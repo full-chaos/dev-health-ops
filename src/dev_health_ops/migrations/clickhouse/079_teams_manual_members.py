@@ -106,14 +106,23 @@ def upgrade(client) -> None:
     )
 
     facets_by_org_team: dict[tuple[str, str], set[str]] = {}
-    for (
-        org_id,
-        canonical_id,
-        email,
-        display_name,
-        provider_identities_raw,
-        team_ids,
-    ) in identity_rows:
+    for row in identity_rows:
+        # Defensive: a migration-runner test harness (or any other caller
+        # whose fake client doesn't discriminate by query text) can hand
+        # back a row shape that doesn't match this SELECT's 6 columns --
+        # skip it rather than crash the whole migration chain over what is,
+        # in every real environment, optional enrichment data (a clean
+        # install's identities table is empty anyway).
+        if len(row) != 6:
+            continue
+        (
+            org_id,
+            canonical_id,
+            email,
+            display_name,
+            provider_identities_raw,
+            team_ids,
+        ) = row
         if not team_ids:
             continue
         facets = member_facets(

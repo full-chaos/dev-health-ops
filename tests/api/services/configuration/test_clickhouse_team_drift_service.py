@@ -129,6 +129,8 @@ class FakeDriftStore:
                 else team_id,
                 "description": row.get("description"),
                 "members": list(row.get("members") or []),
+                # CHAOS-4321: admin-override provenance marker.
+                "manual_members": list(row.get("manual_members") or []),
                 "project_keys": list(row.get("project_keys") or []),
                 "repo_patterns": list(row.get("repo_patterns") or []),
                 "is_active": int(row.get("is_active", 1) or 0),
@@ -157,6 +159,8 @@ def _seed_catalog_team(
         "name": name,
         "description": description,
         "members": ["alice@example.com"],
+        # CHAOS-4321: admin-override provenance marker.
+        "manual_members": [],
         "project_keys": ["TEAM"],
         "repo_patterns": ["org/repo"],
         "is_active": 1,

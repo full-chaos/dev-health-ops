@@ -1325,6 +1325,7 @@
         "name",
         "description",
         "members",
+        "manual_members",
         "project_keys",
         "repo_patterns",
         "is_active",
@@ -1363,6 +1364,7 @@
         [
           "ada@example.test"
         ],
+        [],
         [
           "CHAOS"
         ],

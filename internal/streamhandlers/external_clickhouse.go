@@ -82,7 +82,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"commit.v1":               "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
 		"pull_request.v1":         "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
 		"review.v1":               "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
 		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
 		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
@@ -201,6 +201,28 @@ func externalRecordValues(
 		return []any{
 			teamID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)), stringField(payload, "name"),
 			externalNullableString(payload, "description"), stringArrayField(payload, "members"),
+			// manual_members (CHAOS-4321) -- KNOWN, DISCLOSED GAP, not a new
+			// regression: this writer sends [] unconditionally, so an
+			// external-ingest update to a team_id that ALSO carries an
+			// admin-curated manual_members override WOULD clear it (same
+			// failure class the codex adversarial review round 2 HIGH
+			// finding raised for providers/teams.py's sync_teams path,
+			// fixed there via ClickHouseStore.insert_teams's
+			// preserve-existing-value guard). NOT fixed the same way here:
+			// productClickHouse (this sink's only ClickHouse dependency) is
+			// deliberately write-only (PrepareBatch only, no Query), so a
+			// preserve-lookup would mean extending that interface and every
+			// implementation/double of it -- out of this ticket's scope.
+			// Also NOT a behavior change THIS edit introduces: before
+			// manual_members existed as a column, this same INSERT already
+			// omitted it from the column list, and ClickHouse fills an
+			// omitted column from its schema DEFAULT ([]) on every write --
+			// this writer has cleared manual_members on every team.v1
+			// record since migration 079 added the column, with or without
+			// this line; adding it explicitly only keeps the column list
+			// (and the golden fixture comparing it) accurate, it does not
+			// change what gets written.
+			[]string{},
 			stringArrayField(payload, "projectKeys"), stringArrayField(payload, "repoPatterns"),
 			externalBoolUint(payload, "isActive", true), updatedAt, now, orgID, system,
 			externalNullableString(payload, "nativeTeamKey"), externalNullableString(payload, "parentTeamId"), source.SourceID,

@@ -123,7 +123,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    layer 2: an ambiguous admin mapping is a data problem to fix, not to
 >    route around.
 >
->    `teams.manual_members` (migration `079_teams_manual_members.sql`) is a
+>    `teams.manual_members` (migration `079_teams_manual_members.py` -- a
+>    Python migration, not pure DDL, since it also backfills from
+>    `identities.team_ids` for pre-existing admin-mapped identities) is a
 >    CHAOS-4321 fix, not the original design: an earlier revision of this
 >    ticket treated ALL of `teams.members` as the override, but a codex
 >    adversarial review (HIGH, both languages) found provider auto-import
@@ -212,8 +214,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
 > semantics: updating an identity removes its facets from teams it left and replaces changed facets in
-> teams it stayed in, editing `teams.members` add/remove-by-facet (never a full recompute) so Auto
-> Import / catalog members are preserved. See *CS6 status (CHAOS-2607)* at the end of §4.
+> teams it stayed in, editing `teams.members` **and** `teams.manual_members` (CHAOS-4321) add/remove-by-facet
+> (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status (CHAOS-2607)*
+> at the end of §4.
 
 **ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
 team attribution mappings.** Manual mappings are ClickHouse fallback records only — never overrides,
@@ -411,7 +414,7 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
 
-One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Two member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = the admin-authored facet roster; together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST — this CS populates `teams.members` for github/gitlab too, and drift-approval (§0.5) can also write it directly. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 > **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
@@ -609,8 +612,9 @@ existing orgs see **no behavior change** — discovery writes straight to `teams
 (flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
 `repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
 imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
-membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` roster is
-then updated surgically on approval. `policy 2` is manual/none. `status` / `change_type` are
+membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` **and**
+`teams.manual_members` (CHAOS-4321) rosters are then updated surgically on approval. `policy 2` is
+manual/none. `status` / `change_type` are
 low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
 can be emitted.
 
@@ -648,19 +652,26 @@ the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
 > 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
 > attribution dimension before write-through — not just the `teams.members` roster — whenever the
 > provider row would replace a manual membership or member fallback. Approving inserts the provider
-> membership, expires the conflicting manual row/fallback, and adds only the incoming member facets to
-> `teams.members`; dismissing leaves both the catalog and attribution dimensions unchanged.
+> membership, expires the conflicting manual row/fallback, and adds the incoming member facets to
+> `teams.members` **and** `teams.manual_members` (CHAOS-4321, via
+> `ClickHouseTeamAdminService.add_members` — see below); dismissing leaves both the catalog and
+> attribution dimensions unchanged.
 >
 > **CHAOS-4321 cross-reference.** `team_memberships` is the PROVIDER (fallback) attribution layer as
 > of this ticket (see the CHAOS-4321 callout in "Why this exists" above and §0.2 rows 4/6) — read
-> only when an identity has no ADMIN mapping (`identities`/`teams`) at all. Approving a pending
-> identity change here inserts the provider's row into `team_memberships` under ITS OWN auto-import
-> `source` (`provider_access`/`native`/`jira_legacy`) — it does not relabel the row `manual` and does
-> not touch `identities.team_ids`. So approving a drift change here can only ever affect the FALLBACK
-> layer's data, never mint an admin (override) mapping — the admin layer is written exclusively by
-> `/org/admin/identities` and `/org/admin/teams`; this drift-review flow only touches `teams.members`
-> (part of the admin layer) indirectly, via `apply_identity_membership_change`'s
-> `team_admin.add_members` call.
+> only when an identity has no ADMIN mapping (`identities`/`teams.manual_members`) at all. Approving a
+> pending identity change here inserts the provider's row into `team_memberships` under ITS OWN
+> auto-import `source` (`provider_access`/`native`/`jira_legacy`) — it does not relabel the row
+> `manual` and does not touch `identities.team_ids`. **This is one of the two genuinely
+> admin-exclusive writers of `teams.manual_members`** (the admin Identities screen is the other;
+> `/org/admin/teams` itself has no member-editing endpoint at all — confirmed by tracing every write
+> site during CHAOS-4321): `apply_identity_membership_change` calls
+> `team_admin.add_members`/`remove_members` directly, which now writes `teams.manual_members` (not
+> just `teams.members`) as of CHAOS-4321. So approving a drift change here DOES mint an admin
+> (override) mapping — a human clicking "approve" is itself the admin action that earns override
+> status, even though the underlying data originated from provider auto-import. (Before CHAOS-4321's
+> provenance fix, this was NOT true: `add_members` wrote only `teams.members`, and this section
+> claimed approval could "never mint an admin mapping" — that claim is now stale and corrected here.)
 
 ### 0.6 Current execution transport (Go worker cutover) — added at restoration
 

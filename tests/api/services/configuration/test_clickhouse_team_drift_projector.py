@@ -76,7 +76,12 @@ def test_auto_apply_policy_writes_observation_and_catalog() -> None:
 
     assert store.observations[0]["team_id"] == "team-1"
     assert store.observations[0]["name"] == "Platform"
-    assert team_writes == [row]
+    # CHAOS-4321 (codex adversarial review round 2, HIGH): AUTO_APPLY_POLICY
+    # now carries the existing manual_members value forward on every write
+    # (never sets/clears it) -- this team has no prior row, so [] is
+    # correct. row itself gains a manual_members key it didn't have before
+    # this ticket; == [row] is no longer exact, hence the explicit dict.
+    assert team_writes == [{**row, "manual_members": []}]
     assert store.drift_inserts == []
 
 

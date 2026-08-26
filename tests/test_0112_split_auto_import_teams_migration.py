@@ -31,6 +31,7 @@ def _table(connection: sa.engine.Connection) -> sa.Table:
         "sync_configurations",
         metadata,
         sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("provider", sa.String(64), nullable=False, server_default="gitlab"),
         sa.Column("sync_options", sa.JSON, nullable=False),
     )
     metadata.create_all(connection)
@@ -158,6 +159,62 @@ def test_upgrade_skips_unreadable_row_without_raising():
         ).scalar_one()
         good_options = json.loads(good) if isinstance(good, str) else good
         assert good_options["auto_import_projects"] is True
+
+
+def test_upgrade_github_provider_clamps_projects_false():
+    """CHAOS-4323 final round (codex adversarial-review, HIGH): GitHub has no
+    "Projects" import (providers/team_capabilities.py). A migration that
+    derived all three flags solely from the legacy auto_import_teams value
+    would give every enabled GitHub config auto_import_projects=True -- an
+    unsupported flag it never explicitly chose, which the API's
+    capability-validation boundary would then reject on the config's very
+    next, unrelated PATCH. teams and members must still turn on."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    migration = _migration()
+    with engine.connect() as connection:
+        table = _table(connection)
+        connection.execute(
+            table.insert(),
+            [
+                {
+                    "id": "row-github",
+                    "provider": "github",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-github-caps-and-spaces",
+                    "provider": " GitHub ",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-gitlab",
+                    "provider": "gitlab",
+                    "sync_options": {"auto_import_teams": True},
+                },
+            ],
+        )
+        connection.commit()
+
+        context = MigrationContext.configure(connection)
+        with Operations.context(context):
+            migration.upgrade()
+
+        for row_id in ("row-github", "row-github-caps-and-spaces"):
+            row = connection.execute(
+                sa.select(table.c.sync_options).where(table.c.id == row_id)
+            ).scalar_one()
+            options = json.loads(row) if isinstance(row, str) else row
+            assert options["auto_import_teams"] is True, row_id
+            assert options["auto_import_projects"] is False, row_id
+            assert options["auto_import_members"] is True, row_id
+
+        gitlab_row = connection.execute(
+            sa.select(table.c.sync_options).where(table.c.id == "row-gitlab")
+        ).scalar_one()
+        gitlab_options = (
+            json.loads(gitlab_row) if isinstance(gitlab_row, str) else gitlab_row
+        )
+        assert gitlab_options["auto_import_projects"] is True
 
 
 def test_downgrade_drops_new_keys_and_keeps_auto_import_teams():

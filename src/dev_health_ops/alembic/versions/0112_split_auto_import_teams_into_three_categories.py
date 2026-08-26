@@ -8,6 +8,20 @@ DATA ONLY. This adds, drops and alters no column. ``SyncConfiguration.
 sync_options`` is (and stays) a ``JSON`` column (``models/settings.py``); the
 three flags are keys inside it, exactly like ``auto_import_teams`` always was.
 
+PROVIDER-AWARE (codex adversarial-review, final round, HIGH): a naive
+"derive all three from auto_import_teams" migration would give every
+enabled GitHub config ``auto_import_projects=True`` -- GitHub has no
+"Projects" import (``providers/team_capabilities.py``: only teams and
+members are supported) and the API rejects that combination on every
+subsequent write. A migrated-in-place row carrying an unsupported flag it
+never explicitly chose would then make an operator's next, unrelated PATCH
+(schedule, name, ...) fail 422, because ``sync.py`` validates the MERGED
+options. This migration hardcodes the one provider/category combination
+known unsupported at 0112's authorship time (GitHub + projects) rather than
+importing the live ``team_capabilities`` module, deliberately: a migration's
+behavior must stay fixed to what it actually did, independent of how the
+capability map evolves after this revision ships.
+
 WHAT WAS WRONG
 --------------
 One checkbox -- "Auto-import teams, projects & members" -- drove three
@@ -84,6 +98,14 @@ _TEAMS = "auto_import_teams"
 _PROJECTS = "auto_import_projects"
 _MEMBERS = "auto_import_members"
 
+# Providers with no "Projects" import as of 0112's authorship (mirrors
+# providers/team_capabilities.py's github row) -- hardcoded, not imported,
+# so this migration's behavior stays fixed regardless of how that live
+# capability map evolves later. Matched case-insensitively against the
+# `provider` column the same way team_capabilities.auto_import_capabilities
+# does.
+_PROVIDERS_WITHOUT_PROJECTS = frozenset({"github"})
+
 # Lightweight table handle rather than raw SQL/the ORM model -- keeps this
 # migration dialect-portable (runs unchanged against the Postgres-JSON
 # production column and the SQLite-TEXT test fixtures) and independent of
@@ -93,6 +115,7 @@ _MEMBERS = "auto_import_members"
 _SYNC_CONFIGURATIONS = sa.table(
     "sync_configurations",
     sa.column("id"),
+    sa.column("provider"),
     # Explicit JSON type: without it, an UPDATE built from this untyped
     # handle binds a bare Python dict with no serialization info, which the
     # sqlite3 test driver rejects outright and which is fragile even on
@@ -132,13 +155,14 @@ def upgrade() -> None:
     rows = bind.execute(
         sa.select(
             _SYNC_CONFIGURATIONS.c.id,
+            _SYNC_CONFIGURATIONS.c.provider,
             _SYNC_CONFIGURATIONS.c.sync_options,
         )
     ).fetchall()
 
     updated = 0
     skipped_unreadable = 0
-    for row_id, raw_options in rows:
+    for row_id, provider, raw_options in rows:
         options = _decode_options(raw_options)
         if isinstance(options, _Unreadable):
             skipped_unreadable += 1
@@ -158,9 +182,18 @@ def upgrade() -> None:
         # false, matching the new API-level rejection of non-bool values for
         # these keys on every write going forward.
         enabled = options.get(_TEAMS) is True
+        # CHAOS-4323 final round (codex adversarial-review, HIGH):
+        # provider-aware clamp. A provider with no "Projects" import (GitHub)
+        # never gets auto_import_projects=True out of this migration, even
+        # when the legacy single flag was enabled -- an unsupported flag a
+        # migrated row never chose would otherwise reject that config's next,
+        # unrelated PATCH at the API's capability-validation boundary.
+        projects_enabled = enabled and (
+            (provider or "").strip().lower() not in _PROVIDERS_WITHOUT_PROJECTS
+        )
         new_options = dict(options)
         new_options[_TEAMS] = enabled
-        new_options[_PROJECTS] = enabled
+        new_options[_PROJECTS] = projects_enabled
         new_options[_MEMBERS] = enabled
 
         if new_options == options:

@@ -116,6 +116,8 @@ func retryCompatibilityError(err error) error {
 		return jobruntime.WithReason(marked, jobruntime.ReasonAmbiguousRefused)
 	case errors.Is(err, ErrCompatibilityProgressStalled):
 		return jobruntime.WithReason(marked, jobruntime.ReasonProgressStalled)
+	case errors.Is(err, ErrCompatibilityCapacityExhausted):
+		return jobruntime.WithReason(marked, jobruntime.ReasonCapacityExhausted)
 	default:
 		return marked
 	}

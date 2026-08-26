@@ -110,6 +110,16 @@ var (
 	// all -- the lease renews forever as long as the independent PG UPDATE
 	// keeps succeeding, regardless of whether real work is progressing.
 	ReasonProgressStalled = reason("progress_stalled")
+	// ReasonCapacityExhausted marks a daily-metrics compatibility bridge
+	// attempt the Python bridge refused to even spawn -- its CHAOS-4317
+	// pids/thread capacity gate waited past its derived ceiling for the api
+	// container's cgroup pids budget to free up (the exact resource the
+	// 2026-08-26 incident's "pthread_create failed: Resource temporarily
+	// unavailable" lines exhausted) and gave up rather than spawn over
+	// budget. Always Retryable -- capacity pressure is transient container
+	// state, never a reason to park a partition for human review, and never
+	// failed_permanent.
+	ReasonCapacityExhausted = reason("capacity_exhausted")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import math
 import os
 import signal
 import sys
@@ -35,9 +36,13 @@ from dev_health_ops.api.internal.worker_auth import (
 )
 from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.prometheus import (
+    DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL,
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING,
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT,
+    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES,
@@ -237,6 +242,277 @@ def _read_cgroup_oom_kill_count() -> int | None:
     except (FileNotFoundError, PermissionError, OSError, ValueError):
         return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-4317: pids/thread capacity bound on runner subprocess spawn.
+#
+# _RUNNER_CONCURRENCY_SEMAPHORE (above) bounds only this feature's own
+# subprocess COUNT -- it has no idea how many OS threads/pids the container's
+# cgroup budget has left, and cannot see other consumers sharing the same
+# budget (OTel span-exporter init, sync_run threads, the runner child's own
+# internal native-library threads). The 2026-08-26 incident hit
+# "pthread_create failed: Resource temporarily unavailable" with the
+# semaphore's default concurrency already at 1 -- proof a count-only bound
+# cannot protect a budget it never reads.
+#
+# Every ceiling source below is read fresh at each decision point (cheap
+# file/syscall reads, not cached across the process lifetime): no compose
+# file (dev, ops/, or prod's hand-maintained copy) sets an explicit
+# `pids_limit` today (grep-confirmed 2026-08-26), so the container-level
+# cgroup pids.max is very likely unbounded ("max") in every environment this
+# runs in right now -- the real ceiling that was hit on 2026-08-26 was never
+# conclusively measured (blocked: no prod access). `effective_pids_ceiling`
+# therefore takes the MINIMUM of whichever sources are actually finite,
+# falling back to a documented conservative constant only when nothing at
+# all is readable (non-Linux dev/CI).
+# ---------------------------------------------------------------------------
+
+_PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV = (
+    "DEV_HEALTH_METRICS_RUNNER_PIDS_SAFETY_MARGIN_FRACTION"
+)
+_DEFAULT_PIDS_SAFETY_MARGIN_FRACTION = 0.2  # reserve 20% of the ceiling for
+# ambient consumers this feature does not control (OTel, sync_run threads,
+# uvicorn/gunicorn worker threads) -- the exact gap the 2026-08-26 incident
+# fell into: this feature's own concurrency was already at its floor (1).
+
+_PIDS_CAPACITY_WAIT_POLL_SECONDS_ENV = (
+    "DEV_HEALTH_METRICS_RUNNER_PIDS_WAIT_POLL_SECONDS"
+)
+_DEFAULT_PIDS_CAPACITY_WAIT_POLL_SECONDS = 2.0
+
+_PIDS_CAPACITY_WAIT_UNIT_SECONDS_ENV = (
+    "DEV_HEALTH_METRICS_RUNNER_PIDS_WAIT_UNIT_SECONDS"
+)
+_DEFAULT_PIDS_CAPACITY_WAIT_UNIT_SECONDS = 30.0  # seconds of allowed wait per
+# "deficit unit" (one more per-child pids cost's worth of headroom missing)
+# -- the wait ceiling scales with how far over budget the container
+# currently is, never a flat wall-clock number (standing rule: timeouts
+# never fix capacity races). A partition that is barely over budget waits a
+# short, bounded time; one arriving into a badly starved container is given
+# proportionally longer before it gives up and reports capacity_exhausted.
+
+_PIDS_FALLBACK_CEILING_ENV = "DEV_HEALTH_METRICS_RUNNER_PIDS_FALLBACK_CEILING"
+_DEFAULT_PIDS_FALLBACK_CEILING = 4096  # used ONLY when no cgroup/rlimit/proc
+# source is readable at all (non-Linux dev/CI) -- never silently "no bound".
+
+_DEFAULT_PIDS_PER_CHILD_COST = 32  # conservative seed for the per-runner-child
+# pids/thread cost, used until the first real measurement lands (see
+# _record_per_child_pids_cost); converges upward to the observed peak, same
+# seed-then-converge shape _RUNNER_DEFAULT_MEMORY_LIMIT_BYTES already uses.
+
+_PIDS_PER_CHILD_COST_HOLDER = [_DEFAULT_PIDS_PER_CHILD_COST]
+_PIDS_POLL_SECONDS = 0.25
+
+
+def _read_int_cgroup_file(path: str) -> int | None:
+    """Read one cgroup accounting file, returning None if absent/unbounded.
+
+    A literal "max" (cgroup v2's spelling for "no limit on this axis") reads
+    as None, exactly like a missing file -- both mean "this source has
+    nothing to contribute to the ceiling", not "the ceiling is zero".
+    """
+    try:
+        with open(path, encoding="ascii") as handle:
+            raw = handle.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    if raw == "max" or not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+# Module-level, individually monkeypatch-able so tests can point these at a
+# fake cgroup file tree (a tmp_path fixture) instead of the real filesystem --
+# cgroup v2 path first, v1 fallback path second, in the order each reader
+# tries them.
+_PIDS_MAX_PATHS = ("/sys/fs/cgroup/pids.max", "/sys/fs/cgroup/pids/pids.max")
+_PIDS_CURRENT_PATHS = (
+    "/sys/fs/cgroup/pids.current",
+    "/sys/fs/cgroup/pids/pids.current",
+)
+_HOST_THREADS_MAX_PATH = "/proc/sys/kernel/threads-max"
+
+
+def _read_pids_max() -> int | None:
+    for path in _PIDS_MAX_PATHS:
+        value = _read_int_cgroup_file(path)
+        if value is not None:
+            return value
+    return None
+
+
+def _read_pids_current() -> int | None:
+    for path in _PIDS_CURRENT_PATHS:
+        value = _read_int_cgroup_file(path)
+        if value is not None:
+            return value
+    return None
+
+
+def _read_rlimit_nproc() -> int | None:
+    try:
+        import resource
+
+        soft, _hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    except (ImportError, AttributeError, OSError, ValueError):
+        return None
+    if soft <= 0 or soft == resource.RLIM_INFINITY:
+        return None
+    return soft
+
+
+def _read_host_threads_max() -> int | None:
+    # Host-wide, NOT container-scoped -- /proc/sys/kernel is typically not
+    # namespaced per-container, so this is visible even when nothing else
+    # here is finite. The most likely candidate for what was actually
+    # exhausted on 2026-08-26, per the ticket's own framing (a shared-host
+    # ceiling hit by every container's combined thread creation at :00).
+    return _read_int_cgroup_file(_HOST_THREADS_MAX_PATH)
+
+
+def _configured_int_env(key: str, default: int) -> int:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _configured_float_env(key: str, default: float) -> float:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _effective_pids_ceiling() -> int:
+    """The lowest finite pids/thread ceiling visible from inside this container."""
+    candidates = [
+        value
+        for value in (_read_pids_max(), _read_rlimit_nproc(), _read_host_threads_max())
+        if value is not None
+    ]
+    if candidates:
+        return min(candidates)
+    return _configured_int_env(
+        _PIDS_FALLBACK_CEILING_ENV, _DEFAULT_PIDS_FALLBACK_CEILING
+    )
+
+
+def _observed_per_child_pids_cost() -> int:
+    return _PIDS_PER_CHILD_COST_HOLDER[0]
+
+
+def _record_per_child_pids_cost(sample: int) -> None:
+    if sample > _PIDS_PER_CHILD_COST_HOLDER[0]:
+        _PIDS_PER_CHILD_COST_HOLDER[0] = sample
+
+
+async def _poll_peak_child_pids_delta(
+    process: asyncio.subprocess.Process,
+    baseline_pids_current: int | None,
+    peak_delta_holder: list[int],
+    *,
+    interval_seconds: float = _PIDS_POLL_SECONDS,
+) -> None:
+    """Sample the cgroup pids.current delta while a runner child is alive.
+
+    Measures the REAL number of pids/threads one runner child consumes at
+    its peak (CHAOS-4317: "measured, not guessed") -- baseline_pids_current
+    is read immediately before spawn by the caller; this loop tracks how far
+    above that baseline the container's live pids.current climbs for as
+    long as this specific child is running. None (baseline unreadable, e.g.
+    non-Linux dev) makes this a no-op, same fallback shape as every other
+    reader in this module. Cancelled by the caller once the subprocess
+    exits, same pattern as _poll_peak_rss_bytes.
+    """
+    if baseline_pids_current is None:
+        return
+    while True:
+        current = _read_pids_current()
+        if current is not None:
+            peak_delta_holder[0] = max(
+                peak_delta_holder[0], current - baseline_pids_current
+            )
+        if process.returncode is not None:
+            return
+        await asyncio.sleep(interval_seconds)
+
+
+async def _await_pids_capacity() -> float:
+    """Block until the container has pids headroom for one more runner child.
+
+    Returns the seconds actually waited (0.0 if capacity was already
+    available) -- the caller observes this into
+    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS. Never spawns anything
+    itself, purely a gate checked before asyncio.create_subprocess_exec.
+    This IS the durable, no-drop queue CHAOS-4317 asks for: the Go caller's
+    HTTP request is already kept alive independently by River's
+    lease-renewal loop (runWithLeaseRenewal keeps workCtx alive as long as
+    the cheap RenewPartition UPDATE keeps succeeding, regardless of whether
+    this call is progressing) -- so waiting here inside the still-open
+    request drops nothing and needs no new disk-backed queue.
+
+    Bounded, not infinite: the wait ceiling scales with how far over budget
+    the container currently is (deficit_units * a per-unit second budget),
+    not a flat wall-clock number -- re-derived on every poll, so it shrinks
+    as headroom frees up and grows if the deficit worsens. Raises
+    _CompatibilityProcessFailure(reason="capacity_exhausted",
+    safe_to_retry=True) if the bound is exceeded -- always retryable, never
+    a silent drop.
+    """
+    poll_interval = _configured_float_env(
+        _PIDS_CAPACITY_WAIT_POLL_SECONDS_ENV, _DEFAULT_PIDS_CAPACITY_WAIT_POLL_SECONDS
+    )
+    wait_unit_seconds = _configured_float_env(
+        _PIDS_CAPACITY_WAIT_UNIT_SECONDS_ENV, _DEFAULT_PIDS_CAPACITY_WAIT_UNIT_SECONDS
+    )
+    margin_fraction = _configured_float_env(
+        _PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, _DEFAULT_PIDS_SAFETY_MARGIN_FRACTION
+    )
+    waited = 0.0
+    while True:
+        ceiling = _effective_pids_ceiling()
+        current = _read_pids_current()
+        if current is None:
+            # No live cgroup signal at all (non-Linux/dev) -- nothing to
+            # gate on, proceed exactly as before this feature existed.
+            return waited
+        DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT.set(current)
+        DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING.set(ceiling)
+        per_child = _observed_per_child_pids_cost()
+        margin = int(ceiling * margin_fraction)
+        needed = current + margin + per_child
+        if needed <= ceiling:
+            if waited:
+                DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS.observe(waited)
+            return waited
+        deficit_units = max(1, math.ceil((needed - ceiling) / max(per_child, 1)))
+        wait_ceiling = deficit_units * wait_unit_seconds
+        if waited >= wait_ceiling:
+            DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS.observe(waited)
+            DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL.inc()
+            raise _CompatibilityProcessFailure(
+                f"metric compatibility process capacity_exhausted -- waited "
+                f"{waited:.1f}s for pids headroom (ceiling={ceiling}, "
+                f"current={current}, margin={margin}, per_child={per_child})",
+                reason="capacity_exhausted",
+                safe_to_retry=True,
+            )
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
 
 
 class _StrictRequest(BaseModel):
@@ -1532,6 +1808,15 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     payload = _canonical_json(_execution_process_payload(execution)).encode()
     if len(payload) > _MAX_COMPATIBILITY_PROCESS_BYTES:
         raise ValueError("metric compatibility process input exceeds the bound")
+    # CHAOS-4317: gate on the container's live pids/thread budget BEFORE
+    # spawning -- the concurrency semaphore above bounds this feature's own
+    # subprocess count, but the 2026-08-26 incident hit pthread_create
+    # failures with that count already at its floor, because nothing read
+    # the actual shared budget. Waits (bounded, capacity-derived) rather
+    # than erroring immediately -- see _await_pids_capacity's docstring for
+    # why waiting here is a durable queue, not a drop.
+    await _await_pids_capacity()
+    pids_baseline = _read_pids_current()
     process = await asyncio.create_subprocess_exec(
         *_COMPATIBILITY_RUNNER_COMMAND,
         stdin=asyncio.subprocess.PIPE,
@@ -1589,6 +1874,10 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 interval_seconds=_PROGRESS_STALL_WATCHDOG_POLL_SECONDS,
             )
         )
+    peak_pids_delta_holder = [0]
+    pids_task = asyncio.create_task(
+        _poll_peak_child_pids_delta(process, pids_baseline, peak_pids_delta_holder)
+    )
     input_error: BrokenPipeError | ConnectionResetError | None = None
     try:
         try:
@@ -1610,6 +1899,8 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             rss_task.cancel()
         if stall_task is not None and not stall_task.done():
             stall_task.cancel()
+        if not pids_task.done():
+            pids_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             # CodeQL py/ineffectual-statement flags this as a no-op because
             # the coroutine's return value (always None) is discarded, but
@@ -1632,6 +1923,11 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 # final state is visible before the classification below
                 # reads it -- the discarded return value is not the point.
                 await stall_task
+        with contextlib.suppress(asyncio.CancelledError):
+            # Same cancel-then-await pattern as rss_task immediately above,
+            # for the same reason: guarantees peak_pids_delta_holder's last
+            # write below has already happened.
+            await pids_task
         # codex R2: read the shared holder, NOT the task's return value --
         # cancelling rss_task almost always interrupts it inside
         # asyncio.sleep, which raises CancelledError before any `return`
@@ -1644,6 +1940,12 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS.labels(
             worker_kind=execution.worker_kind, operation=execution.operation
         ).observe(_monotonic() - started_at)
+        # CHAOS-4317: converge the per-child pids cost estimate toward the
+        # real observed peak -- only a positive, plausible delta counts, so
+        # a baseline read that failed (pids_baseline is None, delta stays 0)
+        # never regresses the seeded/converged estimate.
+        if peak_pids_delta_holder[0] > 0:
+            _record_per_child_pids_cost(peak_pids_delta_holder[0])
 
     lines = [line for line in stdout.split(b"\n") if line.strip()]
     progress_seen = False

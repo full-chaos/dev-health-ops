@@ -369,6 +369,7 @@ func TestRetryCompatibilityErrorAttachesBoundedReasonAndPreservesCause(t *testin
 		{name: "resource_exhausted", cause: ErrCompatibilityResourceExhausted},
 		{name: "ambiguous_refused", cause: ErrCompatibilityAmbiguousRefused},
 		{name: "progress_stalled", cause: ErrCompatibilityProgressStalled},
+		{name: "capacity_exhausted", cause: ErrCompatibilityCapacityExhausted},
 		{name: "unclassified", cause: ErrUnavailable},
 	}
 	for _, testCase := range cases {

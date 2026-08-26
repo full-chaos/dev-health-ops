@@ -168,13 +168,28 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+
+      # CHAOS-4346: this job used to `pip install -r requirements.txt`
+      # (requirements.txt is just `-e .[dev]`), which re-resolves every
+      # unpinned specifier in pyproject.toml against PyPI on every run --
+      # uv.lock's pin is never consulted. openai>=3.0.0 floated onto
+      # openai 3.4.0 mid-flight on 2026-08-26 (uv.lock has 3.0.0) and broke
+      # tests/test_logging_config.py's leak harness for every PR in flight,
+      # none of which had touched that test or its dependency. `uv sync
+      # --frozen` installs exactly uv.lock's resolution and FAILS the step
+      # if the lock is stale relative to pyproject.toml, so a real
+      # dependency bump has to touch (and review) uv.lock instead of
+      # silently drifting under CI.
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-docs.txt
+          uv sync --frozen --all-extras --dev
+          uv pip install --python .venv/bin/python -r requirements-docs.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run parallel unit test contract
         env:

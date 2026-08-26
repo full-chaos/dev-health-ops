@@ -71,6 +71,15 @@ def _source_from(metric: str, definition: MetricDefinition) -> str:
     but teams are never summed into each other: an org-wide chart (no
     team filter) still averages EACH team's own ratio, unchanged from
     before this table had a repo_id column.
+
+    CHAOS-4329 (codex round 3, P1): before summing, drop the legacy
+    ``repo_id=''`` bucket for any (team_id, day) key that ALSO has real
+    per-repo rows -- the same legacy-bucket-suppression every other
+    team_metrics_daily reader applies (see cognitive_load.py's
+    ``_fetch_team_metrics`` for the canonical shape). Without this, a
+    historical day re-driven with real per-repo rows after migration 080
+    would sum the old pre-migration aggregate together with the new
+    per-repo rows and double-count that day.
     """
     dedup_source = dedup_from(definition.source_table)
     if not (definition.numerator and definition.denominator):
@@ -83,7 +92,13 @@ def _source_from(metric: str, definition: MetricDefinition) -> str:
             if(sum({definition.denominator}) > 0,
                sum({definition.numerator}) / sum({definition.denominator}), 0.0
             ) AS {metric}
-        FROM {dedup_source}
+        FROM (
+            SELECT
+                *,
+                countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+            FROM {dedup_source}
+        )
+        WHERE repo_id != '' OR real_repo_count = 0
         GROUP BY org_id, team_id, day
     ) AS {definition.source_table}"""
 

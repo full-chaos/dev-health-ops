@@ -446,6 +446,14 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 // view, so a team's repos are summed together but teams are never summed
 // into each other: an org-wide chart (no team filter) still averages EACH
 // team's own ratio, unchanged from before this table had a repo_id column.
+// sourceFrom mirrors Python's _source_from (reports/charts.py). For a
+// numerator/denominator metric (CHAOS-4329, table-local) it also drops the
+// legacy empty-string repo_id bucket for any (team_id, day) key that also
+// has real per-repo rows -- the same legacy-bucket-suppression every other
+// team_metrics_daily reader applies (codex round 3, P1). Without this, a
+// historical day re-driven with real per-repo rows after migration 080
+// would sum the old pre-migration aggregate together with the new per-repo
+// rows and double-count that day.
 func sourceFrom(metric string, definition metricDefinition) string {
 	dedupSource := dedupFromSource(definition.SourceTable)
 	if definition.Numerator == "" || definition.Denominator == "" {
@@ -459,7 +467,13 @@ func sourceFrom(metric string, definition metricDefinition) string {
             if(sum(%s) > 0,
                sum(%s) / sum(%s), 0.0
             ) AS %s
-        FROM %s
+        FROM (
+            SELECT
+                *,
+                countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+            FROM %s
+        )
+        WHERE repo_id != '' OR real_repo_count = 0
         GROUP BY org_id, team_id, day
     ) AS %s`,
 		definition.Denominator, definition.Numerator, definition.Denominator,

@@ -174,3 +174,73 @@ async def test_execute_chart_org_wide_averages_teams_not_repos_or_org() -> None:
         "numerator/denominator were summed across TEAMS instead of just "
         "repos within each team (the regression this test guards)"
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_chart_drops_legacy_bucket_once_a_real_per_repo_backfill_exists() -> (
+    None
+):
+    """codex CHAOS-4329 round 3 (P1): a historical day that has BOTH the
+    migration's legacy repo_id='' aggregate AND a later real per-repo
+    backfill for the same (team, day) must not sum the two together --
+    that would double-count the day. Legacy row: 4 commits/2 after-hours
+    (ratio 0.5). Real backfill: repo-a 8/2 (0.25) -- the only repo, so the
+    correct team-day ratio is 0.25, not the double-counted
+    (4+8)/(2+2)=0.333 an unfiltered SUM would produce.
+    """
+    from datetime import date, datetime, timezone
+
+    sink = _sink()
+    org_id = str(uuid.uuid4())  # throwaway random org (isolated, no cleanup needed)
+    sink.org_id = org_id
+    day = date(2026, 1, 1)
+
+    legacy_row = TeamMetricsDailyRecord(
+        day=day,
+        team_id="core",
+        team_name="Core",
+        commits_count=4,
+        after_hours_commits_count=2,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.5,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+        repo_id="",  # pre-migration-080 write
+    )
+    backfill_row = TeamMetricsDailyRecord(
+        day=day,
+        team_id="core",
+        team_name="Core",
+        commits_count=8,
+        after_hours_commits_count=2,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.25,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        repo_id="repo-a",  # post-migration-080 real per-repo re-drive
+    )
+    sink.write_team_metrics([legacy_row])
+    sink.write_team_metrics([backfill_row])
+
+    spec = ChartSpec(
+        chart_id="chart-legacy",
+        plan_id="plan-1",
+        chart_type="line",
+        metric="after_hours_commit_ratio",
+        group_by="day",
+        filter_teams=["core"],
+        time_range_start=day,
+        time_range_end=day,
+        title=None,
+        org_id=org_id,
+    )
+    result = await execute_chart(spec, sink.client)
+
+    assert len(result.data_points) == 1
+    got = result.data_points[0]["y"]
+    assert got == pytest.approx(0.25), (
+        f"after_hours_commit_ratio y={got!r}, want ~0.25 (repo-a's real "
+        "backfill alone) -- 0.333 would mean the legacy repo_id='' bucket "
+        "was summed together with the real per-repo backfill "
+        "(the regression this test guards)"
+    )

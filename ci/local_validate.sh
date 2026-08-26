@@ -1207,7 +1207,7 @@ metrics_readback() {
   # and a clickhouse:// URI has no such SQLAlchemy dialect registered
   # (NoSuchModuleError). run_live_backend_e2e.sh hits the same hazard and
   # unsets all three for the identical reason -- mirrored here, not guessed.
-  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" env -u POSTGRES_URI -u DATABASE_URI -u DATABASE_URL \
     "${DEVHOPS}" fixtures generate \
     --sink "${SCRATCH_URI}" --db-type clickhouse \
@@ -1226,11 +1226,11 @@ metrics_readback() {
   # above (day-to-day variance in the fixture generator can leave any single
   # day's bucket empty for a given family, which is not the defect this stage
   # checks for) — verified locally 2026-08-25.
-  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${DEVHOPS}" metrics daily --backfill 7 || return 1
-  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${DEVHOPS}" metrics dora --backfill 7 || return 1
-  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${DEVHOPS}" metrics complexity || return 1
 
   printf '   asserting ClickHouse readback (rows with computed_at >= %s, repo_ids ⊆ repos.id)\n' "${run_start}"

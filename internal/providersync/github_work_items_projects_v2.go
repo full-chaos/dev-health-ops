@@ -461,9 +461,12 @@ func fetchGitHubProjectV2Target(
 			}, nil
 		}
 		connection := *envelope.Data.Organization.ProjectV2.Items
+		paginationComplete := connection.PageInfo != nil && connection.PageInfo.HasNextPage != nil
 		for index := range connection.Nodes {
 			item := connection.Nodes[index]
-			if item.Changes.PageInfo.HasNextPage {
+			if item.Changes.PageInfo == nil || item.Changes.PageInfo.HasNextPage == nil {
+				paginationComplete = false
+			} else if *item.Changes.PageInfo.HasNextPage {
 				cursor := strings.TrimSpace(item.Changes.PageInfo.EndCursor)
 				if cursor == "" || strings.TrimSpace(item.ID) == "" {
 					return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
@@ -484,7 +487,11 @@ func fetchGitHubProjectV2Target(
 					}
 					more := continuation.Data.Node.Changes
 					item.Changes.Nodes = append(item.Changes.Nodes, more.Nodes...)
-					if !more.PageInfo.HasNextPage {
+					if more.PageInfo == nil || more.PageInfo.HasNextPage == nil {
+						paginationComplete = false
+						break
+					}
+					if !*more.PageInfo.HasNextPage {
 						break
 					}
 					next := strings.TrimSpace(more.PageInfo.EndCursor)
@@ -496,7 +503,16 @@ func fetchGitHubProjectV2Target(
 			}
 			items = append(items, item)
 		}
-		if !connection.PageInfo.HasNextPage {
+		if !paginationComplete {
+			client.Metrics.RecordProjectsV2DegradedSnapshot(githubProjectsV2StructuralDegraded)
+			slog.Warn("github_projects_v2.degraded_snapshot",
+				"reason", githubProjectsV2StructuralDegraded, "org_login", target.OrgLogin,
+				"project_number", target.ProjectNumber)
+			return gitHubProjectV2TargetFetchResult{
+				Items: items, DegradedReason: githubProjectsV2StructuralDegraded,
+			}, nil
+		}
+		if !*connection.PageInfo.HasNextPage {
 			return gitHubProjectV2TargetFetchResult{Items: items, Complete: true}, nil
 		}
 		next := strings.TrimSpace(connection.PageInfo.EndCursor)
@@ -545,13 +561,13 @@ func fetchGitHubProjectV2GraphQL(
 }
 
 type gitHubProjectV2PageInfo struct {
-	HasNextPage bool   `json:"hasNextPage"`
+	HasNextPage *bool  `json:"hasNextPage"`
 	EndCursor   string `json:"endCursor"`
 }
 
 type gitHubProjectV2Connection[T any] struct {
-	Nodes    []T                     `json:"nodes"`
-	PageInfo gitHubProjectV2PageInfo `json:"pageInfo"`
+	Nodes    []T                      `json:"nodes"`
+	PageInfo *gitHubProjectV2PageInfo `json:"pageInfo"`
 }
 
 type gitHubProjectV2ItemsEnvelope struct {

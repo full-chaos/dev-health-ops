@@ -450,18 +450,35 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 			reply        string
 			wantComplete bool
 			wantRemovals int
+			wantCause    string
 		}{
 			{
 				name:         "null organization",
 				reply:        `{"data":{"organization":null}}`,
 				wantComplete: false,
 				wantRemovals: 0,
+				wantCause:    githubProjectsV2NullOrganization,
 			},
 			{
 				name:         "null project",
 				reply:        `{"data":{"organization":{"projectV2":null}}}`,
 				wantComplete: false,
 				wantRemovals: 0,
+				wantCause:    githubProjectsV2NullProject,
+			},
+			{
+				name:         "missing page info",
+				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[]}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
+			},
+			{
+				name:         "page info missing hasNextPage",
+				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"endCursor":null}}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
 			},
 			{
 				name:         "genuinely empty board",
@@ -482,6 +499,14 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 				}
 				if len(result.Snapshots) != 1 || result.Snapshots[0].Complete != test.wantComplete {
 					t.Fatalf("snapshot=%+v, want Complete=%t", result.Snapshots, test.wantComplete)
+				}
+				if test.wantCause == "" {
+					if len(result.Incomplete) != 0 {
+						t.Fatalf("incomplete=%+v, want authoritative snapshot", result.Incomplete)
+					}
+				} else if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+					result.Incomplete[0].Cause != test.wantCause {
+					t.Fatalf("incomplete=%+v, want projects_v2/%s", result.Incomplete, test.wantCause)
 				}
 				rows, counts := diffGitHubProjectV2Snapshot(
 					claim, "ghprojv2:acme#3", result.Snapshots[0].Subjects, prior,

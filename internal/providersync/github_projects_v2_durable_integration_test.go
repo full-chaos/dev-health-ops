@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,6 +82,28 @@ VALUES ($1, $3, $2, 'work-items',
 	repository, err := NewPostgresRepository(pool)
 	if err != nil {
 		t.Fatal(err)
+	}
+	expectedWatermarkKeys := []string{
+		"work-items",
+		"work-item-labels",
+		"work-item-projects",
+		"work-item-history",
+		"work-item-comments",
+	}
+	assertWatermarks := func(t *testing.T, got map[string]time.Time, want time.Time) {
+		t.Helper()
+		if len(got) != len(expectedWatermarkKeys) {
+			t.Fatalf("watermark keys=%v, want exactly %v", got, expectedWatermarkKeys)
+		}
+		for _, dataset := range expectedWatermarkKeys {
+			watermark, exists := got[dataset]
+			if !exists {
+				t.Fatalf("watermarks=%v missing required key %q", got, dataset)
+			}
+			if !watermark.Equal(want) {
+				t.Fatalf("%s watermark=%s want=%s", dataset, watermark, want)
+			}
+		}
 	}
 	for _, test := range []struct {
 		name         string
@@ -252,24 +275,47 @@ SELECT status, result::text FROM public.sync_run_units WHERE id = $1`, test.unit
 					t.Fatalf("degraded response changed prior membership: transitions=%d presence=%d to=%q", membershipRows, presenceRows, toProjectID)
 				}
 				seedWatermark := time.Date(2026, 8, 20, 1, 0, 0, 0, time.UTC)
-				for dataset, watermark := range watermarks {
-					if !watermark.Equal(seedWatermark) {
-						t.Fatalf("degraded response advanced %s watermark to %s, seed=%s", dataset, watermark, seedWatermark)
-					}
-				}
+				assertWatermarks(t, watermarks, seedWatermark)
 			}
 			if test.wantRemoval {
 				if result.Watermark == nil || !result.Watermark.Equal(*claim.BeforeAt) {
 					t.Fatalf("empty board watermark=%v want=%v", result.Watermark, claim.BeforeAt)
 				}
-				if membershipRows != 2 || presenceRows != 0 || toProjectID != "" {
-					t.Fatalf("empty board did not durably remove prior membership: transitions=%d presence=%d to=%q", membershipRows, presenceRows, toProjectID)
+				if membershipRows != 2 || presenceRows != 0 {
+					t.Fatalf("empty board did not durably remove prior membership: transitions=%d presence=%d", membershipRows, presenceRows)
 				}
-				for dataset, watermark := range watermarks {
-					if !watermark.Equal(*claim.BeforeAt) {
-						t.Fatalf("empty board %s watermark=%s want=%s", dataset, watermark, *claim.BeforeAt)
-					}
+				expectedRemoval := projectmembership.Row{
+					OrgID: claim.OrgID, SubjectKind: projectmembership.SubjectPullRequest,
+					SubjectID: "42", RepoID: githubProjectV2TestRepoID(t), Provider: "github",
+					FromProjectID: "ghprojv2:acme#3", OccurredAt: test.before.Add(time.Minute),
 				}
+				expectedRemoval.EventID = projectmembership.EventID(expectedRemoval)
+				var removalRows uint64
+				var removalSubjectKind, removalSubjectID, removalRepoID, removalProvider string
+				var removalFromProjectID, removalToProjectID, removalEventID string
+				var removalOccurredAt time.Time
+				if err := conn.QueryRow(ctx, `
+SELECT count(), any(subject_kind), any(subject_id), any(toString(repo_id)), any(provider),
+       any(from_project_id), any(to_project_id), any(event_id), any(occurred_at)
+FROM project_membership_transitions FINAL
+WHERE org_id = ? AND event_id = ?`, claim.OrgID, expectedRemoval.EventID,
+				).Scan(
+					&removalRows, &removalSubjectKind, &removalSubjectID, &removalRepoID,
+					&removalProvider, &removalFromProjectID, &removalToProjectID,
+					&removalEventID, &removalOccurredAt,
+				); err != nil {
+					t.Fatal(err)
+				}
+				if removalRows != 1 || removalSubjectKind != string(expectedRemoval.SubjectKind) ||
+					removalSubjectID != expectedRemoval.SubjectID || removalRepoID != expectedRemoval.RepoID.String() ||
+					removalProvider != expectedRemoval.Provider || removalFromProjectID != expectedRemoval.FromProjectID ||
+					removalToProjectID != expectedRemoval.ToProjectID || removalEventID != expectedRemoval.EventID ||
+					!removalOccurredAt.Equal(expectedRemoval.OccurredAt) {
+					t.Fatalf("persisted removal mismatch: count=%d subject=%s/%s repo=%s provider=%s from=%q to=%q event=%q occurred=%s want=%+v",
+						removalRows, removalSubjectKind, removalSubjectID, removalRepoID, removalProvider,
+						removalFromProjectID, removalToProjectID, removalEventID, removalOccurredAt, expectedRemoval)
+				}
+				assertWatermarks(t, watermarks, *claim.BeforeAt)
 			}
 
 			var exposition bytes.Buffer

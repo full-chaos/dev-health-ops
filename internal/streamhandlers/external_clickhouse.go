@@ -13,12 +13,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
 
 const externalUpdatedAtClampSkew = 5 * time.Minute
+
+// teamManualMembersPreserveQuery is the external-ingest analogue of
+// ClickHouseStore._preserve_existing_manual_members's SELECT (CHAOS-4321,
+// team-lead ruling 2026-08-26): one batched read per team.v1 kind per Write
+// call, keyed by (org_id, id), never N+1.
+const teamManualMembersPreserveQuery = "SELECT id, manual_members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
 
 type ClickHouseExternalBatchSink struct {
 	conn productClickHouse
@@ -52,12 +59,38 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		if err != nil {
 			return ExternalRecomputeScope{}, err
 		}
+		// CHAOS-4321 (team-lead ruling, 2026-08-26): "an admin-override
+		// column that one write path can erase is not shippable." Read the
+		// current manual_members for every team this batch is about to
+		// write BEFORE preparing the insert, so the write below can carry
+		// each team's existing value forward instead of clobbering it with
+		// the ClickHouse schema DEFAULT ([]). A read failure here is NOT
+		// papered over with an empty preserved set (that would silently
+		// wipe overrides the same way the original gap did) -- it aborts
+		// this Write() call before any team.v1 row is prepared, same as
+		// every other failure in this function; the message redelivers and
+		// the row is retried, never silently written wrong. (Every other
+		// kind in this batch that sorted before "team.v1" has already been
+		// durably written by this point -- that is pre-existing behavior
+		// for ANY failure partway through this loop, not new here: this
+		// function has never wrapped its per-kind writes in one transaction.)
+		var existingManualMembers map[string][]string
+		if kind == "team.v1" {
+			teamIDs := make([]string, 0, len(grouped[kind]))
+			for _, record := range grouped[kind] {
+				teamIDs = append(teamIDs, stringField(record.Payload, "id"))
+			}
+			existingManualMembers, err = s.preserveExistingManualMembers(ctx, source.Pointer.OrgID, teamIDs)
+			if err != nil {
+				return ExternalRecomputeScope{}, fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
+			}
+		}
 		batch, err := s.conn.PrepareBatch(ctx, query)
 		if err != nil {
 			return ExternalRecomputeScope{}, fmt.Errorf("prepare external %s sink: %w", kind, err)
 		}
 		for _, record := range grouped[kind] {
-			values, err := externalRecordValues(source, record, now, &scope)
+			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
 			if err != nil {
 				return ExternalRecomputeScope{}, fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
 			}
@@ -74,6 +107,36 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)
 	scope.RecordKinds = sortedExternalStrings(scope.RecordKinds)
 	return scope, nil
+}
+
+// preserveExistingManualMembers batch-reads the current manual_members for
+// every team this Write() call is about to touch, mirroring
+// ClickHouseStore._preserve_existing_manual_members's query and intent
+// exactly (CHAOS-4321, team-lead ruling 2026-08-26). A team with no existing
+// row simply has no entry in the returned map -- externalRecordValues
+// defaults that case to [], the correct value for a genuinely new team.
+func (s *ClickHouseExternalBatchSink) preserveExistingManualMembers(
+	ctx context.Context, orgID string, teamIDs []string,
+) (map[string][]string, error) {
+	if len(teamIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.conn.Query(ctx, teamManualMembersPreserveQuery,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("team_ids", teamIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	existing := make(map[string][]string, len(teamIDs))
+	for rows.Next() {
+		var id string
+		var manualMembers []string
+		if err := rows.Scan(&id, &manualMembers); err != nil {
+			return nil, err
+		}
+		existing[id] = manualMembers
+	}
+	return existing, rows.Err()
 }
 
 func externalInsertQuery(kind string) (string, error) {
@@ -117,6 +180,7 @@ func externalRecordValues(
 	record externalSinkRecord,
 	now time.Time,
 	scope *ExternalRecomputeScope,
+	existingManualMembers map[string][]string,
 ) ([]any, error) {
 	payload := record.Payload
 	orgID, system, instance := source.Pointer.OrgID, source.Pointer.SourceSystem, source.Pointer.SourceInstance
@@ -198,31 +262,21 @@ func externalRecordValues(
 		}
 		updatedAt = externalClampUpdatedAt(updatedAt, now)
 		scope.TeamIDs = append(scope.TeamIDs, teamID)
+		// manual_members (CHAOS-4321, team-lead ruling 2026-08-26): this
+		// writer carries the team's CURRENT manual_members forward instead
+		// of overwriting it, same guard ClickHouseStore.insert_teams
+		// applies in Python -- Write() reads it via
+		// preserveExistingManualMembers before preparing this batch. A
+		// team with no existing row (or a genuinely new team.v1 record)
+		// correctly defaults to [].
+		manualMembers := []string{}
+		if existing, ok := existingManualMembers[teamID]; ok {
+			manualMembers = existing
+		}
 		return []any{
 			teamID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)), stringField(payload, "name"),
 			externalNullableString(payload, "description"), stringArrayField(payload, "members"),
-			// manual_members (CHAOS-4321) -- KNOWN, DISCLOSED GAP, not a new
-			// regression: this writer sends [] unconditionally, so an
-			// external-ingest update to a team_id that ALSO carries an
-			// admin-curated manual_members override WOULD clear it (same
-			// failure class the codex adversarial review round 2 HIGH
-			// finding raised for providers/teams.py's sync_teams path,
-			// fixed there via ClickHouseStore.insert_teams's
-			// preserve-existing-value guard). NOT fixed the same way here:
-			// productClickHouse (this sink's only ClickHouse dependency) is
-			// deliberately write-only (PrepareBatch only, no Query), so a
-			// preserve-lookup would mean extending that interface and every
-			// implementation/double of it -- out of this ticket's scope.
-			// Also NOT a behavior change THIS edit introduces: before
-			// manual_members existed as a column, this same INSERT already
-			// omitted it from the column list, and ClickHouse fills an
-			// omitted column from its schema DEFAULT ([]) on every write --
-			// this writer has cleared manual_members on every team.v1
-			// record since migration 079 added the column, with or without
-			// this line; adding it explicitly only keeps the column list
-			// (and the golden fixture comparing it) accurate, it does not
-			// change what gets written.
-			[]string{},
+			manualMembers,
 			stringArrayField(payload, "projectKeys"), stringArrayField(payload, "repoPatterns"),
 			externalBoolUint(payload, "isActive", true), updatedAt, now, orgID, system,
 			externalNullableString(payload, "nativeTeamKey"), externalNullableString(payload, "parentTeamId"), source.SourceID,

@@ -43,6 +43,16 @@ type productEvent struct {
 
 type productClickHouse interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
+	// Query is narrow and single-purpose (CHAOS-4321, team-lead ruling
+	// 2026-08-26): ClickHouseExternalBatchSink's team.v1 write needs to read
+	// a team's current manual_members before overwriting the row, the same
+	// preserve-on-write guard ClickHouseStore.insert_teams already applies
+	// in Python -- an admin-override column that one write path can
+	// silently erase is not shippable. This does not widen what
+	// ProductTelemetryHandler can do; it only reads, and the real
+	// driver.Conn (this interface's only production implementation)
+	// already satisfies it with zero adapter changes.
+	Query(context.Context, string, ...any) (driver.Rows, error)
 }
 
 type ProductTelemetryHandler struct{ conn productClickHouse }

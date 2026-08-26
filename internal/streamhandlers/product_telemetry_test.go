@@ -3,6 +3,7 @@ package streamhandlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -19,6 +20,18 @@ type productSink struct {
 	batch   *productBatch
 	batches []*productBatch
 	err     error
+
+	// queryRows/queryErr configure Query -- used by
+	// ClickHouseExternalBatchSink's team.v1 manual_members preserve-lookup
+	// (CHAOS-4321, team-lead ruling 2026-08-26). Unset (the default for
+	// every test that doesn't care) means "no existing row for any team",
+	// which is exactly the pre-fix behavior every existing test already
+	// expects.
+	queryRows     [][]any
+	queryErr      error
+	queryCalls    int
+	lastQuery     string
+	lastQueryArgs []any
 }
 
 func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
@@ -34,6 +47,47 @@ func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.
 	}
 	return s.batch, nil
 }
+
+func (s *productSink) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
+	s.queryCalls++
+	s.lastQuery = query
+	s.lastQueryArgs = args
+	if s.queryErr != nil {
+		return nil, s.queryErr
+	}
+	return &productRows{rows: s.queryRows}, nil
+}
+
+// productRows is a minimal driver.Rows double: only Next/Scan/Close/Err are
+// ever exercised by preserveExistingManualMembers's read loop.
+type productRows struct {
+	rows []([]any)
+	idx  int
+}
+
+func (r *productRows) Next() bool { return r.idx < len(r.rows) }
+func (r *productRows) Scan(dest ...any) error {
+	row := r.rows[r.idx]
+	r.idx++
+	for i, d := range dest {
+		switch target := d.(type) {
+		case *string:
+			*target, _ = row[i].(string)
+		case *[]string:
+			*target, _ = row[i].([]string)
+		default:
+			return fmt.Errorf("productRows: unsupported scan dest %T", d)
+		}
+	}
+	return nil
+}
+func (r *productRows) ScanStruct(any) error             { return errors.New("unused") }
+func (r *productRows) ColumnTypes() []driver.ColumnType { return nil }
+func (r *productRows) Totals(...any) error              { return errors.New("unused") }
+func (r *productRows) Columns() []string                { return nil }
+func (r *productRows) Close() error                     { return nil }
+func (r *productRows) Err() error                       { return nil }
+func (r *productRows) HasData() bool                    { return len(r.rows) > 0 }
 
 type productBatch struct {
 	rows    [][]any

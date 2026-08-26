@@ -1,21 +1,27 @@
-"""CHAOS-4321 (chris's ruling, 2026-08-26 06:24-06:26 PT, Urgent): team
-attribution comes ONLY from project/repo OWNERSHIP -- no owning team means
-``unassigned``. Nothing about who authored or was assigned an item may ever
-become a team candidate: a person can be on N teams, so member -> team is not
-a function, and picking one (as ``author_membership``/CHAOS-4244 and the
-older, pre-4244 ``assignee_membership`` both did) is fabrication.
+"""CHAOS-4321 (chris's ruling, 2026-08-26): only the CHAOS-4244 author_membership
+path (a PR/MR's reporter walked through ``team_memberships``) is removed.
+``assignee_membership`` -- the pre-4244, rank-4 mechanism -- STAYS: chris
+confirmed membership-based attribution is legitimate under the manual
+override (see docs/contribute/architecture/team-attribution.md Sec 0 for the
+gate reasoning). An author is simply whoever opened the item, with none of
+the deliberate-curation character an assignment has; nothing about who
+authored an item may become a team candidate.
 
-RED-FIRST (ticket step 2): every case in this module fails against the
-pre-CHAOS-4321 ``resolve_team_attribution``, which still stamps a primary
-team candidate from ``team_memberships`` alone (via ``attribution_context.
-member_by_identity`` for both the author/reporter path -- CHAOS-4244 -- and
-the context-based assignee path, and via the legacy ``TeamResolver`` for the
-older assignee path predating CHAOS-4244). This module intentionally does
-NOT touch ``tests/metrics/test_pr_author_team_attribution.py`` (the CHAOS-4244
-suite asserting the now-forbidden behavior) -- that suite is replaced in the
-same commit that removes ``author_membership``/``assignee_membership`` from
-``resolve_team_attribution`` (see ``docs/contribute/architecture/
-team-attribution.md`` Sec 0 for the post-fix precedence ladder).
+RED-FIRST (ticket step 2, author scope only): every case here fails against
+the pre-CHAOS-4321 ``resolve_team_attribution``, which still stamps a primary
+``author_membership`` candidate from ``team_memberships`` via
+``attribution_context.member_by_identity`` (the reporter path, CHAOS-4244).
+This module does NOT touch ``tests/metrics/test_pr_author_team_attribution.py``
+(the CHAOS-4244 suite asserting the now-forbidden author behavior; its
+assignee-scoped tests, e.g. ``test_assignee_still_outranks_nothing_and_
+author_never_overrides_a_real_assignee``, describe UNCHANGED behavior and
+must survive) -- that suite's author-specific tests are replaced in the same
+commit that removes ``author_membership`` from ``resolve_team_attribution``.
+
+An earlier revision of this module also asserted assignee-in-non-owning-team
+-> unassigned. That was WRONG: chris's ruling keeps assignee_membership
+legitimate regardless of repo/project ownership, so those cases (and the
+legacy ``TeamResolver``-based assignee path) are removed here, not asserted.
 """
 
 from __future__ import annotations
@@ -30,7 +36,6 @@ from dev_health_ops.metrics.compute_work_items import (
 )
 from dev_health_ops.metrics.prometheus import work_item_team_attribution_metric_source
 from dev_health_ops.models.work_items import WorkItem
-from dev_health_ops.providers.teams import TeamResolver
 
 COMPUTED_AT = datetime(2026, 8, 26, tzinfo=timezone.utc)
 REPO_ID = uuid.UUID("c7198fbc-1945-3717-05d8-eb78866b4e79")
@@ -63,8 +68,9 @@ def _pr_work_item(
 def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
     # Mirrors what the ClickHouse-loaded member_by_identity path stores today
     # (source stamped "assignee_membership" at load time; the reporter path
-    # relabels it "author_membership" at the point of use). Post-fix, neither
-    # label may ever reach resolve_team_attribution's output.
+    # relabels it "author_membership" at the point of use). Post-fix, the
+    # "author_membership" label may never reach resolve_team_attribution's
+    # output again -- "assignee_membership" still can, unchanged.
     return TeamAttributionCandidate(
         source="assignee_membership",
         team_id=team_id,
@@ -88,6 +94,8 @@ def test_author_in_a_team_that_does_not_own_the_repo_is_unassigned():
     )
     assert (team_id, team_name) == (None, None)
     assert [c.source for c in candidates] == ["unassigned"]
+    # Target reason for the eventual combined (Python + Go) telemetry change
+    # (ticket step 4) -- deferred alongside the source removal, see handoff.
     assert candidates[0].evidence == "no_candidate:no_owning_team"
 
 
@@ -109,42 +117,12 @@ def test_author_on_two_teams_is_unassigned_no_arbitrary_pick():
     assert candidates[0].evidence == "no_candidate:no_owning_team"
 
 
-def test_assignee_in_a_team_that_does_not_own_the_repo_is_unassigned_context_path():
-    item = _pr_work_item(assignees=["bob"], repo_id=REPO_ID)
+def test_bot_author_with_matching_membership_row_still_unassigned():
+    item = _pr_work_item(reporter="github:dependabot[bot]")
     context = TeamAttributionContext(
         member_by_identity={
-            ("github", "bob"): [_member_candidate("team-ops", "Ops Team")]
-        }
-    )
-    team_id, team_name, candidates = resolve_team_attribution(
-        item, team_resolver=None, project_key_resolver=None, attribution_context=context
-    )
-    assert (team_id, team_name) == (None, None)
-    assert [c.source for c in candidates] == ["unassigned"]
-
-
-def test_assignee_in_a_team_that_does_not_own_the_repo_is_unassigned_legacy_path():
-    """The OLDER (pre-CHAOS-4244) assignee mechanism -- the standalone
-    ``TeamResolver`` passed as ``team_resolver`` -- must be removed too, not
-    just the context-based one. A populated legacy resolver mapping the
-    assignee to a team must not resolve when nothing owns the repo."""
-    item = _pr_work_item(assignees=["bob"], repo_id=REPO_ID)
-    team_id, team_name, candidates = resolve_team_attribution(
-        item,
-        team_resolver=TeamResolver(member_to_team={"bob": ("team-ops", "Ops Team")}),
-        project_key_resolver=None,
-    )
-    assert (team_id, team_name) == (None, None)
-    assert [c.source for c in candidates] == ["unassigned"]
-
-
-def test_assignee_on_two_teams_is_unassigned_no_arbitrary_pick():
-    item = _pr_work_item(assignees=["bob"])
-    context = TeamAttributionContext(
-        member_by_identity={
-            ("github", "bob"): [
-                _member_candidate("team-ops", "Ops Team"),
-                _member_candidate("team-platform", "Platform Team"),
+            ("github", "github:dependabot[bot]"): [
+                _member_candidate("team-ops", "Ops Team")
             ]
         }
     )
@@ -153,14 +131,23 @@ def test_assignee_on_two_teams_is_unassigned_no_arbitrary_pick():
     )
     assert (team_id, team_name) == (None, None)
     assert [c.source for c in candidates] == ["unassigned"]
+    # Pinned to the new uniform reason, not the old "bot_author" one -- the
+    # bot check itself is removed along with the rest of the author path, so
+    # this is red-first too, not merely a same-outcome-different-reason case.
+    assert candidates[0].evidence == "no_candidate:no_owning_team"
 
 
-def test_ownership_wins_regardless_of_membership():
-    """Repo ownership resolves the team even when the author AND assignee
-    (the same person here) are BOTH mapped to a DIFFERENT team via
-    team_memberships -- membership must contribute NOTHING to the candidate
-    list, not merely lose a precedence fight."""
-    item = _pr_work_item(reporter="alice", assignees=["alice"], repo_id=REPO_ID)
+def test_ownership_wins_over_author_membership():
+    """Repo ownership resolves the team even when the author is mapped to a
+    DIFFERENT team via team_memberships -- the author signal must contribute
+    NOTHING to the candidate list at all (not merely lose a precedence
+    fight), unlike assignee_membership, which DOES still appear as a
+    non-primary candidate in the equivalent situation (unchanged,
+    ``tests/metrics/test_pr_author_team_attribution.py::
+    test_assignee_still_outranks_nothing_and_author_never_overrides_a_real_assignee``).
+    No assignee is set here, so the only candidates possible are
+    repo_ownership and (pre-fix) author_membership."""
+    item = _pr_work_item(reporter="alice", repo_id=REPO_ID)
     context = TeamAttributionContext(
         repo_by_id={
             # TeamAttributionContext keys are (provider, str(key)) --
@@ -187,26 +174,6 @@ def test_ownership_wins_regardless_of_membership():
     )
     assert (team_id, team_name) == ("team-repo", "Repository Team")
     assert [c.source for c in candidates] == ["repo_ownership"]
-
-
-def test_bot_author_with_matching_membership_row_still_unassigned():
-    item = _pr_work_item(reporter="github:dependabot[bot]")
-    context = TeamAttributionContext(
-        member_by_identity={
-            ("github", "github:dependabot[bot]"): [
-                _member_candidate("team-ops", "Ops Team")
-            ]
-        }
-    )
-    team_id, team_name, candidates = resolve_team_attribution(
-        item, team_resolver=None, project_key_resolver=None, attribution_context=context
-    )
-    assert (team_id, team_name) == (None, None)
-    assert [c.source for c in candidates] == ["unassigned"]
-    # Pinned to the new uniform reason, not the old "bot_author" one -- the
-    # bot check itself is removed along with the rest of the author path, so
-    # this is red-first too, not merely a same-outcome-different-reason case.
-    assert candidates[0].evidence == "no_candidate:no_owning_team"
 
 
 def test_no_owning_team_telemetry_reason_surfaces_through_metric_mapper():

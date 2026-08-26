@@ -4,8 +4,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // The production feed for computed_at is time.Now() (complete_route.go:118),
@@ -77,45 +75,38 @@ func TestGitHubWorkItemDerivedSurfacesQuantizeStampsAtBuilderEntry(t *testing.T)
 	}
 }
 
-// githubWorkItemDerivedCollisionFixture drives a REAL resolver-produced
-// sorting-key collision: two candidates sharing (source, team_id) but
-// differing in fields the ClickHouse sorting key does not carry (evidence,
-// team_name), so if the resolver ever stops emitting two candidates here the
-// collision tests below fail rather than quietly becoming vacuous.
-//
-// CHAOS-4321 (chris's ruling, 2026-08-26): this used to be the Go twin of the
-// two_assignees_one_team_collide_on_sorting_key oracle case -- two members of
-// ONE team, both resolving via assignee_membership. That source no longer
-// exists (member -> team inference is fabrication; team attribution is
-// ownership-only). Two repo_ownership facts naming the SAME team by
-// different repo identities (repo_id vs repo_full_name -- both legitimate,
-// independently-keyed ownership facts a real sync can produce for one repo)
-// reproduce the identical real-resolver collision without touching a removed
-// source.
+// githubWorkItemDerivedCollisionFixture is the Go twin of the
+// two_assignees_one_team_collide_on_sorting_key oracle case: two members of ONE
+// team assigned to one issue. It is built from the REAL derivation context and
+// the REAL builder, so if the resolver ever stops emitting two candidates here
+// the collision tests below fail rather than quietly becoming vacuous.
 func githubWorkItemDerivedCollisionFixture(
 	t *testing.T, computedAt time.Time,
 ) githubWorkItemDerivedSurfaces {
 	t.Helper()
 	claim := githubWorkItemOracleClaim()
-	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	facts := githubWorkItemDerivationFacts{
-		Repos: []githubWorkItemDerivationRepoFact{
+		Members: []githubWorkItemDerivationMemberFact{
 			{
 				Provider: "github", TeamID: "payments", TeamName: "Payments",
-				RepoID: &repoID, IsPrimary: 1, Specificity: 50, Priority: 20,
+				MemberID: "m1", RawProviderUserID: stringPointer("octocat"),
+				IdentityFacets: []string{"octocat"},
+				IsPrimary:      1, Specificity: 50, Priority: 20,
 				UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 			},
 			{
 				Provider: "github", TeamID: "payments", TeamName: "Payments Squad",
-				RepoFullName: "acme/api", IsPrimary: 0, Specificity: 50, Priority: 20,
+				MemberID: "m2", RawProviderUserID: stringPointer("hubcat"),
+				IdentityFacets: []string{"hubcat"},
+				IsPrimary:      0, Specificity: 50, Priority: 20,
 				UpdatedAt: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 			},
 		},
 	}
-	repoUUID := uuid.MustParse(repoID)
 	rows := githubWorkItemRows{WorkItems: []githubWorkItemRow{{
 		WorkItemID: "acme/api#40", Provider: "github", Title: "t", Type: "issue",
-		Status: "todo", RepoID: &repoUUID, ProjectID: stringPointer("acme/api"),
+		Status: "todo", ProjectID: stringPointer("acme/api"),
+		Assignees: []string{"octocat", "hubcat"},
 		CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
 		OrgID:     claim.OrgID,

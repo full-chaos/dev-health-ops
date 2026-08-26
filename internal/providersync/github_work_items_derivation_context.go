@@ -49,10 +49,13 @@ type githubWorkItemDerivationSubject struct {
 	ProjectName   *string
 	Assignees     []string
 	// Reporter is the item's author (e.g. a PR's opener). CHAOS-4321 (chris's
-	// ruling, 2026-08-26): a person is never a team-attribution source --
-	// resolve() no longer reads Reporter at all. Kept on the struct because
-	// callers outside this file populate/persist it as ordinary work_item
-	// data (member attribution, a separate person-keyed concern -- see
+	// ruling, 2026-08-26): the CHAOS-4244 author_membership path (rank 6),
+	// which fed Reporter through the same team_memberships lookup as
+	// assignee_membership, is removed -- resolve() no longer reads Reporter
+	// for team attribution at all. assignee_membership (below) is unchanged.
+	// Reporter is kept on the struct because callers outside this file
+	// populate/persist it as ordinary work_item data (member attribution, a
+	// separate person-keyed concern -- see
 	// docs/contribute/architecture/team-attribution.md §0).
 	Reporter *string
 	OrgID    string
@@ -649,32 +652,30 @@ func (derived githubWorkItemDerivationContext) resolve(
 		bySource["repo_ownership"],
 		derived.repoByName[attributionMapKey(subject.Provider, githubWorkItemDerivationStringValue(subject.ProjectID))]...,
 	)
-	// CHAOS-4321 (chris's ruling, 2026-08-26): team attribution comes ONLY
-	// from project/repo OWNERSHIP -- never from a person. Both
-	// author_membership (CHAOS-4244, rank 6, the reporter/author path) and
-	// assignee_membership (pre-4244, rank 4) walked a person (subject.
-	// Reporter / subject.Assignees) through memberByID -- built from
-	// team_memberships -- to a team and wrote that as TEAM attribution. A
-	// person can be on N teams, so member -> team is not a function; picking
-	// one was fabrication (the CHAOS-4321 incident: 19+ wrong rows on prod
-	// from author_membership alone, growing every generation, plus every
-	// assignee_membership row ever written since it shipped). Member
-	// attribution (who authored/was assigned) is a separate, person-keyed
-	// concern that lives OUTSIDE this table -- see
-	// docs/contribute/architecture/team-attribution.md §0 -- and must never
-	// feed a team candidate here. The "assignee_membership"/"author_membership"
-	// source strings stay valid on the ClickHouse Enum8 so historical rows
-	// written before this fix keep reading back; this resolver simply never
-	// emits either again. memberByID/loadMembers/Facts.Members are now
-	// unused by resolve() (kept wired pending a follow-up cleanup ticket --
-	// see PR RISK-NOTES).
+	for _, assignee := range subject.Assignees {
+		bySource["assignee_membership"] = append(
+			bySource["assignee_membership"],
+			derived.memberByID[attributionMapKey(subject.Provider, normalizeDerivationIdentity(assignee))]...,
+		)
+	}
+	// CHAOS-4321 (chris's ruling, 2026-08-26): the CHAOS-4244 author_membership
+	// path used to live here -- the reporter (author), stamped as its own
+	// source/rank (rank 6, below linked_issue), fed through the SAME
+	// memberByID lookup the assignee loop above uses. Removed by explicit
+	// ruling: unlike assignee_membership (rank 4, above -- UNCHANGED),
+	// author_membership is not covered by the manual-override basis that
+	// keeps assignee_membership legitimate; see
+	// docs/contribute/architecture/team-attribution.md §0 and CHAOS-4321 for
+	// the reasoning. The "author_membership" Enum8 value stays valid for
+	// readback of historical rows; this resolver simply never emits it again.
 	bySource["manual_fallback"] = append(
 		bySource["manual_fallback"], derived.manualCandidates(subject)...,
 	)
 
 	order := []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
-		"linked_issue", "manual_fallback", "unassigned",
+		"assignee_membership", "linked_issue",
+		"manual_fallback", "unassigned",
 	}
 	var primary *githubWorkItemDerivationCandidate
 	all := make([]githubWorkItemDerivationCandidate, 0)
@@ -699,14 +700,19 @@ func (derived githubWorkItemDerivationContext) resolve(
 		all = append(all, candidates...)
 	}
 	if primary == nil {
-		// CHAOS-4321: the only reason left an item can be unassigned is that
-		// no project/repo ownership fact (or native/issue-project/linked-issue/
-		// manual-fallback) resolved a team for it -- surfaced as a distinct
-		// telemetry reason (githubWorkItemTeamAttributionMetricSource strips
-		// the "no_candidate:" prefix) so operators can tell "nobody owns this"
-		// from a future different unassigned cause.
+		// CHAOS-4321 (ticket step 4, telemetry): a `no_owning_team` evidence
+		// tag was tried here and reverted -- the live-Python-oracle gate
+		// (ci/check_go.sh, NOT plain `go test`) caught it as a cross-language
+		// parity break: Python's resolve_team_attribution still emits bare
+		// "no_candidate" for this case (its reporterSkipReason mechanism is
+		// untouched, Python source change is held). Evidence stays
+		// "no_candidate" -- byte-identical to Python and to main -- until the
+		// telemetry improvement can land in the SAME change as the Python
+		// fix. See docs/contribute/architecture/team-attribution.md §0.6 and
+		// AGENTS.md "Anything cross-implementation needs a differential
+		// oracle."
 		value := githubWorkItemDerivationCandidate{
-			Source: "unassigned", Confidence: "none", Evidence: "no_candidate:no_owning_team",
+			Source: "unassigned", Confidence: "none", Evidence: "no_candidate",
 			IsPrimary: 1, UpdatedAt: normalizedDerivationTime(time.Time{}),
 		}
 		primary = &value
@@ -941,12 +947,9 @@ func (derived githubWorkItemDerivationContext) buildLinkedIssueIndex(
 	baseNative := map[string]bool{}
 	keyIndex := map[string]string{}
 	ambiguous := map[string]bool{}
-	// CHAOS-4321: assignee_membership dropped -- it is no longer a
-	// first-class ownership fact resolve() can even produce, so it must not
-	// be donor-eligible either.
 	allowedDonorSources := map[string]bool{
 		"native_team": true, "issue_project": true, "project_ownership": true,
-		"repo_ownership": true,
+		"repo_ownership": true, "assignee_membership": true,
 	}
 	for _, subject := range subjects {
 		baseNative[subject.WorkItemID] = derived.nativeTeamCandidate(subject) != nil
@@ -1431,9 +1434,9 @@ func githubWorkItemDerivationStringValue(value *string) string {
 // and githubWorkItemDerivationIsPullOrMergeRequestType (the CHAOS-4244
 // reporter-ambiguity gate, bot filter, and PR/MR type gate) were removed here
 // -- their only caller was the author_membership candidate path this ruling
-// deletes. Historical `no_candidate:bot_author` / `no_candidate:ambiguous_membership`
+// removes. Historical `no_candidate:bot_author` / `no_candidate:ambiguous_membership`
 // rows already on prod stay readable (Enum8 unaffected); nothing new writes
-// them.
+// them. assignee_membership is unaffected -- it never had these gates.
 
 func githubWorkItemDerivationFirstNonEmpty(values ...string) string {
 	for _, value := range values {

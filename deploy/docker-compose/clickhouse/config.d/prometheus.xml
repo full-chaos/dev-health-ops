@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+  CHAOS-4245: enable ClickHouse's built-in Prometheus exporter so the prod
+  otel-collector (deploy/otel/otel.prod.yml, job "clickhouse") can scrape
+  server-level metrics/events/asynchronous_metrics.
+
+  Deliberately does NOT enable `status_info` or any per-query/per-table
+  exposition: ClickHouse's native exporter only ever emits the three
+  families below, all process-wide gauges/counters with no per-query or
+  per-table labels, so cardinality is bounded regardless.
+
+  Opening this listener requires a ClickHouse process restart to bind the new
+  port; config.d drop-ins do not hot-reload a new TCP listener. See the PR's
+  PROD-APPLY section: this file is NOT applied to prod as part of this PR.
+-->
+<clickhouse>
+  <prometheus>
+    <endpoint>/metrics</endpoint>
+    <port>9363</port>
+    <metrics>true</metrics>
+    <events>true</events>
+    <asynchronous_metrics>true</asynchronous_metrics>
+  </prometheus>
+</clickhouse>

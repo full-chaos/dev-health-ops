@@ -1,0 +1,399 @@
+extensions:
+  docker_observer:
+    endpoint: unix:///var/run/docker.sock
+    include_all_containers: true
+    excluded_images:
+      - "otel/*"
+    timeout: 5s
+    cache_sync_interval: 60m
+    events: [start, stop, die]
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  #filelog/docker:
+  #    include: [/var/lib/docker/containers/*/*-json.log]
+  #    # exclude:
+  #    #     - /var/lib/docker/containers/862d3425c7c6411e0bd376f9628c44ecf7dee09fcd188aa3bf7ec09ce7eee520/*
+  #    poll_interval: 200ms
+  #    start_at: end
+  #    include_file_name: false
+  #    include_file_path: true
+  #    operators:
+  #        - id: container-parser
+  #          type: container
+  #          format: docker
+  #          add_metadata_from_filepath: false
+  #        - id: extract-container-id
+  #          type: regex_parser
+  #          parse_from: attributes["log.file.path"]
+  #          regex: "/var/lib/docker/containers/(?P<container_id>[a-f0-9]{64})/"
+  #          on_error: send
+  #        - id: move-container-id
+  #          type: move
+  #          from: attributes.container_id
+  #          to: resource["container.id"]
+  #          if: '"container_id" in attributes'
+  #        - id: remove-filepath
+  #          type: remove
+  #          field: attributes["log.file.path"]
+  #        - id: extract-service-name
+  #          type: regex_parser
+  #          parse_from: body
+  #          regex: '"service\.name":\s*"(?P<svc>[^"]+)"'
+  #          if: 'body matches "service\\.name"'
+  #          on_error: send
+  #        - id: set-service-name
+  #          type: move
+  #          from: attributes.svc
+  #          to: resource["service.name"]
+  #          if: '"svc" in attributes'
+  receiver_creator/docker-logs:
+    watch_observers: [docker_observer]
+    receivers:
+      filelog/per-container:
+        rule: type == "container" and port == 0
+        resource_attributes:
+          container.id: "`container_id`"
+          container.name: "`name`"
+          container.image.name: "`image`"
+
+          # Pull service metadata from Docker labels.
+          service.name: '`"logging.service.name" in labels ? labels["logging.service.name"] : name`'
+          service.namespace: '`"logging.service.namespace" in labels ? labels["logging.service.namespace"] : "default"`'
+
+        config:
+          include:
+            - /var/lib/docker/containers/`container_id`/`container_id`-json.log
+          include_file_path: false
+          include_file_name: false
+          start_at: end
+          poll_interval: 200ms
+          operators:
+            - id: container-parser
+              type: container
+              format: docker
+              add_metadata_from_filepath: false
+
+            # If the app log body is JSON, parse it into attributes.
+            - id: parse-json-body
+              type: json_parser
+              parse_from: body
+              parse_to: attributes
+              if: 'body matches "^\\s*\\{"'
+              on_error: send
+
+            # severity normalization
+            - id: parse-severity-from-level
+              type: severity_parser
+              parse_from: attributes.level
+              if: '"level" in attributes'
+              on_error: send
+
+            - id: parse-severity-from-loglevel
+              type: severity_parser
+              parse_from: attributes.loglevel
+              if: '"loglevel" in attributes'
+              on_error: send
+
+            - id: parse-severity-from-severity
+              type: severity_parser
+              parse_from: attributes.severity
+              if: '"severity" in attributes'
+              on_error: send
+
+            # Preserve loglevel as a queryable custom attr.
+            - id: copy-level-to-loglevel
+              type: copy
+              from: attributes.level
+              to: attributes.loglevel
+              if: '"level" in attributes and !("loglevel" in attributes)'
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    metrics:
+      container.cpu.utilization:
+        enabled: true
+      container.memory.percent:
+        enabled: true
+      container.network.io.usage.rx_bytes:
+        enabled: true
+      container.network.io.usage.tx_bytes:
+        enabled: true
+      container.network.io.usage.rx_dropped:
+        enabled: true
+      container.network.io.usage.tx_dropped:
+        enabled: true
+      container.memory.usage.limit:
+        enabled: true
+      container.memory.usage.total:
+        enabled: true
+      container.blockio.io_service_bytes_recursive:
+        enabled: true
+
+  hostmetrics:
+    root_path: /hostfs
+    collection_interval: 60s
+    scrapers:
+      cpu: {}
+      disk: {}
+      load: {}
+      filesystem:
+        exclude_mount_points:
+          mount_points:
+            - /dev/*
+            - /proc/*
+            - /sys/*
+            - /run/*
+            - /var/lib/docker/*
+            - /var/lib/containerd/*
+            - /snap/*
+          match_type: regexp
+        exclude_fs_types:
+          fs_types:
+            - autofs
+            - binfmt_misc
+            - bpf
+            - cgroup2
+            - configfs
+            - debugfs
+            - devpts
+            - devtmpfs
+            - fusectl
+            - hugetlbfs
+            - mqueue
+            - nsfs
+            - overlay
+            - proc
+            - pstore
+            - rpc_pipefs
+            - securityfs
+            - sysfs
+            - tmpfs
+            - tracefs
+          match_type: strict
+      memory: {}
+      network: {}
+      paging: {}
+      process:
+        mute_process_name_error: true
+        mute_process_exe_error: true
+        mute_process_io_error: true
+        mute_process_user_error: true
+        mute_process_cgroup_error: true
+      # processes: {}
+      system: {}
+
+  # CHAOS-4245: Prometheus scrape targets. Everything here resolves on the
+  # `dev-health` compose network by service name -- none of these ports are
+  # published to the host.
+  prometheus:
+    config:
+      scrape_configs:
+        # ClickHouse's built-in exporter (metrics/events/asynchronous_metrics
+        # only -- no per-query/per-table labels, so this is already bounded
+        # cardinality). The relabel below still drops ClickHouseProfileEvents_*
+        # -- by far the largest of the three families and the least useful for
+        # SigNoz alerting -- to keep the scrape lean. Requires the CH restart
+        # noted in deploy/docker-compose/clickhouse/config.d/prometheus.xml;
+        # this job is inert (target unreachable, scrape_up=0) until that lands.
+        - job_name: clickhouse
+          scrape_interval: 30s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["clickhouse:9363"]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "ClickHouseProfileEvents_.*"
+              action: drop
+        # FastAPI app -- prometheus-fastapi-instrumentator, always on (core
+        # dependency, not optional). billing-edge does not expose /metrics.
+        - job_name: api
+          scrape_interval: 30s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["api:8000"]
+        # Go worker fleet (compose.go-workers.yml). Every service here shares
+        # the same operator HTTP server (internal/platform/shell/shell.go ->
+        # internal/platform/health/server.go) on --http-addr=:8080. Worker
+        # groups heavy/ops/sync/sync-provider can run multiple replicas, so
+        # these use dns_sd_configs (re-resolved every 30s) instead of
+        # static_configs, which would only ever resolve to one replica IP at
+        # collector start. CHAOS-4308 tracks a gap in which *counters* reach
+        # this endpoint (a second collector type, jobruntime.MetricsCollector,
+        # isn't registered yet) -- the endpoint itself is already live and
+        # already serves several registered sources (worker_runtime,
+        # provider_foundation, sync_scheduler, sync_reconciler_pipeline, etc).
+        - job_name: go-workers
+          scrape_interval: 30s
+          metrics_path: /metrics
+          dns_sd_configs:
+            - names:
+                - go-worker-heavy
+                - go-worker-ops
+                - go-worker-sync
+                - go-worker-sync-provider
+                - go-reconciler
+                - go-scheduler
+                - go-stream-external
+                - go-stream-ingest
+                - go-stream-pagerduty
+              type: A
+              port: 8080
+              refresh_interval: 30s
+        # Collector self-scrape (service.telemetry.metrics below) so SigNoz
+        # shows scrape_up per target, including the collector itself.
+        - job_name: otelcol-internal
+          scrape_interval: 30s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["localhost:8888"]
+
+  # Postgres (external/managed -- never a compose service in prod) via direct
+  # SQL wire protocol, not an exporter sidecar. Never point this at pgbouncer:
+  # transaction-mode pooling breaks the receiver's session assumptions, same
+  # rule as the `migrate` service's POSTGRES_URI.
+  postgresql:
+    endpoint: ${env:POSTGRES_HOST}:5432
+    transport: tcp
+    username: ${env:POSTGRES_USER}
+    password: ${env:POSTGRES_PASSWORD}
+    databases: ["${env:POSTGRES_DB}"]
+    collection_interval: 30s
+    tls:
+      insecure: true
+
+  # Valkey. No auth configured today (matches REDIS_URL=redis://valkey:6379/1
+  # used unauthenticated elsewhere in compose.production.yml).
+  redis:
+    endpoint: valkey:6379
+    collection_interval: 30s
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  resourcedetection:
+    detectors: [env, system, docker]
+    timeout: 2s
+    override: false
+    system:
+      hostname_sources: [os]
+
+  resource/common:
+    attributes:
+      - key: host.name
+        value: oci-ampere
+        action: upsert
+      - key: deployment.environment
+        value: production
+        action: upsert
+      - key: hostname
+        value: oci-ampere
+        action: upsert
+
+  transform/docker-meta:
+    log_statements:
+      - context: resource
+        statements:
+          - set(attributes["container.runtime"], "docker")
+
+  transform/normalize-log-fields:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(resource.attributes["service.name"], attributes["service.name"]) where (resource.attributes["service.name"] == nil or resource.attributes["service.name"] == "") and attributes["service.name"] != nil
+          - set(resource.attributes["service.name"], attributes["service"]) where (resource.attributes["service.name"] == nil or resource.attributes["service.name"] == "") and attributes["service"] != nil
+          - set(resource.attributes["service.name"], attributes["serviceName"]) where (resource.attributes["service.name"] == nil or resource.attributes["service.name"] == "") and attributes["serviceName"] != nil
+
+          - set(attributes["loglevel"], attributes["level"]) where attributes["loglevel"] == nil and attributes["level"] != nil
+          - set(attributes["loglevel"], attributes["severity"]) where attributes["loglevel"] == nil and attributes["severity"] != nil
+          - set(attributes["loglevel"], severity_text) where attributes["loglevel"] == nil and severity_text != nil and severity_text != ""
+
+          - set(severity_text, attributes["loglevel"]) where (severity_text == nil or severity_text == "") and attributes["loglevel"] != nil
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+exporters:
+  debug:
+  #    verbosity: detailed
+  # Add this temporary debugging exporter
+  # file/debug:
+  #     path: /tmp/otel-payload-debug.json
+  #     # JSON format lets you see the exact nested key/value structure
+  #     format: json
+  otlp_http/signoz:
+    endpoint: https://otlp.fullchaos.dev
+    tls:
+      insecure: false
+    headers:
+      CF-Access-Client-Id: ${env:CF_ACCESS_CLIENT_ID}
+      CF-Access-Client-Secret: ${env:CF_ACCESS_CLIENT_SECRET}
+  otlp:
+    endpoint: https://ingest.us2.signoz.cloud:443
+    tls:
+      insecure: false
+    headers:
+      # CHAOS-4245: the reference copy of this file (chris's local
+      # otel.prod.yml, "matches prod") had this as a literal live SigNoz
+      # Cloud ingestion key. Replaced with an env reference before this file
+      # was ever tracked in git -- see PROD-APPLY for the rotation note.
+      signoz-ingestion-key: ${env:SIGNOZ_INGESTION_KEY}
+
+service:
+  extensions: [docker_observer, health_check, pprof, zpages]
+  telemetry:
+    logs:
+      level: info
+    # CHAOS-4245: exposes the collector's own runtime metrics on :8888 so the
+    # prometheus/otelcol-internal scrape job above can read them back --
+    # otherwise there is no scrape_up series for the collector itself. This
+    # build (signoz/signoz-otel-collector) uses the newer `readers` telemetry
+    # schema -- the older `metrics.address` key is rejected by its config
+    # migration layer (`migration.MetricsConfigV030`).
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource/common, batch]
+      exporters: [otlp_http/signoz]
+
+    metrics:
+      receivers:
+        [otlp, docker_stats, hostmetrics, prometheus, postgresql, redis]
+      processors: [memory_limiter, resourcedetection, resource/common, batch]
+      exporters: [otlp_http/signoz]
+
+    logs:
+      receivers: [otlp, receiver_creator/docker-logs]
+      processors:
+        [
+          memory_limiter,
+          resourcedetection,
+          resource/common,
+          transform/normalize-log-fields,
+          transform/docker-meta,
+          batch,
+        ]
+      exporters: [otlp_http/signoz]

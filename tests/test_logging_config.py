@@ -361,7 +361,17 @@ async def test_leak_harness_actually_observes_a_leak_when_unpatched(
     server = fake_server(_Scenario.SUCCESS)
     host, port = cast(tuple[str, int], server.server_address)
     sentinels = _sentinel_bundle()
-    base_url = f"http://{host}:{port}/v1"
+    # CHAOS-4346: on openai>=3.4.0 the body-content sentinels below never
+    # leak via this path (see _OPENAI_LOGS_REQUEST_BODY_AT_DEBUG), so an
+    # additional URL-embedded marker is needed to keep this test mutation-
+    # sensitive to the httpx2/httpcore2 clamp entries specifically -- httpx2
+    # logs the full outgoing request line ("HTTP Request: POST <url>") at
+    # INFO regardless of DEBUG, so it leaks whenever httpx2/httpcore2 aren't
+    # pinned to WARNING, independent of whether the SDK still logs bodies.
+    # The fake handler ignores the request path entirely, so any path
+    # segment routes to the same response.
+    url_marker = _sentinel("url-path-marker")
+    base_url = f"http://{host}:{port}/v1/{url_marker}"
 
     configure_logging(level="DEBUG")
     # Construct the provider BEFORE forcing DEBUG: the constructor itself now
@@ -390,6 +400,14 @@ async def test_leak_harness_actually_observes_a_leak_when_unpatched(
             "now fails, either the SDK reintroduced body logging (move the "
             "_OPENAI_LOGS_REQUEST_BODY_AT_DEBUG boundary up to match) or "
             "something in this repo is logging it instead (a real leak)"
+        )
+        assert url_marker in caplog.text, (
+            "expected the URL-embedded marker to leak via httpx2's own "
+            "request-line logging with the httpx2/httpcore2 clamp reverted; "
+            "if this fails, the harness can no longer prove the "
+            "httpx2/httpcore2 clamp entries (CHAOS-4346) do anything on "
+            "this openai version -- this test would pass vacuously whether "
+            "or not those entries were removed or misspelled"
         )
         return
     assert sentinels["question"] in caplog.text, (

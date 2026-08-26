@@ -96,6 +96,14 @@ func configuredOperationalOrderingContract() (OperationalOrderingContract, error
 	return parseOperationalOrderingContract(raw, present)
 }
 
+// ConfiguredOperationalOrderingContract exposes the canonical operational-row
+// contract to other metrics readers. Callers must resolve it once and retain
+// the value so one execution cannot change SQL shape after an environment
+// mutation.
+func ConfiguredOperationalOrderingContract() (OperationalOrderingContract, error) {
+	return configuredOperationalOrderingContract()
+}
+
 // currentOperationalRowsSQL ports current_operational_rows_sql
 // (operational_current.py:25). The parenthesised sub-select is spliced into a
 // FROM clause exactly as Python splices it.
@@ -130,23 +138,37 @@ func currentOperationalRowsSQL(
     )`, table, outer)
 }
 
-// resolvedIncidentsQuery ports active_incidents_query(IncidentWindow.RESOLVED)
-// (metrics/active_incidents.py:22).
-//
-// Only the RESOLVED window is ported: it is the only one DORA uses, and a
-// general-purpose builder would be a larger new Go surface than the kind being
-// ported needs. The shape is otherwise character-faithful, because a
-// paraphrase is exactly how a copied query drifts from the one it mirrors --
-// the divergence class internal/providersync's readback pairs exist to catch.
-// A live-Python oracle test pins this against the real builder.
-func resolvedIncidentsQuery(repoFilter string, contract OperationalOrderingContract) string {
+// IncidentWindow selects the lifecycle timestamp used by the canonical
+// repository-scoped incident projection.
+type IncidentWindow int
+
+const (
+	IncidentWindowResolved IncidentWindow = iota + 1
+	IncidentWindowStarted
+)
+
+// IncidentProjectionQuery ports active_incidents_query
+// (metrics/active_incidents.py:22). DORA uses RESOLVED; daily incident metrics
+// use STARTED. Keeping both on one builder prevents the service-mapping and
+// current-row predicates from drifting between metrics readers.
+func IncidentProjectionQuery(
+	window IncidentWindow, repoFilter string, contract OperationalOrderingContract,
+) string {
+	timeFilter := ""
+	switch window {
+	case IncidentWindowResolved:
+		timeFilter = "resolved_at IS NOT NULL " +
+			"AND resolved_at >= {start:DateTime64(3, 'UTC')} " +
+			"AND resolved_at < {end:DateTime64(3, 'UTC')}"
+	case IncidentWindowStarted:
+		timeFilter = "started_at >= {start:DateTime64(3, 'UTC')} " +
+			"AND started_at < {end:DateTime64(3, 'UTC')}"
+	}
 	currentIncidents := currentOperationalRowsSQL(
 		"operational_incidents",
 		[]string{
 			"is_deleted = 0",
-			"resolved_at IS NOT NULL " +
-				"AND resolved_at >= {start:DateTime64(3, 'UTC')} " +
-				"AND resolved_at < {end:DateTime64(3, 'UTC')}",
+			timeFilter,
 		},
 		contract,
 	)
@@ -182,7 +204,11 @@ func resolvedIncidentsQuery(repoFilter string, contract OperationalOrderingContr
             LIMIT 1 BY mapping.repo_id, incident.id
         )
         ORDER BY repo_id, incident_id
-    `, currentIncidents, currentMappings, repoFilter)
+	`, currentIncidents, currentMappings, repoFilter)
+}
+
+func resolvedIncidentsQuery(repoFilter string, contract OperationalOrderingContract) string {
+	return IncidentProjectionQuery(IncidentWindowResolved, repoFilter, contract)
 }
 
 // repoFilterClause ports _repo_filter (job_dora.py:60). repo_id wins over

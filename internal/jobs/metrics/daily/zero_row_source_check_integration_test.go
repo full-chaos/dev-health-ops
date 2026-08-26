@@ -5,13 +5,18 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -23,6 +28,85 @@ import (
 type stubSourceDataConn struct {
 	hasRows map[string]bool
 	queries []string
+}
+
+// strictSourceDataConn models the clickhouse-go named-argument boundary. The
+// production source/output columns are UUID, so the checker must send a
+// []uuid.UUID value for its Array(UUID) parameter. The old []string binding is
+// deliberately rejected here: this makes the handler regression red on the
+// pre-fix tip instead of allowing a table-name-only stub to pass.
+type strictSourceDataConn struct {
+	queries []string
+}
+
+func (conn *strictSourceDataConn) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
+	conn.queries = append(conn.queries, query)
+	if strings.Contains(query, "repo_ids:") {
+		if !strings.Contains(query, "repo_ids:Array(UUID)") {
+			return nil, fmt.Errorf("repository filter is not Array(UUID): %s", query)
+		}
+		for _, arg := range args {
+			named, ok := arg.(driver.NamedValue)
+			if !ok || named.Name != "repo_ids" {
+				continue
+			}
+			if _, ok := named.Value.([]uuid.UUID); !ok {
+				return nil, fmt.Errorf("repo_ids binding type = %T, want []uuid.UUID", named.Value)
+			}
+		}
+	}
+	// cicd has source rows but no output rows. Every other family is empty, so
+	// only cicd is expected to block the partition.
+	if strings.Contains(query, "FROM ci_pipeline_runs") {
+		return &boolRows{present: true}, nil
+	}
+	return &boolRows{present: false}, nil
+}
+
+// incidentScopeConn returns an incident only when the repository is linked by
+// the canonical service mapping. The mapped/unmapped split is the production
+// shape that an org-wide operational_incidents probe cannot represent.
+type incidentScopeConn struct {
+	mappedRepo uuid.UUID
+}
+
+func (conn *incidentScopeConn) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
+	if !strings.Contains(query, "repo_ids:") {
+		if strings.Contains(query, "FROM operational_incidents") {
+			// Baseline behavior: org-wide incident presence would make this true
+			// for every partition. The fixed query always has repo_ids and does
+			// not take this branch.
+			return &boolRows{present: true}, nil
+		}
+		return &boolRows{present: false}, nil
+	}
+	if !strings.Contains(query, "operational_service_repository_mappings") {
+		return &boolRows{present: false}, nil
+	}
+	if !strings.Contains(query, "repo_ids:Array(UUID)") ||
+		!strings.Contains(query, "is_active = 1") ||
+		!strings.Contains(query, "valid_from <=") ||
+		!strings.Contains(query, "valid_to IS NULL") ||
+		!strings.Contains(query, "resolved_at >= {start:DateTime64(3, 'UTC')}") ||
+		!strings.Contains(query, "resolved_at < {end:DateTime64(3, 'UTC')}") {
+		return nil, fmt.Errorf("incident query does not use canonical mapped projection: %s", query)
+	}
+	for _, arg := range args {
+		named, ok := arg.(driver.NamedValue)
+		if !ok || named.Name != "repo_ids" {
+			continue
+		}
+		ids, ok := named.Value.([]uuid.UUID)
+		if !ok {
+			return nil, fmt.Errorf("incident repo_ids binding type = %T, want []uuid.UUID", named.Value)
+		}
+		for _, id := range ids {
+			if id == conn.mappedRepo {
+				return &boolRows{present: true}, nil
+			}
+		}
+	}
+	return &boolRows{present: false}, nil
 }
 
 func (conn *stubSourceDataConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
@@ -189,5 +273,299 @@ func TestClickHouseSourceDataCheckerSkipsPartitionsWithNoRepositories(t *testing
 	}
 	if len(conn.queries) != 0 {
 		t.Fatalf("no_repositories partition issued %d ClickHouse queries, want 0", len(conn.queries))
+	}
+}
+
+// TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData proves the
+// causal boundary: source data plus empty output reaches the real partition
+// handler, increments the family observer, releases the claim for retry, and
+// never calls CompletePartition. It also proves the production UUID binding
+// rather than accepting a table-name-only answer.
+func TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000105"
+		partitionID = "00000000-0000-4000-8000-000000000106"
+		orgID       = "00000000-0000-4000-8000-000000000009"
+		day         = "2026-08-25"
+	)
+	insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, day, []RepositoryID{
+		"00000000-0000-4000-8000-000000000002",
+	})
+
+	conn := &strictSourceDataConn{}
+	checker, err := NewClickHouseSourceDataChecker(pool, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: partitionID, RunID: runID},
+			Token:         "00000000-0000-4000-8000-000000000107",
+			LeaseDuration: time.Second,
+		},
+		run: Run{ID: runID, OrganizationID: orgID, Status: "running"},
+	}
+	observer := &recordingZeroRowsObserver{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetSourceDataChecker(checker)
+	handler.SetZeroRowsObserver(observer)
+
+	err = handler.Work(ctx, partitionExecutionFor(partitionID, runID, orgID))
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("handler error = %v, want retryable zero-row error", err)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("ReleasePartition calls = %d, want 1", store.partitionReleases)
+	}
+	if len(observer.families) != 1 || observer.families[0] != "cicd" {
+		t.Fatalf("observed families = %v, want [cicd]", observer.families)
+	}
+}
+
+// TestClickHouseSourceDataCheckerScopesIncidentSourceThroughCurrentMapping
+// proves that an incident linked to one repository cannot block an unrelated
+// repository's partition. The fixture carries one mapped and one unmapped repo
+// in the same organization and feeds the checker through the production-shaped
+// service/mapping projection boundary.
+func TestClickHouseSourceDataCheckerScopesIncidentSourceThroughCurrentMapping(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		orgID        = "00000000-0000-4000-8000-000000000009"
+		day          = "2026-08-25"
+		mappedRepo   = "00000000-0000-4000-8000-000000000108"
+		unmappedRepo = "00000000-0000-4000-8000-000000000109"
+	)
+	insertPartitionScope(t, ctx, pool,
+		"00000000-0000-4000-8000-000000000110",
+		"00000000-0000-4000-8000-000000000111", orgID, day,
+		[]RepositoryID{mappedRepo})
+	insertPartitionScope(t, ctx, pool,
+		"00000000-0000-4000-8000-000000000112",
+		"00000000-0000-4000-8000-000000000113", orgID, day,
+		[]RepositoryID{unmappedRepo})
+
+	parsedMappedRepo, err := uuid.Parse(mappedRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker, err := NewClickHouseSourceDataChecker(pool, &incidentScopeConn{mappedRepo: parsedMappedRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedFamilies, err := checker.ZeroRowFamiliesWithSourceData(ctx, "00000000-0000-4000-8000-000000000111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mappedFamilies) != 1 || mappedFamilies[0] != "incident" {
+		t.Fatalf("mapped incident families = %v, want [incident]", mappedFamilies)
+	}
+	unmappedFamilies, err := checker.ZeroRowFamiliesWithSourceData(ctx, "00000000-0000-4000-8000-000000000113")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unmappedFamilies) != 0 {
+		t.Fatalf("unmapped incident families = %v, want none", unmappedFamilies)
+	}
+}
+
+// TestClickHouseSourceDataCheckerBindsUUIDArrayAgainstRealUUIDColumn executes
+// the checker query against a real ClickHouse UUID column. A substring stub can
+// accept []string forever; this test reaches the driver encoder and server type
+// checker, proving the Array(UUID) binding matches the production schema.
+func TestClickHouseSourceDataCheckerBindsUUIDArrayAgainstRealUUIDColumn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.Exec(ctx, `
+CREATE TABLE ci_pipeline_runs (
+    org_id String,
+    repo_id UUID,
+    finished_at DateTime64(3, 'UTC')
+) ENGINE = MergeTree ORDER BY (org_id, repo_id, finished_at)`); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		orgID  = "00000000-0000-4000-8000-000000000009"
+		repoID = "00000000-0000-4000-8000-000000000002"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (org_id, repo_id, finished_at)
+VALUES ('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000002'), toDateTime64('2026-08-25 12:00:00', 3, 'UTC'))`); err != nil {
+		t.Fatal(err)
+	}
+	checker := &ClickHouseSourceDataChecker{conn: conn}
+	repositoryID, err := uuid.Parse(repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := checker.exists(ctx, `
+SELECT 1 FROM ci_pipeline_runs
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
+LIMIT 1`, orgID, "2026-08-25", []uuid.UUID{repositoryID})
+	if err != nil {
+		t.Fatalf("UUID source query: %v", err)
+	}
+	if !found {
+		t.Fatal("UUID source query did not find the inserted row")
+	}
+}
+
+// TestClickHouseIncidentProjectionUsesMappedRepositories executes the
+// canonical current-row incident projection against ClickHouse. Only the
+// mapped repository has a service mapping; the same org/day incident must not
+// be treated as source data for the unmapped repository.
+func TestClickHouseIncidentProjectionUsesMappedRepositories(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, statement := range []string{
+		`CREATE TABLE operational_incidents (
+    org_id String, id String, service_id Nullable(String),
+    source_revision DateTime64(6, 'UTC'), source_conflict_key String, ingest_revision UInt128,
+    is_deleted UInt8, started_at Nullable(DateTime64(3, 'UTC'))
+) ENGINE = MergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE operational_service_repository_mappings (
+    org_id String, id String, service_id String, repo_id Nullable(UUID),
+    source_revision DateTime64(6, 'UTC'), source_conflict_key String, ingest_revision UInt128,
+    is_deleted UInt8, is_active UInt8, valid_from Nullable(DateTime64(6, 'UTC')),
+    valid_to Nullable(DateTime64(6, 'UTC'))
+) ENGINE = MergeTree ORDER BY (org_id, id)`,
+		`CREATE TABLE repos (
+    org_id String, id UUID
+) ENGINE = MergeTree ORDER BY (org_id, id)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		orgID        = "00000000-0000-4000-8000-000000000009"
+		mappedRepo   = "00000000-0000-4000-8000-000000000108"
+		unmappedRepo = "00000000-0000-4000-8000-000000000109"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO operational_incidents
+VALUES ('00000000-0000-4000-8000-000000000009', 'incident-1', 'service-1',
+        toDateTime64('2026-08-25 01:00:00', 6, 'UTC'), 'source-1', 1, 0,
+        toDateTime64('2026-08-25 02:00:00', 3, 'UTC'))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO operational_service_repository_mappings
+VALUES ('00000000-0000-4000-8000-000000000009', 'mapping-1', 'service-1',
+        toUUID('00000000-0000-4000-8000-000000000108'),
+        toDateTime64('2026-08-25 01:00:00', 6, 'UTC'), 'source-1', 1, 0, 1,
+        toDateTime64('2026-08-24 00:00:00', 6, 'UTC'), NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO repos VALUES
+('00000000-0000-4000-8000-000000000009', toUUID('00000000-0000-4000-8000-000000000108'))`); err != nil {
+		t.Fatal(err)
+	}
+	mappedID, err := uuid.Parse(mappedRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unmappedID, err := uuid.Parse(unmappedRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &ClickHouseSourceDataChecker{conn: conn}
+	start := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+	for _, testCase := range []struct {
+		name string
+		repo uuid.UUID
+		want bool
+	}{
+		{name: "mapped", repo: mappedID, want: true},
+		{name: "unmapped", repo: unmappedID, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := checker.existsIncident(ctx, orgID, start, end, []uuid.UUID{testCase.repo})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != testCase.want {
+				t.Fatalf("incident source for %s = %t, want %t", testCase.name, got, testCase.want)
+			}
+		})
+	}
+}
+
+type recordingZeroRowsObserver struct {
+	families []string
+}
+
+func (observer *recordingZeroRowsObserver) ObserveDailyMetricsFamilyZeroRowsWithSource(family string) error {
+	observer.families = append(observer.families, family)
+	return nil
+}
+
+func partitionExecutionFor(partitionID, runID, orgID string) *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs] {
+	return &jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]{
+		OrganizationID: &orgID,
+		Envelope: jobcontract.Envelope{
+			OrganizationID: &orgID,
+			Domain:         jobcontract.DomainLink{Type: "daily_metrics_partition", ID: partitionID},
+		},
+		Args: jobruntime.DailyMetricsPartitionArgs{EnvelopeArgs: jobruntime.EnvelopeArgs[jobcontract.DailyMetricsPartitionPayload]{
+			OrganizationID: &orgID,
+			Domain:         jobcontract.DomainLink{Type: "daily_metrics_partition", ID: partitionID},
+			Payload:        jobcontract.DailyMetricsPartitionPayload{PartitionID: partitionID},
+		}},
 	}
 }

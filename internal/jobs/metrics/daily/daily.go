@@ -324,8 +324,12 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	if handler.sourceChecker != nil {
 		families, checkErr := handler.sourceChecker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
 		if checkErr != nil {
+			// A checker query failure is not evidence of a zero-row anomaly. Do
+			// not turn a broken ClickHouse/Postgres dependency into an invisible
+			// retry loop: release the claim and fail this partition loudly so the
+			// runtime/operator can see and repair the dependency.
 			releasePartition(handler.store, ctx, *claim)
-			return jobruntime.Retryable(checkErr)
+			return jobruntime.Permanent(checkErr)
 		}
 		if len(families) > 0 {
 			if handler.zeroRowsObserver != nil {

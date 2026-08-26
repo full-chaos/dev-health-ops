@@ -3,8 +3,10 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,16 +67,16 @@ WHERE partition.id = $1::uuid`, partitionID).Scan(&orgID, &day, &rawRepositoryID
 		// already terminalizes that case as no_repositories. Nothing to check.
 		return nil, nil
 	}
-	// clickhouse-go's Array(String) named-parameter binding is verified against
-	// plain []string, not an arbitrary named string type; converting once here
-	// keeps every query below on that verified path.
-	repositoryIDs := repositoryIDStrings(typedRepositoryIDs)
+	repositoryIDs, err := repositoryIDUUIDs(typedRepositoryIDs)
+	if err != nil {
+		return nil, ErrInvalidState
+	}
 
 	// cicd: source is ci_pipeline_runs, keyed by its own repo_id and the day
 	// its run finished.
 	cicdSource, err := checker.exists(ctx, `
 SELECT 1 FROM ci_pipeline_runs
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
@@ -82,7 +84,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	}
 	cicdOutput, err := checker.exists(ctx, `
 SELECT 1 FROM cicd_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)} AND day = {day:Date}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
@@ -94,7 +96,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	// not a simplified two-value one.
 	deploySource, err := checker.exists(ctx, `
 SELECT 1 FROM deployments
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND toDate(coalesce(deployed_at, finished_at, started_at, last_synced)) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
@@ -102,7 +104,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	}
 	deployOutput, err := checker.exists(ctx, `
 SELECT 1 FROM deploy_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)} AND day = {day:Date}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
@@ -117,7 +119,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	// the RCA itself found stale -- testops_quality_drag is not checked here.
 	testopsSource, err := checker.exists(ctx, `
 SELECT 1 FROM test_suite_results
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
@@ -126,34 +128,32 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	testopsOutput, err := checker.exists(ctx, `
 SELECT 1 FROM (
   SELECT repo_id FROM testops_release_confidence
-  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)} AND day = {day:Date}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
   UNION ALL
   SELECT repo_id FROM testops_pipeline_stability
-  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)} AND day = {day:Date}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 )
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	// incident: operational_incidents carries no repo_id (it is a generic
-	// operational entity keyed by service_id; repo attribution is itself a
-	// separate, still-"pending" family -- work_graph_edges). The source check
-	// here is therefore org-scoped, not repo-scoped, which is a known
-	// imprecision: an org-wide incident that day does not prove any one of
-	// this partition's specific repos owns it. See RISK-NOTES.
-	incidentSource, err := checker.existsOrgScoped(ctx, `
-SELECT 1 FROM operational_incidents
-WHERE org_id = {org_id:String} AND is_deleted = 0
-  AND ((started_at IS NOT NULL AND toDate(started_at) = {day:Date})
-       OR (source_event_at IS NOT NULL AND toDate(source_event_at) = {day:Date}))
-LIMIT 1`, orgID, day)
+	// incident: operational_incidents has no repo_id. The canonical projection
+	// makes it repository-scoped through the current active service mapping,
+	// with the same current-row and resolved-day predicates as the production
+	// incident_metrics_daily reader. An incident with no current repo mapping
+	// cannot prove source data for any partition and is intentionally omitted.
+	dayStart, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return nil, ErrInvalidState
+	}
+	incidentSource, err := checker.existsIncident(ctx, orgID, dayStart, dayStart.AddDate(0, 0, 1), repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
 	incidentOutput, err := checker.exists(ctx, `
 SELECT 1 FROM incident_metrics_daily
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(String)} AND day = {day:Date}
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 }
 
 func (checker *ClickHouseSourceDataChecker) exists(
-	ctx context.Context, query string, orgID string, day string, repositoryIDs []string,
+	ctx context.Context, query string, orgID string, day string, repositoryIDs []uuid.UUID,
 ) (bool, error) {
 	rows, err := checker.conn.Query(ctx, query,
 		clickhouse.Named("org_id", orgID),
@@ -194,15 +194,55 @@ func (checker *ClickHouseSourceDataChecker) exists(
 	return found, nil
 }
 
-func (checker *ClickHouseSourceDataChecker) existsOrgScoped(
-	ctx context.Context, query string, orgID string, day string,
+func (checker *ClickHouseSourceDataChecker) existsIncident(
+	ctx context.Context, orgID string, start, end time.Time, repositoryIDs []uuid.UUID,
 ) (bool, error) {
-	rows, err := checker.conn.Query(ctx, query,
+	rows, err := checker.conn.Query(ctx, `
+WITH current_incidents AS (
+    SELECT *
+    FROM (
+        SELECT *
+        FROM operational_incidents
+        WHERE org_id = {org_id:String}
+        ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
+        LIMIT 1 BY org_id, id
+    )
+    WHERE is_deleted = 0
+      AND resolved_at >= {start:DateTime64(3, 'UTC')}
+      AND resolved_at < {end:DateTime64(3, 'UTC')}
+), current_mappings AS (
+    SELECT *
+    FROM (
+        SELECT *
+        FROM operational_service_repository_mappings
+        WHERE org_id = {org_id:String}
+        ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
+        LIMIT 1 BY org_id, id
+    )
+    WHERE is_deleted = 0
+      AND is_active = 1
+      AND repo_id IS NOT NULL
+      AND valid_from <= {as_of:DateTime64(6, 'UTC')}
+      AND (valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})
+)
+SELECT 1
+FROM current_incidents AS incident
+INNER JOIN current_mappings AS mapping
+    ON incident.org_id = mapping.org_id
+   AND incident.service_id = mapping.service_id
+INNER JOIN repos AS repo FINAL
+    ON mapping.org_id = repo.org_id
+   AND mapping.repo_id = repo.id
+WHERE mapping.repo_id IN {repo_ids:Array(UUID)}
+LIMIT 1`,
 		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("day", day),
+		clickhouse.Named("start", start),
+		clickhouse.Named("end", end),
+		clickhouse.Named("as_of", end),
+		clickhouse.Named("repo_ids", repositoryIDs),
 	)
 	if err != nil {
-		return false, ErrUnavailable
+		return false, fmt.Errorf("incident source query: %w: %v", ErrUnavailable, err)
 	}
 	defer rows.Close()
 	found := rows.Next()
@@ -210,6 +250,18 @@ func (checker *ClickHouseSourceDataChecker) existsOrgScoped(
 		return false, ErrUnavailable
 	}
 	return found, nil
+}
+
+func repositoryIDUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {
+	result := make([]uuid.UUID, len(ids))
+	for index, id := range ids {
+		parsed, err := uuid.Parse(string(id))
+		if err != nil {
+			return nil, err
+		}
+		result[index] = parsed
+	}
+	return result, nil
 }
 
 var _ SourceDataChecker = (*ClickHouseSourceDataChecker)(nil)

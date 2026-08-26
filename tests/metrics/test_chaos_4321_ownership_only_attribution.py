@@ -1,27 +1,41 @@
-"""CHAOS-4321 (chris's ruling, 2026-08-26): only the CHAOS-4244 author_membership
-path (a PR/MR's reporter walked through ``team_memberships``) is removed.
-``assignee_membership`` -- the pre-4244, rank-4 mechanism -- STAYS: chris
-confirmed membership-based attribution is legitimate under the manual
-override (see docs/contribute/architecture/team-attribution.md Sec 0 for the
-gate reasoning). An author is simply whoever opened the item, with none of
-the deliberate-curation character an assignment has; nothing about who
-authored an item may become a team candidate.
+"""CHAOS-4321 (chris's ruling, 2026-08-26 07:09 PT, refined 08:30 PT --
+supersedes the earlier 06:24/06:43 framings this module previously tested):
+membership-based team attribution (assignee AND author alike) is a
+TWO-LAYER resolution, plain wording (chris-approved, use verbatim
+elsewhere): "A work item gets a team from the project/repo it lives in.
+That is team attribution. If that finds nothing, we look at the person on
+the item (assignee, or PR author). If that person is mapped to one team,
+the item goes to that team. If the person is mapped to two or more teams,
+we do not guess -- the item stays unassigned." "Mapped" = the ClickHouse
+team mappings (the built override): layer 1 is the admin-authored
+``identities`` (canonical_id -> team_ids) / ``teams`` (id -> members facet
+roster) catalog written by ``/org/admin/identities`` and
+``/org/admin/teams``; layer 2 is provider-imported ``team_memberships``
+(auto-import), consulted ONLY when layer 1 has NO candidate at all for that
+identity (chris, 08:30 PT: "manual is override -- if the override exists,
+use it, else use attribution from providers"). An AMBIGUOUS layer-1 mapping
+does NOT fall through to layer 2 -- the admin mapping needs fixing, not
+bypassing.
 
-RED-FIRST (ticket step 2, author scope only): every case here fails against
-the pre-CHAOS-4321 ``resolve_team_attribution``, which still stamps a primary
-``author_membership`` candidate from ``team_memberships`` via
-``attribution_context.member_by_identity`` (the reporter path, CHAOS-4244).
-This module does NOT touch ``tests/metrics/test_pr_author_team_attribution.py``
-(the CHAOS-4244 suite asserting the now-forbidden author behavior; its
-assignee-scoped tests, e.g. ``test_assignee_still_outranks_nothing_and_
-author_never_overrides_a_real_assignee``, describe UNCHANGED behavior and
-must survive) -- that suite's author-specific tests are replaced in the same
-commit that removes ``author_membership`` from ``resolve_team_attribution``.
+``resolve_team_attribution`` never sees the raw tables -- it reads
+``attribution_context.member_by_identity`` (identities, provider-scoped) ∪
+``.member_by_untyped_facet`` (bare ``teams.members`` entries with no backing
+identity, matched without a provider tag) for layer 1, and
+``.provider_member_by_identity`` for layer 2, via the shared
+``_resolve_membership`` helper. A person can be admin-mapped to N teams (an
+identity's ``team_ids`` is a list); picking one is fabrication, so N>1
+resolves to ``unassigned`` with reason ``ambiguous_admin_membership:<sorted
+team ids>`` (or ``ambiguous_provider_membership:<...>`` if the ambiguity is
+in layer 2) -- for BOTH assignee and author (assignee previously had no such
+gate at all: an ambiguous member's `_ranked` specificity ordering silently
+picked an arbitrary winner, which is exactly the defect this ticket exists
+to remove). No mapping in either layer -> ``no_membership``.
 
-An earlier revision of this module also asserted assignee-in-non-owning-team
--> unassigned. That was WRONG: chris's ruling keeps assignee_membership
-legitimate regardless of repo/project ownership, so those cases (and the
-legacy ``TeamResolver``-based assignee path) are removed here, not asserted.
+This supersedes three earlier revisions of this module: round 1 ("remove
+both sources"), round 3 ("author removed, assignee unconditionally stays"),
+and the first CHAOS-4321 cut ("admin-only, provider auto-import excluded
+entirely from attribution") -- all wrong per chris's 08:30 PT refinement:
+provider auto-import stays as the fallback layer, not excluded.
 """
 
 from __future__ import annotations
@@ -49,7 +63,8 @@ def _pr_work_item(
 ) -> WorkItem:
     """A GitHub PR-shaped WorkItem with no native team key and no project
     key -- the shape a PR takes when nothing but ownership/membership facts
-    could possibly resolve it."""
+    could possibly resolve it. ``type="pr"`` keeps the reporter/author path
+    eligible (``_REPORTER_ELIGIBLE_TYPES``)."""
     return WorkItem(
         work_item_id="ghpr:full-chaos/dev-health-ops#4321",
         provider="github",
@@ -66,11 +81,25 @@ def _pr_work_item(
 
 
 def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
-    # Mirrors what the ClickHouse-loaded member_by_identity path stores today
-    # (source stamped "assignee_membership" at load time; the reporter path
-    # relabels it "author_membership" at the point of use). Post-fix, the
-    # "author_membership" label may never reach resolve_team_attribution's
-    # output again -- "assignee_membership" still can, unchanged.
+    # Mirrors what load_team_attribution_context now stores in
+    # member_by_identity: sourced from admin-authored `identities`/`teams`
+    # rows only, stamped "assignee_membership" at load time (the reporter
+    # path relabels it "author_membership" at the point of use).
+    return TeamAttributionCandidate(
+        source="assignee_membership",
+        team_id=team_id,
+        team_name=team_name,
+        confidence="high",
+        evidence=f"assignee_membership={team_id}",
+        is_primary=1,
+        specificity=60,
+    )
+
+
+def _provider_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
+    # Mirrors what load_team_attribution_context's restored fallback layer
+    # stores in provider_member_by_identity: sourced from provider
+    # auto-import team_memberships (unchanged shape from before CHAOS-4321).
     return TeamAttributionCandidate(
         source="assignee_membership",
         team_id=team_id,
@@ -82,8 +111,36 @@ def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
     )
 
 
-def test_author_in_a_team_that_does_not_own_the_repo_is_unassigned():
-    item = _pr_work_item(reporter="alice", repo_id=REPO_ID)
+def test_assignee_with_no_admin_mapping_is_unassigned():
+    """(a) A member who exists only in provider auto-import data (never
+    admin-mapped) is represented by an identity key absent from
+    member_by_identity -- the loader excludes team_memberships entirely, so
+    such a member never reaches this dict at all."""
+    item = _pr_work_item(assignees=["alice"])
+    context = TeamAttributionContext(member_by_identity={})
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+    assert candidates[0].evidence == "no_candidate:no_membership"
+
+
+def test_author_with_no_admin_mapping_is_unassigned():
+    """(a) Same as above, author/reporter role."""
+    item = _pr_work_item(reporter="alice")
+    context = TeamAttributionContext(member_by_identity={})
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+    assert candidates[0].evidence == "no_candidate:no_membership"
+
+
+def test_assignee_admin_mapped_to_one_team_is_attributed():
+    """(b) Exactly one admin-mapped team -> that team, source assignee_membership."""
+    item = _pr_work_item(assignees=["alice"])
     context = TeamAttributionContext(
         member_by_identity={
             ("github", "alice"): [_member_candidate("team-ops", "Ops Team")]
@@ -92,14 +149,56 @@ def test_author_in_a_team_that_does_not_own_the_repo_is_unassigned():
     team_id, team_name, candidates = resolve_team_attribution(
         item, team_resolver=None, project_key_resolver=None, attribution_context=context
     )
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    assert [c.source for c in candidates] == ["assignee_membership"]
+
+
+def test_author_admin_mapped_to_one_team_is_attributed():
+    """(b) Same, author/reporter role -- author_membership is NOT removed by
+    this ticket, only gated: it stays as a rank-6 signal, below linked_issue,
+    when the reporter resolves to exactly one admin-mapped team."""
+    item = _pr_work_item(reporter="alice")
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [_member_candidate("team-ops", "Ops Team")]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    assert [c.source for c in candidates] == ["author_membership"]
+    assert candidates[0].evidence == "reporter=alice"
+
+
+def test_assignee_admin_mapped_to_two_teams_is_unassigned_no_arbitrary_pick():
+    """(c) A person can be on N teams; picking one is fabrication. This is
+    the defect this ticket exists to close for ASSIGNEE specifically --
+    before this fix, `_ranked`'s specificity/priority ordering silently
+    picked an arbitrary winner among an ambiguous member's teams."""
+    item = _pr_work_item(assignees=["alice"])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                _member_candidate("team-ops", "Ops Team"),
+                _member_candidate("team-platform", "Platform Team"),
+            ]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
     assert (team_id, team_name) == (None, None)
     assert [c.source for c in candidates] == ["unassigned"]
-    # Target reason for the eventual combined (Python + Go) telemetry change
-    # (ticket step 4) -- deferred alongside the source removal, see handoff.
-    assert candidates[0].evidence == "no_candidate:no_owning_team"
+    assert (
+        candidates[0].evidence
+        == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
+    )
 
 
-def test_author_on_two_teams_is_unassigned_no_arbitrary_pick():
+def test_author_admin_mapped_to_two_teams_is_unassigned_no_arbitrary_pick():
+    """(c) Same, author/reporter role -- the pre-existing CHAOS-4110 ambiguity
+    gate, unchanged in shape, now fed by admin-only data."""
     item = _pr_work_item(reporter="alice")
     context = TeamAttributionContext(
         member_by_identity={
@@ -114,10 +213,17 @@ def test_author_on_two_teams_is_unassigned_no_arbitrary_pick():
     )
     assert (team_id, team_name) == (None, None)
     assert [c.source for c in candidates] == ["unassigned"]
-    assert candidates[0].evidence == "no_candidate:no_owning_team"
+    assert (
+        candidates[0].evidence
+        == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
+    )
 
 
-def test_bot_author_with_matching_membership_row_still_unassigned():
+def test_bot_author_never_attributed_even_when_admin_mapped():
+    """A bot/App reporter carries no team meaning regardless of whether it
+    happens to match an admin-authored membership row -- unaffected by this
+    ticket's scope change, re-asserted here since the surrounding gate
+    changed shape."""
     item = _pr_work_item(reporter="github:dependabot[bot]")
     context = TeamAttributionContext(
         member_by_identity={
@@ -131,28 +237,17 @@ def test_bot_author_with_matching_membership_row_still_unassigned():
     )
     assert (team_id, team_name) == (None, None)
     assert [c.source for c in candidates] == ["unassigned"]
-    # Pinned to the new uniform reason, not the old "bot_author" one -- the
-    # bot check itself is removed along with the rest of the author path, so
-    # this is red-first too, not merely a same-outcome-different-reason case.
-    assert candidates[0].evidence == "no_candidate:no_owning_team"
+    assert candidates[0].evidence == "no_candidate:bot_author"
 
 
-def test_ownership_wins_over_author_membership():
-    """Repo ownership resolves the team even when the author is mapped to a
-    DIFFERENT team via team_memberships -- the author signal must contribute
-    NOTHING to the candidate list at all (not merely lose a precedence
-    fight), unlike assignee_membership, which DOES still appear as a
-    non-primary candidate in the equivalent situation (unchanged,
-    ``tests/metrics/test_pr_author_team_attribution.py::
-    test_assignee_still_outranks_nothing_and_author_never_overrides_a_real_assignee``).
-    No assignee is set here, so the only candidates possible are
-    repo_ownership and (pre-fix) author_membership."""
-    item = _pr_work_item(reporter="alice", repo_id=REPO_ID)
+def test_ownership_wins_over_assignee_and_author_membership():
+    """(d) Ownership always wins, even when BOTH assignee and author are
+    admin-mapped to a DIFFERENT team -- membership candidates still appear
+    as non-primary provenance rows, they just never outrank a real
+    repo_ownership fact."""
+    item = _pr_work_item(reporter="alice", assignees=["bob"], repo_id=REPO_ID)
     context = TeamAttributionContext(
         repo_by_id={
-            # TeamAttributionContext keys are (provider, str(key)) --
-            # _context_candidates str()s the lookup key (item.repo_id, a
-            # UUID) before the dict.get, so the fixture key must too.
             ("github", str(REPO_ID)): [
                 TeamAttributionCandidate(
                     source="repo_ownership",
@@ -166,33 +261,147 @@ def test_ownership_wins_over_author_membership():
             ]
         },
         member_by_identity={
-            ("github", "alice"): [_member_candidate("team-other", "Other Team")]
+            ("github", "alice"): [_member_candidate("team-other", "Other Team")],
+            ("github", "bob"): [_member_candidate("team-other", "Other Team")],
         },
     )
     team_id, team_name, candidates = resolve_team_attribution(
         item, team_resolver=None, project_key_resolver=None, attribution_context=context
     )
     assert (team_id, team_name) == ("team-repo", "Repository Team")
-    assert [c.source for c in candidates] == ["repo_ownership"]
+    sources = {c.source for c in candidates}
+    assert sources == {"repo_ownership", "assignee_membership", "author_membership"}
+    primary = next(c for c in candidates if c.is_primary)
+    assert primary.source == "repo_ownership"
 
 
-def test_no_owning_team_telemetry_reason_surfaces_through_metric_mapper():
-    """Ticket step 4: an unassigned outcome must carry a telemetry-visible
-    reason. work_item_team_attribution_metric_source already strips the
-    ``no_candidate:`` prefix generically (used previously for bot_author /
-    ambiguous_membership) -- this proves the new no_owning_team reason rides
-    the same mechanism with no separate mapper change required."""
+def test_admin_membership_telemetry_reasons_surface_through_metric_mapper():
+    """Ticket step 6 (telemetry): an unassigned outcome from an admin-
+    membership gap must carry a telemetry-visible reason.
+    work_item_team_attribution_metric_source already strips the
+    ``no_candidate:`` prefix generically (previously used for bot_author /
+    ambiguous_membership) -- this proves both new reasons ride the same
+    mechanism with no separate mapper change required, and that the reason
+    string is identical to what Go's githubWorkItemTeamAttributionMetricSource
+    must also emit (parity requirement, AGENTS.md)."""
+    no_mapping_item = _pr_work_item(reporter="alice")
+    _, _, no_mapping_candidates = resolve_team_attribution(
+        no_mapping_item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=TeamAttributionContext(member_by_identity={}),
+    )
+    no_mapping_primary = no_mapping_candidates[0]
+    assert (
+        work_item_team_attribution_metric_source(
+            no_mapping_primary.source, no_mapping_primary.evidence
+        )
+        == "no_membership"
+    )
+
+    ambiguous_item = _pr_work_item(reporter="alice")
+    _, _, ambiguous_candidates = resolve_team_attribution(
+        ambiguous_item,
+        team_resolver=None,
+        project_key_resolver=None,
+        attribution_context=TeamAttributionContext(
+            member_by_identity={
+                ("github", "alice"): [
+                    _member_candidate("team-ops", "Ops Team"),
+                    _member_candidate("team-platform", "Platform Team"),
+                ]
+            }
+        ),
+    )
+    ambiguous_primary = ambiguous_candidates[0]
+    assert (
+        work_item_team_attribution_metric_source(
+            ambiguous_primary.source, ambiguous_primary.evidence
+        )
+        == "ambiguous_admin_membership"
+    )
+
+
+def test_teams_members_only_mapping_is_attributed_no_identities_row():
+    """(e) A `teams.members` facet with no backing `identities` row is still
+    an admin mapping (added directly on `/org/admin/teams/[id]/edit`) --
+    matched via `member_by_untyped_facet`, without a provider tag."""
+    item = _pr_work_item(assignees=["alice@example.com"])
+    context = TeamAttributionContext(
+        member_by_untyped_facet={
+            "alice@example.com": [_member_candidate("team-ops", "Ops Team")]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    assert [c.source for c in candidates] == ["assignee_membership"]
+
+
+def test_provider_only_single_team_is_attributed_via_fallback_layer():
+    """(f) No admin mapping at all for this identity, but provider
+    auto-import (`team_memberships`) resolves exactly one team -- chris,
+    08:30 PT: "manual is override -- if the override exists, use it, else
+    use attribution from providers." """
     item = _pr_work_item(reporter="alice")
+    context = TeamAttributionContext(
+        provider_member_by_identity={
+            ("github", "alice"): [_provider_candidate("team-ops", "Ops Team")]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    assert [c.source for c in candidates] == ["author_membership"]
+    assert candidates[0].evidence == "reporter=alice"
+
+
+def test_admin_mapping_overrides_a_conflicting_provider_membership():
+    """(g) The SAME identity resolves to a DIFFERENT team in each layer --
+    the admin mapping (layer 1) wins outright; the provider layer's
+    candidate never even reaches the candidate list (layer 2 is consulted
+    only when layer 1 has nothing)."""
+    item = _pr_work_item(assignees=["alice"])
     context = TeamAttributionContext(
         member_by_identity={
             ("github", "alice"): [_member_candidate("team-ops", "Ops Team")]
-        }
+        },
+        provider_member_by_identity={
+            ("github", "alice"): [_provider_candidate("team-other", "Other Team")]
+        },
     )
-    _, _, candidates = resolve_team_attribution(
+    team_id, team_name, candidates = resolve_team_attribution(
         item, team_resolver=None, project_key_resolver=None, attribution_context=context
     )
-    primary = candidates[0]
+    assert (team_id, team_name) == ("team-ops", "Ops Team")
+    assert [c.source for c in candidates] == ["assignee_membership"]
+
+
+def test_ambiguous_admin_mapping_does_not_fall_through_to_provider():
+    """(h) The admin mapping is ambiguous (2 teams); the provider layer has
+    a perfectly clean single-team answer for the SAME identity. The admin
+    mapping is authoritative even when ambiguous -- it must be fixed, not
+    bypassed by falling through to provider data."""
+    item = _pr_work_item(assignees=["alice"])
+    context = TeamAttributionContext(
+        member_by_identity={
+            ("github", "alice"): [
+                _member_candidate("team-ops", "Ops Team"),
+                _member_candidate("team-platform", "Platform Team"),
+            ]
+        },
+        provider_member_by_identity={
+            ("github", "alice"): [_provider_candidate("team-clean", "Clean Team")]
+        },
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
     assert (
-        work_item_team_attribution_metric_source(primary.source, primary.evidence)
-        == "no_owning_team"
+        candidates[0].evidence
+        == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
     )

@@ -160,13 +160,16 @@ func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 		t.Fatalf("fixture produced no sorting-key collision (%d rows, %d keys); "+
 			"the dedup tests below would be vacuous", len(rows), len(byKey))
 	}
-	// They must differ in fields the sorting key does NOT carry -- otherwise
+	// They must differ in a field the sorting key does NOT carry -- otherwise
 	// the collision is harmless and proves nothing about which row survives.
-	if collided[0].TeamName == nil || collided[1].TeamName == nil ||
-		*collided[0].TeamName == *collided[1].TeamName {
-		t.Errorf("collided rows must differ in team_name, got %v / %v",
-			collided[0].TeamName, collided[1].TeamName)
-	}
+	// Evidence is that field. team_name is deliberately NOT asserted to
+	// differ here (CHAOS-4321): a membership candidate's team_name is now
+	// resolved from the admin-authored `teams` catalog -- ONE canonical name
+	// per team_id (see newGitHubWorkItemDerivationContext's memberTeamNames
+	// map) -- so two colliding membership rows for the SAME team_id
+	// correctly share the SAME team_name today; the fixture below still sets
+	// different TeamName strings per fact only to prove that divergence, if
+	// present in the raw input, does NOT leak into the output.
 	if collided[0].Evidence == collided[1].Evidence {
 		t.Errorf("collided rows must differ in evidence, got %q twice",
 			collided[0].Evidence)

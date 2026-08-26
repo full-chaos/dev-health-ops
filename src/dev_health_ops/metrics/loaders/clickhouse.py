@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -61,6 +62,30 @@ async def _clickhouse_query_dicts(
     from dev_health_ops.api.queries.client import query_dicts
 
     return await query_dicts(client, query, params)
+
+
+def _decode_provider_identities_json(value: Any) -> dict[str, list[str]]:
+    """Decode an `identities.provider_identities` ClickHouse row value.
+
+    Stored as a JSON-encoded string on the wire (see
+    ``ClickHouseIdentityStore.create_or_update``,
+    api/services/configuration/clickhouse_identity_admin.py); mirrors that
+    module's ``_decode_provider_identities`` decoding (not imported directly
+    to avoid a cross-layer dependency from the metrics loader onto the admin
+    API service module).
+    """
+    if isinstance(value, dict):
+        return {str(k): [str(v) for v in (vals or [])] for k, vals in value.items()}
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        if isinstance(parsed, dict):
+            return {
+                str(k): [str(v) for v in (vals or [])] for k, vals in parsed.items()
+            }
+    return {}
 
 
 class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
@@ -473,6 +498,73 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             """,
             params,
         )
+        # CHAOS-4321 (chris's ruling, 2026-08-26 07:09 PT): membership-based
+        # team attribution (assignee AND author) is legitimate ONLY for
+        # mappings an operator wrote through the admin surface
+        # (`/org/admin/teams`, `/org/admin/identities`) -- never inferred
+        # from provider auto-import. Those admin screens write the
+        # `identities` (canonical_id -> team_ids, provider_identities) and
+        # `teams` (id -> members facet roster) tables; they never write
+        # `team_memberships` (that table is populated exclusively by the 4
+        # provider auto-import workers -- see
+        # workers/team_autoimport_{github,gitlab,jira,linear}.py -- and is
+        # read by drift/conflict review only, never by attribution).
+        # `team_memberships` is therefore no longer queried here at all.
+        #
+        # An identity's admin-authorized team set is the UNION of:
+        #   (a) `identities.team_ids` (its own declared teams), and
+        #   (b) any active team whose `teams.members` roster contains one of
+        #       the identity's facets (canonical_id / email / any provider
+        #       raw id).
+        # (b) matters because the drift-approval admin action
+        # (`apply_identity_membership_change`,
+        # api/services/configuration/clickhouse_identity_drift.py) writes
+        # `teams.members` directly without also updating
+        # `identities.team_ids` -- reading `team_ids` alone would silently
+        # drop that admin decision. A bare `teams.members` facet with no
+        # matching `identities` row is not usable on its own: it carries no
+        # provider tag, so there is no safe way to scope it to
+        # `item.provider` for the `(provider, identity_key)` lookup below.
+        identity_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT canonical_id, email, provider_identities, team_ids, updated_at
+            FROM identities FINAL
+            WHERE is_active = 1
+            {self._org_filter()}
+            """,
+            self._inject_org_id({}),
+        )
+        admin_team_rows = await _clickhouse_query_dicts(
+            self.client,
+            f"""
+            SELECT id, name, members
+            FROM teams FINAL
+            WHERE is_active = 1
+            {self._org_filter()}
+            """,
+            self._inject_org_id({}),
+        )
+
+        admin_teams: dict[str, dict[str, Any]] = {}
+        for row in admin_team_rows:
+            team_id = str(row.get("id") or "")
+            if not team_id:
+                continue
+            admin_teams[team_id] = {
+                "name": str(row.get("name") or team_id),
+                "members": {
+                    str(m).strip().lower() for m in (row.get("members") or []) if m
+                },
+            }
+
+        # CHAOS-4321 (chris, 08:30 PT): "manual is override -- if the
+        # override exists, use it, else use attribution from providers."
+        # The admin catalog above (`identities`/`teams`) is the override;
+        # `team_memberships` (provider auto-import, unchanged since before
+        # this ticket) is the FALLBACK layer, consulted by
+        # `resolve_team_attribution`'s `_resolve_membership` only when the
+        # admin layer has no candidate at all for a given identity.
         member_rows = await _clickhouse_query_dicts(
             self.client,
             f"""
@@ -580,6 +672,112 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     (str(row.get("provider") or ""), str(row["repo_full_name"])), []
                 ).append(candidate)
 
+        for row in identity_rows:
+            canonical_id = str(row.get("canonical_id") or "")
+            if not canonical_id:
+                continue
+            provider_identities = _decode_provider_identities_json(
+                row.get("provider_identities")
+            )
+            email = row.get("email")
+            updated_at = row.get("updated_at") or as_of
+
+            facets = {canonical_id.strip().lower()}
+            if email:
+                facets.add(str(email).strip().lower())
+            for raw_ids in provider_identities.values():
+                facets.update(str(r).strip().lower() for r in raw_ids if r)
+
+            resolved_team_ids: set[str] = set()
+            for team_id in row.get("team_ids") or []:
+                if str(team_id) in admin_teams:
+                    resolved_team_ids.add(str(team_id))
+            for team_id, team in admin_teams.items():
+                if facets & team["members"]:
+                    resolved_team_ids.add(team_id)
+            if not resolved_team_ids:
+                continue
+
+            for provider, raw_ids in provider_identities.items():
+                keys = {str(r).strip().lower() for r in raw_ids if r}
+                if email:
+                    keys.add(str(email).strip().lower())
+                keys.add(canonical_id.strip().lower())
+                if not keys:
+                    continue
+                for team_id in resolved_team_ids:
+                    candidate = TeamAttributionCandidate(
+                        source="assignee_membership",
+                        team_id=team_id,
+                        team_name=admin_teams[team_id]["name"],
+                        # "high", matching the pre-existing is_primary->high
+                        # formula `_candidate()` (above) uses for ownership
+                        # rows -- is_primary=1 is fixed for every
+                        # admin-authored membership candidate (there is no
+                        # per-membership primary/secondary signal in
+                        # `identities`/`teams`, unlike the old
+                        # `team_memberships.is_primary` auto-import column),
+                        # so this is deliberately unconditional, not
+                        # hardcoded independently of is_primary. Mirrored
+                        # exactly on the Go side
+                        # (githubWorkItemDerivationCandidateFromFact's
+                        # confidenceForPrimary(1) == "high").
+                        confidence="high",
+                        evidence=f"assignee_membership={canonical_id}",
+                        is_primary=1,
+                        # 60, not the legacy roster fallback's 50
+                        # (compute_work_items.py's `_resolve_team` block): an
+                        # explicit per-identity admin mapping is a more
+                        # curated signal than the global YAML/store roster
+                        # fallback and should win the intra-source tie-break
+                        # if both ever resolve the same assignee (the roster
+                        # fallback is empty in production today, but this
+                        # keeps the ordering meaningful rather than
+                        # coincidental).
+                        specificity=60,
+                        priority=0,
+                        updated_at=updated_at,
+                    )
+                    for key in keys:
+                        context.member_by_identity.setdefault(
+                            (str(provider), key), []
+                        ).append(candidate)
+
+        # CHAOS-4321 (team-lead correction, 2026-08-26): a `teams.members`
+        # facet with no backing `identities` row is STILL an admin mapping
+        # -- adding a member directly on `/org/admin/teams/[id]/edit` is one
+        # of the two admin surfaces chris named, and requiring an
+        # `identities` row would silently drop it. Matched WITHOUT a
+        # provider tag (an admin-entered email/login/id is the admin's
+        # intent regardless of which provider's item it ends up matching --
+        # `teams.members` carries no provider column to scope by, unlike
+        # `identities.provider_identities`). Registered for every facet in
+        # every admin team, unconditionally -- a facet that ALSO has a
+        # backing `identities` row just gets a second, redundant candidate
+        # for the same team, which the team-id-set gate in
+        # `_resolve_membership` collapses harmlessly.
+        for team_id, team in admin_teams.items():
+            for facet in team["members"]:
+                if not facet:
+                    continue
+                candidate = TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id=team_id,
+                    team_name=team["name"],
+                    confidence="high",
+                    evidence=f"assignee_membership={facet}",
+                    is_primary=1,
+                    specificity=60,
+                    priority=0,
+                    updated_at=as_of,
+                )
+                context.member_by_untyped_facet.setdefault(facet, []).append(candidate)
+
+        # CHAOS-4321 (chris, 08:30 PT): provider auto-import fallback layer
+        # -- unchanged from pre-CHAOS-4321 `team_memberships` processing,
+        # just written into `provider_member_by_identity` instead of
+        # `member_by_identity` so `resolve_team_attribution` only reaches it
+        # when the admin layer has nothing for that identity.
         for row in member_rows:
             candidate = _candidate(
                 row,
@@ -601,7 +799,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 key = " ".join(str(identity or "").strip().lower().split())
                 if key and key not in seen_identity_keys:
                     seen_identity_keys.add(key)
-                    context.member_by_identity.setdefault(
+                    context.provider_member_by_identity.setdefault(
                         (str(row.get("provider") or ""), key), []
                     ).append(candidate)
 

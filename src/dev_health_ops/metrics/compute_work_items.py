@@ -127,6 +127,24 @@ class TeamAttributionContext:
     member_by_identity: dict[tuple[str, str], list[TeamAttributionCandidate]] = field(
         default_factory=dict
     )
+    # CHAOS-4321 (chris, 08:30 PT — "manual is override: if the override
+    # exists, use it, else use attribution from providers"): the admin
+    # mapping (identities.team_ids / teams.members, above) is layer 1 --
+    # authoritative when present, including when present-but-ambiguous (an
+    # ambiguous admin mapping does NOT fall through to provider data; it
+    # needs fixing, not bypassing). `member_by_untyped_facet` is admin layer
+    # too: a `teams.members` facet with no backing `identities` row (added
+    # via `/org/admin/teams/[id]/edit` directly) -- matched WITHOUT a
+    # provider tag (an admin-entered email/login is the admin's intent
+    # regardless of provider). `provider_member_by_identity` is layer 2, the
+    # pre-CHAOS-4321 `team_memberships` auto-import data -- consulted ONLY
+    # when layer 1 resolves to ZERO candidates for that identity.
+    member_by_untyped_facet: dict[str, list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
+    provider_member_by_identity: dict[
+        tuple[str, str], list[TeamAttributionCandidate]
+    ] = field(default_factory=dict)
     manual_fallbacks: list[ManualFallbackRule] = field(default_factory=list)
 
 
@@ -289,6 +307,57 @@ def _context_candidates(
     return list(mapping.get((provider, str(key)), []))
 
 
+def _resolve_membership(
+    attribution_context: TeamAttributionContext | None,
+    provider: str,
+    identity: str | None,
+) -> tuple[list[TeamAttributionCandidate], str | None]:
+    """Two-layer membership resolution (CHAOS-4321, chris 08:30 PT: "manual
+    is override -- if the override exists, use it, else use attribution
+    from providers"). Layer 1 (admin mapping:
+    `attribution_context.member_by_identity` ∪ `.member_by_untyped_facet`,
+    both sourced from `identities`/`teams`) is AUTHORITATIVE when it has any
+    candidate at all for this identity -- including when ambiguous: an
+    ambiguous admin mapping does NOT fall through to layer 2, it needs
+    fixing, not bypassing. Layer 2 (`.provider_member_by_identity`, sourced
+    from provider auto-import `team_memberships`) is consulted ONLY when
+    layer 1 has ZERO candidates for this identity. Both layers apply the
+    SAME exactly-one-team gate.
+
+    Returns `(candidates, reason)`: `candidates` is the resolved list to use
+    for the caller's source when exactly one team resolved (`reason` is
+    `None`); otherwise `candidates` is empty and `reason` is one of
+    `"ambiguous_admin_membership:<sorted team ids>"`,
+    `"ambiguous_provider_membership:<sorted team ids>"`, or
+    `"no_membership"` -- `None` only when there is no identity to look up at
+    all (no assignee, no reporter).
+    """
+    if attribution_context is None or not identity:
+        return [], None
+    key = _identity_key(identity)
+    admin_candidates = list(
+        _context_candidates(attribution_context.member_by_identity, provider, key)
+    )
+    admin_candidates.extend(attribution_context.member_by_untyped_facet.get(key, []))
+    admin_teams = {c.team_id for c in admin_candidates}
+    if len(admin_teams) == 1:
+        return admin_candidates, None
+    if len(admin_teams) > 1:
+        ids = ",".join(sorted(t for t in admin_teams if t))
+        return [], f"ambiguous_admin_membership:{ids}"
+
+    provider_candidates = _context_candidates(
+        attribution_context.provider_member_by_identity, provider, key
+    )
+    provider_teams = {c.team_id for c in provider_candidates}
+    if len(provider_teams) == 1:
+        return provider_candidates, None
+    if len(provider_teams) > 1:
+        ids = ",".join(sorted(t for t in provider_teams if t))
+        return [], f"ambiguous_provider_membership:{ids}"
+    return [], "no_membership"
+
+
 def _native_team_candidate(
     item: WorkItem,
     project_key_resolver: ProjectKeyTeamResolver | None,
@@ -431,11 +500,12 @@ def resolve_team_attribution(
         "manual_fallback": [],
         "unassigned": [],
     }
-    # CHAOS-4244: WHY the reporter path contributed nothing, if it didn't --
-    # threaded onto the final unassigned row's evidence below (only when
-    # nothing else resolved either) so the residual is traceable instead of a
-    # bare "no_candidate".
+    # CHAOS-4244/CHAOS-4321: WHY the assignee/reporter membership path
+    # contributed nothing, if it didn't -- threaded onto the final unassigned
+    # row's evidence below (only when nothing else resolved either) so the
+    # residual is traceable instead of a bare "no_candidate".
     reporter_skip_reason: str | None = None
+    membership_skip_reasons: set[str] = set()
 
     native = _native_team_candidate(item, project_key_resolver)
     if native is not None:
@@ -493,14 +563,28 @@ def resolve_team_attribution(
                 attribution_context.repo_by_name, item.provider, item.project_id
             )
         )
+        # CHAOS-4321 (chris's ruling, 2026-08-26): membership-based
+        # attribution -- assignee AND author alike -- is only legitimate when
+        # it resolves to EXACTLY one admin-mapped team; a person on 2+ teams
+        # gives no reason to prefer one ("picking one is fabrication"). This
+        # ambiguity gate previously applied ONLY to the reporter/author path
+        # (CHAOS-4110) -- assignee had no such gate and would silently let
+        # `_ranked`'s specificity/priority ordering pick an arbitrary winner
+        # among an ambiguous member's teams. `attribution_context.member_by_identity`
+        # is now itself sourced only from admin-authored `identities`/`teams`
+        # rows (see `load_team_attribution_context`,
+        # metrics/loaders/clickhouse.py) -- never provider auto-import --
+        # so every candidate reaching this loop is already admin-mapped;
+        # ambiguity here means "mapped to more than one team", not
+        # "auto-imported vs. curated".
         for assignee_identity in item.assignees:
-            candidates_by_source["assignee_membership"].extend(
-                _context_candidates(
-                    attribution_context.member_by_identity,
-                    item.provider,
-                    _identity_key(assignee_identity),
-                )
+            assignee_candidates, assignee_reason = _resolve_membership(
+                attribution_context, item.provider, assignee_identity
             )
+            if assignee_candidates:
+                candidates_by_source["assignee_membership"].extend(assignee_candidates)
+            elif assignee_reason:
+                membership_skip_reasons.add(assignee_reason)
         # CHAOS-4244: a PR/MR's reporter (the author) is a membership signal
         # GitHub's own "assignee" field never carries -- GitHub distinguishes
         # the two, and most PRs are opened with no assignee set at all. This
@@ -514,12 +598,15 @@ def resolve_team_attribution(
         # unreliable ALONE, but a match is still a strictly better signal
         # than the unassigned floor it used to fall to.
         #
-        # Ambiguity gate (chris, CHAOS-4110, 2026-08-23): a person-shaped
-        # signal is only usable "where the reporter's membership is
-        # unambiguous (exactly one team)" -- a person on 2+ teams gives no
-        # reason to prefer one. An assignee keeps no such gate: it is the
-        # pre-existing rank-4 mechanism, not the new one this ticket is
-        # adding. Bot filter: a bot/App author (dependabot, github-actions,
+        # Ambiguity gate (chris, CHAOS-4110, 2026-08-23; extended to assignee
+        # by CHAOS-4321, 2026-08-26): a person-shaped signal is only usable
+        # "where the reporter's membership is unambiguous (exactly one
+        # team)" -- a person on 2+ teams gives no reason to prefer one. The
+        # assignee loop above now applies the SAME gate (CHAOS-4321) -- it
+        # used to have none, which was itself part of the defect this ticket
+        # fixes: an assignee on 2+ admin-mapped teams would silently let
+        # `_ranked`'s ordering pick one. Bot filter: a bot/App author
+        # (dependabot, github-actions,
         # ...) carries no team meaning and must not be attributed at all --
         # see _is_bot_identity. Neither exclusion is a rejection of person-
         # shaped attribution (chris, 2026-08-24: the Ops-Team-mapped-to-
@@ -556,13 +643,10 @@ def resolve_team_attribution(
         if reporter_eligible and _is_bot_identity(item.reporter):
             reporter_skip_reason = "bot_author"
         elif reporter_eligible:
-            reporter_candidates = _context_candidates(
-                attribution_context.member_by_identity,
-                item.provider,
-                _identity_key(item.reporter),
+            reporter_candidates, reporter_reason = _resolve_membership(
+                attribution_context, item.provider, item.reporter
             )
-            reporter_teams = {c.team_id for c in reporter_candidates}
-            if len(reporter_teams) == 1:
+            if reporter_candidates:
                 # source AND evidence are rewritten (not passed through
                 # verbatim) so a reporter-resolved row lands in its own
                 # author_membership rank rather than assignee_membership's,
@@ -581,8 +665,8 @@ def resolve_team_attribution(
                     )
                     for candidate in reporter_candidates
                 )
-            elif len(reporter_teams) > 1:
-                reporter_skip_reason = "ambiguous_membership"
+            elif reporter_reason:
+                membership_skip_reasons.add(reporter_reason)
 
     assignee: str | None = item.assignees[0] if item.assignees else None
     team_id, team_name = _resolve_team(team_resolver, assignee)
@@ -630,10 +714,36 @@ def resolve_team_attribution(
         rows.extend(ranked)
 
     if primary is None:
+        if reporter_skip_reason:
+            membership_skip_reasons.add(reporter_skip_reason)
+        # CHAOS-4321 (chris 08:30 PT, two-layer membership): several reasons
+        # can coexist (e.g. an ambiguous admin-mapped assignee AND a reporter
+        # with no membership anywhere) -- pick the single most actionable one
+        # for the evidence string. `ambiguous_admin_membership` names a
+        # fixable data problem in the AUTHORITATIVE layer (fix the admin
+        # mapping) and wins over everything, including a provider-layer
+        # ambiguity, which is a lower-priority data problem (the admin
+        # mapping, once added, would settle it). `bot_author` is a
+        # definitive "this can never resolve" answer. `no_membership` is the
+        # least specific (nobody involved has any mapping in either layer)
+        # and loses to all of the above.
+        membership_reason: str | None = None
+        for reason in sorted(membership_skip_reasons):
+            if reason.startswith("ambiguous_admin_membership"):
+                membership_reason = reason
+                break
+        if membership_reason is None:
+            if "bot_author" in membership_skip_reasons:
+                membership_reason = "bot_author"
+            else:
+                for reason in sorted(membership_skip_reasons):
+                    if reason.startswith("ambiguous_provider_membership"):
+                        membership_reason = reason
+                        break
+        if membership_reason is None and "no_membership" in membership_skip_reasons:
+            membership_reason = "no_membership"
         unassigned_evidence = (
-            f"no_candidate:{reporter_skip_reason}"
-            if reporter_skip_reason
-            else "no_candidate"
+            f"no_candidate:{membership_reason}" if membership_reason else "no_candidate"
         )
         primary = TeamAttributionCandidate(
             source="unassigned",

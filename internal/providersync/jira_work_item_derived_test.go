@@ -355,8 +355,12 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	if leaseChecks != 2 {
 		t.Fatalf("lease checks=%d want=2", leaseChecks)
 	}
-	if len(conn.queries) != 6 {
-		t.Fatalf("migrated context queries=%d want=6", len(conn.queries))
+	// CHAOS-4321: loadMembers issues two queries (identities, teams --
+	// admin-authored data) and loadProviderMembers restores the
+	// pre-CHAOS-4321 team_memberships query as the fallback layer (chris,
+	// 08:30 PT), so the full Load() total grows from 6 to 8.
+	if len(conn.queries) != 8 {
+		t.Fatalf("migrated context queries=%d want=8", len(conn.queries))
 	}
 	for index, args := range conn.args {
 		if len(args) == 0 || args[0] != claim.OrgID {
@@ -406,8 +410,8 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	); !errors.Is(err, providerfoundation.ErrLeaseLost) {
 		t.Fatalf("post-load lost lease error=%v", err)
 	}
-	if lostAfterChecks != 2 || len(lostAfterConn.queries) != 6 {
-		t.Fatalf("post-load lease checks/queries=%d/%d want=2/6", lostAfterChecks, len(lostAfterConn.queries))
+	if lostAfterChecks != 2 || len(lostAfterConn.queries) != 8 {
+		t.Fatalf("post-load lease checks/queries=%d/%d want=2/8", lostAfterChecks, len(lostAfterConn.queries))
 	}
 }
 

@@ -47,26 +47,24 @@ async def test_loader_builds_team_attribution_context(
                     "updated_at": now,
                 }
             ]
-        if "team_memberships" in query:
+        if "FROM identities FINAL" in query:
             return [
                 {
-                    "provider": "jira",
-                    "team_id": "team-member",
-                    "team_name": "Member Team",
-                    "member_id": "member-1",
-                    "raw_provider_user_id": "jira-user-1",
-                    "raw_email": "ADA@EXAMPLE.COM",
-                    "identity_facets": [
-                        "jira-user-1",
-                        "jira:accountid:member-1",
-                        "canonicalb@example.com",
-                    ],
-                    "is_primary": 1,
-                    "specificity": 50,
-                    "priority": 20,
+                    "canonical_id": "jira:member-1",
+                    "email": "ADA@EXAMPLE.COM",
+                    "provider_identities": '{"jira": ["jira-user-1"]}',
+                    "team_ids": ["team-member"],
                     "updated_at": now,
                 }
             ]
+        if "FROM teams FINAL" in query:
+            return [
+                {"id": "team-member", "name": "Member Team", "members": []},
+            ]
+        if "team_memberships" in query:
+            # CHAOS-4321: provider auto-import fallback layer -- empty here,
+            # exercised separately below.
+            return []
         # manual_attribution_fallbacks
         return [
             {
@@ -89,8 +87,12 @@ async def test_loader_builds_team_attribution_context(
         object(), org_id="org-1"
     ).load_team_attribution_context(as_of=now)
 
-    # Four reads now: project / repo / membership ownership + manual fallbacks.
-    assert len(calls) == 4
+    # Six reads: project / repo ownership + admin identities + admin teams
+    # (CHAOS-4321: the admin-authored `identities`/`teams` catalog is the
+    # override layer) + provider `team_memberships` (fallback layer, chris
+    # 08:30 PT: "manual is override -- if the override exists, use it, else
+    # use attribution from providers") + manual fallbacks.
+    assert len(calls) == 6
     project_query = next(q for q in calls if "team_project_ownership" in q)
     # Ownership reads dedup per logical scope via argMax (NOT FINAL, which is
     # ineffective while valid_from is in the table sort key), and stay org-scoped.
@@ -107,18 +109,23 @@ async def test_loader_builds_team_attribution_context(
         context.repo_by_name[("github", "full-chaos/dev-health")][0].team_id
         == "team-repo"
     )
+    # Every facet of the admin-mapped identity resolves to its team: the
+    # provider raw id, the identity's email, and its canonical_id.
+    assert (
+        context.member_by_identity[("jira", "jira-user-1")][0].team_id == "team-member"
+    )
     assert (
         context.member_by_identity[("jira", "ada@example.com")][0].team_id
         == "team-member"
     )
     assert (
-        context.member_by_identity[("jira", "canonicalb@example.com")][0].team_id
+        context.member_by_identity[("jira", "jira:member-1")][0].team_id
         == "team-member"
     )
-    membership_query = next(q for q in calls if "team_memberships" in q)
-    assert "identity_facets" in membership_query
-    assert "argMax(name, (updated_at, last_synced, name))" in membership_query
-    assert "ORDER BY g.provider, g.member_id, g.team_id" in membership_query
+    identities_query = next(q for q in calls if "FROM identities FINAL" in q)
+    assert "is_active = 1" in identities_query
+    teams_query = next(q for q in calls if "FROM teams FINAL" in q)
+    assert "is_active = 1" in teams_query
 
     repo_query = next(q for q in calls if "team_repo_ownership" in q)
     assert "argMax(name, (updated_at, last_synced, name))" in repo_query
@@ -195,31 +202,30 @@ async def test_loader_preserves_explicit_zero_manual_priority(
 async def test_loader_identity_facets_feed_assignee_membership_before_roster_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """CHAOS-4321: an admin-authored identity's facets (canonical_id, email,
+    every provider raw id) all resolve to its admin-mapped team, and that
+    admin-authored candidate outranks the legacy global-roster
+    ``TeamResolver`` fallback (unused in production -- ``load_team_resolver``
+    reads an empty ``config/team_mapping.yaml`` -- but exercised here to pin
+    the ordering contract)."""
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
     async def fake_query(_client: object, query: str, _params: dict[str, object]):
         if "team_project_ownership" in query or "team_repo_ownership" in query:
             return []
-        if "team_memberships" in query:
+        if "FROM identities FINAL" in query:
             return [
                 {
-                    "provider": "github",
-                    "team_id": "team-platform",
-                    "team_name": "Platform Team",
-                    "member_id": "gh:lead",
-                    "raw_provider_user_id": "canonicala@example.com",
-                    "raw_email": "personal@example.com",
-                    "identity_facets": [
-                        "canonicala@example.com",
-                        "github:lead",
-                        "canonicalb@example.com",
-                        "personal@example.com",
-                    ],
-                    "is_primary": 1,
-                    "specificity": 100,
-                    "priority": 10,
+                    "canonical_id": "gh:lead",
+                    "email": "canonicalb@example.com",
+                    "provider_identities": '{"github": ["canonicala@example.com"]}',
+                    "team_ids": ["team-platform"],
                     "updated_at": now,
                 }
+            ]
+        if "FROM teams FINAL" in query:
+            return [
+                {"id": "team-platform", "name": "Platform Team", "members": []},
             ]
         return []
 
@@ -234,6 +240,10 @@ async def test_loader_identity_facets_feed_assignee_membership_before_roster_fal
     assert (
         context.member_by_identity[("github", "canonicalb@example.com")][0].evidence
         == "assignee_membership=gh:lead"
+    )
+    assert (
+        context.member_by_identity[("github", "canonicala@example.com")][0].team_id
+        == "team-platform"
     )
 
     item = WorkItem(
@@ -262,7 +272,9 @@ async def test_loader_identity_facets_feed_assignee_membership_before_roster_fal
     assert team_id == "team-platform"
     assert candidates[0].source == "assignee_membership"
     assert candidates[0].evidence == "assignee_membership=gh:lead"
-    assert candidates[0].specificity == 100
+    # 60: admin-authored (identities/teams) beats the legacy 50-specificity
+    # global roster fallback within the same assignee_membership source.
+    assert candidates[0].specificity == 60
     assert any(
         candidate.evidence == "assignee=canonicalb@example.com"
         for candidate in candidates

@@ -418,7 +418,10 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	if _, err := source.loadRepos(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
+	if _, _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.loadProviderMembers(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.loadManualFallbacks(context.Background(), orgID, asOf); err != nil {
@@ -429,14 +432,17 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(conn.queries) != 5 {
-		t.Fatalf("queries = %d, want 5", len(conn.queries))
+	// CHAOS-4321: loadMembers issues TWO queries (identities, teams admin
+	// roster) and loadProviderMembers restores the pre-CHAOS-4321
+	// team_memberships query as the fallback layer (chris, 08:30 PT) -- 7
+	// total, not 5.
+	if len(conn.queries) != 7 {
+		t.Fatalf("queries = %d, want 7", len(conn.queries))
 	}
 
 	orders := []string{
 		"ORDER BY g.provider, g.project_id, g.team_id",
 		"ORDER BY g.provider, g.repo_full_name, g.team_id",
-		"ORDER BY g.provider, g.member_id, g.team_id",
 	}
 	for index, order := range orders {
 		query := conn.queries[index]
@@ -449,20 +455,52 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 			t.Fatalf("query %d args = %#v", index, args)
 		}
 	}
+
+	// loadMembers: identities (index 2) then admin teams (index 3) -- both
+	// admin-authored, org-scoped, active-only, and neither takes an as-of
+	// arg (membership isn't bitemporal like ownership).
+	identitiesQuery := conn.queries[2]
+	if !strings.Contains(identitiesQuery, "FROM identities FINAL") ||
+		!strings.Contains(identitiesQuery, "is_active = 1") {
+		t.Fatalf("identities query lacks admin-authored/active fence:\n%s", identitiesQuery)
+	}
+	if args := conn.args[2]; len(args) != 2 || args[0] != orgID || args[1] != githubWorkItemDerivationContextLimit+1 {
+		t.Fatalf("identities query args = %#v", args)
+	}
+	adminTeamsQuery := conn.queries[3]
+	if !strings.Contains(adminTeamsQuery, "FROM teams FINAL") ||
+		!strings.Contains(adminTeamsQuery, "is_active = 1") {
+		t.Fatalf("admin teams query lacks admin-authored/active fence:\n%s", adminTeamsQuery)
+	}
+	if args := conn.args[3]; len(args) != 2 || args[0] != orgID || args[1] != githubWorkItemDerivationContextLimit+1 {
+		t.Fatalf("admin teams query args = %#v", args)
+	}
+
+	// loadProviderMembers (index 4): the restored pre-CHAOS-4321
+	// team_memberships query, fallback layer, bitemporal (as_of + org_id).
+	providerMembersQuery := conn.queries[4]
+	if !strings.Contains(providerMembersQuery, "FROM team_memberships") ||
+		!strings.Contains(providerMembersQuery, "ORDER BY g.provider, g.member_id, g.team_id") {
+		t.Fatalf("provider members query lacks expected shape:\n%s", providerMembersQuery)
+	}
+	if args := conn.args[4]; len(args) != 4 || args[0] != orgID || args[1] != asOf || args[2] != asOf || args[3] != githubWorkItemDerivationContextLimit+1 {
+		t.Fatalf("provider members query args = %#v", args)
+	}
+
 	manualOrder := "ORDER BY provider, scope_type, scope_id, priority, team_id, team_name, reason"
-	if manualQuery := conn.queries[3]; !strings.Contains(manualQuery, manualOrder) {
+	if manualQuery := conn.queries[5]; !strings.Contains(manualQuery, manualOrder) {
 		t.Fatalf("manual fallback query lacks complete deterministic order:\n%s", manualQuery)
 	}
-	if args := conn.args[3]; len(args) != 4 || args[0] != orgID ||
+	if args := conn.args[5]; len(args) != 4 || args[0] != orgID ||
 		args[1] != asOf || args[2] != asOf ||
 		args[3] != githubWorkItemDerivationContextLimit+1 {
 		t.Fatalf("manual query args = %#v", args)
 	}
-	donorQuery := conn.queries[4]
+	donorQuery := conn.queries[6]
 	if !strings.Contains(donorQuery, "WHERE org_id = ?") || !strings.Contains(donorQuery, "LIMIT ?") {
 		t.Fatalf("donor query lost tenant/limit fence:\n%s", donorQuery)
 	}
-	if args := conn.args[4]; len(args) != 4 || args[0] != orgID || args[3] != 2 {
+	if args := conn.args[6]; len(args) != 4 || args[0] != orgID || args[3] != 2 {
 		t.Fatalf("donor query args = %#v", args)
 	}
 }
@@ -620,38 +658,44 @@ var _ githubWorkItemDerivationContextSource = (*fakeGitHubWorkItemDerivationCont
 // of the ruling's author-only scenarios: every case below failed against the
 // pre-CHAOS-4321 resolver, which stamped a primary author_membership
 // candidate from team_memberships alone.
-func TestGitHubWorkItemDerivationAuthorNeverInfersTeamFromMembership(t *testing.T) {
+// TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminMapped
+// covers CHAOS-4321 (chris's ruling, 2026-08-26 07:09 PT): membership-based
+// attribution (assignee AND author alike) is legitimate ONLY when it
+// resolves to EXACTLY one admin-authored team -- `derived.memberByID` is
+// itself sourced only from `identities`/`teams` now (see loadMembers), never
+// provider auto-import, so every candidate reaching resolve() is already
+// admin-mapped; "no membership" here means no ADMIN membership, and
+// "ambiguous" means mapped to 2+ teams, never "auto-imported vs curated".
+func TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminMapped(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 
 	for _, tt := range []struct {
-		name    string
-		facts   githubWorkItemDerivationFacts
-		subject func() githubWorkItemDerivationSubject
+		name       string
+		facts      githubWorkItemDerivationFacts
+		subject    func() githubWorkItemDerivationSubject
+		wantSource string
+		wantTeam   string
+		wantEvid   string
 	}{
 		{
-			name: "author in a team that does not own the repo",
-			facts: githubWorkItemDerivationFacts{
-				Members: []githubWorkItemDerivationMemberFact{{
-					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
-					MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
-				}},
-			},
+			name:  "author with no admin mapping is unassigned",
+			facts: githubWorkItemDerivationFacts{},
 			subject: func() githubWorkItemDerivationSubject {
 				reporter := "alice"
 				return githubWorkItemDerivationSubject{
 					WorkItemID: "ghpr:acme/api#1", Provider: "github", Type: "pr",
-					RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
+					Reporter: &reporter, OrgID: "org-acme",
 				}
 			},
+			wantSource: "unassigned", wantEvid: "no_candidate:no_membership",
 		},
 		{
-			name: "author on two teams (ambiguous) -- no arbitrary pick",
+			name: "author admin-mapped to one team is attributed",
 			facts: githubWorkItemDerivationFacts{
-				Members: []githubWorkItemDerivationMemberFact{
-					{Provider: "github", TeamID: "team-ops", TeamName: "Ops Team", MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now},
-					{Provider: "github", TeamID: "team-platform", TeamName: "Platform Team", MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now},
-				},
+				Members: []githubWorkItemDerivationMemberFact{{
+					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+				}},
 			},
 			subject: func() githubWorkItemDerivationSubject {
 				reporter := "alice"
@@ -660,13 +704,31 @@ func TestGitHubWorkItemDerivationAuthorNeverInfersTeamFromMembership(t *testing.
 					Reporter: &reporter, OrgID: "org-acme",
 				}
 			},
+			wantSource: "author_membership", wantTeam: "team-ops",
 		},
 		{
-			name: "bot author with a matching membership row -- still unassigned",
+			name: "author admin-mapped to two teams is unassigned, no arbitrary pick",
+			facts: githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{
+					{Provider: "github", TeamID: "team-ops", TeamName: "Ops Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+					{Provider: "github", TeamID: "team-platform", TeamName: "Platform Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+				},
+			},
+			subject: func() githubWorkItemDerivationSubject {
+				reporter := "alice"
+				return githubWorkItemDerivationSubject{
+					WorkItemID: "ghpr:acme/api#3", Provider: "github", Type: "pr",
+					Reporter: &reporter, OrgID: "org-acme",
+				}
+			},
+			wantSource: "unassigned", wantEvid: "no_candidate:ambiguous_admin_membership:team-ops,team-platform",
+		},
+		{
+			name: "bot author never attributed even when admin-mapped",
 			facts: githubWorkItemDerivationFacts{
 				Members: []githubWorkItemDerivationMemberFact{{
 					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
-					MemberID: "dependabot[bot]", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+					MemberID: "dependabot[bot]", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 				}},
 			},
 			subject: func() githubWorkItemDerivationSubject {
@@ -676,13 +738,14 @@ func TestGitHubWorkItemDerivationAuthorNeverInfersTeamFromMembership(t *testing.
 					Reporter: &reporter, OrgID: "org-acme",
 				}
 			},
+			wantSource: "unassigned", wantEvid: "no_candidate:bot_author",
 		},
 		{
-			name: "plain GitHub issue, mapped reporter, no ownership fact anywhere",
+			name: "plain GitHub issue, admin-mapped reporter -- author path stays PR/MR-only",
 			facts: githubWorkItemDerivationFacts{
 				Members: []githubWorkItemDerivationMemberFact{{
 					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
-					MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 				}},
 			},
 			subject: func() githubWorkItemDerivationSubject {
@@ -692,13 +755,14 @@ func TestGitHubWorkItemDerivationAuthorNeverInfersTeamFromMembership(t *testing.
 					Reporter: &reporter, OrgID: "org-acme",
 				}
 			},
+			wantSource: "unassigned", wantEvid: "no_candidate",
 		},
 		{
-			name: "GitLab MR, mapped reporter -- author path removed for every provider/type",
+			name: "GitLab MR, admin-mapped reporter -- author path is provider-neutral",
 			facts: githubWorkItemDerivationFacts{
 				Members: []githubWorkItemDerivationMemberFact{{
 					Provider: "gitlab", TeamID: "team-ops", TeamName: "Ops Team",
-					MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 				}},
 			},
 			subject: func() githubWorkItemDerivationSubject {
@@ -708,41 +772,104 @@ func TestGitHubWorkItemDerivationAuthorNeverInfersTeamFromMembership(t *testing.
 					Reporter: &reporter, OrgID: "org-acme",
 				}
 			},
+			wantSource: "author_membership", wantTeam: "team-ops",
+		},
+		{
+			name:  "assignee with no admin mapping is unassigned",
+			facts: githubWorkItemDerivationFacts{},
+			subject: func() githubWorkItemDerivationSubject {
+				return githubWorkItemDerivationSubject{
+					WorkItemID: "gh:acme/api#20", Provider: "github", Type: "issue",
+					Assignees: []string{"alice"}, OrgID: "org-acme",
+				}
+			},
+			wantSource: "unassigned", wantEvid: "no_candidate:no_membership",
+		},
+		{
+			name: "assignee admin-mapped to one team is attributed",
+			facts: githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{{
+					Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+					MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+				}},
+			},
+			subject: func() githubWorkItemDerivationSubject {
+				return githubWorkItemDerivationSubject{
+					WorkItemID: "gh:acme/api#21", Provider: "github", Type: "issue",
+					Assignees: []string{"alice"}, OrgID: "org-acme",
+				}
+			},
+			wantSource: "assignee_membership", wantTeam: "team-ops",
+		},
+		{
+			name: "assignee admin-mapped to two teams is unassigned, no arbitrary pick",
+			facts: githubWorkItemDerivationFacts{
+				Members: []githubWorkItemDerivationMemberFact{
+					{Provider: "github", TeamID: "team-ops", TeamName: "Ops Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+					{Provider: "github", TeamID: "team-platform", TeamName: "Platform Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+				},
+			},
+			subject: func() githubWorkItemDerivationSubject {
+				return githubWorkItemDerivationSubject{
+					WorkItemID: "gh:acme/api#22", Provider: "github", Type: "issue",
+					Assignees: []string{"alice"}, OrgID: "org-acme",
+				}
+			},
+			wantSource: "unassigned", wantEvid: "no_candidate:ambiguous_admin_membership:team-ops,team-platform",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			derived := newGitHubWorkItemDerivationContext(tt.facts)
 			subject := tt.subject()
 			teamID, teamName, candidates := derived.resolve(subject)
-			if teamID != nil || teamName != nil {
-				t.Fatalf("team = (%v, %v), want (nil, nil)",
-					githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+			if tt.wantTeam == "" {
+				if teamID != nil || teamName != nil {
+					t.Fatalf("team = (%v, %v), want (nil, nil)",
+						githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+				}
+			} else if githubWorkItemDerivationStringValue(teamID) != tt.wantTeam {
+				t.Fatalf("team = %v, want %v", githubWorkItemDerivationStringValue(teamID), tt.wantTeam)
 			}
-			// Evidence stays plain "no_candidate" -- byte-identical to
-			// Python and to main -- not "no_candidate:no_owning_team": that
-			// telemetry improvement (ticket step 4) broke the live-Python-
-			// oracle parity gate (Python's evidence is untouched, held
-			// pending team-lead) and is deferred to land with the Python fix.
-			if len(candidates) != 1 || candidates[0].Source != "unassigned" ||
-				candidates[0].Evidence != "no_candidate" || candidates[0].IsPrimary != 1 {
-				t.Fatalf("candidates = %+v, want exactly one unassigned/no_candidate primary row", candidates)
+			var primary *githubWorkItemDerivationCandidate
+			for index := range candidates {
+				if candidates[index].IsPrimary == 1 {
+					primary = &candidates[index]
+					break
+				}
 			}
-			if got := githubWorkItemTeamAttributionMetricSource(githubWorkItemTeamAttributionRow{
-				Source: candidates[0].Source, Evidence: candidates[0].Evidence,
-			}); got != "unassigned" {
-				t.Fatalf("metric source = %q, want unassigned", got)
+			if primary == nil || primary.Source != tt.wantSource {
+				t.Fatalf("candidates = %+v, want primary source %q", candidates, tt.wantSource)
+			}
+			if tt.wantEvid != "" && primary.Evidence != tt.wantEvid {
+				t.Fatalf("evidence = %q, want %q", primary.Evidence, tt.wantEvid)
+			}
+			if tt.wantSource == "unassigned" {
+				wantMetric := "unassigned"
+				if reason, ok := strings.CutPrefix(tt.wantEvid, "no_candidate:"); ok && reason != "" {
+					// CHAOS-4321: the metric label drops any ":<team ids>"
+					// suffix (cardinality guard) -- only the persisted
+					// evidence text keeps it.
+					if name, _, found := strings.Cut(reason, ":"); found {
+						wantMetric = name
+					} else {
+						wantMetric = reason
+					}
+				}
+				if got := githubWorkItemTeamAttributionMetricSource(githubWorkItemTeamAttributionRow{
+					Source: primary.Source, Evidence: primary.Evidence,
+				}); got != wantMetric {
+					t.Fatalf("metric source = %q, want %q", got, wantMetric)
+				}
 			}
 		})
 	}
 }
 
-func TestGitHubWorkItemDerivationOwnershipWinsOverAuthorMembership(t *testing.T) {
-	// CHAOS-4321: repo ownership resolves the team even when the author is
-	// mapped to a DIFFERENT team via team_memberships -- the author signal
-	// must contribute NOTHING to the candidate list at all (not merely lose
-	// a precedence fight, and unlike assignee_membership which DOES still
-	// appear as a non-primary candidate in this situation --
-	// TestGitHubWorkItemDerivationPreservesPrecedenceAndProvenance above).
+func TestGitHubWorkItemDerivationOwnershipWinsOverAssigneeAndAuthorMembership(t *testing.T) {
+	// CHAOS-4321: ownership always wins, even when BOTH assignee and author
+	// are admin-mapped to a DIFFERENT team -- membership candidates still
+	// appear as non-primary provenance rows, they just never outrank a real
+	// repo_ownership fact.
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
@@ -750,34 +877,42 @@ func TestGitHubWorkItemDerivationOwnershipWinsOverAuthorMembership(t *testing.T)
 			Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
 			RepoID: &repoID, IsPrimary: 1, Specificity: 70, UpdatedAt: now,
 		}},
-		Members: []githubWorkItemDerivationMemberFact{{
-			Provider: "github", TeamID: "team-other", TeamName: "Other Team",
-			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
-		}},
+		Members: []githubWorkItemDerivationMemberFact{
+			{Provider: "github", TeamID: "team-other", TeamName: "Other Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+			{Provider: "github", TeamID: "team-other", TeamName: "Other Team", MemberID: "bob", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+		},
 	})
 	reporter := "alice"
 	teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
 		WorkItemID: "ghpr:acme/api#6", Provider: "github", Type: "pr",
-		RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
+		RepoID: &repoID, Reporter: &reporter, Assignees: []string{"bob"}, OrgID: "org-acme",
 	})
 	if githubWorkItemDerivationStringValue(teamID) != "team-repo" || githubWorkItemDerivationStringValue(teamName) != "Repository Team" {
 		t.Fatalf("team = (%v, %v), want team-repo/Repository Team",
 			githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
 	}
-	// No assignee set, so no assignee_membership candidate either -- exactly
-	// one row (repo_ownership); the author signal is structurally absent.
-	if len(candidates) != 1 || candidates[0].Source != "repo_ownership" {
-		t.Fatalf("candidates = %+v, want exactly one repo_ownership row (author must not appear at all)", candidates)
+	sources := map[string]bool{}
+	var primarySource string
+	for _, candidate := range candidates {
+		sources[candidate.Source] = true
+		if candidate.IsPrimary == 1 {
+			primarySource = candidate.Source
+		}
+	}
+	if primarySource != "repo_ownership" {
+		t.Fatalf("primary source = %q, want repo_ownership", primarySource)
+	}
+	if !sources["assignee_membership"] || !sources["author_membership"] {
+		t.Fatalf("candidates = %+v, want assignee_membership AND author_membership present as non-primary rows", candidates)
 	}
 }
 
 func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.T) {
-	// CHAOS-4321: since the author signal no longer resolves ANY team, an
-	// author-only "donor" cannot inherit-donate one either. author_membership
-	// was never in allowedDonorSources even before this ruling (see main's
-	// buildLinkedIssueIndex) -- this confirms the stronger post-fix property:
-	// there is no author candidate to consider donor-eligible in the first
-	// place.
+	// CHAOS-4321: author_membership resolves the donor's OWN attribution
+	// (when unambiguous, restored by the 07:09 PT ruling) but stays OUT of
+	// allowedDonorSources (see buildLinkedIssueIndex) -- a person-shaped
+	// signal must never be laundered into a rank-5 linked_issue donor fact
+	// for a DIFFERENT item, ranked or not.
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	reporter := "alice"
 	donor := githubWorkItemDerivationSubject{
@@ -790,13 +925,18 @@ func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.
 	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
 		Members: []githubWorkItemDerivationMemberFact{{
 			Provider: "github", TeamID: "team-donor-only", TeamName: "Donor Only Team",
-			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 		}},
 	})
-	donorTeamID, _, _ := derived.resolve(donor)
-	if donorTeamID != nil {
-		t.Fatalf("donor team id = %v, want nil (author-only membership must not resolve a team)",
+	donorTeamID, _, donorCandidates := derived.resolve(donor)
+	if githubWorkItemDerivationStringValue(donorTeamID) != "team-donor-only" {
+		t.Fatalf("donor team id = %v, want team-donor-only (its OWN attribution resolves via author_membership)",
 			githubWorkItemDerivationStringValue(donorTeamID))
+	}
+	for _, candidate := range donorCandidates {
+		if candidate.IsPrimary == 1 && candidate.Source != "author_membership" {
+			t.Fatalf("donor primary source = %q, want author_membership", candidate.Source)
+		}
 	}
 	subjects := map[string]githubWorkItemDerivationSubject{
 		donor.WorkItemID: donor, dependent.WorkItemID: dependent,
@@ -810,4 +950,101 @@ func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.
 	if _, ok := linkedIssue[dependent.WorkItemID]; ok {
 		t.Fatalf("dependent inherited a team from an author-only donor: %+v", linkedIssue[dependent.WorkItemID])
 	}
+}
+
+// TestGitHubWorkItemDerivationTwoLayerMembershipResolution covers CHAOS-4321
+// (chris, 08:30 PT: "manual is override -- if the override exists, use it,
+// else use attribution from providers"): (e) a bare teams.members facet with
+// no backing identities row still resolves via memberByUntypedFacet, (f) no
+// admin mapping at all falls through to the provider auto-import layer, (g)
+// an admin mapping wins outright over a conflicting provider membership for
+// the SAME identity, and (h) an AMBIGUOUS admin mapping does not fall
+// through to a clean provider answer.
+func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+
+	t.Run("(e) teams.members-only mapping is attributed, no identities row", func(t *testing.T) {
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			UntypedMembers: []githubWorkItemDerivationUntypedMemberFact{{
+				TeamID: "team-ops", TeamName: "Ops Team", Facet: "alice@example.com", UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#30", Provider: "github", Type: "issue",
+			Assignees: []string{"alice@example.com"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-ops" || githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+			t.Fatalf("team = (%v, %v), want team-ops/Ops Team", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row", candidates)
+		}
+	})
+
+	t.Run("(f) provider-only single team is attributed via fallback layer", func(t *testing.T) {
+		reporter := "alice"
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "ghpr:acme/api#31", Provider: "github", Type: "pr",
+			Reporter: &reporter, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-ops" || githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+			t.Fatalf("team = (%v, %v), want team-ops/Ops Team", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "author_membership" || candidates[0].Evidence != "reporter=alice" {
+			t.Fatalf("candidates = %+v, want exactly one author_membership row", candidates)
+		}
+	})
+
+	t.Run("(g) admin mapping overrides a conflicting provider membership", func(t *testing.T) {
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			Members: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-ops", TeamName: "Ops Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+			}},
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-other", TeamName: "Other Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#32", Provider: "github", Type: "issue",
+			Assignees: []string{"alice"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-ops" || githubWorkItemDerivationStringValue(teamName) != "Ops Team" {
+			t.Fatalf("team = (%v, %v), want team-ops/Ops Team", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row (provider layer must not even appear)", candidates)
+		}
+	})
+
+	t.Run("(h) ambiguous admin mapping does not fall through to provider", func(t *testing.T) {
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			Members: []githubWorkItemDerivationMemberFact{
+				{Provider: "github", TeamID: "team-ops", TeamName: "Ops Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+				{Provider: "github", TeamID: "team-platform", TeamName: "Platform Team", MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now},
+			},
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-clean", TeamName: "Clean Team",
+				MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#33", Provider: "github", Type: "issue",
+			Assignees: []string{"alice"}, OrgID: "org-acme",
+		})
+		if teamID != nil || teamName != nil {
+			t.Fatalf("team = (%v, %v), want (nil, nil)", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "unassigned" ||
+			candidates[0].Evidence != "no_candidate:ambiguous_admin_membership:team-ops,team-platform" {
+			t.Fatalf("candidates = %+v, want exactly one unassigned row naming the colliding admin teams", candidates)
+		}
+	})
 }

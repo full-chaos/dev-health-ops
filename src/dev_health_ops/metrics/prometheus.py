@@ -497,7 +497,14 @@ def work_item_team_attribution_metric_source(source: str, evidence: str) -> str:
     if source == "unassigned":
         prefix = "no_candidate:"
         if evidence.startswith(prefix) and len(evidence) > len(prefix):
-            return evidence[len(prefix) :]
+            reason = evidence[len(prefix) :]
+            # CHAOS-4321: an ambiguous-membership reason carries the
+            # colliding team ids after a second ":" (e.g.
+            # "ambiguous_admin_membership:team-ops,team-platform") so an
+            # admin can act on the persisted evidence text -- but a
+            # Prometheus label must stay bounded cardinality, so only the
+            # reason NAME (before that ":") becomes the label value here.
+            return reason.split(":", 1)[0]
         return "unassigned"
     return source
 

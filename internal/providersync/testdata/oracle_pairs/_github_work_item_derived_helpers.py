@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import contextlib
 import io
+import json
 import pathlib
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -218,6 +219,71 @@ _MANUAL_FIELDS = (
 )
 
 
+def _identities_and_teams_from_members(
+    members: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Translate Go-shaped ``githubWorkItemDerivationMemberFact`` fixture rows
+    into the ``identities``/``teams`` rows CHAOS-4321's loader now reads.
+
+    Oracle fixtures are authored once, as ``Facts.Members`` (Provider, TeamID,
+    TeamName, MemberID, RawEmail, IdentityFacets, ...) -- the SAME shape both
+    languages' `resolve()` cascades consume. Since CHAOS-4321 moved the
+    ClickHouse SOURCE of that data from `team_memberships` to `identities`/
+    `teams`, this fake transport must synthesize the new tables' shape from
+    the SAME fixture rather than requiring every oracle pair to author two
+    parallel fixtures for one concept -- an identity's canonical_id is its
+    MemberID; its team_ids is every TeamID it appears under; its
+    provider_identities groups IdentityFacets by Provider.
+    """
+    identities_by_canonical: dict[str, dict[str, Any]] = {}
+    team_names: dict[str, str] = {}
+    for raw in members:
+        team_id = str(raw.get("TeamID") or "")
+        if team_id and team_id not in team_names:
+            team_names[team_id] = str(raw.get("TeamName") or team_id)
+        canonical_id = str(raw.get("MemberID") or "")
+        if not canonical_id:
+            continue
+        entry = identities_by_canonical.setdefault(
+            canonical_id,
+            {
+                "canonical_id": canonical_id,
+                "email": None,
+                "provider_identities": {},
+                "team_ids": [],
+                "updated_at": raw.get("UpdatedAt"),
+            },
+        )
+        if not entry["email"] and raw.get("RawEmail"):
+            entry["email"] = raw.get("RawEmail")
+        provider = str(raw.get("Provider") or "")
+        if provider:
+            facets = entry["provider_identities"].setdefault(provider, [])
+            for facet in raw.get("IdentityFacets") or []:
+                facet_str = str(facet)
+                if facet_str and facet_str not in facets:
+                    facets.append(facet_str)
+        if team_id and team_id not in entry["team_ids"]:
+            entry["team_ids"].append(team_id)
+    identities_rows = [
+        {
+            "canonical_id": data["canonical_id"],
+            "email": data["email"],
+            "provider_identities": json.dumps(data["provider_identities"]),
+            "team_ids": data["team_ids"],
+            "updated_at": parse_time(data["updated_at"])
+            if data["updated_at"]
+            else None,
+        }
+        for data in identities_by_canonical.values()
+    ]
+    teams_rows = [
+        {"id": team_id, "name": name, "members": []}
+        for team_id, name in team_names.items()
+    ]
+    return identities_rows, teams_rows
+
+
 class _ContextQueryClient:
     """Fake ClickHouse boundary; production loader SQL and mapping stay live."""
 
@@ -228,6 +294,26 @@ class _ContextQueryClient:
         self.seen: set[str] = set()
 
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        # CHAOS-4321: `identities`/`teams` are admin-authored catalogs, not
+        # bitemporal ownership facts -- their queries carry only org_id/limit,
+        # no as_of, and no `o.`-aliased subquery. Checked before the generic
+        # ownership-query fence below, which requires both.
+        if "FROM identities FINAL" in query:
+            if params.get("org_id") != self.org_id:
+                raise AssertionError("identities query lost its tenant fence")
+            self.seen.add("identities")
+            identities_rows, _ = _identities_and_teams_from_members(
+                self.facts.get("Members") or []
+            )
+            return identities_rows
+        if "FROM teams FINAL" in query:
+            if params.get("org_id") != self.org_id:
+                raise AssertionError("admin teams query lost its tenant fence")
+            self.seen.add("teams")
+            _, teams_rows = _identities_and_teams_from_members(
+                self.facts.get("Members") or []
+            )
+            return teams_rows
         if (
             params.get("org_id") != self.org_id
             or "o.org_id = {org_id:String}" not in query
@@ -247,10 +333,15 @@ class _ContextQueryClient:
                 _loader_row(raw, _REPO_FIELDS) for raw in self.facts.get("Repos") or []
             ]
         if "team_memberships" in query:
-            self.seen.add("members")
+            # CHAOS-4321 (chris, 08:30 PT): the FALLBACK membership layer --
+            # provider auto-import, restored unchanged from before this
+            # ticket. Sourced from Facts.ProviderMembers (NOT Facts.Members,
+            # which is the admin/override layer synthesized into
+            # identities/teams above).
+            self.seen.add("provider_members")
             return [
                 _loader_row(raw, _MEMBER_FIELDS)
-                for raw in self.facts.get("Members") or []
+                for raw in self.facts.get("ProviderMembers") or []
             ]
         if "manual_attribution_fallbacks" in query:
             self.seen.add("manual")
@@ -305,7 +396,14 @@ class DerivedCase:
                 query_client, org_id=self.org_id
             ).load_team_attribution_context(as_of=self.as_of)
         )
-        if query_client.seen != {"projects", "repos", "members", "manual"}:
+        if query_client.seen != {
+            "projects",
+            "repos",
+            "identities",
+            "teams",
+            "provider_members",
+            "manual",
+        }:
             raise AssertionError(
                 "production team-attribution loader coverage incomplete: "
                 f"{query_client.seen}"

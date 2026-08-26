@@ -674,7 +674,13 @@ def test_ambiguous_reporter_evidence_tags_the_unassigned_row():
     )
     primary = [r for r in records if r.is_primary]
     assert len(primary) == 1
-    assert primary[0].evidence == "no_candidate:ambiguous_membership"
+    # CHAOS-4321: reason renamed to ambiguous_admin_membership (this is the
+    # admin-mapping layer) and now carries the colliding team ids so an
+    # admin can act on the persisted evidence text.
+    assert (
+        primary[0].evidence
+        == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
+    )
 
 
 def test_reporter_and_assignee_same_person_same_team_stay_distinct_provenance():

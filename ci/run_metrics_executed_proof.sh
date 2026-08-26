@@ -391,6 +391,19 @@ echo "   -- fixtures generate (CHAOS-4276: git_commits + a repo-pattern team for
 # gate -- `fixtures generate` writes directly, independent of the
 # sync_run/outbox/post_sync chain the loop above drives, so ordering
 # relative to it is irrelevant.
+#
+# --team-count 1 (CHAOS-4276 codex round-1 finding 3): with repo-count 1 and
+# team-count >= 2, _build_repo_team_assignments's own "every team must own at
+# least one repo" fallback forces every team onto the SAME single repo, i.e.
+# a multi-owner repo. RepoPatternTeamResolver's exact-match map (both the Go
+# and Python implementations) holds exactly one team per repo pattern
+# string, so seeding the same pattern for two co-owning teams makes
+# whichever team was written last win and silently strands the other team's
+# commits with no repo-pattern match -- the fixtures fix above deliberately
+# does not emit a pattern for a multi-owner repo (see its own comment), so a
+# 2-team/1-repo seed here would have exercised membership fallback instead
+# of the repo-pattern-first path this job's comment above says it proves.
+# One team keeps the repo genuinely single-owner.
 ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
   run_dev_hops fixtures generate \
   --sink "${CLICKHOUSE_URI_HTTP}" \
@@ -398,7 +411,7 @@ ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTG
   --repo-name "${REPO_NAME}" \
   --repo-count 1 \
   --days "${BACKFILL_DAYS}" \
-  --team-count 2 \
+  --team-count 1 \
   --seed 4276
 
 echo "==> finalizing the 4 deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
@@ -479,6 +492,20 @@ for family, info in summary.items():
     } >>"${GITHUB_STEP_SUMMARY}"
   fi
 fi
+
+echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from the Go executor, not the Python fail-open fallback"
+# The readback JSON above proves rows LANDED; it cannot distinguish which
+# path wrote them (TeamWellbeingExecutor vs. job_daily.py's Python compute
+# after the native call fell open). worker_daily_metrics_native_family_
+# outcome_total{family="team_wellbeing",outcome="computed"} is the ONLY
+# signal that names which path actually ran (team-lead's ruling: without
+# it, a green readback is not proof the native executor is the one being
+# tested). Read from the worker's own /metrics endpoint while it is still
+# running -- this must happen before the cleanup trap tears it down at
+# script exit.
+curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null \
+  | grep -E '^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{family="team_wellbeing"' \
+  || echo "WARNING: no worker_daily_metrics_native_family_* series found for team_wellbeing"
 
 if [ "${FINAL_RC}" -ne 0 ]; then
   # Dispatch-path diagnostic dump (CHAOS-4266): the readback assertion only

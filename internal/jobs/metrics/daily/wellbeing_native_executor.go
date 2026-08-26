@@ -40,6 +40,12 @@ import (
 //     product meaning (the parity manifest already treats it as volatile
 //     column-wise), but a per-row or per-query stamp would be a real
 //     behavioural difference in a column somebody may key on.
+//  3. TEAM BUCKETS RESET PER REPO, NOT PER PARTITION (codex round-1 finding,
+//     see computeWellbeingPerRepo's doc comment) -- the Python bridge calls
+//     compute_team_wellbeing_metrics_daily once per repo_id, so this executor
+//     runs numerical.ComputeTeamWellbeing once per repo in the partition and
+//     concatenates the results, rather than aggregating every repo's commits
+//     into one call.
 type TeamWellbeingExecutor struct {
 	conn               driver.Conn
 	businessTZ         *time.Location
@@ -136,16 +142,71 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	metrics := numerical.ComputeTeamWellbeing(
-		day, commits, repoNamesByID, repoResolver, memberResolver,
+	allMetrics := computeWellbeingPerRepo(
+		day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver,
 		executor.businessTZ, executor.businessHoursStart, executor.businessHoursEnd,
 	)
 
-	written, err := WriteTeamMetricsDaily(ctx, executor.conn, run.OrganizationID, day, executor.nowUTC(), metrics)
+	written, err := WriteTeamMetricsDaily(ctx, executor.conn, run.OrganizationID, day, executor.nowUTC(), allMetrics)
 	if err != nil {
 		return 0, err
 	}
 	return written, nil
+}
+
+// computeWellbeingPerRepo groups commits by repo and runs
+// numerical.ComputeTeamWellbeing once per repoID (in repoIDs' own order),
+// concatenating the resulting rows.
+//
+// CHAOS-4276 codex round-1 (finding 2): the Python bridge invokes
+// compute_team_wellbeing_metrics_daily ONCE PER repo_id (worker_metrics.py's
+// `for repo_id in repo_ids` loop, CHAOS-4264 -- "each run_daily_metrics_job
+// call loads and releases only that repo's source rows"), scoping every
+// call's commit set -- and therefore every team's commit/after-hours/weekend
+// bucket -- to that one repo alone. team_metrics_daily is deduped downstream
+// by (org_id, team_id, day) (internal/jobs/report/dedup.go,
+// clickhouse_dedup.py): whichever row a reader picks for a key is a
+// repo-scoped slice, never a cross-repo sum. A single call aggregating every
+// repo in the partition into one row produces a materially different number
+// for any team whose repos span more than one entry in this partition -- not
+// a rounding difference, a different row. Running ComputeTeamWellbeing once
+// per repo mirrors the Python loop's bucket-reset boundary exactly, so a
+// multi-repo partition writes the same per-repo-scoped rows Python does.
+// Iterating in repoIDs' own (sorted, deterministic -- see
+// normalizeRepositoryPartitions) order keeps this reproducible run to run
+// regardless of ClickHouse row-return order. A repo-less commit (repoIDs
+// empty) never happens for a real dispatched partition -- partitionRepositoryIDs
+// never emits an empty chunk -- so it is not specially handled here: an
+// empty repoIDs simply loops zero times and writes nothing, matching
+// Python's `for repo_id in repo_ids` loop body never running either.
+func computeWellbeingPerRepo(
+	day time.Time,
+	repoIDs []uuid.UUID,
+	commits []numerical.Commit,
+	repoNamesByID map[string]string,
+	repoResolver numerical.RepoTeamResolver,
+	memberResolver numerical.MemberTeamResolver,
+	businessTZ *time.Location,
+	businessHoursStart, businessHoursEnd int,
+) []numerical.TeamWellbeingMetric {
+	commitsByRepo := make(map[string][]numerical.Commit, len(repoIDs))
+	for _, commit := range commits {
+		commitsByRepo[commit.RepoID] = append(commitsByRepo[commit.RepoID], commit)
+	}
+
+	var allMetrics []numerical.TeamWellbeingMetric
+	for _, repoID := range repoIDs {
+		repoCommits := commitsByRepo[repoID.String()]
+		if len(repoCommits) == 0 {
+			continue
+		}
+		metrics := numerical.ComputeTeamWellbeing(
+			day, repoCommits, repoNamesByID, repoResolver, memberResolver,
+			businessTZ, businessHoursStart, businessHoursEnd,
+		)
+		allMetrics = append(allMetrics, metrics...)
+	}
+	return allMetrics
 }
 
 func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {

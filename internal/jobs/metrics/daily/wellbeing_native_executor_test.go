@@ -8,6 +8,9 @@ import (
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
 // stubDriverConn is an unimplemented clickhouse driver.Conn. Every method
@@ -98,5 +101,75 @@ func TestComputeFamilyRejectsUnparseablePartitionRepoIDs(t *testing.T) {
 	partition := Partition{ID: testPartitionID, RepoIDs: []RepositoryID{"not-a-uuid"}}
 	if _, err := executor.ComputeFamily(context.Background(), run, partition); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("err=%v, want ErrInvalidState", err)
+	}
+}
+
+// TestComputeWellbeingPerRepoScopesBucketsToOneRepoAtATime is the regression
+// test for codex round-1 finding 2 (CHAOS-4276): a team that committed to
+// TWO repos in the same partition must land as TWO team_metrics_daily rows
+// (one per repo, each counting only that repo's commits), never one row
+// aggregating both repos -- mirroring worker_metrics.py's `for repo_id in
+// repo_ids` loop, which calls compute_team_wellbeing_metrics_daily (and so
+// resets every team's bucket) once per repo.
+func TestComputeWellbeingPerRepoScopesBucketsToOneRepoAtATime(t *testing.T) {
+	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC) // Monday
+	repoA := uuid.MustParse("00000000-0000-0000-0000-0000000000a1")
+	repoB := uuid.MustParse("00000000-0000-0000-0000-0000000000b2")
+	repoIDs := []uuid.UUID{repoA, repoB}
+
+	teams := []WellbeingTeam{
+		{ID: "platform", Name: "Platform", RepoPatterns: []string{"org/repo-a", "org/repo-b"}},
+	}
+	repoResolver := NewRepoPatternResolver(teams)
+	memberResolver := NewMemberResolver(teams)
+	repoNamesByID := map[string]string{
+		repoA.String(): "org/repo-a",
+		repoB.String(): "org/repo-b",
+	}
+
+	businessHours := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC) // Monday, business hours
+	commits := []numerical.Commit{
+		{RepoID: repoA.String(), AuthorEmail: "dev-a@example.com", CommitterWhen: businessHours},
+		{RepoID: repoA.String(), AuthorEmail: "dev-a@example.com", CommitterWhen: businessHours},
+		{RepoID: repoB.String(), AuthorEmail: "dev-b@example.com", CommitterWhen: businessHours},
+	}
+
+	got := computeWellbeingPerRepo(day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver, time.UTC, 9, 17)
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows (one per repo) for the one team spanning both repos, got %d: %#v", len(got), got)
+	}
+	for _, row := range got {
+		if row.TeamID != "platform" {
+			t.Fatalf("unexpected team in row: %#v", row)
+		}
+	}
+	// repo-a's row must count ONLY repo-a's 2 commits, never repo-b's.
+	if got[0].CommitsCount != 2 {
+		t.Fatalf("repo-a row: commits_count=%d, want 2 (repo-b's commit must not leak in)", got[0].CommitsCount)
+	}
+	// repo-b's row must count ONLY repo-b's 1 commit.
+	if got[1].CommitsCount != 1 {
+		t.Fatalf("repo-b row: commits_count=%d, want 1 (repo-a's commits must not leak in)", got[1].CommitsCount)
+	}
+}
+
+func TestComputeWellbeingPerRepoSkipsRepoWithNoCommitsThatDay(t *testing.T) {
+	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	repoA := uuid.MustParse("00000000-0000-0000-0000-0000000000a1")
+	repoB := uuid.MustParse("00000000-0000-0000-0000-0000000000b2")
+	repoIDs := []uuid.UUID{repoA, repoB}
+	teams := []WellbeingTeam{{ID: "platform", Name: "Platform", RepoPatterns: []string{"org/repo-a"}}}
+	repoResolver := NewRepoPatternResolver(teams)
+	memberResolver := NewMemberResolver(teams)
+	repoNamesByID := map[string]string{repoA.String(): "org/repo-a", repoB.String(): "org/repo-b"}
+	commits := []numerical.Commit{
+		{RepoID: repoA.String(), AuthorEmail: "dev@example.com", CommitterWhen: time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)},
+	}
+
+	got := computeWellbeingPerRepo(day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver, time.UTC, 9, 17)
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row (repo-b had no commits that day, must not write an empty row), got %d: %#v", len(got), got)
 	}
 }

@@ -217,6 +217,83 @@ def test_upgrade_github_provider_clamps_projects_false():
         assert gitlab_options["auto_import_projects"] is True
 
 
+def test_upgrade_provider_with_no_auto_import_support_clamps_all_three_false():
+    """CHAOS-4323 narrow follow-up round (codex adversarial-review, HIGH):
+    the first provider-aware fix only special-cased GitHub/projects, but
+    launchdarkly and pagerduty are valid sync_configurations.provider values
+    (PROVIDER_SYNC_TARGETS in api/admin/routers/sync.py) with NO
+    auto-import capability at all -- absent from
+    team_capabilities._AUTO_IMPORT_CAPABILITIES, so
+    auto_import_capabilities() treats them exactly like an
+    unrecognized/future provider (all three categories unsupported). An
+    enabled legacy row for either would otherwise get all three flags
+    True, and the API's capability-validation boundary would then reject
+    that config's next, unrelated PATCH for EVERY category, not just
+    projects. jira/linear (unlike gitlab, already covered above) are
+    exercised here too as a second full-support control."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    migration = _migration()
+    with engine.connect() as connection:
+        table = _table(connection)
+        connection.execute(
+            table.insert(),
+            [
+                {
+                    "id": "row-launchdarkly",
+                    "provider": "launchdarkly",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-pagerduty",
+                    "provider": "pagerduty",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-unknown-provider",
+                    "provider": "some-future-provider",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-jira",
+                    "provider": "jira",
+                    "sync_options": {"auto_import_teams": True},
+                },
+                {
+                    "id": "row-linear",
+                    "provider": "linear",
+                    "sync_options": {"auto_import_teams": True},
+                },
+            ],
+        )
+        connection.commit()
+
+        context = MigrationContext.configure(connection)
+        with Operations.context(context):
+            migration.upgrade()
+
+        for row_id in (
+            "row-launchdarkly",
+            "row-pagerduty",
+            "row-unknown-provider",
+        ):
+            row = connection.execute(
+                sa.select(table.c.sync_options).where(table.c.id == row_id)
+            ).scalar_one()
+            options = json.loads(row) if isinstance(row, str) else row
+            assert options["auto_import_teams"] is False, row_id
+            assert options["auto_import_projects"] is False, row_id
+            assert options["auto_import_members"] is False, row_id
+
+        for row_id in ("row-jira", "row-linear"):
+            row = connection.execute(
+                sa.select(table.c.sync_options).where(table.c.id == row_id)
+            ).scalar_one()
+            options = json.loads(row) if isinstance(row, str) else row
+            assert options["auto_import_teams"] is True, row_id
+            assert options["auto_import_projects"] is True, row_id
+            assert options["auto_import_members"] is True, row_id
+
+
 def test_downgrade_drops_new_keys_and_keeps_auto_import_teams():
     engine = sa.create_engine("sqlite:///:memory:")
     migration = _migration()

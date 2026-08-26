@@ -8,19 +8,30 @@ DATA ONLY. This adds, drops and alters no column. ``SyncConfiguration.
 sync_options`` is (and stays) a ``JSON`` column (``models/settings.py``); the
 three flags are keys inside it, exactly like ``auto_import_teams`` always was.
 
-PROVIDER-AWARE (codex adversarial-review, final round, HIGH): a naive
-"derive all three from auto_import_teams" migration would give every
-enabled GitHub config ``auto_import_projects=True`` -- GitHub has no
-"Projects" import (``providers/team_capabilities.py``: only teams and
-members are supported) and the API rejects that combination on every
-subsequent write. A migrated-in-place row carrying an unsupported flag it
-never explicitly chose would then make an operator's next, unrelated PATCH
-(schedule, name, ...) fail 422, because ``sync.py`` validates the MERGED
-options. This migration hardcodes the one provider/category combination
-known unsupported at 0112's authorship time (GitHub + projects) rather than
-importing the live ``team_capabilities`` module, deliberately: a migration's
-behavior must stay fixed to what it actually did, independent of how the
-capability map evolves after this revision ships.
+PROVIDER-AWARE (codex adversarial-review, final round, HIGH; narrow
+follow-up round, HIGH): a naive "derive all three from auto_import_teams"
+migration would give every enabled GitHub config
+``auto_import_projects=True`` -- GitHub has no "Projects" import
+(``providers/team_capabilities.py``: only teams and members are supported)
+-- and every enabled ``launchdarkly``/``pagerduty`` config all three flags
+``True``, even though those two are valid ``sync_configurations.provider``
+values (``api/admin/routers/sync.py``'s ``PROVIDER_SYNC_TARGETS``) that have
+NO auto-import capability at all (absent from
+``team_capabilities._AUTO_IMPORT_CAPABILITIES``, so
+``auto_import_capabilities()`` falls through to
+``_UNSUPPORTED_PROVIDER_CAPABILITY`` for them -- the same fallback an
+unrecognized/future provider gets). Either case gives a migrated row a flag
+it never explicitly chose, which the API rejects on every subsequent write
+(``sync.py`` validates the MERGED options) -- an operator's next, unrelated
+PATCH (schedule, name, ...) would 422. This migration hardcodes the full
+category matrix for every provider known to have auto-import support at
+0112's authorship time (github/gitlab/jira/linear) rather than importing the
+live ``team_capabilities`` module, deliberately: a migration's behavior must
+stay fixed to what it actually did, independent of how that map evolves
+after this revision ships. Every OTHER provider (``launchdarkly``,
+``pagerduty``, and any future addition) gets all three flags clamped to
+``False`` regardless of the legacy value, matching
+``_UNSUPPORTED_PROVIDER_CAPABILITY``.
 
 WHAT WAS WRONG
 --------------
@@ -98,13 +109,25 @@ _TEAMS = "auto_import_teams"
 _PROJECTS = "auto_import_projects"
 _MEMBERS = "auto_import_members"
 
-# Providers with no "Projects" import as of 0112's authorship (mirrors
-# providers/team_capabilities.py's github row) -- hardcoded, not imported,
+# Frozen snapshot of providers/team_capabilities.py's per-category
+# auto-import support at 0112's authorship time -- hardcoded, not imported,
 # so this migration's behavior stays fixed regardless of how that live
-# capability map evolves later. Matched case-insensitively against the
-# `provider` column the same way team_capabilities.auto_import_capabilities
-# does.
-_PROVIDERS_WITHOUT_PROJECTS = frozenset({"github"})
+# capability map evolves later (same rationale as the module docstring).
+# (teams, projects, members). Any provider NOT a key here (e.g.
+# "launchdarkly", "pagerduty" -- both valid sync_configurations.provider
+# values with no team-autoimport support at all, per
+# PROVIDER_SYNC_TARGETS in api/admin/routers/sync.py -- or an
+# unrecognized/future provider) gets all three clamped False, mirroring
+# team_capabilities._UNSUPPORTED_PROVIDER_CAPABILITY's fallback. Matched
+# case-insensitively/stripped against the `provider` column, the same way
+# team_capabilities.auto_import_capabilities() does.
+_PROVIDER_CATEGORY_SUPPORT: dict[str, tuple[bool, bool, bool]] = {
+    "github": (True, False, True),
+    "gitlab": (True, True, True),
+    "jira": (True, True, True),
+    "linear": (True, True, True),
+}
+_UNSUPPORTED_CATEGORY_SUPPORT = (False, False, False)
 
 # Lightweight table handle rather than raw SQL/the ORM model -- keeps this
 # migration dialect-portable (runs unchanged against the Postgres-JSON
@@ -182,19 +205,25 @@ def upgrade() -> None:
         # false, matching the new API-level rejection of non-bool values for
         # these keys on every write going forward.
         enabled = options.get(_TEAMS) is True
-        # CHAOS-4323 final round (codex adversarial-review, HIGH):
-        # provider-aware clamp. A provider with no "Projects" import (GitHub)
-        # never gets auto_import_projects=True out of this migration, even
-        # when the legacy single flag was enabled -- an unsupported flag a
-        # migrated row never chose would otherwise reject that config's next,
-        # unrelated PATCH at the API's capability-validation boundary.
-        projects_enabled = enabled and (
-            (provider or "").strip().lower() not in _PROVIDERS_WITHOUT_PROJECTS
+        # CHAOS-4323 final round + narrow follow-up (codex adversarial-
+        # review, both HIGH): provider-aware clamp against the FULL
+        # per-category matrix, not just GitHub/projects. A provider with no
+        # auto-import support at all for a category (GitHub+projects, or
+        # every category for launchdarkly/pagerduty/an unrecognized
+        # provider) never gets that flag set True out of this migration,
+        # even when the legacy single flag was enabled -- an unsupported
+        # flag a migrated row never chose would otherwise reject that
+        # config's next, unrelated PATCH at the API's capability-validation
+        # boundary.
+        teams_supported, projects_supported, members_supported = (
+            _PROVIDER_CATEGORY_SUPPORT.get(
+                (provider or "").strip().lower(), _UNSUPPORTED_CATEGORY_SUPPORT
+            )
         )
         new_options = dict(options)
-        new_options[_TEAMS] = enabled
-        new_options[_PROJECTS] = projects_enabled
-        new_options[_MEMBERS] = enabled
+        new_options[_TEAMS] = enabled and teams_supported
+        new_options[_PROJECTS] = enabled and projects_supported
+        new_options[_MEMBERS] = enabled and members_supported
 
         if new_options == options:
             continue

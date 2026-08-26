@@ -1190,7 +1190,7 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:263"
+      "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
       "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:396",

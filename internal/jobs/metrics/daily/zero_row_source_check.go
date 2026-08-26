@@ -110,28 +110,43 @@ LIMIT 1`, orgID, day, repositoryIDs)
 		return nil, err
 	}
 
-	testopsSource, err := checker.exists(ctx, `
-SELECT 1 FROM (
-  SELECT repo_id FROM ci_pipeline_runs
-  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-    AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
-  UNION ALL
-  SELECT repo_id FROM test_suite_results
-  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-    AND coalesce(started_at, finished_at) IS NOT NULL
-    AND toDate(coalesce(started_at, finished_at)) = {day:Date}
-)
+	// testops_risk's three outputs have DIFFERENT source eligibility
+	// (codex adversarial review, round 2, CHAOS-4263):
+	// compute_release_confidence and compute_quality_drag
+	// (compute_testops_risk.py) accept a repo with EITHER pipeline metrics OR
+	// test metrics alone -- a pipeline-only or suite-only day legitimately
+	// produces rows for both. compute_pipeline_stability takes ONLY
+	// pipeline_metrics_7d: a suite-only day (test_suite_results present, zero
+	// ci_pipeline_runs) has nothing to derive stability from and legitimately
+	// writes zero pipeline_stability rows -- that is not an anomaly. Treating
+	// "pipeline OR suite" as pipeline_stability's eligibility too (round 1's
+	// mistake) pinned a healthy suite-only day as a permanent failure.
+	testopsPipelineSource, err := checker.exists(ctx, `
+SELECT 1 FROM ci_pipeline_runs
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
+	testopsSuiteSource, err := checker.exists(ctx, `
+SELECT 1 FROM test_suite_results
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND coalesce(started_at, finished_at) IS NOT NULL
+  AND toDate(coalesce(started_at, finished_at)) = {day:Date}
+LIMIT 1`, orgID, day, repositoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	testopsEitherSource := testopsPipelineSource || testopsSuiteSource
+
 	// testops_risk writes three independent output tables (release_confidence,
 	// quality_drag, pipeline_stability -- job_daily.py:1481-1483 logs zero-rows
-	// for each separately). A UNION ALL existence check collapses them into one
-	// boolean, so a regression that empties one table while another still has
-	// rows never gets flagged (codex adversarial review, round 1, CHAOS-4263).
-	// Check each output independently and flag the family if source data
-	// exists but ANY expected output is missing.
+	// for each separately). A single combined existence check collapses them
+	// into one boolean, so a regression that empties one table while another
+	// still has rows never gets flagged (round 1). Check each output
+	// independently, against its OWN eligible source, and flag the family if
+	// ANY eligible output is missing.
 	releaseConfidenceOutput, err := checker.exists(ctx, `
 SELECT 1 FROM testops_release_confidence
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
@@ -153,7 +168,8 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
-	testopsOutput := releaseConfidenceOutput && qualityDragOutput && pipelineStabilityOutput
+	testopsMissingOutput := (testopsEitherSource && (!releaseConfidenceOutput || !qualityDragOutput)) ||
+		(testopsPipelineSource && !pipelineStabilityOutput)
 
 	// incident: operational_incidents has no repo_id. The canonical projection
 	dayStart, err := time.Parse("2006-01-02", day)
@@ -179,7 +195,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	if deploySource && !deployOutput {
 		flagged = append(flagged, "deploy")
 	}
-	if testopsSource && !testopsOutput {
+	if testopsMissingOutput {
 		flagged = append(flagged, "testops_risk")
 	}
 	if incidentSource && !incidentOutput {

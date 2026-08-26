@@ -30,8 +30,19 @@ var (
 	// ErrZeroRowsWithSourceData means a family's upstream source data existed
 	// for a partition's repos+day but its output table had zero rows for that
 	// scope (CHAOS-4263). Distinct from a genuinely empty day: the partition
-	// must not report success, since retrying may resolve a transient
-	// compute-path failure.
+	// must not report success. This is classified Permanent, not Retryable
+	// (codex adversarial review, round 2): the compatibility bridge's
+	// execution ledger (worker_metrics.py:_reserve_execution) marks this
+	// exact (run, partition, family, generation, scope_digest) identity
+	// "succeeded" the moment ComputePartition returns -- any later attempt at
+	// the SAME identity is answered "skipped" without recomputing anything, so
+	// a bare retry can never resolve this on its own. Marking it Retryable
+	// would silently burn the job's attempt budget re-checking the same
+	// unchanged output before failing anyway, with no recomputation ever
+	// happening in between. Permanent fails loud and immediately instead,
+	// which is what the RCA actually requires; real recomputation needs a new
+	// execution identity (a ledger repair or a fresh run/partition), which is
+	// a separate, larger change than this ticket's scope.
 	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
 )
 
@@ -337,7 +348,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				}
 			}
 			releasePartition(handler.store, ctx, *claim)
-			return jobruntime.Retryable(ErrZeroRowsWithSourceData)
+			return jobruntime.Permanent(ErrZeroRowsWithSourceData)
 		}
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {

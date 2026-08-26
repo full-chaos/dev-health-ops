@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -229,16 +231,17 @@ func TestClickHouseSourceDataCheckerFlagsOnlyFamiliesWithSourceButNoOutput(t *te
 	}
 }
 
-// TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty pins
-// the codex adversarial-review finding (round 1, CHAOS-4263): testops_risk
+// TestPartitionHandlerWorkFlagsTestopsRiskWhenPipelineStabilityIsMissingDespitePipelineSource
+// pins the codex adversarial-review finding (round 1, CHAOS-4263): testops_risk
 // writes THREE independent output tables (release_confidence, quality_drag,
 // pipeline_stability -- job_daily.py:1481-1483 logs their zero-row state
 // separately), and a UNION-based existence check let one populated table mask
-// another's empty one. Seeds source data plus two of the three outputs
-// present and the third empty, and drives the real PartitionHandler.Work path
-// (not just the checker function) to prove the partition is released and
-// retried instead of silently completing.
-func TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty(t *testing.T) {
+// another's empty one. Seeds pipeline source data plus two of the three
+// outputs present and the third (pipeline_stability, which pipeline source
+// makes eligible) empty, and drives the real PartitionHandler.Work path (not
+// just the checker function) to prove the partition is released and fails
+// permanently instead of silently completing.
+func TestPartitionHandlerWorkFlagsTestopsRiskWhenPipelineStabilityIsMissingDespitePipelineSource(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -262,12 +265,22 @@ func TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty(t *te
 	insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, day,
 		[]RepositoryID{"00000000-0000-4000-8000-000000000002"})
 
-	// testops_risk source present (test_suite_results); release_confidence
-	// and quality_drag populated but pipeline_stability empty -- the exact
-	// shape a UNION ALL existence check cannot distinguish from "all three
-	// present".
+	// ci_pipeline_runs present (pipeline source, so pipeline_stability IS
+	// eligible); release_confidence and quality_drag populated but
+	// pipeline_stability empty -- a genuine compute regression, not a
+	// suite-only day (codex adversarial review, round 2, CHAOS-4263: round
+	// 1's fix wrongly required all three outputs whenever EITHER pipeline or
+	// suite source existed, which misclassified a healthy suite-only day as
+	// this same anomaly -- see
+	// TestClickHouseSourceDataCheckerAllowsMissingPipelineStabilityOnASuiteOnlyDay
+	// below for that corrected healthy case).
+	// cicd_metrics_daily is also seeded present so this test isolates the
+	// testops_risk anomaly -- cicd's own source/output pair is unrelated to
+	// this scenario and would otherwise also flag "cicd" (its source query
+	// shares the ci_pipeline_runs table name this stub keys on).
 	conn := &stubSourceDataConn{hasRows: map[string]bool{
-		"test_suite_results":         true,
+		"ci_pipeline_runs":           true,
+		"cicd_metrics_daily":         true,
 		"testops_release_confidence": true,
 		"testops_quality_drag":       true,
 		"testops_pipeline_stability": false,
@@ -293,8 +306,8 @@ func TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty(t *te
 	handler.SetZeroRowsObserver(observer)
 
 	err = handler.Work(ctx, partitionExecutionFor(partitionID, runID, orgID))
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("handler error = %v, want retryable zero-row error", err)
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("handler error = %v, want permanent zero-row error", err)
 	}
 	if store.partitionCompletions != 0 {
 		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
@@ -304,6 +317,58 @@ func TestPartitionHandlerWorkFlagsTestopsRiskWhenOnlyOneOutputTableIsEmpty(t *te
 	}
 	if len(observer.families) != 1 || observer.families[0] != "testops_risk" {
 		t.Fatalf("observed families = %v, want [testops_risk]", observer.families)
+	}
+}
+
+// TestClickHouseSourceDataCheckerAllowsMissingPipelineStabilityOnASuiteOnlyDay
+// pins the codex round 2 finding directly: compute_pipeline_stability
+// (compute_testops_risk.py) takes ONLY pipeline_metrics_7d, so a day with
+// test_suite_results but zero ci_pipeline_runs legitimately produces zero
+// pipeline_stability rows while still producing release_confidence and
+// quality_drag rows (both accept a repo from either source). That must NOT
+// be flagged.
+func TestClickHouseSourceDataCheckerAllowsMissingPipelineStabilityOnASuiteOnlyDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000117"
+		partitionID = "00000000-0000-4000-8000-000000000118"
+		orgID       = "00000000-0000-4000-8000-000000000009"
+		day         = "2026-08-25"
+	)
+	insertPartitionScope(t, ctx, pool, runID, partitionID, orgID, day,
+		[]RepositoryID{"00000000-0000-4000-8000-000000000002"})
+
+	// No ci_pipeline_runs at all -- a suite-only day. pipeline_stability
+	// stays empty legitimately.
+	conn := &stubSourceDataConn{hasRows: map[string]bool{
+		"test_suite_results":         true,
+		"testops_release_confidence": true,
+		"testops_quality_drag":       true,
+		"testops_pipeline_stability": false,
+	}}
+	checker, err := NewClickHouseSourceDataChecker(pool, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	families, err := checker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(families) != 0 {
+		t.Fatalf("flagged families = %v, want none (suite-only day is healthy)", families)
 	}
 }
 
@@ -357,7 +422,7 @@ func TestClickHouseSourceDataCheckerSkipsPartitionsWithNoRepositories(t *testing
 // handler, increments the family observer, releases the claim for retry, and
 // never calls CompletePartition. It also proves the production UUID binding
 // rather than accepting a table-name-only answer.
-func TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData(t *testing.T) {
+func TestPartitionHandlerWorkFailsPermanentlyAndObservesZeroRowsWithSourceData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -404,8 +469,8 @@ func TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData(t *testing
 	handler.SetZeroRowsObserver(observer)
 
 	err = handler.Work(ctx, partitionExecutionFor(partitionID, runID, orgID))
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("handler error = %v, want retryable zero-row error", err)
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("handler error = %v, want permanent zero-row error", err)
 	}
 	if store.partitionCompletions != 0 {
 		t.Fatalf("CompletePartition calls = %d, want 0", store.partitionCompletions)
@@ -627,6 +692,33 @@ INSERT INTO repos VALUES
 			}
 		})
 	}
+
+	// Reproduce the ORIGINAL codex BLOCK finding on #1911 directly (chris's
+	// ruling 2026-08-25: a "prod-facing bug" claim needs a red artifact, not
+	// code logic): an org-wide probe (no repo scoping at all) against this
+	// exact fixture. The org has exactly one incident, linked only to the
+	// mapped repo -- an org-wide query must incorrectly report source data
+	// for the UNMAPPED repo too, which is the false positive the fixed,
+	// mapping-scoped query above (existsIncident) does not produce.
+	t.Run("pre_fix_org_wide_probe_false_positives_the_unmapped_repo", func(t *testing.T) {
+		var found bool
+		if err := conn.QueryRow(ctx, `
+SELECT 1 FROM operational_incidents
+WHERE org_id = {org_id:String}
+  AND resolved_at >= {start:DateTime64(3, 'UTC')}
+  AND resolved_at < {end:DateTime64(3, 'UTC')}
+LIMIT 1`,
+			clickhouse.Named("org_id", orgID),
+			clickhouse.Named("start", remaining.DateTime64Argument(start, remaining.DateTime64MillisecondPrecision)),
+			clickhouse.Named("end", remaining.DateTime64Argument(end, remaining.DateTime64MillisecondPrecision)),
+		).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatal("setup error: org-wide probe found no incident at all")
+		}
+		t.Log("RED CONFIRMED: an org-wide incident probe with no repo scoping returns true for the org regardless of which repo is being checked -- it would report source data for the unmapped repo, which existsIncident (mapping-scoped) correctly reports false for")
+	})
 }
 
 type recordingZeroRowsObserver struct {

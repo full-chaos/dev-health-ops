@@ -105,3 +105,72 @@ async def test_execute_chart_recomputes_team_metrics_daily_ratio_across_repos() 
         "sum(commits) = 4/10) -- 0.625 would mean an unweighted avg() over "
         "the two repos' ratios (the regression this test guards)"
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_chart_org_wide_averages_teams_not_repos_or_org() -> None:
+    """codex CHAOS-4329 round 2 (P1): an org-wide chart (no team filter)
+    must keep averaging EACH TEAM's own ratio equally -- summing
+    numerator/denominator across TEAMS (not just repos) would silently
+    change this chart's existing equal-weighted semantics into a
+    commit-weighted ratio across the whole org. team-a (1 commit, 1
+    after-hours = ratio 1.0) and team-b (99 commits, 0 after-hours = ratio
+    0.0): the correct equal-weighted average is 0.5; a commit-weighted sum
+    would read 0.01 -- the regression this test guards.
+    """
+    from datetime import date, datetime, timezone
+
+    sink = _sink()
+    org_id = str(uuid.uuid4())  # throwaway random org (isolated, no cleanup needed)
+    sink.org_id = org_id
+    day = date(2026, 1, 1)
+
+    team_a = TeamMetricsDailyRecord(
+        day=day,
+        team_id="team-a",
+        team_name="A",
+        commits_count=1,
+        after_hours_commits_count=1,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=1.0,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        repo_id="repo-a",
+    )
+    team_b = TeamMetricsDailyRecord(
+        day=day,
+        team_id="team-b",
+        team_name="B",
+        commits_count=99,
+        after_hours_commits_count=0,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.0,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        repo_id="repo-b",
+    )
+    sink.write_team_metrics([team_a])
+    sink.write_team_metrics([team_b])
+
+    spec = ChartSpec(
+        chart_id="chart-org-wide",
+        plan_id="plan-1",
+        chart_type="line",
+        metric="after_hours_commit_ratio",
+        group_by="day",
+        filter_teams=[],  # org-wide: no team filter
+        time_range_start=day,
+        time_range_end=day,
+        title=None,
+        org_id=org_id,
+    )
+    result = await execute_chart(spec, sink.client)
+
+    assert len(result.data_points) == 1
+    got = result.data_points[0]["y"]
+    assert got == pytest.approx(0.5), (
+        f"after_hours_commit_ratio y={got!r}, want ~0.5 (equal-weighted "
+        "average of team-a's 1.0 and team-b's 0.0) -- 0.01 would mean "
+        "numerator/denominator were summed across TEAMS instead of just "
+        "repos within each team (the regression this test guards)"
+    )

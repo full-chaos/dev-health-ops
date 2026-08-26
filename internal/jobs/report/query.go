@@ -361,23 +361,18 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		xExpression, xType, temporal = "toDate(day)", "Date", true
 	}
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
-	switch {
-	case strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count":
+	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
-	case definition.Numerator != "" && definition.Denominator != "":
-		// CHAOS-4329 ("no regression" ruling, codex round 2): a plain
-		// avg(metric) here averages one row PER (chart-key, repo) equally
-		// regardless of repo size the moment the source table can yield
-		// more than one row per key. Recompute the ratio from the summed
-		// additive numerator/denominator instead -- correct at any
-		// chart-key grouping, matches the SUM-then-recompute pattern the
-		// 4 named team_metrics_daily readers already use (Python mirror:
-		// reports/charts.py::_aggregate_expression).
-		yExpression = fmt.Sprintf(
-			"if(sum(%s) > 0, sum(%s) / sum(%s), 0.0)",
-			definition.Denominator, definition.Numerator, definition.Denominator,
-		)
 	}
+	// yExpression for a numerator/denominator ratio metric stays a plain
+	// avg(metric) -- CHAOS-4329 codex round 2 ("preserve team-level
+	// averaging"): the recompute happens one layer down, in the FROM
+	// source built below, which pre-collapses to (org_id, team_id, day)
+	// BEFORE this aggregate ever runs. Recomputing SUM(numerator)/
+	// SUM(denominator) at THIS layer would sum across every team in
+	// scope, not just a team's own repos, silently changing an org-wide
+	// chart's existing equal-weighted "avg across teams" semantics into a
+	// commit-weighted ratio across the whole org.
 	clauses := []string{spec.Metric + " IS NOT NULL"}
 	parameters := make([]any, 0, 5)
 	if spec.OrganizationID != "" {
@@ -411,7 +406,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// latest-generation source (see dedup.go) so a re-drive is never summed
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
-	source := dedupFromSource(definition.SourceTable)
+	source := sourceFrom(spec.Metric, definition)
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
         CAST('total', '%s') AS x,
@@ -434,6 +429,41 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
         %s
     GROUP BY x
     ORDER BY %s`, xExpression, yExpression, source, where, order), parameters, nil
+}
+
+// sourceFrom is the FROM source for buildChartQuery's outer SELECT.
+//
+// For an ordinary metric this is just the table's dedup source (latest
+// generation per natural key -- dedupFromSource). For a metric declaring a
+// numerator/denominator pair (CHAOS-4329, table-local -- see
+// metricDefinition.Numerator's doc comment), it is a nested subquery that
+// FIRST collapses to one row per (org_id, team_id, day), summing the
+// additive numerator/denominator across a team's repos and recomputing the
+// ratio -- exactly the SUM-then-recompute pattern the 4 named
+// team_metrics_daily readers use (Python mirror:
+// reports/charts.py::_source_from). The outer query then applies its
+// EXISTING avg()/GROUP BY x logic on top of this already-team-collapsed
+// view, so a team's repos are summed together but teams are never summed
+// into each other: an org-wide chart (no team filter) still averages EACH
+// team's own ratio, unchanged from before this table had a repo_id column.
+func sourceFrom(metric string, definition metricDefinition) string {
+	dedupSource := dedupFromSource(definition.SourceTable)
+	if definition.Numerator == "" || definition.Denominator == "" {
+		return dedupSource
+	}
+	return fmt.Sprintf(`(
+        SELECT
+            org_id,
+            team_id,
+            day,
+            if(sum(%s) > 0,
+               sum(%s) / sum(%s), 0.0
+            ) AS %s
+        FROM %s
+        GROUP BY org_id, team_id, day
+    ) AS %s`,
+		definition.Denominator, definition.Numerator, definition.Denominator,
+		metric, dedupSource, definition.SourceTable)
 }
 
 func (definition metricDefinition) hasDimension(target string) bool {

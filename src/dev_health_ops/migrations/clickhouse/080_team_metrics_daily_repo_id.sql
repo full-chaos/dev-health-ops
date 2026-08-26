@@ -22,6 +22,14 @@
 -- per-repo rows -- until then a legacy day surfaces the same single-repo slice
 -- it always did.
 --
+-- CODEX ROUND 2 P1 (ruled non-blocking, tracked as CHAOS-4342): once a
+-- legacy day IS re-driven with real per-repo rows, readers drop the
+-- legacy bucket the moment ANY real row exists for that (team_id, day)
+-- key -- correct once EVERY repo has been rewritten, but transiently
+-- under-counts for the BOUNDED duration of that one day's full
+-- per-repo partition sequence (never permanent -- see CHAOS-4342 for the
+-- write-side retirement fix that closes this window).
+--
 -- New rows (written by the Python/Go writers updated in this same change)
 -- always carry a real repo_id. Readers therefore: argMax per
 -- (team_id, repo_id, day) first (one row per repo-or-legacy-bucket), THEN

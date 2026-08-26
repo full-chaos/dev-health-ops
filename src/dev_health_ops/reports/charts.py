@@ -38,24 +38,54 @@ class ChartResult:
 def _aggregate_expression(metric: str, definition: MetricDefinition) -> str:
     if metric.endswith("_count") or definition.unit == "count":
         return f"sum({metric})"
-    if definition.numerator and definition.denominator:
-        # CHAOS-4329 ("no regression" ruling, codex round 2): a plain
-        # avg(metric) here averages one row PER (chart-key, repo) equally
-        # regardless of repo size the moment the source table can yield
-        # more than one row per key (team_metrics_daily gained repo_id).
-        # Recompute the ratio from the summed additive numerator/
-        # denominator instead -- correct at any chart-key grouping,
-        # matches the SUM-then-recompute pattern the 4 named
-        # team_metrics_daily readers already use.
-        return (
-            f"if(sum({definition.denominator}) > 0, "
-            f"sum({definition.numerator}) / sum({definition.denominator}), 0.0)"
-        )
+    # CHAOS-4329 (codex round 2, "preserve team-level averaging"): this
+    # stays a plain avg(metric) even for a numerator/denominator ratio
+    # metric -- the recompute happens ONE LAYER DOWN, in _source_from,
+    # which pre-collapses to (org_id, team_id, day) BEFORE this aggregate
+    # ever runs. Recomputing SUM(numerator)/SUM(denominator) at THIS
+    # layer would sum across every team in scope, not just a team's own
+    # repos, silently changing an org-wide chart's existing
+    # equal-weighted "avg across teams" semantics into a commit-weighted
+    # ratio across the whole org (codex's example: teams with ratios 1/1
+    # and 0/99 would read 0.01 instead of 0.5).
     return f"avg({metric})"
 
 
 def _dimension_available(definition: MetricDefinition, dimension: str) -> bool:
     return dimension in definition.dimensions
+
+
+def _source_from(metric: str, definition: MetricDefinition) -> str:
+    """The FROM source for build_chart_query's outer SELECT.
+
+    For an ordinary metric this is just the table's dedup source
+    (argMax-per-key latest generation). For a metric declaring a
+    numerator/denominator pair (CHAOS-4329, table-local -- see
+    MetricDefinition.numerator's docstring), it is a nested subquery that
+    FIRST collapses to one row per (org_id, team_id, day), summing the
+    additive numerator/denominator across a team's repos and recomputing
+    the ratio -- exactly the SUM-then-recompute pattern the 4 named
+    team_metrics_daily readers use. The outer query (build_chart_query)
+    then applies its EXISTING avg()/GROUP BY x logic on top of this
+    already-team-collapsed view, so a team's repos are summed together
+    but teams are never summed into each other: an org-wide chart (no
+    team filter) still averages EACH team's own ratio, unchanged from
+    before this table had a repo_id column.
+    """
+    dedup_source = dedup_from(definition.source_table)
+    if not (definition.numerator and definition.denominator):
+        return dedup_source
+    return f"""(
+        SELECT
+            org_id,
+            team_id,
+            day,
+            if(sum({definition.denominator}) > 0,
+               sum({definition.numerator}) / sum({definition.denominator}), 0.0
+            ) AS {metric}
+        FROM {dedup_source}
+        GROUP BY org_id, team_id, day
+    ) AS {definition.source_table}"""
 
 
 def _resolve_grouping(
@@ -86,7 +116,7 @@ def build_chart_query(spec: ChartSpec) -> tuple[str, dict[str, Any]]:
 
     x_expr, x_type, _, x_is_temporal = _resolve_grouping(spec, definition)
     y_expr = _aggregate_expression(spec.metric, definition)
-    source_table = dedup_from(definition.source_table)
+    source_table = _source_from(spec.metric, definition)
 
     params: dict[str, Any] = {}
     clauses = [f"{spec.metric} IS NOT NULL"]

@@ -174,7 +174,28 @@ go build -o "${BIN_DIR}/dev-health-worker" ./cmd/dev-health-worker
 go build -o "${BIN_DIR}/dev-health-reconciler" ./cmd/dev-health-reconciler
 
 echo "==> applying Postgres (Alembic) migrations"
+# DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 is required here, not optional: a
+# plain `migrate postgres upgrade` targets ONLY the application_schema
+# alembic branch (src/dev_health_ops/migrate.py::_effective_postgres_upgrade_
+# revision) and deliberately skips 0066_activate_river_worker_job_routes,
+# which leaves worker_job_routes exactly as 0064 seeded it -- transport=
+# 'celery', generation=1 -- for metrics.daily_dispatch and every other
+# non-canary kind. That table is a SEPARATE gate from
+# sync_dispatch_transport_routes below: the reconciler's generic outbox relay
+# (internal/joboutbox/relay.go -> internal/jobroute.Controller.DeferredKinds/
+# Resolve) reads worker_job_routes live on every step and excludes any kind
+# whose transport is 'celery' from claiming, regardless of what
+# contracts/jobs/v1/registry.json says the checked-in route is and regardless
+# of which queues dev-health-worker selects. Without this opt-in,
+# metrics.daily_dispatch's outbox row is inserted by the post-sync fanout and
+# then sits pending forever -- no error, no log line, just zero "queue":
+# "metrics" activity, which is exactly the CHAOS-4266 root cause found while
+# chasing the proof job staying red after CHAOS-4263 merged. Safe here only
+# because this job's Postgres is its own throwaway CI database, never a
+# shared or production-adjacent one (same justification as
+# DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN below).
 DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 \
   run_dev_hops --db "${POSTGRES_SUPERUSER_URI}" migrate postgres upgrade
 
 echo "==> applying ClickHouse migrations"
@@ -361,6 +382,39 @@ for family, info in summary.items():
       echo '```'
     } >>"${GITHUB_STEP_SUMMARY}"
   fi
+fi
+
+if [ "${FINAL_RC}" -ne 0 ]; then
+  # Dispatch-path diagnostic dump (CHAOS-4266): the readback assertion only
+  # ever sees ClickHouse, so a zero-rows failure is silent on WHICH step of
+  # seed -> outbox -> river -> compute never happened. Dump the three tables
+  # that answer that, in order: is the kind even routed to river
+  # (worker_job_routes), did the sync-orchestration outbox actually relay
+  # (sync_dispatch_outbox), and did a River job for the metrics/sync queues
+  # ever get inserted or run (river.river_job). `|| true` throughout: this is
+  # best-effort diagnostics on an already-failing run, never a reason to mask
+  # the real FINAL_RC below.
+  echo "==> diagnostic dump (readback failed; dumping dispatch-path state)"
+  echo "--- worker_job_routes (metrics.* kinds; gates the reconciler's generic outbox relay) ---"
+  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    -c "SELECT job_kind, transport, paused, generation, updated_at FROM worker_job_routes WHERE job_kind LIKE 'metrics.%' ORDER BY job_kind;" \
+    || true
+  echo "--- sync_dispatch_outbox (post_sync/dispatch_sync_run/finalize_sync_run/reference_discovery for this run's org) ---"
+  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    -c "SELECT kind, status, attempts, last_error, created_at, updated_at FROM sync_dispatch_outbox WHERE org_id = '${ORG_ID}' ORDER BY created_at;" \
+    || true
+  echo "--- worker_job_outbox (metrics.* kinds; the generic outbox the relay above drains) ---"
+  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    -c "SELECT job_kind, status, attempt_count, scheduled_at, created_at FROM worker_job_outbox WHERE job_kind LIKE 'metrics.%' ORDER BY created_at;" \
+    || true
+  echo "--- river.river_job (metrics/sync queues; did the relay ever insert one) ---"
+  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    -c "SELECT kind, queue, state, errors, attempted_at, finalized_at FROM river.river_job WHERE queue IN ('metrics', 'sync') ORDER BY id;" \
+    || true
 fi
 
 echo "==> worker / reconciler logs (tail)"

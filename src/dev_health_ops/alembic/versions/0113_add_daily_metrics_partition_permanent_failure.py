@@ -92,7 +92,7 @@ def downgrade() -> None:
     # recreated (narrower) check constraint below can actually apply. These
     # partitions become re-dispatchable again, exactly as they were before
     # this revision existed.
-    op.execute(
+    op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"UPDATE {_TABLE} SET status = 'failed' WHERE status = 'failed_permanent'"
     )
     op.create_check_constraint(

@@ -156,13 +156,18 @@ class RecommendationsTeamFailure(Exception):
 _SCHEDULED_FANOUT_GENERATION_PREFIX = "fixed-schedule:daily_metrics_fanout:"
 
 _LATEST_DAILY_METRICS_RUN_SQL = """
-    SELECT finalization_status
-    FROM daily_metrics_runs
-    WHERE org_id = CAST(:org_id AS uuid)
-      AND target_day = CAST(:target_day AS date)
-      AND starts_with(generation, :fanout_prefix)
-      AND status NOT IN ('canceled', 'failed')
-    ORDER BY created_at DESC, generation DESC
+    SELECT
+        run.finalization_status,
+        EXISTS (
+            SELECT 1 FROM daily_metrics_partitions AS partition
+            WHERE partition.run_id = run.id AND partition.status = 'failed_permanent'
+        ) AS has_stuck_partition
+    FROM daily_metrics_runs AS run
+    WHERE run.org_id = CAST(:org_id AS uuid)
+      AND run.target_day = CAST(:target_day AS date)
+      AND starts_with(run.generation, :fanout_prefix)
+      AND run.status NOT IN ('canceled', 'failed')
+    ORDER BY run.created_at DESC, run.generation DESC
     LIMIT 1
 """
 
@@ -238,14 +243,24 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
     target_day = day.date() if isinstance(day, datetime) else day
     try:
         with get_postgres_session_sync() as session:
-            finalization_status = session.execute(
-                text(_LATEST_DAILY_METRICS_RUN_SQL),
-                {
-                    "org_id": str(org_id),
-                    "target_day": target_day.isoformat(),
-                    "fanout_prefix": _SCHEDULED_FANOUT_GENERATION_PREFIX,
-                },
-            ).scalar_one_or_none()
+            row = (
+                session.execute(
+                    text(_LATEST_DAILY_METRICS_RUN_SQL),
+                    {
+                        "org_id": str(org_id),
+                        "target_day": target_day.isoformat(),
+                        "fanout_prefix": _SCHEDULED_FANOUT_GENERATION_PREFIX,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            finalization_status = (
+                row["finalization_status"] if row is not None else None
+            )
+            has_stuck_partition = (
+                bool(row["has_stuck_partition"]) if row is not None else False
+            )
     except Exception as exc:
         RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL.labels(
             exception_type=type(exc).__name__
@@ -269,6 +284,22 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
 
     if finalization_status is None or finalization_status == _FINALIZATION_SUCCEEDED:
         return True
+    if has_stuck_partition:
+        # CHAOS-4319: a failed_permanent partition can never move again
+        # without a human /metric-executions/v1/{id}/repair call -- unlike
+        # plain 'failed' (River retries it), this specific run will NEVER
+        # reach finalization_status='succeeded' on its own. Surfaced here,
+        # not by changing this gate's return value: the existing contract
+        # ("any non-succeeded state -> skip") already covers this run
+        # correctly, this only makes WHY it may never resolve visible
+        # without a human running SQL against daily_metrics_partitions.
+        logger.warning(
+            "Daily metrics fan-out run for org=%s day=%s has a failed_permanent "
+            "partition -- this run will not finalize without a human "
+            "/metric-executions/v1/{id}/repair call",
+            org_id,
+            day,
+        )
     logger.info(
         "Daily metrics fan-out run for org=%s day=%s has finalization_status=%s; "
         "metrics are not final",

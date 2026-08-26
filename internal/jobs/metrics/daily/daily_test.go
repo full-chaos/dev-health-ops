@@ -339,6 +339,46 @@ func TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding(t 
 	}
 }
 
+// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable is the
+// codex-round-1 (P1) red-first proof: the detached, 5s-timeout-boxed
+// FailPartitionPermanently write can itself fail (a transient DB error, or
+// the lease already expired by the time it runs). Before this fix, Work
+// classified the job Permanent unconditionally whenever the bridge
+// response was ErrCompatibilityAmbiguousStuck, regardless of whether the
+// durable write actually landed -- so a failed write meant River stopped
+// retrying with NOTHING durable to show for it, the exact silent-loss shape
+// CHAOS-4319 exists to close. A failed write must fall back to ordinary
+// Retryable so River keeps trying instead of canceling on an unconfirmed
+// write.
+func TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                 Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		permanentFailureErr: ErrUnavailable,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousStuck})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("failed durable write = %v, want retryable (never Permanent on an unconfirmed write)", err)
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("partitionReleases = %d, want 1 -- the fallback path must still release the claim", store.partitionReleases)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- a failed write is not a persisted_failed outcome", observer.decisions)
+	}
+}
+
 // TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable is the
 // control case: a live concurrent claim (state=="executing") is a genuine,
 // self-resolving overlap, not a stuck ledger row, and must keep the
@@ -597,6 +637,7 @@ type fakeStore struct {
 	materializedAfterDispatchList bool
 	permanentFailures             int
 	permanentFailureReason        string
+	permanentFailureErr           error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -646,6 +687,9 @@ func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error 
 }
 func (store *fakeStore) FailPartitionPermanently(_ context.Context, _ PartitionClaim, reason string) error {
 	store.permanentFailures++
+	if store.permanentFailureErr != nil {
+		return store.permanentFailureErr
+	}
 	store.permanentFailureReason = reason
 	return nil
 }

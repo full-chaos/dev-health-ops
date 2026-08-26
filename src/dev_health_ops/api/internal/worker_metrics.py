@@ -815,21 +815,14 @@ async def _mark_retry_authorized(
 ) -> None:
     """Move a fresh failure straight to retry_authorized, skipping ambiguous.
 
-    CHAOS-4264: originally only reached when the runner subprocess emitted
-    zero progress lines before failing (signaled, resource-exhausted, or a
-    plain exception) -- i.e. no repository's families were written for this
-    execution, so there was nothing an ambiguous-state human review could
+    CHAOS-4264: only reached when the runner subprocess emitted zero
+    progress lines before failing (signaled, resource-exhausted, or a plain
+    exception) -- i.e. no repository's families were written for this
+    execution, so there is nothing an ambiguous-state human review could
     confirm or refute that a retry doesn't already handle safely. This is
     the same terminal value _repair_execution's "retry_safe" resolution
     writes; the only difference is that it fires automatically instead of
     waiting on a human, and only under that stronger safety condition.
-
-    CHAOS-4319: for worker_kind=="daily" and operation=="partition" this is
-    now also reached when progress WAS seen -- see the safe_to_retry
-    computation in _run_compatibility_process_locked for why a repeated
-    write is provably safe there (append-only, reader-deduped tables). Every
-    other worker_kind/operation pair is unaffected: they only ever reach
-    here on the original zero-progress condition.
     """
     await session.execute(
         text(
@@ -1420,35 +1413,30 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # non-partition paths stay ambiguous unconditionally, exactly as before
     # this ticket.
     #
-    # CHAOS-4319: this used to additionally require `not progress_seen` --
-    # any write at all sent the execution to _mark_ambiguous instead, which
-    # _reserve_execution refuses (ambiguous_refused) FOREVER after, since
-    # nothing auto-reaps a bare "ambiguous" row (see its own comment below;
-    # the only escape is a human /repair call). In production this meant one
-    # partial-progress kill permanently stuck a partition: Go kept marking
-    # every subsequent ambiguous_refused response Retryable regardless, so
-    # River burned its whole attempt budget reproducing the identical 409
-    # before silently discarding the job -- CHAOS-4319's "after one ambiguous
-    # outcome, every later retry is refused until River discards it".
-    #
-    # The `not progress_seen` guard is dropped here for exactly this
-    # worker_kind/operation pair because it is the one path where a repeated
-    # write is provably safe to make: every table run_daily_metrics_job
-    # writes for a partition (cicd/deploy/testops_*/repo_*/dora_metrics_daily,
-    # ...) is an append-only MergeTree table readers dedup by design
-    # (platform contract -- never a ReplacingMergeTree "fix"; see
-    # docs/contribute/architecture/... and AGENTS.md's append-only-daily-
-    # tables rule). A retry that re-walks a repo already written for this day
-    # produces a duplicate row a reader's argMax/latest-wins query already
-    # collapses, not a wrong answer -- unlike remaining-metrics families
-    # (recommendations' fired/tombstone state, most notably), which have no
-    # such blanket guarantee and are why this stays scoped to daily/partition
-    # only. Each classified failure re-authorizes exactly one more attempt
-    # (_reserve_execution's attempt_count CAS bounds one authorization to one
-    # use); River's own MaxAttempts is the ceiling, so no separate retry cap
-    # is needed here.
+    # CHAOS-4319 (considered, NOT applied): an earlier version of this
+    # change also dropped `not progress_seen` for daily/partition, reasoning
+    # that every table run_daily_metrics_job writes is an append-only
+    # MergeTree table readers dedup by design (platform contract), so a
+    # repeated write should be a harmless duplicate. Codex round-1 review
+    # falsified that premise: file_metrics_daily (the file_hotspots family)
+    # IS append-only, but its readers (api/queries/heatmap.py's
+    # fetch_hotspot_risk, and its sibling code-hotspots query) `SUM(...)`
+    # over the raw rows with no `argMax`/`computed_at` dedup at all -- a
+    # retry-caused duplicate row silently inflates hotspot/churn scores, not
+    # a "harmless duplicate a reader already collapses." Proving the
+    # append-only+reader-dedup property per table (team-lead's CHAOS-4319 GO
+    # condition 1) is real work spanning every family in families.json and
+    # every reader of every table it writes -- out of this ticket's scope.
+    # `not progress_seen` stays required here; CHAOS-4319's durable-truth
+    # fix (Go-side FailPartitionPermanently + the state-aware classification
+    # above) still fully closes the "silently discarded" bug on its own --
+    # a progress-having failure now durably persists failed_permanent
+    # (visible, with a reason and telemetry) the FIRST time it lands
+    # ambiguous, rather than looping through 5 guaranteed 409s first.
     safe_to_retry = (
-        execution.worker_kind == "daily" and execution.operation == "partition"
+        execution.worker_kind == "daily"
+        and execution.operation == "partition"
+        and not progress_seen
     )
     if return_code < 0:
         reason = "process_signaled"
@@ -1461,12 +1449,6 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     else:
         reason = "process_failed"
         message = "metric compatibility process failed"
-    # progress_seen no longer gates safe_to_retry for daily/partition
-    # (CHAOS-4319), but it stays genuinely useful diagnostic context for the
-    # remaining/finalize paths that still land ambiguous and wait on a human
-    # /repair call -- carried into failure_detail (_mark_ambiguous truncates
-    # to 1024 chars) rather than silently dropped.
-    message = f"{message} (progress_seen={progress_seen})"
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason=reason).inc()
     raise _CompatibilityProcessFailure(
         message, reason=reason, safe_to_retry=safe_to_retry

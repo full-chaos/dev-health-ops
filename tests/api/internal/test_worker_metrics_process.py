@@ -355,21 +355,22 @@ def _synthetic_runner_source(*, allocate_bytes: int, limit_bytes: int) -> str:
 
 @pytest.mark.skipif(sys.platform != "linux", reason="see memory-limit test above")
 @pytest.mark.asyncio
-async def test_metric_compatibility_process_classifies_resource_exhausted_with_progress_as_safe_to_retry(
+async def test_metric_compatibility_process_classifies_resource_exhausted_with_progress_as_ambiguous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Progress WAS emitted (2 of 3 repos already written) before the
-    resource bound was hit. CHAOS-4264 originally kept this conservative
-    (ambiguous-eligible, human /repair required); CHAOS-4319 changes that
-    for daily/partition specifically: every table this path writes
-    (cicd/deploy/testops_*/repo_*/dora_metrics_daily, ...) is an
-    append-only MergeTree table readers dedup by design, so a retry that
-    re-walks an already-written repo produces a harmless duplicate a
-    reader's argMax/latest-wins query already collapses -- not the
-    "might silently double-write something unsafe" risk the ambiguous
-    state exists to gate. See _reserve_execution's stuck-forever behavior
-    once a row lands "ambiguous": without this, one partial-progress kill
-    permanently discarded a partition (CHAOS-4319's own repro)."""
+    resource bound was hit -- CHAOS-4264 says this must stay conservative
+    (ambiguous-eligible), not be waved through as safe_to_retry.
+
+    CHAOS-4319 considered and REJECTED broadening this: codex round-1 review
+    found file_metrics_daily's readers (api/queries/heatmap.py's
+    fetch_hotspot_risk and its sibling) `SUM(...)` with no `computed_at`
+    dedup, so a retry-caused duplicate would silently inflate hotspot
+    scores. The append-only+reader-dedup property is not uniformly true
+    across every table this path writes, so this stays conservative; see
+    the CHAOS-4319 comment on `safe_to_retry`'s definition below for the
+    durable-truth fix that closes the ticket's actual bug without relying
+    on that premise."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -382,7 +383,7 @@ async def test_metric_compatibility_process_classifies_resource_exhausted_with_p
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "resource_exhausted"
-    assert excinfo.value.safe_to_retry is True
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio
@@ -462,18 +463,16 @@ async def test_metric_compatibility_process_daily_finalize_never_safe_to_retry(
 
 
 @pytest.mark.asyncio
-async def test_metric_compatibility_process_progress_then_signal_kill_is_safe_to_retry(
+async def test_metric_compatibility_process_progress_then_signal_kill_is_not_safe_to_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHAOS-4319 red-first proof, at the classification layer: same signal
-    kill as test_metric_compatibility_process_classifies_signal_kill_with_
-    no_progress_as_safe_to_retry above, but at least one repo's families
-    were already written first. Before this ticket that made the execution
-    permanently unrecoverable (_mark_ambiguous -> every later
-    _reserve_execution call on the same identity 409s "ambiguous_refused"
-    forever, with no auto-heal). It is now classified safe_to_retry for the
-    same append-only/reader-dedup reason as the resource_exhausted case
-    above -- see that test's docstring."""
+    """Same signal kill, but at least one repo's families were already
+    written first -- must NOT be classified safe_to_retry, matching the
+    conservative default that predates this ticket. CHAOS-4319 considered
+    and rejected broadening this generally (see the resource_exhausted test
+    above); the actual fix is durable persistence on the Go side once this
+    lands ambiguous, not authorizing a retry that risks a reader-side
+    double-count."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -488,7 +487,7 @@ async def test_metric_compatibility_process_progress_then_signal_kill_is_safe_to
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_signaled"
-    assert excinfo.value.safe_to_retry is True
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio

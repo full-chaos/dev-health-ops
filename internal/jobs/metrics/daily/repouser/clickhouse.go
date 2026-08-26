@@ -94,8 +94,8 @@ func (loader *ClickHouseLoader) loadCommitStats(
 	ctx context.Context, orgID string, repoIDs []uuid.UUID, start, end time.Time,
 ) ([]CommitStatRow, error) {
 	rows, err := loader.conn.Query(ctx, commitStatsQuery,
-		clickhouse.Named("start", start.UTC()),
-		clickhouse.Named("end", end.UTC()),
+		clickhouse.Named("start", dateTimeArgument(start)),
+		clickhouse.Named("end", dateTimeArgument(end)),
 		clickhouse.Named("repo_ids", repoIDs),
 		clickhouse.Named("org_id", orgID),
 	)
@@ -183,8 +183,8 @@ func (loader *ClickHouseLoader) loadPullRequests(
 	ctx context.Context, orgID string, repoIDs []uuid.UUID, start, end time.Time,
 ) ([]PullRequestRow, error) {
 	rows, err := loader.conn.Query(ctx, pullRequestsQuery,
-		clickhouse.Named("start", start.UTC()),
-		clickhouse.Named("end", end.UTC()),
+		clickhouse.Named("start", dateTimeArgument(start)),
+		clickhouse.Named("end", dateTimeArgument(end)),
 		clickhouse.Named("repo_ids", repoIDs),
 		clickhouse.Named("org_id", orgID),
 	)
@@ -252,8 +252,8 @@ func (loader *ClickHouseLoader) loadPullRequestReviews(
 	ctx context.Context, orgID string, repoIDs []uuid.UUID, start, end time.Time,
 ) ([]PullRequestReviewRow, error) {
 	rows, err := loader.conn.Query(ctx, pullRequestReviewsQuery,
-		clickhouse.Named("start", start.UTC()),
-		clickhouse.Named("end", end.UTC()),
+		clickhouse.Named("start", dateTimeArgument(start)),
+		clickhouse.Named("end", dateTimeArgument(end)),
 		clickhouse.Named("repo_ids", repoIDs),
 		clickhouse.Named("org_id", orgID),
 	)
@@ -332,8 +332,8 @@ func (loader *ClickHouseLoader) LoadBugWorkItems(
 	rows, err := loader.conn.Query(ctx, bugWorkItemsQuery,
 		clickhouse.Named("repo_ids", repoIDs),
 		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("start", start.UTC()),
-		clickhouse.Named("end", end.UTC()),
+		clickhouse.Named("start", dateTimeArgument(start)),
+		clickhouse.Named("end", dateTimeArgument(end)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load bug work items: %w", err)
@@ -504,6 +504,25 @@ func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetri
 		return 0, fmt.Errorf("send commit_metrics batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// dateTimeArgument renders a timestamp as a plain literal for a
+// {name:DateTime} named parameter.
+//
+// clickhouse-go renders a time.Time bound directly to a named parameter as
+// a toDateTime(...) EXPRESSION (e.g. `toDateTime('2026-08-26 00:00:00')`),
+// but ClickHouse's parameter binding PARSES the parameter text as a literal
+// value for the declared type -- it does not evaluate expressions there.
+// The server therefore rejects it: "Cannot parse datetime:
+// value toDateTime('2026-08-26 00:00:00') cannot be parsed as DateTime".
+// This was caught by the isolated real-ClickHouse readback (CHAOS-4275),
+// not by any mocked-connection unit test -- passing a plain formatted
+// string instead of a time.Time value is what makes the parameter a literal
+// the parser accepts. See also internal/jobs/metrics/remaining's identical
+// note for DateTime64 columns (dora_native_clickhouse.go); this is the same
+// class of gap for the plain DateTime type this package's queries use.
+func dateTimeArgument(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05")
 }
 
 func derefStr(value *string) string {

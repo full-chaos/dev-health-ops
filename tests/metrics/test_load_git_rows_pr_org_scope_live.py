@@ -56,9 +56,22 @@ pytestmark = [
     pytest.mark.clickhouse,
     pytest.mark.skipif(
         not CLICKHOUSE_URI,
-        reason="Requires CLICKHOUSE_URI (e.g. clickhouse://ch:ch@localhost:8123/default)",
+        reason="Requires CLICKHOUSE_URI pointed at a SCRATCH database "
+        "(e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate_xxx) "
+        "-- never /default, which holds real dev data.",
     ),
 ]
+
+if (
+    CLICKHOUSE_URI
+    and CLICKHOUSE_URI.rstrip("/").rsplit("/", 1)[-1].split("?")[0] == "default"
+):
+    pytest.skip(
+        "refusing to run against CLICKHOUSE_URI's /default database -- "
+        "point this at a scratch db (see ops-local-validate skill / "
+        "ops/AGENTS.md 'Safety rule')",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture(scope="module")

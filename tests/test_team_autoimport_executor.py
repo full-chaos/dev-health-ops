@@ -422,3 +422,97 @@ async def test_loader_manual_members_overrides_a_conflicting_teams_members_entry
     assert primary.source == "assignee_membership"
     assert primary.confidence == "high"
     assert primary.specificity == 60
+
+
+@pytest.mark.asyncio
+async def test_loader_scopes_teams_members_fallback_facet_by_confirmed_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4321 round 3 (team-lead ruling, 2026-08-26, codex adversarial
+    review HIGH finding): a bare (non-email) teams.members facet the loader
+    can confirm -- via identities.provider_identities -- belongs to ONE
+    specific provider must only resolve items from THAT provider. Demoting
+    teams.members to the fallback tier is not enough on its own: without
+    this, a GitHub-imported roster login could still attribute a
+    Jira/GitLab/Linear item sharing the same raw string, at fallback
+    priority instead of override priority."""
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    async def fake_query(_client: object, query: str, _params: dict[str, object]):
+        if "FROM identities FINAL" in query:
+            return [
+                {
+                    "canonical_id": "github:lead-user",
+                    "email": None,
+                    "provider_identities": '{"github": ["lead"]}',
+                    "team_ids": [],
+                    "updated_at": now,
+                },
+            ]
+        if "FROM teams FINAL" in query:
+            return [
+                {
+                    "id": "team-eng",
+                    "name": "Engineering",
+                    "members": ["lead", "alice@example.com"],
+                    "manual_members": [],
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query,
+    )
+
+    context = await ClickHouseDataLoader(
+        object(), org_id="org-1"
+    ).load_team_attribution_context(as_of=now)
+
+    # The bare login "lead" is confirmed for github ONLY -- routed into the
+    # typed provider_member_by_identity pool, not the untyped one.
+    assert "lead" not in context.provider_member_by_untyped_facet
+    assert (
+        context.provider_member_by_identity[("github", "lead")][0].team_id == "team-eng"
+    )
+    # The email-shaped facet stays untyped (CHAOS-2609 bare-email matching).
+    assert (
+        context.provider_member_by_untyped_facet["alice@example.com"][0].team_id
+        == "team-eng"
+    )
+
+    jira_item = WorkItem(
+        work_item_id="jira:PROJ-1",
+        provider="jira",
+        title="Cross-provider probe",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        created_at=now,
+        updated_at=now,
+        assignees=["lead"],
+        labels=[],
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        jira_item, None, None, attribution_context=context
+    )
+    assert team_id is None, "a github-tagged login must not attribute a jira item"
+    assert candidates[0].source == "unassigned"
+    assert candidates[0].evidence == "no_candidate:no_membership"
+
+    github_item = WorkItem(
+        work_item_id="gh:full-chaos/dev-health#3",
+        provider="github",
+        title="Same-provider probe",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        created_at=now,
+        updated_at=now,
+        assignees=["lead"],
+        labels=[],
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        github_item, None, None, attribution_context=context
+    )
+    assert team_id == "team-eng", "the same login must still attribute its own provider"

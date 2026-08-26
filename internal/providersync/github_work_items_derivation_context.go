@@ -1304,12 +1304,19 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	if facts.Repos, err = source.loadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
-	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, err = source.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+	var providerTaggedRosterMembers []githubWorkItemDerivationMemberFact
+	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, providerTaggedRosterMembers, err = source.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
 	if facts.ProviderMembers, err = source.loadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
+	// CHAOS-4321 round 3 (team-lead ruling, 2026-08-26): teams.members
+	// facets loadMembers could provider-tag (via identities.
+	// provider_identities) join the SAME ProviderMembers pool real
+	// team_memberships rows populate, so they resolve through the SAME
+	// provider-scoped attributionMapKey path -- not a parallel one.
+	facts.ProviderMembers = append(facts.ProviderMembers, providerTaggedRosterMembers...)
 	if facts.ManualFallbacks, err = source.loadManualFallbacks(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
@@ -1513,6 +1520,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) loadMembers(
 	[]githubWorkItemDerivationMemberFact,
 	[]githubWorkItemDerivationUntypedMemberFact,
 	[]githubWorkItemDerivationUntypedMemberFact,
+	[]githubWorkItemDerivationMemberFact,
 	error,
 ) {
 	identityRows, err := source.Conn.Query(ctx, `
@@ -1521,7 +1529,7 @@ FROM identities FINAL
 WHERE org_id = ? AND is_active = 1
 LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	defer identityRows.Close()
 	identities := []githubWorkItemDerivationAdminIdentity{}
@@ -1531,15 +1539,15 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 			&identity.CanonicalID, &identity.Email, &identity.ProviderIdentities,
 			&identity.TeamIDs, &identity.UpdatedAt,
 		); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		identities = append(identities, identity)
 		if len(identities) > githubWorkItemDerivationContextLimit {
-			return nil, nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
 		}
 	}
 	if err := identityRows.Err(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
@@ -1551,7 +1559,7 @@ FROM teams FINAL
 WHERE org_id = ? AND is_active = 1
 LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	defer teamRows.Close()
 	adminTeams := map[string]githubWorkItemDerivationAdminTeam{}
@@ -1561,16 +1569,16 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 		if err := teamRows.Scan(
 			&team.TeamID, &team.Name, &team.Members, &team.ManualMembers,
 		); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		adminTeams[team.TeamID] = team
 		teamCount++
 		if teamCount > githubWorkItemDerivationContextLimit {
-			return nil, nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
 		}
 	}
 	if err := teamRows.Err(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT): (b) below used to match
@@ -1587,6 +1595,43 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 			}
 		}
 		teamMemberFacets[teamID] = facets
+	}
+
+	// CHAOS-4321 (team-lead ruling, 2026-08-26, codex round 3 adversarial
+	// review HIGH finding): a `teams.members` fallback facet may only match
+	// a work item if it is email-shaped (an email legitimately identifies
+	// the same person on every provider -- CHAOS-2609) or provider-tagged
+	// for the item's specific provider; a bare non-email facet (a display
+	// name, a raw login/id) with no confirmed provider is ignored in the
+	// fallback tier rather than matched against every provider. Without
+	// this, a GitHub-imported roster login could still attribute a
+	// Jira/GitLab/Linear item sharing the same raw string -- the exact
+	// cross-provider leak class this ticket exists to close, just at lower
+	// priority than before. identities.provider_identities is the only
+	// place in this schema a raw facet string is genuinely tagged with a
+	// provider, so it is the source of truth for facetProviderIndex below.
+	facetProviderIndex := map[string]map[string]struct{}{}
+	for _, identity := range identities {
+		providerIdentities := map[string][]string{}
+		if raw := strings.TrimSpace(identity.ProviderIdentities); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &providerIdentities)
+		}
+		for provider, rawIDs := range providerIdentities {
+			provider = strings.TrimSpace(provider)
+			if provider == "" {
+				continue
+			}
+			for _, rawID := range rawIDs {
+				key := normalizeDerivationIdentity(rawID)
+				if key == "" {
+					continue
+				}
+				if facetProviderIndex[key] == nil {
+					facetProviderIndex[key] = map[string]struct{}{}
+				}
+				facetProviderIndex[key][provider] = struct{}{}
+			}
+		}
 	}
 
 	result := []githubWorkItemDerivationMemberFact{}
@@ -1674,7 +1719,7 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 					UpdatedAt:   identity.UpdatedAt,
 				})
 				if len(result) > githubWorkItemDerivationContextLimit {
-					return nil, nil, nil, ErrEffectRecoveryUnsafe
+					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
 				}
 			}
 		}
@@ -1711,7 +1756,7 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 				Facet:    facet,
 			})
 			if len(untyped) > githubWorkItemDerivationContextLimit {
-				return nil, nil, nil, ErrEffectRecoveryUnsafe
+				return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
 			}
 		}
 	}
@@ -1720,26 +1765,57 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 	// review HIGH finding): `teams.members` mixes admin-curated entries
 	// (mirrored into ManualMembers above) with UNREVIEWED provider
 	// auto-import roster writes -- demoted here to the provider-FALLBACK
-	// tier (ProviderUntypedMembers), matched WITHOUT a provider tag for the
-	// same reason the admin-layer loop above is untyped.
+	// tier.
+	//
+	// CHAOS-4321 round 3 fix (team-lead ruling, 2026-08-26, codex
+	// adversarial review HIGH finding): matched WITHOUT a provider tag ONLY
+	// when the facet is email-shaped (facetProviderIndex above cannot and
+	// should not gate an email -- CHAOS-2609 bare-email matching is
+	// deliberately cross-provider). A non-email facet is provider-tagged
+	// via facetProviderIndex and routed into providerTagged instead --
+	// Load() appends providerTagged onto facts.ProviderMembers, so it is
+	// consulted through the SAME provider-scoped attributionMapKey path as
+	// real team_memberships rows. A non-email facet with no confirmed
+	// provider tag at all matches nothing and is dropped.
 	providerUntyped := []githubWorkItemDerivationUntypedMemberFact{}
+	providerTagged := []githubWorkItemDerivationMemberFact{}
 	for _, teamID := range githubWorkItemDerivationSortedAdminTeamIDs(adminTeams) {
 		team := adminTeams[teamID]
+		teamName := githubWorkItemDerivationFirstNonEmpty(team.Name, teamID)
 		for _, facet := range team.Members {
 			if strings.TrimSpace(facet) == "" {
 				continue
 			}
-			providerUntyped = append(providerUntyped, githubWorkItemDerivationUntypedMemberFact{
-				TeamID:   teamID,
-				TeamName: githubWorkItemDerivationFirstNonEmpty(team.Name, teamID),
-				Facet:    facet,
-			})
-			if len(providerUntyped) > githubWorkItemDerivationContextLimit {
-				return nil, nil, nil, ErrEffectRecoveryUnsafe
+			normalized := normalizeDerivationIdentity(facet)
+			if strings.Contains(normalized, "@") {
+				providerUntyped = append(providerUntyped, githubWorkItemDerivationUntypedMemberFact{
+					TeamID: teamID, TeamName: teamName, Facet: facet,
+				})
+				if len(providerUntyped) > githubWorkItemDerivationContextLimit {
+					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+				}
+				continue
+			}
+			for provider := range facetProviderIndex[normalized] {
+				providerTagged = append(providerTagged, githubWorkItemDerivationMemberFact{
+					Provider: provider, TeamID: teamID, TeamName: teamName,
+					MemberID: facet,
+					// 50/10, matching the untyped fallback candidate's
+					// specificity/priority exactly -- this pool differs
+					// from that one only in HOW it is matched (provider-
+					// scoped vs. untyped), not in how much it is trusted.
+					// UpdatedAt left zero-value, matching providerUntyped's
+					// existing (pre-round-3) sibling construction above,
+					// which has never set it either.
+					IsPrimary: 1, Specificity: 50, Priority: 10,
+				})
+				if len(providerTagged) > githubWorkItemDerivationContextLimit {
+					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+				}
 			}
 		}
 	}
-	return result, untyped, providerUntyped, nil
+	return result, untyped, providerUntyped, providerTagged, nil
 }
 
 // githubWorkItemDerivationSortedAdminTeamIDs returns adminTeams' keys sorted,

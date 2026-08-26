@@ -812,15 +812,42 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 )
                 context.member_by_untyped_facet.setdefault(facet, []).append(candidate)
 
+        # CHAOS-4321 (team-lead ruling, 2026-08-26, codex round 3 adversarial
+        # review HIGH finding): a `teams.members` fallback facet may only
+        # match a work item if it is email-shaped (an email legitimately
+        # identifies the same person on every provider -- CHAOS-2609) or
+        # provider-tagged for the item's specific provider; a bare
+        # non-email facet (a display name, a raw login/id) with no
+        # confirmed provider is ignored in the fallback tier rather than
+        # matched against every provider. Without this, a GitHub-imported
+        # roster login could still attribute a Jira/GitLab/Linear item
+        # sharing the same raw string -- the exact cross-provider leak
+        # class this ticket exists to close, just at lower priority than
+        # before. `identities.provider_identities` is the only place in
+        # this schema a raw facet string is genuinely tagged with a
+        # provider, so it is the source of truth for facet_provider_index
+        # below.
+        facet_provider_index: dict[str, set[str]] = {}
+        for row in identity_rows:
+            for provider, raw_ids in _decode_provider_identities_json(
+                row.get("provider_identities")
+            ).items():
+                provider = str(provider or "").strip()
+                if not provider:
+                    continue
+                for raw_id in raw_ids or []:
+                    key = str(raw_id).strip().lower()
+                    if not key:
+                        continue
+                    facet_provider_index.setdefault(key, set()).add(provider)
+
         # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
         # adversarial review HIGH finding: "the new membership layer can
         # turn provider-imported rosters into authoritative, provider-neutral
         # admin overrides"). `teams.members` mixes admin-curated entries
         # (mirrored into `manual_members` above) with UNREVIEWED provider
         # auto-import roster writes -- demoted here to the provider-FALLBACK
-        # tier, matched WITHOUT a provider tag for the same reason the
-        # admin-layer untyped loop above is untyped (no provider column on
-        # `teams.members`). Lower specificity (50, the pre-CHAOS-4321 legacy
+        # tier. Lower specificity (50, the pre-CHAOS-4321 legacy
         # roster-fallback convention) than the admin layer's untyped
         # candidates (60) so it never wins an intra-source tie if a
         # candidate from BOTH pools were ever compared directly -- though in
@@ -855,9 +882,26 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     priority=10,
                     updated_at=as_of,
                 )
-                context.provider_member_by_untyped_facet.setdefault(facet, []).append(
-                    candidate
-                )
+                if "@" in facet:
+                    # Email-shaped: matched WITHOUT a provider tag, same as
+                    # before CHAOS-4321 round 3 -- CHAOS-2609 bare-email
+                    # matching is deliberately cross-provider.
+                    context.provider_member_by_untyped_facet.setdefault(
+                        facet, []
+                    ).append(candidate)
+                    continue
+                # Non-email: only match for a provider facet_provider_index
+                # confirms this exact string belongs to. Routed into the
+                # ALREADY provider-scoped `provider_member_by_identity`
+                # dict -- the same one real `team_memberships` rows
+                # populate -- so it resolves through the SAME
+                # `(provider, key)` lookup, not a parallel untyped one. A
+                # facet with no confirmed provider tag at all matches
+                # nothing.
+                for provider in facet_provider_index.get(facet, ()):
+                    context.provider_member_by_identity.setdefault(
+                        (provider, facet), []
+                    ).append(candidate)
 
         # CHAOS-4321 (chris, 08:30 PT): provider auto-import fallback layer
         # -- unchanged from pre-CHAOS-4321 `team_memberships` processing,

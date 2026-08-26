@@ -418,7 +418,7 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	if _, err := source.loadRepos(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
+	if _, _, _, _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.loadProviderMembers(context.Background(), orgID, asOf); err != nil {
@@ -502,6 +502,88 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	}
 	if args := conn.args[6]; len(args) != 4 || args[0] != orgID || args[3] != 2 {
 		t.Fatalf("donor query args = %#v", args)
+	}
+}
+
+// fakeMembersSplitConn feeds loadMembers one identities row and one teams
+// row so the CHAOS-4321 round-3 provider-tag split can be tested against
+// the real ClickHouse-scan path, not just the pure resolve() consumer.
+type fakeMembersSplitConn struct {
+	driver.Conn
+}
+
+func (fakeMembersSplitConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "FROM identities FINAL"):
+		return &fakeMembersSplitRows{
+			rows: [][]any{
+				{"alice-id", (*string)(nil), `{"github":["lead"]}`, []string{}, time.Time{}},
+			},
+		}, nil
+	case strings.Contains(query, "FROM teams FINAL"):
+		return &fakeMembersSplitRows{
+			rows: [][]any{
+				{"team-eng", "Engineering", []string{"lead", "alice@example.com"}, []string{}},
+			},
+		}, nil
+	default:
+		return emptyGitHubWorkItemDerivationRows{}, nil
+	}
+}
+
+type fakeMembersSplitRows struct {
+	rows [][]any
+	idx  int
+}
+
+func (r *fakeMembersSplitRows) Next() bool { return r.idx < len(r.rows) }
+func (r *fakeMembersSplitRows) Scan(dest ...any) error {
+	row := r.rows[r.idx]
+	r.idx++
+	for i, d := range dest {
+		switch target := d.(type) {
+		case *string:
+			*target, _ = row[i].(string)
+		case **string:
+			*target, _ = row[i].(*string)
+		case *[]string:
+			*target, _ = row[i].([]string)
+		case *time.Time:
+			*target, _ = row[i].(time.Time)
+		default:
+			return fmt.Errorf("fakeMembersSplitRows: unsupported scan dest %T", d)
+		}
+	}
+	return nil
+}
+func (r *fakeMembersSplitRows) ScanStruct(any) error             { return nil }
+func (r *fakeMembersSplitRows) ColumnTypes() []driver.ColumnType { return nil }
+func (r *fakeMembersSplitRows) Totals(...any) error              { return nil }
+func (r *fakeMembersSplitRows) Columns() []string                { return nil }
+func (r *fakeMembersSplitRows) Close() error                     { return nil }
+func (r *fakeMembersSplitRows) Err() error                       { return nil }
+func (r *fakeMembersSplitRows) HasData() bool                    { return len(r.rows) > 0 }
+
+// TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider pins the
+// loadMembers half of the CHAOS-4321 round-3 fix directly (resolve()-level
+// coverage lives in TestGitHubWorkItemDerivationTwoLayerMembershipResolution
+// (k)/(l)/(m)): a `teams.members` roster containing a bare, non-email login
+// ("lead") that identities.provider_identities confirms belongs to GitHub
+// must be split into a github-provider-tagged fact, NOT the untyped pool --
+// while the email-shaped facet in the SAME roster stays untyped.
+func TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider(t *testing.T) {
+	source := githubWorkItemClickHouseDerivationContextSource{Conn: fakeMembersSplitConn{}}
+	_, _, providerUntyped, providerTagged, err := source.loadMembers(context.Background(), "org-acme", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providerTagged) != 1 ||
+		providerTagged[0].Provider != "github" || providerTagged[0].TeamID != "team-eng" ||
+		providerTagged[0].MemberID != "lead" || providerTagged[0].Specificity != 50 || providerTagged[0].Priority != 10 {
+		t.Fatalf("providerTagged = %+v, want exactly one github-tagged \"lead\" fact at specificity 50/priority 10", providerTagged)
+	}
+	if len(providerUntyped) != 1 || providerUntyped[0].Facet != "alice@example.com" {
+		t.Fatalf("providerUntyped = %+v, want exactly the email-shaped facet (the login must NOT stay untyped)", providerUntyped)
 	}
 }
 
@@ -1096,6 +1178,76 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		}
 		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].Specificity != 60 {
 			t.Fatalf("candidates = %+v, want exactly one assignee_membership row at specificity 60 (admin layer, not fallback)", candidates)
+		}
+	})
+
+	// (k)/(l)/(m) below pin the CHAOS-4321 round-3 codex adversarial review
+	// HIGH finding fix (team-lead ruling, 2026-08-26): a teams.members
+	// fallback facet must not cross providers unless it is email-shaped.
+	// loadMembers is what actually splits a raw teams.members roster by
+	// provider tag (identities.provider_identities) -- these three cases
+	// fix the SPLIT'S OUTPUT shape directly, i.e. exactly what loadMembers
+	// hands to ProviderMembers (provider-tagged) and ProviderUntypedMembers
+	// (email-shaped, still untyped) after the split.
+	t.Run("(k) a provider-tagged roster login never attributes a DIFFERENT provider's item sharing the same string", func(t *testing.T) {
+		// A GitHub team's roster contains bare login "lead" -- loadMembers
+		// confirmed via identities.provider_identities that "lead" is a
+		// GitHub identity, so it lands in ProviderMembers keyed to
+		// Provider: "github", not in the untyped pool.
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-eng", TeamName: "Engineering",
+				MemberID: "lead", IsPrimary: 1, Specificity: 50, Priority: 10,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "jira:PROJ-1", Provider: "jira", Type: "issue",
+			Assignees: []string{"lead"}, OrgID: "org-acme",
+		})
+		if teamID != nil || teamName != nil {
+			t.Fatalf("team = (%v, %v), want (nil, nil): a github-tagged roster login must not attribute a jira item sharing the same raw string", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "unassigned" || candidates[0].Evidence != "no_candidate:no_membership" {
+			t.Fatalf("candidates = %+v, want exactly one unassigned/no_membership row", candidates)
+		}
+	})
+
+	t.Run("(l) the SAME provider-tagged roster login still attributes ITS OWN provider's item (positive control for (k))", func(t *testing.T) {
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderMembers: []githubWorkItemDerivationMemberFact{{
+				Provider: "github", TeamID: "team-eng", TeamName: "Engineering",
+				MemberID: "lead", IsPrimary: 1, Specificity: 50, Priority: 10,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#40", Provider: "github", Type: "issue",
+			Assignees: []string{"lead"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-eng" || githubWorkItemDerivationStringValue(teamName) != "Engineering" {
+			t.Fatalf("team = (%v, %v), want team-eng/Engineering", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row", candidates)
+		}
+	})
+
+	t.Run("(m) an email-shaped roster facet still attributes ACROSS providers (CHAOS-2609 stays)", func(t *testing.T) {
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderUntypedMembers: []githubWorkItemDerivationUntypedMemberFact{{
+				TeamID: "team-eng", TeamName: "Engineering", Facet: "alice@example.com", UpdatedAt: now,
+			}},
+		})
+		for _, provider := range []string{"github", "jira"} {
+			teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+				WorkItemID: provider + ":same-email#1", Provider: provider, Type: "issue",
+				Assignees: []string{"alice@example.com"}, OrgID: "org-acme",
+			})
+			if githubWorkItemDerivationStringValue(teamID) != "team-eng" || githubWorkItemDerivationStringValue(teamName) != "Engineering" {
+				t.Fatalf("%s: team = (%v, %v), want team-eng/Engineering", provider, githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+			}
+			if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
+				t.Fatalf("%s: candidates = %+v, want exactly one assignee_membership row", provider, candidates)
+			}
 		}
 	})
 }

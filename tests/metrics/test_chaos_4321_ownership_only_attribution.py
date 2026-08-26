@@ -84,6 +84,25 @@ def _pr_work_item(
     )
 
 
+def _jira_issue_work_item(*, assignees: list[str] | None = None) -> WorkItem:
+    """A Jira issue-shaped WorkItem, for the cross-provider fallback-tier
+    tests (k)/(m): the shape a Jira item takes when nothing but membership
+    facts could possibly resolve it."""
+    return WorkItem(
+        work_item_id="jira:PROJ-1",
+        provider="jira",
+        title="Cross-provider fallback probe",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        reporter=None,
+        assignees=assignees or [],
+        repo_id=None,
+        created_at=COMPUTED_AT,
+        updated_at=COMPUTED_AT,
+    )
+
+
 def _member_candidate(team_id: str, team_name: str) -> TeamAttributionCandidate:
     # Mirrors what load_team_attribution_context now stores in
     # member_by_identity: sourced from admin-authored `identities`/
@@ -420,6 +439,68 @@ def test_ambiguous_admin_mapping_does_not_fall_through_to_provider():
         candidates[0].evidence
         == "no_candidate:ambiguous_admin_membership:team-ops,team-platform"
     )
+
+
+def test_provider_tagged_roster_login_never_attributes_a_different_providers_item():
+    """(k) CHAOS-4321 round 3 (team-lead ruling, 2026-08-26, codex
+    adversarial review HIGH finding): a `teams.members` roster login the
+    loader confirmed (via `identities.provider_identities`) belongs to
+    GitHub must not attribute a Jira item sharing the same raw string --
+    the exact cross-provider leak class this ticket exists to close,
+    surviving at the fallback tier even after `teams.members` was demoted
+    out of the admin tier."""
+    item = _jira_issue_work_item(assignees=["lead"])
+    context = TeamAttributionContext(
+        provider_member_by_identity={
+            ("github", "lead"): [_provider_candidate("team-eng", "Engineering")]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == (None, None)
+    assert [c.source for c in candidates] == ["unassigned"]
+    assert candidates[0].evidence == "no_candidate:no_membership"
+
+
+def test_provider_tagged_roster_login_still_attributes_its_own_providers_item():
+    """(l) Positive control for (k): the SAME github-tagged "lead" facet
+    still attributes a GitHub item -- the fix scopes the match, it does not
+    break it."""
+    item = _pr_work_item(assignees=["lead"])
+    context = TeamAttributionContext(
+        provider_member_by_identity={
+            ("github", "lead"): [_provider_candidate("team-eng", "Engineering")]
+        }
+    )
+    team_id, team_name, candidates = resolve_team_attribution(
+        item, team_resolver=None, project_key_resolver=None, attribution_context=context
+    )
+    assert (team_id, team_name) == ("team-eng", "Engineering")
+    assert [c.source for c in candidates] == ["assignee_membership"]
+
+
+def test_email_shaped_roster_facet_still_attributes_across_providers():
+    """(m) CHAOS-2609 stays: an email-shaped `teams.members` facet keeps
+    matching regardless of provider -- only bare non-email facets are
+    scoped by (k)."""
+    context = TeamAttributionContext(
+        provider_member_by_untyped_facet={
+            "alice@example.com": [_provider_candidate("team-eng", "Engineering")]
+        }
+    )
+    for item in (
+        _pr_work_item(assignees=["alice@example.com"]),
+        _jira_issue_work_item(assignees=["alice@example.com"]),
+    ):
+        team_id, team_name, candidates = resolve_team_attribution(
+            item,
+            team_resolver=None,
+            project_key_resolver=None,
+            attribution_context=context,
+        )
+        assert (team_id, team_name) == ("team-eng", "Engineering")
+        assert [c.source for c in candidates] == ["assignee_membership"]
 
 
 def _membership_layer_count(layer: str) -> float:

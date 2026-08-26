@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import sys
@@ -145,12 +146,28 @@ def test_metric_process_payload_round_trips_only_durable_execution_fields() -> N
         "claim_token",
         "scope",
         "generation_seed",
+        "skip_families",
     }
     assert worker_metrics._execution_from_process_payload(payload) == execution
     with pytest.raises(ValueError, match="input is invalid"):
         worker_metrics._execution_from_process_payload(
             {**payload, "callable": "os.system"}
         )
+
+
+def test_metric_process_payload_round_trips_a_non_empty_skip_families() -> None:
+    """CHAOS-4276: skip_families must survive the subprocess boundary
+    round-trip, not just default to empty -- the field this ticket added is
+    exactly the one the earlier round-trip test does not exercise with a
+    non-default value."""
+    execution = dataclasses.replace(
+        _daily_execution(), skip_families=("team_wellbeing",)
+    )
+    payload = worker_metrics._execution_process_payload(execution)
+    assert payload["skip_families"] == ["team_wellbeing"]
+    round_tripped = worker_metrics._execution_from_process_payload(payload)
+    assert round_tripped == execution
+    assert round_tripped.skip_families == ("team_wellbeing",)
 
 
 def test_metric_runner_encodes_a_fixed_bounded_outcome() -> None:

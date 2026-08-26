@@ -49,18 +49,34 @@ var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", E
 // CHAOS-4315 (reversing this sentinel's original disposition): in the
 // CHUNKED route -- the one production dispatch always executes for cicd/tests
 // (execution_registry.go marks github {cicd,tests} Chunked unconditionally)
-// -- this is now a per-artifact SKIP, handled exactly like
-// ErrGitHubTestsArtifactUnavailable above: the artifact is skipped with its
-// own durable cause (githubTestsArtifactOversizedCause) and its own counter
-// reason, and the walk continues. The prior "stays a UNIT-level failure"
-// disposition pinned sync_watermarks forever on any repository that
-// regularly produces one oversized CI artifact, since the same artifact is
-// the same size on every retry (CHAOS-4142's ruling reapplied one level
-// down: an oversized artifact is provider data, not a fault of the caller,
-// same as an unavailable one). It matches the Python precedent
+// -- this is now a per-artifact SKIP, handled like
+// ErrGitHubTestsArtifactUnavailable above (skipped with its own durable
+// cause githubTestsArtifactOversizedCause and its own counter reason, walk
+// continues) but with ONE deliberate divergence: it is also a
+// WATERMARK-ADVANCING cause (githubTestsWatermarkAdvancingPairs), while
+// artifact_unavailable stays withholding. The two causes differ in kind, not
+// just in name: an unavailable/unreadable artifact is a TRANSIENT fact about
+// this one attempt -- the redirect, the connection, the bytes obtained THIS
+// time -- so a later re-walk of the same window might genuinely observe it
+// differently, and withholding buys a real chance at recovering full
+// coverage. An oversized artifact is DETERMINISTIC: the same artifact is the
+// same number of bytes on every future re-walk of the same window, so
+// withholding buys nothing -- it only pins sync_watermarks on that window
+// forever, re-walking an unrecoverable loss hourly until GitHub's retention
+// expires it (CHAOS-4142's "positively observed, deterministic bound
+// advances; unknown remainder withholds" rule, reapplied one level down from
+// its original per-run-cap application). This is the prior disposition's
+// exact defect at the artifact granularity: prod hit `since_at` pinned at
+// 2026-08-19 by exactly this mechanism. It matches the Python precedent
 // (connectors/github.py's download_artifact_zip returns b"" past the same
 // 100MB cap; processors/github.py's `if not data: continue` skips it) --
 // prod Go was the one route out of step.
+//
+// The observed size and the cap are captured on
+// *githubTestsArtifactOversizedError (below) rather than only in the error
+// text, so the chunked route can persist a durable per-artifact marker
+// (GitHubTestsSkippedArtifact) instead of leaving the run id/artifact
+// id/size/cap in the log line only.
 //
 // The non-chunked oracle Collect below (github_tests_route.go, production-
 // dead for cicd/tests) deliberately KEEPS the old terminal disposition,
@@ -78,6 +94,26 @@ var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", E
 // stays retryable: unlike a fixed artifact size, a dropped connection can
 // succeed on retry (CHAOS-4191).
 var ErrGitHubTestsArtifactOversized = fmt.Errorf("%w: artifact oversized", ErrGitHubTestsIncomplete)
+
+// githubTestsArtifactOversizedError carries the observed (capped) size and
+// the configured cap alongside ErrGitHubTestsArtifactOversized, so a caller
+// building a durable per-artifact marker (CHAOS-4315's GitHubTestsSkippedArtifact)
+// does not have to parse them back out of the error string. ErrGitHubTestsArtifactOversized
+// stays the stable sentinel every errors.Is check matches against; Unwrap
+// keeps that working unchanged.
+type githubTestsArtifactOversizedError struct {
+	SizeBytes int64
+	CapBytes  int64
+}
+
+func (e *githubTestsArtifactOversizedError) Error() string {
+	return fmt.Sprintf(
+		"%s: artifact size %d bytes exceeds cap %d bytes",
+		ErrGitHubTestsArtifactOversized, e.SizeBytes, e.CapBytes,
+	)
+}
+
+func (e *githubTestsArtifactOversizedError) Unwrap() error { return ErrGitHubTestsArtifactOversized }
 
 type githubTestsPipelineRow struct {
 	OrgID           string     `json:"org_id"`
@@ -715,11 +751,13 @@ func downloadGitHubTestsArtifact(
 		// LimitReader above, so it is always exactly that value here -- the
 		// true artifact size beyond the cap is never read. That capped
 		// length is still the useful "observed size" for the skip marker: it
-		// is the boundary the download actually crossed.
-		return nil, requests, false, fmt.Errorf(
-			"%w: artifact size %d bytes exceeds cap %d bytes",
-			ErrGitHubTestsArtifactOversized, len(body), githubTestsMaxDownloadSize,
-		)
+		// is the boundary the download actually crossed. Carried on the typed
+		// error (not just the message) so the chunked route's durable marker
+		// (GitHubTestsSkippedArtifact, CHAOS-4315) gets real ints, not a
+		// re-parse of formatted text.
+		return nil, requests, false, &githubTestsArtifactOversizedError{
+			SizeBytes: int64(len(body)), CapBytes: int64(githubTestsMaxDownloadSize),
+		}
 	}
 	return body, requests, false, nil
 }

@@ -118,6 +118,41 @@ type GitHubTestsIncomplete struct {
 	Count     int    `json:"count"`
 }
 
+// GitHubTestsSkippedArtifact is a durable per-artifact marker for ONE
+// oversized-artifact skip (CHAOS-4315): enough for an operator to find the
+// exact GitHub artifact behind an artifact_oversized GitHubTestsIncomplete
+// count, which -- unlike GitHubTestsIncomplete's closed Component/Cause
+// vocabulary -- deliberately carries no provider-supplied identifiers at
+// all. RunID and ArtifactID ARE provider-supplied and unbounded, which is
+// exactly why this type is separate and why the number of records is capped
+// (githubTestsMaxSkippedArtifactRecords) rather than growing with every
+// skip: the chunk cursor that carries it between resumes has its own hard
+// byte budget (maxChunkCursorBytes), and an unbounded per-artifact list
+// would risk making the cursor itself unencodable on a source with heavy,
+// sustained skip volume.
+type GitHubTestsSkippedArtifact struct {
+	RunID      string `json:"run_id"`
+	ArtifactID string `json:"artifact_id"`
+	SizeBytes  int64  `json:"size_bytes"`
+	CapBytes   int64  `json:"cap_bytes"`
+}
+
+// githubTestsMaxSkippedArtifactRecords bounds how many GitHubTestsSkippedArtifact
+// records one unit's cursor carries. Chosen conservatively against
+// maxChunkCursorBytes (4KiB, chunked_persistence.go): a record serializes to
+// roughly 90-120 bytes depending on id lengths, and the cursor already
+// carries NextURL, Repo, and the rest of githubTestsChunkCursor's fields
+// before this list even starts, so a cap sized for those bytes alone (e.g.
+// 50) could push an otherwise-healthy cursor over budget and fail
+// ErrChunkCheckpointConflict on encode -- turning a documented, harmless
+// truncation (records beyond the cap collapse into
+// SkippedArtifactsOverflow) into an undocumented, harmful one (the WHOLE
+// cursor becomes unencodable, and unrelated committed progress is lost).
+// Occurrences beyond this cap are still fully reflected in the closed
+// GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
+// per-artifact SAMPLE used to locate a specific artifact is bounded.
+const githubTestsMaxSkippedArtifactRecords = 20
+
 const (
 	// githubTestsReportMemberComponent is the original vocabulary: one member
 	// of a test-report archive that could not be parsed.
@@ -208,12 +243,27 @@ const (
 // re-fetching returns exactly the same items. Withholding there recovers
 // nothing and pins since_at forever, which is the CHAOS-4142 outage.
 //
-// report_member stays withholding, preserving its pre-CHAOS-4142 behavior
-// rather than being reclassified; see CHAOS-4153.
+// report_member is mostly still withholding, preserving its pre-CHAOS-4142
+// behavior; see CHAOS-4153. The single exception, added by CHAOS-4315, is
+// githubTestsArtifactOversizedCause -- and the reason is the SAME rule as
+// the item cap above, restated at DETERMINISTIC vs TRANSIENT rather than
+// SEEN vs UNKNOWN: report_member's other causes (artifact_unavailable,
+// unreadable_archive, malformed, unreadable) are properties of ONE download
+// ATTEMPT -- a redirect with no Location, a connection that dropped, bytes
+// that would not parse -- and a later re-walk might genuinely observe that
+// same artifact differently, so withholding buys a real chance at full
+// coverage. An oversized artifact is a property of the ARTIFACT: the same
+// bytes are the same size on every future attempt, so a re-walk can never
+// recover it, and withholding only pins the window on it forever -- CHAOS-4315's
+// prod symptom (since_at pinned since 2026-08-19) was this exact mechanism,
+// one component up from where CHAOS-4142 first named it. Every other
+// report_member cause stays withholding: this exception is scoped to the
+// one cause that is provably deterministic, not to the whole component.
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}},
+	githubTestsReportMemberComponent: {githubTestsArtifactOversizedCause: {}},
 }
 
 // githubTestsBlocksWatermark reports whether these observations leave any part

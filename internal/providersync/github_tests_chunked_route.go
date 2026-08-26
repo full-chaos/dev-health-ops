@@ -68,6 +68,29 @@ type githubTestsChunkCursor struct {
 	// that walk's lifetime -- see bumpGitHubTestsArchiveCounter.
 	ArchivesSeen       *int `json:"archives_seen,omitempty"`
 	ArchivesUnreadable *int `json:"archives_unreadable,omitempty"`
+	// SkippedArtifacts is the bounded per-artifact marker sample for
+	// oversized-artifact skips (CHAOS-4315) -- see GitHubTestsSkippedArtifact
+	// and githubTestsMaxSkippedArtifactRecords. SkippedArtifactsOverflow
+	// counts skips beyond the cap that could not get a record; it is always
+	// consistent with (and never double-counted against)
+	// githubTestsArtifactOversizedCause's Incomplete Count, which reflects
+	// every skip regardless of the cap.
+	SkippedArtifacts         []GitHubTestsSkippedArtifact `json:"skipped_artifacts,omitempty"`
+	SkippedArtifactsOverflow int                          `json:"skipped_artifacts_overflow,omitempty"`
+}
+
+// appendGitHubTestsSkippedArtifact records ONE oversized-artifact marker,
+// capping the retained sample at githubTestsMaxSkippedArtifactRecords and
+// counting the rest via overflow rather than growing the list unbounded
+// (CHAOS-4315 -- see the cap's own doc comment for why this must stay
+// bounded).
+func appendGitHubTestsSkippedArtifact(
+	records []GitHubTestsSkippedArtifact, overflow int, record GitHubTestsSkippedArtifact,
+) ([]GitHubTestsSkippedArtifact, int) {
+	if len(records) >= githubTestsMaxSkippedArtifactRecords {
+		return records, overflow + 1
+	}
+	return append(records, record), overflow
 }
 
 // bumpGitHubTestsArchiveCounter returns a NEW pointer one greater than the
@@ -430,6 +453,13 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	incomplete := append(
 		make([]GitHubTestsIncomplete, 0, len(cursor.Incomplete)), cursor.Incomplete...,
 	)
+	// Same typed-nil-to-empty-slice normalization as `incomplete` above, and
+	// for the identical reason: a cursor that never skipped an oversized
+	// artifact carries a nil SkippedArtifacts, which marshals to JSON null,
+	// which decodeCompletionValue-style strict readers refuse (CHAOS-3940).
+	skippedArtifacts := append(
+		make([]GitHubTestsSkippedArtifact, 0, len(cursor.SkippedArtifacts)), cursor.SkippedArtifacts...,
+	)
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
@@ -439,6 +469,13 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			"repo": cursor.Repo, "reports_complete": len(incomplete) == 0,
 			"reports_skipped": githubTestsIncompleteCount(incomplete),
 			"incomplete":      incomplete,
+			// Durable per-artifact marker for oversized skips (CHAOS-4315):
+			// the run id/artifact id/size/cap an operator needs to find the
+			// exact GitHub artifact behind an artifact_oversized count,
+			// bounded per githubTestsMaxSkippedArtifactRecords with overflow
+			// tracked separately rather than silently dropped.
+			"skipped_artifacts":          skippedArtifacts,
+			"skipped_artifacts_overflow": cursor.SkippedArtifactsOverflow,
 		},
 		// Only a WINDOW-BLOCKING observation withholds the watermark. An
 		// inventory page cap leaves the old end of a newest-first window
@@ -860,18 +897,30 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// ErrGitHubTestsArtifactOversized before this
 							// fix). Skipped the same way as an unavailable
 							// artifact, with its own cause and its own
-							// counter reason so an operator can tell the
-							// two apart; the artifact id and the observed
-							// size/cap (carried in downloadErr) go to the
-							// log line only, matching run id's treatment
-							// above -- both are provider-supplied and
-							// unbounded, so neither belongs in the durable
-							// GitHubTestsIncomplete evidence.
+							// counter reason so an operator can tell the two
+							// apart. The artifact id and the observed
+							// size/cap (carried in downloadErr, a
+							// *githubTestsArtifactOversizedError) go to a
+							// bounded durable marker (cursor.SkippedArtifacts,
+							// just below) AND the log line -- both are
+							// provider-supplied and unbounded, which is why
+							// neither belongs on GitHubTestsIncomplete's own
+							// closed Component/Cause/Count shape.
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactOversized) {
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactOversizedCause,
 								)
+								var sizeErr *githubTestsArtifactOversizedError
+								if errors.As(downloadErr, &sizeErr) {
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+										GitHubTestsSkippedArtifact{
+											RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+											SizeBytes: sizeErr.SizeBytes, CapBytes: sizeErr.CapBytes,
+										},
+									)
+								}
 								slog.Warn(
 									"provider artifact skipped: oversized",
 									"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,

@@ -69,6 +69,205 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
             ]
         }
 
+    def generate_team_ownership_edges(
+        self,
+        *,
+        all_teams: list[Team],
+        repo_team_assignments: list[list[Team]],
+        repo_names: list[str],
+        repo_ids: list[uuid.UUID],
+        org_id: str,
+        provider: str = "synthetic",
+        as_of: datetime | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Build ``team_repo_ownership``, ``team_project_ownership``, and
+        ``team_memberships`` edge rows from the SAME repo<->team assignment
+        already used for ``teams.repo_patterns`` (CHAOS-4276), so ownership
+        stays consistent with the pattern-resolver path.
+
+        Fixtures audit 2026-08-26 / CHAOS-4338: before this, these three
+        tables had zero writers anywhere in fixtures, starving 5-6 of the
+        real attribution resolver's ~9 sources
+        (``load_team_attribution_context``, ``compute_work_items.py``).
+
+        Project ids are the repo's full name
+        (``generators/projects.py``'s ``project_id_for_repo``: repo-backed
+        projects are 1:1 with repos in this fixture world), so
+        ``team_project_ownership`` reuses the identical assignment as
+        ``team_repo_ownership``.
+
+        CHAOS-4329 proof: every co-owning team (not just the primary owner
+        at index 0) gets its own ownership row, so any team
+        ``_build_repo_team_assignments`` gave >=2 repos naturally produces
+        >=2 ``team_repo_ownership`` rows for that ``team_id`` -- no separate
+        random assignment needed to keep in sync.
+
+        Ambiguous-identity proof: the LAST member of the first team with
+        members also gets a second ``team_memberships`` row into a
+        DIFFERENT team (source='provider_access'), so a real attribution
+        resolver run against this fixture data sees two distinct
+        ``team_id``s for that one identity and correctly refuses to guess
+        (per the documented rule: "if the person is mapped to two or more
+        teams, we do not guess -- the item stays unassigned").
+
+        Admin-override proof (CHAOS-4321, chris 2026-08-26 08:30 PT:
+        "manual is override -- if the override exists, use it, else use
+        attribution from providers"): a THIRD identity gets an
+        ``identities`` row with ``team_ids`` pointing at one team AND that
+        team's ``manual_members`` (mutated on the ``Team`` object in place,
+        so the caller's subsequent ``store.insert_teams`` write carries it)
+        -- the admin layer -- while the SAME identity also gets a
+        conflicting ``team_memberships`` row (source='provider_access')
+        into a DIFFERENT team -- the provider auto-import fallback layer.
+        The two-layer resolver (``compute_work_items._resolve_membership``)
+        must pick the admin team, never the provider-fallback one.
+        """
+        now = as_of or datetime.now(timezone.utc)
+        # Comfortably in the past so every real `as_of <= now` compute-time
+        # read sees these rows as already valid (valid_from <= as_of).
+        valid_from = now - timedelta(days=len(repo_names) + 30)
+
+        repo_rows: list[dict[str, Any]] = []
+        project_rows: list[dict[str, Any]] = []
+        for idx, owners in enumerate(repo_team_assignments):
+            if not owners or idx >= len(repo_names) or idx >= len(repo_ids):
+                continue
+            repo_name = repo_names[idx]
+            repo_id = repo_ids[idx]
+            for owner_idx, team in enumerate(owners):
+                is_primary = 1 if owner_idx == 0 else 0
+                common = {
+                    "org_id": org_id,
+                    "provider": provider,
+                    "team_id": team.id,
+                    "source": "native",
+                    "is_primary": is_primary,
+                    "specificity": 100 if is_primary else 50,
+                    "priority": 0,
+                    "valid_from": valid_from,
+                    "valid_to": None,
+                    "updated_at": now,
+                }
+                repo_rows.append(
+                    {
+                        **common,
+                        "repo_id": repo_id,
+                        "repo_full_name": repo_name,
+                        "match_type": "exact",
+                    }
+                )
+                project_rows.append(
+                    {
+                        **common,
+                        "project_id": repo_name,
+                        "project_key": None,
+                    }
+                )
+
+        membership_rows: list[dict[str, Any]] = []
+        for team in all_teams:
+            for member in team.members or []:
+                member_key = str(member).strip().lower()
+                membership_rows.append(
+                    {
+                        "org_id": org_id,
+                        "provider": provider,
+                        "team_id": team.id,
+                        "member_id": member_key,
+                        "raw_provider_user_id": None,
+                        "raw_email": member_key,
+                        "identity_facets": [],
+                        "source": "native",
+                        "is_primary": 1,
+                        "specificity": 50,
+                        "priority": 10,
+                        "valid_from": valid_from,
+                        "valid_to": None,
+                        "updated_at": now,
+                    }
+                )
+
+        teams_with_members = [team for team in all_teams if team.members]
+        if len(teams_with_members) >= 2:
+            primary_team, secondary_team = (
+                teams_with_members[0],
+                teams_with_members[1],
+            )
+            ambiguous_member = str((primary_team.members or [])[-1]).strip().lower()
+            membership_rows.append(
+                {
+                    "org_id": org_id,
+                    "provider": provider,
+                    "team_id": secondary_team.id,
+                    "member_id": ambiguous_member,
+                    "raw_provider_user_id": None,
+                    "raw_email": ambiguous_member,
+                    "identity_facets": [],
+                    "source": "provider_access",
+                    "is_primary": 0,
+                    "specificity": 50,
+                    "priority": 10,
+                    "valid_from": valid_from,
+                    "valid_to": None,
+                    "updated_at": now,
+                }
+            )
+
+        identity_rows: list[dict[str, Any]] = []
+        if len(teams_with_members) >= 3:
+            admin_team, conflicting_team = (
+                teams_with_members[2],
+                teams_with_members[1],
+            )
+            override_member = str((admin_team.members or [])[0]).strip().lower()
+
+            existing_manual = list(getattr(admin_team, "manual_members", None) or [])
+            if override_member not in existing_manual:
+                existing_manual.append(override_member)
+            admin_team.manual_members = existing_manual
+
+            identity_rows.append(
+                {
+                    "org_id": org_id,
+                    "canonical_id": override_member,
+                    "email": override_member,
+                    "display_name": None,
+                    "provider_identities": "{}",
+                    "team_ids": [admin_team.id],
+                    "is_active": 1,
+                    "updated_at": now,
+                }
+            )
+
+            # Conflicting provider-fallback signal for the SAME identity,
+            # into a DIFFERENT team -- proves the admin layer wins, never
+            # the reverse.
+            membership_rows.append(
+                {
+                    "org_id": org_id,
+                    "provider": provider,
+                    "team_id": conflicting_team.id,
+                    "member_id": override_member,
+                    "raw_provider_user_id": None,
+                    "raw_email": override_member,
+                    "identity_facets": [],
+                    "source": "provider_access",
+                    "is_primary": 0,
+                    "specificity": 50,
+                    "priority": 10,
+                    "valid_from": valid_from,
+                    "valid_to": None,
+                    "updated_at": now,
+                }
+            )
+
+        return {
+            "team_repo_ownership": repo_rows,
+            "team_project_ownership": project_rows,
+            "team_memberships": membership_rows,
+            "identities": identity_rows,
+        }
+
     def generate_repo_metrics_daily(
         self, days: int = 30
     ) -> list[RepoMetricsDailyRecord]:

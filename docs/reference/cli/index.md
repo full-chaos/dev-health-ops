@@ -629,7 +629,7 @@ dev-hops fixtures generate \
   --seed 42 \
   --with-metrics \
   --with-work-graph \
-  --team-count 8
+  --team-count 10
 ```
 
 **Options:**
@@ -645,9 +645,10 @@ dev-hops fixtures generate \
 | `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
 | `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, Cockpit/TestOps risk inputs, etc.) |
 | `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
-| `--team-count` | `8` | Number of synthetic teams to create |
+| `--team-count` | `10` | Number of synthetic teams to create |
+| `--db-type` | auto-detected | Explicit DB type (`postgres`, `clickhouse`, etc). Overrides the auto-detection described below; only needed when the sink URI's scheme doesn't name it unambiguously. |
 
-Database type is auto-detected from the sink URI.
+Database type is auto-detected from the sink URI unless `--db-type` overrides it.
 
 Every fixture run also seeds synthetic security alert rows into
 `security_alerts` for each generated repo. These rows include Dependabot,

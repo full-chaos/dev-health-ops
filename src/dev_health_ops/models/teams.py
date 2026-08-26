@@ -44,6 +44,7 @@ class Team(Base):
         team_uuid: uuid.UUID | None = None,
         org_id: str = "",
         repo_patterns: list[str] | None = None,
+        manual_members: list[str] | None = None,
     ):
         self.id = id
         self.team_uuid = team_uuid or uuid.uuid4()
@@ -61,6 +62,15 @@ class Team(Base):
         # Postgres migration; SQLAlchemy ignores unmapped attributes on
         # flush, so this is a no-op for any Postgres-backed store.
         self.repo_patterns = repo_patterns or []
+        # NOT a mapped_column either, same reasoning as repo_patterns above --
+        # manual_members is the ClickHouse-only admin-override provenance
+        # column added by migration 079 (CHAOS-4321). Kept as a plain
+        # instance attribute so ClickHouseStore.insert_teams picks it up via
+        # getattr/hasattr; always present (defaulting to []) so fixtures
+        # writers never hit the "caller never learned about this column"
+        # preserve-existing-value path insert_teams reserves for OTHER,
+        # non-fixtures Team-like callers (e.g. providers/teams.py).
+        self.manual_members = manual_members or []
 
 
 class JiraProjectOpsTeamLink(Base):

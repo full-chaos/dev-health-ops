@@ -334,6 +334,45 @@ def test_post_sync_team_autoimport_skips_when_auto_import_disabled(
     assert captured == []
 
 
+@pytest.mark.parametrize(
+    "sync_options",
+    [
+        {"auto_import_projects": True},
+        {"auto_import_members": True},
+        {
+            "auto_import_teams": True,
+            "auto_import_projects": False,
+            "auto_import_members": False,
+        },
+    ],
+)
+def test_post_sync_team_autoimport_dispatches_when_any_single_category_selected(
+    db_session, monkeypatch, sync_options
+) -> None:
+    """CHAOS-4323: the task-level gate is an OR across all three -- selecting
+    ONLY one category (not necessarily teams) must still run
+    run_team_autoimport, which is where each flag is honoured independently."""
+    run, _integration, config = _seed_run_with_config(
+        db_session,
+        status=SyncRunStatus.SUCCESS.value,
+        sync_options=sync_options,
+    )
+    _patch_session(monkeypatch, db_session)
+    captured: list[dict[str, Any]] = []
+
+    def _run_autoimport(**kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs)
+        return {"status": "success"}
+
+    monkeypatch.setattr(team_autoimport, "run_team_autoimport", _run_autoimport)
+
+    result = team_autoimport.run_post_sync_team_autoimport(str(run.id))
+
+    assert result["status"] == "dispatched"
+    assert len(captured) == 1
+    assert captured[0]["scope"]["sync_options"] == sync_options
+
+
 def test_post_sync_team_autoimport_resolves_credentials_from_integration(
     db_session, monkeypatch
 ) -> None:

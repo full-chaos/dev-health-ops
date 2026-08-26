@@ -28,8 +28,14 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
-from dev_health_ops.providers.team_capabilities import team_provider_capabilities
+from dev_health_ops.providers.team_capabilities import (
+    auto_import_capabilities,
+    team_provider_capabilities,
+)
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,15 @@ async def _populate_async(
     team_store: Any | None = None,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested (GitLab supports all three today).
+    capability = auto_import_capabilities(PROVIDER)
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return _zero_summary(org_id=org_id, reason="no_categories_selected")
     if not _provider_capable():
         if strict:
             raise ValueError(
@@ -177,15 +192,18 @@ async def _populate_async(
     # catalog this run wrote may be a partial view -- a partial catalog must
     # never be recorded as a complete one.
     native_projects_complete = not result.truncated and not missing_selected_source_ids
-    membership_rows, _, observed_team_ids = await _membership_rows(
-        org_id=org_id,
-        token=token,
-        url=url,
-        teams=teams,
-        now=now,
-        resolver=resolver,
-        strict=strict,
-    )
+    if want_members:
+        membership_rows, _, observed_team_ids = await _membership_rows(
+            org_id=org_id,
+            token=token,
+            url=url,
+            teams=teams,
+            now=now,
+            resolver=resolver,
+            strict=strict,
+        )
+    else:
+        membership_rows, observed_team_ids = [], set()
     sink = _sink(scope)
     membership_rows = await _split_memberships_for_review(
         org_id=org_id,
@@ -199,27 +217,32 @@ async def _populate_async(
     for team_row in team_rows:
         team_row["members"] = member_roster.get(str(team_row["id"]), [])
 
-    await _project_team_rows(
-        org_id=org_id,
-        team_rows=team_rows,
-        sink=sink,
-        team_store=team_store,
-        discovered_at=now,
-    )
-    sink.write_team_project_ownership(project_rows)
-    sink.write_team_memberships(membership_rows)
+    if want_teams:
+        await _project_team_rows(
+            org_id=org_id,
+            team_rows=team_rows,
+            sink=sink,
+            team_store=team_store,
+            discovered_at=now,
+        )
+    if want_projects:
+        sink.write_team_project_ownership(project_rows)
+    if want_members:
+        sink.write_team_memberships(membership_rows)
     catalog_projects = _dedupe_projects(native_project_rows)
-    if hasattr(sink, "write_projects"):
+    if want_projects and hasattr(sink, "write_projects"):
         sink.write_projects(catalog_projects)
 
     summary: dict[str, Any] = {
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if want_teams else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
-        "projects_imported": len({row.project_id for row in project_rows}),
+        "projects_imported": len({row.project_id for row in project_rows})
+        if want_projects
+        else 0,
         # The Ask Dev subject catalog rows written via write_projects(), distinct
         # from "projects_imported" above (team-ownership project paths).
-        "native_projects_imported": len(catalog_projects),
+        "native_projects_imported": len(catalog_projects) if want_projects else 0,
         # False when either discovery walk (teams or the flat projects
         # listing) hit its pagination bound, OR a selected source id never
         # showed up in discovery at all -- so a partial catalog is never
@@ -235,9 +258,11 @@ async def _populate_async(
         # discovered but unselected). Surfaced by id so a caller can act on
         # exactly which source is unaccounted for, not just a count.
         "native_projects_missing_selected_source_ids": missing_selected_source_ids,
-        "members_imported": len({row.member_id for row in membership_rows}),
-        "team_memberships_imported": len(membership_rows),
-        "team_project_ownership_imported": len(project_rows),
+        "members_imported": len({row.member_id for row in membership_rows})
+        if want_members
+        else 0,
+        "team_memberships_imported": len(membership_rows) if want_members else 0,
+        "team_project_ownership_imported": len(project_rows) if want_projects else 0,
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }

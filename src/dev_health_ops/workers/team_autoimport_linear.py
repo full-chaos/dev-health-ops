@@ -37,6 +37,10 @@ from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
 from dev_health_ops.providers.linear.normalize import linear_cycle_to_sprint
+from dev_health_ops.providers.team_capabilities import auto_import_capabilities
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +340,23 @@ def populate(
     **kwargs: Any,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested (Linear supports all three today).
+    capability = auto_import_capabilities("linear")
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return {
+            "status": "skipped",
+            "reason": "no_categories_selected",
+            "projects_imported": 0,
+            "native_projects_imported": 0,
+            "members_imported": 0,
+            "team_memberships_imported": 0,
+            "team_project_ownership_imported": 0,
+        }
     linear_credentials = linear_credentials_from_mapping(credentials)
     if linear_credentials is None:
         if strict:
@@ -412,11 +433,15 @@ def populate(
                 )
             )
 
-        discovered_members = _run(
-            membership.discover_members_linear(
-                api_key=linear_credentials.api_key,
-                team_key=team_id,
+        discovered_members = (
+            _run(
+                membership.discover_members_linear(
+                    api_key=linear_credentials.api_key,
+                    team_key=team_id,
+                )
             )
+            if want_members
+            else []
         )
         roster_facets: list[str] = []
         for member in discovered_members:
@@ -476,52 +501,55 @@ def populate(
             # Linear project name resolves as an Ask Dev subject. Kept in its own
             # try so a cycles failure below cannot discard projects and a projects
             # failure cannot discard cycles — the two are independent fetches.
-            try:
-                # Accumulated one node at a time, NOT via a list comprehension
-                # over the generator: a failure part-way through pagination must
-                # keep the prefix already fetched instead of discarding every
-                # project because the last page 502'd.
-                #
-                # Archived projects are requested DELIBERATELY. Linear's
-                # connection omits them by default, so an archived project would
-                # just stop appearing and this worker -- which only writes the
-                # rows it is handed -- could never write the is_active=0 that
-                # retires it. The catalog would serve the stale subject forever.
-                for node in client.iter_projects(include_archived=True):
-                    # Versioned at the OBSERVATION boundary, not at worker
-                    # start. ``now`` is captured before team discovery and
-                    # enumeration, which can take a long time; two overlapping
-                    # runs for the same org would then be ordered by when they
-                    # STARTED rather than by what they SAW. A run that started
-                    # earlier but observed a project later would write a stale
-                    # version and lose to the other run's tombstone, keeping a
-                    # live project retired.
-                    native_project_rows.extend(
-                        _linear_project_records(
-                            [node],
-                            org_id=org_id,
-                            now=datetime.now(timezone.utc),
+            # CHAOS-4323: gated on the "projects" category -- sprints/cycles
+            # below stay unconditional (reference data, not a category).
+            if want_projects:
+                try:
+                    # Accumulated one node at a time, NOT via a list comprehension
+                    # over the generator: a failure part-way through pagination must
+                    # keep the prefix already fetched instead of discarding every
+                    # project because the last page 502'd.
+                    #
+                    # Archived projects are requested DELIBERATELY. Linear's
+                    # connection omits them by default, so an archived project would
+                    # just stop appearing and this worker -- which only writes the
+                    # rows it is handed -- could never write the is_active=0 that
+                    # retires it. The catalog would serve the stale subject forever.
+                    for node in client.iter_projects(include_archived=True):
+                        # Versioned at the OBSERVATION boundary, not at worker
+                        # start. ``now`` is captured before team discovery and
+                        # enumeration, which can take a long time; two overlapping
+                        # runs for the same org would then be ordered by when they
+                        # STARTED rather than by what they SAW. A run that started
+                        # earlier but observed a project later would write a stale
+                        # version and lose to the other run's tombstone, keeping a
+                        # live project retired.
+                        native_project_rows.extend(
+                            _linear_project_records(
+                                [node],
+                                org_id=org_id,
+                                now=datetime.now(timezone.utc),
+                            )
                         )
+                    # Only here: the iterator ran to exhaustion without raising.
+                    native_projects_complete = True
+                except Exception:
+                    # Enumeration did not finish. Strict reference discovery fails
+                    # the run; otherwise keep what arrived but leave the run marked
+                    # INCOMPLETE, so a partial catalog is never recorded as a full
+                    # one. A missing project would otherwise look identical to a
+                    # project that does not exist.
+                    logger.warning(
+                        "Linear project enumeration for org_id=%s did not complete; "
+                        "keeping %d project(s) already fetched and marking the run "
+                        "incomplete. Absence-based retirement is skipped.",
+                        org_id,
+                        len(native_project_rows),
+                        exc_info=True,
                     )
-                # Only here: the iterator ran to exhaustion without raising.
-                native_projects_complete = True
-            except Exception:
-                # Enumeration did not finish. Strict reference discovery fails
-                # the run; otherwise keep what arrived but leave the run marked
-                # INCOMPLETE, so a partial catalog is never recorded as a full
-                # one. A missing project would otherwise look identical to a
-                # project that does not exist.
-                logger.warning(
-                    "Linear project enumeration for org_id=%s did not complete; "
-                    "keeping %d project(s) already fetched and marking the run "
-                    "incomplete. Absence-based retirement is skipped.",
-                    org_id,
-                    len(native_project_rows),
-                    exc_info=True,
-                )
-                if strict:
-                    raise
-            project_rows.extend(native_project_rows)
+                    if strict:
+                        raise
+                project_rows.extend(native_project_rows)
             for team in teams:
                 api_team = client.get_team_by_key(_team_id(team))
                 if not api_team or not api_team.get("id"):
@@ -573,34 +601,37 @@ def populate(
 
             memberships = _run(split_with_store())
         _apply_roster(team_rows, memberships)
-        if team_store is not None:
-            _run(
-                project_team_rows_with_store(
-                    store=team_store,
-                    org_id=org_id,
-                    provider="linear",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
+        if want_teams:
+            if team_store is not None:
+                _run(
+                    project_team_rows_with_store(
+                        store=team_store,
+                        org_id=org_id,
+                        provider="linear",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
                 )
-            )
-        elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
-            _run(
-                project_provider_team_rows(
-                    dsn=_clickhouse_dsn(scope),
-                    org_id=org_id,
-                    provider="linear",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
+            elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+                _run(
+                    project_provider_team_rows(
+                        dsn=_clickhouse_dsn(scope),
+                        org_id=org_id,
+                        provider="linear",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
                 )
-            )
-        else:
-            _run(sink.insert_teams(team_rows))
-        sink.write_projects(projects)
-        sink.write_members(members)
-        sink.write_team_memberships(memberships)
-        sink.write_team_project_ownership(ownership)
+            else:
+                _run(sink.insert_teams(team_rows))
+        if want_projects:
+            sink.write_projects(projects)
+            sink.write_team_project_ownership(ownership)
+        if want_members:
+            sink.write_members(members)
+            sink.write_team_memberships(memberships)
         if hasattr(sink, "write_sprints"):
             sink.write_sprints(sprint_rows)
     finally:
@@ -609,23 +640,25 @@ def populate(
 
     return {
         "mode": scope.get("mode"),
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if want_teams else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
-        "projects_imported": len(projects),
+        "projects_imported": len(projects) if want_projects else 0,
         # Counted off the deduped rows actually handed to the sink, not the
         # pre-dedupe fetch, so the number reports what was written.
         "native_projects_imported": sum(
             1 for row in projects if row.project_key is None
-        ),
+        )
+        if want_projects
+        else 0,
         # False when Linear's project connection could not be enumerated to the
         # end. Without this an incomplete discovery run reports exactly like a
         # complete one, and a project that simply never arrived is
         # indistinguishable from a project that does not exist.
         "native_projects_complete": native_projects_complete,
-        "members_imported": len(members),
-        "team_memberships_imported": len(memberships),
-        "team_project_ownership_imported": len(ownership),
+        "members_imported": len(members) if want_members else 0,
+        "team_memberships_imported": len(memberships) if want_members else 0,
+        "team_project_ownership_imported": len(ownership) if want_projects else 0,
         "sprints_imported": len(sprint_rows),
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,

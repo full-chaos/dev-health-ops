@@ -453,6 +453,51 @@ async def test_create_sync_config_rejects_invalid_timezone(client):
 
 
 @pytest.mark.asyncio
+async def test_create_sync_config_rejects_unsupported_auto_import_category(client):
+    """CHAOS-4323: GitHub has no "Projects" import -- selecting it must be
+    rejected at write time, not silently accepted as a checkbox that writes
+    nothing."""
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "github-bad-category",
+            "provider": "github",
+            "sync_targets": [],
+            "sync_options": {"all_repos": True, "auto_import_projects": True},
+        },
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail["unsupported_auto_import_categories"] == {
+        "projects": "GitHub attributes ownership via repos, not projects.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_sync_config_accepts_supported_auto_import_categories(client):
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "linear-all-categories",
+            "provider": "linear",
+            "sync_targets": ["work-items"],
+            "sync_options": {
+                "auto_import_teams": True,
+                "auto_import_projects": True,
+                "auto_import_members": True,
+            },
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
 async def test_batch_create_linear_without_repos_creates_active_config_and_job(
     client, session_maker
 ):
@@ -959,6 +1004,51 @@ async def test_update_sync_config_changes_is_active(client):
     data = resp.json()
     assert data["is_active"] is False
     assert data["id"] == config_id
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_rejects_unsupported_auto_import_category(client):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="github-update-bad-category", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"sync_options": {"auto_import_projects": True}},
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "projects" in detail["unsupported_auto_import_categories"]
+
+
+@pytest.mark.asyncio
+async def test_get_auto_import_capabilities(client):
+    ac, _ = client
+
+    resp = await ac.get("/api/v1/admin/sync-configs/auto-import-capabilities")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data) == {"github", "gitlab", "jira", "linear"}
+    assert data["github"] == {
+        "teams": True,
+        "projects": False,
+        "members": True,
+        "reasons": {
+            "projects": "GitHub attributes ownership via repos, not projects.",
+        },
+    }
+    assert data["linear"] == {
+        "teams": True,
+        "projects": True,
+        "members": True,
+        "reasons": {},
+    }
 
 
 async def _tests_dataset_row(session_maker, integration_id: uuid.UUID):

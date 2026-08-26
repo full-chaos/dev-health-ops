@@ -200,6 +200,123 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     ]
 
 
+def test_github_org_import_honours_members_only_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323: with only auto_import_members selected, GitHub writes
+    memberships but neither team rows (auto_import_teams off) nor
+    team_repo_ownership (auto_import_projects off, GitHub's project-ownership
+    analog) -- proves the per-category write gate, not just the flag read."""
+
+    sink = RecordingSink()
+    resolver = IdentityResolver(alias_to_canonical={})
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="github",
+                provider_team_id="platform",
+                name="Platform",
+                associations={
+                    "repo_patterns": ["full-chaos/dev-health"],
+                    "provider_org": org_name,
+                },
+            ),
+        ]
+
+    async def discover_members_github(
+        self, token: str, org_name: str, team_slug: str
+    ) -> list[DiscoveredMember]:
+        return [
+            DiscoveredMember(
+                provider_type="github",
+                provider_identity=f"{team_slug}-lead",
+                display_name=f"{team_slug} lead",
+                email=f"{team_slug}@example.com",
+            )
+        ]
+
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github.TeamMembershipService,
+        "discover_members_github",
+        discover_members_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "ClickHouseMetricsSink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "load_identity_resolver", lambda: resolver
+    )
+
+    summary = team_autoimport_github.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "org": "full-chaos"},
+        scope={
+            "analytics_db": "clickhouse://test",
+            "sync_options": {"auto_import_members": True},
+            # The actual production seam (run_team_autoimport) threads the
+            # resolved per-category selection under this key -- calling
+            # populate() directly with only "sync_options" set would NOT gate
+            # anything, since providers never re-derive categories from
+            # sync_options themselves (single source of truth in
+            # team_autoimport.run_team_autoimport).
+            "import_categories": {
+                "teams": False,
+                "projects": False,
+                "members": True,
+            },
+        },
+    )
+
+    assert summary["teams_imported"] == 0
+    assert summary["team_repo_ownership_imported"] == 0
+    assert summary["team_memberships_imported"] == 1
+    # Neither the team dimension nor repo-ownership sinks were called.
+    assert sink.teams == []
+    assert sink.repo_ownership == []
+    assert len(sink.memberships) == 1
+    assert sink.memberships[0].member_id == "gh:platform-lead"
+
+
+def test_github_org_import_skips_populate_entirely_when_no_category_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discover_calls: list[str] = []
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        discover_calls.append(org_name)
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+
+    summary = team_autoimport_github.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "org": "full-chaos"},
+        scope={
+            "analytics_db": "clickhouse://test",
+            "import_categories": {
+                "teams": False,
+                "projects": False,
+                "members": False,
+            },
+        },
+    )
+
+    assert summary["status"] == "skipped"
+    assert summary["reason"] == "no_categories_selected"
+    # Never even reached discovery -- no network call attempted.
+    assert discover_calls == []
+
+
 def test_github_strict_reference_discovery_uses_app_installation_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

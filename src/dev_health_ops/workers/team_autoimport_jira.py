@@ -37,6 +37,10 @@ from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.jira.client import JiraAuth, JiraClient
 from dev_health_ops.providers.jira.normalize import jira_sprint_payload_to_model
+from dev_health_ops.providers.team_capabilities import auto_import_capabilities
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 _T = TypeVar("_T")
 _REAL_CLICKHOUSE_SINK_TYPE = ClickHouseMetricsSink
@@ -171,6 +175,23 @@ def populate(
     **kwargs: Any,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested (Jira supports all three today).
+    capability = auto_import_capabilities("jira")
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return {
+            "status": "skipped",
+            "reason": "no_categories_selected",
+            "teams_imported": 0,
+            "projects_imported": 0,
+            "members_imported": 0,
+            "team_memberships_imported": 0,
+            "team_project_ownership_imported": 0,
+        }
     jira_credentials = jira_credentials_from_mapping(credentials)
     if jira_credentials is None:
         if strict:
@@ -283,13 +304,17 @@ def populate(
                 )
             )
 
-        discovered_members = _run(
-            membership.discover_members_jira_bulk(
-                email=jira_credentials.email,
-                api_token=jira_credentials.api_token,
-                url=jira_credentials.base_url,
-                project_keys=project_keys,
+        discovered_members = (
+            _run(
+                membership.discover_members_jira_bulk(
+                    email=jira_credentials.email,
+                    api_token=jira_credentials.api_token,
+                    url=jira_credentials.base_url,
+                    project_keys=project_keys,
+                )
             )
+            if want_members
+            else []
         )
         # Resolve each member through the SAME org alias map an assignee uses:
         # facets[0] is the alias-resolved identity (canonical email when the
@@ -372,40 +397,41 @@ def populate(
     sink, should_close = _sink_from_kwargs(scope, kwargs)
     try:
         team_store = _team_store_from_kwargs(sink, kwargs)
-        for link in _load_jira_legacy_links(sink, org_id=org_id):
-            project_key = str(link.get("project_key") or "")
-            ops_team_id = str(link.get("ops_team_id") or "")
-            if not project_key or not ops_team_id:
-                continue
-            project_id = _project_id(org_id, "jira", project_key)
-            if not any(row.id == project_id for row in project_rows):
-                project_rows.append(
-                    ProjectRecord(
-                        id=project_id,
+        if want_projects:
+            for link in _load_jira_legacy_links(sink, org_id=org_id):
+                project_key = str(link.get("project_key") or "")
+                ops_team_id = str(link.get("ops_team_id") or "")
+                if not project_key or not ops_team_id:
+                    continue
+                project_id = _project_id(org_id, "jira", project_key)
+                if not any(row.id == project_id for row in project_rows):
+                    project_rows.append(
+                        ProjectRecord(
+                            id=project_id,
+                            org_id=org_id,
+                            provider="jira",
+                            project_key=project_key,
+                            name=str(link.get("project_name") or project_key),
+                            is_active=1,
+                            updated_at=now,
+                            last_synced=now,
+                        )
+                    )
+                ownership_rows.append(
+                    TeamProjectOwnershipRecord(
                         org_id=org_id,
                         provider="jira",
+                        team_id=ops_team_id,
+                        project_id=project_id,
                         project_key=project_key,
-                        name=str(link.get("project_name") or project_key),
-                        is_active=1,
+                        source="jira_legacy",
+                        is_primary=1,
+                        specificity=90,
+                        priority=20,
+                        valid_from=now,
                         updated_at=now,
-                        last_synced=now,
                     )
                 )
-            ownership_rows.append(
-                TeamProjectOwnershipRecord(
-                    org_id=org_id,
-                    provider="jira",
-                    team_id=ops_team_id,
-                    project_id=project_id,
-                    project_key=project_key,
-                    source="jira_legacy",
-                    is_primary=1,
-                    specificity=90,
-                    priority=20,
-                    valid_from=now,
-                    updated_at=now,
-                )
-            )
 
         projects = _dedupe_projects(project_rows)
         members = _dedupe_members(member_rows)
@@ -438,34 +464,37 @@ def populate(
 
             memberships = _run(split_with_store())
         _apply_roster(team_rows, memberships)
-        if team_store is not None:
-            _run(
-                project_team_rows_with_store(
-                    store=team_store,
-                    org_id=org_id,
-                    provider="jira",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
+        if want_teams:
+            if team_store is not None:
+                _run(
+                    project_team_rows_with_store(
+                        store=team_store,
+                        org_id=org_id,
+                        provider="jira",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
                 )
-            )
-        elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
-            _run(
-                project_provider_team_rows(
-                    dsn=_clickhouse_dsn(scope),
-                    org_id=org_id,
-                    provider="jira",
-                    team_rows=team_rows,
-                    team_writer=sink.insert_teams,
-                    discovered_at=now,
+            elif isinstance(sink, _REAL_CLICKHOUSE_SINK_TYPE):
+                _run(
+                    project_provider_team_rows(
+                        dsn=_clickhouse_dsn(scope),
+                        org_id=org_id,
+                        provider="jira",
+                        team_rows=team_rows,
+                        team_writer=sink.insert_teams,
+                        discovered_at=now,
+                    )
                 )
-            )
-        else:
-            _run(sink.insert_teams(team_rows))
-        sink.write_projects(projects)
-        sink.write_members(members)
-        sink.write_team_memberships(memberships)
-        sink.write_team_project_ownership(ownership)
+            else:
+                _run(sink.insert_teams(team_rows))
+        if want_projects:
+            sink.write_projects(projects)
+            sink.write_team_project_ownership(ownership)
+        if want_members:
+            sink.write_members(members)
+            sink.write_team_memberships(memberships)
         if hasattr(sink, "write_sprints"):
             sink.write_sprints(sprint_rows)
     finally:
@@ -475,15 +504,17 @@ def populate(
     jira_legacy_count = sum(1 for row in ownership if row.source == "jira_legacy")
     return {
         "mode": scope.get("mode"),
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if want_teams else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
-        "projects_imported": len(projects),
-        "members_imported": len(members),
-        "team_memberships_imported": len(memberships),
-        "team_project_ownership_imported": len(ownership),
+        "projects_imported": len(projects) if want_projects else 0,
+        "members_imported": len(members) if want_members else 0,
+        "team_memberships_imported": len(memberships) if want_members else 0,
+        "team_project_ownership_imported": len(ownership) if want_projects else 0,
         "sprints_imported": len(sprint_rows),
-        "jira_legacy_project_ownership_imported": jira_legacy_count,
+        "jira_legacy_project_ownership_imported": jira_legacy_count
+        if want_projects
+        else 0,
         "team_repo_ownership_imported": 0,
         "work_item_team_attributions_imported": 0,
     }

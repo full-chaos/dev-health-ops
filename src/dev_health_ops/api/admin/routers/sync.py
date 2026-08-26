@@ -67,6 +67,10 @@ from dev_health_ops.providers.github.work_item_options import (
     canonical_github_work_item_runtime_options,
     snapshot_github_work_item_runtime_options,
 )
+from dev_health_ops.providers.team_capabilities import (
+    all_auto_import_capabilities,
+    unsupported_auto_import_categories,
+)
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
     is_canonical_incident_feature_enabled_async,
@@ -1584,6 +1588,30 @@ async def _create_planner_managed_config(
     return parent, integration
 
 
+@router.get("/sync-configs/auto-import-capabilities")
+async def get_auto_import_capabilities(
+    org_id: str = Depends(get_admin_org_id),
+) -> dict[str, dict[str, object]]:
+    """Per-provider, per-category auto-import capability (CHAOS-4323).
+
+    Single source of truth for the wizard's three checkboxes: which
+    provider supports which of teams/projects/members, and why not for the
+    ones it doesn't (e.g. GitHub has no "Projects" import). The web wizard
+    renders an unsupported category disabled with this reason rather than
+    letting an operator select a checkbox that would write nothing.
+    """
+
+    return {
+        provider: {
+            "teams": capability.teams,
+            "projects": capability.projects,
+            "members": capability.members,
+            "reasons": dict(capability.reasons),
+        }
+        for provider, capability in all_auto_import_capabilities().items()
+    }
+
+
 @router.get("/sync-targets")
 async def get_provider_sync_targets(
     session: AsyncSession = Depends(get_session),
@@ -2014,6 +2042,24 @@ async def create_sync_config(
         initial_sync_depth=payload.initial_sync_depth,
     )
 
+    # CHAOS-4323: reject requesting an auto-import category this provider
+    # cannot supply (e.g. auto_import_projects on a GitHub config) rather than
+    # silently accepting a checkbox that would write nothing.
+    unsupported_categories = unsupported_auto_import_categories(
+        payload.provider, sync_options
+    )
+    if unsupported_categories:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"{payload.provider} does not support the requested "
+                    "auto-import categories"
+                ),
+                "unsupported_auto_import_categories": unsupported_categories,
+            },
+        )
+
     initial_sync_depth = sync_options.get("initial_sync_depth")
     if initial_sync_depth is not None:
 
@@ -2375,6 +2421,23 @@ async def update_sync_config(
         }
         for key in cleared_keys:
             merged_options.pop(key, None)
+        # CHAOS-4323: same rejection as create, evaluated against the fully
+        # MERGED options so a category left on from the config's prior state
+        # (not just one this PATCH explicitly sets) is still caught.
+        unsupported_categories = unsupported_auto_import_categories(
+            str(getattr(config, "provider", "")), merged_options
+        )
+        if unsupported_categories:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": (
+                        f"{getattr(config, 'provider', '')} does not support "
+                        "the requested auto-import categories"
+                    ),
+                    "unsupported_auto_import_categories": unsupported_categories,
+                },
+            )
         mutable_config.sync_options = merged_options
     if (
         str(getattr(config, "provider", "")).lower() == "github"

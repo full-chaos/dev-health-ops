@@ -31,6 +31,11 @@ class PostSyncDispatchPayload:
     to_date: str | None
     work_graph_from_date: str | None
     work_graph_to_date: str | None
+    # CHAOS-4323: "should the post-sync team-autoimport task dispatch at all" --
+    # true when ANY of the three independent auto_import_teams/_projects/_members
+    # flags is set, not just auto_import_teams. Name kept for callers/tests; the
+    # task itself (team_autoimport.run_post_sync_team_autoimport) re-reads
+    # sync_options and honours each flag independently once dispatched.
     auto_import_teams: bool
 
 
@@ -116,10 +121,13 @@ def build_post_sync_dispatch_payload(
     from dev_health_ops.sync.trigger_routing import (
         canonical_sync_config_for_sync_run,
     )
+    from dev_health_ops.workers.team_autoimport_categories import (
+        import_categories_from_sync_options,
+    )
 
     canonical_config = canonical_sync_config_for_sync_run(session, run)
     auto_import_teams = (
-        bool((canonical_config.sync_options or {}).get("auto_import_teams"))
+        any(import_categories_from_sync_options(canonical_config.sync_options).values())
         if canonical_config is not None
         else False
     )

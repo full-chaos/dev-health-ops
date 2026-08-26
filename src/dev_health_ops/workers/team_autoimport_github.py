@@ -23,8 +23,14 @@ from dev_health_ops.api.services.configuration.team_membership import (
 from dev_health_ops.metrics.schemas import TeamMembershipRecord, TeamRepoOwnershipRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
-from dev_health_ops.providers.team_capabilities import team_provider_capabilities
+from dev_health_ops.providers.team_capabilities import (
+    auto_import_capabilities,
+    team_provider_capabilities,
+)
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from dev_health_ops.workers.team_autoimport_categories import (
+    resolve_import_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,17 @@ async def _populate_async(
     team_store: Any | None = None,
 ) -> dict[str, Any]:
     strict = bool(scope.get("strict_reference_discovery"))
+    categories = resolve_import_categories(scope)
+    # CHAOS-4323 defense-in-depth: AND against this provider's own capability
+    # regardless of what scope requested -- GitHub has no "Projects" import
+    # (projects_imported is always 0 below), so want_projects is always False
+    # here even if a stale config or a bypassed caller set it True.
+    capability = auto_import_capabilities(PROVIDER)
+    want_teams = categories["teams"] and capability.teams
+    want_projects = categories["projects"] and capability.projects
+    want_members = categories["members"] and capability.members
+    if not (want_teams or want_projects or want_members):
+        return _zero_summary(org_id=org_id, reason="no_categories_selected")
     if not _provider_capable():
         if strict:
             raise ValueError(
@@ -109,16 +126,26 @@ async def _populate_async(
     # canonical identity an aliased assignee does (CHAOS-2609).
     resolver = load_identity_resolver()
     team_rows = _team_rows(org_id=org_id, teams=teams, now=now)
+    # GitHub has no "Projects" import concept at all -- auto_import_capabilities
+    # ("github").projects is False, so want_projects is always False (see the
+    # capability clamp above) and projects_imported stays 0 below. Repo
+    # ownership is derived PURELY from team associations (no separate
+    # "projects" discovery call exists), so it is a team-import artifact, not
+    # a projects one -- gated on "teams", matching pre-CHAOS-4323 behavior
+    # where the single auto_import_teams flag wrote both together.
     repo_rows = _repo_ownership_rows(org_id=org_id, teams=teams, now=now)
-    membership_rows, _, observed_team_ids = await _membership_rows(
-        org_id=org_id,
-        token=token,
-        org_name=org_name,
-        teams=teams,
-        now=now,
-        resolver=resolver,
-        strict=strict,
-    )
+    if want_members:
+        membership_rows, _, observed_team_ids = await _membership_rows(
+            org_id=org_id,
+            token=token,
+            org_name=org_name,
+            teams=teams,
+            now=now,
+            resolver=resolver,
+            strict=strict,
+        )
+    else:
+        membership_rows, observed_team_ids = [], set()
     sink = _sink(scope)
     membership_rows = await _split_memberships_for_review(
         org_id=org_id,
@@ -132,25 +159,30 @@ async def _populate_async(
     for team_row in team_rows:
         team_row["members"] = member_roster.get(str(team_row["id"]), [])
 
-    await _project_team_rows(
-        org_id=org_id,
-        team_rows=team_rows,
-        sink=sink,
-        team_store=team_store,
-        discovered_at=now,
-    )
-    sink.write_team_repo_ownership(repo_rows)
-    sink.write_team_memberships(membership_rows)
+    if want_teams:
+        await _project_team_rows(
+            org_id=org_id,
+            team_rows=team_rows,
+            sink=sink,
+            team_store=team_store,
+            discovered_at=now,
+        )
+    if want_teams:
+        sink.write_team_repo_ownership(repo_rows)
+    if want_members:
+        sink.write_team_memberships(membership_rows)
 
     return {
-        "teams_imported": len(team_rows),
+        "teams_imported": len(team_rows) if want_teams else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": 0,
-        "members_imported": len({row.member_id for row in membership_rows}),
-        "team_memberships_imported": len(membership_rows),
+        "members_imported": len({row.member_id for row in membership_rows})
+        if want_members
+        else 0,
+        "team_memberships_imported": len(membership_rows) if want_members else 0,
         "team_project_ownership_imported": 0,
-        "team_repo_ownership_imported": len(repo_rows),
+        "team_repo_ownership_imported": len(repo_rows) if want_teams else 0,
         "work_item_team_attributions_imported": 0,
     }
 

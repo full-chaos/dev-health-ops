@@ -2243,6 +2243,49 @@ def test_build_post_sync_dispatch_payload_returns_none_without_success(db_sessio
     assert build_post_sync_dispatch_payload(db_session, run.id) is None
 
 
+@pytest.mark.parametrize(
+    ("sync_options", "expected"),
+    [
+        ({}, False),
+        (
+            {
+                "auto_import_teams": False,
+                "auto_import_projects": False,
+                "auto_import_members": False,
+            },
+            False,
+        ),
+        ({"auto_import_teams": True}, True),
+        # CHAOS-4323: the dispatch gate is an OR across all three -- selecting
+        # ONLY projects (teams/members left off) must still fire the gate so
+        # the post-sync team-autoimport task dispatches at all; the task
+        # itself then honours each flag independently once it runs.
+        ({"auto_import_projects": True}, True),
+        ({"auto_import_members": True}, True),
+    ],
+)
+def test_build_post_sync_dispatch_payload_auto_import_teams_is_any_of_three(
+    db_session, sync_options, expected
+):
+    run, unit = _seed_run(db_session)
+    unit.status = SyncRunUnitStatus.SUCCESS.value
+    config = SyncConfiguration(
+        org_id=run.org_id,
+        name="canonical",
+        provider="github",
+        sync_targets=["git"],
+        sync_options=sync_options,
+        integration_id=run.integration_id,
+    )
+    db_session.add(config)
+    db_session.flush()
+
+    payload = build_post_sync_dispatch_payload(db_session, run.id)
+
+    assert payload is not None
+    assert payload.auto_import_teams is expected
+
+
 def test_finalize_zero_unit_run_does_not_report_success(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 

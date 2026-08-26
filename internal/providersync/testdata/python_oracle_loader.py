@@ -1020,6 +1020,18 @@ def _target_linear_team_autoimport() -> None:
         "dev_health_ops.providers.linear.normalize",
         {"linear_cycle_to_sprint": _unsupported_dependency},
     )
+    # CHAOS-4323: team_autoimport_linear.py's capability clamp and category
+    # gate are pure scope/provider-name lookups, never invoked by the
+    # oracle's narrow target (_linear_project_records) -- stubbed, not
+    # loaded, like their neighbors above.
+    _install_module(
+        "dev_health_ops.providers.team_capabilities",
+        {"auto_import_capabilities": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.workers.team_autoimport_categories",
+        {"resolve_import_categories": _unsupported_dependency},
+    )
 
 
 def _target_fetch_utils() -> None:

@@ -19,6 +19,14 @@ This adds a distinct terminal status, 'failed_permanent', paired with a
 bounded failure_reason, so an unrecoverable partition is durably recorded and
 excluded from DispatchablePartitions's reclaim set (`status IN ('pending',
 'failed')`) instead of retried forever or silently lost.
+
+failure_reason is a SHARED column, not exclusive to failed_permanent: CHAOS-
+4316 (partition liveness bound) writes it on the ordinary retryable
+status='failed' path too (e.g. reason='progress_stalled'), so the CHECK
+constraint allows failure_reason on EITHER 'failed' or 'failed_permanent' --
+never on 'pending'/'running'/'succeeded' -- while still requiring a reason
+whenever status IS 'failed_permanent' specifically (that terminal write
+always has one; a retryable 'failed' release may or may not).
 """
 
 from __future__ import annotations
@@ -37,7 +45,8 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 _TABLE = "daily_metrics_partitions"
 _STATUS_CHECK = "ck_daily_metrics_partition_status"
-_REASON_CHECK = "ck_daily_metrics_partition_failure_reason"
+_REASON_SCOPE_CHECK = "ck_daily_metrics_partition_failure_reason_scope"
+_REASON_REQUIRED_CHECK = "ck_daily_metrics_partition_failed_permanent_has_reason"
 _INDEX = "ix_daily_metrics_partition_failed_permanent"
 
 
@@ -52,10 +61,18 @@ def upgrade() -> None:
         _TABLE,
         "status IN ('pending', 'running', 'succeeded', 'failed', 'failed_permanent')",
     )
+    # Two constraints, not one biconditional: failure_reason may accompany
+    # EITHER failed-ish status (CHAOS-4316 writes it on plain 'failed' too),
+    # but failed_permanent specifically always carries one.
     op.create_check_constraint(
-        _REASON_CHECK,
+        _REASON_SCOPE_CHECK,
         _TABLE,
-        "(status = 'failed_permanent') = (failure_reason IS NOT NULL)",
+        "failure_reason IS NULL OR status IN ('failed', 'failed_permanent')",
+    )
+    op.create_check_constraint(
+        _REASON_REQUIRED_CHECK,
+        _TABLE,
+        "status <> 'failed_permanent' OR failure_reason IS NOT NULL",
     )
     op.create_index(
         _INDEX,
@@ -67,7 +84,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(_INDEX, table_name=_TABLE)
-    op.drop_constraint(_REASON_CHECK, _TABLE, type_="check")
+    op.drop_constraint(_REASON_REQUIRED_CHECK, _TABLE, type_="check")
+    op.drop_constraint(_REASON_SCOPE_CHECK, _TABLE, type_="check")
     op.drop_constraint(_STATUS_CHECK, _TABLE, type_="check")
     # A downgrade target's own status vocabulary never included
     # 'failed_permanent' -- fold any such row back to plain 'failed' so the

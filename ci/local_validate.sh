@@ -1188,8 +1188,22 @@ metrics_readback_diff_relevant() {
   # review, CHAOS-4266) -- a PR that only touches
   # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
   # this one does, must not have this stage silently skip.
-  printf '%s\n' "${changed}" | grep -qE \
-    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)'
+  #
+  # CHAOS-4319: a here-string, not `printf ... | grep -qE ...`. Under this
+  # script's `set -uo pipefail`, `grep -q` exits the instant it finds its
+  # first match without draining the rest of stdin -- if `changed` has more
+  # lines still queued, the upstream `printf` gets SIGPIPE on its next write
+  # and exits 141, and pipefail reports THAT as the pipeline's status
+  # instead of grep's real (matching, 0) result. The bug is silent and
+  # match-position-dependent: it only fires when the match is early enough
+  # in `changed` that printf is still writing when grep exits, which is
+  # exactly the common case for a real PR's small file count -- this exact
+  # function returned 141 (falsely "not relevant") against this ticket's
+  # own diff, which very much touches internal/jobs/metrics/. A here-string
+  # has no live producer process to SIGPIPE.
+  grep -qE \
+    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
+    <<<"${changed}"
 }
 
 metrics_readback() {

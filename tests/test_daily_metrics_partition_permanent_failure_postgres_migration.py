@@ -181,8 +181,9 @@ def test_0113_adds_nullable_bounded_failure_reason_without_rewriting_history(
 def test_0113_failed_permanent_requires_a_failure_reason(
     migrated_to_0112: PostgresMigrationHarness,
 ) -> None:
-    """The paired CHECK constraint: status='failed_permanent' iff
-    failure_reason is set -- neither can exist without the other."""
+    """failed_permanent always carries a reason; a reason may also
+    accompany plain 'failed' (CHAOS-4316 writes it there), but never
+    pending/running/succeeded."""
     _seed_run_and_pending_partition(migrated_to_0112.engine)
     command.upgrade(_migration_config(), "0113")
 
@@ -207,12 +208,29 @@ def test_0113_failed_permanent_requires_a_failure_reason(
                 sa.text(f"UPDATE {_TABLE} SET {_COLUMN} = NULL WHERE ordinal = 0")
             )
 
-    # A reason on a non-failed_permanent status must also be rejected.
+    # A reason on plain 'failed' (CHAOS-4316's retryable liveness-kill path)
+    # must be ALLOWED -- the shared column is not failed_permanent-exclusive.
+    with migrated_to_0112.engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                f"UPDATE {_TABLE} SET status = 'failed', "
+                f"{_COLUMN} = 'progress_stalled' WHERE ordinal = 0"
+            )
+        )
+    with migrated_to_0112.engine.connect() as connection:
+        row = connection.execute(
+            sa.text(f"SELECT status, {_COLUMN} FROM {_TABLE} WHERE ordinal = 0")
+        ).one()
+    assert row.status == "failed"
+    assert row.failure_reason == "progress_stalled"
+
+    # A reason on 'pending' (never a failed-ish status) must still be
+    # rejected.
     with pytest.raises(IntegrityError):
         with migrated_to_0112.engine.begin() as connection:
             connection.execute(
                 sa.text(
-                    f"UPDATE {_TABLE} SET status = 'failed', "
+                    f"UPDATE {_TABLE} SET status = 'pending', "
                     f"{_COLUMN} = 'ambiguous_refused' WHERE ordinal = 0"
                 )
             )

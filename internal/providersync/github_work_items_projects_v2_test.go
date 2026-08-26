@@ -481,6 +481,26 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 				wantCause:    githubProjectsV2StructuralDegraded,
 			},
 			{
+				// codex adversarial review, CHAOS-4289 round 2: the outer
+				// `items` connection already refuses a null/omitted `nodes`
+				// (the "missing page info" case above), but the nested
+				// per-item `changes` connection is the same GraphQL shape and
+				// had no equivalent check -- an item reporting
+				// hasNextPage:false with `nodes` entirely omitted silently
+				// dropped its status-transition history while the board
+				// still reported Complete. The item itself (Issue #7 in
+				// acme/api) is otherwise fully identifiable, isolating this
+				// case to the pagination-completeness gate rather than
+				// item-identification (boardIncomplete).
+				name: "nested changes nodes missing",
+				reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+					`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+					`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
+			},
+			{
 				name:         "genuinely empty board",
 				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 				wantComplete: true,

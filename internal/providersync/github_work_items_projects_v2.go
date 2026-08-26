@@ -482,7 +482,16 @@ func fetchGitHubProjectV2Target(
 		paginationComplete := connection.PageInfo != nil && connection.PageInfo.HasNextPage != nil
 		for index := range connection.Nodes {
 			item := connection.Nodes[index]
-			if item.Changes.PageInfo == nil || item.Changes.PageInfo.HasNextPage == nil {
+			// codex adversarial review, CHAOS-4289 round 2: the outer `items`
+			// connection already refuses a null/omitted `nodes` (Items.Nodes ==
+			// nil above), because that shape is indistinguishable from "GitHub
+			// sent a malformed payload" rather than "genuinely zero". The nested
+			// per-item `changes` connection is the identical GraphQL shape and
+			// deserves the identical check -- without it, a null/omitted
+			// `changes.nodes` next to an explicit `hasNextPage:false` silently
+			// drops this item's status-transition history while the board
+			// still reports Complete.
+			if item.Changes.PageInfo == nil || item.Changes.PageInfo.HasNextPage == nil || item.Changes.Nodes == nil {
 				paginationComplete = false
 			} else if *item.Changes.PageInfo.HasNextPage {
 				cursor := strings.TrimSpace(item.Changes.PageInfo.EndCursor)

@@ -11,30 +11,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// TestComputeFamilyMultiRepoRowsSurviveClickHouseSecondPrecisionTruncation is
-// the real-ClickHouse boundary proof codex round 3 required (CHAOS-4276):
-// team_metrics_daily.computed_at is `DateTime('UTC')` -- ClickHouse's
-// SECOND-precision type, not `DateTime64` -- so two Go time.Time values that
-// are merely "not equal" in memory can still collapse to an IDENTICAL
-// persisted value if they fall in the same wall-clock second, reopening the
-// exact argMax(computed_at) tie round 2's fix was meant to close. A
-// same-package unit test against a recording batch (as round 2 shipped)
-// cannot observe this: it only sees the pre-serialization time.Time values,
-// never what ClickHouse actually stores or how argMax resolves a real tie.
+// TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam is a real-ClickHouse
+// proof that TeamWellbeingExecutor.ComputeFamily writes team_metrics_daily's
+// per-repo row SHAPE correctly (CHAOS-4276 codex round-1 finding 2): a team
+// whose commits span two repos in one partition must land as two separate
+// rows, each counting only its own repo's commits -- never one row
+// aggregating both. This drives the real production entry point
+// (ComputeFamily), not a direct numerical/computeWellbeingPerRepo call, so
+// it also proves the ClickHouse write side (WriteTeamMetricsDailyPerRepo)
+// round-trips correctly.
 //
-// This test drives TeamWellbeingExecutor.ComputeFamily end-to-end (the real
-// production entry point, not a direct numerical/computeWellbeingPerRepo
-// call) against a partition with TWO repos owned by the SAME team, so the
-// team's two rows are genuinely written through ComputeFamily's
-// base+index-second timestamp scheme (wellbeing_native_executor.go)
-// and then reads them back the same way a real consumer does --
-// argMax(commits_count, computed_at) grouped by (org_id, team_id, day),
-// mirroring cognitive_load.py/clickhouse_dedup.py's own dedup query. If the
-// two rows' computed_at values truncated to the same second, this would be
-// nondeterministic across runs; asserting a SPECIFIC, expected winner
-// (repo B, the later index, higher UNIX second) makes any flake in either
-// direction visible immediately.
-func TestComputeFamilyMultiRepoRowsSurviveClickHouseSecondPrecisionTruncation(t *testing.T) {
+// This does NOT assert anything about computed_at ordering or distinctness
+// (codex round-3 raised that; chris/team-lead's ruling rejected fabricating
+// timestamps to force it -- see ComputeFamily's doc comment and this PR's
+// RISK-NOTES: team_metrics_daily has no repo_id column at all, so which
+// repo's row a reader's argMax(computed_at) picks for a multi-repo team is
+// a pre-existing, cross-language property, not something this test's scope
+// covers or something a Go-side timestamp trick should paper over).
+func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -61,8 +55,7 @@ func TestComputeFamilyMultiRepoRowsSurviveClickHouseSecondPrecisionTruncation(t 
     committer_when DateTime64(3, 'UTC'), org_id String, last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
 		// Exact production schema (001_metrics_v2.sql + 024_add_org_id.sql +
-		// 027_add_org_id_to_sorting_keys.py): computed_at is `DateTime('UTC')`
-		// -- second precision -- this is the column under test.
+		// 027_add_org_id_to_sorting_keys.py).
 		`CREATE TABLE team_metrics_daily (
     day Date, team_id LowCardinality(String), team_name String,
     commits_count UInt32, after_hours_commits_count UInt32, weekend_commits_count UInt32,
@@ -94,8 +87,7 @@ INSERT INTO repos (id, repo, org_id, last_synced) VALUES
 		t.Fatal(err)
 	}
 	// repo-a: 5 commits. repo-b: 3 commits. Deliberately different counts
-	// so the readback below can tell WHICH repo's row won the tie
-	// unambiguously, not just that a row exists.
+	// so the readback below can tell WHICH repo's row is WHICH unambiguously.
 	if err := conn.Exec(ctx, `
 INSERT INTO git_commits (repo_id, hash, author_name, author_email, committer_when, org_id, last_synced) VALUES
 (toUUID('`+repoA+`'), 'a1', 'Dev A', 'dev-a@example.com', toDateTime64('2026-08-24 12:00:00', 3, 'UTC'), '`+orgID+`', now64(3)),
@@ -128,73 +120,31 @@ INSERT INTO git_commits (repo_id, hash, author_name, author_email, committer_whe
 		t.Fatalf("written=%d, want 2 (one row per repo for the one shared team)", written)
 	}
 
-	// Read back BOTH raw rows to prove ClickHouse actually persisted two
-	// DISTINCT computed_at values -- the exact storage-boundary property
-	// codex round 3 flagged as unverified.
 	rows, err := conn.Query(ctx, `
-SELECT commits_count, computed_at FROM team_metrics_daily
+SELECT commits_count FROM team_metrics_daily
 WHERE org_id = ? AND team_id = 'shared-team'
-ORDER BY computed_at`, orgID)
+ORDER BY commits_count`, orgID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	type persistedRow struct {
-		commitsCount uint32
-		computedAt   time.Time
-	}
-	var persisted []persistedRow
+	var commitCounts []uint32
 	for rows.Next() {
-		var row persistedRow
-		if err := rows.Scan(&row.commitsCount, &row.computedAt); err != nil {
+		var count uint32
+		if err := rows.Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		persisted = append(persisted, row)
+		commitCounts = append(commitCounts, count)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(persisted) != 2 {
-		t.Fatalf("persisted rows=%d, want 2: %#v", len(persisted), persisted)
+	if len(commitCounts) != 2 {
+		t.Fatalf("persisted rows=%d, want 2: %#v", len(commitCounts), commitCounts)
 	}
-	if persisted[0].computedAt.Equal(persisted[1].computedAt) {
-		t.Fatalf(
-			"both rows persisted with the IDENTICAL computed_at %v -- ClickHouse's "+
-				"second-precision DateTime column truncated the per-repo timestamps "+
-				"to the same value, reopening the argMax tie codex round 3 flagged",
-			persisted[0].computedAt,
-		)
-	}
-	if !persisted[1].computedAt.After(persisted[0].computedAt) {
-		t.Fatalf("expected computed_at to be strictly increasing by repo order, got %v then %v",
-			persisted[0].computedAt, persisted[1].computedAt)
-	}
-
-	// Now the real consumer-facing query: argMax(commits_count, computed_at)
-	// per (org_id, team_id, day), the SAME dedup pattern
-	// cognitive_load.py/clickhouse_dedup.py use. It must deterministically
-	// resolve to repo-b's row (the later, index-1 timestamp) -- the
-	// production analogue of "whichever repo was processed last wins",
-	// matching Python's own real per-repo_id call cadence.
-	dedupedRows, err := conn.Query(ctx, `
-SELECT argMax(commits_count, computed_at) AS commits_count
-FROM team_metrics_daily
-WHERE org_id = ? AND team_id = 'shared-team'
-GROUP BY org_id, team_id, day`, orgID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dedupedRows.Close()
-	if !dedupedRows.Next() {
-		t.Fatal("expected one deduped row, got none")
-	}
-	var dedupedCommitsCount uint32
-	if err := dedupedRows.Scan(&dedupedCommitsCount); err != nil {
-		t.Fatal(err)
-	}
-	if dedupedCommitsCount != 3 {
-		t.Fatalf("argMax-deduped commits_count=%d, want 3 (repo-b's count, the later-timestamped row) -- "+
-			"got %d instead, which means the tie-break did not resolve deterministically",
-			dedupedCommitsCount, dedupedCommitsCount)
+	// repo-b's row (3 commits) and repo-a's row (5 commits), never a single
+	// aggregated 8 -- the round-1 regression this test guards against.
+	if commitCounts[0] != 3 || commitCounts[1] != 5 {
+		t.Fatalf("commits_count values=%v, want [3, 5] (repo-b's and repo-a's counts kept separate, never summed)", commitCounts)
 	}
 }

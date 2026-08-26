@@ -41,7 +41,7 @@ import (
 //     picks a row via argMax(<col>, computed_at), so every repo's rows
 //     sharing one partition-wide timestamp made that tie-break
 //     implementation-defined for any team spanning more than one repo.
-//     Distinct, monotonically increasing timestamps per repo group restore
+//     Distinct, real (never fabricated) timestamps per repo group restore
 //     the same "whichever repo was processed last wins" determinism
 //     Python's real per-repo_id call cadence already has.
 //  3. TEAM BUCKETS RESET PER REPO, NOT PER PARTITION (codex round-1 finding,
@@ -50,6 +50,21 @@ import (
 //     runs numerical.ComputeTeamWellbeing once per repo in the partition and
 //     concatenates the results, rather than aggregating every repo's commits
 //     into one call.
+//  4. A TEAM SPANNING MULTIPLE REPOS ONLY EVER SURFACES ONE REPO'S SLICE
+//     (pre-existing in Python, not something this port fixes -- CHAOS-4276
+//     codex round-3, chris/team-lead's ruling): team_metrics_daily has NO
+//     repo_id column and every known reader dedups purely on
+//     (org_id, team_id, day) (cognitive_load.py, native_team_workload.py,
+//     metrics/scoring/wellbeing.py all GROUP BY day, team_id). Both this
+//     executor and job_daily.py's write_team_metrics write one row PER
+//     REPO for a multi-repo team, so whichever repo's row has the latest
+//     computed_at is the only one a reader ever sees -- the other repos'
+//     contributions to that team's day are silently invisible, in BOTH
+//     languages, today. Do not "fix" this by fabricating timestamps (see
+//     ComputeFamily) or by changing only the Go side: it needs a real
+//     writer/reader contract change (sum across repos, or add repo_id to
+//     the key) applied to both implementations. Tracked separately; see
+//     this PR's RISK-NOTES.
 type TeamWellbeingExecutor struct {
 	conn               driver.Conn
 	businessTZ         *time.Location
@@ -151,20 +166,20 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		executor.businessTZ, executor.businessHoursStart, executor.businessHoursEnd,
 	)
 
-	// One timestamp per repo group, strictly increasing by a full second per
-	// group in repoIDs' own deterministic order -- see
-	// WriteTeamMetricsDailyPerRepo's doc comment (CHAOS-4276 codex round-2
-	// finding 1, tightened in round 3: team_metrics_daily.computed_at is
-	// ClickHouse `DateTime`, second precision, not `DateTime64` -- two
-	// wall-clock time.Now() calls captured within the same second, entirely
-	// plausible for a small partition, would truncate to an IDENTICAL
-	// persisted value and reopen the exact argMax tie round 2 was fixing.
-	// One base timestamp plus a full second per group index survives that
-	// truncation regardless of how fast the loop actually runs.
-	base := executor.nowUTC()
+	// One HONEST, real-wall-clock timestamp per repo group, captured in
+	// repoIDs' own deterministic order -- see WriteTeamMetricsDailyPerRepo's
+	// doc comment (CHAOS-4276 codex round-2 finding 1). computed_at must
+	// stay truthful: a codex round-3 pass proposed spacing these artificially
+	// (base + index*1s) to survive team_metrics_daily.computed_at's
+	// second-level storage precision, but chris/team-lead ruled that out --
+	// see this file's package doc comment and this PR's RISK-NOTES for why
+	// a tie here is a symptom of a DIFFERENT, pre-existing defect
+	// (team_metrics_daily has no repo_id in its key at all, so Python has
+	// the identical "last-repo-processed-wins" property already), not
+	// something a fabricated timestamp should paper over.
 	computedAtByRepo := make([]time.Time, len(perRepoMetrics))
 	for index := range perRepoMetrics {
-		computedAtByRepo[index] = base.Add(time.Duration(index) * time.Second)
+		computedAtByRepo[index] = executor.nowUTC()
 	}
 
 	written, err := WriteTeamMetricsDailyPerRepo(ctx, executor.conn, run.OrganizationID, day, perRepoMetrics, computedAtByRepo)

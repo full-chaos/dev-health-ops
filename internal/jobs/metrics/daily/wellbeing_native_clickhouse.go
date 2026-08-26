@@ -304,17 +304,23 @@ type wellbeingBatchConn interface {
 // "whichever repo was processed last wins" is at least a REPRODUCIBLE
 // tie-break.
 //
-// CALLERS MUST NOT PASS TWO GROUPS WHOSE TIMESTAMPS FALL IN THE SAME
-// WALL-CLOCK SECOND (codex round-3 finding): this table's computed_at
+// NOTE (codex round-3, chris/team-lead's ruling): this table's computed_at
 // column is `DateTime('UTC')` -- ClickHouse's second-precision type, not
 // `DateTime64` -- so two Go time.Time values that are merely unequal in
-// memory still collapse to an IDENTICAL persisted value, and thus an
-// identical argMax tie, if their computedAtByRepo entries share a second.
-// wellbeing_native_executor.go's caller satisfies this by spacing every
-// group's timestamp a full second apart (base.Add(index * time.Second)),
-// not by calling nowUTC() fresh per group -- a real ClickHouse round trip
-// (wellbeing_native_executor_timestamp_integration_test.go) proves this
-// survives the truncation and that argMax resolves deterministically.
+// memory can still collapse to an identical persisted value if two groups
+// are computed within the same wall-clock second. Round 3 initially tried
+// to paper over that by spacing timestamps a fabricated full second apart
+// per group index; that was REJECTED -- computed_at must stay truthful,
+// and the real defect a tie exposes is one level deeper: team_metrics_daily
+// has no repo_id column at all, so ANY tie-break (real or fabricated) still
+// only ever surfaces ONE repo's slice of a multi-repo team's day, silently
+// dropping the others -- a property Python's own write_team_metrics already
+// has today (see TeamWellbeingExecutor's package doc comment item 4 in
+// wellbeing_native_executor.go, and this PR's RISK-NOTES). Fixing that is a
+// writer/reader contract change applied
+// to both languages, tracked separately; this function keeps honest,
+// real-wall-clock per-group timestamps, which is at minimum no worse than
+// Python's existing behavior and never fabricates data.
 //
 // perRepoRows and computedAtByRepo must be the same length and share index
 // order; every row in perRepoRows[i] is stamped with computedAtByRepo[i].

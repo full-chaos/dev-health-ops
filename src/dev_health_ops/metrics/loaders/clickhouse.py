@@ -169,8 +169,10 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           changed_files
         FROM git_pull_requests
         WHERE
-          (created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}})
-          OR (merged_at IS NOT NULL AND merged_at >= {{start:DateTime}} AND merged_at < {{end:DateTime}})
+          (
+            (created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}})
+            OR (merged_at IS NOT NULL AND merged_at >= {{start:DateTime}} AND merged_at < {{end:DateTime}})
+          )
           {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
         {org_filter}
         """
@@ -191,6 +193,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         commit_dicts = await _clickhouse_query_dicts(self.client, commit_query, params)
         pr_dicts = await _clickhouse_query_dicts(self.client, pr_query, params)
         review_dicts = await _clickhouse_query_dicts(self.client, review_query, params)
+
+        if self.org_id:
+            await self._record_pr_org_scope_filtered(
+                repo_filter=repo_filter,
+                repo_id=repo_id,
+                repo_name=repo_name,
+                params=params,
+                scoped_row_count=len(pr_dicts),
+            )
 
         commit_rows: list[CommitStatRow] = []
         for r in commit_dicts:
@@ -255,6 +266,61 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 )
 
         return commit_rows, pr_rows, review_rows
+
+    async def _record_pr_org_scope_filtered(
+        self,
+        *,
+        repo_filter: str,
+        repo_id: uuid.UUID | None,
+        repo_name: str | None,
+        params: dict[str, Any],
+        scoped_row_count: int,
+    ) -> None:
+        """Emit ``CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL`` for the PR read.
+
+        Runs a cheap ``count()`` against the SAME time/repo predicate the PR
+        query used, but WITHOUT the org filter, and records the delta
+        against the org-scoped row count already fetched. This is the
+        leak-guard telemetry for CHAOS-4324: before the fix, this delta
+        would always have read 0 -- the unparenthesized ``OR`` let any
+        same-window row match regardless of ``org_id``, so the org-scoped
+        and unscoped counts were identical even though other tenants had
+        matching rows. ``params`` still carries ``org_id`` (needed by the
+        ``repo_name`` branch's nested repo lookup); only the top-level org
+        filter clause is omitted here.
+        """
+        from dev_health_ops.metrics.prometheus import (
+            CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL,
+        )
+
+        pr_repo_filter = (
+            repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""
+        )
+        count_query = f"""
+        SELECT count() AS c
+        FROM git_pull_requests
+        WHERE
+          (
+            (created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}})
+            OR (merged_at IS NOT NULL AND merged_at >= {{start:DateTime}} AND merged_at < {{end:DateTime}})
+          )
+          {pr_repo_filter}
+        """
+        try:
+            rows = await _clickhouse_query_dicts(self.client, count_query, params)
+        except Exception:
+            logger.warning(
+                "load_git_rows: org-scope filter-count query failed; "
+                "skipping CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL",
+                exc_info=True,
+            )
+            return
+        unscoped_total = int(rows[0].get("c") or 0) if rows else 0
+        filtered = max(0, unscoped_total - scoped_row_count)
+        if filtered:
+            CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL.labels(
+                table="git_pull_requests"
+            ).inc(filtered)
 
     async def load_work_items(
         self,

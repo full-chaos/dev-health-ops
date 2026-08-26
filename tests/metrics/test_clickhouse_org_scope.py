@@ -30,14 +30,25 @@ async def test_load_git_rows_includes_org_filter(mock_query_dicts):
 
     await loader.load_git_rows(start, end, repo_id=None)
 
-    # Three queries: commits, PRs, reviews
-    assert mock_query_dicts.call_count == 3
-    for call in mock_query_dicts.call_args_list:
+    # Four queries: commits, PRs, reviews, plus the CHAOS-4324 org-scope
+    # filtered-row telemetry count (deliberately unscoped by org so it can
+    # measure what org scoping excluded -- see
+    # ClickHouseDataLoader._record_pr_org_scope_filtered).
+    assert mock_query_dicts.call_count == 4
+    calls = mock_query_dicts.call_args_list
+    data_calls, filter_count_call = calls[:3], calls[3]
+    for call in data_calls:
         sql = call.args[1]
         params = call.args[2]
         assert "org_id" in params, "org_id must be in query params"
         assert params["org_id"] == "acme-corp"
         assert "org_id" in sql, "SQL must contain org_id filter"
+
+    # The filtered-row count query intentionally omits the org filter (it
+    # measures the delta against the org-scoped PR count) but still carries
+    # org_id in params for the repo_name-branch's nested repo lookup.
+    filter_params = filter_count_call.args[2]
+    assert filter_params["org_id"] == "acme-corp"
 
 
 @pytest.mark.asyncio

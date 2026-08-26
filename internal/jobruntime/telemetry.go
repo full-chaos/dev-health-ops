@@ -102,6 +102,68 @@ type dailyMetricsLeaseLabels struct {
 	Result DailyMetricsLeaseResult
 }
 
+// DailyMetricsRunTrigger identifies which of the two entry points created a
+// daily-metrics run: the nightly all-org fixed schedule, or a post-sync
+// re-drive for one completed sync (CHAOS-4263). The set is closed: those are
+// the only two callers of daily.PostgresStore's Start*RunTx methods.
+type DailyMetricsRunTrigger string
+
+const (
+	DailyMetricsRunTriggerScheduledFanout DailyMetricsRunTrigger = "scheduled_fanout"
+	DailyMetricsRunTriggerPostSync        DailyMetricsRunTrigger = "post_sync"
+)
+
+// DailyMetricsDiscoveryOutcome is the bounded result of resolving live
+// ClickHouse repository identity for one daily-metrics run (CHAOS-4263).
+// NoRepositories must be counted, not just logged: before this, a run that
+// discovered zero repositories terminalized as an ordinary success, and a
+// dashboard reading zero on this series could not tell "no stale orgs today"
+// apart from "the discovery step never runs".
+type DailyMetricsDiscoveryOutcome string
+
+const (
+	DailyMetricsDiscoveryOutcomeMaterialized   DailyMetricsDiscoveryOutcome = "materialized"
+	DailyMetricsDiscoveryOutcomeNoRepositories DailyMetricsDiscoveryOutcome = "no_repositories"
+	// DailyMetricsDiscoveryOutcomeRepositoryCapExceeded records a discovery
+	// that resolved more repositories than the run is allowed to partition
+	// (CHAOS-4263, codex adversarial review round 3) -- a fail-loud outcome,
+	// never a silent truncation to the cap.
+	DailyMetricsDiscoveryOutcomeRepositoryCapExceeded DailyMetricsDiscoveryOutcome = "repository_cap_exceeded"
+)
+
+type dailyMetricsDiscoveryLabels struct {
+	Trigger DailyMetricsRunTrigger
+	Outcome DailyMetricsDiscoveryOutcome
+}
+
+// PostSyncFanoutOutcome is the bounded result of NativePostSyncService.Fanout
+// deciding whether one completed sync's post_sync job re-drove daily metrics
+// (CHAOS-4263, codex adversarial-review round 2). "no_repositories" here
+// names the same "nothing published" outcome as DailyMetricsDiscoveryOutcome
+// for dashboard continuity, even though at THIS layer it means "this sync had
+// no daily-relevant capability" or "no successful sync_run_unit at all" --
+// live ClickHouse repository discovery itself happens later, inside the
+// daily_dispatch job this outcome would have published, never inside Fanout.
+type PostSyncFanoutOutcome string
+
+const (
+	PostSyncFanoutOutcomePublished      PostSyncFanoutOutcome = "published"
+	PostSyncFanoutOutcomeNoRepositories PostSyncFanoutOutcome = "no_repositories"
+	PostSyncFanoutOutcomeError          PostSyncFanoutOutcome = "error"
+)
+
+func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
+	return []PostSyncFanoutOutcome{
+		PostSyncFanoutOutcomePublished, PostSyncFanoutOutcomeNoRepositories, PostSyncFanoutOutcomeError,
+	}
+}
+
+// dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
+// families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
+// four the RCA found stale despite fresh source data. The other 19 families in
+// families.json are out of this ticket.
+var dailyMetricsZeroRowsWithSourceFamilies = []string{"cicd", "deploy", "incident", "testops_risk"}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -228,24 +290,27 @@ type MetricsCollector struct {
 
 	runtimeInfo *RuntimeInfo
 
-	jobsAvailable             map[JobLabels]int64
-	jobOldestAge              map[queueLabels]float64
-	jobsRunning               map[JobLabels]int64
-	executionSaturation       map[queueLabels]float64
-	jobWait                   map[JobLabels]*histogram
-	jobDuration               map[jobResultLabels]*histogram
-	jobAttempts               map[attemptLabels]uint64
-	jobPanics                 map[string]uint64
-	cancellations             map[cancellationLabels]uint64
-	deterministicFailures     map[deterministicFailureLabels]uint64
-	domainMismatch            map[string]uint64
-	syncLeaseExpired          map[syncLeaseResultLabels]uint64
-	reportRunLeaseExpired     map[ReportRunLeaseResult]uint64
-	idempotencyRenewalRetired map[IdempotencyRenewalRetiredReason]uint64
-	dailyMetricsLease         map[dailyMetricsLeaseLabels]uint64
-	workGraphReleaseLost      uint64
-	remainingReleaseLost      uint64
-	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
+	jobsAvailable                        map[JobLabels]int64
+	jobOldestAge                         map[queueLabels]float64
+	jobsRunning                          map[JobLabels]int64
+	executionSaturation                  map[queueLabels]float64
+	jobWait                              map[JobLabels]*histogram
+	jobDuration                          map[jobResultLabels]*histogram
+	jobAttempts                          map[attemptLabels]uint64
+	jobPanics                            map[string]uint64
+	cancellations                        map[cancellationLabels]uint64
+	deterministicFailures                map[deterministicFailureLabels]uint64
+	domainMismatch                       map[string]uint64
+	syncLeaseExpired                     map[syncLeaseResultLabels]uint64
+	reportRunLeaseExpired                map[ReportRunLeaseResult]uint64
+	idempotencyRenewalRetired            map[IdempotencyRenewalRetiredReason]uint64
+	dailyMetricsLease                    map[dailyMetricsLeaseLabels]uint64
+	dailyMetricsDiscovery                map[dailyMetricsDiscoveryLabels]uint64
+	dailyMetricsFamilyZeroRowsWithSource map[string]uint64
+	postSyncFanout                       map[PostSyncFanoutOutcome]uint64
+	workGraphReleaseLost                 uint64
+	remainingReleaseLost                 uint64
+	zeroUnitFinalizations                map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -326,6 +391,9 @@ var _ Observer = (*MetricsCollector)(nil)
 var _ SyncLeaseObserver = (*MetricsCollector)(nil)
 var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
+var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
@@ -342,44 +410,47 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 
 	collector := &MetricsCollector{
-		allowedJobs:                        make(map[JobLabels]struct{}, len(dimensions.Jobs)),
-		allowedQueues:                      make(map[queueLabels]struct{}),
-		allowedKinds:                       make(map[string]struct{}),
-		allowedDomains:                     make(map[string]struct{}, len(dimensions.DomainTypes)),
-		allowedSyncLeases:                  make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
-		allowedStreams:                     make(map[StreamLabels]struct{}, len(dimensions.Streams)),
-		allowedBudgets:                     make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
-		allowedConcurrencyBudgets:          make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
-		jobsAvailable:                      make(map[JobLabels]int64, len(dimensions.Jobs)),
-		jobOldestAge:                       make(map[queueLabels]float64),
-		jobsRunning:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
-		executionSaturation:                make(map[queueLabels]float64),
-		jobWait:                            make(map[JobLabels]*histogram, len(dimensions.Jobs)),
-		jobDuration:                        make(map[jobResultLabels]*histogram),
-		jobAttempts:                        make(map[attemptLabels]uint64),
-		jobPanics:                          make(map[string]uint64),
-		cancellations:                      make(map[cancellationLabels]uint64),
-		deterministicFailures:              make(map[deterministicFailureLabels]uint64),
-		domainMismatch:                     make(map[string]uint64, len(dimensions.DomainTypes)),
-		syncLeaseExpired:                   make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
-		reportRunLeaseExpired:              make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
-		idempotencyRenewalRetired:          make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
-		dailyMetricsLease:                  make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
-		zeroUnitFinalizations:              make(map[zeroUnitFinalizationLabels]uint64),
-		coverageCacheInvalidationsEmitted:  make(map[string]uint64),
-		coverageCacheInvalidationsConsumed: make(map[string]uint64),
-		externalProjectMembershipsSunk:     make(map[string]uint64),
-		externalRecordRefusals:             make(map[externalRefusalLabels]uint64),
-		streamLag:                          make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamPending:                      make(map[StreamLabels]int64, len(dimensions.Streams)),
-		streamOldestPending:                make(map[StreamLabels]float64, len(dimensions.Streams)),
-		budgetWait:                         make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
-		concurrencyBudgetCapacity:          make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetLeased:            make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetWait:              make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
-		concurrencyBudgetEvents:            make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
-		poolSaturation:                     map[string]float64{poolDomain: 0, poolQueueControl: 0},
-		poolAcquire:                        make(map[poolAcquireLabels]*histogram, 8),
+		allowedJobs:                          make(map[JobLabels]struct{}, len(dimensions.Jobs)),
+		allowedQueues:                        make(map[queueLabels]struct{}),
+		allowedKinds:                         make(map[string]struct{}),
+		allowedDomains:                       make(map[string]struct{}, len(dimensions.DomainTypes)),
+		allowedSyncLeases:                    make(map[SyncLeaseLabels]struct{}, len(dimensions.SyncLeases)),
+		allowedStreams:                       make(map[StreamLabels]struct{}, len(dimensions.Streams)),
+		allowedBudgets:                       make(map[BudgetLabels]struct{}, len(dimensions.Budgets)),
+		allowedConcurrencyBudgets:            make(map[ConcurrencyBudgetLabels]struct{}, len(dimensions.ConcurrencyBudgets)),
+		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
+		jobOldestAge:                         make(map[queueLabels]float64),
+		jobsRunning:                          make(map[JobLabels]int64, len(dimensions.Jobs)),
+		executionSaturation:                  make(map[queueLabels]float64),
+		jobWait:                              make(map[JobLabels]*histogram, len(dimensions.Jobs)),
+		jobDuration:                          make(map[jobResultLabels]*histogram),
+		jobAttempts:                          make(map[attemptLabels]uint64),
+		jobPanics:                            make(map[string]uint64),
+		cancellations:                        make(map[cancellationLabels]uint64),
+		deterministicFailures:                make(map[deterministicFailureLabels]uint64),
+		domainMismatch:                       make(map[string]uint64, len(dimensions.DomainTypes)),
+		syncLeaseExpired:                     make(map[syncLeaseResultLabels]uint64, len(dimensions.SyncLeases)*len(syncLeaseResults())),
+		reportRunLeaseExpired:                make(map[ReportRunLeaseResult]uint64, len(reportRunLeaseResults())),
+		idempotencyRenewalRetired:            make(map[IdempotencyRenewalRetiredReason]uint64, len(idempotencyRenewalRetiredReasons())),
+		dailyMetricsLease:                    make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
+		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
+		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
+		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
+		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
+		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
+		coverageCacheInvalidationsConsumed:   make(map[string]uint64),
+		externalProjectMembershipsSunk:       make(map[string]uint64),
+		externalRecordRefusals:               make(map[externalRefusalLabels]uint64),
+		streamLag:                            make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamPending:                        make(map[StreamLabels]int64, len(dimensions.Streams)),
+		streamOldestPending:                  make(map[StreamLabels]float64, len(dimensions.Streams)),
+		budgetWait:                           make(map[BudgetLabels]*histogram, len(dimensions.Budgets)),
+		concurrencyBudgetCapacity:            make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetLeased:              make(map[ConcurrencyBudgetLabels]int64, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetWait:                make(map[ConcurrencyBudgetLabels]*histogram, len(dimensions.ConcurrencyBudgets)),
+		concurrencyBudgetEvents:              make(map[concurrencyBudgetResultLabels]uint64, len(dimensions.ConcurrencyBudgets)*2),
+		poolSaturation:                       map[string]float64{poolDomain: 0, poolQueueControl: 0},
+		poolAcquire:                          make(map[poolAcquireLabels]*histogram, 8),
 	}
 	for _, labels := range dimensions.Jobs {
 		if err := validateJobLabels(labels); err != nil {
@@ -434,6 +505,12 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, labels := range dailyMetricsLeaseSeries() {
 		collector.dailyMetricsLease[labels] = 0
+	}
+	for _, labels := range dailyMetricsDiscoverySeries() {
+		collector.dailyMetricsDiscovery[labels] = 0
+	}
+	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
+		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -718,6 +795,52 @@ func (collector *MetricsCollector) ObserveDailyMetricsLease(
 		return errors.New("daily metrics lease dimensions are not registered")
 	}
 	collector.dailyMetricsLease[labels]++
+	return nil
+}
+
+// ObserveDailyMetricsDiscovery records the outcome of resolving live
+// ClickHouse repository identity for one daily-metrics run, whichever of the
+// two triggers created it (CHAOS-4263).
+func (collector *MetricsCollector) ObserveDailyMetricsDiscovery(
+	trigger DailyMetricsRunTrigger,
+	outcome DailyMetricsDiscoveryOutcome,
+) error {
+	labels := dailyMetricsDiscoveryLabels{Trigger: trigger, Outcome: outcome}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if _, ok := collector.dailyMetricsDiscovery[labels]; !ok {
+		return errors.New("daily metrics discovery dimensions are not registered")
+	}
+	collector.dailyMetricsDiscovery[labels]++
+	return nil
+}
+
+// ObserveDailyMetricsFamilyZeroRowsWithSource records that a metrics.daily
+// family's source data existed for a partition's repositories and day, but
+// its output table had zero rows for that scope (CHAOS-4263, chris's ruling
+// 2026-08-25). The metric name intentionally breaks from this file's worker_
+// prefix convention: it is a cross-repo/cross-PR contract with CHAOS-4266
+// (the live-e2e gate), which consumes it by this exact name.
+func (collector *MetricsCollector) ObserveDailyMetricsFamilyZeroRowsWithSource(family string) error {
+	if !slices.Contains(dailyMetricsZeroRowsWithSourceFamilies, family) {
+		return errors.New("daily metrics zero-rows-with-source family is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsFamilyZeroRowsWithSource[family]++
+	return nil
+}
+
+// ObservePostSyncFanout records the outcome of one post_sync job's decision
+// about whether to re-drive daily metrics for its organization (CHAOS-4263,
+// codex adversarial-review round 2).
+func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutOutcome) error {
+	if !slices.Contains(postSyncFanoutOutcomes(), outcome) {
+		return errors.New("post-sync fanout outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.postSyncFanout[outcome]++
 	return nil
 }
 
@@ -1290,6 +1413,9 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeReportRunLeases(&output)
 	collector.writeIdempotencyRenewalRetired(&output)
 	collector.writeDailyMetricsLeases(&output)
+	collector.writeDailyMetricsDiscovery(&output)
+	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
+	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeZeroUnitFinalizations(&output)
@@ -1557,6 +1683,31 @@ func (collector *MetricsCollector) writeDailyMetricsLeases(output *strings.Build
 		writeUintSample(output, "worker_daily_metrics_lease_total", []metricLabel{
 			{"stage", string(labels.Stage)}, {"result", string(labels.Result)},
 		}, collector.dailyMetricsLease[labels])
+	}
+}
+
+func (collector *MetricsCollector) writeDailyMetricsDiscovery(output *strings.Builder) {
+	writeMetadata(output, "worker_daily_metrics_discovery_total", "Repository-discovery outcomes for daily-metrics runs, by trigger and bounded outcome (CHAOS-4263).", "counter")
+	for _, labels := range dailyMetricsDiscoverySeries() {
+		writeUintSample(output, "worker_daily_metrics_discovery_total", []metricLabel{
+			{"trigger", string(labels.Trigger)}, {"outcome", string(labels.Outcome)},
+		}, collector.dailyMetricsDiscovery[labels])
+	}
+}
+
+func (collector *MetricsCollector) writeDailyMetricsFamilyZeroRowsWithSource(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_families_zero_rows_with_source_total", "Metrics.daily families whose source data existed for a partition's repos+day but whose output table had zero rows for that scope (CHAOS-4263).", "counter")
+	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
+		writeUintSample(output, "dev_health_daily_metrics_families_zero_rows_with_source_total",
+			[]metricLabel{{"family", family}}, collector.dailyMetricsFamilyZeroRowsWithSource[family])
+	}
+}
+
+func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) {
+	writeMetadata(output, "dev_health_post_sync_fanout_total", "Post-sync fanout outcomes: whether a completed sync's post_sync job published a daily-metrics re-drive (CHAOS-4263).", "counter")
+	for _, outcome := range postSyncFanoutOutcomes() {
+		writeUintSample(output, "dev_health_post_sync_fanout_total",
+			[]metricLabel{{"outcome", string(outcome)}}, collector.postSyncFanout[outcome])
 	}
 }
 
@@ -1835,6 +1986,24 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 			DailyMetricsLeaseResultReclaimed, DailyMetricsLeaseResultReleaseLost, DailyMetricsLeaseResultSnoozed,
 		} {
 			series = append(series, dailyMetricsLeaseLabels{Stage: stage, Result: result})
+		}
+	}
+	return series
+}
+
+// dailyMetricsDiscoverySeries is the closed cross product of triggers and
+// outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
+// non-empty every time" from "discovery never runs for this trigger".
+func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
+	series := make([]dailyMetricsDiscoveryLabels, 0, 6)
+	for _, trigger := range []DailyMetricsRunTrigger{
+		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
+	} {
+		for _, outcome := range []DailyMetricsDiscoveryOutcome{
+			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,
+			DailyMetricsDiscoveryOutcomeRepositoryCapExceeded,
+		} {
+			series = append(series, dailyMetricsDiscoveryLabels{Trigger: trigger, Outcome: outcome})
 		}
 	}
 	return series

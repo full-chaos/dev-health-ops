@@ -25,7 +25,7 @@ func NewClickHouseRepositoryDiscoverer(conn repositoryRows) (*ClickHouseReposito
 	return &ClickHouseRepositoryDiscoverer{conn: conn}, nil
 }
 
-func (discoverer *ClickHouseRepositoryDiscoverer) RepositoryIDs(ctx context.Context, organizationID string) ([]string, error) {
+func (discoverer *ClickHouseRepositoryDiscoverer) RepositoryIDs(ctx context.Context, organizationID string) ([]RepositoryID, error) {
 	if discoverer == nil || discoverer.conn == nil || !validUUID(organizationID) {
 		return nil, ErrInvalidState
 	}
@@ -42,13 +42,13 @@ ORDER BY id`, organizationID)
 		return nil, ErrUnavailable
 	}
 	defer rows.Close()
-	identifiers := make([]string, 0, 64)
+	identifiers := make([]RepositoryID, 0, 64)
 	for rows.Next() {
 		var repositoryID uuid.UUID
 		if err := rows.Scan(&repositoryID); err != nil {
 			return nil, ErrUnavailable
 		}
-		identifiers = append(identifiers, repositoryID.String())
+		identifiers = append(identifiers, RepositoryID(repositoryID.String()))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, ErrUnavailable
@@ -57,3 +57,13 @@ ORDER BY id`, organizationID)
 }
 
 var _ RepositoryDiscoverer = (*ClickHouseRepositoryDiscoverer)(nil)
+
+// repositoryIDStrings converts to the plain []string clickhouse-go's
+// Array(String) named-parameter binding is verified against.
+func repositoryIDStrings(ids []RepositoryID) []string {
+	result := make([]string, len(ids))
+	for index, id := range ids {
+		result[index] = string(id)
+	}
+	return result
+}

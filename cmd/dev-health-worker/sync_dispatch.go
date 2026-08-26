@@ -36,22 +36,75 @@ func (writer dailyPostSyncWriter) StartRunTx(
 	tx pgx.Tx,
 	plan syncdispatchruntime.PostSyncPlan,
 	prerequisiteCompletionKey string,
-) (string, error) {
+) (string, string, error) {
+	// RepositoryIDs is intentionally omitted: this run's repository set is
+	// resolved later, from live ClickHouse repos.id, via the same
+	// daily.RepositoryDiscoverer the scheduled fixed-schedule fan-out uses
+	// (CHAOS-4263). sync_run_units.source_id is a Postgres integration_sources
+	// id and was never in ClickHouse's id space.
 	run, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
 		OrganizationID:            plan.OrganizationID,
 		TargetDay:                 plan.TargetDay,
 		Generation:                "post-sync:" + plan.SyncRunID,
-		RepositoryIDs:             plan.RepositoryIDs,
 		PrerequisiteCompletionKey: prerequisiteCompletionKey,
 	}, writer.publisher)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
 	if err != nil {
-		return "", syncdispatchruntime.ErrPostSyncUnavailable
+		return "", "", syncdispatchruntime.ErrPostSyncUnavailable
 	}
-	return completionKey, nil
+	// Re-drive the stale window behind this sync's target day (CHAOS-4263):
+	// before this, post-sync only ever re-triggered day D, so a day's
+	// cicd/deploy/incident families could be computed once by an earlier
+	// git/work-item-triggered run and then never recomputed once fresh
+	// CI/deploy/incident data landed for it. These catch-up dispatches are
+	// independent of the day-D chain above: they neither wait on
+	// prerequisiteCompletionKey nor gate anything downstream of it.
+	for _, day := range postSyncDailyBackfillDays(plan) {
+		if _, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+			OrganizationID: plan.OrganizationID,
+			TargetDay:      day,
+			Generation:     "post-sync:" + plan.SyncRunID,
+		}, writer.publisher); err != nil {
+			return "", "", err
+		}
+	}
+	return run.ID, completionKey, nil
+}
+
+// maxPostSyncDailyBackfillDays bounds how many extra days behind a sync's
+// target day the post-sync daily dispatch will re-drive (CHAOS-4263). Each
+// extra day is a whole separate daily_metrics_runs pipeline (dispatch,
+// per-repository partitions, finalize, and a job_daily.py execution per
+// family), unlike the dora family's BackfillDays, which one job execution
+// consumes as a single bounded query -- so this cap is deliberately smaller
+// than dora's 90 (postSyncRemainingScope) to avoid a single sync's post-sync
+// fanout bursting dozens of concurrent day-pipelines. 14 days comfortably
+// covers the staleness windows observed in the CHAOS-4263 incident (up to 18
+// days for deploy_metrics_daily); a gap wider than that is a historical
+// backfill, which is a deliberate one-off operation, not a re-drive.
+const maxPostSyncDailyBackfillDays = 14
+
+// postSyncDailyBackfillDays returns the additional days behind plan.TargetDay
+// that this sync's window covers, bounded by maxPostSyncDailyBackfillDays
+// (CHAOS-4263). Day D itself is dispatched separately, unconditionally, by
+// the caller; this only ever returns the days strictly before it.
+func postSyncDailyBackfillDays(plan syncdispatchruntime.PostSyncPlan) []time.Time {
+	extraDays := plan.BackfillDays - 1
+	if extraDays > maxPostSyncDailyBackfillDays {
+		extraDays = maxPostSyncDailyBackfillDays
+	}
+	if extraDays <= 0 {
+		return nil
+	}
+	targetDay := plan.TargetDay.UTC()
+	days := make([]time.Time, 0, extraDays)
+	for offset := 1; offset <= extraDays; offset++ {
+		days = append(days, targetDay.AddDate(0, 0, -offset))
+	}
+	return days
 }
 
 type remainingPostSyncWriter struct {
@@ -348,6 +401,14 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	// The fanout-outcome counter reports directly, the same way the daily
+	// discovery/zero-rows observers do: generic runtime middleware has no way
+	// to know whether Fanout published a daily-metrics re-drive for this
+	// sync's organization or found nothing daily-relevant -- only Fanout
+	// itself knows (CHAOS-4263, codex adversarial-review round 2).
+	if fanoutObserver, ok := observer.(jobruntime.PostSyncFanoutObserver); ok {
+		postSync.SetFanoutObserver(fanoutObserver)
 	}
 	// The zero-unit finalization counter reports directly, the same way the
 	// work-graph store reports a release-lost lease directly (cmd/dev-health-worker/workgraph.go):

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,7 +20,6 @@ type PostSyncPlan struct {
 	SyncRunID      string
 	TargetDay      time.Time
 	BackfillDays   int
-	RepositoryIDs  []string
 	From           *time.Time
 	To             *time.Time
 	Daily          bool
@@ -32,7 +31,11 @@ type PostSyncPlan struct {
 }
 
 type DailyPostSyncWriter interface {
-	StartRunTx(context.Context, pgx.Tx, PostSyncPlan, string) (string, error)
+	// StartRunTx starts (or resumes) this sync's daily-metrics run. It returns
+	// the run's dispatch id (daily_metrics_runs.id -- CHAOS-4263 fanout
+	// telemetry, codex adversarial-review round 2) alongside the ordered-
+	// completion key the rest of Fanout's chain passes forward.
+	StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, prerequisiteCompletionKey string) (dispatchID string, completionKey string, err error)
 }
 
 type RemainingPostSyncWriter interface {
@@ -48,13 +51,24 @@ type TeamAutoimportPostSyncWriter interface {
 }
 
 type NativePostSyncService struct {
-	pool       *pgxpool.Pool
-	daily      DailyPostSyncWriter
-	remaining  RemainingPostSyncWriter
-	workGraph  WorkGraphInvestmentPostSyncWriter
-	teamImport TeamAutoimportPostSyncWriter
-	logger     *slog.Logger
-	now        func() time.Time
+	pool           *pgxpool.Pool
+	daily          DailyPostSyncWriter
+	remaining      RemainingPostSyncWriter
+	workGraph      WorkGraphInvestmentPostSyncWriter
+	teamImport     TeamAutoimportPostSyncWriter
+	logger         *slog.Logger
+	fanoutObserver jobruntime.PostSyncFanoutObserver
+	now            func() time.Time
+}
+
+// SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
+// (codex adversarial-review round 2). A nil observer (the default) means
+// Fanout still logs the outcome, it just has nothing to count.
+func (service *NativePostSyncService) SetFanoutObserver(observer jobruntime.PostSyncFanoutObserver) {
+	if service == nil {
+		return
+	}
+	service.fanoutObserver = observer
 }
 
 // NewNativePostSyncService constructs the fanout. logger receives the
@@ -82,7 +96,7 @@ func NewNativePostSyncService(
 
 // Fanout validates the exact River transport generation, reconstructs scope
 // from authoritative SyncRun state, and stages every child in one transaction.
-func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) error {
+func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) (err error) {
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrPostSyncUnavailable
 	}
@@ -99,13 +113,60 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if !current {
 		return nil
 	}
+
+	// The fanout-outcome telemetry (CHAOS-4263) is recorded exactly once, by
+	// this single deferred call, and only once its outcome is durably true
+	// (codex adversarial review, round 3): recording "published" as soon as
+	// daily.StartRunTx staged its write -- before WorkGraph, Investment,
+	// membership_backfill, DORA, team-autoimport, or the final Commit had a
+	// chance to fail and roll the whole transaction back -- would let
+	// telemetry claim a publish that never actually landed. observe is only
+	// armed once loadPostSyncPlan has run, so an error before that (an
+	// infrastructure failure with no plan/generation resolved yet, or a
+	// stale/non-current route) is not part of "did this sync's daily fanout
+	// publish" and is deliberately left unobserved by this counter.
+	//
+	// committed, not "err == nil", gates published/no_repositories (round 4
+	// fix): a panic unwinding out of a later writer leaves the named err nil
+	// (a normal return was never reached), but this deferred function still
+	// runs during the unwind -- checking err alone would report a publish
+	// that a concurrent panic-triggered rollback (the OTHER deferred
+	// tx.Rollback, registered earlier and therefore run AFTER this one) was
+	// about to undo. committed is set true in exactly the two places
+	// tx.Commit(ctx) itself returned nil, so a panic always resolves to the
+	// error branch here, regardless of what err holds.
+	var (
+		outcome    jobruntime.PostSyncFanoutOutcome
+		dispatchID string
+		observe    bool
+		committed  bool
+	)
+	defer func() {
+		if !observe {
+			return
+		}
+		if !committed {
+			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
+			return
+		}
+		service.observeFanout(outcome, args, dispatchID)
+	}()
+
 	plan, err := loadPostSyncPlan(ctx, tx, args, service.now().UTC())
 	if err != nil {
+		observe = true
 		return err
 	}
 	if plan == nil {
-		return tx.Commit(ctx)
+		observe = true
+		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		if err = tx.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
 	}
+	observe = true
 	var orderedCompletion string
 	if plan.Complexity {
 		orderedCompletion, err = service.remaining.StartRunTx(
@@ -116,12 +177,15 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.Daily {
-		orderedCompletion, err = service.daily.StartRunTx(
+		dispatchID, orderedCompletion, err = service.daily.StartRunTx(
 			ctx, tx, *plan, orderedCompletion,
 		)
 		if err != nil {
 			return err
 		}
+		outcome = jobruntime.PostSyncFanoutOutcomePublished
+	} else {
+		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
 	}
 	if plan.WorkGraph {
 		orderedCompletion, err = service.workGraph.StartRequestTx(
@@ -146,17 +210,50 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.DORA {
-		if _, err := service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
+		if _, err = service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
 			return err
 		}
 	}
-	if err := service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
+	if err = service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrPostSyncUnavailable
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		err = ErrPostSyncUnavailable
+		return err
 	}
+	committed = true
 	return nil
+}
+
+// observeFanout logs the CHAOS-4263 fanout-outcome line (codex adversarial-
+// review round 2) and, if a counter is wired, records it. dispatchID is only
+// meaningful (non-empty) for PostSyncFanoutOutcomePublished; the repository
+// count that outcome would ideally carry is not knowable here by design --
+// live ClickHouse repository discovery is deliberately deferred to the
+// daily_dispatch job this call published, never run inside the scheduler's
+// own Postgres transaction (see daily.RepositoryDiscoverer's doc comment) --
+// so it is logged as 0 to make that explicit rather than imply a count this
+// layer cannot see.
+func (service *NativePostSyncService) observeFanout(
+	outcome jobruntime.PostSyncFanoutOutcome, args PostSyncArgs, dispatchID string,
+) {
+	if service == nil {
+		return
+	}
+	logger := service.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("post_sync_fanout",
+		"outcome", string(outcome),
+		"org_id", args.OrganizationID(),
+		"sync_run_id", args.SyncRunID(),
+		"dispatch_id", dispatchID,
+		"repo_count", 0,
+	)
+	if service.fanoutObserver != nil {
+		_ = service.fanoutObserver.ObservePostSyncFanout(outcome)
+	}
 }
 
 // publishTeamAutoimport stages the team-autoimport handoff without letting a
@@ -304,7 +401,7 @@ FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID
 	}
 
 	rows, err := tx.Query(ctx, `
-SELECT provider, dataset_key, source_id::text, since_at, before_at
+SELECT provider, dataset_key, since_at, before_at
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status = 'success'
 ORDER BY id`, args.SyncRunID())
@@ -314,7 +411,6 @@ ORDER BY id`, args.SyncRunID())
 	defer rows.Close()
 	var (
 		targets        = map[string]struct{}{}
-		repositories   = map[string]struct{}{}
 		from           *time.Time
 		to             *time.Time
 		unboundedFrom  bool
@@ -322,9 +418,9 @@ ORDER BY id`, args.SyncRunID())
 		successfulUnit bool
 	)
 	for rows.Next() {
-		var provider, dataset, sourceID string
+		var provider, dataset string
 		var since, before *time.Time
-		if err := rows.Scan(&provider, &dataset, &sourceID, &since, &before); err != nil {
+		if err := rows.Scan(&provider, &dataset, &since, &before); err != nil {
 			return nil, ErrPostSyncUnavailable
 		}
 		capability, ok := providersync.Capability(provider, dataset)
@@ -332,15 +428,8 @@ ORDER BY id`, args.SyncRunID())
 			continue
 		}
 		successfulUnit = true
-		unitGit := false
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
-			if target == "git" || target == "prs" {
-				unitGit = true
-			}
-		}
-		if unitGit {
-			repositories[sourceID] = struct{}{}
 		}
 		if since == nil {
 			unboundedFrom = true
@@ -402,14 +491,9 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	}
 	currentSingleDay := (from == nil && to == nil) ||
 		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
-	repositoryIDs := make([]string, 0, len(repositories))
-	for id := range repositories {
-		repositoryIDs = append(repositoryIDs, id)
-	}
-	sort.Strings(repositoryIDs)
 	return &PostSyncPlan{
 		OrganizationID: orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
-		BackfillDays: backfillDays, RepositoryIDs: repositoryIDs, From: from, To: to,
+		BackfillDays: backfillDays, From: from, To: to,
 		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,
 		TeamAutoimport: autoImport,

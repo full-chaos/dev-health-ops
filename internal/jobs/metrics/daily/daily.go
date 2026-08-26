@@ -16,6 +16,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -27,7 +28,34 @@ var (
 	ErrLeaseLost    = errors.New("daily metrics execution lease was lost")
 	ErrLeaseActive  = errors.New("daily metrics execution lease is still active")
 	ErrUnavailable  = errors.New("daily metrics dependency is unavailable")
+	// ErrZeroRowsWithSourceData means a family's upstream source data existed
+	// for a partition's repos+day but its output table had zero rows for that
+	// scope (CHAOS-4263). Distinct from a genuinely empty day: the partition
+	// must not report success. This is classified Permanent, not Retryable
+	// (codex adversarial review, round 2): the compatibility bridge's
+	// execution ledger (worker_metrics.py:_reserve_execution) marks this
+	// exact (run, partition, family, generation, scope_digest) identity
+	// "succeeded" the moment ComputePartition returns -- any later attempt at
+	// the SAME identity is answered "skipped" without recomputing anything, so
+	// a bare retry can never resolve this on its own. Marking it Retryable
+	// would silently burn the job's attempt budget re-checking the same
+	// unchanged output before failing anyway, with no recomputation ever
+	// happening in between. Permanent fails loud and immediately instead,
+	// which is what the RCA actually requires; real recomputation needs a new
+	// execution identity (a ledger repair or a fresh run/partition), which is
+	// a separate, larger change than this ticket's scope.
+	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
 )
+
+// ErrRepositoryCapExceeded means live ClickHouse repository discovery
+// (MaterializeScheduledFanout) resolved more repositories than
+// maxDailyMetricsRepositoriesPerRun for one run (CHAOS-4263, codex
+// adversarial review round 3). It wraps ErrInvalidState so existing
+// classification call sites (errors.Is(err, ErrInvalidState) -> Permanent)
+// need no changes: retrying cannot reduce the discovered repository count,
+// so this must fail loud and immediately, exactly like any other invalid
+// durable state, never silently truncate to the cap.
+var ErrRepositoryCapExceeded = fmt.Errorf("%w: repository count exceeds cap", ErrInvalidState)
 
 // LeaseActiveError reports that the claim target is held by a lease that has
 // not expired yet, and carries how long is left on it.
@@ -78,6 +106,14 @@ func retryCompatibilityError(err error) error {
 	}
 }
 
+// RepositoryID is a ClickHouse repos.id -- the identity space
+// daily.RepositoryDiscoverer resolves against (CHAOS-4263, chris's ruling
+// 2026-08-25). It is a distinct type from any Postgres integration_sources.id
+// (sync_run_units.source_id) so the compiler rejects passing one for the
+// other: that exact confusion -- embedding an integration_sources.id where a
+// repos.id was expected -- was this ticket's root cause.
+type RepositoryID string
+
 type Run struct {
 	ID             string
 	OrganizationID string
@@ -96,7 +132,7 @@ type StartRunRequest struct {
 	OrganizationID            string
 	TargetDay                 time.Time
 	Generation                string
-	RepositoryIDs             []string
+	RepositoryIDs             []RepositoryID
 	PrerequisiteCompletionKey string
 }
 
@@ -135,7 +171,7 @@ type Store interface {
 	LoadRun(context.Context, string) (Run, error)
 	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
-	MaterializeScheduledFanout(context.Context, Run, []string) (bool, error)
+	MaterializeScheduledFanout(context.Context, Run, []RepositoryID) (bool, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
@@ -150,7 +186,7 @@ type Store interface {
 // organization. It is deliberately called only by the heavy worker after the
 // scheduler transaction has committed the daily run and dispatch handoff.
 type RepositoryDiscoverer interface {
-	RepositoryIDs(context.Context, string) ([]string, error)
+	RepositoryIDs(context.Context, string) ([]RepositoryID, error)
 }
 
 // Publisher persists a child handoff. Its production implementation must use
@@ -233,9 +269,11 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 }
 
 type PartitionHandler struct {
-	store         Store
-	publisher     Publisher
-	compatibility CompatibilityExecutor
+	store            Store
+	publisher        Publisher
+	compatibility    CompatibilityExecutor
+	sourceChecker    SourceDataChecker
+	zeroRowsObserver jobruntime.DailyMetricsZeroRowsObserver
 }
 
 func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
@@ -243,6 +281,26 @@ func NewPartitionHandler(store Store, publisher Publisher, compatibility Compati
 		return nil, ErrUnavailable
 	}
 	return &PartitionHandler{store: store, publisher: publisher, compatibility: compatibility}, nil
+}
+
+// SetSourceDataChecker wires the optional zero-rows-with-source-data check
+// (CHAOS-4263). A nil checker (the default) is a no-op, leaving the
+// partition contract exactly as it was before this capability existed.
+func (handler *PartitionHandler) SetSourceDataChecker(checker SourceDataChecker) {
+	if handler == nil {
+		return
+	}
+	handler.sourceChecker = checker
+}
+
+// SetZeroRowsObserver wires the optional telemetry observer for the same
+// check. Never gates behavior on its own: a checker with no observer still
+// fails the partition, it just fails silently on the metric.
+func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMetricsZeroRowsObserver) {
+	if handler == nil {
+		return
+	}
+	handler.zeroRowsObserver = observer
 }
 
 func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) error {
@@ -284,6 +342,25 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	); err != nil {
 		releasePartition(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
+	}
+	if handler.sourceChecker != nil {
+		families, checkErr := handler.sourceChecker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
+		if checkErr != nil {
+			releasePartition(handler.store, ctx, *claim)
+			if errors.Is(checkErr, ErrInvalidState) {
+				return jobruntime.Permanent(checkErr)
+			}
+			return jobruntime.Retryable(checkErr)
+		}
+		if len(families) > 0 {
+			if handler.zeroRowsObserver != nil {
+				for _, family := range families {
+					_ = handler.zeroRowsObserver.ObserveDailyMetricsFamilyZeroRowsWithSource(family)
+				}
+			}
+			releasePartition(handler.store, ctx, *claim)
+			return jobruntime.Permanent(ErrZeroRowsWithSourceData)
+		}
 	}
 	if err := handler.store.CompletePartition(ctx, *claim, handler.publisher); err != nil {
 		// The one post-claim exit that used to return without releasing. If the

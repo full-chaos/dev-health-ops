@@ -288,11 +288,14 @@ async def test_cognitive_load_team_id_reflected_in_result() -> None:
 
 @pytest.mark.asyncio
 async def test_cognitive_load_repo_id_filters_user_query_only() -> None:
-    """repo_id is embedded in the user-metrics query only.
+    """The GraphQL ``repoId`` filter narrows the user-metrics query only.
 
-    ``team_metrics_daily`` has no ``repo_id`` column, so the team-metrics
-    query must remain unfiltered by repo even when ``repo_id`` is supplied —
-    regression test for CHAOS-2386 (the resolver previously had no repo_id
+    ``team_metrics_daily`` gained a ``repo_id`` column (CHAOS-4329) that the
+    team-metrics query now groups/sums by internally, but
+    ``_fetch_team_metrics`` still does not accept a ``repoId`` FILTER — it
+    always aggregates across every repo a team owns, unlike the user-metrics
+    query below, which narrows to one repo when ``repoId`` is supplied.
+    Regression test for CHAOS-2386 (the resolver previously had no repo_id
     field/predicate at all, making the UI repo control a no-op). The
     predicate resolves against an org-scoped subquery over ``repos`` (by
     UUID or slug) rather than comparing the UUID column directly against
@@ -327,7 +330,11 @@ async def test_cognitive_load_repo_id_filters_user_query_only() -> None:
     assert "org_id = {org_id:String}" in first_query
     assert "repo = {repo_id:String}" in first_query
     assert "toString(id) = {repo_id:String}" in first_query
-    assert "repo_id" not in second_query
+    # The team query groups/sums by repo_id (CHAOS-4329) but never takes the
+    # GraphQL repoId as a FILTER -- the {repo_id:String} bind parameter (the
+    # thing the user-metrics query above is filtered by) must not appear.
+    assert "{repo_id:String}" not in second_query
+    assert "repos" not in second_query
 
 
 @pytest.mark.asyncio
@@ -488,16 +495,21 @@ async def test_cognitive_load_user_query_dedups_via_argmax_computed_at() -> None
 @pytest.mark.asyncio
 async def test_cognitive_load_team_query_dedups_via_argmax_computed_at() -> None:
     """The team_metrics query must collapse to the latest row per
-    (day, team_id) via argMax(<col>, computed_at) before AVGing."""
+    (day, team_id, repo_id) via argMax(<col>, computed_at) (CHAOS-4329: adds
+    repo_id to the dedup key), SUM the additive counts across a team's
+    repos, recompute the ratio from those sums, then AVG across teams."""
     ctx = _ctx()
     _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
 
     await resolve_cognitive_load(ctx, _input())
 
     team_query: str = _squash_ws(ctx.client.query.call_args_list[1].args[0])
-    assert "argMax(after_hours_commit_ratio, computed_at)" in team_query
-    assert "argMax(weekend_commit_ratio, computed_at)" in team_query
+    assert "argMax(commits_count, computed_at)" in team_query
+    assert "argMax(after_hours_commits_count, computed_at)" in team_query
+    assert "argMax(weekend_commits_count, computed_at)" in team_query
+    assert "GROUP BY day, team_id, repo_id" in team_query
     assert "GROUP BY day, team_id" in team_query
+    assert "total_after_hours_commits / total_commits" in team_query
     assert "AVG(after_hours_commit_ratio)" in team_query
 
 

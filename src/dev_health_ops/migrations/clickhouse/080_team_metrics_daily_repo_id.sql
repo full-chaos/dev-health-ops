@@ -1,0 +1,61 @@
+-- CHAOS-4329: team_metrics_daily loses every repo but one -- rows were keyed
+-- only on (org_id, team_id, day), so a team owning N repos kept only the
+-- last-written repo's commit/after-hours/weekend slice -- every reader's
+-- argMax(<col>, computed_at) GROUP BY day, team_id picked one row and the
+-- other N-1 repos' contributions were silently invisible (Python
+-- worker_metrics.py/job_daily.py and Go computeWellbeingPerRepo both write
+-- once per repo into the same key -- pre-existing in Python, mirrored not
+-- fixed by the Go native port PR #1922).
+--
+-- Fix: add repo_id so a writer can key one row PER (org, team, repo, day).
+--
+-- LEGACY ROW CONTRACT: every row written before this migration ships gets
+-- repo_id='' (the DEFAULT below applies to existing rows exactly like the
+-- 024_add_org_id.sql org_id backfill). '' is a real, singular dedup bucket --
+-- NOT a wildcard, NOT "all repos" merged into one number -- it is simply the
+-- one physical row a legacy day's argMax(computed_at) already picked before
+-- this migration existed. Readers keying on (team_id, repo_id, day) collapse
+-- every legacy row for a given (team_id, day) into that same one bucket via
+-- argMax, so historical numbers are UNCHANGED by this migration -- no
+-- double-count, no retroactive fix. A backfill (tracked separately, planner
+-- path per this ticket's follow-on) is required to give historical days real
+-- per-repo rows -- until then a legacy day surfaces the same single-repo slice
+-- it always did.
+--
+-- New rows (written by the Python/Go writers updated in this same change)
+-- always carry a real repo_id. Readers therefore: argMax per
+-- (team_id, repo_id, day) first (one row per repo-or-legacy-bucket), THEN
+-- SUM the additive counts (commits_count, after_hours_commits_count,
+-- weekend_commits_count) across repos into the team-day total, and
+-- RECOMPUTE the ratio from the summed counts -- a ratio is not additive
+-- across rows (append-only-daily-tables contract), so it is never averaged
+-- directly across repos.
+--
+-- Not part of the ORDER BY / sorting key: team_metrics_daily is a plain
+-- MergeTree (append-only, not ReplacingMergeTree), so adding repo_id to the
+-- key would require a table rebuild (the 027_add_org_id_to_sorting_keys.py
+-- pattern) for a query-performance win only -- out of scope for this fix,
+-- which needs repo_id readable, not sorted-on. Filters below still hit the
+-- (team_id, day) prefix of the existing ORDER BY (team_id, day) first.
+ALTER TABLE team_metrics_daily ADD COLUMN IF NOT EXISTS repo_id String DEFAULT '';
+
+-- CHAOS-4332 (folded in -- same table, same migration, chris/team-lead's
+-- explicit instruction rather than a second migration): computed_at was
+-- `DateTime('UTC')`, whole-second precision. A re-drive of the SAME
+-- (org_id, team_id, repo_id, day) key twice within one wall-clock second --
+-- an ordinary post-sync recompute shape, not a rare edge case -- stored the
+-- IDENTICAL computed_at for both rows, so every reader's
+-- argMax(<col>, computed_at) tie-break over two physically-equal
+-- timestamps became implementation-defined: ClickHouse documents no
+-- guarantee about which of several rows tied on the max value it returns.
+-- Promoting to `DateTime64(6, 'UTC')` keeps two real, distinct wall-clock
+-- writes distinct in storage, so argMax resolves the TRUE later write
+-- deterministically. Both writers already stamp real microsecond
+-- wall-clock time today (Python's `datetime.now(timezone.utc)` in
+-- job_daily.py, Go's `time.Now().UTC()` in
+-- wellbeing_native_executor.go's nowUTC) -- this migration only stops the
+-- column from discarding the precision they already produce -- no writer
+-- code change, no fabricated stagger. Existing rows keep their (now
+-- zero-padded to .000000) values -- no data loss, no reinterpretation, an
+-- ordinary type-widening mutation.
+ALTER TABLE team_metrics_daily MODIFY COLUMN computed_at DateTime64(6, 'UTC');

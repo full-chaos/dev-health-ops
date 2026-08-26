@@ -14,6 +14,7 @@ from dev_health_ops.utils.datetime import to_utc
 
 class TeamBucket(TypedDict):
     team_name: str
+    repo_id: str
     commits: int
     after_hours: int
     weekend: int
@@ -56,6 +57,19 @@ def compute_team_wellbeing_metrics_daily(
 
     The input is commit_stat_rows; commits are deduplicated by (repo_id, commit_hash)
     because commit_stat_rows are per-file.
+
+    CHAOS-4329: buckets are keyed by (team_id, repo_id), not team_id alone, so
+    a caller whose commit_stat_rows span more than one repo (e.g. a full-org
+    run_daily_metrics_job call with repo_id=None, or a team owning several
+    repos) gets one TeamMetricsDailyRecord PER (team, repo) instead of a
+    single row silently overwriting the others once written -- the defect
+    this function used to have (job_daily.py's per-repo call loop wrote one
+    row per repo into the same (team_id, day) key with no repo_id to
+    distinguish them, so downstream argMax(computed_at) kept only the
+    last-written repo's slice). Every reader now sums the additive counts
+    across repos and recomputes the ratio -- see cognitive_load.py,
+    native_team_workload.py, metrics/scoring/wellbeing.py,
+    recommendations/loader.py.
     """
     tz = ZoneInfo(business_timezone)
     start, end = _utc_day_window(day)
@@ -74,11 +88,12 @@ def compute_team_wellbeing_metrics_daily(
             to_utc(row["committer_when"]),
         )
 
-    # Aggregate by team.
-    by_team: dict[str, TeamBucket] = {}
+    # Aggregate by (team, repo) -- CHAOS-4329, see docstring.
+    by_team_repo: dict[tuple[str, str], TeamBucket] = {}
     for _key, (identity, committed_at) in commits.items():
         if not (start <= committed_at < end):
             continue
+        repo_id = str(_key[0])
         team_id = None
         team_name = None
         if repo_team_resolver is not None:
@@ -89,15 +104,17 @@ def compute_team_wellbeing_metrics_daily(
         if not team_id:
             team_id = unknown_team_id
             team_name = unknown_team_name
-        bucket = by_team.get(team_id)
+        bucket_key = (team_id, repo_id)
+        bucket = by_team_repo.get(bucket_key)
         if bucket is None:
             new_bucket: TeamBucket = {
                 "team_name": team_name or team_id,
+                "repo_id": repo_id,
                 "commits": 0,
                 "after_hours": 0,
                 "weekend": 0,
             }
-            by_team[team_id] = new_bucket
+            by_team_repo[bucket_key] = new_bucket
             bucket = new_bucket
 
         bucket["commits"] = int(bucket["commits"]) + 1
@@ -111,7 +128,9 @@ def compute_team_wellbeing_metrics_daily(
             bucket["after_hours"] = int(bucket["after_hours"]) + 1
 
     records: list[TeamMetricsDailyRecord] = []
-    for team_id, bucket in sorted(by_team.items(), key=lambda kv: kv[0]):
+    for (team_id, _repo_id), bucket in sorted(
+        by_team_repo.items(), key=lambda kv: kv[0]
+    ):
         commits_count = int(bucket["commits"])
         after_hours_count = int(bucket["after_hours"])
         weekend_count = int(bucket["weekend"])
@@ -125,6 +144,7 @@ def compute_team_wellbeing_metrics_daily(
                 day=day,
                 team_id=team_id,
                 team_name=bucket["team_name"] or team_id,
+                repo_id=bucket["repo_id"],
                 commits_count=commits_count,
                 after_hours_commits_count=after_hours_count,
                 weekend_commits_count=weekend_count,

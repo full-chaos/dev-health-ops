@@ -363,6 +363,22 @@ if _PROMETHEUS_AVAILABLE:
     # (CHAOS-3481, producer_version 3 active).
 
     # ---------------------------------------------------------------------------
+    # team_metrics_daily per-repo fan-out (CHAOS-4329)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _prometheus_client_module.Histogram(
+        "dev_health_team_metrics_daily_repo_count",
+        "Distinct repo_id rows written to team_metrics_daily per (team_id, "
+        "day) in one write_team_metrics call. Before repo_id existed on this "
+        "table, a team spanning N repos always wrote N rows into the SAME "
+        "(team_id, day) key and every reader's argMax(computed_at) kept only "
+        "the last-written repo's slice -- the other N-1 were silently "
+        "invisible. This makes the real per-team repo fan-out an observable "
+        "series instead of something only a bug report could surface. A "
+        "value of 1 is an ordinary single-repo team, not a defect.",
+        buckets=(1, 2, 3, 5, 8, 13, 21, 34, 55),
+    )
+
+    # ---------------------------------------------------------------------------
     # Recommendations readiness gate (CHAOS-4073)
     # ---------------------------------------------------------------------------
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _prometheus_client_module.Counter(
@@ -676,6 +692,23 @@ def record_investment_membership_scope_stale(
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS.labels(scope_mode=scope_mode).set(
         lag_seconds
     )
+
+
+def record_team_metrics_daily_repo_rows(rows: list[Any]) -> None:
+    """Observe the distinct repo_id count per team_id in one team_metrics_daily
+    write (CHAOS-4329). ``rows`` is the exact list passed to
+    ``write_team_metrics`` -- every row must carry ``team_id``/``repo_id``
+    attributes (``TeamMetricsDailyRecord`` does). Call once per write, after
+    the sink call, never per-sink (a dual-sink write would otherwise double
+    every observation).
+    """
+    if not rows:
+        return
+    repos_by_team: dict[str, set[str]] = {}
+    for row in rows:
+        repos_by_team.setdefault(row.team_id, set()).add(row.repo_id)
+    for repo_ids in repos_by_team.values():
+        DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT.observe(len(repo_ids))
 
 
 def record_metrics_family_zero_rows(*, family: str, cause: str) -> None:

@@ -209,8 +209,13 @@ class TestWellbeingScorer:
             for query in client.queries
             if "testops_pipeline_metrics_daily" in query
         )
-        assert "argMax(after_hours_commit_ratio, computed_at)" in team_query
-        assert "argMax(weekend_commit_ratio, computed_at)" in team_query
+        # CHAOS-4329: team_metrics_daily now dedups per (day, team_id,
+        # repo_id) on the additive counts, sums across repos, and
+        # recomputes the ratio -- see loader docstring.
+        assert "argMax(commits_count, computed_at)" in team_query
+        assert "argMax(after_hours_commits_count, computed_at)" in team_query
+        assert "argMax(weekend_commits_count, computed_at)" in team_query
+        assert "GROUP BY day, team_id, repo_id" in team_query
         assert "GROUP BY day, team_id" in team_query
         _assert_append_only_generation_dedup(pipeline_query)
 

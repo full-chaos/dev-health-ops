@@ -305,6 +305,11 @@ class TeamMetricsDailyRecord:
     weekend_commit_ratio: float
     computed_at: datetime
     org_id: str = ""
+    #: CHAOS-4329: which repo this row's commits came from. "" is the LEGACY
+    #: sentinel (rows written before migration 080 -- see that file's
+    #: comment for the dedup contract). Never "" for a row written by
+    #: compute_team_wellbeing_metrics_daily after this field was added.
+    repo_id: str = ""
 
 
 @dataclass(frozen=True)

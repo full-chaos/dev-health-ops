@@ -111,7 +111,11 @@ def test_build_chart_query_with_month_grouping_uses_time_bucket():
     [
         ("loc_touched", "user_metrics_daily", "org_id, repo_id, author_email, day"),
         ("total_loc_touched", "repo_metrics_daily", "org_id, repo_id, day"),
-        ("after_hours_commit_ratio", "team_metrics_daily", "org_id, team_id, day"),
+        (
+            "after_hours_commit_ratio",
+            "team_metrics_daily",
+            "org_id, team_id, repo_id, day",
+        ),
         (
             "median_duration_seconds",
             "testops_pipeline_metrics_daily",

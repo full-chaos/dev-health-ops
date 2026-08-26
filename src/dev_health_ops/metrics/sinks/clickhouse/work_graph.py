@@ -190,6 +190,7 @@ class WorkGraphMixin(_ClickHouseSinkBase):
                 "weekend_commit_ratio",
                 "computed_at",
                 "org_id",
+                "repo_id",
             ],
             rows,
         )

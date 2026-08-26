@@ -17,6 +17,13 @@ The two result sets are merged on ``day`` (over the UNION of days) in Python
 before being returned. All reads are org-scoped via ``require_org_id`` +
 parametrized ``org_id``. No data is written or recomputed — pure surface of
 persisted metrics.
+
+CHAOS-4329: ``team_metrics_daily`` gained a ``repo_id`` column (``''`` on
+legacy rows -- migration 080). ``_fetch_team_metrics`` dedups per
+``(team_id, repo_id, day)``, SUMs the additive counts across a team's repos,
+and RECOMPUTES the ratio from those summed counts before averaging across
+teams -- a team owning N repos no longer loses N-1 of them to a bare
+``(team_id, day)`` argMax collapse.
 """
 
 from __future__ import annotations
@@ -72,9 +79,11 @@ async def _fetch_user_metrics(
     rows by day. This prevents double-counting from re-computation passes.
 
     Filters by ``org_id`` (always), date range, and optionally ``team_id`` /
-    ``repo_id`` (the latter is valid here since ``user_metrics_daily`` carries
-    a ``repo_id`` column per row; ``team_metrics_daily`` does not, so
-    ``repo_id`` is never applied to the team-metrics query).
+    ``repo_id``. ``team_metrics_daily`` gained a ``repo_id`` column in
+    CHAOS-4329, but ``_fetch_team_metrics`` does not (yet) accept a
+    ``repo_id`` filter -- it always aggregates across every repo a team
+    owns, matching this resolver's existing team-scoped (not repo-scoped)
+    contract; only ``_fetch_user_metrics`` here takes a ``repo_id`` filter.
 
     The GraphQL ``repoId`` input may be EITHER the repo's UUID (``repos.id``)
     OR its human-readable full_name/slug (``repos.repo``, e.g.
@@ -142,14 +151,23 @@ async def _fetch_team_metrics(
     until_date: str,
     team_id: str | None,
 ) -> list[dict[str, Any]]:
-    """AVG of latest-per-team after-hours / weekend commit ratios, by day.
+    """AVG across teams of each team's after-hours / weekend commit ratio, by day.
 
-    ``team_metrics_daily`` is append-only (plain MergeTree) and team-scoped
-    (no repo_id). The inner subquery collapses each
-    ``(org_id, team_id, day)`` key to its latest row via
-    ``argMax(<col>, computed_at)``; the outer query AVGs those deduplicated
-    rows by day. When ``team_id`` is supplied we filter to that team;
-    otherwise we average across all teams to produce an org-wide signal.
+    ``team_metrics_daily`` is append-only (plain MergeTree) and, since
+    CHAOS-4329, carries a ``repo_id`` per row (``''`` on legacy rows written
+    before that migration -- see its comment for the dedup contract). A team
+    owning N repos writes one row PER (team_id, repo_id, day); collapsing
+    straight to ``(team_id, day)`` the old way keeps only one repo's slice.
+
+    Three layers: (1) the innermost subquery collapses each
+    ``(org_id, team_id, repo_id, day)`` key to its latest row via
+    ``argMax(<col>, computed_at)``; (2) the middle layer SUMs the additive
+    counts across a team's repos for each day and RECOMPUTES the ratio from
+    those summed counts -- a ratio is not additive across rows, so it is
+    never averaged directly across repos; (3) the outer query AVGs those
+    per-team-day ratios across teams, unchanged from before. When
+    ``team_id`` is supplied we filter to that team; otherwise we average
+    across all teams to produce an org-wide signal.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -174,10 +192,27 @@ async def _fetch_team_metrics(
             SELECT
                 day,
                 team_id,
-                argMax(after_hours_commit_ratio, computed_at) AS after_hours_commit_ratio,
-                argMax(weekend_commit_ratio,     computed_at) AS weekend_commit_ratio
-            FROM team_metrics_daily
-            {inner_where}
+                sum(commits_count)             AS total_commits,
+                sum(after_hours_commits_count) AS total_after_hours_commits,
+                sum(weekend_commits_count)      AS total_weekend_commits,
+                if(total_commits > 0,
+                   total_after_hours_commits / total_commits, 0.0
+                ) AS after_hours_commit_ratio,
+                if(total_commits > 0,
+                   total_weekend_commits / total_commits, 0.0
+                ) AS weekend_commit_ratio
+            FROM (
+                SELECT
+                    day,
+                    team_id,
+                    repo_id,
+                    argMax(commits_count,             computed_at) AS commits_count,
+                    argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
+                    argMax(weekend_commits_count,      computed_at) AS weekend_commits_count
+                FROM team_metrics_daily
+                {inner_where}
+                GROUP BY day, team_id, repo_id
+            )
             GROUP BY day, team_id
         )
         GROUP BY day

@@ -1673,6 +1673,15 @@ class ClickHouseStore:
                         "name": item.get("name"),
                         "description": item.get("description"),
                         "members": item.get("members") or [],
+                        # CHAOS-4321: admin-override provenance marker. Callers
+                        # that never carry it forward (i.e. never set this key)
+                        # get [] here, which is only safe for a genuinely-new
+                        # row -- ClickHouseTeamDriftProjector's AUTO_APPLY_POLICY
+                        # branch and ClickHouseTeamAdminService.create_or_update
+                        # both explicitly carry the existing value forward
+                        # before calling insert_teams, precisely so a sync
+                        # write never lands here as an accidental reset.
+                        "manual_members": item.get("manual_members") or [],
                         "project_keys": item.get("project_keys") or [],
                         "repo_patterns": item.get("repo_patterns") or [],
                         "is_active": int(item.get("is_active", 1)),
@@ -1695,6 +1704,7 @@ class ClickHouseStore:
                         "name": item.name,
                         "description": item.description,
                         "members": getattr(item, "members", []) or [],
+                        "manual_members": getattr(item, "manual_members", []) or [],
                         "project_keys": getattr(item, "project_keys", []) or [],
                         "repo_patterns": getattr(item, "repo_patterns", []) or [],
                         "is_active": int(getattr(item, "is_active", 1) or 0),
@@ -1718,6 +1728,7 @@ class ClickHouseStore:
                 "name",
                 "description",
                 "members",
+                "manual_members",
                 "project_keys",
                 "repo_patterns",
                 "is_active",

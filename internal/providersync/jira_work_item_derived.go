@@ -127,7 +127,7 @@ func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	if facts.Repos, err = delegate.loadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
-	if facts.Members, facts.UntypedMembers, err = delegate.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, err = delegate.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
 	if facts.ProviderMembers, err = delegate.loadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {

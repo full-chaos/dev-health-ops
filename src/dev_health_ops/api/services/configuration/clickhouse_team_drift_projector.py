@@ -48,6 +48,7 @@ _TEAM_COLUMNS = (
     "provider",
     "native_team_key",
     "parent_team_id",
+    "manual_members",
 )
 _CHANGE_COLUMNS = (
     "org_id",
@@ -201,9 +202,24 @@ class ClickHouseTeamDriftProjector:
 
         if policy == AUTO_APPLY_POLICY:
             if apply_catalog:
-                await self.team_writer(
-                    [_catalog_row_for_write(self.org_id, catalog_row or team_row)]
+                row_to_write = _catalog_row_for_write(
+                    self.org_id, catalog_row or team_row
                 )
+                # CHAOS-4321 (chris, 2026-08-26 10:39 PT: "sync must not
+                # clear it"): manual_members is the admin-override
+                # provenance marker -- provider auto-import never sets or
+                # clears it. ``teams`` is a ReplacingMergeTree keyed on
+                # (org_id, id): this INSERT is a full new row version, so
+                # omitting the column would silently reset it to the
+                # schema default ([]) under FINAL. Carry the EXISTING value
+                # forward unchanged instead.
+                existing_for_manual = await self._team_row(observed["team_id"])
+                row_to_write["manual_members"] = (
+                    existing_for_manual.get("manual_members", [])
+                    if existing_for_manual is not None
+                    else []
+                )
+                await self.team_writer([row_to_write])
             await self._mark_pending(
                 pending_changes,
                 status=STATUS_RESOLVED,

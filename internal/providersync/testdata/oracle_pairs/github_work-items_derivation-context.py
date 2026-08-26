@@ -140,10 +140,19 @@ class _ContextQueryClient:
         ]
 
     def _admin_teams_from_members(self) -> list[dict[str, Any]]:
-        """CHAOS-4321: synthesize `teams` rows (id/name only -- `members` is
-        left empty; the identities-side `team_ids` union above already
-        accounts for every membership these Facts describe) FROM the same
-        `Facts.Members` list, one row per distinct TeamID."""
+        """CHAOS-4321: synthesize `teams` rows FROM the same `Facts.Members`
+        list, one row per distinct TeamID -- the identities-side `team_ids`
+        union above already accounts for every membership these Facts
+        describe, so `members`/`manual_members` are left empty here.
+
+        Note: this fake does NOT yet exercise Facts.UntypedMembers/
+        Facts.ProviderUntypedMembers (the teams.manual_members-override /
+        teams.members-fallback untyped-facet paths added by CHAOS-4321) --
+        that gap predates this ticket's fix (member_by_untyped_facet's oracle
+        coverage was already absent) and is covered instead by pure-Go/
+        pure-Python unit tests on both sides
+        (TestGitHubWorkItemDerivationTwoLayerMembershipResolution's (e)-(j)
+        subtests; test_chaos_4321_ownership_only_attribution.py)."""
         by_team: dict[str, dict[str, Any]] = {}
         for raw in self.facts.get("Members") or []:
             team_id = str(raw.get("TeamID") or "")
@@ -155,6 +164,7 @@ class _ContextQueryClient:
                     "id": team_id,
                     "name": str(raw.get("TeamName") or team_id),
                     "members": [],
+                    "manual_members": [],
                 },
             )
         return list(by_team.values())

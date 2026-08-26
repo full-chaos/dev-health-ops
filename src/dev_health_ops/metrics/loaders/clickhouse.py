@@ -513,18 +513,31 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         #
         # An identity's admin-authorized team set is the UNION of:
         #   (a) `identities.team_ids` (its own declared teams), and
-        #   (b) any active team whose `teams.members` roster contains one of
-        #       the identity's facets (canonical_id / email / any provider
-        #       raw id).
+        #   (b) any active team whose `teams.manual_members` roster contains
+        #       one of the identity's facets (canonical_id / email / any
+        #       provider raw id).
         # (b) matters because the drift-approval admin action
         # (`apply_identity_membership_change`,
         # api/services/configuration/clickhouse_identity_drift.py) writes
-        # `teams.members` directly without also updating
+        # `teams.manual_members` directly without also updating
         # `identities.team_ids` -- reading `team_ids` alone would silently
-        # drop that admin decision. A bare `teams.members` facet with no
-        # matching `identities` row is not usable on its own: it carries no
-        # provider tag, so there is no safe way to scope it to
+        # drop that admin decision. A bare `teams.manual_members` facet with
+        # no matching `identities` row is not usable on its own: it carries
+        # no provider tag, so there is no safe way to scope it to
         # `item.provider` for the `(provider, identity_key)` lookup below.
+        #
+        # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
+        # adversarial review HIGH finding): this used to read `teams.members`
+        # for (b). `members` is NOT admin-exclusive -- provider auto-import
+        # writes unreviewed roster rows into it too (see
+        # workers/team_autoimport_github.py's AUTO_APPLY_POLICY path via
+        # ClickHouseTeamDriftProjector) -- so a roster entry imported from
+        # ONE provider could become an authoritative, ambiguity-suppressing
+        # answer for a DIFFERENT provider's work item sharing the same
+        # identity string. `teams.manual_members` (written only by
+        # ClickHouseTeamAdminService.add_members/remove_members/set_members)
+        # is the genuinely admin-exclusive subset; `teams.members` is now
+        # read separately, below, as the provider-fallback tier.
         identity_rows = await _clickhouse_query_dicts(
             self.client,
             f"""
@@ -538,7 +551,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         admin_team_rows = await _clickhouse_query_dicts(
             self.client,
             f"""
-            SELECT id, name, members
+            SELECT id, name, members, manual_members
             FROM teams FINAL
             WHERE is_active = 1
             {self._org_filter()}
@@ -553,8 +566,23 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 continue
             admin_teams[team_id] = {
                 "name": str(row.get("name") or team_id),
+                # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
+                # adversarial review HIGH finding): `members` mixes
+                # admin-curated entries with UNREVIEWED provider auto-import
+                # roster writes (team_autoimport_github.py's
+                # AUTO_APPLY_POLICY path writes straight into it) -- it is
+                # NOT admin-exclusive, so it cannot be the authoritative
+                # override layer. `manual_members` (written only by
+                # ClickHouseTeamAdminService.add_members/remove_members/
+                # set_members -- the admin Identities screen and the
+                # drift-approval flow) is.
                 "members": {
                     str(m).strip().lower() for m in (row.get("members") or []) if m
+                },
+                "manual_members": {
+                    str(m).strip().lower()
+                    for m in (row.get("manual_members") or [])
+                    if m
                 },
             }
 
@@ -692,8 +720,11 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             for team_id in row.get("team_ids") or []:
                 if str(team_id) in admin_teams:
                     resolved_team_ids.add(str(team_id))
+            # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT): `manual_members`,
+            # not `members` -- see the admin_teams comment above for why
+            # `members` can no longer stand in for "admin decided this".
             for team_id, team in admin_teams.items():
-                if facets & team["members"]:
+                if facets & team["manual_members"]:
                     resolved_team_ids.add(team_id)
             if not resolved_team_ids:
                 continue
@@ -743,21 +774,29 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                             (str(provider), key), []
                         ).append(candidate)
 
-        # CHAOS-4321 (team-lead correction, 2026-08-26): a `teams.members`
-        # facet with no backing `identities` row is STILL an admin mapping
-        # -- adding a member directly on `/org/admin/teams/[id]/edit` is one
-        # of the two admin surfaces chris named, and requiring an
+        # CHAOS-4321 (team-lead correction, 2026-08-26; scope fixed 10:39
+        # PT): a `teams.manual_members` facet with no backing `identities`
+        # row is STILL an admin mapping -- adding a member via the admin
+        # Identities screen or the drift-approval flow is one of the
+        # genuinely admin-exclusive writers chris named, and requiring an
         # `identities` row would silently drop it. Matched WITHOUT a
         # provider tag (an admin-entered email/login/id is the admin's
         # intent regardless of which provider's item it ends up matching --
-        # `teams.members` carries no provider column to scope by, unlike
-        # `identities.provider_identities`). Registered for every facet in
-        # every admin team, unconditionally -- a facet that ALSO has a
-        # backing `identities` row just gets a second, redundant candidate
-        # for the same team, which the team-id-set gate in
+        # `teams.manual_members` carries no provider column to scope by,
+        # unlike `identities.provider_identities`). Registered for every
+        # facet in every admin team, unconditionally -- a facet that ALSO
+        # has a backing `identities` row just gets a second, redundant
+        # candidate for the same team, which the team-id-set gate in
         # `_resolve_membership` collapses harmlessly.
+        #
+        # This loop used to iterate `team["members"]` -- fixed (chris,
+        # 2026-08-26 10:39 PT, after a codex adversarial review HIGH
+        # finding) to iterate `team["manual_members"]` instead, since
+        # `members` is not admin-exclusive (see the admin_teams comment
+        # above). The unreviewed `members` roster is handled separately,
+        # below, as the provider-fallback tier.
         for team_id, team in admin_teams.items():
-            for facet in team["members"]:
+            for facet in team["manual_members"]:
                 if not facet:
                     continue
                 candidate = TeamAttributionCandidate(
@@ -772,6 +811,45 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                     updated_at=as_of,
                 )
                 context.member_by_untyped_facet.setdefault(facet, []).append(candidate)
+
+        # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
+        # adversarial review HIGH finding: "the new membership layer can
+        # turn provider-imported rosters into authoritative, provider-neutral
+        # admin overrides"). `teams.members` mixes admin-curated entries
+        # (mirrored into `manual_members` above) with UNREVIEWED provider
+        # auto-import roster writes -- demoted here to the provider-FALLBACK
+        # tier, matched WITHOUT a provider tag for the same reason the
+        # admin-layer untyped loop above is untyped (no provider column on
+        # `teams.members`). Lower specificity (50, the pre-CHAOS-4321 legacy
+        # roster-fallback convention) than the admin layer's untyped
+        # candidates (60) so it never wins an intra-source tie if a
+        # candidate from BOTH pools were ever compared directly -- though in
+        # practice `_resolve_membership` never lets that happen: this pool
+        # is consulted only when the admin layer (layer 1) has zero
+        # candidates for the identity. Confidence is "high" (not a
+        # "fallback-tier" downgrade): this codebase's convention is that
+        # confidence mirrors is_primary (see `_candidate()`/
+        # `confidenceForPrimary` on the Go side), not "how much do we trust
+        # the source" -- specificity is what actually distinguishes this
+        # tier.
+        for team_id, team in admin_teams.items():
+            for facet in team["members"]:
+                if not facet:
+                    continue
+                candidate = TeamAttributionCandidate(
+                    source="assignee_membership",
+                    team_id=team_id,
+                    team_name=team["name"],
+                    confidence="high",
+                    evidence=f"assignee_membership={facet}",
+                    is_primary=1,
+                    specificity=50,
+                    priority=0,
+                    updated_at=as_of,
+                )
+                context.provider_member_by_untyped_facet.setdefault(facet, []).append(
+                    candidate
+                )
 
         # CHAOS-4321 (chris, 08:30 PT): provider auto-import fallback layer
         # -- unchanged from pre-CHAOS-4321 `team_memberships` processing,

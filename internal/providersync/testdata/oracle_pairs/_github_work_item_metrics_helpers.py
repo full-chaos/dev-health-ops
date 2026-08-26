@@ -200,8 +200,16 @@ def _identities_and_teams_from_members(
         }
         for data in identities_by_canonical.values()
     ]
+    # Note: this fake does NOT yet exercise Facts.UntypedMembers/
+    # Facts.ProviderUntypedMembers (the teams.manual_members-override /
+    # teams.members-fallback untyped-facet paths added by CHAOS-4321) --
+    # that gap predates this ticket's fix (member_by_untyped_facet's oracle
+    # coverage was already absent) and is covered instead by pure-Go/
+    # pure-Python unit tests on both sides
+    # (TestGitHubWorkItemDerivationTwoLayerMembershipResolution's (e)-(j)
+    # subtests; test_chaos_4321_ownership_only_attribution.py).
     teams_rows = [
-        {"id": team_id, "name": name, "members": []}
+        {"id": team_id, "name": name, "members": [], "manual_members": []}
         for team_id, name in team_names.items()
     ]
     return identities_rows, teams_rows

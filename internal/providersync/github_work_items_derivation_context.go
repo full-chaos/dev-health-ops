@@ -143,8 +143,9 @@ type githubWorkItemDerivationFacts struct {
 	// `identities.provider_identities`. Authoritative -- consulted first,
 	// and an ambiguous match here does NOT fall through to ProviderMembers.
 	Members []githubWorkItemDerivationMemberFact
-	// UntypedMembers is ALSO the admin layer: bare `teams.members` facets
-	// with no backing `identities` row, matched without a provider tag.
+	// UntypedMembers is ALSO the admin layer: bare `teams.manual_members`
+	// facets with no backing `identities` row, matched without a provider
+	// tag.
 	UntypedMembers []githubWorkItemDerivationUntypedMemberFact
 	// ProviderMembers is the FALLBACK layer (chris, 2026-08-26 08:30 PT:
 	// "manual is override -- if the override exists, use it, else use
@@ -152,8 +153,18 @@ type githubWorkItemDerivationFacts struct {
 	// `team_memberships`, consulted ONLY when the admin layer (Members ∪
 	// UntypedMembers) has ZERO candidates for a given identity.
 	ProviderMembers []githubWorkItemDerivationMemberFact
-	ManualFallbacks []githubWorkItemDerivationManualFallback
-	DonorItems      []githubWorkItemDerivationSubject
+	// ProviderUntypedMembers is ALSO the fallback layer (chris, 2026-08-26
+	// 10:39 PT, after a codex adversarial review HIGH finding: "the new
+	// membership layer can turn provider-imported rosters into
+	// authoritative, provider-neutral admin overrides"): `teams.members`
+	// mixes admin-curated entries (mirrored into `manual_members`, the
+	// UntypedMembers source above) with UNREVIEWED provider auto-import
+	// roster writes, so it is NOT admin-exclusive and cannot be layer 1.
+	// Matched WITHOUT a provider tag for the same reason UntypedMembers is
+	// untyped (no provider column on `teams.members`).
+	ProviderUntypedMembers []githubWorkItemDerivationUntypedMemberFact
+	ManualFallbacks        []githubWorkItemDerivationManualFallback
+	DonorItems             []githubWorkItemDerivationSubject
 }
 
 type githubWorkItemDerivationLoadRequest struct {
@@ -225,12 +236,13 @@ type githubWorkItemDerivationContext struct {
 	// membership layer; providerMemberByID (auto-import team_memberships)
 	// is the FALLBACK layer, consulted only when the admin layer has
 	// nothing for an identity (CHAOS-4321, chris 08:30 PT).
-	memberByID           map[string][]githubWorkItemDerivationCandidate
-	memberByUntypedFacet map[string][]githubWorkItemDerivationCandidate
-	providerMemberByID   map[string][]githubWorkItemDerivationCandidate
-	manualFallbacks      []githubWorkItemDerivationManualFallback
-	linkedIssue          map[string][2]string
-	storedEdgeMerge      githubWorkItemStoredEdgeMergeObservation
+	memberByID                   map[string][]githubWorkItemDerivationCandidate
+	memberByUntypedFacet         map[string][]githubWorkItemDerivationCandidate
+	providerMemberByID           map[string][]githubWorkItemDerivationCandidate
+	providerMemberByUntypedFacet map[string][]githubWorkItemDerivationCandidate
+	manualFallbacks              []githubWorkItemDerivationManualFallback
+	linkedIssue                  map[string][2]string
+	storedEdgeMerge              githubWorkItemStoredEdgeMergeObservation
 }
 
 func loadGitHubWorkItemDerivationContext(
@@ -519,16 +531,17 @@ func newGitHubWorkItemDerivationContext(
 	facts githubWorkItemDerivationFacts,
 ) githubWorkItemDerivationContext {
 	result := githubWorkItemDerivationContext{
-		projectKeyTeams:      map[string]githubWorkItemDerivationTeamFact{},
-		projectByID:          map[string][]githubWorkItemDerivationCandidate{},
-		projectByKey:         map[string][]githubWorkItemDerivationCandidate{},
-		repoByID:             map[string][]githubWorkItemDerivationCandidate{},
-		repoByName:           map[string][]githubWorkItemDerivationCandidate{},
-		memberByID:           map[string][]githubWorkItemDerivationCandidate{},
-		memberByUntypedFacet: map[string][]githubWorkItemDerivationCandidate{},
-		providerMemberByID:   map[string][]githubWorkItemDerivationCandidate{},
-		manualFallbacks:      append([]githubWorkItemDerivationManualFallback(nil), facts.ManualFallbacks...),
-		linkedIssue:          map[string][2]string{},
+		projectKeyTeams:              map[string]githubWorkItemDerivationTeamFact{},
+		projectByID:                  map[string][]githubWorkItemDerivationCandidate{},
+		projectByKey:                 map[string][]githubWorkItemDerivationCandidate{},
+		repoByID:                     map[string][]githubWorkItemDerivationCandidate{},
+		repoByName:                   map[string][]githubWorkItemDerivationCandidate{},
+		memberByID:                   map[string][]githubWorkItemDerivationCandidate{},
+		memberByUntypedFacet:         map[string][]githubWorkItemDerivationCandidate{},
+		providerMemberByID:           map[string][]githubWorkItemDerivationCandidate{},
+		providerMemberByUntypedFacet: map[string][]githubWorkItemDerivationCandidate{},
+		manualFallbacks:              append([]githubWorkItemDerivationManualFallback(nil), facts.ManualFallbacks...),
+		linkedIssue:                  map[string][2]string{},
 	}
 	for _, team := range facts.Teams {
 		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID) {
@@ -642,6 +655,40 @@ func newGitHubWorkItemDerivationContext(
 			1, 60, 0, fact.UpdatedAt,
 		)
 		result.memberByUntypedFacet[facet] = append(result.memberByUntypedFacet[facet], candidate)
+	}
+	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
+	// review HIGH finding: "the new membership layer can turn
+	// provider-imported rosters into authoritative, provider-neutral admin
+	// overrides"). `teams.members` mixes admin-curated entries (mirrored
+	// into ProviderUntypedMembers's sibling, UntypedMembers, above) with
+	// UNREVIEWED provider auto-import roster writes -- demoted here to the
+	// provider-FALLBACK tier, matched WITHOUT a provider tag for the same
+	// reason the admin-layer untyped loop above is untyped. Lower
+	// specificity (50, the pre-CHAOS-4321 legacy roster-fallback
+	// convention) than the admin layer's untyped candidates (60) so it
+	// never wins an intra-source tie if a candidate from BOTH pools were
+	// ever compared directly -- though in practice resolveMembership never
+	// lets that happen: this pool is consulted only when the admin layer
+	// (layer 1) has zero candidates for the identity. Confidence comes out
+	// "high" via confidenceForPrimary(1), matching Python's explicit choice
+	// there -- this codebase's convention is that confidence mirrors
+	// IsPrimary, not "how much do we trust the source"; specificity is what
+	// actually distinguishes this tier.
+	for _, fact := range facts.ProviderUntypedMembers {
+		facet := normalizeDerivationIdentity(fact.Facet)
+		if facet == "" {
+			continue
+		}
+		teamID := strings.TrimSpace(fact.TeamID)
+		if teamID == "" {
+			continue
+		}
+		candidate := githubWorkItemDerivationCandidateFromFact(
+			"assignee_membership", teamID, githubWorkItemDerivationFirstNonEmpty(fact.TeamName, teamID),
+			fmt.Sprintf("assignee_membership=%s", fact.Facet),
+			1, 50, 0, fact.UpdatedAt,
+		)
+		result.providerMemberByUntypedFacet[facet] = append(result.providerMemberByUntypedFacet[facet], candidate)
 	}
 	// CHAOS-4321 (chris, 08:30 PT): provider auto-import fallback layer --
 	// unchanged shape from before this ticket (fact.IsPrimary/.Specificity
@@ -1250,7 +1297,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) Load(
 	if facts.Repos, err = source.loadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
-	if facts.Members, facts.UntypedMembers, err = source.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, err = source.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return githubWorkItemDerivationFacts{}, err
 	}
 	if facts.ProviderMembers, err = source.loadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {
@@ -1407,12 +1454,16 @@ type githubWorkItemDerivationAdminIdentity struct {
 }
 
 // githubWorkItemDerivationAdminTeam is one row of the ClickHouse `teams`
-// table (id -> members facet roster) -- admin-authored via
-// `/org/admin/teams`.
+// table (id -> members facet roster). Members mixes admin edits (via
+// `/org/admin/teams`/`/org/admin/identities`) with UNREVIEWED provider
+// auto-import roster writes (CHAOS-4321 fix, chris 2026-08-26 10:39 PT, after
+// a codex adversarial review HIGH finding) -- ManualMembers is the
+// admin-EXCLUSIVE subset, written only by ClickHouseTeamAdminService.
 type githubWorkItemDerivationAdminTeam struct {
-	TeamID  string
-	Name    string
-	Members []string
+	TeamID        string
+	Name          string
+	Members       []string
+	ManualMembers []string
 }
 
 // loadMembers builds membership-attribution facts EXCLUSIVELY from
@@ -1451,14 +1502,19 @@ type githubWorkItemDerivationAdminTeam struct {
 // valid_from/valid_to window like `team_memberships` was.
 func (source githubWorkItemClickHouseDerivationContextSource) loadMembers(
 	ctx context.Context, orgID string, _ time.Time,
-) ([]githubWorkItemDerivationMemberFact, []githubWorkItemDerivationUntypedMemberFact, error) {
+) (
+	[]githubWorkItemDerivationMemberFact,
+	[]githubWorkItemDerivationUntypedMemberFact,
+	[]githubWorkItemDerivationUntypedMemberFact,
+	error,
+) {
 	identityRows, err := source.Conn.Query(ctx, `
 SELECT canonical_id, email, provider_identities, team_ids, updated_at
 FROM identities FINAL
 WHERE org_id = ? AND is_active = 1
 LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer identityRows.Close()
 	identities := []githubWorkItemDerivationAdminIdentity{}
@@ -1468,47 +1524,57 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 			&identity.CanonicalID, &identity.Email, &identity.ProviderIdentities,
 			&identity.TeamIDs, &identity.UpdatedAt,
 		); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		identities = append(identities, identity)
 		if len(identities) > githubWorkItemDerivationContextLimit {
-			return nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, ErrEffectRecoveryUnsafe
 		}
 	}
 	if err := identityRows.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
+	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
+	// review HIGH finding): manual_members is the admin-EXCLUSIVE subset of
+	// members -- see githubWorkItemDerivationAdminTeam's doc comment.
 	teamRows, err := source.Conn.Query(ctx, `
-SELECT id, name, members
+SELECT id, name, members, manual_members
 FROM teams FINAL
 WHERE org_id = ? AND is_active = 1
 LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer teamRows.Close()
 	adminTeams := map[string]githubWorkItemDerivationAdminTeam{}
 	teamCount := 0
 	for teamRows.Next() {
 		var team githubWorkItemDerivationAdminTeam
-		if err := teamRows.Scan(&team.TeamID, &team.Name, &team.Members); err != nil {
-			return nil, nil, err
+		if err := teamRows.Scan(
+			&team.TeamID, &team.Name, &team.Members, &team.ManualMembers,
+		); err != nil {
+			return nil, nil, nil, err
 		}
 		adminTeams[team.TeamID] = team
 		teamCount++
 		if teamCount > githubWorkItemDerivationContextLimit {
-			return nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, ErrEffectRecoveryUnsafe
 		}
 	}
 	if err := teamRows.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
+	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT): (b) below used to match
+	// on `team.Members` -- fixed to `team.ManualMembers`, since `members` is
+	// NOT admin-exclusive (provider auto-import writes unreviewed roster
+	// rows into it too; see AUTO_APPLY_POLICY in
+	// clickhouse_team_drift_projector.py).
 	teamMemberFacets := make(map[string]map[string]struct{}, len(adminTeams))
 	for teamID, team := range adminTeams {
-		facets := make(map[string]struct{}, len(team.Members))
-		for _, member := range team.Members {
+		facets := make(map[string]struct{}, len(team.ManualMembers))
+		for _, member := range team.ManualMembers {
 			if key := normalizeDerivationIdentity(member); key != "" {
 				facets[key] = struct{}{}
 			}
@@ -1601,7 +1667,7 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 					UpdatedAt:   identity.UpdatedAt,
 				})
 				if len(result) > githubWorkItemDerivationContextLimit {
-					return nil, nil, ErrEffectRecoveryUnsafe
+					return nil, nil, nil, ErrEffectRecoveryUnsafe
 				}
 			}
 		}
@@ -1616,15 +1682,19 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 		return result[i].TeamID < result[j].TeamID
 	})
 
-	// CHAOS-4321 (team-lead correction): every `teams.members` facet is ALSO
-	// an untyped admin-mapping candidate, independent of whether it has a
-	// backing `identities` row above -- adding a member directly on
-	// `/org/admin/teams/[id]/edit` is one of the two admin surfaces chris
-	// named.
+	// CHAOS-4321 (team-lead correction, 2026-08-26; scope fixed 10:39 PT):
+	// every `teams.manual_members` facet is ALSO an untyped admin-mapping
+	// candidate, independent of whether it has a backing `identities` row
+	// above -- adding a member via the admin Identities screen or the
+	// drift-approval flow is one of the genuinely admin-exclusive writers
+	// chris named. Used to iterate `team.Members` -- fixed to
+	// `team.ManualMembers` after a codex adversarial review HIGH finding
+	// (`members` is not admin-exclusive). The unreviewed `Members` roster is
+	// handled separately, below, as the provider-fallback tier.
 	untyped := []githubWorkItemDerivationUntypedMemberFact{}
 	for _, teamID := range githubWorkItemDerivationSortedAdminTeamIDs(adminTeams) {
 		team := adminTeams[teamID]
-		for _, facet := range team.Members {
+		for _, facet := range team.ManualMembers {
 			if strings.TrimSpace(facet) == "" {
 				continue
 			}
@@ -1634,11 +1704,35 @@ LIMIT ?`, orgID, githubWorkItemDerivationContextLimit+1)
 				Facet:    facet,
 			})
 			if len(untyped) > githubWorkItemDerivationContextLimit {
-				return nil, nil, ErrEffectRecoveryUnsafe
+				return nil, nil, nil, ErrEffectRecoveryUnsafe
 			}
 		}
 	}
-	return result, untyped, nil
+
+	// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
+	// review HIGH finding): `teams.members` mixes admin-curated entries
+	// (mirrored into ManualMembers above) with UNREVIEWED provider
+	// auto-import roster writes -- demoted here to the provider-FALLBACK
+	// tier (ProviderUntypedMembers), matched WITHOUT a provider tag for the
+	// same reason the admin-layer loop above is untyped.
+	providerUntyped := []githubWorkItemDerivationUntypedMemberFact{}
+	for _, teamID := range githubWorkItemDerivationSortedAdminTeamIDs(adminTeams) {
+		team := adminTeams[teamID]
+		for _, facet := range team.Members {
+			if strings.TrimSpace(facet) == "" {
+				continue
+			}
+			providerUntyped = append(providerUntyped, githubWorkItemDerivationUntypedMemberFact{
+				TeamID:   teamID,
+				TeamName: githubWorkItemDerivationFirstNonEmpty(team.Name, teamID),
+				Facet:    facet,
+			})
+			if len(providerUntyped) > githubWorkItemDerivationContextLimit {
+				return nil, nil, nil, ErrEffectRecoveryUnsafe
+			}
+		}
+	}
+	return result, untyped, providerUntyped, nil
 }
 
 // githubWorkItemDerivationSortedAdminTeamIDs returns adminTeams' keys sorted,
@@ -1885,14 +1979,18 @@ func githubWorkItemDerivationStringValue(value *string) string {
 
 // resolveMembership mirrors compute_work_items.py's `_resolve_membership`
 // (CHAOS-4321, chris 08:30 PT: "manual is override -- if the override
-// exists, use it, else use attribution from providers"). Layer 1 (admin:
-// `memberByID` ∪ `memberByUntypedFacet`, sourced from `identities`/`teams`)
-// is AUTHORITATIVE when it has ANY candidate for this identity -- including
-// when ambiguous: an ambiguous admin mapping does NOT fall through to layer
-// 2, it needs fixing, not bypassing. Layer 2 (`providerMemberByID`, sourced
-// from provider auto-import `team_memberships`) is consulted ONLY when
-// layer 1 has ZERO candidates for this identity. Both layers apply the SAME
-// exactly-one-team gate.
+// exists, use it, else use attribution from providers"; refined 2026-08-26
+// 10:39 PT: "admin is an override, not a default -- it's the sync config
+// mapping, but admin can override it in the panel"). Layer 1 (admin:
+// `memberByID` ∪ `memberByUntypedFacet`, sourced from `identities.team_ids`
+// and `teams.manual_members` -- NOT `teams.members`, which mixes in
+// unreviewed provider auto-import rows) is AUTHORITATIVE when it has ANY
+// candidate for this identity -- including when ambiguous: an ambiguous
+// admin mapping does NOT fall through to layer 2, it needs fixing, not
+// bypassing. Layer 2 (`providerMemberByID` ∪ `providerMemberByUntypedFacet`,
+// sourced from provider auto-import `team_memberships` and `teams.members`
+// respectively) is consulted ONLY when layer 1 has ZERO candidates for this
+// identity. Both layers apply the SAME exactly-one-team gate.
 //
 // Returns `(candidates, reason)`: `candidates` is the resolved list to use
 // for the caller's source when exactly one team resolved (`reason` is
@@ -1924,7 +2022,11 @@ func (derived githubWorkItemDerivationContext) resolveMembership(
 		return nil, "ambiguous_admin_membership:" + githubWorkItemDerivationSortedTeamIDs(adminTeams)
 	}
 
-	providerCandidates := derived.providerMemberByID[attributionMapKey(provider, key)]
+	providerCandidates := append(
+		[]githubWorkItemDerivationCandidate(nil),
+		derived.providerMemberByID[attributionMapKey(provider, key)]...,
+	)
+	providerCandidates = append(providerCandidates, derived.providerMemberByUntypedFacet[key]...)
 	providerTeams := map[string]struct{}{}
 	for _, candidate := range providerCandidates {
 		providerTeams[githubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}

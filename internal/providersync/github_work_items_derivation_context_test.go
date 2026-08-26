@@ -418,7 +418,7 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	if _, err := source.loadRepos(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
+	if _, _, _, err := source.loadMembers(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.loadProviderMembers(context.Background(), orgID, asOf); err != nil {
@@ -1045,6 +1045,57 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		if len(candidates) != 1 || candidates[0].Source != "unassigned" ||
 			candidates[0].Evidence != "no_candidate:ambiguous_admin_membership:team-ops,team-platform" {
 			t.Fatalf("candidates = %+v, want exactly one unassigned row naming the colliding admin teams", candidates)
+		}
+	})
+
+	t.Run("(i) a bare UntypedMembers-shaped members facet with no ManualMembers entry resolves via the fallback tier, not the override", func(t *testing.T) {
+		// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
+		// adversarial review HIGH finding: "the new membership layer can
+		// turn provider-imported rosters into authoritative,
+		// provider-neutral admin overrides"): ProviderUntypedMembers (from
+		// teams.members) must resolve, but as the fallback tier -- lower
+		// specificity than the admin layer's UntypedMembers
+		// (teams.manual_members).
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			ProviderUntypedMembers: []githubWorkItemDerivationUntypedMemberFact{{
+				TeamID: "team-fallback", TeamName: "Fallback Team", Facet: "bob@example.com", UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#34", Provider: "github", Type: "issue",
+			Assignees: []string{"bob@example.com"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-fallback" || githubWorkItemDerivationStringValue(teamName) != "Fallback Team" {
+			t.Fatalf("team = (%v, %v), want team-fallback/Fallback Team", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].Specificity != 50 {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row at specificity 50", candidates)
+		}
+	})
+
+	t.Run("(j) an UntypedMembers (manual_members) entry overrides a conflicting ProviderUntypedMembers (members) entry for the same identity", func(t *testing.T) {
+		// The other half of (i): a genuinely admin-exclusive
+		// teams.manual_members facet wins outright even when the SAME
+		// identity also appears in a DIFFERENT team's bare teams.members
+		// roster (the shape a provider auto-import row takes) -- the admin
+		// layer short-circuits before the fallback pool is ever consulted.
+		derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
+			UntypedMembers: []githubWorkItemDerivationUntypedMemberFact{{
+				TeamID: "team-override", TeamName: "Override Team", Facet: "carol@example.com", UpdatedAt: now,
+			}},
+			ProviderUntypedMembers: []githubWorkItemDerivationUntypedMemberFact{{
+				TeamID: "team-fallback", TeamName: "Fallback Team", Facet: "carol@example.com", UpdatedAt: now,
+			}},
+		})
+		teamID, teamName, candidates := derived.resolve(githubWorkItemDerivationSubject{
+			WorkItemID: "gh:acme/api#35", Provider: "github", Type: "issue",
+			Assignees: []string{"carol@example.com"}, OrgID: "org-acme",
+		})
+		if githubWorkItemDerivationStringValue(teamID) != "team-override" || githubWorkItemDerivationStringValue(teamName) != "Override Team" {
+			t.Fatalf("team = (%v, %v), want team-override/Override Team", githubWorkItemDerivationStringValue(teamID), githubWorkItemDerivationStringValue(teamName))
+		}
+		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].Specificity != 60 {
+			t.Fatalf("candidates = %+v, want exactly one assignee_membership row at specificity 60 (admin layer, not fallback)", candidates)
 		}
 	})
 }

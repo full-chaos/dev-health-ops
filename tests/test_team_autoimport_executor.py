@@ -292,3 +292,133 @@ async def test_loader_identity_facets_feed_assignee_membership_before_roster_fal
             if candidate.evidence == "assignee=canonicalb@example.com"
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_loader_bare_teams_members_facet_resolves_via_fallback_not_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
+    review HIGH finding, "the new membership layer can turn provider-imported
+    rosters into authoritative, provider-neutral admin overrides"):
+    teams.members mixes admin-curated entries with UNREVIEWED provider
+    auto-import roster writes (team_autoimport_github.py's
+    AUTO_APPLY_POLICY path writes straight into it), so it is NOT
+    admin-exclusive and cannot be the override layer. A bare teams.members
+    facet with no teams.manual_members entry and no identities row must
+    still resolve -- via the provider-FALLBACK tier
+    (provider_member_by_untyped_facet), not the admin override
+    (member_by_untyped_facet)."""
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    async def fake_query(_client: object, query: str, _params: dict[str, object]):
+        if "FROM teams FINAL" in query:
+            return [
+                {
+                    "id": "team-fallback",
+                    "name": "Fallback Team",
+                    "members": ["bob@example.com"],
+                    "manual_members": [],
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query,
+    )
+
+    context = await ClickHouseDataLoader(
+        object(), org_id="org-1"
+    ).load_team_attribution_context(as_of=now)
+
+    assert context.member_by_untyped_facet == {}
+    assert (
+        context.provider_member_by_untyped_facet["bob@example.com"][0].team_id
+        == "team-fallback"
+    )
+
+    item = WorkItem(
+        work_item_id="gh:full-chaos/dev-health#1",
+        provider="github",
+        title="Bare teams.members facet",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        created_at=now,
+        updated_at=now,
+        assignees=["bob@example.com"],
+        labels=[],
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=context
+    )
+    assert team_id == "team-fallback"
+    primary = next(candidate for candidate in candidates if candidate.is_primary == 1)
+    assert primary.source == "assignee_membership"
+    assert primary.confidence == "high"
+    assert primary.specificity == 50
+
+
+@pytest.mark.asyncio
+async def test_loader_manual_members_overrides_a_conflicting_teams_members_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the fix above: a teams.manual_members entry IS the
+    admin override, and wins outright even when the SAME identity also
+    appears in a DIFFERENT team's bare teams.members roster (the shape a
+    provider auto-import row takes) -- the admin layer short-circuits before
+    the (ambiguous) fallback pool is ever consulted."""
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    async def fake_query(_client: object, query: str, _params: dict[str, object]):
+        if "FROM teams FINAL" in query:
+            return [
+                {
+                    "id": "team-fallback",
+                    "name": "Fallback Team",
+                    "members": ["carol@example.com"],
+                    "manual_members": [],
+                },
+                {
+                    "id": "team-override",
+                    "name": "Override Team",
+                    # add_members mirrors manual writes into `members` too
+                    # (legacy TeamResolver compat) -- this row's own presence
+                    # in the fallback pool must not matter once the admin
+                    # layer resolves unambiguously.
+                    "members": ["carol@example.com"],
+                    "manual_members": ["carol@example.com"],
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query,
+    )
+
+    context = await ClickHouseDataLoader(
+        object(), org_id="org-1"
+    ).load_team_attribution_context(as_of=now)
+
+    item = WorkItem(
+        work_item_id="gh:full-chaos/dev-health#2",
+        provider="github",
+        title="Admin override wins over a conflicting fallback entry",
+        type="issue",
+        status="todo",
+        status_raw="Open",
+        created_at=now,
+        updated_at=now,
+        assignees=["carol@example.com"],
+        labels=[],
+    )
+    team_id, _, candidates = resolve_team_attribution(
+        item, None, None, attribution_context=context
+    )
+    assert team_id == "team-override"
+    primary = next(candidate for candidate in candidates if candidate.is_primary == 1)
+    assert primary.source == "assignee_membership"
+    assert primary.confidence == "high"
+    assert primary.specificity == 60

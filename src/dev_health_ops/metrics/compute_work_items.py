@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal, TypedDict
 
+from dev_health_ops.metrics.prometheus import TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL
 from dev_health_ops.metrics.schemas import (
     EstimateCoverageMetricsDailyRecord,
     WorkItemCycleTimeRecord,
@@ -129,22 +130,35 @@ class TeamAttributionContext:
     )
     # CHAOS-4321 (chris, 08:30 PT — "manual is override: if the override
     # exists, use it, else use attribution from providers"): the admin
-    # mapping (identities.team_ids / teams.members, above) is layer 1 --
+    # mapping (identities.team_ids / teams.manual_members) is layer 1 --
     # authoritative when present, including when present-but-ambiguous (an
     # ambiguous admin mapping does NOT fall through to provider data; it
     # needs fixing, not bypassing). `member_by_untyped_facet` is admin layer
-    # too: a `teams.members` facet with no backing `identities` row (added
-    # via `/org/admin/teams/[id]/edit` directly) -- matched WITHOUT a
-    # provider tag (an admin-entered email/login is the admin's intent
-    # regardless of provider). `provider_member_by_identity` is layer 2, the
-    # pre-CHAOS-4321 `team_memberships` auto-import data -- consulted ONLY
+    # too: a `teams.manual_members` facet with no backing `identities` row
+    # (added via the admin Identities screen or the drift-approval flow) --
+    # matched WITHOUT a provider tag (an admin-entered email/login is the
+    # admin's intent regardless of provider). `provider_member_by_identity`
+    # and `provider_member_by_untyped_facet` are layer 2, consulted ONLY
     # when layer 1 resolves to ZERO candidates for that identity.
+    #
+    # CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex adversarial
+    # review HIGH finding): `teams.members` is NOT admin-exclusive -- provider
+    # auto-import writes unreviewed roster entries into it too (see
+    # workers/team_autoimport_github.py's AUTO_APPLY_POLICY path), so it
+    # cannot be trusted as an authoritative, no-fallthrough override. Only
+    # `teams.manual_members` (written exclusively by
+    # ClickHouseTeamAdminService.add_members/remove_members/set_members --
+    # the admin Identities screen and drift-approval) is layer 1.
+    # `teams.members` moved to layer 2 as `provider_member_by_untyped_facet`.
     member_by_untyped_facet: dict[str, list[TeamAttributionCandidate]] = field(
         default_factory=dict
     )
     provider_member_by_identity: dict[
         tuple[str, str], list[TeamAttributionCandidate]
     ] = field(default_factory=dict)
+    provider_member_by_untyped_facet: dict[str, list[TeamAttributionCandidate]] = field(
+        default_factory=dict
+    )
     manual_fallbacks: list[ManualFallbackRule] = field(default_factory=list)
 
 
@@ -314,15 +328,20 @@ def _resolve_membership(
 ) -> tuple[list[TeamAttributionCandidate], str | None]:
     """Two-layer membership resolution (CHAOS-4321, chris 08:30 PT: "manual
     is override -- if the override exists, use it, else use attribution
-    from providers"). Layer 1 (admin mapping:
+    from providers"; refined 2026-08-26 10:39 PT: "admin is an override, not
+    a default -- it's the sync config mapping, but admin can override it in
+    the panel"). Layer 1 (admin mapping:
     `attribution_context.member_by_identity` ∪ `.member_by_untyped_facet`,
-    both sourced from `identities`/`teams`) is AUTHORITATIVE when it has any
-    candidate at all for this identity -- including when ambiguous: an
-    ambiguous admin mapping does NOT fall through to layer 2, it needs
-    fixing, not bypassing. Layer 2 (`.provider_member_by_identity`, sourced
-    from provider auto-import `team_memberships`) is consulted ONLY when
-    layer 1 has ZERO candidates for this identity. Both layers apply the
-    SAME exactly-one-team gate.
+    sourced from `identities.team_ids` and `teams.manual_members` -- NOT
+    `teams.members`, which mixes in unreviewed provider auto-import rows, see
+    the field docstrings on `TeamAttributionContext`) is AUTHORITATIVE when
+    it has any candidate at all for this identity -- including when
+    ambiguous: an ambiguous admin mapping does NOT fall through to layer 2,
+    it needs fixing, not bypassing. Layer 2
+    (`.provider_member_by_identity` ∪ `.provider_member_by_untyped_facet`,
+    sourced from provider auto-import `team_memberships` and `teams.members`
+    respectively) is consulted ONLY when layer 1 has ZERO candidates for this
+    identity. Both layers apply the SAME exactly-one-team gate.
 
     Returns `(candidates, reason)`: `candidates` is the resolved list to use
     for the caller's source when exactly one team resolved (`reason` is
@@ -341,16 +360,23 @@ def _resolve_membership(
     admin_candidates.extend(attribution_context.member_by_untyped_facet.get(key, []))
     admin_teams = {c.team_id for c in admin_candidates}
     if len(admin_teams) == 1:
+        TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer="admin_override").inc()
         return admin_candidates, None
     if len(admin_teams) > 1:
         ids = ",".join(sorted(t for t in admin_teams if t))
         return [], f"ambiguous_admin_membership:{ids}"
 
-    provider_candidates = _context_candidates(
-        attribution_context.provider_member_by_identity, provider, key
+    provider_candidates = list(
+        _context_candidates(
+            attribution_context.provider_member_by_identity, provider, key
+        )
+    )
+    provider_candidates.extend(
+        attribution_context.provider_member_by_untyped_facet.get(key, [])
     )
     provider_teams = {c.team_id for c in provider_candidates}
     if len(provider_teams) == 1:
+        TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL.labels(layer="provider_fallback").inc()
         return provider_candidates, None
     if len(provider_teams) > 1:
         ids = ",".join(sorted(t for t in provider_teams if t))

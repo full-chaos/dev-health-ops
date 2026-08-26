@@ -386,6 +386,23 @@ if _PROMETHEUS_AVAILABLE:
         ["provider", "source"],
     )
 
+    TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_team_attribution_membership_layer_total",
+        "assignee_membership/author_membership resolutions by which layer "
+        "resolved them (CHAOS-4321, chris 2026-08-26 10:39 PT: 'admin is an "
+        "override, not a default'). layer='admin_override' means "
+        "identities.team_ids or teams.manual_members had a single-team "
+        "answer; layer='provider_fallback' means the admin layer had zero "
+        "candidates and team_memberships or teams.members (the unreviewed "
+        "auto-import roster) resolved it instead. Incremented at "
+        "resolution time in _resolve_membership, not derived post-hoc from "
+        "the written row, since specificity alone cannot reliably "
+        "distinguish a real team_memberships row's arbitrary specificity "
+        "from the fixed values this ticket's two synthetic untyped-facet "
+        "pools use.",
+        ["layer"],
+    )
+
     # ---------------------------------------------------------------------------
     # Metric compatibility bridge runner subprocess (CHAOS-4264)
     # ---------------------------------------------------------------------------
@@ -459,6 +476,7 @@ else:
     INTEGRATION_CREDENTIAL_DECRYPT_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
     WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _noop_counter()
+    TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()

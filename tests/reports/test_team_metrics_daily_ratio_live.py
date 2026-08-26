@@ -247,23 +247,28 @@ async def test_execute_chart_drops_legacy_bucket_once_a_real_per_repo_backfill_e
 
 
 @pytest.mark.asyncio
-async def test_execute_chart_still_surfaces_a_legacy_only_day_with_no_backfill_yet() -> (
+async def test_execute_chart_does_not_leak_another_orgs_real_rows_into_its_own_legacy_bucket_decision() -> (
     None
 ):
-    """Independent-review coverage gap (post codex round 3): the legacy-
-    bucket-suppression filter (WHERE repo_id != '' OR real_repo_count = 0)
-    has a second branch nothing else in this file exercises -- a
-    (team, day) that has ONLY the legacy repo_id='' row, no real per-repo
-    backfill yet. real_repo_count is 0 for that key, so the second
-    disjunct keeps the legacy row. A future refactor that simplified the
-    filter to just "WHERE repo_id != ''" would silently zero out every
-    not-yet-backfilled historical day -- this test guards that branch.
+    """Deterministic red-first proof for the independent-review finding
+    (second review pass): _source_from's legacy-bucket-suppression window
+    previously partitioned by (day, team_id) only, with NO org_id
+    boundary. Two orgs sharing a (team, day) key -- org A with ONLY a
+    legacy empty-string-repo_id row (no backfill yet), org B with a real
+    per-repo row -- both share that (day, team_id) partition. Under the
+    pre-fix window, org B's real row makes real_repo_count > 0 for the
+    SHARED partition, so org A's own legacy row would be wrongly dropped
+    (repo_id == '' AND real_repo_count != 0 -- neither disjunct holds)
+    even though org A was never touched by any backfill. Both orgs' rows
+    are written by THIS test, so (unlike a single-org fixture) this fails
+    deterministically pre-fix and cannot pass by accident of test
+    ordering or leftover shared state from other tests in this file.
     """
     from datetime import date, datetime, timezone
 
     sink = _sink()
-    org_id = str(uuid.uuid4())  # throwaway random org (isolated, no cleanup needed)
-    sink.org_id = org_id
+    org_a = str(uuid.uuid4())  # throwaway random org under test (isolated)
+    org_b = str(uuid.uuid4())  # throwaway random NOISE org (isolated)
     day = date(2026, 1, 1)
 
     legacy_only_row = TeamMetricsDailyRecord(
@@ -276,9 +281,27 @@ async def test_execute_chart_still_surfaces_a_legacy_only_day_with_no_backfill_y
         after_hours_commit_ratio=0.5,
         weekend_commit_ratio=0.0,
         computed_at=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+        org_id=org_a,
         repo_id="",  # pre-migration-080 write, never re-driven
     )
+    other_org_real_row = TeamMetricsDailyRecord(
+        day=day,
+        team_id="core",
+        team_name="Core",
+        commits_count=100,
+        after_hours_commits_count=0,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.0,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+        org_id=org_b,
+        repo_id="repo-x",  # a DIFFERENT org's real per-repo backfill
+    )
+    # Explicit per-row org_id (both set above) bypasses the sink's
+    # auto-inject-from-self.org_id path -- required to write two distinct
+    # orgs' rows through one sink instance.
     sink.write_team_metrics([legacy_only_row])
+    sink.write_team_metrics([other_org_real_row])
 
     spec = ChartSpec(
         chart_id="chart-legacy-only",
@@ -290,15 +313,16 @@ async def test_execute_chart_still_surfaces_a_legacy_only_day_with_no_backfill_y
         time_range_start=day,
         time_range_end=day,
         title=None,
-        org_id=org_id,
+        org_id=org_a,
     )
     result = await execute_chart(spec, sink.client)
 
     assert len(result.data_points) == 1
     got = result.data_points[0]["y"]
     assert got == pytest.approx(0.5), (
-        f"after_hours_commit_ratio y={got!r}, want ~0.5 (the legacy row's "
-        "own ratio) -- 0.0 or an empty result would mean the "
-        "legacy-only-day branch of the suppression filter (real_repo_count "
-        "= 0) was dropped instead of kept (the regression this test guards)"
+        f"after_hours_commit_ratio y={got!r}, want ~0.5 (org A's own legacy "
+        "row, untouched by any backfill) -- 0.0 or an empty result would "
+        "mean org B's real per-repo row (different org, same day/team) "
+        "leaked into org A's real_repo_count and wrongly dropped org A's "
+        "legacy bucket (the regression this test guards)"
     )

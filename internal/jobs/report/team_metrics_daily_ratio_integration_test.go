@@ -246,17 +246,21 @@ VALUES
 	}
 }
 
-// TestClickHouseQueryAdapterStillSurfacesALegacyOnlyDayWithNoBackfillYet is
-// the independent-review coverage gap raised after codex round 3: the
-// legacy-bucket-suppression filter (a non-empty-repo_id OR
-// real_repo_count = 0 disjunction) has a second branch the other tests in
-// this file don't exercise -- a (team, day) with ONLY the legacy
-// empty-string repo_id row, no real per-repo backfill yet. real_repo_count
-// is 0 for that key, so the second disjunct keeps the legacy row. A future
-// refactor that simplified the filter to require a non-empty repo_id
-// unconditionally would silently zero out every not-yet-backfilled
-// historical day -- this test guards that branch.
-func TestClickHouseQueryAdapterStillSurfacesALegacyOnlyDayWithNoBackfillYet(t *testing.T) {
+// TestClickHouseQueryAdapterDoesNotLeakAnotherOrgsRealRowsIntoItsOwnLegacyBucketDecision
+// is the deterministic red-first proof for the independent-review finding
+// (second review pass): _source_from's/sourceFrom's legacy-bucket-
+// suppression window previously partitioned by (day, team_id) only, with
+// NO org_id boundary. Two orgs sharing a (team, day) key -- org-1 with
+// ONLY a legacy empty-string-repo_id row (no backfill yet), org-2 with a
+// real per-repo row -- both share that (day, team_id) partition. Under the
+// pre-fix window, org-2's real row makes real_repo_count > 0 for the
+// SHARED partition, so org-1's own legacy row would be wrongly dropped
+// (an empty repo_id AND a nonzero real_repo_count -- neither disjunct holds) even
+// though org-1 was never touched by any backfill. This is a single
+// isolated container/table with both orgs' data present at once, so
+// (unlike a single-org fixture) it fails deterministically pre-fix and
+// cannot pass by accident of test ordering or leftover shared state.
+func TestClickHouseQueryAdapterDoesNotLeakAnotherOrgsRealRowsIntoItsOwnLegacyBucketDecision(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -287,7 +291,8 @@ INSERT INTO team_metrics_daily
     (day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count,
      after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id, repo_id)
 VALUES
-    ('2026-01-01', 'core', 'Core', 4, 2, 0, 0.5, 0.0, '2026-01-01 12:00:00.000000', 'org-1', '')`); err != nil {
+    ('2026-01-01', 'core', 'Core', 4, 2, 0, 0.5, 0.0, '2026-01-01 12:00:00.000000', 'org-1', ''),
+    ('2026-01-01', 'core', 'Core', 100, 0, 0, 0.0, 0.0, '2026-01-01 12:00:00.000000', 'org-2', 'repo-x')`); err != nil {
 		t.Fatal(err)
 	}
 	loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
@@ -315,9 +320,9 @@ VALUES
 	got := result.Charts[0].DataPoints[0].Y
 	if got < 0.499 || got > 0.501 {
 		t.Fatalf(
-			"after_hours_commit_ratio y=%v, want ~0.5 (the legacy row's own ratio) -- "+
-				"0.0 or an empty result would mean the legacy-only-day branch of the suppression filter "+
-				"(real_repo_count = 0) was dropped instead of kept",
+			"after_hours_commit_ratio y=%v, want ~0.5 (org-1's own legacy row, untouched by any backfill) -- "+
+				"0.0 or an empty result would mean org-2's real per-repo row (different org, same day/team) "+
+				"leaked into org-1's real_repo_count and wrongly dropped org-1's legacy bucket",
 			got,
 		)
 	}

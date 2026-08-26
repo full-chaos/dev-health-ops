@@ -96,7 +96,7 @@ func NewNativePostSyncService(
 
 // Fanout validates the exact River transport generation, reconstructs scope
 // from authoritative SyncRun state, and stages every child in one transaction.
-func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) error {
+func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncArgs) (err error) {
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrPostSyncUnavailable
 	}
@@ -113,14 +113,46 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if !current {
 		return nil
 	}
+
+	// The fanout-outcome telemetry (CHAOS-4263) is recorded exactly once, by
+	// this single deferred call, and only once its outcome is durably true
+	// (codex adversarial review, round 3): recording "published" as soon as
+	// daily.StartRunTx staged its write -- before WorkGraph, Investment,
+	// membership_backfill, DORA, team-autoimport, or the final Commit had a
+	// chance to fail and roll the whole transaction back -- would let
+	// telemetry claim a publish that never actually landed. observe is only
+	// armed once loadPostSyncPlan has run, so an error before that (an
+	// infrastructure failure with no plan/generation resolved yet, or a
+	// stale/non-current route) is not part of "did this sync's daily fanout
+	// publish" and is deliberately left unobserved by this counter.
+	var (
+		outcome    jobruntime.PostSyncFanoutOutcome
+		dispatchID string
+		observe    bool
+	)
+	defer func() {
+		if !observe {
+			return
+		}
+		if err != nil {
+			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
+			return
+		}
+		service.observeFanout(outcome, args, dispatchID)
+	}()
+
 	plan, err := loadPostSyncPlan(ctx, tx, args, service.now().UTC())
 	if err != nil {
+		observe = true
 		return err
 	}
 	if plan == nil {
-		service.observeFanout(jobruntime.PostSyncFanoutOutcomeNoRepositories, args, "")
-		return tx.Commit(ctx)
+		observe = true
+		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		err = tx.Commit(ctx)
+		return err
 	}
+	observe = true
 	var orderedCompletion string
 	if plan.Complexity {
 		orderedCompletion, err = service.remaining.StartRunTx(
@@ -131,17 +163,15 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.Daily {
-		var dispatchID string
 		dispatchID, orderedCompletion, err = service.daily.StartRunTx(
 			ctx, tx, *plan, orderedCompletion,
 		)
 		if err != nil {
-			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
 			return err
 		}
-		service.observeFanout(jobruntime.PostSyncFanoutOutcomePublished, args, dispatchID)
+		outcome = jobruntime.PostSyncFanoutOutcomePublished
 	} else {
-		service.observeFanout(jobruntime.PostSyncFanoutOutcomeNoRepositories, args, "")
+		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
 	}
 	if plan.WorkGraph {
 		orderedCompletion, err = service.workGraph.StartRequestTx(
@@ -166,15 +196,16 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.DORA {
-		if _, err := service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
+		if _, err = service.remaining.StartRunTx(ctx, tx, "dora", *plan, ""); err != nil {
 			return err
 		}
 	}
-	if err := service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
+	if err = service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrPostSyncUnavailable
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		err = ErrPostSyncUnavailable
+		return err
 	}
 	return nil
 }

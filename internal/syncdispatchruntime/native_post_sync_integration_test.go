@@ -376,6 +376,72 @@ func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *tes
 	}
 }
 
+// TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWholeTransaction
+// pins the codex adversarial-review finding (round 3, CHAOS-4263): the
+// fanout-outcome telemetry must not be transactionally dishonest. daily.
+// StartRunTx staging its write inside the still-open transaction is not the
+// same as it landing -- a later stage (here: investment.materialize) failing
+// rolls back the ENTIRE transaction, daily dispatch included, so this must
+// report "error", never "published".
+func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWholeTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000041"
+		runID         = "00000000-0000-4000-8000-000000000042"
+		outboxID      = "00000000-0000-4000-8000-000000000043"
+		integrationID = "00000000-0000-4000-8000-000000000044"
+		repositoryID  = "00000000-0000-4000-8000-000000000045"
+	)
+	// seedPostSync's "commits" dataset makes plan.Daily AND plan.Investment
+	// both true, so daily.StartRunTx (a real writer here, not the failing
+	// one) succeeds and stages its work before investment.materialize fails.
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	service, err := NewNativePostSyncService(
+		pool,
+		markerDaily{},
+		markerRemaining{},
+		markerWorkGraph{markerWriter{failKind: "investment.materialize"}},
+		markerTeam{},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingFanoutObserver{}
+	service.SetFanoutObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	if err := service.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
+		t.Fatalf("Fanout error = %v, want ErrPostSyncUnavailable", err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
+		t.Fatalf("observed outcomes = %v, want [error] -- daily's staged write was rolled back, so it must never report published", observer.outcomes)
+	}
+	var markers int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 0 {
+		t.Fatalf("rolled-back generation left %d markers behind", markers)
+	}
+}
+
 func createPostSyncTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `

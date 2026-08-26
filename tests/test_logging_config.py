@@ -34,6 +34,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
 
+import openai
 import pytest
 
 from dev_health_ops.llm.agent.contracts import (
@@ -47,7 +48,32 @@ from dev_health_ops.llm.agent.errors import AgentProviderError
 from dev_health_ops.llm.agent.openai_compatible import OpenAICompatibleAgentProvider
 from dev_health_ops.logging_config import configure_logging
 
-_CONTENT_CARRYING_CLIENT_LOGGERS = ("openai", "httpx", "httpcore")
+_CONTENT_CARRYING_CLIENT_LOGGERS = (
+    "openai",
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+)
+
+# CHAOS-4346: openai>=3.4.0 stopped including request/response body content
+# (messages, tools, schemas) in its own "openai" logger's DEBUG line -- see
+# openai._base_client's own comment, "Request bodies, files, URLs, and
+# custom options can contain private data" -- confirmed empirically: the
+# CHAOS-3258 leak harness below reproduces the sentinel leak against
+# openai==3.0.0/3.3.1 but not against openai==3.4.0, where the SDK's request-
+# building debug call only logs `method=%s retries_taken=%i`. That is an
+# upstream privacy improvement, not evidence this repo's own clamp (see
+# dev_health_ops.logging_config._CONTENT_CARRYING_CLIENT_LOGGERS) stopped
+# mattering -- httpx2/httpcore2 (the SDK's actual transport dependency,
+# distinct from "httpx"/"httpcore") and any future openai release could
+# still log body content. A plain version-string comparison is deliberate
+# here (not a runtime capability probe): the empirical boundary is known
+# (3.3.1 leaks, 3.4.0 does not) and simplicity keeps this self-check
+# legible; revisit if a later openai release reopens or moves the boundary.
+_OPENAI_LOGS_REQUEST_BODY_AT_DEBUG = tuple(
+    int(part) for part in openai.__version__.split(".")[:3]
+) < (3, 4, 0)
 
 
 def _sentinel(name: str) -> str:
@@ -326,11 +352,26 @@ async def test_leak_harness_actually_observes_a_leak_when_unpatched(
     fixture) and confirm the question sentinel DOES appear in captured logs.
     If this test ever stops failing-when-unpatched, the suite above could
     pass for the wrong reason: nothing being logged at all.
+
+    CHAOS-4346: on openai>=3.4.0 the SDK itself no longer logs request
+    bodies at DEBUG (see _OPENAI_LOGS_REQUEST_BODY_AT_DEBUG above), so this
+    exact reproduction is unavailable on that SDK version -- asserted
+    explicitly below rather than silently passing for the wrong reason.
     """
     server = fake_server(_Scenario.SUCCESS)
     host, port = cast(tuple[str, int], server.server_address)
     sentinels = _sentinel_bundle()
-    base_url = f"http://{host}:{port}/v1"
+    # CHAOS-4346: on openai>=3.4.0 the body-content sentinels below never
+    # leak via this path (see _OPENAI_LOGS_REQUEST_BODY_AT_DEBUG), so an
+    # additional URL-embedded marker is needed to keep this test mutation-
+    # sensitive to the httpx2/httpcore2 clamp entries specifically -- httpx2
+    # logs the full outgoing request line ("HTTP Request: POST <url>") at
+    # INFO regardless of DEBUG, so it leaks whenever httpx2/httpcore2 aren't
+    # pinned to WARNING, independent of whether the SDK still logs bodies.
+    # The fake handler ignores the request path entirely, so any path
+    # segment routes to the same response.
+    url_marker = _sentinel("url-path-marker")
+    base_url = f"http://{host}:{port}/v1/{url_marker}"
 
     configure_logging(level="DEBUG")
     # Construct the provider BEFORE forcing DEBUG: the constructor itself now
@@ -352,6 +393,23 @@ async def test_leak_harness_actually_observes_a_leak_when_unpatched(
         )
 
     assert error is None
+    if not _OPENAI_LOGS_REQUEST_BODY_AT_DEBUG:
+        assert sentinels["question"] not in caplog.text, (
+            f"openai=={openai.__version__} was expected to no longer log "
+            "request bodies at DEBUG (per its own _base_client.py); if this "
+            "now fails, either the SDK reintroduced body logging (move the "
+            "_OPENAI_LOGS_REQUEST_BODY_AT_DEBUG boundary up to match) or "
+            "something in this repo is logging it instead (a real leak)"
+        )
+        assert url_marker in caplog.text, (
+            "expected the URL-embedded marker to leak via httpx2's own "
+            "request-line logging with the httpx2/httpcore2 clamp reverted; "
+            "if this fails, the harness can no longer prove the "
+            "httpx2/httpcore2 clamp entries (CHAOS-4346) do anything on "
+            "this openai version -- this test would pass vacuously whether "
+            "or not those entries were removed or misspelled"
+        )
+        return
     assert sentinels["question"] in caplog.text, (
         "expected the unpatched SDK loggers to leak the question sentinel; "
         "if this fails, the harness above cannot be trusted to catch a "

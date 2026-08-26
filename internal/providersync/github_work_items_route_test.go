@@ -242,6 +242,21 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	}{
 		{name: "null organization", reply: `{"data":{"organization":null}}`, reason: githubProjectsV2NullOrganization},
 		{name: "null project", reply: `{"data":{"organization":{"projectV2":null}}}`, reason: githubProjectsV2NullProject},
+		// codex adversarial review, CHAOS-4289 round 1: an unidentifiable
+		// board item (unrecognised typename here) is a DIFFERENT degradation
+		// path than the two above -- fetchGitHubProjectV2Target reports this
+		// target Complete, the gap is discovered per-item in the outer Fetch
+		// loop -- and it is exactly the path that used to suppress removals
+		// via Snapshot.Complete without ever reaching the route's watermark
+		// gate. This case is the ROUTE-LEVEL, behavioral proof of that fix:
+		// it exercises Collect() end to end and asserts the watermark itself,
+		// not just the Fetch-level Incomplete slice.
+		{
+			name: "unidentified item", reason: githubProjectsV2UnidentifiedItem,
+			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			doer := &githubWorkItemsRouteDoer{

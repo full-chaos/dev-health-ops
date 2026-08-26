@@ -131,6 +131,28 @@ type dailyMetricsDiscoveryLabels struct {
 	Outcome DailyMetricsDiscoveryOutcome
 }
 
+// PostSyncFanoutOutcome is the bounded result of NativePostSyncService.Fanout
+// deciding whether one completed sync's post_sync job re-drove daily metrics
+// (CHAOS-4263, codex adversarial-review round 2). "no_repositories" here
+// names the same "nothing published" outcome as DailyMetricsDiscoveryOutcome
+// for dashboard continuity, even though at THIS layer it means "this sync had
+// no daily-relevant capability" or "no successful sync_run_unit at all" --
+// live ClickHouse repository discovery itself happens later, inside the
+// daily_dispatch job this outcome would have published, never inside Fanout.
+type PostSyncFanoutOutcome string
+
+const (
+	PostSyncFanoutOutcomePublished      PostSyncFanoutOutcome = "published"
+	PostSyncFanoutOutcomeNoRepositories PostSyncFanoutOutcome = "no_repositories"
+	PostSyncFanoutOutcomeError          PostSyncFanoutOutcome = "error"
+)
+
+func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
+	return []PostSyncFanoutOutcome{
+		PostSyncFanoutOutcomePublished, PostSyncFanoutOutcomeNoRepositories, PostSyncFanoutOutcomeError,
+	}
+}
+
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
 // four the RCA found stale despite fresh source data. The other 19 families in
@@ -280,6 +302,7 @@ type MetricsCollector struct {
 	dailyMetricsLease                    map[dailyMetricsLeaseLabels]uint64
 	dailyMetricsDiscovery                map[dailyMetricsDiscoveryLabels]uint64
 	dailyMetricsFamilyZeroRowsWithSource map[string]uint64
+	postSyncFanout                       map[PostSyncFanoutOutcome]uint64
 	workGraphReleaseLost                 uint64
 	remainingReleaseLost                 uint64
 	zeroUnitFinalizations                map[zeroUnitFinalizationLabels]uint64
@@ -365,6 +388,7 @@ var _ ReportRunLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
+var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
@@ -406,6 +430,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsLease:                    make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
+		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
 		coverageCacheInvalidationsConsumed:   make(map[string]uint64),
@@ -798,6 +823,19 @@ func (collector *MetricsCollector) ObserveDailyMetricsFamilyZeroRowsWithSource(f
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFamilyZeroRowsWithSource[family]++
+	return nil
+}
+
+// ObservePostSyncFanout records the outcome of one post_sync job's decision
+// about whether to re-drive daily metrics for its organization (CHAOS-4263,
+// codex adversarial-review round 2).
+func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutOutcome) error {
+	if !slices.Contains(postSyncFanoutOutcomes(), outcome) {
+		return errors.New("post-sync fanout outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.postSyncFanout[outcome]++
 	return nil
 }
 
@@ -1372,6 +1410,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsLeases(&output)
 	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
+	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeZeroUnitFinalizations(&output)
@@ -1656,6 +1695,14 @@ func (collector *MetricsCollector) writeDailyMetricsFamilyZeroRowsWithSource(out
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		writeUintSample(output, "dev_health_daily_metrics_families_zero_rows_with_source_total",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsFamilyZeroRowsWithSource[family])
+	}
+}
+
+func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) {
+	writeMetadata(output, "dev_health_post_sync_fanout_total", "Post-sync fanout outcomes: whether a completed sync's post_sync job published a daily-metrics re-drive (CHAOS-4263).", "counter")
+	for _, outcome := range postSyncFanoutOutcomes() {
+		writeUintSample(output, "dev_health_post_sync_fanout_total",
+			[]metricLabel{{"outcome", string(outcome)}}, collector.postSyncFanout[outcome])
 	}
 }
 

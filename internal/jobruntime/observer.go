@@ -110,6 +110,18 @@ type DailyMetricsDiscoveryObserver interface {
 	ObserveDailyMetricsDiscovery(DailyMetricsRunTrigger, DailyMetricsDiscoveryOutcome) error
 }
 
+// PostSyncFanoutObserver is the narrow capability NativePostSyncService.Fanout
+// depends on after it decides whether a completed sync warrants a daily-
+// metrics re-drive (CHAOS-4263, codex adversarial-review round 2). Before
+// this observer existed, Fanout's decision was invisible: a daily_dispatch
+// publish and a legitimate "not daily-relevant" skip both looked, from the
+// outside, like an ordinary post_sync job completing with no error -- so a
+// gate that finds zero rows downstream had no way to tell "we published and
+// nothing consumed it" apart from "we never published at all".
+type PostSyncFanoutObserver interface {
+	ObservePostSyncFanout(PostSyncFanoutOutcome) error
+}
+
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
 // partition handler depends on when a family's upstream source data exists
 // for a partition's repositories and day, but that family's output table has

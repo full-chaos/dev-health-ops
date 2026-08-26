@@ -68,6 +68,11 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.ObserveDailyMetricsDiscovery(DailyMetricsRunTriggerPostSync, DailyMetricsDiscoveryOutcomeNoRepositories); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObservePostSyncFanout(PostSyncFanoutOutcomePublished); err != nil {
+		t.Fatal(err)
+	}
+	// no_repositories and error are deliberately left unobserved so their
+	// pre-seeded zeros (asserted below) are proven, not merely assumed.
 	// scheduled_fanout/materialized is deliberately left unobserved so its
 	// pre-seeded zero (asserted below) is proven, not merely assumed.
 	// The fenced reason is deliberately left unobserved so its pre-seeded zero
@@ -135,6 +140,9 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_daily_metrics_discovery_total{trigger="scheduled_fanout",outcome="no_repositories"} 0`,
 		`worker_daily_metrics_discovery_total{trigger="post_sync",outcome="materialized"} 0`,
 		`worker_daily_metrics_discovery_total{trigger="post_sync",outcome="no_repositories"} 1`,
+		`dev_health_post_sync_fanout_total{outcome="published"} 1`,
+		`dev_health_post_sync_fanout_total{outcome="no_repositories"} 0`,
+		`dev_health_post_sync_fanout_total{outcome="error"} 0`,
 		`worker_workgraph_lease_release_lost_total 1`,
 		`worker_remaining_metrics_lease_release_lost_total 0`,
 		`worker_stream_lag{stream="external_ingest",consumer_group="sink_workers"} 19`,
@@ -159,6 +167,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
 		"worker_idempotency_renewal_retired_total",
 		"worker_daily_metrics_lease_total", "worker_daily_metrics_discovery_total",
+		"dev_health_post_sync_fanout_total",
 		"worker_workgraph_lease_release_lost_total", "worker_remaining_metrics_lease_release_lost_total",
 		"worker_stream_lag", "worker_stream_pending",
 		"worker_stream_oldest_pending_seconds", "worker_budget_wait_seconds",

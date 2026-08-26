@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,9 +36,9 @@ ON CONFLICT DO NOTHING`, plan.SyncRunID, kind, prerequisite)
 
 type markerDaily struct{ markerWriter }
 
-func (writer markerDaily) StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, prerequisite string) (string, error) {
+func (writer markerDaily) StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, prerequisite string) (string, string, error) {
 	err := writer.write(ctx, tx, "daily", plan, prerequisite)
-	return "daily", err
+	return "daily-dispatch-id", "daily", err
 }
 
 type markerRemaining struct{ markerWriter }
@@ -185,6 +186,193 @@ WHERE sync_run_id=$1`, runID)
 	}
 	if markers != 0 {
 		t.Fatalf("stale route emitted %d markers", markers)
+	}
+}
+
+// recordingFanoutObserver captures every jobruntime.PostSyncFanoutOutcome Fanout reports
+// (CHAOS-4263, codex adversarial-review round 2) so tests can assert exactly
+// what a real gate reading dev_health_post_sync_fanout_total would see.
+type recordingFanoutObserver struct {
+	outcomes []jobruntime.PostSyncFanoutOutcome
+}
+
+func (observer *recordingFanoutObserver) ObservePostSyncFanout(outcome jobruntime.PostSyncFanoutOutcome) error {
+	observer.outcomes = append(observer.outcomes, outcome)
+	return nil
+}
+
+// TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID pins the
+// telemetry team-lead ordered after diagnosing PR #1916's proof gate staying
+// red with zero visibility into whether Fanout ever published a daily
+// dispatch: a daily-relevant sync must report "published" with the real
+// dispatch id from daily.StartRunTx, not a synthesized placeholder.
+func TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000011"
+		runID         = "00000000-0000-4000-8000-000000000012"
+		outboxID      = "00000000-0000-4000-8000-000000000013"
+		integrationID = "00000000-0000-4000-8000-000000000014"
+		repositoryID  = "00000000-0000-4000-8000-000000000015"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingFanoutObserver{}
+	service.SetFanoutObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	if err := service.Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomePublished {
+		t.Fatalf("observed outcomes = %v, want [published]", observer.outcomes)
+	}
+}
+
+// TestNativePostSyncFanoutObservesNoRepositoriesOutcomeWhenNotDailyRelevant
+// pins the healthy skip case: a sync that only touched a capability outside
+// dailyMetricsTrigger's set (git/work-items/cicd/deployments/incidents) must
+// not publish a daily dispatch, and Fanout must report that decision, not
+// stay silent about it.
+func TestNativePostSyncFanoutObservesNoRepositoriesOutcomeWhenNotDailyRelevant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000021"
+		runID         = "00000000-0000-4000-8000-000000000022"
+		outboxID      = "00000000-0000-4000-8000-000000000023"
+		integrationID = "00000000-0000-4000-8000-000000000024"
+		repositoryID  = "00000000-0000-4000-8000-000000000025"
+	)
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO sync_dispatch_transport_routes
+		    (kind,transport,generation,paused,rollback_transport)
+		  VALUES ('post_sync','river',1,false,'celery')`, nil},
+		{`INSERT INTO sync_dispatch_outbox
+    (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
+		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
+		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
+			[]any{runID, orgID, integrationID}},
+		// "blame" LegacyTargets to ["blame"] alone -- not git, prs, work-items,
+		// cicd, deployments, incidents, or operational -- so successfulUnit is
+		// true (plan != nil) but dailyMetricsTrigger's every input is false.
+		{`INSERT INTO sync_run_units
+    (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
+VALUES ('00000000-0000-4000-8000-000000000026',$1,'github','blame',$2,
+        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
+			[]any{runID, repositoryID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingFanoutObserver{}
+	service.SetFanoutObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	if err := service.Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeNoRepositories {
+		t.Fatalf("observed outcomes = %v, want [no_repositories]", observer.outcomes)
+	}
+	var markers int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1 AND kind='daily'`, runID).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 0 {
+		t.Fatal("a non-daily-relevant sync published a daily dispatch marker")
+	}
+}
+
+// TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails pins
+// that a genuine publish failure is distinguishable from both a healthy skip
+// and a healthy publish -- the third bucket the CHAOS-4266 gate needs to tell
+// apart "we tried and failed" from "we never tried".
+func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000031"
+		runID         = "00000000-0000-4000-8000-000000000032"
+		outboxID      = "00000000-0000-4000-8000-000000000033"
+		integrationID = "00000000-0000-4000-8000-000000000034"
+		repositoryID  = "00000000-0000-4000-8000-000000000035"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	service, err := NewNativePostSyncService(
+		pool,
+		markerDaily{markerWriter{failKind: "daily"}},
+		markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingFanoutObserver{}
+	service.SetFanoutObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	if err := service.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
+		t.Fatalf("Fanout error = %v, want ErrPostSyncUnavailable", err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
+		t.Fatalf("observed outcomes = %v, want [error]", observer.outcomes)
 	}
 }
 

@@ -36,7 +36,7 @@ func (writer dailyPostSyncWriter) StartRunTx(
 	tx pgx.Tx,
 	plan syncdispatchruntime.PostSyncPlan,
 	prerequisiteCompletionKey string,
-) (string, error) {
+) (string, string, error) {
 	// RepositoryIDs is intentionally omitted: this run's repository set is
 	// resolved later, from live ClickHouse repos.id, via the same
 	// daily.RepositoryDiscoverer the scheduled fixed-schedule fan-out uses
@@ -49,11 +49,11 @@ func (writer dailyPostSyncWriter) StartRunTx(
 		PrerequisiteCompletionKey: prerequisiteCompletionKey,
 	}, writer.publisher)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
 	if err != nil {
-		return "", syncdispatchruntime.ErrPostSyncUnavailable
+		return "", "", syncdispatchruntime.ErrPostSyncUnavailable
 	}
 	// Re-drive the stale window behind this sync's target day (CHAOS-4263):
 	// before this, post-sync only ever re-triggered day D, so a day's
@@ -68,10 +68,10 @@ func (writer dailyPostSyncWriter) StartRunTx(
 			TargetDay:      day,
 			Generation:     "post-sync:" + plan.SyncRunID,
 		}, writer.publisher); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return completionKey, nil
+	return run.ID, completionKey, nil
 }
 
 // maxPostSyncDailyBackfillDays bounds how many extra days behind a sync's
@@ -401,6 +401,14 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	// The fanout-outcome counter reports directly, the same way the daily
+	// discovery/zero-rows observers do: generic runtime middleware has no way
+	// to know whether Fanout published a daily-metrics re-drive for this
+	// sync's organization or found nothing daily-relevant -- only Fanout
+	// itself knows (CHAOS-4263, codex adversarial-review round 2).
+	if fanoutObserver, ok := observer.(jobruntime.PostSyncFanoutObserver); ok {
+		postSync.SetFanoutObserver(fanoutObserver)
 	}
 	// The zero-unit finalization counter reports directly, the same way the
 	// work-graph store reports a release-lost lease directly (cmd/dev-health-worker/workgraph.go):

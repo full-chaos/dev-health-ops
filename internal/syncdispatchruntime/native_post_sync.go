@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,7 +31,11 @@ type PostSyncPlan struct {
 }
 
 type DailyPostSyncWriter interface {
-	StartRunTx(context.Context, pgx.Tx, PostSyncPlan, string) (string, error)
+	// StartRunTx starts (or resumes) this sync's daily-metrics run. It returns
+	// the run's dispatch id (daily_metrics_runs.id -- CHAOS-4263 fanout
+	// telemetry, codex adversarial-review round 2) alongside the ordered-
+	// completion key the rest of Fanout's chain passes forward.
+	StartRunTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, prerequisiteCompletionKey string) (dispatchID string, completionKey string, err error)
 }
 
 type RemainingPostSyncWriter interface {
@@ -46,13 +51,24 @@ type TeamAutoimportPostSyncWriter interface {
 }
 
 type NativePostSyncService struct {
-	pool       *pgxpool.Pool
-	daily      DailyPostSyncWriter
-	remaining  RemainingPostSyncWriter
-	workGraph  WorkGraphInvestmentPostSyncWriter
-	teamImport TeamAutoimportPostSyncWriter
-	logger     *slog.Logger
-	now        func() time.Time
+	pool           *pgxpool.Pool
+	daily          DailyPostSyncWriter
+	remaining      RemainingPostSyncWriter
+	workGraph      WorkGraphInvestmentPostSyncWriter
+	teamImport     TeamAutoimportPostSyncWriter
+	logger         *slog.Logger
+	fanoutObserver jobruntime.PostSyncFanoutObserver
+	now            func() time.Time
+}
+
+// SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
+// (codex adversarial-review round 2). A nil observer (the default) means
+// Fanout still logs the outcome, it just has nothing to count.
+func (service *NativePostSyncService) SetFanoutObserver(observer jobruntime.PostSyncFanoutObserver) {
+	if service == nil {
+		return
+	}
+	service.fanoutObserver = observer
 }
 
 // NewNativePostSyncService constructs the fanout. logger receives the
@@ -102,6 +118,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return err
 	}
 	if plan == nil {
+		service.observeFanout(jobruntime.PostSyncFanoutOutcomeNoRepositories, args, "")
 		return tx.Commit(ctx)
 	}
 	var orderedCompletion string
@@ -114,12 +131,17 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		}
 	}
 	if plan.Daily {
-		orderedCompletion, err = service.daily.StartRunTx(
+		var dispatchID string
+		dispatchID, orderedCompletion, err = service.daily.StartRunTx(
 			ctx, tx, *plan, orderedCompletion,
 		)
 		if err != nil {
+			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
 			return err
 		}
+		service.observeFanout(jobruntime.PostSyncFanoutOutcomePublished, args, dispatchID)
+	} else {
+		service.observeFanout(jobruntime.PostSyncFanoutOutcomeNoRepositories, args, "")
 	}
 	if plan.WorkGraph {
 		orderedCompletion, err = service.workGraph.StartRequestTx(
@@ -155,6 +177,37 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return ErrPostSyncUnavailable
 	}
 	return nil
+}
+
+// observeFanout logs the CHAOS-4263 fanout-outcome line (codex adversarial-
+// review round 2) and, if a counter is wired, records it. dispatchID is only
+// meaningful (non-empty) for PostSyncFanoutOutcomePublished; the repository
+// count that outcome would ideally carry is not knowable here by design --
+// live ClickHouse repository discovery is deliberately deferred to the
+// daily_dispatch job this call published, never run inside the scheduler's
+// own Postgres transaction (see daily.RepositoryDiscoverer's doc comment) --
+// so it is logged as 0 to make that explicit rather than imply a count this
+// layer cannot see.
+func (service *NativePostSyncService) observeFanout(
+	outcome jobruntime.PostSyncFanoutOutcome, args PostSyncArgs, dispatchID string,
+) {
+	if service == nil {
+		return
+	}
+	logger := service.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("post_sync_fanout",
+		"outcome", string(outcome),
+		"org_id", args.OrganizationID(),
+		"sync_run_id", args.SyncRunID(),
+		"dispatch_id", dispatchID,
+		"repo_count", 0,
+	)
+	if service.fanoutObserver != nil {
+		_ = service.fanoutObserver.ObservePostSyncFanout(outcome)
+	}
 }
 
 // publishTeamAutoimport stages the team-autoimport handoff without letting a

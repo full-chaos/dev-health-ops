@@ -1138,6 +1138,125 @@ ch_tests() {
   run_stage "argMax live-exec proof (real engine)" ch_argmax_proof ch_argmax_proof
 }
 
+# --- metrics_readback (CHAOS-4266): executed-proof for the metrics.daily
+# family. CHAOS-4263/CHAOS-4264 ran undetected on prod and local for a week
+# because every existing check asserted a job RAN (trigger fired, zero rows
+# logged) rather than that it produced rows for the org it computed for
+# (feedback_metrics_merge_requires_ch_readback.md). This stage seeds real
+# source rows (ci runs, deployments, incidents, test results — via `fixtures
+# generate` WITHOUT --with-metrics, so no derived metric table is
+# pre-seeded), computes daily/dora/complexity SYNCHRONOUSLY through the real
+# `dev-hops metrics` CLI, then asserts rows actually landed for the seeded
+# org's live ClickHouse repo ids (ci/assert_metrics_executed_proof.py, shared
+# with CI's live-e2e gate).
+#
+# Unlike CI's live-e2e `metrics-executed-proof` job (CHAOS-4266 item 1), this
+# stage does NOT drive the Go dispatch/post-sync path — it calls the same
+# compute functions the Go bridge calls, synchronously, which is the
+# faithful-enough proof for a fast local gate but does not on its own catch a
+# dispatch-layer defect (CHAOS-4263's wrong repo-id space reaching the
+# partition, or CHAOS-4264's bridge OOM). CI is what catches those.
+#
+# Seeding source rows directly via `fixtures generate` (rather than through a
+# real or synthetic provider sync_run, as CI's job does) is ACCEPTABLE HERE,
+# specifically because this stage's job is proving compute+readback
+# synchronously, not proving the sync -> dispatch -> compute chain end to
+# end. Do not cite a green run of THIS stage as evidence the dispatch path
+# works — only CI's `metrics-executed-proof` job is that proof.
+METRICS_READBACK_ORG_ID="${METRICS_READBACK_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
+METRICS_READBACK_REPO_NAME="${METRICS_READBACK_REPO_NAME:-ci-local-validate/metrics-readback}"
+
+# Decide ONCE, up front (CHAOS-3571 discipline — see run_declared_stages):
+# does the diff touch a path this stage exists to guard? Fails OPEN (runs the
+# stage) on any git error or unresolvable base ref — being unable to tell is a
+# reason to be MORE careful, never less. Deliberately not gated behind any
+# "under contention" carve-out (feedback_local_verify_under_contention.md):
+# chris's 2026-08-25 ruling is that a metrics-family PR merges only with a
+# real ClickHouse readback in evidence, and host load does not change what
+# the PR touches.
+metrics_readback_diff_relevant() {
+  local base changed
+  base="$(git -C "${ROOT}" merge-base origin/main HEAD 2>/dev/null || true)"
+  if [ -z "${base}" ]; then
+    return 0 # can't resolve a base ref — run it rather than guess.
+  fi
+  changed="$(git -C "${ROOT}" diff --name-only "${base}"...HEAD 2>/dev/null || true)"
+  if [ -z "${changed}" ]; then
+    return 0 # diff failed, or genuinely empty (e.g. no commits yet) — run it.
+  fi
+  # Includes the oracle script and its synthetic-seeding path too (codex
+  # review, CHAOS-4266) -- a PR that only touches
+  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
+  # this one does, must not have this stage silently skip.
+  printf '%s\n' "${changed}" | grep -qE \
+    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)'
+}
+
+metrics_readback() {
+  case "${SCRATCH_URI}" in
+  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  esac
+
+  local run_start
+  run_start="$("${PYBIN}" -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+
+  printf '   seeding real source rows (ci runs, deployments, incidents, test results) into scratch CH — no --with-metrics\n'
+  # POSTGRES_URI/DATABASE_URI/DATABASE_URL must be UNSET here, not pointed at
+  # the (ClickHouse) SCRATCH_URI: fixtures/runner.py's auth/org seeding opens a
+  # separate SQLAlchemy engine from whichever of those env vars it finds first,
+  # and a clickhouse:// URI has no such SQLAlchemy dialect registered
+  # (NoSuchModuleError). run_live_backend_e2e.sh hits the same hazard and
+  # unsets all three for the identical reason -- mirrored here, not guessed.
+  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" env -u POSTGRES_URI -u DATABASE_URI -u DATABASE_URL \
+    "${DEVHOPS}" fixtures generate \
+    --sink "${SCRATCH_URI}" --db-type clickhouse \
+    --repo-name "${METRICS_READBACK_REPO_NAME}" \
+    --provider synthetic \
+    --days 7 --commits-per-day 3 --pr-count 5 \
+    --seed 20260825 || return 1
+
+  printf '   computing daily/dora/complexity SYNCHRONOUSLY (dev-hops metrics ...)\n'
+  # --sink here takes a BACKEND NAME ("clickhouse"), not a URI -- unlike
+  # fixtures generate's --sink above. The connection itself comes from
+  # CLICKHOUSE_URI (add_sink_arg / validate_sink in utils/cli.py); passing the
+  # scratch URI as --sink fails closed with "Unknown sink" rather than
+  # silently reading the wrong database, which is how this was caught.
+  # --backfill 7 covers the whole 7-day window `fixtures generate` seeded
+  # above (day-to-day variance in the fixture generator can leave any single
+  # day's bucket empty for a given family, which is not the defect this stage
+  # checks for) — verified locally 2026-08-25.
+  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics daily --backfill 7 || return 1
+  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics dora --backfill 7 || return 1
+  ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics complexity || return 1
+
+  printf '   asserting ClickHouse readback (rows with computed_at >= %s, repo_ids ⊆ repos.id)\n' "${run_start}"
+  # "incident" is deliberately excluded — see CHAOS-4269. `fixtures generate`
+  # DOES seed a valid operational_service_repository_mappings row (via the
+  # real map_issue_incidents path); the family is still permanently zero-row
+  # because active_incidents_query's `valid_from <= {as_of}` filter
+  # (src/dev_health_ops/metrics/active_incidents.py:60) has no NULL-OK guard,
+  # unlike the symmetric `valid_to IS NULL OR ...` clause beside it — and
+  # map_issue_incidents never sets valid_from, so the mapping is silently
+  # excluded (confirmed by hand: 0/7 days with 10 seeded incidents AND a
+  # correct, present mapping row). That is a real bug (CHAOS-4269, filed
+  # 2026-08-25), not the CHAOS-4263/4264 defect this stage exists to catch,
+  # so it is cited rather than papered over or misdiagnosed as a fixture gap.
+  # "file_hotspots" (compute_file_hotspots -> file_metrics_daily) is included
+  # here but NOT in ci/run_metrics_executed_proof.sh's list: `fixtures
+  # generate` above seeds real commit stats (--commits-per-day 3), which
+  # `metrics daily` needs to compute it, but the CI job's synthetic
+  # cicd/deployments/incidents/tests seeding never touches git data at all.
+  PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
+    --clickhouse-uri "${SCRATCH_URI}" \
+    --org-id "${METRICS_READBACK_ORG_ID}" \
+    --run-start "${run_start}" \
+    --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots
+}
+
 print_summary() {
   echo
   banner "SUMMARY"
@@ -1193,8 +1312,15 @@ verify_stage_manifest() {
 # same precedent as `--lock-probe` exercising the real acquire_lock/
 # release_lock without paying for preflight/lint/mypy/the unit suite.
 run_declared_stages() {
+  local metrics_readback_needed=0
+  if [ "${SKIP_CLICKHOUSE:-0}" != "1" ] && metrics_readback_diff_relevant; then
+    metrics_readback_needed=1
+  fi
+
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
     DECLARED_STAGE_IDS=(lint_format lint_check typecheck unit_suite)
+  elif [ "${metrics_readback_needed}" = "1" ]; then
+    DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate metrics_readback unit_suite ch_argmax_proof)
   else
     DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
   fi
@@ -1205,6 +1331,11 @@ run_declared_stages() {
   # run_stage "go: format + vet + test"     go_fast    gate_go_fast
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
   ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
+  if [ "${metrics_readback_needed}" = "1" ]; then
+    run_stage "metrics executed-proof readback (CHAOS-4266)" metrics_readback metrics_readback
+  else
+    skip "metrics executed-proof readback (CHAOS-4266)" "diff does not touch src/dev_health_ops/metrics, internal/jobs/metrics, internal/syncdispatchruntime, or the metrics bridge (or SKIP_CLICKHOUSE=1)"
+  fi
   run_stage "unit suite (FULL, not subset)" unit_suite gate_unit_suite
   ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
 
@@ -1403,6 +1534,12 @@ if [ "${1:-}" = "--stage-manifest-probe" ]; then
   ch_create_scratch() { return 0; }
   ch_migrate() { return 0; }
   ch_argmax_proof() { return 0; }
+  # CHAOS-4266: pin the diff-relevance check true so the declared set is
+  # deterministic (9 stages) regardless of this checkout's actual git state --
+  # same reasoning as every other stub above, applied to the one stage whose
+  # declaration is itself conditional.
+  metrics_readback_diff_relevant() { return 0; }
+  metrics_readback() { return 0; }
   run_declared_stages
 fi
 

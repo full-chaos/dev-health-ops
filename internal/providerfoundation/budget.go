@@ -433,6 +433,10 @@ func (m *Metrics) RecordPerRunTruncation(provider, dataset, component, cause str
 var metricArtifactSkipReasonVocabulary = map[string]struct{}{
 	"unreadable_archive":   {},
 	"artifact_unavailable": {},
+	// artifact_oversized (CHAOS-4315): a github tests/cicd artifact whose
+	// download exceeded the route's size cap, skipped and counted like the
+	// two reasons above instead of failing the unit closed.
+	"artifact_oversized": {},
 }
 
 // MetricArtifactSkipReasonLabel bounds the artifact skip reason label.

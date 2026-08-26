@@ -280,19 +280,45 @@ WHERE org_id = ?
 	return commits, nil
 }
 
-// wellbeingBatchConn is the narrow write capability WriteTeamMetricsDaily
-// needs.
+// wellbeingBatchConn is the narrow write capability
+// WriteTeamMetricsDailyPerRepo needs.
 type wellbeingBatchConn interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
-// WriteTeamMetricsDaily ports write_team_metrics
-// (sinks/clickhouse/work_graph.py:177) -- the same table and column order.
-func WriteTeamMetricsDaily(
-	ctx context.Context, conn wellbeingBatchConn, organizationID string, day time.Time, computedAt time.Time,
-	rows []numerical.TeamWellbeingMetric,
+// WriteTeamMetricsDailyPerRepo ports the write side of write_team_metrics
+// (sinks/clickhouse/work_graph.py:177) -- the same table and column order --
+// but stamps each repo GROUP's rows with its own computed_at instead of one
+// shared value for the whole write.
+//
+// CHAOS-4276 codex round-2 finding 1: team_metrics_daily is deduped
+// downstream via argMax(<col>, computed_at) per (org_id, team_id, day)
+// (cognitive_load.py, clickhouse_dedup.py). When a team spans more than one
+// repo in a partition, giving every repo's rows the IDENTICAL computed_at
+// makes that argMax tie-break implementation-defined -- ClickHouse gives no
+// guarantee which of several rows tied on the max value it returns, and
+// that can vary by replica or merge state. Python's real per-repo_id call
+// structure never has this problem: job_daily.py captures computed_at fresh
+// inside every run_daily_metrics_job call, so distinct repo-scoped calls
+// naturally get distinct, monotonically increasing timestamps --
+// "whichever repo was processed last wins" is at least a REPRODUCIBLE
+// tie-break. perRepoRows and computedAtByRepo must be the same length and
+// share index order; every row in perRepoRows[i] is stamped with
+// computedAtByRepo[i]. Still ONE PrepareBatch/Send round trip (not one
+// write per repo), so this carries no new partial-write risk relative to
+// WriteTeamMetricsDaily.
+func WriteTeamMetricsDailyPerRepo(
+	ctx context.Context, conn wellbeingBatchConn, organizationID string, day time.Time,
+	perRepoRows [][]numerical.TeamWellbeingMetric, computedAtByRepo []time.Time,
 ) (int, error) {
-	if len(rows) == 0 {
+	if len(perRepoRows) != len(computedAtByRepo) {
+		return 0, fmt.Errorf("%w: %d repo row-groups but %d timestamps", ErrInvalidState, len(perRepoRows), len(computedAtByRepo))
+	}
+	total := 0
+	for _, rows := range perRepoRows {
+		total += len(rows)
+	}
+	if total == 0 {
 		return 0, nil
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
@@ -306,20 +332,23 @@ func WriteTeamMetricsDaily(
 		return 0, fmt.Errorf("prepare team_metrics_daily batch: %w", err)
 	}
 	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	for _, row := range rows {
-		if err := batch.Append(
-			dayValue, row.TeamID, row.TeamName, uint32(row.CommitsCount),
-			uint32(row.AfterHoursCommitsCount), uint32(row.WeekendCommitsCount),
-			row.AfterHoursCommitRatio, row.WeekendCommitRatio,
-			computedAt.UTC(), organizationID,
-		); err != nil {
-			return 0, fmt.Errorf("append team_metrics_daily row: %w", err)
+	for groupIndex, rows := range perRepoRows {
+		computedAt := computedAtByRepo[groupIndex].UTC()
+		for _, row := range rows {
+			if err := batch.Append(
+				dayValue, row.TeamID, row.TeamName, uint32(row.CommitsCount),
+				uint32(row.AfterHoursCommitsCount), uint32(row.WeekendCommitsCount),
+				row.AfterHoursCommitRatio, row.WeekendCommitRatio,
+				computedAt, organizationID,
+			); err != nil {
+				return 0, fmt.Errorf("append team_metrics_daily row: %w", err)
+			}
 		}
 	}
 	if err := batch.Send(); err != nil {
 		return 0, fmt.Errorf("send team_metrics_daily batch: %w", err)
 	}
-	return len(rows), nil
+	return total, nil
 }
 
 func derefWellbeingString(value *string) string {

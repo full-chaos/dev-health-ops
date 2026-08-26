@@ -127,10 +127,20 @@ func TestComputeWellbeingPerRepoMatchesMultiRepoPartitionGolden(t *testing.T) {
 			repoResolver := NewRepoPatternResolver(teams)
 			memberResolver := NewMemberResolver(teams)
 
-			got := computeWellbeingPerRepo(
+			perRepo := computeWellbeingPerRepo(
 				day, repoIDs, commits, testCase.RepoNamesByID, repoResolver, memberResolver,
 				tz, testCase.BusinessHoursStart, testCase.BusinessHoursEnd,
 			)
+			// The golden's `expected` is one flat, concatenated list (in
+			// repo order) -- flatten computeWellbeingPerRepo's per-repo
+			// groups the same way before comparing. This still exercises
+			// the exact grouping/reset behaviour under test (finding 2):
+			// only the row VALUES are flattened for comparison, nothing
+			// about how they were computed.
+			var got []numerical.TeamWellbeingMetric
+			for _, group := range perRepo {
+				got = append(got, group...)
+			}
 
 			want := make([]numerical.TeamWellbeingMetric, len(testCase.Expected))
 			for index, row := range testCase.Expected {

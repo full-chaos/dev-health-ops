@@ -137,20 +137,20 @@ func TestComputeWellbeingPerRepoScopesBucketsToOneRepoAtATime(t *testing.T) {
 	got := computeWellbeingPerRepo(day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver, time.UTC, 9, 17)
 
 	if len(got) != 2 {
-		t.Fatalf("expected 2 rows (one per repo) for the one team spanning both repos, got %d: %#v", len(got), got)
+		t.Fatalf("expected 2 repo groups (one per repo) for the one team spanning both repos, got %d: %#v", len(got), got)
 	}
-	for _, row := range got {
-		if row.TeamID != "platform" {
-			t.Fatalf("unexpected team in row: %#v", row)
+	for _, group := range got {
+		if len(group) != 1 || group[0].TeamID != "platform" {
+			t.Fatalf("unexpected group contents: %#v", group)
 		}
 	}
-	// repo-a's row must count ONLY repo-a's 2 commits, never repo-b's.
-	if got[0].CommitsCount != 2 {
-		t.Fatalf("repo-a row: commits_count=%d, want 2 (repo-b's commit must not leak in)", got[0].CommitsCount)
+	// repo-a's group must count ONLY repo-a's 2 commits, never repo-b's.
+	if got[0][0].CommitsCount != 2 {
+		t.Fatalf("repo-a group: commits_count=%d, want 2 (repo-b's commit must not leak in)", got[0][0].CommitsCount)
 	}
-	// repo-b's row must count ONLY repo-b's 1 commit.
-	if got[1].CommitsCount != 1 {
-		t.Fatalf("repo-b row: commits_count=%d, want 1 (repo-a's commits must not leak in)", got[1].CommitsCount)
+	// repo-b's group must count ONLY repo-b's 1 commit.
+	if got[1][0].CommitsCount != 1 {
+		t.Fatalf("repo-b group: commits_count=%d, want 1 (repo-a's commits must not leak in)", got[1][0].CommitsCount)
 	}
 }
 

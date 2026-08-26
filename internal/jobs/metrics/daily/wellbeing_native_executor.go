@@ -35,11 +35,15 @@ import (
 //     ports the CURRENT Python behavior (repo-pattern first, membership
 //     fallback second, see numerical.ComputeTeamWellbeing) rather than
 //     anticipating that ruling -- see this PR's RISK-NOTES.
-//  2. computed_at IS STAMPED ONCE PER (run, partition) CALL, mirroring
-//     DORAExecutor's "one stamp for the whole partition" rule: it carries no
-//     product meaning (the parity manifest already treats it as volatile
-//     column-wise), but a per-row or per-query stamp would be a real
-//     behavioural difference in a column somebody may key on.
+//  2. computed_at IS STAMPED ONCE PER REPO GROUP, NOT ONCE PER PARTITION
+//     (revised in codex round-2, see WriteTeamMetricsDailyPerRepo's doc
+//     comment): team_metrics_daily's (org_id, team_id, day) reader dedup
+//     picks a row via argMax(<col>, computed_at), so every repo's rows
+//     sharing one partition-wide timestamp made that tie-break
+//     implementation-defined for any team spanning more than one repo.
+//     Distinct, monotonically increasing timestamps per repo group restore
+//     the same "whichever repo was processed last wins" determinism
+//     Python's real per-repo_id call cadence already has.
 //  3. TEAM BUCKETS RESET PER REPO, NOT PER PARTITION (codex round-1 finding,
 //     see computeWellbeingPerRepo's doc comment) -- the Python bridge calls
 //     compute_team_wellbeing_metrics_daily once per repo_id, so this executor
@@ -142,12 +146,20 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	allMetrics := computeWellbeingPerRepo(
+	perRepoMetrics := computeWellbeingPerRepo(
 		day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver,
 		executor.businessTZ, executor.businessHoursStart, executor.businessHoursEnd,
 	)
 
-	written, err := WriteTeamMetricsDaily(ctx, executor.conn, run.OrganizationID, day, executor.nowUTC(), allMetrics)
+	// One fresh timestamp per repo group, captured in repoIDs' own
+	// deterministic order -- see WriteTeamMetricsDailyPerRepo's doc comment
+	// (CHAOS-4276 codex round-2 finding 1).
+	computedAtByRepo := make([]time.Time, len(perRepoMetrics))
+	for index := range perRepoMetrics {
+		computedAtByRepo[index] = executor.nowUTC()
+	}
+
+	written, err := WriteTeamMetricsDailyPerRepo(ctx, executor.conn, run.OrganizationID, day, perRepoMetrics, computedAtByRepo)
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +168,11 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 
 // computeWellbeingPerRepo groups commits by repo and runs
 // numerical.ComputeTeamWellbeing once per repoID (in repoIDs' own order),
-// concatenating the resulting rows.
+// returning one row-group PER REPO rather than a single concatenated slice
+// -- callers that persist the result need each group kept separate so they
+// can stamp it with its own write-time timestamp (WriteTeamMetricsDailyPerRepo,
+// CHAOS-4276 codex round-2 finding 1). A repo with no commits that day, or
+// whose commits produced no rows, contributes no group (never an empty one).
 //
 // CHAOS-4276 codex round-1 (finding 2): the Python bridge invokes
 // compute_team_wellbeing_metrics_daily ONCE PER repo_id (worker_metrics.py's
@@ -188,13 +204,13 @@ func computeWellbeingPerRepo(
 	memberResolver numerical.MemberTeamResolver,
 	businessTZ *time.Location,
 	businessHoursStart, businessHoursEnd int,
-) []numerical.TeamWellbeingMetric {
+) [][]numerical.TeamWellbeingMetric {
 	commitsByRepo := make(map[string][]numerical.Commit, len(repoIDs))
 	for _, commit := range commits {
 		commitsByRepo[commit.RepoID] = append(commitsByRepo[commit.RepoID], commit)
 	}
 
-	var allMetrics []numerical.TeamWellbeingMetric
+	var perRepo [][]numerical.TeamWellbeingMetric
 	for _, repoID := range repoIDs {
 		repoCommits := commitsByRepo[repoID.String()]
 		if len(repoCommits) == 0 {
@@ -204,9 +220,12 @@ func computeWellbeingPerRepo(
 			day, repoCommits, repoNamesByID, repoResolver, memberResolver,
 			businessTZ, businessHoursStart, businessHoursEnd,
 		)
-		allMetrics = append(allMetrics, metrics...)
+		if len(metrics) == 0 {
+			continue
+		}
+		perRepo = append(perRepo, metrics)
 	}
-	return allMetrics
+	return perRepo
 }
 
 func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {

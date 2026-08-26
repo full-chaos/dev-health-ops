@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
 func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
@@ -126,10 +129,63 @@ func TestLoadWellbeingCommitsRejectsInvertedWindow(t *testing.T) {
 	}
 }
 
-func TestWriteTeamMetricsDailyEmptyRowsIsNoop(t *testing.T) {
-	written, err := WriteTeamMetricsDaily(context.Background(), &panicBatchConn{t: t}, "org-1", time.Now(), time.Now(), nil)
+func TestWriteTeamMetricsDailyPerRepoEmptyRowsIsNoop(t *testing.T) {
+	written, err := WriteTeamMetricsDailyPerRepo(context.Background(), &panicBatchConn{t: t}, "org-1", time.Now(), nil, nil)
 	if err != nil || written != 0 {
 		t.Fatalf("written=%d err=%v, want 0/nil for empty rows", written, err)
+	}
+}
+
+func TestWriteTeamMetricsDailyPerRepoEmptyGroupsAreNoop(t *testing.T) {
+	// Every repo group is present but empty -- total rows is still 0, must
+	// stay a no-op (never call PrepareBatch on the panicking stub conn).
+	written, err := WriteTeamMetricsDailyPerRepo(
+		context.Background(), &panicBatchConn{t: t}, "org-1", time.Now(),
+		[][]numerical.TeamWellbeingMetric{{}, {}}, []time.Time{time.Now(), time.Now()},
+	)
+	if err != nil || written != 0 {
+		t.Fatalf("written=%d err=%v, want 0/nil for all-empty groups", written, err)
+	}
+}
+
+func TestWriteTeamMetricsDailyPerRepoRejectsMismatchedLengths(t *testing.T) {
+	rows := [][]numerical.TeamWellbeingMetric{{{TeamID: "t1", CommitsCount: 1}}}
+	if _, err := WriteTeamMetricsDailyPerRepo(
+		context.Background(), &panicBatchConn{t: t}, "org-1", time.Now(), rows, nil,
+	); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("err=%v, want ErrInvalidState", err)
+	}
+}
+
+func TestWriteTeamMetricsDailyPerRepoStampsEachGroupWithItsOwnTimestamp(t *testing.T) {
+	batch := &recordingBatch{}
+	conn := &recordingBatchConn{batch: batch}
+	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	repoATime := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	repoBTime := time.Date(2026, 8, 26, 10, 0, 1, 0, time.UTC)
+	rows := [][]numerical.TeamWellbeingMetric{
+		{{TeamID: "team-x", TeamName: "Team X", CommitsCount: 2}},
+		{{TeamID: "team-x", TeamName: "Team X", CommitsCount: 1}},
+	}
+
+	written, err := WriteTeamMetricsDailyPerRepo(context.Background(), conn, "org-1", day, rows, []time.Time{repoATime, repoBTime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != 2 {
+		t.Fatalf("written=%d, want 2", written)
+	}
+	if len(batch.appended) != 2 {
+		t.Fatalf("appended %d rows, want 2", len(batch.appended))
+	}
+	// computed_at is the 9th positional argument (0-indexed 8) in the
+	// INSERT column list this function shares with the ported
+	// write_team_metrics.
+	if got := batch.appended[0][8]; got != repoATime {
+		t.Fatalf("row 0 computed_at=%v, want %v (repo A's own timestamp)", got, repoATime)
+	}
+	if got := batch.appended[1][8]; got != repoBTime {
+		t.Fatalf("row 1 computed_at=%v, want %v (repo B's own timestamp, distinct from repo A's)", got, repoBTime)
 	}
 }
 
@@ -139,6 +195,34 @@ func (conn *panicBatchConn) PrepareBatch(context.Context, string, ...driver.Prep
 	conn.t.Fatal("PrepareBatch must not be called for zero rows")
 	return nil, nil
 }
+
+// recordingBatchConn/recordingBatch capture exactly what
+// WriteTeamMetricsDailyPerRepo appends and sends, for asserting the
+// per-row computed_at values it stamps (CHAOS-4276 codex round-2 finding 1).
+type recordingBatchConn struct{ batch *recordingBatch }
+
+func (conn *recordingBatchConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	return conn.batch, nil
+}
+
+type recordingBatch struct {
+	appended [][]any
+	sent     bool
+}
+
+func (batch *recordingBatch) Append(values ...any) error {
+	batch.appended = append(batch.appended, values)
+	return nil
+}
+func (batch *recordingBatch) Send() error                   { batch.sent = true; return nil }
+func (batch *recordingBatch) Abort() error                  { return nil }
+func (batch *recordingBatch) AppendStruct(any) error        { return errors.New("unused") }
+func (batch *recordingBatch) Column(int) driver.BatchColumn { return nil }
+func (batch *recordingBatch) Flush() error                  { return nil }
+func (batch *recordingBatch) IsSent() bool                  { return batch.sent }
+func (batch *recordingBatch) Rows() int                     { return len(batch.appended) }
+func (batch *recordingBatch) Columns() []column.Interface   { return nil }
+func (batch *recordingBatch) Close() error                  { return nil }
 
 // wellbeingTeamRowsStub and wellbeingCommitRowsStub reuse
 // recordingRepositoryConnection from clickhouse_test.go, satisfying the

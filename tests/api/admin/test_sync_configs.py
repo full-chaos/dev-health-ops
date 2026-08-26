@@ -477,6 +477,33 @@ async def test_create_sync_config_rejects_unsupported_auto_import_category(clien
 
 
 @pytest.mark.asyncio
+async def test_create_sync_config_rejects_malformed_auto_import_category_value(
+    client,
+):
+    """CHAOS-4323 (codex adversarial-review): a non-bool value for one of the
+    three flags must be rejected, not silently truthy-coerced -- Python's
+    bool("false") and Go's exact-string-match "true" comparison would
+    otherwise disagree about the same persisted config."""
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "linear-malformed-flag",
+            "provider": "linear",
+            "sync_targets": ["work-items"],
+            "sync_options": {"auto_import_teams": "false"},
+        },
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail["malformed_auto_import_category_values"] == {
+        "auto_import_teams": "false",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_sync_config_accepts_supported_auto_import_categories(client):
     ac, _ = client
 
@@ -495,6 +522,31 @@ async def test_create_sync_config_accepts_supported_auto_import_categories(clien
     )
 
     assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_batch_create_rejects_unsupported_auto_import_category(client):
+    """CHAOS-4323 (codex adversarial-review): the batch create endpoint must
+    apply the same capability rejection as the single create/update
+    endpoints — a request cannot bypass it by using /sync-configs/batch."""
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "github-batch-bad-category",
+            "provider": "github",
+            "sync_targets": [],
+            "sync_options": {"all_repos": True, "auto_import_projects": True},
+            "repos": [],
+        },
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail["unsupported_auto_import_categories"] == {
+        "projects": "GitHub attributes ownership via repos, not projects.",
+    }
 
 
 @pytest.mark.asyncio

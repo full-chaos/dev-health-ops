@@ -55,9 +55,24 @@ class RecordingSink:
             }
         ]
     )
+    # CHAOS-4323: canned "currently persisted" team rows, keyed by id, for
+    # exercising the members-off roster-preservation read (_existing_team_members).
+    existing_team_rows: dict[str, dict[str, Any]] = field(default_factory=dict)
+    query_dicts_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     async def insert_teams(self, rows: list[dict[str, Any]]) -> None:
         self.teams.extend(rows)
+
+    def query_dicts(
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        self.query_dicts_calls.append((query, parameters))
+        team_ids = parameters.get("team_ids") or []
+        return [
+            {"id": team_id, "members": self.existing_team_rows[team_id]["members"]}
+            for team_id in team_ids
+            if team_id in self.existing_team_rows
+        ]
 
     def write_team_repo_ownership(self, rows: list[Any]) -> None:
         self.repo_ownership.extend(rows)
@@ -281,6 +296,77 @@ def test_github_org_import_honours_members_only_selection(
     assert sink.repo_ownership == []
     assert len(sink.memberships) == 1
     assert sink.memberships[0].member_id == "gh:platform-lead"
+
+
+def test_github_org_import_preserves_existing_roster_when_members_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323 (codex adversarial-review, HIGH): a teams-only run (members
+    off) must NOT overwrite the team row's "members" field with an empty
+    list -- that would erase a roster a previous run (or an admin) wrote.
+    It must read back and carry forward whatever is currently persisted."""
+
+    sink = RecordingSink()
+    sink.existing_team_rows["gh:platform"] = {
+        "members": ["preexisting-lead@example.com"]
+    }
+    resolver = IdentityResolver(alias_to_canonical={})
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="github",
+                provider_team_id="platform",
+                name="Platform",
+                associations={
+                    "repo_patterns": ["full-chaos/dev-health"],
+                    "provider_org": org_name,
+                },
+            ),
+        ]
+
+    async def discover_members_github(
+        self, token: str, org_name: str, team_slug: str
+    ) -> list[DiscoveredMember]:
+        raise AssertionError(
+            "member discovery must not run when the members category is off"
+        )
+
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github.TeamMembershipService,
+        "discover_members_github",
+        discover_members_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "ClickHouseMetricsSink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "load_identity_resolver", lambda: resolver
+    )
+
+    summary = team_autoimport_github.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "org": "full-chaos"},
+        scope={
+            "analytics_db": "clickhouse://test",
+            "import_categories": {
+                "teams": True,
+                "projects": False,
+                "members": False,
+            },
+        },
+    )
+
+    assert summary["teams_imported"] == 1
+    assert len(sink.teams) == 1
+    # Preserved, not erased -- this is the whole point of the fix.
+    assert sink.teams[0]["members"] == ["preexisting-lead@example.com"]
+    assert sink.query_dicts_calls, "roster-preservation read must have run"
 
 
 def test_github_org_import_skips_populate_entirely_when_no_category_selected(

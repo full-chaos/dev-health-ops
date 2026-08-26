@@ -69,6 +69,7 @@ from dev_health_ops.providers.github.work_item_options import (
 )
 from dev_health_ops.providers.team_capabilities import (
     all_auto_import_capabilities,
+    malformed_auto_import_category_values,
     unsupported_auto_import_categories,
 )
 from dev_health_ops.sync.canonical_incident_gate import (
@@ -1970,6 +1971,34 @@ async def batch_create_sync_configs(
     if payload.initial_sync_depth is not None:
         parent_options["initial_sync_depth"] = payload.initial_sync_depth
 
+    # CHAOS-4323: same rejection as the single-config create/update endpoints
+    # — batch create must not silently persist an auto-import category this
+    # provider cannot supply (codex adversarial-review finding).
+    malformed_categories = malformed_auto_import_category_values(parent_options)
+    if malformed_categories:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "auto-import category flags must be true or false",
+                "malformed_auto_import_category_values": {
+                    key: str(value) for key, value in malformed_categories.items()
+                },
+            },
+        )
+    unsupported_categories = unsupported_auto_import_categories(
+        provider, parent_options
+    )
+    if unsupported_categories:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"{provider} does not support the requested auto-import categories"
+                ),
+                "unsupported_auto_import_categories": unsupported_categories,
+            },
+        )
+
     # Resolve GitLab repos (and the effective instance URL) before creating
     # the parent so a self-hosted gitlab_url derived from the credential is
     # persisted into both parent and child options — otherwise children with
@@ -2044,7 +2073,20 @@ async def create_sync_config(
 
     # CHAOS-4323: reject requesting an auto-import category this provider
     # cannot supply (e.g. auto_import_projects on a GitHub config) rather than
-    # silently accepting a checkbox that would write nothing.
+    # silently accepting a checkbox that would write nothing. Malformed
+    # (non-bool) values are rejected first so a Python/Go coercion mismatch
+    # can never reach either reader (codex adversarial-review finding).
+    malformed_categories = malformed_auto_import_category_values(sync_options)
+    if malformed_categories:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "auto-import category flags must be true or false",
+                "malformed_auto_import_category_values": {
+                    key: str(value) for key, value in malformed_categories.items()
+                },
+            },
+        )
     unsupported_categories = unsupported_auto_import_categories(
         payload.provider, sync_options
     )
@@ -2424,6 +2466,17 @@ async def update_sync_config(
         # CHAOS-4323: same rejection as create, evaluated against the fully
         # MERGED options so a category left on from the config's prior state
         # (not just one this PATCH explicitly sets) is still caught.
+        malformed_categories = malformed_auto_import_category_values(merged_options)
+        if malformed_categories:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "auto-import category flags must be true or false",
+                    "malformed_auto_import_category_values": {
+                        key: str(value) for key, value in malformed_categories.items()
+                    },
+                },
+            )
         unsupported_categories = unsupported_auto_import_categories(
             str(getattr(config, "provider", "")), merged_options
         )

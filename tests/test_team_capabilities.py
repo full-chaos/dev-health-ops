@@ -5,6 +5,7 @@ import pytest
 from dev_health_ops.providers.team_capabilities import (
     all_auto_import_capabilities,
     auto_import_capabilities,
+    malformed_auto_import_category_values,
     org_drift_capable_providers,
     team_provider_capabilities,
     unsupported_auto_import_categories,
@@ -92,3 +93,27 @@ def test_all_auto_import_capabilities_exposes_every_populator_backed_provider():
 )
 def test_unsupported_auto_import_categories(provider, sync_options, expected):
     assert unsupported_auto_import_categories(provider, sync_options) == expected
+
+
+@pytest.mark.parametrize(
+    ("sync_options", "expected"),
+    [
+        ({}, {}),
+        ({"auto_import_teams": True}, {}),
+        ({"auto_import_teams": False}, {}),
+        # codex adversarial-review: Python's bool() truthiness would accept
+        # the STRING "false" as enabled while Go compares JSON text exactly
+        # to 'true' -- reject anything but a real bool.
+        ({"auto_import_teams": "false"}, {"auto_import_teams": "false"}),
+        ({"auto_import_projects": 1}, {"auto_import_projects": 1}),
+        ({"auto_import_members": None}, {"auto_import_members": None}),
+        (
+            {"auto_import_teams": "true", "auto_import_projects": True},
+            {"auto_import_teams": "true"},
+        ),
+        # Unrelated keys are ignored even if malformed themselves.
+        ({"owner": 42, "auto_import_teams": True}, {}),
+    ],
+)
+def test_malformed_auto_import_category_values(sync_options, expected):
+    assert malformed_auto_import_category_values(sync_options) == expected

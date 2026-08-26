@@ -213,9 +213,22 @@ async def _populate_async(
         team_store=team_store,
         discovered_at=now,
     )
-    member_roster = _roster_from_memberships(membership_rows)
-    for team_row in team_rows:
-        team_row["members"] = member_roster.get(str(team_row["id"]), [])
+    if want_members:
+        member_roster = _roster_from_memberships(membership_rows)
+        for team_row in team_rows:
+            team_row["members"] = member_roster.get(str(team_row["id"]), [])
+    elif want_teams:
+        # CHAOS-4323 (codex adversarial-review): a teams-only run (members
+        # off) must not erase a previously-imported roster by writing an
+        # empty "members" list -- preserve whatever is currently persisted.
+        existing_members = _existing_team_members(
+            sink=sink,
+            org_id=org_id,
+            provider=PROVIDER,
+            team_ids=[str(row["id"]) for row in team_rows],
+        )
+        for team_row in team_rows:
+            team_row["members"] = existing_members.get(str(team_row["id"]), [])
 
     if want_teams:
         await _project_team_rows(
@@ -562,6 +575,40 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
     if not dsn:
         raise ValueError("CLICKHOUSE_URI is required for GitLab team auto-import")
     return ClickHouseMetricsSink(dsn=dsn)
+
+
+def _existing_team_members(
+    *, sink: Any, org_id: str, provider: str, team_ids: list[str]
+) -> dict[str, list[str]]:
+    """Best-effort read of the CURRENTLY persisted roster for these teams.
+
+    CHAOS-4323: when members import is off, a teams-only run must not
+    overwrite the roster with an empty list. See the identical helper's
+    docstring in team_autoimport_github.py for the full rationale.
+    """
+    if not team_ids or not hasattr(sink, "query_dicts"):
+        return {}
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT id, members
+            FROM teams FINAL
+            WHERE org_id = {org_id:String}
+              AND provider = {provider:String}
+              AND id IN {team_ids:Array(String)}
+            """,
+            {"org_id": org_id, "provider": provider, "team_ids": team_ids},
+        )
+    except Exception:
+        logger.warning(
+            "Could not read existing team rosters for org_id=%s provider=%s; "
+            "a members-off run will write empty rosters for these teams",
+            org_id,
+            provider,
+            exc_info=True,
+        )
+        return {}
+    return {str(row.get("id")): list(row.get("members") or []) for row in rows}
 
 
 def _roster_from_memberships(

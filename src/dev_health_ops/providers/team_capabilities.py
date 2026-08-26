@@ -145,3 +145,28 @@ def unsupported_auto_import_categories(
                 category, _UNSUPPORTED_PROVIDER_REASON
             )
     return unsupported
+
+
+def malformed_auto_import_category_values(
+    sync_options: Mapping[str, object],
+) -> dict[str, object]:
+    """The subset of the three ``sync_options`` keys that ARE PRESENT but are
+    not a strict ``bool`` (e.g. the string ``"false"``, ``1``, ``null``).
+
+    CHAOS-4323 (codex adversarial-review): Python's own read of these flags
+    (``team_autoimport_categories.import_categories_from_sync_options``) uses
+    ``bool(value)`` truthiness -- the string ``"false"`` is truthy there. Go's
+    ``native_post_sync.go`` dispatch gate instead compares the stored JSON
+    text exactly to the literal ``'true'``. The same persisted config would
+    then disagree between the two readers on whether to dispatch at all.
+    Rejecting anything but ``true``/``false``/absent at every write boundary
+    (create, update, batch create) means a malformed value can never reach
+    either reader in the first place -- closing the gap at the source rather
+    than trying to make two independent coercions agree.
+    """
+
+    return {
+        option_key: sync_options[option_key]
+        for option_key in _CATEGORY_TO_SYNC_OPTION.values()
+        if option_key in sync_options and not isinstance(sync_options[option_key], bool)
+    }

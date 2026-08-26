@@ -103,6 +103,40 @@ def _clickhouse_dsn(scope: dict[str, Any]) -> str:
     return dsn
 
 
+def _existing_team_members(
+    *, sink: Any, org_id: str, provider: str, team_ids: list[str]
+) -> dict[str, list[str]]:
+    """Best-effort read of the CURRENTLY persisted roster for these teams.
+
+    CHAOS-4323: when members import is off, a teams-only run must not
+    overwrite the roster with an empty list. See the identical helper's
+    docstring in team_autoimport_github.py for the full rationale.
+    """
+    if not team_ids or not hasattr(sink, "query_dicts"):
+        return {}
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT id, members
+            FROM teams FINAL
+            WHERE org_id = {org_id:String}
+              AND provider = {provider:String}
+              AND id IN {team_ids:Array(String)}
+            """,
+            {"org_id": org_id, "provider": provider, "team_ids": team_ids},
+        )
+    except Exception:
+        logger.warning(
+            "Could not read existing team rosters for org_id=%s provider=%s; "
+            "a members-off run will write empty rosters for these teams",
+            org_id,
+            provider,
+            exc_info=True,
+        )
+        return {}
+    return {str(row.get("id")): list(row.get("members") or []) for row in rows}
+
+
 def _team_store_from_kwargs(sink: _DimensionSink, kwargs: dict[str, Any]) -> Any | None:
     return kwargs.get("team_store") or (
         sink if hasattr(sink, "insert_team_provider_observations") else None
@@ -581,7 +615,9 @@ def populate(
                     store=review_store,
                     org_id=org_id,
                     rows=memberships,
-                    observed_team_ids=_observed_team_ids("linear", team_rows),
+                    observed_team_ids=(
+                        _observed_team_ids("linear", team_rows) if want_members else ()
+                    ),
                     discovered_at=now,
                 )
             )
@@ -595,12 +631,29 @@ def populate(
                         store=store,
                         org_id=org_id,
                         rows=memberships,
-                        observed_team_ids=_observed_team_ids("linear", team_rows),
+                        observed_team_ids=(
+                            _observed_team_ids("linear", team_rows)
+                            if want_members
+                            else ()
+                        ),
                         discovered_at=now,
                     )
 
             memberships = _run(split_with_store())
-        _apply_roster(team_rows, memberships)
+        if want_members:
+            _apply_roster(team_rows, memberships)
+        elif want_teams:
+            # CHAOS-4323 (codex adversarial-review): a teams-only run (members
+            # off) must not erase a previously-imported roster by writing an
+            # empty "members" list -- preserve whatever is currently persisted.
+            existing_members = _existing_team_members(
+                sink=sink,
+                org_id=org_id,
+                provider="linear",
+                team_ids=[str(row["id"]) for row in team_rows],
+            )
+            for team_row in team_rows:
+                team_row["members"] = existing_members.get(str(team_row["id"]), [])
         if want_teams:
             if team_store is not None:
                 _run(

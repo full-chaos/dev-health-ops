@@ -195,7 +195,7 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 // process start, exactly like the zero-rows-with-source series, so a
 // construction refusal is visible on the SAME counter a healthy deploy
 // would move, not absent from it.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

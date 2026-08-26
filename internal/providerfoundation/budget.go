@@ -666,7 +666,7 @@ func (m *Metrics) RecordWorkItemTeamAttributionWritten(provider, source string) 
 func MetricProjectsV2DegradedReasonLabel(value string) string {
 	lowered := strings.ToLower(strings.TrimSpace(value))
 	switch lowered {
-	case "null_organization", "null_project", "structural_degradation":
+	case "null_organization", "null_project", "structural_degradation", "unidentified_item":
 		return lowered
 	default:
 		return "other"

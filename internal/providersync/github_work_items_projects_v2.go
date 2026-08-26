@@ -104,12 +104,13 @@ const (
 	githubProjectsV2NullOrganization    = "null_organization"
 	githubProjectsV2NullProject         = "null_project"
 	githubProjectsV2StructuralDegraded  = "structural_degradation"
+	githubProjectsV2UnidentifiedItem    = "unidentified_item"
 )
 
 func githubProjectsV2DegradedCause(cause string) bool {
 	switch cause {
 	case githubProjectsV2NullOrganization, githubProjectsV2NullProject,
-		githubProjectsV2StructuralDegraded:
+		githubProjectsV2StructuralDegraded, githubProjectsV2UnidentifiedItem:
 		return true
 	default:
 		return false
@@ -313,6 +314,23 @@ func (GitHubProjectV2Fetcher) Fetch(
 			result.Incomplete = append(result.Incomplete, GitHubWorkItemsIncomplete{
 				Component: githubProjectsV2IncompleteComponent,
 				Cause:     targetResult.DegradedReason,
+			})
+		}
+		// boardIncomplete already suppressed this board's removals (Complete
+		// above), but that alone left the family watermark free to advance --
+		// a later incremental sync would then start from a point that never
+		// saw the unidentified item positively, with no durable signal a
+		// retry is owed. Record it exactly like a target-level degradation so
+		// the route withholds the watermark too (codex adversarial review,
+		// CHAOS-4289 round 1).
+		if boardIncomplete {
+			client.Metrics.RecordProjectsV2DegradedSnapshot(githubProjectsV2UnidentifiedItem)
+			slog.Warn("github_projects_v2.degraded_snapshot",
+				"reason", githubProjectsV2UnidentifiedItem, "org_login", target.OrgLogin,
+				"project_number", target.ProjectNumber)
+			result.Incomplete = append(result.Incomplete, GitHubWorkItemsIncomplete{
+				Component: githubProjectsV2IncompleteComponent,
+				Cause:     githubProjectsV2UnidentifiedItem,
 			})
 		}
 	}

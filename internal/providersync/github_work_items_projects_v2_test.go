@@ -846,6 +846,16 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false and no identified subjects", result.Snapshots[0])
 		}
+		// Codex adversarial review, CHAOS-4289 round 1: suppressing this
+		// board's removals is not enough on its own -- the route's watermark
+		// gate keys off Fetch's durable Incomplete evidence, not the
+		// snapshot's Complete flag, so a still-unidentified item must show up
+		// here too or a later sync could advance past it unretried.
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+			result.Incomplete[0].Cause != githubProjectsV2UnidentifiedItem {
+			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2UnidentifiedItem)
+		}
 	})
 
 	t.Run("a board of only draft issues is complete", func(t *testing.T) {
@@ -855,6 +865,9 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=true (a draft issue names no subject at all, which is complete information) and no subjects", result.Snapshots[0])
 		}
+		if len(result.Incomplete) != 0 {
+			t.Fatalf("incomplete=%+v, want none: a draft-only board is genuinely complete", result.Incomplete)
+		}
 	})
 
 	t.Run("an unrecognised content typename is incomplete", func(t *testing.T) {
@@ -863,6 +876,11 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false: GitHub added a content kind this code has never seen", result.Snapshots[0])
+		}
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+			result.Incomplete[0].Cause != githubProjectsV2UnidentifiedItem {
+			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2UnidentifiedItem)
 		}
 	})
 
@@ -874,6 +892,9 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 2 {
 			t.Fatalf("snapshot=%+v, want Complete=true with 2 identified subjects", result.Snapshots[0])
+		}
+		if len(result.Incomplete) != 0 {
+			t.Fatalf("incomplete=%+v, want none: every board item was positively identified", result.Incomplete)
 		}
 	})
 }

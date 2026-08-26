@@ -346,6 +346,24 @@ def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
         },
         analytics_db_url=_get_db_url(),
     )
+    # CHAOS-4323 (team-lead 08-26): run_team_autoimport still returns
+    # status=success on a roster-preservation-read failure -- correct, since
+    # the write was safely skipped rather than corrupting data, but that
+    # also means a degraded run is otherwise indistinguishable from a clean
+    # one. The counter (record_team_autoimport_roster_preservation_failed,
+    # incremented at the point of failure inside each populator) is the
+    # metric signal; this WARNING is the log signal for the same event,
+    # surfaced at the one place every sync run's outcome is already logged.
+    if summary.get("roster_preservation_failed"):
+        logger.warning(
+            "Team auto-import for org_id=%s provider=%s could not confirm "
+            "the existing team roster and skipped the team-dimension write "
+            "for sync_run_id=%s -- team name/description/repo_patterns are "
+            "stale for this org until a later run succeeds",
+            org_id,
+            provider,
+            sync_run_id,
+        )
     return {
         "status": "dispatched",
         "sync_run_id": sync_run_id,

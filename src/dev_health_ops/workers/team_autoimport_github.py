@@ -20,6 +20,9 @@ from dev_health_ops.api.services.configuration.team_discovery import (
 from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
+from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_roster_preservation_failed,
+)
 from dev_health_ops.metrics.schemas import TeamMembershipRecord, TeamRepoOwnershipRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
@@ -176,6 +179,7 @@ async def _populate_async(
         )
         if existing_members is None:
             roster_write_safe = False
+            record_team_autoimport_roster_preservation_failed(provider=PROVIDER)
         else:
             for team_row in team_rows:
                 team_row["members"] = existing_members.get(str(team_row["id"]), [])

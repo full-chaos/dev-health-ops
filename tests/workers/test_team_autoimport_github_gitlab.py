@@ -431,6 +431,12 @@ def test_github_org_import_fails_closed_when_roster_read_fails(
     monkeypatch.setattr(
         team_autoimport_github, "load_identity_resolver", lambda: resolver
     )
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        team_autoimport_github,
+        "record_team_autoimport_roster_preservation_failed",
+        lambda *, provider: recorded.append(provider),
+    )
 
     summary = team_autoimport_github.populate(
         org_id="org-1",
@@ -447,6 +453,9 @@ def test_github_org_import_fails_closed_when_roster_read_fails(
 
     assert summary["teams_imported"] == 0
     assert summary["roster_preservation_failed"] is True
+    # CHAOS-4323 (team-lead 08-26): telemetry baked into the fail-closed
+    # path, same PR -- a degraded run must not look identical to a clean one.
+    assert recorded == ["github"]
     # The write never happened -- the whole point of failing closed.
     assert sink.teams == []
 

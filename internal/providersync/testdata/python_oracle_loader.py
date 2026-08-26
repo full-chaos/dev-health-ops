@@ -1032,6 +1032,17 @@ def _target_linear_team_autoimport() -> None:
         "dev_health_ops.workers.team_autoimport_categories",
         {"resolve_import_categories": _unsupported_dependency},
     )
+    # CHAOS-4323 round-3 follow-up: the roster-preservation-failure counter
+    # is recorded only on the fail-closed branch, never reached by the
+    # oracle's narrow target -- stubbed like its neighbors above.
+    _install_module(
+        "dev_health_ops.metrics.prometheus",
+        {
+            "record_team_autoimport_roster_preservation_failed": (
+                _unsupported_dependency
+            )
+        },
+    )
 
 
 def _target_fetch_utils() -> None:

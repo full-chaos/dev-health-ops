@@ -26,6 +26,9 @@ from dev_health_ops.api.services.configuration.team_membership import (
     TeamMembershipService,
 )
 from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_roster_preservation_failed,
+)
 from dev_health_ops.metrics.schemas import (
     MemberRecord,
     ProjectRecord,
@@ -538,6 +541,7 @@ def populate(
             )
             if existing_members is None:
                 roster_write_safe = False
+                record_team_autoimport_roster_preservation_failed(provider="jira")
             else:
                 for team_row in team_rows:
                     team_row["members"] = existing_members.get(str(team_row["id"]), [])

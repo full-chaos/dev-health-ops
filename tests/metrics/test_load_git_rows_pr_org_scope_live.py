@@ -62,10 +62,24 @@ pytestmark = [
     ),
 ]
 
-if (
-    CLICKHOUSE_URI
-    and CLICKHOUSE_URI.rstrip("/").rsplit("/", 1)[-1].split("?")[0] == "default"
-):
+
+def _resolves_to_default_database(uri: str) -> bool:
+    """True if *uri* would have the ClickHouse client connect to "default".
+
+    Mirrors how the client itself resolves the database name from a DSN:
+    the URL path component, percent-decoded, with an EMPTY path (no
+    trailing "/xxx" at all, e.g. "clickhouse://ch:ch@localhost:8123")
+    also meaning "default" -- a naive literal "/default" string match
+    misses both that empty-path case and any percent-encoded form
+    (e.g. "%64efault").
+    """
+    from urllib.parse import unquote, urlsplit
+
+    path = urlsplit(uri).path.lstrip("/")
+    return unquote(path) in ("", "default")
+
+
+if CLICKHOUSE_URI and _resolves_to_default_database(CLICKHOUSE_URI):
     pytest.skip(
         "refusing to run against CLICKHOUSE_URI's /default database -- "
         "point this at a scratch db (see ops-local-validate skill / "

@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "team_wellbeing": [
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-repo",
+          "team_name": "Repo Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "repo_pattern_wins_over_membership",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "dev@example.com",
+          "author_name": null,
+          "commit_hash": "c1",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-wild",
+          "team_name": "Wildcard Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "wildcard_repo_pattern",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "nobody@example.com",
+          "author_name": null,
+          "commit_hash": "c2",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000b"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-member",
+          "team_name": "Member Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "membership_fallback_email",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "dev@example.com",
+          "author_name": null,
+          "commit_hash": "c3",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-member",
+          "team_name": "Member Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "membership_fallback_display_name",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": null,
+          "author_name": "Display Name",
+          "commit_hash": "c4",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "unassigned",
+          "team_name": "Unassigned",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "unassigned_bucket",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c5",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-22",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 3,
+          "team_id": "unassigned",
+          "team_name": "Unassigned",
+          "weekend_commit_ratio": 1.0,
+          "weekend_commits_count": 3
+        }
+      ],
+      "label": "weekend_and_after_hours_mix",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c6",
+          "committer_when": "2026-08-22T02:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        },
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c7",
+          "committer_when": "2026-08-22T23:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        },
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c8",
+          "committer_when": "2026-08-22T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.6666666666666666,
+          "after_hours_commits_count": 2,
+          "commits_count": 3,
+          "team_id": "unassigned",
+          "team_name": "Unassigned",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "weekday_after_hours",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c9",
+          "committer_when": "2026-08-24T07:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        },
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c10",
+          "committer_when": "2026-08-24T18:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        },
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c11",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "America/New_York",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "unassigned",
+          "team_name": "Unassigned",
+          "weekend_commit_ratio": 1.0,
+          "weekend_commits_count": 1
+        }
+      ],
+      "label": "business_timezone_conversion",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "ghost@example.com",
+          "author_name": null,
+          "commit_hash": "c12",
+          "committer_when": "2026-08-24T03:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000c"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-repo",
+          "team_name": "Repo Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "duplicate_commit_hash_dedup",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "dev@example.com",
+          "author_name": null,
+          "commit_hash": "c13",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a"
+        },
+        {
+          "author_email": "dev@example.com",
+          "author_name": null,
+          "commit_hash": "c13",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a"
+        }
+      ]
+    },
+    {
+      "business_hours_end": 17,
+      "business_hours_start": 9,
+      "business_timezone": "UTC",
+      "day": "2026-08-24",
+      "expected": [
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-repo",
+          "team_name": "Repo Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        },
+        {
+          "after_hours_commit_ratio": 0.0,
+          "after_hours_commits_count": 0,
+          "commits_count": 1,
+          "team_id": "team-wild",
+          "team_name": "Wildcard Team",
+          "weekend_commit_ratio": 0.0,
+          "weekend_commits_count": 0
+        }
+      ],
+      "label": "multiple_teams_sorted",
+      "repo_names_by_id": {
+        "00000000-0000-4000-8000-00000000000a": "org/service-a",
+        "00000000-0000-4000-8000-00000000000b": "org/wild-service"
+      },
+      "rows": [
+        {
+          "author_email": "nobody@example.com",
+          "author_name": null,
+          "commit_hash": "c14",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000b"
+        },
+        {
+          "author_email": "dev@example.com",
+          "author_name": null,
+          "commit_hash": "c15",
+          "committer_when": "2026-08-24T12:00:00Z",
+          "repo_id": "00000000-0000-4000-8000-00000000000a"
+        }
+      ]
+    }
+  ]
+}

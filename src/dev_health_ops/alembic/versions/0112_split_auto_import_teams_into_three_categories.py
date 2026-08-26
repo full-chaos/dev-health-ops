@@ -22,11 +22,14 @@ WHAT THIS MIGRATION OWNS, EXACTLY
 For every ``sync_configurations`` row, ``sync_options`` gains two new keys,
 and ``auto_import_teams`` itself is normalized:
 
-- ``auto_import_teams`` was truthy  -> ``auto_import_teams``,
-  ``auto_import_projects``, ``auto_import_members`` all ``True``.
-- ``auto_import_teams`` was falsy or absent -> all three explicitly ``False``
-  (a missing key is normalized to present-and-false, not left absent, so
-  every migrated row's intent is unambiguous going forward).
+- ``auto_import_teams`` was the JSON boolean ``true`` (Python ``is True``,
+  not a truthiness check) -> ``auto_import_teams``, ``auto_import_projects``,
+  ``auto_import_members`` all ``True``.
+- Anything else -- ``false``, absent, or a malformed value ``sync_options``
+  was never schema-validated before this PR (a string, a number, ``null``)
+  -- -> all three explicitly ``False`` (a missing or malformed key is
+  normalized to present-and-false, not left absent or coerced by
+  truthiness, so every migrated row's intent is unambiguous going forward).
 
 No other ``sync_options`` key is read, added, or removed. A row whose
 ``sync_options`` cannot be decoded (not a JSON object) is left untouched and
@@ -145,7 +148,16 @@ def upgrade() -> None:
             )
             continue
 
-        enabled = bool(options.get(_TEAMS))
+        # CHAOS-4323 round 2 (codex adversarial-review, MEDIUM): a strict
+        # identity check, not bool(). Python's bool() truthiness would treat
+        # a malformed legacy value like the STRING "false" as enabled --
+        # bool("false") is True. sync_options was never schema-validated
+        # before this PR, so a row genuinely could carry one. Only the real
+        # JSON boolean `true` (Python `True`) counts as enabled; anything
+        # else -- a string, a number, null, absent -- is quarantined to
+        # false, matching the new API-level rejection of non-bool values for
+        # these keys on every write going forward.
+        enabled = options.get(_TEAMS) is True
         new_options = dict(options)
         new_options[_TEAMS] = enabled
         new_options[_PROJECTS] = enabled

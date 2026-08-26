@@ -59,6 +59,9 @@ class RecordingSink:
     # exercising the members-off roster-preservation read (_existing_team_members).
     existing_team_rows: dict[str, dict[str, Any]] = field(default_factory=dict)
     query_dicts_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # CHAOS-4323 round 2: set to force query_dicts to raise, simulating a
+    # ClickHouse read failure during roster preservation.
+    query_dicts_raises: bool = False
 
     async def insert_teams(self, rows: list[dict[str, Any]]) -> None:
         self.teams.extend(rows)
@@ -67,6 +70,8 @@ class RecordingSink:
         self, query: str, parameters: dict[str, Any]
     ) -> list[dict[str, Any]]:
         self.query_dicts_calls.append((query, parameters))
+        if self.query_dicts_raises:
+            raise RuntimeError("simulated ClickHouse read failure")
         team_ids = parameters.get("team_ids") or []
         return [
             {"id": team_id, "members": self.existing_team_rows[team_id]["members"]}
@@ -367,6 +372,75 @@ def test_github_org_import_preserves_existing_roster_when_members_off(
     # Preserved, not erased -- this is the whole point of the fix.
     assert sink.teams[0]["members"] == ["preexisting-lead@example.com"]
     assert sink.query_dicts_calls, "roster-preservation read must have run"
+
+
+def test_github_org_import_fails_closed_when_roster_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4323 round 2 (codex adversarial-review, HIGH): if the roster-
+    preservation read itself fails (ClickHouse unavailable, degraded, or a
+    schema mismatch), the fix must NOT fall through to writing an empty
+    "members" list -- that reproduces the exact data loss the fix exists to
+    prevent, only now triggered by infra flakiness instead of the members
+    flag. The team-dimension write must be skipped entirely instead."""
+
+    sink = RecordingSink(query_dicts_raises=True)
+    resolver = IdentityResolver(alias_to_canonical={})
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="github",
+                provider_team_id="platform",
+                name="Platform",
+                associations={
+                    "repo_patterns": ["full-chaos/dev-health"],
+                    "provider_org": org_name,
+                },
+            ),
+        ]
+
+    async def discover_members_github(
+        self, token: str, org_name: str, team_slug: str
+    ) -> list[DiscoveredMember]:
+        raise AssertionError(
+            "member discovery must not run when the members category is off"
+        )
+
+    monkeypatch.setattr(
+        team_autoimport_github.TeamDiscoveryService,
+        "discover_github",
+        discover_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github.TeamMembershipService,
+        "discover_members_github",
+        discover_members_github,
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "ClickHouseMetricsSink", lambda dsn: sink
+    )
+    monkeypatch.setattr(
+        team_autoimport_github, "load_identity_resolver", lambda: resolver
+    )
+
+    summary = team_autoimport_github.populate(
+        org_id="org-1",
+        credentials={"token": "secret", "org": "full-chaos"},
+        scope={
+            "analytics_db": "clickhouse://test",
+            "import_categories": {
+                "teams": True,
+                "projects": False,
+                "members": False,
+            },
+        },
+    )
+
+    assert summary["teams_imported"] == 0
+    assert summary["roster_preservation_failed"] is True
+    # The write never happened -- the whole point of failing closed.
+    assert sink.teams == []
 
 
 def test_github_org_import_skips_populate_entirely_when_no_category_selected(

@@ -195,3 +195,50 @@ def test_downgrade_drops_new_keys_and_keeps_auto_import_teams():
         assert "auto_import_members" not in options
         assert options["auto_import_teams"] is True
         assert options["owner"] == "acme"
+
+
+def test_upgrade_quarantines_malformed_legacy_flag_values_to_false():
+    """CHAOS-4323 round 2 (codex adversarial-review, MEDIUM): sync_options
+    was never schema-validated before this PR, so a legacy row could carry a
+    non-bool value for auto_import_teams. Python's bool() truthiness would
+    treat the STRING "false" as enabled (bool("false") is True) -- the
+    migration must use a strict identity check instead and quarantine
+    anything that isn't the real JSON boolean true to false."""
+    engine = sa.create_engine("sqlite:///:memory:")
+    migration = _migration()
+    with engine.connect() as connection:
+        table = _table(connection)
+        connection.execute(
+            table.insert(),
+            [
+                {
+                    "id": "row-string-false",
+                    "sync_options": {"auto_import_teams": "false"},
+                },
+                {
+                    "id": "row-string-true",
+                    "sync_options": {"auto_import_teams": "true"},
+                },
+                {"id": "row-int-one", "sync_options": {"auto_import_teams": 1}},
+                {"id": "row-null", "sync_options": {"auto_import_teams": None}},
+            ],
+        )
+        connection.commit()
+
+        context = MigrationContext.configure(connection)
+        with Operations.context(context):
+            migration.upgrade()
+
+        for row_id in (
+            "row-string-false",
+            "row-string-true",
+            "row-int-one",
+            "row-null",
+        ):
+            row = connection.execute(
+                sa.select(table.c.sync_options).where(table.c.id == row_id)
+            ).scalar_one()
+            options = json.loads(row) if isinstance(row, str) else row
+            assert options["auto_import_teams"] is False, row_id
+            assert options["auto_import_projects"] is False, row_id
+            assert options["auto_import_members"] is False, row_id

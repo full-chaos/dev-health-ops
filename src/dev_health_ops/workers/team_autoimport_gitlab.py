@@ -213,24 +213,32 @@ async def _populate_async(
         team_store=team_store,
         discovered_at=now,
     )
+    # CHAOS-4323 round 2 (codex adversarial-review, HIGH): roster_write_safe
+    # gates ONLY the team-dimension write (the row carrying "members"). A
+    # roster-preservation read failure must never fall through to writing an
+    # unconfirmed empty roster -- it skips that write entirely instead.
+    roster_write_safe = True
     if want_members:
         member_roster = _roster_from_memberships(membership_rows)
         for team_row in team_rows:
             team_row["members"] = member_roster.get(str(team_row["id"]), [])
     elif want_teams:
-        # CHAOS-4323 (codex adversarial-review): a teams-only run (members
-        # off) must not erase a previously-imported roster by writing an
-        # empty "members" list -- preserve whatever is currently persisted.
+        # A teams-only run (members off) must not erase a previously-imported
+        # roster by writing an empty "members" list -- preserve whatever is
+        # currently persisted.
         existing_members = _existing_team_members(
             sink=sink,
             org_id=org_id,
             provider=PROVIDER,
             team_ids=[str(row["id"]) for row in team_rows],
         )
-        for team_row in team_rows:
-            team_row["members"] = existing_members.get(str(team_row["id"]), [])
+        if existing_members is None:
+            roster_write_safe = False
+        else:
+            for team_row in team_rows:
+                team_row["members"] = existing_members.get(str(team_row["id"]), [])
 
-    if want_teams:
+    if want_teams and roster_write_safe:
         await _project_team_rows(
             org_id=org_id,
             team_rows=team_rows,
@@ -247,7 +255,8 @@ async def _populate_async(
         sink.write_projects(catalog_projects)
 
     summary: dict[str, Any] = {
-        "teams_imported": len(team_rows) if want_teams else 0,
+        "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
+        "roster_preservation_failed": not roster_write_safe,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows})
@@ -579,15 +588,28 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
 
 def _existing_team_members(
     *, sink: Any, org_id: str, provider: str, team_ids: list[str]
-) -> dict[str, list[str]]:
-    """Best-effort read of the CURRENTLY persisted roster for these teams.
+) -> dict[str, list[str]] | None:
+    """Read of the CURRENTLY persisted roster for these teams, for a
+    members-off run to carry forward instead of overwriting it with [].
 
-    CHAOS-4323: when members import is off, a teams-only run must not
-    overwrite the roster with an empty list. See the identical helper's
-    docstring in team_autoimport_github.py for the full rationale.
+    CHAOS-4323 round 2 (codex adversarial-review, HIGH): returns ``None``
+    (never a substitute {}) whenever the current roster genuinely could not
+    be confirmed, so the caller fails CLOSED (skips the team-dimension
+    write) rather than write an empty roster it never actually verified was
+    empty. See the identical helper's docstring in
+    team_autoimport_github.py for the full rationale.
     """
-    if not team_ids or not hasattr(sink, "query_dicts"):
+    if not team_ids:
         return {}
+    if not hasattr(sink, "query_dicts"):
+        logger.warning(
+            "Cannot confirm existing team rosters for org_id=%s provider=%s "
+            "(sink has no query_dicts) -- skipping the team-dimension write "
+            "for this members-off run rather than risk erasing rosters",
+            org_id,
+            provider,
+        )
+        return None
     try:
         rows = sink.query_dicts(
             """
@@ -601,13 +623,14 @@ def _existing_team_members(
         )
     except Exception:
         logger.warning(
-            "Could not read existing team rosters for org_id=%s provider=%s; "
-            "a members-off run will write empty rosters for these teams",
+            "Could not read existing team rosters for org_id=%s provider=%s "
+            "-- skipping the team-dimension write for this members-off run "
+            "rather than risk erasing rosters",
             org_id,
             provider,
             exc_info=True,
         )
-        return {}
+        return None
     return {str(row.get("id")): list(row.get("members") or []) for row in rows}
 
 

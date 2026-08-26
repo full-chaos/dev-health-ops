@@ -155,24 +155,32 @@ async def _populate_async(
         team_store=team_store,
         discovered_at=now,
     )
+    # CHAOS-4323 round 2 (codex adversarial-review, HIGH): roster_write_safe
+    # gates ONLY the team-dimension write (the row carrying "members"). A
+    # roster-preservation read failure must never fall through to writing an
+    # unconfirmed empty roster -- it skips that write entirely instead.
+    roster_write_safe = True
     if want_members:
         member_roster = _roster_from_memberships(membership_rows)
         for team_row in team_rows:
             team_row["members"] = member_roster.get(str(team_row["id"]), [])
     elif want_teams:
-        # CHAOS-4323 (codex adversarial-review): a teams-only run (members
-        # off) must not erase a previously-imported roster by writing an
-        # empty "members" list -- preserve whatever is currently persisted.
+        # A teams-only run (members off) must not erase a previously-imported
+        # roster by writing an empty "members" list -- preserve whatever is
+        # currently persisted.
         existing_members = _existing_team_members(
             sink=sink,
             org_id=org_id,
             provider=PROVIDER,
             team_ids=[str(row["id"]) for row in team_rows],
         )
-        for team_row in team_rows:
-            team_row["members"] = existing_members.get(str(team_row["id"]), [])
+        if existing_members is None:
+            roster_write_safe = False
+        else:
+            for team_row in team_rows:
+                team_row["members"] = existing_members.get(str(team_row["id"]), [])
 
-    if want_teams:
+    if want_teams and roster_write_safe:
         await _project_team_rows(
             org_id=org_id,
             team_rows=team_rows,
@@ -186,7 +194,7 @@ async def _populate_async(
         sink.write_team_memberships(membership_rows)
 
     return {
-        "teams_imported": len(team_rows) if want_teams else 0,
+        "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
         "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
         "reference_sprint_ids": [],
         "projects_imported": 0,
@@ -197,6 +205,7 @@ async def _populate_async(
         "team_project_ownership_imported": 0,
         "team_repo_ownership_imported": len(repo_rows) if want_teams else 0,
         "work_item_team_attributions_imported": 0,
+        "roster_preservation_failed": not roster_write_safe,
     }
 
 
@@ -411,22 +420,35 @@ def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:
 
 def _existing_team_members(
     *, sink: Any, org_id: str, provider: str, team_ids: list[str]
-) -> dict[str, list[str]]:
-    """Best-effort read of the CURRENTLY persisted roster for these teams.
+) -> dict[str, list[str]] | None:
+    """Read of the CURRENTLY persisted roster for these teams, for a
+    members-off run to carry forward instead of overwriting it with [].
 
-    CHAOS-4323: when members import is off, the fresh discovery pass never
-    looks at membership, so the roster this run would otherwise write is an
-    empty list -- overwriting whatever the last import (or a manual edit)
-    left there. Reading it back first and carrying it forward means a
-    teams-only run updates name/description/repo_patterns without touching
-    the roster. Same query shape as
+    CHAOS-4323 round 2 (codex adversarial-review, HIGH): the first version of
+    this helper swallowed a failed read and returned {}, which the caller
+    then treated as "these teams truly have no members" and wrote — silently
+    reproducing the exact data loss this fix exists to prevent, only now
+    triggered by ClickHouse being unavailable/degraded instead of by the
+    members flag. Returns ``None`` (never a substitute {}) whenever the
+    current roster genuinely could not be confirmed, so the caller can fail
+    CLOSED (skip the team-dimension write for this run) rather than write an
+    empty roster it never actually verified was empty. An empty dict is only
+    ever returned when there is nothing to look up (``team_ids`` empty) or
+    the query genuinely found no matching rows (a real, confirmed answer).
+    Same query shape as
     ``clickhouse_team_drift_projector.ClickHouseTeamDriftProjector._team_row``.
-    Silently returns {} (falls back to empty rosters, the old behavior) if
-    the sink can't run a raw query (e.g. a test double) or the query fails --
-    this is a data-quality improvement, never a reason to fail the run.
     """
-    if not team_ids or not hasattr(sink, "query_dicts"):
+    if not team_ids:
         return {}
+    if not hasattr(sink, "query_dicts"):
+        logger.warning(
+            "Cannot confirm existing team rosters for org_id=%s provider=%s "
+            "(sink has no query_dicts) -- skipping the team-dimension write "
+            "for this members-off run rather than risk erasing rosters",
+            org_id,
+            provider,
+        )
+        return None
     try:
         rows = sink.query_dicts(
             """
@@ -440,13 +462,14 @@ def _existing_team_members(
         )
     except Exception:
         logger.warning(
-            "Could not read existing team rosters for org_id=%s provider=%s; "
-            "a members-off run will write empty rosters for these teams",
+            "Could not read existing team rosters for org_id=%s provider=%s "
+            "-- skipping the team-dimension write for this members-off run "
+            "rather than risk erasing rosters",
             org_id,
             provider,
             exc_info=True,
         )
-        return {}
+        return None
     return {str(row.get("id")): list(row.get("members") or []) for row in rows}
 
 

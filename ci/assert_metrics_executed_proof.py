@@ -60,6 +60,18 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     "file_hotspots": "file_metrics_daily",
 }
 
+# Team-keyed families (CHAOS-4276): unlike REPO_DAY_FAMILIES, these tables are
+# NOT (repo_id, day)-shaped -- team_metrics_daily is keyed (team_id, day) and
+# scoped only by org_id. A commit whose repo/author resolve to no team lands
+# under the synthetic "unassigned" team_id (compute_team_wellbeing_metrics_daily's
+# unknown_team_id default), which is a VALID row, not a dead id -- so this
+# family gets its own readback (team_readback) rather than reusing
+# family_readback/unscoped_repo_ids, which would incorrectly demand every
+# team_id be a live repo_id.
+TEAM_DAY_FAMILIES: dict[str, str] = {
+    "team_wellbeing": "team_metrics_daily",
+}
+
 
 def live_repo_ids(client, org_id: str) -> set[str]:
     """The org's real ClickHouse repo ids.
@@ -122,6 +134,32 @@ def unscoped_repo_ids(client, table: str, run_start: datetime) -> set[str]:
     return {str(row[0]) for row in result.result_rows}
 
 
+def team_readback(
+    client, table: str, org_id: str, run_start: datetime
+) -> dict[str, FamilyRowCount]:
+    """Team-keyed counterpart of family_readback (CHAOS-4276).
+
+    Scoped by org_id directly rather than an enumerated id set: team_id has
+    no separate "live id" oracle the way repo_id does (repos table) --
+    "unassigned" is a legitimate team_id with no corresponding row anywhere
+    else, so there is nothing to cross-check it against.
+    """
+    result = client.query(
+        f"""
+        SELECT team_id, count() AS n, max(computed_at) AS latest
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY team_id
+        """,
+        parameters={"org_id": org_id, "run_start": run_start},
+    )
+    return {
+        str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
+        for row in result.result_rows
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clickhouse-uri", required=True)
@@ -133,12 +171,13 @@ def main() -> int:
         "with computed_at before this are stale evidence, not proof this run "
         "computed anything.",
     )
+    all_families = sorted(REPO_DAY_FAMILIES) + sorted(TEAM_DAY_FAMILIES)
     parser.add_argument(
         "--families",
         nargs="+",
-        default=sorted(REPO_DAY_FAMILIES),
-        choices=sorted(REPO_DAY_FAMILIES),
-        help="Subset of families to check (default: all).",
+        default=all_families,
+        choices=all_families,
+        help="Subset of families to check (default: all, repo-keyed and team-keyed).",
     )
     parser.add_argument(
         "--summary-json",
@@ -174,6 +213,23 @@ def main() -> int:
         summary: dict[str, dict[str, object]] = {}
         failures: list[str] = []
         for family in args.families:
+            if family in TEAM_DAY_FAMILIES:
+                table = TEAM_DAY_FAMILIES[family]
+                team_rows = team_readback(client, table, args.org_id, run_start)
+                total_rows = sum(int(v["rows"]) for v in team_rows.values())
+                summary[family] = {
+                    "table": table,
+                    "rows_written": total_rows,
+                    "teams_with_rows": sorted(team_rows),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"row with computed_at >= {args.run_start} for "
+                        f"org {args.org_id}."
+                    )
+                continue
+
             table = REPO_DAY_FAMILIES[family]
             readback = family_readback(client, table, repo_ids, run_start)
             total_rows = sum(int(v["rows"]) for v in readback.values())

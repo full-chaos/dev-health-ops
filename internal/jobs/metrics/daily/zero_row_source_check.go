@@ -80,6 +80,7 @@ WHERE partition.id = $1::uuid`, partitionID).Scan(&orgID, &day, &rawRepositoryID
 	cicdSource, err := checker.exists(ctx, `
 SELECT 1 FROM ci_pipeline_runs
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+  AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
   AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
@@ -93,14 +94,10 @@ LIMIT 1`, orgID, day, repositoryIDs)
 		return nil, err
 	}
 
-	// deploy: source is deployments. The four-way coalesce matches the
-	// native DORA executor's own window predicate (dora_native_clickhouse.go
-	// deploymentWindowQuery) -- this is deliberately the same fallback chain,
-	// not a simplified two-value one.
 	deploySource, err := checker.exists(ctx, `
 SELECT 1 FROM deployments
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND toDate(coalesce(deployed_at, finished_at, started_at, last_synced)) = {day:Date}
+  AND deployed_at IS NOT NULL AND toDate(deployed_at) = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
@@ -113,17 +110,17 @@ LIMIT 1`, orgID, day, repositoryIDs)
 		return nil, err
 	}
 
-	// testops_risk: writes testops_release_confidence, testops_quality_drag,
-	// and testops_pipeline_stability together (families.json), reading
-	// already-computed test/pipeline metrics as its own inputs rather than a
-	// single raw event table. test_suite_results is the closest genuine raw
-	// "test results" source (CHAOS-4263 ruling's own phrase); output presence
-	// only checks release_confidence and pipeline_stability, the two tables
-	// the RCA itself found stale -- testops_quality_drag is not checked here.
 	testopsSource, err := checker.exists(ctx, `
-SELECT 1 FROM test_suite_results
-WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
-  AND finished_at IS NOT NULL AND toDate(finished_at) = {day:Date}
+SELECT 1 FROM (
+  SELECT repo_id FROM ci_pipeline_runs
+  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+    AND started_at IS NOT NULL AND toDate(started_at) = {day:Date}
+  UNION ALL
+  SELECT repo_id FROM test_suite_results
+  WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
+    AND coalesce(started_at, finished_at) IS NOT NULL
+    AND toDate(coalesce(started_at, finished_at)) = {day:Date}
+)
 LIMIT 1`, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
@@ -142,10 +139,6 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	}
 
 	// incident: operational_incidents has no repo_id. The canonical projection
-	// makes it repository-scoped through the current active service mapping,
-	// with the same current-row and resolved-day predicates as the production
-	// incident_metrics_daily reader. An incident with no current repo mapping
-	// cannot prove source data for any partition and is intentionally omitted.
 	dayStart, err := time.Parse("2006-01-02", day)
 	if err != nil {
 		return nil, ErrInvalidState
@@ -205,12 +198,16 @@ func (checker *ClickHouseSourceDataChecker) existsIncident(
 		return false, fmt.Errorf("incident ordering contract: %w", err)
 	}
 	projection := remaining.IncidentProjectionQuery(
-		remaining.IncidentWindowResolved,
+		remaining.IncidentWindowStarted,
 		" AND mapping.repo_id IN {repo_ids:Array(UUID)}",
 		contract,
 	)
 	asOf := time.Now().UTC()
-	rows, err := checker.conn.Query(ctx, "SELECT 1 FROM ("+projection+") LIMIT 1",
+	rows, err := checker.conn.Query(ctx, `SELECT 1 FROM (`+projection+`) AS incident
+WHERE incident.resolved_at IS NOT NULL
+  AND incident.resolved_at >= {start:DateTime64(3, 'UTC')}
+  AND incident.resolved_at < {end:DateTime64(3, 'UTC')}
+LIMIT 1`,
 		clickhouse.Named("org_id", orgID),
 		clickhouse.Named("start", remaining.DateTime64Argument(
 			start, remaining.DateTime64MillisecondPrecision)),

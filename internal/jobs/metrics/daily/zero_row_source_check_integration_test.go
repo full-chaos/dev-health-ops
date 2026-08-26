@@ -55,8 +55,6 @@ func (conn *strictSourceDataConn) Query(_ context.Context, query string, args ..
 			}
 		}
 	}
-	// cicd has source rows but no output rows. Every other family is empty, so
-	// only cicd is expected to block the partition.
 	if strings.Contains(query, "FROM ci_pipeline_runs") {
 		return &boolRows{present: true}, nil
 	}
@@ -337,8 +335,8 @@ func TestPartitionHandlerWorkRetriesAndObservesZeroRowsWithSourceData(t *testing
 	if store.partitionReleases != 1 {
 		t.Fatalf("ReleasePartition calls = %d, want 1", store.partitionReleases)
 	}
-	if len(observer.families) != 1 || observer.families[0] != "cicd" {
-		t.Fatalf("observed families = %v, want [cicd]", observer.families)
+	if len(observer.families) != 2 || observer.families[0] != "cicd" || observer.families[1] != "testops_risk" {
+		t.Fatalf("observed families = %v, want [cicd testops_risk]", observer.families)
 	}
 }
 

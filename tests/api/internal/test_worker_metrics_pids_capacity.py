@@ -66,13 +66,9 @@ def _isolate_pids_sources(
     pids_max: int,
     pids_current: int,
 ) -> Path:
-    """Point every pids/thread ceiling source at a fake, writable cgroup
-    tree except pids_current, which the caller mutates to simulate live
-    consumption. Neutralizes RLIMIT_NPROC and host threads-max so the test's
-    ceiling is deterministic (the real test process's rlimits/host state
-    would otherwise leak in and make the ceiling non-reproducible), and
-    resets the module-level reservation state so no earlier test in this
-    process's shared module globals leaks a stale reservation in."""
+    """Point the pids ceiling/current sources at a fake, writable cgroup
+    tree, and reset the module-level reservation state so no earlier test
+    in this process's shared module globals leaks a stale reservation in."""
     pids_max_file = tmp_path / "pids.max"
     pids_current_file = tmp_path / "pids.current"
     pids_max_file.write_text(str(pids_max))
@@ -80,10 +76,6 @@ def _isolate_pids_sources(
     monkeypatch.setattr(worker_metrics, "_PIDS_MAX_PATHS", (str(pids_max_file),))
     monkeypatch.setattr(
         worker_metrics, "_PIDS_CURRENT_PATHS", (str(pids_current_file),)
-    )
-    monkeypatch.setattr(worker_metrics, "_read_rlimit_nproc", lambda: None)
-    monkeypatch.setattr(
-        worker_metrics, "_HOST_THREADS_MAX_PATH", str(tmp_path / "nope")
     )
     monkeypatch.setattr(worker_metrics, "_PIDS_RESERVED_HOLDER", [0])
     # Default the safety multiplier to 1.0 (no hedge) so tests can reason
@@ -120,27 +112,26 @@ def test_read_int_cgroup_file_garbage_is_none(tmp_path: Path) -> None:
     assert worker_metrics._read_int_cgroup_file(str(path)) is None
 
 
-def test_effective_pids_ceiling_takes_the_minimum_finite_source(
+def test_effective_pids_ceiling_reads_cgroup_pids_max(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _isolate_pids_sources(monkeypatch, tmp_path, pids_max=500, pids_current=0)
     assert worker_metrics._effective_pids_ceiling() == 500
 
 
-def test_effective_pids_ceiling_falls_back_when_nothing_is_readable(
+def test_effective_pids_ceiling_falls_back_when_pids_max_is_unreadable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # No compose file anywhere sets pids_limit today (CHAOS-4317 design doc)
-    # -- this is the realistic "unbounded everywhere" shape: cgroup pids.max
-    # reads "max" (never present here), RLIMIT_NPROC is infinite, and the
-    # host threads-max path does not exist either.
+    # -- this is the realistic "unbounded" shape: cgroup pids.max reads
+    # "max" (never present here). CHAOS-4317 codex review (PR #1931 round
+    # 2, P1): only cgroup pids.max is used for the ceiling now -- RLIMIT_
+    # NPROC and host threads-max were removed because neither shares
+    # pids.current's container/cgroup scope, so mixing them in could
+    # under-report a real host-wide exhaustion.
     monkeypatch.setattr(worker_metrics, "_PIDS_MAX_PATHS", (str(tmp_path / "absent1"),))
     monkeypatch.setattr(
         worker_metrics, "_PIDS_CURRENT_PATHS", (str(tmp_path / "absent2"),)
-    )
-    monkeypatch.setattr(worker_metrics, "_read_rlimit_nproc", lambda: None)
-    monkeypatch.setattr(
-        worker_metrics, "_HOST_THREADS_MAX_PATH", str(tmp_path / "absent3")
     )
     monkeypatch.delenv(worker_metrics._PIDS_FALLBACK_CEILING_ENV, raising=False)
 
@@ -439,3 +430,119 @@ async def test_partitions_over_budget_queue_durably_without_ever_exceeding_the_c
         "at least one of the 9 partitions must have queued -- otherwise "
         "this test never actually exercised the over-budget path"
     )
+
+
+# ---------------------------------------------------------------------------
+# Codex review round 2 (PR #1931): per-child measurement isolation, the
+# safety multiplier's own validation, and reclassifying a spawn-time OSError.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="/proc/<pid>/status only exists on Linux (what every deployment "
+    "target runs) -- macOS has no /proc filesystem at all.",
+)
+@pytest.mark.asyncio
+async def test_poll_peak_child_thread_count_is_immune_to_ambient_ceiling_activity() -> (
+    None
+):
+    """CHAOS-4317 codex review (PR #1931 round 2, P1) falsifier: a version
+    that measures the container-wide cgroup pids.current delta (instead of
+    this one child's own /proc/<pid>/status Threads: field) would report a
+    much higher, WRONG peak here -- ambient growth unrelated to the child
+    would get attributed to it. Using a real short-lived child process (a
+    tiny python -c script) and reading its own /proc/<pid>/status directly
+    proves the measurement is scoped correctly.
+    """
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(0.3)",
+    )
+    holder = [0]
+    poll_task = asyncio.create_task(
+        worker_metrics._poll_peak_child_thread_count(
+            process.pid, process, holder, interval_seconds=0.02
+        )
+    )
+    await process.wait()
+    # The poller's own loop notices process.returncode is set and returns
+    # cleanly -- no cancellation needed once the child has already exited.
+    await poll_task
+
+    # A real Python process has at least its main thread -- this asserts
+    # the reader actually found something real, not that it silently
+    # no-op'd (which a broken /proc path would also make "pass" at 0).
+    assert holder[0] >= 1
+
+
+def test_configured_per_child_safety_multiplier_rejects_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 2, P2): an explicit "0"
+    would zero out _reserved_per_child_pids_cost entirely, silently
+    disabling the safety hedge and allowing unlimited admission relative to
+    the raw watermark under increased concurrency."""
+    monkeypatch.setenv(worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, "0")
+    assert (
+        worker_metrics._configured_per_child_safety_multiplier()
+        == worker_metrics._DEFAULT_PIDS_PER_CHILD_SAFETY_MULTIPLIER
+    )
+
+
+def test_configured_per_child_safety_multiplier_rejects_non_finite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 2, P2) falsifier: the
+    generic float parser's `value >= 0` check lets "inf" through -- passed
+    straight to math.ceil(watermark * inf) it raises an unclassified
+    OverflowError instead of a controlled fallback."""
+    monkeypatch.setenv(worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, "inf")
+    assert (
+        worker_metrics._configured_per_child_safety_multiplier()
+        == worker_metrics._DEFAULT_PIDS_PER_CHILD_SAFETY_MULTIPLIER
+    )
+    monkeypatch.setenv(worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, "-1.0")
+    assert (
+        worker_metrics._configured_per_child_safety_multiplier()
+        == worker_metrics._DEFAULT_PIDS_PER_CHILD_SAFETY_MULTIPLIER
+    )
+
+
+def test_configured_per_child_safety_multiplier_accepts_a_valid_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(worker_metrics._PIDS_PER_CHILD_SAFETY_MULTIPLIER_ENV, "3.5")
+    assert worker_metrics._configured_per_child_safety_multiplier() == 3.5
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_process_reclassifies_spawn_time_oserror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 2, P1) falsifier: without
+    the try/except around asyncio.create_subprocess_exec, this OSError
+    (modeling the exact 2026-08-26 incident's EAGAIN from pthread_create)
+    would propagate uncaught up through _execute's generic `except
+    Exception` handler, which marks the execution ambiguous (needs a human
+    /repair call) even though no computation ever started -- instead of the
+    always-retryable capacity_exhausted this test asserts.
+    """
+    _isolate_pids_sources(monkeypatch, tmp_path, pids_max=1000, pids_current=10)
+    monkeypatch.setattr(worker_metrics, "_PIDS_PER_CHILD_COST_HOLDER", [10])
+    monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, "0.0")
+
+    async def raise_eagain(*_args: object, **_kwargs: object) -> None:
+        raise BlockingIOError(11, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(worker_metrics.asyncio, "create_subprocess_exec", raise_eagain)
+
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "capacity_exhausted"
+    assert excinfo.value.safe_to_retry is True
+    # The reservation taken before the failed spawn must still be released
+    # -- otherwise every subsequent call would see a permanently inflated
+    # _PIDS_RESERVED_HOLDER for a child that never actually existed.
+    assert worker_metrics._PIDS_RESERVED_HOLDER[0] == 0

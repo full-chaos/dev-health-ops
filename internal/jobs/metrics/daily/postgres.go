@@ -526,16 +526,24 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 		trigger = jobruntime.DailyMetricsRunTriggerPostSync
 	}
 	// Live ClickHouse discovery has no natural upper bound the way an
-	// explicit StartRunRequest does -- fail loud here rather than silently
+	// explicit StartRunRequest does -- fail loud rather than silently
 	// chunking an unbounded repository set into an unbounded number of
 	// daily_partition jobs (CHAOS-4263, codex adversarial review round 3).
-	if len(repositoryIDs) > maxDailyMetricsRepositoriesPerRun {
-		store.observeDiscovery(trigger, jobruntime.DailyMetricsDiscoveryOutcomeRepositoryCapExceeded)
-		return false, ErrRepositoryCapExceeded
-	}
-	partitions, err := normalizeRepositoryPartitions(repositoryIDs)
-	if err != nil {
-		return false, err
+	// The actual terminal-state write happens below, inside the same locked
+	// transaction every other outcome uses (round 4 fix): an early return
+	// here, before any write, left the durable run stuck in 'running'
+	// forever -- no partitions, no completion fence, no terminal state,
+	// worse than the burst it replaced, since a readiness gate that treats a
+	// nonterminal run as unfinished would block that org's whole day
+	// indefinitely with no re-drive path.
+	overCap := len(repositoryIDs) > maxDailyMetricsRepositoriesPerRun
+	var partitions [][]RepositoryID
+	if !overCap {
+		var err error
+		partitions, err = normalizeRepositoryPartitions(repositoryIDs)
+		if err != nil {
+			return false, err
+		}
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -572,6 +580,37 @@ SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid`, r
 		return false, nil
 	}
 	now := store.now().UTC()
+	if overCap {
+		command, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed', finalized_at = $1, updated_at = $1
+WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
+		if err != nil {
+			return false, ErrUnavailable
+		}
+		if command.RowsAffected() != 1 {
+			return false, ErrInvalidState
+		}
+		completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
+		if err != nil {
+			return false, ErrInvalidState
+		}
+		// Marked even though this terminalized as a failure: everything
+		// downstream in this same post-sync fanout chain (workgraph.build,
+		// investment.materialize, membership_backfill, ...) is gated on this
+		// exact completion key, and this org's discovered repository count
+		// cannot change by waiting -- never marking it would strand the
+		// ENTIRE chain, not just daily, on a condition that cannot resolve
+		// on its own.
+		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+			return false, ErrUnavailable
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, ErrUnavailable
+		}
+		store.observeDiscovery(trigger, jobruntime.DailyMetricsDiscoveryOutcomeRepositoryCapExceeded)
+		return false, ErrRepositoryCapExceeded
+	}
 	if len(partitions) == 0 {
 		command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs

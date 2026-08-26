@@ -298,12 +298,19 @@ func TestMaterializeScheduledFanoutFailsLoudlyWhenRepositoryCapIsExceeded(t *tes
 	if partitions != 0 {
 		t.Fatalf("partitions=%d, want 0 -- an over-cap discovery must not silently truncate and partition anyway", partitions)
 	}
-	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM daily_metrics_runs WHERE id=$1::uuid`, run.ID).Scan(&status); err != nil {
+	var status, finalization string
+	if err := pool.QueryRow(ctx, `SELECT status, finalization_status FROM daily_metrics_runs WHERE id=$1::uuid`, run.ID).Scan(&status, &finalization); err != nil {
 		t.Fatal(err)
 	}
-	if status != "running" {
-		t.Fatalf("run status=%s, want running (unaffected -- MaterializeScheduledFanout's own transaction rolled back)", status)
+	if status != "failed" || finalization != "failed" {
+		t.Fatalf("run status=%s finalization=%s, want failed/failed -- an over-cap run must reach a terminal state, not strand in running forever", status, finalization)
+	}
+	var fences int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_completion_fences WHERE completion_key=$1`, "daily_metrics_run:"+run.ID).Scan(&fences); err != nil {
+		t.Fatal(err)
+	}
+	if fences != 1 {
+		t.Fatalf("completion fences=%d, want 1 -- downstream fanout steps gated on this key must not be stranded too", fences)
 	}
 }
 

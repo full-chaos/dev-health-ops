@@ -125,16 +125,27 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	// infrastructure failure with no plan/generation resolved yet, or a
 	// stale/non-current route) is not part of "did this sync's daily fanout
 	// publish" and is deliberately left unobserved by this counter.
+	//
+	// committed, not "err == nil", gates published/no_repositories (round 4
+	// fix): a panic unwinding out of a later writer leaves the named err nil
+	// (a normal return was never reached), but this deferred function still
+	// runs during the unwind -- checking err alone would report a publish
+	// that a concurrent panic-triggered rollback (the OTHER deferred
+	// tx.Rollback, registered earlier and therefore run AFTER this one) was
+	// about to undo. committed is set true in exactly the two places
+	// tx.Commit(ctx) itself returned nil, so a panic always resolves to the
+	// error branch here, regardless of what err holds.
 	var (
 		outcome    jobruntime.PostSyncFanoutOutcome
 		dispatchID string
 		observe    bool
+		committed  bool
 	)
 	defer func() {
 		if !observe {
 			return
 		}
-		if err != nil {
+		if !committed {
 			service.observeFanout(jobruntime.PostSyncFanoutOutcomeError, args, "")
 			return
 		}
@@ -149,8 +160,11 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		observe = true
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
-		err = tx.Commit(ctx)
-		return err
+		if err = tx.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
 	}
 	observe = true
 	var orderedCompletion string
@@ -207,6 +221,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		err = ErrPostSyncUnavailable
 		return err
 	}
+	committed = true
 	return nil
 }
 

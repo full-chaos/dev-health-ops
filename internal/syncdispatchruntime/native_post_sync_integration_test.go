@@ -20,10 +20,14 @@ import (
 )
 
 type markerWriter struct {
-	failKind string
+	failKind  string
+	panicKind string
 }
 
 func (writer markerWriter) write(ctx context.Context, tx pgx.Tx, kind string, plan PostSyncPlan, prerequisite string) error {
+	if kind == writer.panicKind {
+		panic("simulated writer panic: " + kind)
+	}
 	if kind == writer.failKind {
 		return ErrPostSyncUnavailable
 	}
@@ -439,6 +443,78 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWh
 	}
 	if markers != 0 {
 		t.Fatalf("rolled-back generation left %d markers behind", markers)
+	}
+}
+
+// TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics
+// pins the codex adversarial-review finding (round 4, CHAOS-4263): a panic
+// unwinding out of a later-stage writer (here: workGraph.build) leaves the
+// named `err` return nil -- Fanout never took a normal error-return path --
+// but the deferred fanout-outcome observation still runs during the unwind.
+// Checking `err == nil` alone would report "published" for a transaction
+// that a panic is actively rolling back. The observation must depend on an
+// explicit committed flag, not on the absence of a returned error.
+func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000051"
+		runID         = "00000000-0000-4000-8000-000000000052"
+		outboxID      = "00000000-0000-4000-8000-000000000053"
+		integrationID = "00000000-0000-4000-8000-000000000054"
+		repositoryID  = "00000000-0000-4000-8000-000000000055"
+	)
+	// seedPostSync's "commits" dataset makes plan.Daily AND plan.WorkGraph
+	// both true, so daily.StartRunTx (a real writer here) succeeds and
+	// stages its work before workgraph.build panics.
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	service, err := NewNativePostSyncService(
+		pool,
+		markerDaily{},
+		markerRemaining{},
+		markerWorkGraph{markerWriter{panicKind: "workgraph.build"}},
+		markerTeam{},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingFanoutObserver{}
+	service.SetFanoutObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	panicked := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		_ = service.Fanout(ctx, args)
+		return nil
+	}()
+	if panicked == nil {
+		t.Fatal("Fanout did not panic -- markerWorkGraph.panicKind was not exercised")
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
+		t.Fatalf("observed outcomes = %v, want [error] -- a panicking writer must never report published", observer.outcomes)
+	}
+	var markers int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 0 {
+		t.Fatalf("panicking generation left %d markers behind -- the panic's rollback should have discarded daily's staged write too", markers)
 	}
 }
 

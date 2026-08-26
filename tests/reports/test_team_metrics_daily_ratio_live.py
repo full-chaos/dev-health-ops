@@ -244,3 +244,61 @@ async def test_execute_chart_drops_legacy_bucket_once_a_real_per_repo_backfill_e
         "was summed together with the real per-repo backfill "
         "(the regression this test guards)"
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_chart_still_surfaces_a_legacy_only_day_with_no_backfill_yet() -> (
+    None
+):
+    """Independent-review coverage gap (post codex round 3): the legacy-
+    bucket-suppression filter (WHERE repo_id != '' OR real_repo_count = 0)
+    has a second branch nothing else in this file exercises -- a
+    (team, day) that has ONLY the legacy repo_id='' row, no real per-repo
+    backfill yet. real_repo_count is 0 for that key, so the second
+    disjunct keeps the legacy row. A future refactor that simplified the
+    filter to just "WHERE repo_id != ''" would silently zero out every
+    not-yet-backfilled historical day -- this test guards that branch.
+    """
+    from datetime import date, datetime, timezone
+
+    sink = _sink()
+    org_id = str(uuid.uuid4())  # throwaway random org (isolated, no cleanup needed)
+    sink.org_id = org_id
+    day = date(2026, 1, 1)
+
+    legacy_only_row = TeamMetricsDailyRecord(
+        day=day,
+        team_id="core",
+        team_name="Core",
+        commits_count=4,
+        after_hours_commits_count=2,
+        weekend_commits_count=0,
+        after_hours_commit_ratio=0.5,
+        weekend_commit_ratio=0.0,
+        computed_at=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+        repo_id="",  # pre-migration-080 write, never re-driven
+    )
+    sink.write_team_metrics([legacy_only_row])
+
+    spec = ChartSpec(
+        chart_id="chart-legacy-only",
+        plan_id="plan-1",
+        chart_type="line",
+        metric="after_hours_commit_ratio",
+        group_by="day",
+        filter_teams=["core"],
+        time_range_start=day,
+        time_range_end=day,
+        title=None,
+        org_id=org_id,
+    )
+    result = await execute_chart(spec, sink.client)
+
+    assert len(result.data_points) == 1
+    got = result.data_points[0]["y"]
+    assert got == pytest.approx(0.5), (
+        f"after_hours_commit_ratio y={got!r}, want ~0.5 (the legacy row's "
+        "own ratio) -- 0.0 or an empty result would mean the "
+        "legacy-only-day branch of the suppression filter (real_repo_count "
+        "= 0) was dropped instead of kept (the regression this test guards)"
+    )

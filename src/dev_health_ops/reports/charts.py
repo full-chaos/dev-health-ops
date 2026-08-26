@@ -80,6 +80,20 @@ def _source_from(metric: str, definition: MetricDefinition) -> str:
     historical day re-driven with real per-repo rows after migration 080
     would sum the old pre-migration aggregate together with the new
     per-repo rows and double-count that day.
+
+    The window's PARTITION BY includes ``org_id`` (unlike the 4 named
+    readers' equivalent window, which can omit it because THEY embed a
+    ``WHERE org_id = ...`` filter inside their own innermost subquery,
+    before their window runs). This function has no such caller-scoped
+    filter available -- ``build_chart_query``'s ``org_id``/day-range/team
+    WHERE clause is applied in the OUTER query, after this subquery's own
+    GROUP BY has already collapsed rows. Without ``org_id`` in the
+    PARTITION BY, a legacy-only day for one org would incorrectly read
+    another org's unrelated real per-repo rows sharing the same
+    (day, team_id) and see a nonzero ``real_repo_count``, wrongly dropping
+    its own legacy row and returning no data for that org's untouched
+    historical day (independent-review coverage gap, verified as a real
+    defect once a legacy-only-day test was added).
     """
     dedup_source = dedup_from(definition.source_table)
     if not (definition.numerator and definition.denominator):
@@ -95,7 +109,7 @@ def _source_from(metric: str, definition: MetricDefinition) -> str:
         FROM (
             SELECT
                 *,
-                countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+                countIf(repo_id != '') OVER (PARTITION BY org_id, day, team_id) AS real_repo_count
             FROM {dedup_source}
         )
         WHERE repo_id != '' OR real_repo_count = 0

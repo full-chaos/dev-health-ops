@@ -235,7 +235,14 @@ def test_team_spanning_two_repos_sums_correctly_through_every_reader() -> None:
     assert signals["after_hours_ratio_inverse"] == pytest.approx(1.0 - true_ratio)
 
     # READ proof 4: recommendations/loader.py (rule-engine metrics loader).
-    loader = ClickHouseMetricsLoader(sink.client)
+    # org_id is required here -- ClickHouseMetricsLoader._oc() only adds an
+    # org_id filter when the loader was constructed with one; without it,
+    # this reader's window function has no per-org boundary at all (its
+    # own PARTITION BY day relies on team_id + org_id being pinned by the
+    # WHERE clause first) and would read every org sharing team_id="core"
+    # in the shared test ClickHouse instance, not just this test's own
+    # throwaway org.
+    loader = ClickHouseMetricsLoader(sink.client, org_id=org_id)
     after_hours, _cycle_times = loader._load_sustainability_signals(
         "core", DAY, date(2026, 8, 25)
     )

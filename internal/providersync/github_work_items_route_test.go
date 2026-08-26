@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,6 +223,95 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	}
 	if incomplete := githubWorkItemsRouteIncomplete(t, batch); len(incomplete) != 0 {
 		t.Fatalf("incomplete=%+v", incomplete)
+	}
+
+	// Null organization and projectV2 responses are incomplete evidence. The
+	// route must withhold the watermark and retain warning/telemetry causality.
+	degradedClaim := githubWorkItemsRESTClaim()
+	degradedClaim.DatasetOptions = map[string]any{
+		"include_issues": false, "include_pull_requests": false,
+		"fetch_comments": false, "fetch_milestones": false,
+	}
+	degradedClaim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+		map[string]any{"org_login": "acme", "project_number": 3},
+	}}
+	for _, test := range []struct {
+		name   string
+		reply  string
+		reason string
+	}{
+		{name: "null organization", reply: `{"data":{"organization":null}}`, reason: githubProjectsV2NullOrganization},
+		{name: "null project", reply: `{"data":{"organization":{"projectV2":null}}}`, reason: githubProjectsV2NullProject},
+		// codex adversarial review, CHAOS-4289 round 1: an unidentifiable
+		// board item (unrecognised typename here) is a DIFFERENT degradation
+		// path than the two above -- fetchGitHubProjectV2Target reports this
+		// target Complete, the gap is discovered per-item in the outer Fetch
+		// loop -- and it is exactly the path that used to suppress removals
+		// via Snapshot.Complete without ever reaching the route's watermark
+		// gate. This case is the ROUTE-LEVEL, behavioral proof of that fix:
+		// it exercises Collect() end to end and asserts the watermark itself,
+		// not just the Fetch-level Incomplete slice.
+		{
+			name: "unidentified item", reason: githubProjectsV2UnidentifiedItem,
+			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		},
+		// codex adversarial review, CHAOS-4289 round 2: this item (Issue #7 in
+		// acme/api) is otherwise fully identifiable -- boardIncomplete stays
+		// false -- so this is the ROUTE-LEVEL, behavioral proof that a
+		// null/omitted nested `changes.nodes` alone (distinct from the
+		// unidentified-item case above) also withholds the watermark, via the
+		// same structural_degradation reason the outer pagination checks use.
+		{
+			name: "nested changes nodes missing", reason: githubProjectsV2StructuralDegraded,
+			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &githubWorkItemsRouteDoer{
+				t: t,
+				rest: &githubWorkItemsRESTDoer{t: t, replies: map[string][]githubWorkItemsRESTReply{
+					"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
+				}},
+				graphqlReplies: []string{test.reply},
+			}
+			metrics := providerfoundation.NewMetrics()
+			client := gitHubPullRequestClient(t, doer, "https://api.github.com")
+			client.Metrics = metrics
+			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
+			batch, err := (GitHubWorkItemsRouteHandler{
+				Projects:                      GitHubProjectV2Fetcher{},
+				ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+				Deriver:                       deriver,
+			}).Collect(
+				context.Background(), degradedClaim,
+				providerfoundation.Credential{Provider: "github", ID: degradedClaim.CredentialID},
+				client, time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.Watermark != nil {
+				t.Fatalf("degraded Projects V2 response advanced watermark: %v", batch.Watermark)
+			}
+			wantIncomplete := []GitHubWorkItemsIncomplete{{
+				Component: githubProjectsV2IncompleteComponent, Cause: test.reason,
+			}}
+			if got := githubWorkItemsRouteIncomplete(t, batch); !reflect.DeepEqual(got, wantIncomplete) {
+				t.Fatalf("incomplete=%+v want=%+v", got, wantIncomplete)
+			}
+			var exposition bytes.Buffer
+			if err := metrics.WritePrometheus(&exposition); err != nil {
+				t.Fatal(err)
+			}
+			wantMetric := `dev_health_providersync_projects_v2_degraded_snapshots_total{reason="` + test.reason + `"} 1`
+			if !strings.Contains(exposition.String(), wantMetric) {
+				t.Fatalf("metrics missing %q in:\n%s", wantMetric, exposition.String())
+			}
+		})
 	}
 }
 

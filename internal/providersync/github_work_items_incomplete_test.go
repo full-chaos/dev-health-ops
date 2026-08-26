@@ -46,6 +46,7 @@ func TestGitHubWorkItemsIncompletePolicyWithholdsWatermarkAfterSnapshotJSONRound
 			map[string]any{
 				"component": "issue_comments", "subject_id": "42", "cause": "transient",
 			},
+			map[string]any{"component": githubProjectsV2IncompleteComponent, "cause": githubProjectsV2NullOrganization},
 		},
 	}
 
@@ -61,6 +62,7 @@ func TestGitHubWorkItemsIncompletePolicyWithholdsWatermarkAfterSnapshotJSONRound
 	want := []GitHubWorkItemsIncomplete{
 		{Component: "milestones", Cause: "transient"},
 		{Component: "issue_comments", SubjectID: "42", Cause: "transient"},
+		{Component: githubProjectsV2IncompleteComponent, Cause: githubProjectsV2NullOrganization},
 	}
 	if got, ok := normalized[githubWorkItemsIncompleteResultKey].([]GitHubWorkItemsIncomplete); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalized incomplete=%#v want=%+v", normalized[githubWorkItemsIncompleteResultKey], want)

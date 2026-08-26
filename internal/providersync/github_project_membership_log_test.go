@@ -94,12 +94,33 @@ func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 		result.MembershipSkips["pull_request_incomplete"] != 1 {
 		t.Fatalf("premise failed, the fetch did not produce both skip reasons: %+v", result.MembershipSkips)
 	}
-	if len(*records) != 1 {
-		t.Fatalf("membership skips produced %d log records, want exactly 1", len(*records))
+	// The same unidentifiable pull request that produces "pull_request_incomplete"
+	// above also leaves this board's item identification incomplete (CHAOS-4289
+	// round 1), which is its own durably-observable event distinct from the
+	// per-item skip reason. Two records, not one -- select by message rather
+	// than by position, since ordering between the two log sites is incidental.
+	if len(*records) != 2 {
+		t.Fatalf("membership skips produced %d log records, want exactly 2: %+v", len(*records), *records)
 	}
-	record := (*records)[0]
-	if record.Message != "github_projects_v2.membership_skips" {
-		t.Fatalf("log event name = %q", record.Message)
+	var record, degraded slog.Record
+	var foundRecord, foundDegraded bool
+	for _, candidate := range *records {
+		switch candidate.Message {
+		case "github_projects_v2.membership_skips":
+			record, foundRecord = candidate, true
+		case "github_projects_v2.degraded_snapshot":
+			degraded, foundDegraded = candidate, true
+		}
+	}
+	if !foundRecord || !foundDegraded {
+		t.Fatalf("records=%+v, want one membership_skips and one degraded_snapshot event", *records)
+	}
+	if degraded.Level != slog.LevelWarn {
+		t.Fatalf("degraded_snapshot level = %s, want WARN", degraded.Level)
+	}
+	degradedAttrs := membershipLogAttrs(degraded)
+	if degradedAttrs["reason"] != githubProjectsV2UnidentifiedItem {
+		t.Fatalf("degraded_snapshot attrs=%+v, want reason=%s", degradedAttrs, githubProjectsV2UnidentifiedItem)
 	}
 	// An unidentifiable pull request means the query or the payload changed
 	// under us; that is not the same news as a draft issue, which is a

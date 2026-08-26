@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -429,6 +430,163 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 			t.Errorf("query missing documented leaf bound %q", leaf)
 		}
 	}
+
+	// Null organization and projectV2 responses are inaccessible boards, not
+	// empty boards. A genuinely empty, non-null board remains authoritative and
+	// must still retire prior memberships.
+	{
+		claim := githubWorkItemOracleClaim()
+		claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{
+			map[string]any{"org_login": "acme", "project_number": 3},
+		}}
+		prior := []githubProjectV2SnapshotSubject{{
+			SubjectKind: projectmembership.SubjectWorkItem,
+			SubjectID:   "gh:acme/api#7",
+			RepoID:      githubProjectV2TestRepoID(t),
+		}}
+		normalizedAt := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+		for _, test := range []struct {
+			name         string
+			reply        string
+			wantComplete bool
+			wantRemovals int
+			wantCause    string
+		}{
+			{
+				name:         "null organization",
+				reply:        `{"data":{"organization":null}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2NullOrganization,
+			},
+			{
+				name:         "null project",
+				reply:        `{"data":{"organization":{"projectV2":null}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2NullProject,
+			},
+			{
+				name:         "missing page info",
+				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[]}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
+			},
+			{
+				name:         "page info missing hasNextPage",
+				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"endCursor":null}}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
+			},
+			{
+				// codex adversarial review, CHAOS-4289 round 2: the outer
+				// `items` connection already refuses a null/omitted `nodes`
+				// (the "missing page info" case above), but the nested
+				// per-item `changes` connection is the same GraphQL shape and
+				// had no equivalent check -- an item reporting
+				// hasNextPage:false with `nodes` entirely omitted silently
+				// dropped its status-transition history while the board
+				// still reported Complete. The item itself (Issue #7 in
+				// acme/api) is otherwise fully identifiable, isolating this
+				// case to the pagination-completeness gate rather than
+				// item-identification (boardIncomplete).
+				name: "nested changes nodes missing",
+				reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+					`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+					`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+				wantComplete: false,
+				wantRemovals: 0,
+				wantCause:    githubProjectsV2StructuralDegraded,
+			},
+			{
+				name:         "genuinely empty board",
+				reply:        `{"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+				wantComplete: true,
+				wantRemovals: 1,
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				doer := &gitHubProjectV2Doer{t: t, replies: []string{test.reply}}
+				result, err := (GitHubProjectV2Fetcher{}).Fetch(
+					context.Background(), claim,
+					providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+					githubProjectV2TestClient(t, doer), normalizedAt, nil,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(result.Snapshots) != 1 || result.Snapshots[0].Complete != test.wantComplete {
+					t.Fatalf("snapshot=%+v, want Complete=%t", result.Snapshots, test.wantComplete)
+				}
+				if test.wantCause == "" {
+					if len(result.Incomplete) != 0 {
+						t.Fatalf("incomplete=%+v, want authoritative snapshot", result.Incomplete)
+					}
+				} else if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+					result.Incomplete[0].Cause != test.wantCause {
+					t.Fatalf("incomplete=%+v, want projects_v2/%s", result.Incomplete, test.wantCause)
+				}
+				rows, counts := diffGitHubProjectV2Snapshot(
+					claim, "ghprojv2:acme#3", result.Snapshots[0].Subjects, prior,
+					result.Snapshots[0].Complete, normalizedAt,
+				)
+				if counts.Removals != test.wantRemovals || len(rows) != test.wantRemovals {
+					t.Fatalf("rows=%+v counts=%+v, want %d removals", rows, counts, test.wantRemovals)
+				}
+			})
+		}
+	}
+
+	// codex adversarial review, CHAOS-4289 round 3: the initial item.Changes
+	// payload's null/omitted `nodes` is refused above ("nested changes nodes
+	// missing"), but a CONTINUATION page -- fetched only when the initial
+	// page claims hasNextPage:true -- is the identical GraphQL shape and
+	// needs the identical check. Without it, a continuation page reporting
+	// hasNextPage:false with `nodes` entirely omitted silently truncated this
+	// item's status-transition history while the board still reported
+	// Complete. A t.Run inside this existing function, not a new top-level
+	// test: no new entry for ci/go_providersync_test_shards.tsv's exhaustive
+	// count (see test: keep providersync shard count stable, 792a147cd).
+	//
+	// The item (Issue #7 in acme/api) is otherwise fully identifiable,
+	// isolating this to the pagination-completeness gate rather than
+	// item-identification (boardIncomplete).
+	t.Run("continuation page missing nodes is incomplete", func(t *testing.T) {
+		doer := &gitHubProjectV2Doer{t: t, replies: []string{
+			`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
+				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[` +
+				`{"field":{"name":"Status"},"previousValue":{"name":"Todo"},"newValue":{"name":"Doing"},"createdAt":"2026-08-01T09:00:00Z","actor":{"login":"octocat"}}` +
+				`],"pageInfo":{"hasNextPage":true,"endCursor":"change-1"}}}` +
+				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+			// The continuation reply: valid, explicit hasNextPage:false, but
+			// `nodes` is entirely omitted -- the same malformed shape the
+			// initial page's own guard refuses.
+			`{"data":{"node":{"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+		}}
+		claim := githubWorkItemOracleClaim()
+		claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+		result, err := (GitHubProjectV2Fetcher{}).Fetch(
+			context.Background(), claim,
+			providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+			githubProjectV2TestClient(t, doer), time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Snapshots) != 1 || result.Snapshots[0].Complete {
+			t.Fatalf("snapshot=%+v, want Complete=false", result.Snapshots)
+		}
+		if len(result.Snapshots[0].Subjects) != 1 || result.Snapshots[0].Subjects[0].SubjectID != "gh:acme/api#7" {
+			t.Fatalf("snapshot=%+v, want the Issue still positively identified", result.Snapshots)
+		}
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+			result.Incomplete[0].Cause != githubProjectsV2StructuralDegraded {
+			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2StructuralDegraded)
+		}
+	})
 }
 
 func TestGitHubProjectV2FetcherFailsClosedOnUnusableCursors(t *testing.T) {
@@ -757,6 +915,16 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false and no identified subjects", result.Snapshots[0])
 		}
+		// Codex adversarial review, CHAOS-4289 round 1: suppressing this
+		// board's removals is not enough on its own -- the route's watermark
+		// gate keys off Fetch's durable Incomplete evidence, not the
+		// snapshot's Complete flag, so a still-unidentified item must show up
+		// here too or a later sync could advance past it unretried.
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+			result.Incomplete[0].Cause != githubProjectsV2UnidentifiedItem {
+			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2UnidentifiedItem)
+		}
 	})
 
 	t.Run("a board of only draft issues is complete", func(t *testing.T) {
@@ -766,6 +934,9 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=true (a draft issue names no subject at all, which is complete information) and no subjects", result.Snapshots[0])
 		}
+		if len(result.Incomplete) != 0 {
+			t.Fatalf("incomplete=%+v, want none: a draft-only board is genuinely complete", result.Incomplete)
+		}
 	})
 
 	t.Run("an unrecognised content typename is incomplete", func(t *testing.T) {
@@ -774,6 +945,11 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 0 {
 			t.Fatalf("snapshot=%+v, want Complete=false: GitHub added a content kind this code has never seen", result.Snapshots[0])
+		}
+		if len(result.Incomplete) != 1 || result.Incomplete[0].Component != githubProjectsV2IncompleteComponent ||
+			result.Incomplete[0].Cause != githubProjectsV2UnidentifiedItem {
+			t.Fatalf("incomplete=%+v, want exactly one %s/%s entry",
+				result.Incomplete, githubProjectsV2IncompleteComponent, githubProjectsV2UnidentifiedItem)
 		}
 	})
 
@@ -785,6 +961,9 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 		if !result.Snapshots[0].Complete || len(result.Snapshots[0].Subjects) != 2 {
 			t.Fatalf("snapshot=%+v, want Complete=true with 2 identified subjects", result.Snapshots[0])
+		}
+		if len(result.Incomplete) != 0 {
+			t.Fatalf("incomplete=%+v, want none: every board item was positively identified", result.Incomplete)
 		}
 	})
 }

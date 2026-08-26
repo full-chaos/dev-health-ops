@@ -35,15 +35,25 @@
 // identity before grouping commits/PRs/reviews into user_metrics_daily rows.
 // That resolver is driven by a YAML config file
 // (src/dev_health_ops/config/identity_mapping.yaml) that ships with
-// `identities: []` -- empty -- by default; an org only diverges from the
-// plain "email, else name, else unknown" fallback (normalize_git_identity
-// with no resolver match) once an operator has explicitly populated it. This
-// package always uses that plain fallback (DefaultNormalizeIdentity). An org
-// with a populated identity_mapping.yaml will see MORE distinct
+// `identities: []` -- empty -- by default. DefaultNormalizeIdentity mirrors
+// the resolver's OWN behavior with that empty map (lowercases the email;
+// see its doc comment -- an earlier revision of this package mirrored the
+// resolver-is-None fallback instead, which does NOT lowercase, and a codex
+// adversarial review caught that this was the wrong branch since production
+// always constructs a resolver). The alias-resolution gap that remains
+// unported is narrower than that: an org only diverges from
+// DefaultNormalizeIdentity once an operator has explicitly populated
+// identity_mapping.yaml with real aliases (e.g. two different emails
+// resolved to one canonical identity). Such an org will see MORE distinct
 // user_metrics_daily rows per day under the Go path than Python produced --
-// one per raw identity instead of one per canonical alias group. Documented
-// here and in PR RISK-NOTES for CHAOS-4275; porting the YAML-driven resolver
-// is a small, bounded follow-up if an org needs it.
+// one per raw (lowercased) identity instead of one per canonical alias
+// group. Documented here and in PR RISK-NOTES for CHAOS-4275; porting the
+// YAML-driven resolver is a small, bounded follow-up if an org needs it.
+//
+// NoResolverNormalizeIdentity (no case-folding) is used ONLY where Python's
+// own real call site genuinely never passes a resolver either --
+// compute_single_owner_file_ratio's call in job_daily.py, unlike
+// compute_daily_metrics's.
 //
 // This package therefore always resolves team_id="unassigned",
 // team_name="Unassigned" for every user_metrics_daily row it writes -- the

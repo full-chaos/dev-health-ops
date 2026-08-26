@@ -54,7 +54,10 @@ func fixturePullRequests() []PullRequestRow {
 	firstComment := dt(9, 0)
 	return []PullRequestRow{
 		{
-			RepoID: repoA, Number: 1, AuthorEmail: "alice@example.com", AuthorName: "Alice",
+			// Mixed-case email, unlike alice's lowercase commits below --
+			// exercises DefaultNormalizeIdentity's lowercasing (matches
+			// generate_repo_user_commit_python_golden.py's PR1).
+			RepoID: repoA, Number: 1, AuthorEmail: "Alice@Example.com", AuthorName: "Alice",
 			CreatedAt: dt(8, 0), MergedAt: &merged1, FirstReviewAt: &firstReview, FirstCommentAt: &firstComment,
 			ChangesRequestedCount: 1, ReviewsCount: 2, CommentsCount: 3,
 			Additions: 250, Deletions: 150, ChangedFiles: 4,
@@ -95,8 +98,8 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 		repoB: ReworkChurnRatio(repoB, commits),
 	}
 	singleOwnerByRepo := map[uuid.UUID]float64{
-		repoA: SingleOwnerFileRatio(repoA, commits, 0.75, DefaultNormalizeIdentity),
-		repoB: SingleOwnerFileRatio(repoB, commits, 0.75, DefaultNormalizeIdentity),
+		repoA: SingleOwnerFileRatio(repoA, commits, 0.75, NoResolverNormalizeIdentity),
+		repoB: SingleOwnerFileRatio(repoB, commits, 0.75, NoResolverNormalizeIdentity),
 	}
 	busFactorByRepo := map[uuid.UUID]int{
 		repoA: BusFactor(repoA, commits, 0.5),

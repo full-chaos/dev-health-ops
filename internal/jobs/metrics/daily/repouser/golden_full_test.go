@@ -39,8 +39,8 @@ func TestComputeMatchesFrozenGoldenExhaustively(t *testing.T) {
 		repoB: ReworkChurnRatio(repoB, commits),
 	}
 	singleOwnerByRepo := map[uuid.UUID]float64{
-		repoA: SingleOwnerFileRatio(repoA, commits, 0.75, DefaultNormalizeIdentity),
-		repoB: SingleOwnerFileRatio(repoB, commits, 0.75, DefaultNormalizeIdentity),
+		repoA: SingleOwnerFileRatio(repoA, commits, 0.75, NoResolverNormalizeIdentity),
+		repoB: SingleOwnerFileRatio(repoB, commits, 0.75, NoResolverNormalizeIdentity),
 	}
 	busFactorByRepo := map[uuid.UUID]int{
 		repoA: BusFactor(repoA, commits, 0.5),

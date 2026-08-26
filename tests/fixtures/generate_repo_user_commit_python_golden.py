@@ -10,14 +10,18 @@ requested round, a second merged PR with no review facts, an unmerged PR
 (created-only), a review from a non-author, a file touched by more than one
 commit (rework), a single-owner file, and one MTTR-eligible bug work item.
 
-internal/jobs/metrics/daily/repouser's Go port has no IdentityResolver and
-no team_resolver/repo_team_resolver (see that package's doc comment for why),
-so this generator deliberately passes none either -- the frozen output is
-therefore Python's OWN no-resolver fallback path, which is the exact
-behaviour the Go port reproduces. A generator that passed real resolvers
-would freeze a golden the Go port could never match, which would make the
-rot guard permanently red for a reason that has nothing to do with a real
-divergence.
+internal/jobs/metrics/daily/repouser's Go port has no team_resolver/
+repo_team_resolver (see that package's doc comment for why), so this
+generator passes none either. It DOES pass a real IdentityResolver with an
+empty alias map, though -- job_daily.py always constructs one
+(`load_identity_resolver()`, unconditional; there is no "no resolver" code
+path in production), so freezing the no-resolver fallback instead (an
+earlier revision of this generator did exactly that) hides the ONE thing
+that fallback does differently: it never lowercases the author email. A
+codex adversarial review on the Go port caught the mismatch. PR1's author
+email below is deliberately mixed-case (unlike her commits' lowercase
+email) specifically to exercise that: without lowercasing, alice would
+split into two user_metrics rows.
 
 Regenerate with `python tests/fixtures/generate_repo_user_commit_python_golden.py`.
 """
@@ -44,6 +48,12 @@ from dev_health_ops.metrics.schemas import (
     PullRequestReviewRow,
     PullRequestRow,
 )
+from dev_health_ops.providers.identity import IdentityResolver
+
+# Empty alias map: the shipped default (identity_mapping.yaml ships
+# `identities: []`). Still exercises the resolver BRANCH of
+# normalize_git_identity (lowercases email), unlike passing None.
+IDENTITY_RESOLVER = IdentityResolver(alias_to_canonical={})
 
 OUTPUT = Path(__file__).with_name("repo_user_commit_python_golden.json")
 
@@ -132,11 +142,16 @@ def _pull_request_rows() -> list[PullRequestRow]:
     return [
         # PR 1 (repo A, alice): merged in-window, has a first review, one
         # changes-requested round (rework), 400 LOC (large PR, threshold 1000
-        # is NOT met here -- keep it a normal-size merged PR).
+        # is NOT met here -- keep it a normal-size merged PR). author_email
+        # is deliberately MIXED CASE, unlike alice's commits' lowercase
+        # email -- exercises normalize_git_identity's resolver-branch
+        # lowercasing (see IDENTITY_RESOLVER above): without it, this PR's
+        # authorship would split into a SEPARATE user_metrics row instead of
+        # merging with her commit activity under one identity.
         {
             "repo_id": REPO_A,
             "number": 1,
-            "author_email": "alice@example.com",
+            "author_email": "Alice@Example.com",
             "author_name": "Alice",
             "created_at": _dt(8),
             "merged_at": _dt(13),
@@ -248,6 +263,11 @@ def render() -> str:
         )
         for repo_id in active_repos
     }
+    # NOTE: job_daily.py's real call site (compute.py:1023-ish) does NOT pass
+    # identity_resolver to compute_single_owner_file_ratio either -- unlike
+    # compute_daily_metrics below, THIS call genuinely uses the no-resolver
+    # fallback in production. Matching that exactly (not "fixing" it to also
+    # take a resolver) is deliberate.
     single_owner_by_repo = {
         repo_id: compute_single_owner_file_ratio(
             repo_id=str(repo_id), window_stats=commit_rows
@@ -272,6 +292,7 @@ def render() -> str:
         pull_request_rows=pr_rows,
         pull_request_review_rows=review_rows,
         computed_at=COMPUTED_AT,
+        identity_resolver=IDENTITY_RESOLVER,
         mttr_by_repo=mttr_by_repo,
         rework_churn_ratio_by_repo=rework_by_repo,
         single_owner_file_ratio_by_repo=single_owner_by_repo,

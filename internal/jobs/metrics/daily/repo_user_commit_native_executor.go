@@ -109,7 +109,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	giniByRepo := make(map[uuid.UUID]float64, len(repoIDs))
 	for _, repoID := range repoIDs {
 		reworkByRepo[repoID] = repouser.ReworkChurnRatio(repoID, windowCommits)
-		singleOwnerByRepo[repoID] = repouser.SingleOwnerFileRatio(repoID, windowCommits, 0.75, repouser.DefaultNormalizeIdentity)
+		singleOwnerByRepo[repoID] = repouser.SingleOwnerFileRatio(repoID, windowCommits, 0.75, repouser.NoResolverNormalizeIdentity)
 		busFactorByRepo[repoID] = repouser.BusFactor(repoID, windowCommits, 0.5)
 		giniByRepo[repoID] = repouser.CodeOwnershipGini(repoID, windowCommits)
 	}

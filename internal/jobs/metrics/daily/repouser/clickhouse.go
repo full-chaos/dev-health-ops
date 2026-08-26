@@ -381,6 +381,22 @@ func NewWriter(connection conn) (*Writer, error) {
 
 // WriteResult writes all three tables and returns the number of rows
 // written to each, in that order.
+//
+// NOT transactional across the three batches: a failure on the user or
+// commit batch after the repo batch already landed leaves a partial
+// generation for this (org, repo, day). This is a deliberate, accepted
+// consequence of the fail-open policy RepoUserCommitExecutor.ComputeFamily
+// relies on (a codex adversarial review raised it explicitly): on any error
+// here, PartitionHandler does NOT put "repo_user_commit" in skipFamilies,
+// so the Python compatibility bridge still computes and writes the SAME
+// (org, repo, day) scope's full, correct row set as part of the same
+// partition -- with a LATER computed_at that wins every reader's
+// argMax/latest dedup over the partial native generation (the same
+// append-only-table contract this repo uses everywhere else, see AGENTS.md
+// "Append-only daily tables = reader dedup"). A durable per-generation
+// commit protocol would only earn its complexity if a native family were
+// ever the SOLE writer with no compatibility-bridge fallback behind it,
+// which is not this family's current design.
 func (writer *Writer) WriteResult(ctx context.Context, result Result) (repoRows, userRows, commitRows int, err error) {
 	if writer == nil || writer.conn == nil {
 		return 0, 0, 0, fmt.Errorf("repouser: writer unavailable")

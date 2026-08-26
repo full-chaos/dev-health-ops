@@ -2373,20 +2373,22 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 return 1
         logging.info("Ownership tables: %s", ownership_counts)
 
-        # Scoping org_id for the admin-override identity lookup below
-        # (codex review, CHAOS-4338 round 2, P2): `fixtures validate` takes
-        # no --org flag, and an unscoped `identities` lookup on a
-        # shared/non-scratch database could pick up an unrelated pre-
-        # existing active identity instead of this run's own fixture row,
-        # producing a false pass or fail. team_project_ownership was just
-        # confirmed non-empty above and is written by this SAME
-        # generate_team_ownership_edges call as the identities row, so its
-        # org_id is this run's real org.
+        # Scoping org_id for every query below (codex review, CHAOS-4338
+        # rounds 2-3, P2): `fixtures validate` takes no --org flag (codex
+        # round 3 incorrectly assumed one exists; verified against the
+        # actual `fix_val` argparser -- it does not), and on a shared/
+        # non-scratch database an unscoped lookup could pick up an
+        # unrelated tenant's rows, producing a false pass or fail.
+        # team_project_ownership was just confirmed non-empty above and is
+        # written by this SAME generate_team_ownership_edges call as every
+        # other row these checks look at, so its org_id is this run's real
+        # org -- every subsequent query in this section is scoped to it.
         _validate_org_id = str(
             client.query(
                 "SELECT org_id FROM team_project_ownership LIMIT 1"
             ).result_rows[0][0]
         )
+        _org_params = {"org_id": _validate_org_id}
 
         # CHAOS-4329 proof: at least one team owns >= 2 distinct repos.
         # Gated on the run's actual repo topology (codex review, CHAOS-4338
@@ -2396,7 +2398,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         # rather than hard-failing a supported, smaller fixture topology.
         distinct_owned_repos = int(
             client.query(
-                "SELECT countDistinct(repo_full_name) FROM team_repo_ownership"
+                "SELECT countDistinct(repo_full_name) FROM team_repo_ownership "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
             ).result_rows[0][0]
         )
         if distinct_owned_repos < 2:
@@ -2411,8 +2415,10 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 client.query(
                     "SELECT count() FROM ("
                     "  SELECT team_id FROM team_repo_ownership"
+                    "  WHERE org_id = {org_id:String}"
                     "  GROUP BY team_id HAVING count(DISTINCT repo_full_name) >= 2"
-                    ")"
+                    ")",
+                    parameters=_org_params,
                 ).result_rows[0][0]
             )
             if multi_repo_teams == 0:
@@ -2433,7 +2439,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         # hard-failing, mirroring the multi-repo-team gate above.
         distinct_teams_with_members_for_ambiguity = int(
             client.query(
-                "SELECT countDistinct(team_id) FROM team_memberships"
+                "SELECT countDistinct(team_id) FROM team_memberships "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
             ).result_rows[0][0]
         )
         if distinct_teams_with_members_for_ambiguity < 2:
@@ -2447,8 +2455,10 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 client.query(
                     "SELECT count() FROM ("
                     "  SELECT member_id FROM team_memberships"
+                    "  WHERE org_id = {org_id:String}"
                     "  GROUP BY member_id HAVING count(DISTINCT team_id) >= 2"
-                    ")"
+                    ")",
+                    parameters=_org_params,
                 ).result_rows[0][0]
             )
             if ambiguous_members == 0:
@@ -2481,7 +2491,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         # Skip rather than hard-failing a supported, smaller topology.
         distinct_teams_with_members = int(
             client.query(
-                "SELECT countDistinct(team_id) FROM team_memberships"
+                "SELECT countDistinct(team_id) FROM team_memberships "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
             ).result_rows[0][0]
         )
         if not _table_exists("identities") or distinct_teams_with_members < 3:
@@ -2586,7 +2598,8 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             return 1
         source_rows = client.query(
             "SELECT source, count() FROM work_item_team_attributions "
-            "GROUP BY source ORDER BY source"
+            "WHERE org_id = {org_id:String} GROUP BY source ORDER BY source",
+            parameters=_org_params,
         ).result_rows
         source_counts = {str(source): int(count) for source, count in source_rows}
         logging.info(

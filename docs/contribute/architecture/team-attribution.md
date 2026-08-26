@@ -106,30 +106,49 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >
 > 1. **Admin layer (the override, authoritative).** `identities`
 >    (canonical_id → team_ids, provider_identities — written by
->    `/org/admin/identities`) ∪ `teams.members` (a facet roster — written by
->    `/org/admin/teams`, provider-untagged: a bare `teams.members` entry with
->    no backing `identities` row still resolves, matched by normalized
->    equality with no provider tag, since adding a member directly on
->    `/org/admin/teams/[id]/edit` is itself one of the two admin surfaces).
->    An identity's admin-authorized team set is `identities.team_ids` ∪ every
->    active team whose `teams.members` contains one of the identity's facets
->    — the union matters because the drift-approval admin action
->    (`apply_identity_membership_change`,
+>    `/org/admin/identities`) ∪ `teams.manual_members` (a facet roster —
+>    written ONLY by `ClickHouseTeamAdminService.add_members`/
+>    `remove_members`/`set_members`, the admin Identities screen and the
+>    drift-approval flow; provider-untagged: a bare `manual_members` entry
+>    with no backing `identities` row still resolves, matched by normalized
+>    equality with no provider tag). An identity's admin-authorized team set
+>    is `identities.team_ids` ∪ every active team whose `teams.manual_members`
+>    contains one of the identity's facets — the union matters because the
+>    drift-approval admin action (`apply_identity_membership_change`,
 >    `api/services/configuration/clickhouse_identity_drift.py`) writes
->    `teams.members` directly without updating `identities.team_ids`. If this
->    layer has ANY candidate for the identity, it decides outright — 1 team
->    attributes, 2+ teams is `unassigned` (`ambiguous_admin_membership`, evidence
->    lists the colliding team ids) and does **not** fall through to layer 2:
->    an ambiguous admin mapping is a data problem to fix, not to route
->    around.
-> 2. **Provider layer (the fallback, unchanged from before this ticket).**
->    `team_memberships`, populated exclusively by the four auto-import
->    workers (`workers/team_autoimport_{github,gitlab,jira,linear}.py`).
->    Consulted ONLY when layer 1 has zero candidates for that identity
->    (chris, 08:30 PT: *"manual is override — if the override exists, use
->    it, else use attribution from providers"*). Same one-team gate:
->    ambiguous here is `ambiguous_provider_membership`; nothing in either
->    layer is `no_membership`.
+>    `teams.manual_members` directly without updating `identities.team_ids`.
+>    If this layer has ANY candidate for the identity, it decides outright —
+>    1 team attributes, 2+ teams is `unassigned` (`ambiguous_admin_membership`,
+>    evidence lists the colliding team ids) and does **not** fall through to
+>    layer 2: an ambiguous admin mapping is a data problem to fix, not to
+>    route around.
+>
+>    `teams.manual_members` (migration `079_teams_manual_members.sql`) is a
+>    CHAOS-4321 fix, not the original design: an earlier revision of this
+>    ticket treated ALL of `teams.members` as the override, but a codex
+>    adversarial review (HIGH, both languages) found provider auto-import
+>    writes UNREVIEWED roster rows straight into `teams.members` too
+>    (`ClickHouseTeamDriftProjector.project_team`'s `AUTO_APPLY_POLICY`
+>    branch, for any identity that doesn't conflict with an existing manual
+>    override) — so a roster entry imported from ONE provider could become
+>    the authoritative, ambiguity-suppressing answer for a DIFFERENT
+>    provider's work item sharing the same identity string. `manual_members`
+>    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
+>    provider auto-import carries it forward unchanged on every sync write
+>    and never sets or clears it. Pre-existing `teams.members` entries have
+>    no way to prove their provenance and fall into the provider layer below
+>    until re-saved from the admin panel.
+> 2. **Provider layer (the fallback).** `team_memberships`, populated
+>    exclusively by the four auto-import workers
+>    (`workers/team_autoimport_{github,gitlab,jira,linear}.py`) ∪
+>    `teams.members` (the mixed-provenance roster the fix above demoted out
+>    of the admin layer). Consulted ONLY when layer 1 has zero candidates for
+>    that identity (chris, 08:30 PT: *"manual is override — if the override
+>    exists, use it, else use attribution from providers"*; refined
+>    2026-08-26 10:39 PT: *"admin is an override, not a default — it's the
+>    sync config mapping, but admin can override it in the panel"*). Same
+>    one-team gate: ambiguous here is `ambiguous_provider_membership`;
+>    nothing in either layer is `no_membership`.
 >
 > `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
 > untouched — this ticket only changes which candidate source(s) attribution
@@ -162,10 +181,13 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > **Regression, not new design.** This override existed before: the
 > ClickHouse-backed roster resolver (`providers/teams.py::_build_member_to_team`,
 > reachable via `load_team_resolver_from_store` reading `teams.members`) is
-> the same mechanism this ticket restores as the admin layer's `teams.members`
-> half — see "Stale references to this document" / the CHAOS-4321 PR body for
-> the file:line history of where the override stopped being wired into
-> `resolve_team_attribution`'s default call path.
+> the ancestor this ticket restores as the admin layer's manual-facet half —
+> now via the narrower, provably admin-exclusive `teams.manual_members`
+> column rather than the mixed-provenance `teams.members` an earlier
+> revision used, per the fix above — see "Stale references to this
+> document" / the CHAOS-4321 PR body for the file:line history of where the
+> override stopped being wired into `resolve_team_attribution`'s default
+> call path.
 
 ---
 

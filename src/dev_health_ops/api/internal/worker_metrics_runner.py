@@ -86,12 +86,30 @@ _DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024  # 640 MiB
 # CHAOS-4264 exists to close. _cgroup_memory_max_bytes reads this
 # container's REAL cgroup v2 ceiling (when available -- cgroup v1, no
 # permission, or a non-container dev run all return None) and the backstop
-# is clamped to leave the SAME ~384 MiB of headroom for the parent api
-# process that the 640 MiB default itself reserves under a 1G container,
-# so the backstop's guarantee ("fires before the container-wide OOM
-# killer") holds regardless of which of this repo's documented container
-# sizes (1G shared api, 2G dedicated metrics-api) it actually runs under.
+# is clamped to leave headroom for the parent api process.
+#
+# codex R2 (PR #1940): clamping alone over-corrected -- for the SAME 1G
+# container this arithmetic clamps the backstop down to exactly 640 MiB,
+# equal to the RSS limit itself, reintroducing the EXACT false positive
+# this whole ticket exists to close (RLIMIT_AS firing on address-space
+# overhead for a compute that never approached the real RSS budget; prod
+# fired at 640 MiB RLIMIT_AS while real RSS was only 465 MiB, a ~1.38x
+# overhead ratio for that one incident alone -- other workloads with more
+# thread/arena overhead could need more). So the backstop must never drop
+# below `_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER` x the RSS limit, REGARDLESS of
+# the container-derived ceiling: under the smallest documented containers
+# (1G shared api, 2G dedicated metrics-api with a 1.25G RSS limit) there is
+# simply not enough total slack to satisfy both the API's own headroom
+# reservation and a safe address-space margin at the same time. When that
+# happens, this prioritizes NOT reintroducing the false-positive bug (a
+# certain, everyday failure) over guaranteeing the backstop fires before
+# an unclassified kernel OOM for a rare spike-between-polls case (not a
+# new regression for that container size -- the same residual risk that
+# existed before CHAOS-4264 introduced any classified bound at all) --
+# falling back to the plain multiplier and logging so it's operator
+# visible, rather than silently shrinking into unsafe territory.
 _RLIMIT_AS_BACKSTOP_MULTIPLIER = 4
+_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER = 1.5
 _RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES = 384 * 1024 * 1024  # 384 MiB
 
 
@@ -132,21 +150,36 @@ def _cgroup_memory_max_bytes() -> int | None:
 def _rlimit_as_backstop_bytes() -> int:
     """The RLIMIT_AS backstop: the configured multiplier, clamped to leave
     headroom under this container's real cgroup ceiling when one is
-    observable. See the module-level comment above
-    ``_RLIMIT_AS_BACKSTOP_MULTIPLIER`` for why the unclamped multiplier
-    alone is not sufficient."""
-    limit = _configured_memory_limit_bytes() * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    observable -- but NEVER below ``_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER`` x
+    the RSS limit, or the clamp itself reintroduces the false-positive bug
+    this ticket exists to close. See the module-level comment above
+    ``_RLIMIT_AS_BACKSTOP_MULTIPLIER`` for the full reasoning and the
+    codex R1/R2 history behind both constraints."""
+    configured = _configured_memory_limit_bytes()
+    preferred = configured * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    minimum_safe = int(configured * _RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER)
     cgroup_max = _cgroup_memory_max_bytes()
     if cgroup_max is None:
-        return limit
+        return preferred
     ceiling = cgroup_max - _RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES
-    if ceiling <= 0:
-        # A cgroup smaller than the headroom itself is misconfigured for
-        # this workload entirely -- fall back to the configured limit alone
-        # (still a real bound, just not headroom-derived) rather than a
-        # zero/negative rlimit, which would reject every allocation.
-        return _configured_memory_limit_bytes()
-    return min(limit, ceiling)
+    if ceiling < minimum_safe:
+        # This container cannot fit both the api headroom reservation and a
+        # safe address-space margin above the RSS limit -- see the R2
+        # comment above. Falling back to the plain multiplier (uncapped by
+        # this container's ceiling) is the safer of two imperfect options.
+        print(
+            "metric compatibility runner: cgroup ceiling "
+            f"({cgroup_max} bytes) leaves no room for a safe RLIMIT_AS "
+            f"backstop above the configured RSS limit ({configured} "
+            f"bytes) after reserving "
+            f"{_RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES} bytes for the "
+            "api process -- falling back to the unclamped multiplier; "
+            "consider raising the container's memory limit or lowering "
+            "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES",
+            file=sys.stderr,
+        )
+        return preferred
+    return min(preferred, ceiling)
 
 
 def _apply_memory_limit() -> None:

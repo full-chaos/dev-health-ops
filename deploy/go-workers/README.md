@@ -697,12 +697,20 @@ the `api` container's own memory limit:
   classified `MemoryError` while real RSS stayed hundreds of MB under the
   same configured bound. The runner still sets a generous `RLIMIT_AS`
   backstop (`_RLIMIT_AS_BACKSTOP_MULTIPLIER`, 4x the configured bound,
-  clamped below this container's real cgroup v2 ceiling when observable —
-  `_cgroup_memory_max_bytes`/`_rlimit_as_backstop_bytes` — since the raw
-  4x multiplier on the 640 MiB default is 2.5 GiB, bigger than the 1G
-  shared `api` container itself, which would let the kernel's own memcg
-  OOM killer fire first and defeat the whole point of a classified
-  backstop; codex review, PR #1940 round 1) purely to convert a
+  clamped below this container's real cgroup v2 ceiling when observable and
+  there is room — `_cgroup_memory_max_bytes`/`_rlimit_as_backstop_bytes` —
+  since the raw 4x multiplier on the 640 MiB default is 2.5 GiB, bigger
+  than the 1G shared `api` container itself, which would let the kernel's
+  own memcg OOM killer fire first and defeat the whole point of a
+  classified backstop; codex review, PR #1940 round 1). The clamp itself
+  is bounded below at `_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER` (1.5x the RSS
+  limit): under the documented 1G container the naive clamp computes
+  exactly 640 MiB — equal to the RSS limit itself, which would reintroduce
+  the precise false positive this ticket exists to close. When a
+  container's ceiling cannot fit both the api headroom AND that minimum
+  safety margin, the runner falls back to the plain (unclamped) multiplier
+  and logs to stderr rather than shrink into unsafe territory (codex
+  review, PR #1940 round 2). Either way this purely converts a
   pathological allocation spike the parent's poll interval might miss into
   a `MemoryError` it can catch and report, rather than an un-classified
   kernel OOM kill; `RLIMIT_DATA` was dropped entirely (it only

@@ -176,29 +176,33 @@ def test_metric_runner_encodes_a_fixed_bounded_outcome() -> None:
     ) == {"outcome": {"family": "complexity", "rows": 1}}
 
 
-def test_rlimit_as_backstop_clamped_below_a_smaller_container_ceiling(
+def test_rlimit_as_backstop_clamped_below_a_container_ceiling_with_room_to_spare(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """codex R1 (PR #1940): the raw 4x multiplier on the 640 MiB default is
-    2.5 GiB, which EXCEEDS the smallest documented deployment (1G shared
-    `api` container) -- a backstop bigger than its own container can never
-    fire before the kernel's memcg OOM killer does, silently reintroducing
-    an un-classified kill. When the real cgroup ceiling is observable and
-    smaller than limit*multiplier, the backstop must be clamped to leave
-    the same headroom the 640 MiB default itself reserves under a 1G
-    container."""
+    2.5 GiB, which can exceed a container's own ceiling -- a backstop
+    bigger than its own container can never fire before the kernel's
+    memcg OOM killer does, silently reintroducing an un-classified kill.
+    When the real cgroup ceiling is observable, leaves room for the api
+    headroom, AND still leaves room for a safe address-space margin above
+    the RSS limit, the backstop is clamped to that ceiling."""
     monkeypatch.setenv(
         worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(640 * 1024 * 1024)
     )
-    # A 1G container: 640 MiB * 4 = 2.5 GiB would exceed it entirely.
+    # A 1.5G container: ceiling = 1536 - 384 = 1152 MiB, which sits between
+    # the 960 MiB safety floor (640 * 1.5) and the 2560 MiB preferred value
+    # (640 * 4) -- this is the one container size that exercises REAL
+    # clamping distinct from both the "plenty of room" and "no room at
+    # all" fallback paths below.
     monkeypatch.setattr(
         worker_metrics_runner,
         "_cgroup_memory_max_bytes",
-        lambda: 1024 * 1024 * 1024,
+        lambda: int(1.5 * 1024 * 1024 * 1024),
     )
     backstop = worker_metrics_runner._rlimit_as_backstop_bytes()
-    assert backstop == (1024 * 1024 * 1024) - (384 * 1024 * 1024)
+    assert backstop == int(1.5 * 1024 * 1024 * 1024) - (384 * 1024 * 1024)
     assert backstop < 640 * 1024 * 1024 * 4
+    assert backstop >= 640 * 1024 * 1024 * 1.5
 
 
 def test_rlimit_as_backstop_uses_the_raw_multiplier_when_cgroup_is_unobservable(
@@ -213,19 +217,44 @@ def test_rlimit_as_backstop_uses_the_raw_multiplier_when_cgroup_is_unobservable(
     assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024 * 4
 
 
+def test_rlimit_as_backstop_never_drops_to_the_rss_limit_under_the_documented_1g_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex R2 (PR #1940): the R1 clamp over-corrected. Under the exact
+    documented 1G shared `api` container with the 640 MiB RSS-limit
+    default, `ceiling = 1024 MiB - 384 MiB = 640 MiB` -- clamping to that
+    ceiling would set RLIMIT_AS to EXACTLY the RSS limit, reintroducing
+    the precise false positive this ticket exists to close (prod fired at
+    640 MiB RLIMIT_AS while real RSS was only 465 MiB). There is not
+    enough slack in this container to fit both the api headroom AND a
+    safe address-space margin above the RSS limit, so the backstop must
+    fall back to the plain (unclamped) multiplier instead of shrinking
+    into a value at or near the RSS limit itself."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(640 * 1024 * 1024)
+    )
+    monkeypatch.setattr(
+        worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: 1024 * 1024 * 1024
+    )
+    backstop = worker_metrics_runner._rlimit_as_backstop_bytes()
+    assert backstop == 640 * 1024 * 1024 * 4
+    assert backstop > 640 * 1024 * 1024 * 1.5
+
+
 def test_rlimit_as_backstop_falls_back_when_cgroup_smaller_than_headroom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A cgroup smaller than the reserved headroom is misconfigured for
-    this workload -- fall back to the configured limit alone rather than
-    a zero/negative rlimit, which would reject every allocation outright."""
+    """A cgroup smaller than the reserved headroom (even negative after
+    subtracting it) is nowhere near enough room for a safe backstop --
+    falls back to the plain multiplier, same as the unobservable-cgroup
+    case, rather than a value at or below the RSS limit itself."""
     monkeypatch.setenv(
         worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(64 * 1024 * 1024)
     )
     monkeypatch.setattr(
         worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: 100 * 1024 * 1024
     )
-    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024
+    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024 * 4
 
 
 @pytest.mark.asyncio

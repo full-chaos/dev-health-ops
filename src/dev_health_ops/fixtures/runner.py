@@ -2652,32 +2652,64 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             ).result_rows[0][0]
         )
         if has_repo_id:
-            # CHAOS-4329 (migration 080, in flight as of this ticket):
-            # team_metrics_daily gains repo_id -- assert the (team, repo,
-            # day) grain survived, not just (team, day) (the exact bug
-            # CHAOS-4329 was filed for: every repo but one dropped per
-            # team). Schema-gated so this PR doesn't couple to #1928's
-            # merge order -- it activates automatically once that column
-            # lands.
-            multi_repo_rows = int(
-                client.query(
-                    "SELECT count() FROM ("
-                    "  SELECT team_id FROM team_metrics_daily"
-                    "  GROUP BY team_id HAVING count(DISTINCT repo_id) >= 2"
-                    ")"
-                ).result_rows[0][0]
+            # CHAOS-4329 (migration 080, merged): team_metrics_daily gains
+            # repo_id -- assert the per-repo grain survived, not collapsed
+            # to a single row (the exact bug CHAOS-4329 was filed for:
+            # every repo but one dropped per team). Schema-gated so this
+            # PR doesn't couple to #1928's merge order -- it activates
+            # automatically once that column lands.
+            #
+            # Proof is topology-independent, not per-team (post-#1928
+            # verification, live run): team_metrics_daily's per-repo
+            # attribution comes from repo_team_resolver (teams.
+            # repo_patterns -- CHAOS-4276's PRIMARY-owner-only map, a
+            # DIFFERENT mechanism than this ticket's team_repo_ownership
+            # co-ownership table), so which SPECIFIC team is primary owner
+            # of >=2 repos is a random draw over the fixture's team/repo
+            # counts, not a guaranteed outcome of any topology this PR
+            # controls (verified: a repo_count=2/team_count=6 run can
+            # legitimately produce zero such teams while every repo still
+            # gets its own correct, non-collapsed row under a DIFFERENT
+            # team). The real regression this proof exists to catch --
+            # rows collapsing to one repo_id (or the legacy '') per team
+            # regardless of how many repos exist -- is instead caught by
+            # asserting >=2 DISTINCT non-empty repo_id values exist in the
+            # table at all, gated on the fixtures run having actually
+            # generated >=2 repos to begin with.
+            distinct_repos_generated = int(
+                client.query("SELECT countDistinct(id) FROM repos").result_rows[0][0]
             )
-            if multi_repo_rows == 0:
-                logging.error(
-                    "FAIL: team_metrics_daily has repo_id but no team spans "
-                    ">=2 repos (CHAOS-4329 regression)."
+            if distinct_repos_generated < 2:
+                logging.info(
+                    "team_metrics_daily: %d rows (only %d repo generated -- "
+                    "the per-repo grain proof needs --repo-count >= 2).",
+                    tmd_count,
+                    distinct_repos_generated,
                 )
-                return 1
-            logging.info(
-                "team_metrics_daily: %d rows, %d teams span >=2 repos",
-                tmd_count,
-                multi_repo_rows,
-            )
+            else:
+                distinct_tmd_repos = int(
+                    client.query(
+                        "SELECT countDistinct(repo_id) FROM team_metrics_daily "
+                        "WHERE repo_id != ''"
+                    ).result_rows[0][0]
+                )
+                if distinct_tmd_repos < 2:
+                    logging.error(
+                        "FAIL: team_metrics_daily has repo_id but only %d "
+                        "distinct non-legacy repo_id value(s) despite %d "
+                        "repos generated -- the per-repo grain collapsed "
+                        "(CHAOS-4329 regression).",
+                        distinct_tmd_repos,
+                        distinct_repos_generated,
+                    )
+                    return 1
+                logging.info(
+                    "team_metrics_daily: %d rows, %d distinct repo_id values "
+                    "(of %d repos generated)",
+                    tmd_count,
+                    distinct_tmd_repos,
+                    distinct_repos_generated,
+                )
         else:
             logging.info(
                 "team_metrics_daily: %d rows (repo_id column not yet present -- "

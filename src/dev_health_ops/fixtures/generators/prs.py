@@ -263,11 +263,36 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
         cluster_size: int = 5,
         org_id: str = "",
     ) -> list[dict[str, Any]]:
-        """Generate work_graph_issue_pr rows with isolated clusters for multiple components."""
+        """Generate work_graph_issue_pr rows with isolated clusters for multiple components.
+
+        CHAOS-4345: two bugs used to make the realized coverage land
+        systematically below `min_coverage`, so `fixtures validate`'s
+        Issue->PR coverage check (which measures epic-EXCLUSIVE coverage,
+        `runner.py`'s `linked_non_epic / non_epic_wi_count`) failed on
+        every run regardless of seed/size:
+
+        1. `target_count` used to be computed against an epic-INCLUSIVE
+           candidate list, and epics could consume slots in
+           `linked_items` -- diluting the realized non-epic-only coverage
+           below the nominal `min_coverage`. Epics are now excluded from
+           `candidates` up front, so `target_count` is computed against
+           the same population the validate check measures.
+        2. `num_clusters` used floor division
+           (`len(linked_items) // cluster_size`), which silently dropped
+           up to `cluster_size - 1` trailing selected-but-unwritten items
+           every run -- no edge, no log, no counter. Ceiling division
+           below includes that final partial cluster; the existing
+           `end = min(start + cluster_size, len(linked_items))` already
+           clips it to the real remaining length correctly.
+        """
         if not work_items or not prs:
             return []
 
-        candidates = [wi for wi in work_items if getattr(wi, "work_item_id", None)]
+        candidates = [
+            wi
+            for wi in work_items
+            if getattr(wi, "work_item_id", None) and getattr(wi, "type", None) != "epic"
+        ]
         pr_numbers = [
             int(pr.number) for pr in prs if getattr(pr, "number", None) is not None
         ]
@@ -281,7 +306,7 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
         synced_at = datetime.now(timezone.utc)
         links: list[dict[str, Any]] = []
 
-        num_clusters = max(1, len(linked_items) // cluster_size)
+        num_clusters = max(1, -(-len(linked_items) // cluster_size))
         pr_idx = 0
 
         for cluster_idx in range(num_clusters):

@@ -372,6 +372,12 @@ services:
   # -- a bare `docker compose up` with Go workers disabled has nothing
   # that ever calls it, so starting it unconditionally would be a second
   # full API process idling for no reason on every default dev-stack up.
+  # This is the `deploy/docker-compose/compose.go-workers.yml` overlay's
+  # own profile -- `deploy/go-workers/compose-go-workers.yml` is a SEPARATE
+  # overlay (`profiles: [go]`) whose single-worker `--queues=sync` topology
+  # doesn't run the `metrics` queue at all, so it has no caller for this
+  # service; see that file's own comment on its `go-worker` service for
+  # the full explanation.
   metrics-api:
     profiles: [go-workers]
     build:

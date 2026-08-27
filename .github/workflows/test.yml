@@ -50,6 +50,17 @@ jobs:
               - 'ci/**'
               - 'migrations/**'
               - 'requirements.txt'
+              # CHAOS-4346: test-matrix's install step now runs `uv sync
+              # --frozen`, which consumes uv.lock directly (pyproject.toml
+              # was already covered above). Without this, a PR touching only
+              # uv.lock -- an ordinary dependency bump -- would get
+              # code=false, skip test-matrix entirely, and the required
+              # `test` check would go green having run no tests against the
+              # new lock. tests/tooling/test_aggregate_gate_results.py's
+              # test_paths_filter_covers_every_file_the_gated_jobs_install
+              # derives this requirement from the `uv sync` invocation itself
+              # and fails if it is missing.
+              - 'uv.lock'
               # Both test jobs `pip install -r requirements-docs.txt` before
               # running anything, so it is part of the test environment. It
               # was missing here until CHAOS-3482 Codex round 2: a PR touching

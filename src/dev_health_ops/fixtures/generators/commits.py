@@ -178,8 +178,24 @@ class CommitsGeneratorMixin(BaseGeneratorMixin):
         return {"snapshots": snapshots, "dailies": dailies}
 
     def generate_files(self) -> list[GitFile]:
+        # CHAOS-4338 / fixtures audit section 3: `contents` was always left
+        # unset (None), so `git_files.contents` was never populated by
+        # fixtures -- starving `run_complexity_db_job` (the real complexity
+        # compute entrypoint, `metrics/job_complexity_db.py`) of any input
+        # to scan, since it reads file contents from git_files/git_blame,
+        # not from disk. Every fixture path is a synthetic `*.py` file, so
+        # `_generate_synthetic_python_lines` (already used for blame) gives
+        # the real `ComplexityScanner` genuine Python source to parse.
         return [
-            GitFile(repo_id=self.repo_id, path=f, executable=False) for f in self.files
+            GitFile(
+                repo_id=self.repo_id,
+                path=f,
+                executable=False,
+                contents="\n".join(self._generate_synthetic_python_lines(f))
+                if f.endswith(".py")
+                else None,
+            )
+            for f in self.files
         ]
 
     def _generate_synthetic_python_lines(self, file_path: str) -> list[str]:

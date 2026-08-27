@@ -905,3 +905,169 @@ class TestFixtureTeamRepoPatterns:
 
         patterned_team = Team(id="t2", name="Team 2", repo_patterns=["acme/service-a"])
         assert patterned_team.repo_patterns == ["acme/service-a"]
+
+
+class TestGeneratedFilesCarryContents:
+    """CHAOS-4338 / fixtures audit 2026-08-26 section 3: git_files.contents
+    was always left unset, so the real complexity compute entrypoint
+    (run_complexity_db_job) had nothing to scan and fixtures had to fabricate
+    file_complexity_snapshots/repo_complexity_daily via random.* instead."""
+
+    def test_generate_files_populates_contents_for_python_files(self):
+        generator = SyntheticDataGenerator(repo_name="acme/contents", seed=3)
+        files = generator.generate_files()
+        assert files, "fixture setup drifted: expected at least one file"
+        py_files = [f for f in files if f.path.endswith(".py")]
+        assert py_files, "fixture file list drifted: expected .py files"
+        for git_file in py_files:
+            assert git_file.contents, (
+                f"{git_file.path} has no contents -- the real complexity "
+                "scanner (ComplexityScanner.should_process default "
+                "**/*.py) has nothing to parse"
+            )
+            # Real Python source, not a placeholder -- ast.parse must
+            # succeed so the real scanner can actually compute complexity.
+            import ast
+
+            ast.parse(git_file.contents)
+
+
+class TestTeamOwnershipEdges:
+    """CHAOS-4338 / fixtures audit 2026-08-26 section 2:
+    team_project_ownership, team_repo_ownership, and team_memberships had
+    ZERO writers anywhere in fixtures, starving 5-6 of the real attribution
+    resolver's ~9 sources. generate_team_ownership_edges builds all three
+    from the SAME repo<->team assignment already used for repo_patterns
+    (CHAOS-4276), so ownership stays consistent with the pattern-resolver
+    path."""
+
+    def _build(self, *, repo_count=5, team_count=4, seed=1):
+        generator = SyntheticDataGenerator(repo_name="acme/ownership", seed=seed)
+        all_teams = generator.get_team_assignment(count=team_count)["teams"]
+        repo_team_assignments = _build_repo_team_assignments(
+            all_teams, repo_count, seed
+        )
+        repo_names = [f"acme/ownership-{i}" for i in range(repo_count)]
+        repo_ids = [uuid.uuid5(uuid.NAMESPACE_URL, name) for name in repo_names]
+        edges = generator.generate_team_ownership_edges(
+            all_teams=all_teams,
+            repo_team_assignments=repo_team_assignments,
+            repo_names=repo_names,
+            repo_ids=repo_ids,
+            org_id="org-1",
+            provider="synthetic",
+        )
+        return all_teams, repo_team_assignments, repo_names, edges
+
+    def test_chaos_4329_proof_a_team_owns_two_or_more_repos(self):
+        """CHAOS-4329: at least one team must have >=2 team_repo_ownership
+        rows (co-owner rows beyond the primary owner are written too, not
+        just the primary -- unlike repo_patterns, which records one primary
+        owner per repo)."""
+        _, _, _, edges = self._build()
+        by_team: dict[str, set[str]] = {}
+        for row in edges["team_repo_ownership"]:
+            by_team.setdefault(row["team_id"], set()).add(row["repo_full_name"])
+        multi_repo_teams = {
+            team_id: repos for team_id, repos in by_team.items() if len(repos) >= 2
+        }
+        assert multi_repo_teams, (
+            "no team owns >=2 repos in team_repo_ownership -- CHAOS-4329 proof missing"
+        )
+
+    def test_ambiguous_identity_proof_one_member_maps_to_two_teams(self):
+        """A real attribution resolver's exactly-one-team gate must see two
+        distinct team_ids for one identity and refuse to guess (unassigned),
+        per the documented rule: "if the person is mapped to two or more
+        teams, we do not guess". With >=3 teams the admin-override identity
+        (a separate, deliberate proof -- see
+        test_admin_override_identity_conflicts_with_provider_fallback) is
+        ALSO a multi-team member by this same grouping, so this asserts
+        "at least one", not "exactly one"."""
+        _, _, _, edges = self._build()
+        by_member: dict[str, set[str]] = {}
+        for row in edges["team_memberships"]:
+            by_member.setdefault(row["member_id"], set()).add(row["team_id"])
+        ambiguous = {
+            member: teams for member, teams in by_member.items() if len(teams) >= 2
+        }
+        assert ambiguous, "no team_memberships identity maps to >=2 teams"
+
+    def test_admin_override_identity_conflicts_with_provider_fallback(self):
+        """CHAOS-4321 (chris: "manual is override -- if the override exists,
+        use it, else use attribution from providers"): with >=3 teams, one
+        identity gets an admin mapping (identities.team_ids + that team's
+        manual_members, mutated on the Team object in place) AND a
+        conflicting provider-fallback team_memberships row into a DIFFERENT
+        team -- the data shape a real two-layer resolver must pick the
+        admin team from."""
+        all_teams, _, _, edges = self._build(team_count=4)
+        assert edges["identities"], (
+            "expected an admin-override identities row with >=3 teams"
+        )
+        identity = edges["identities"][0]
+        admin_team_id = identity["team_ids"][0]
+        override_member = identity["canonical_id"]
+
+        admin_team = next(t for t in all_teams if t.id == admin_team_id)
+        assert override_member in (admin_team.manual_members or []), (
+            "admin team's manual_members must carry the override identity"
+        )
+
+        conflicting_team_ids = {
+            row["team_id"]
+            for row in edges["team_memberships"]
+            if row["member_id"] == override_member
+        }
+        assert admin_team_id in conflicting_team_ids
+        assert len(conflicting_team_ids) >= 2, (
+            "override identity must ALSO have a provider-fallback "
+            "team_memberships row into a different team -- otherwise "
+            "there is no override-vs-fallback conflict to prove"
+        )
+
+    def test_team_project_ownership_mirrors_team_repo_ownership(self):
+        """Project ids are repo full names (generators/projects.py's
+        project_id_for_repo: repo-backed projects are 1:1 with repos in this
+        fixture world), so team_project_ownership must assign the exact same
+        (team_id, repo/project) pairs as team_repo_ownership."""
+        _, _, _, edges = self._build()
+        repo_pairs = {
+            (row["team_id"], row["repo_full_name"])
+            for row in edges["team_repo_ownership"]
+        }
+        project_pairs = {
+            (row["team_id"], row["project_id"])
+            for row in edges["team_project_ownership"]
+        }
+        assert repo_pairs == project_pairs
+        assert repo_pairs, "fixture setup drifted: expected at least one owned repo"
+
+    def test_every_owned_repo_has_exactly_one_primary_owner(self):
+        _, _, repo_names, edges = self._build()
+        primaries_by_repo: dict[str, list[str]] = {}
+        for row in edges["team_repo_ownership"]:
+            if row["is_primary"]:
+                primaries_by_repo.setdefault(row["repo_full_name"], []).append(
+                    row["team_id"]
+                )
+        owned_repos = {row["repo_full_name"] for row in edges["team_repo_ownership"]}
+        for repo_name in owned_repos:
+            assert len(primaries_by_repo.get(repo_name, [])) == 1, (
+                f"repo {repo_name!r} must have exactly one primary owner, "
+                f"got {primaries_by_repo.get(repo_name)}"
+            )
+
+    def test_membership_rows_reference_real_team_members(self):
+        all_teams, _, _, edges = self._build()
+        known_members = {
+            str(member).strip().lower()
+            for team in all_teams
+            for member in (team.members or [])
+        }
+        for row in edges["team_memberships"]:
+            assert row["member_id"] in known_members
+            assert row["org_id"] == "org-1"
+            assert row["provider"] == "synthetic"
+            assert row["source"] in {"native", "provider_access"}
+            assert row["valid_to"] is None

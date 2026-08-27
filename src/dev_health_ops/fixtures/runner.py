@@ -14,12 +14,21 @@ from dev_health_ops.fixtures.demo_identity import (
     demo_repo_name,
 )
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.fixtures.generators.projects import (
+    FIXTURE_NAMESPACE,
+    build_project_record,
+    insert_projects,
+)
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
+from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+from dev_health_ops.metrics.release_impact import (
+    _compute_day as _compute_release_impact_day,
+)
 from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.models.teams import Team
 from dev_health_ops.providers.operational_migration import (
@@ -757,12 +766,85 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             _team_repo_patterns[_owning_teams[0].id].append(_repo_names[_repo_idx])
         for team in all_teams:
             team.repo_patterns = _team_repo_patterns.get(team.id, [])
+
+        # CHAOS-4338 / fixtures audit 2026-08-26 section 2: team_repo_ownership,
+        # team_project_ownership, team_memberships, and identities had zero
+        # writers anywhere in fixtures, starving 5-6 of the real attribution
+        # resolver's ~9 sources (metrics/loaders/clickhouse.py
+        # load_team_attribution_context). Reuses the identical repo<->team
+        # assignment already computed above for repo_patterns, so ownership
+        # stays consistent with the pattern-resolver path -- no separate
+        # random assignment to keep in sync. Computed BEFORE insert_teams
+        # below: the admin-override proof mutates one team's manual_members
+        # in place, and that write must land on the SAME insert_teams call
+        # that writes the rest of the team catalog.
+        _repo_ids = [uuid.uuid5(FIXTURE_NAMESPACE, name) for name in _repo_names]
+        _ownership_edges: dict[str, list] = {}
+        if (
+            hasattr(store, "insert_team_repo_ownership")
+            and hasattr(store, "insert_team_project_ownership")
+            and hasattr(store, "insert_team_memberships")
+            and all_teams
+        ):
+            _ownership_gen = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+            _ownership_edges = _ownership_gen.generate_team_ownership_edges(
+                all_teams=all_teams,
+                repo_team_assignments=repo_team_assignments,
+                repo_names=_repo_names,
+                repo_ids=_repo_ids,
+                org_id=org_id,
+                provider=ns.provider,
+            )
+
         if hasattr(store, "insert_teams") and all_teams:
             for team in all_teams:
                 team.org_id = org_id
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
         fixture_data["teams"] = all_teams
+
+        if _ownership_edges:
+            await store.insert_team_repo_ownership(
+                _ownership_edges["team_repo_ownership"]
+            )
+            await store.insert_team_project_ownership(
+                _ownership_edges["team_project_ownership"]
+            )
+            await store.insert_team_memberships(_ownership_edges["team_memberships"])
+            logging.info(
+                "Inserted %d team_repo_ownership, %d team_project_ownership, "
+                "%d team_memberships rows.",
+                len(_ownership_edges["team_repo_ownership"]),
+                len(_ownership_edges["team_project_ownership"]),
+                len(_ownership_edges["team_memberships"]),
+            )
+            if hasattr(store, "insert_identities") and _ownership_edges.get(
+                "identities"
+            ):
+                await store.insert_identities(_ownership_edges["identities"])
+                logging.info(
+                    "Inserted %d identities rows (admin-override proof).",
+                    len(_ownership_edges["identities"]),
+                )
+
+        # CHAOS-4338 / fixtures audit section 2: generators/projects.py's
+        # insert_projects was previously called only from fixtures/world.py,
+        # so `dev-hops fixtures generate` (this function) wrote zero
+        # `projects` rows -- team_project_ownership above has nothing to
+        # join against without this. Project ids are repo full names
+        # (repo-backed projects are 1:1 with repos in this fixture world).
+        if hasattr(store, "client") and store.client is not None:
+            _project_records = [
+                build_project_record(
+                    org_id=org_id,
+                    repo_full_name=repo_name,
+                    as_of=now,
+                    provider=ns.provider,
+                )
+                for repo_name in _repo_names
+            ]
+            await insert_projects(store.client, _project_records)
+            logging.info("Inserted %d projects rows.", len(_project_records))
 
         # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
         # This must happen regardless of which analytics sink is used.
@@ -1100,7 +1182,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 }
                 for r in pipeline_runs
             ]
-            release_refs = ff_release_refs = generator._default_release_refs(ns.days)
+            # CHAOS-4338 / codex review round 2, P1: _default_release_refs
+            # only depends on `days`, so every repo generated the SAME
+            # release_ref strings (e.g. "v1.0.0"). release_impact compute
+            # (below, after this loop) groups by (org, release_ref,
+            # environment) org-wide, not per repo -- identical refs across
+            # repos silently blended one repo's telemetry into another's and
+            # attributed the merged row to whichever deployment happened to
+            # be latest. Repo-index-suffixing keeps every repo's refs
+            # distinct so each release_impact row stays scoped to the repo
+            # that actually generated it.
+            release_refs = ff_release_refs = [
+                f"{ref}-r{i}" for ref in generator._default_release_refs(ns.days)
+            ]
             deployments = generator.generate_deployments(
                 days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
             )
@@ -1266,15 +1360,35 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
 
             # 8. Metrics
+            #
+            # CHAOS-4338 / fixtures audit section 3: this used to fabricate
+            # file_complexity_snapshots/repo_complexity_daily via pure
+            # random.*, so a green fixtures run proved nothing about the
+            # real compute logic. Calls the SAME entrypoint
+            # `dev-hops metrics complexity` uses against the git_files
+            # (with real synthetic contents -- see CommitsGeneratorMixin.
+            # generate_files) + git_blame rows just written above for this
+            # repo, exercising the real ComplexityScanner instead.
             if ns.with_metrics and sink:
-                comp_data = generator.generate_complexity_metrics(
-                    days=ns.days, org_id=org_id
+                # max_files capped (not None/unbounded): team-lead note
+                # 2026-08-26 -- real ComplexityScanner parsing is CPU-bound
+                # per file, and this now runs once per repo on every
+                # `--with-metrics` run instead of the O(1) random.* it
+                # replaced. 200 is comfortably above the fixed ~40-file
+                # synthetic file list (generator.py's `self.files`) so
+                # today's runs are unaffected, while bounding worst-case
+                # wall time if that list grows or --max-files-shaped input
+                # ever varies per repo.
+                await asyncio.to_thread(
+                    run_complexity_db_job,
+                    repo_id=generator.repo_id,
+                    db_url=ns.sink,
+                    date=now.date(),
+                    backfill_days=1,
+                    language_globs=None,
+                    max_files=200,
+                    org_id=org_id,
                 )
-                if hasattr(sink, "write_file_complexity_snapshots"):
-                    if comp_data["snapshots"]:
-                        sink.write_file_complexity_snapshots(comp_data["snapshots"])
-                    if comp_data["dailies"]:
-                        sink.write_repo_complexity_daily(comp_data["dailies"])
 
     try:
         await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
@@ -1493,30 +1607,31 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     ):
                         sink.write_telemetry_signal_buckets(telemetry_buckets)
 
-                    release_impact = ff_gen.generate_release_impact_daily(
-                        days=ns.days, org_id=org_id, release_refs=release_refs
-                    )
-                    if hasattr(sink, "write_release_impact_daily") and release_impact:
-                        sink.write_release_impact_daily(release_impact)
-
+                    # CHAOS-4338 / fixtures audit section 3: release_impact
+                    # is computed ONCE, org-wide, AFTER this loop (see below)
+                    # -- not per repo. `_compute_day`/`_find_release_env_pairs`
+                    # query ALL org telemetry_signal_bucket/deployments, not
+                    # a single repo's; calling it once per repo iteration
+                    # (codex review, CHAOS-4338 round 1, P1) wrote duplicate
+                    # org-wide rows and attributed every row to whichever
+                    # deployment happened to be latest at that moment,
+                    # independent of which repo's iteration triggered it.
                     feature_flag_graph_contexts.append(
                         {
                             "flags": ff_flags,
                             "events": ff_events,
                             "links": ff_links,
-                            "release_impact": release_impact,
                             "repo_context": repo_context,
                         }
                     )
 
                     logging.info(
                         "Wrote %d feature flags, %d events, %d links, "
-                        "%d telemetry buckets, %d release impact records for repo %s.",
+                        "%d telemetry buckets for repo %s.",
                         len(ff_flags),
                         len(ff_events),
                         len(ff_links),
                         len(telemetry_buckets),
-                        len(release_impact),
                         r_name,
                     )
 
@@ -1524,6 +1639,43 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     "Wrote DORA, investment classifications, investment metrics, "
                     "and file hotspot daily records for %d repos.",
                     _repo_count,
+                )
+
+                # CHAOS-4338 / fixtures audit section 3: this used to
+                # fabricate release_impact_daily via pure random.uniform,
+                # completely hiding the already-known CHAOS-4243/4256/4258
+                # silent-write-failure bugs. `_compute_day` is the SAME
+                # per-day computation `dev-hops metrics release-impact`'s
+                # public `compute_release_impact_daily` delegates to --
+                # called directly (not through that wrapper's day-range/
+                # recomputation-window driver, which exists for the CLI's
+                # re-run use case, not needed here since the exact day range
+                # is already known) so the real records are still available
+                # in-process for the --with-work-graph edge builder below,
+                # which needs ReleaseImpactDailyRecord objects, not a row
+                # count. Computed ONCE (org-wide, all telemetry/deployments
+                # from every repo generated above), not per repo -- see the
+                # comment above the loop this replaced. Shared unfiltered
+                # across every repo's graph-edge context: the consumer
+                # already filters `impact.release_ref in linked_release_refs`
+                # per repo/flag, so sharing the full org-wide list is safe.
+                release_impact: list = []
+                if getattr(sink, "client", None) is not None:
+                    _ri_computed_at = datetime.now(timezone.utc)
+                    for _day_offset in range(max(ns.days, 1)):
+                        _ri_day = now.date() - timedelta(days=_day_offset)
+                        release_impact.extend(
+                            _compute_release_impact_day(
+                                sink.client, org_id, _ri_day, _ri_computed_at
+                            )
+                        )
+                if hasattr(sink, "write_release_impact_daily") and release_impact:
+                    sink.write_release_impact_daily(release_impact)
+                for _context in feature_flag_graph_contexts:
+                    _context["release_impact"] = release_impact
+                logging.info(
+                    "Wrote %d release impact records (org-wide, real compute).",
+                    len(release_impact),
                 )
 
                 team_resolver = load_team_resolver()
@@ -2198,6 +2350,376 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
     if not _validate_cockpit_live_data_fixture_tables(client, _table_exists):
         return 1
 
+    # 1e. Attribution ownership tables (CHAOS-4338 / fixtures audit 2026-08-26
+    # section 3): team_project_ownership, team_repo_ownership, and
+    # team_memberships had zero writers AND zero validate checks before this
+    # ticket -- the 1-of-9-sources attribution gap was invisible here. Every
+    # check below fails on unpatched main.
+    try:
+        ownership_counts: dict[str, int] = {}
+        for table in (
+            "team_project_ownership",
+            "team_repo_ownership",
+            "team_memberships",
+        ):
+            if not _table_exists(table):
+                logging.error("FAIL: %s missing (run fixtures generate).", table)
+                return 1
+            ownership_counts[table] = int(
+                client.query(f"SELECT count() FROM {table}").result_rows[0][0]
+            )
+            if ownership_counts[table] == 0:
+                logging.error("FAIL: %s has zero rows.", table)
+                return 1
+        logging.info("Ownership tables: %s", ownership_counts)
+
+        # Scoping org_id for every query below (codex review, CHAOS-4338
+        # rounds 2-3, P2): `fixtures validate` takes no --org flag (codex
+        # round 3 incorrectly assumed one exists; verified against the
+        # actual `fix_val` argparser -- it does not), and on a shared/
+        # non-scratch database an unscoped lookup could pick up an
+        # unrelated tenant's rows, producing a false pass or fail.
+        # team_project_ownership was just confirmed non-empty above and is
+        # written by this SAME generate_team_ownership_edges call as every
+        # other row these checks look at, so its org_id is this run's real
+        # org -- every subsequent query in this section is scoped to it.
+        _validate_org_id = str(
+            client.query(
+                "SELECT org_id FROM team_project_ownership LIMIT 1"
+            ).result_rows[0][0]
+        )
+        _org_params = {"org_id": _validate_org_id}
+
+        # CHAOS-4329 proof: at least one team owns >= 2 distinct repos.
+        # Gated on the run's actual repo topology (codex review, CHAOS-4338
+        # round 1, P2): `--repo-count 1` (the CLI default) can only ever
+        # produce one distinct repo_full_name, so this proof is
+        # unsatisfiable by construction on a single-repo run -- skip it
+        # rather than hard-failing a supported, smaller fixture topology.
+        distinct_owned_repos = int(
+            client.query(
+                "SELECT countDistinct(repo_full_name) FROM team_repo_ownership "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
+            ).result_rows[0][0]
+        )
+        if distinct_owned_repos < 2:
+            logging.info(
+                "SKIP: CHAOS-4329 multi-repo-team proof (only %d distinct "
+                "repo in team_repo_ownership; needs --repo-count >= 2).",
+                distinct_owned_repos,
+            )
+            multi_repo_teams = 0
+        else:
+            multi_repo_teams = int(
+                client.query(
+                    "SELECT count() FROM ("
+                    "  SELECT team_id FROM team_repo_ownership"
+                    "  WHERE org_id = {org_id:String}"
+                    "  GROUP BY team_id HAVING count(DISTINCT repo_full_name) >= 2"
+                    ")",
+                    parameters=_org_params,
+                ).result_rows[0][0]
+            )
+            if multi_repo_teams == 0:
+                logging.error(
+                    "FAIL: no team owns >=2 repos in team_repo_ownership "
+                    "(CHAOS-4329 proof missing)."
+                )
+                return 1
+
+        # Ambiguous-identity proof: at least one member maps to >=2 teams --
+        # the real resolver's exactly-one-team gate must see this and refuse
+        # to guess rather than pick one arbitrarily. Gated on the run's
+        # actual team topology (codex review, CHAOS-4338 round 2, P2):
+        # generate_team_ownership_edges can only create this ambiguous
+        # member when there are >=2 teams WITH members -- the supported
+        # `--team-count 1` topology has none, so this proof is unsatisfiable
+        # by construction on a single-team run. Skip rather than
+        # hard-failing, mirroring the multi-repo-team gate above.
+        distinct_teams_with_members_for_ambiguity = int(
+            client.query(
+                "SELECT countDistinct(team_id) FROM team_memberships "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
+            ).result_rows[0][0]
+        )
+        if distinct_teams_with_members_for_ambiguity < 2:
+            logging.info(
+                "SKIP: ambiguous-identity proof (%d team(s) with members; needs >=2).",
+                distinct_teams_with_members_for_ambiguity,
+            )
+            ambiguous_members = 0
+        else:
+            ambiguous_members = int(
+                client.query(
+                    "SELECT count() FROM ("
+                    "  SELECT member_id FROM team_memberships"
+                    "  WHERE org_id = {org_id:String}"
+                    "  GROUP BY member_id HAVING count(DISTINCT team_id) >= 2"
+                    ")",
+                    parameters=_org_params,
+                ).result_rows[0][0]
+            )
+            if ambiguous_members == 0:
+                logging.error(
+                    "FAIL: no team_memberships identity maps to >=2 teams "
+                    "(ambiguous-unassigned proof missing)."
+                )
+                return 1
+        logging.info(
+            "Ownership proofs: multi_repo_teams=%d, ambiguous_members=%d",
+            multi_repo_teams,
+            ambiguous_members,
+        )
+
+        # Admin-override proof (CHAOS-4321, team-lead note 2026-08-26; chris:
+        # "manual is override -- if the override exists, use it, else use
+        # attribution from providers"). Resolves one identity that has BOTH
+        # an admin mapping (identities.team_ids + teams.manual_members) AND
+        # a conflicting provider auto-import team_memberships row into a
+        # DIFFERENT team, through the REAL two-layer resolver
+        # (compute_work_items._resolve_membership via
+        # load_team_attribution_context), and asserts the admin layer wins.
+        # Gated on the run's actual team topology (codex review, CHAOS-4338
+        # round 1, P2): `generate_team_ownership_edges` only creates the
+        # admin-override identity when there are >=3 teams WITH members
+        # (needs a distinct admin team, a distinct conflicting team, and
+        # >=1 member on the admin team) -- `--team-count 1` or `2` (or a
+        # `--team-count 3+` run whose author distribution happens to leave
+        # a team memberless) can legitimately produce zero such identities.
+        # Skip rather than hard-failing a supported, smaller topology.
+        distinct_teams_with_members = int(
+            client.query(
+                "SELECT countDistinct(team_id) FROM team_memberships "
+                "WHERE org_id = {org_id:String}",
+                parameters=_org_params,
+            ).result_rows[0][0]
+        )
+        if not _table_exists("identities") or distinct_teams_with_members < 3:
+            logging.info(
+                "SKIP: CHAOS-4321 admin-override proof (%d team(s) with "
+                "members; needs >=3, or identities table missing).",
+                distinct_teams_with_members,
+            )
+            identity_rows_for_check: list = []
+        else:
+            # Scoped to this run's org_id (codex review, CHAOS-4338 round 2,
+            # P2) -- see the _validate_org_id comment above.
+            identity_rows_for_check = client.query(
+                "SELECT canonical_id, team_ids FROM identities FINAL "
+                "WHERE is_active = 1 AND length(team_ids) > 0 "
+                "AND org_id = {org_id:String} LIMIT 1",
+                parameters={"org_id": _validate_org_id},
+            ).result_rows
+        if identity_rows_for_check:
+            override_identity, override_team_ids = identity_rows_for_check[0]
+            override_team_id = str(override_team_ids[0])
+
+            # Also fetch the conflicting row's provider (codex review,
+            # CHAOS-4338 round 2, P2): the conflicting team_memberships row
+            # was written under this run's ACTUAL --provider
+            # (default 'synthetic'), and the two-layer resolver's provider-
+            # fallback layer is looked up by (provider, identity) -- calling
+            # it with a hardcoded 'synthetic' on a --provider github/gitlab/
+            # jira run would never find the conflicting row at all, so the
+            # admin layer would trivially "win" without the fallback layer
+            # ever being in contention.
+            conflicting_rows = client.query(
+                "SELECT provider, count() FROM team_memberships WHERE "
+                "member_id = {member_id:String} AND team_id != "
+                "{team_id:String} AND org_id = {org_id:String} "
+                "GROUP BY provider",
+                parameters={
+                    "member_id": str(override_identity),
+                    "team_id": override_team_id,
+                    "org_id": _validate_org_id,
+                },
+            ).result_rows
+            conflicting_count = sum(int(row[1]) for row in conflicting_rows)
+            if conflicting_count == 0:
+                logging.error(
+                    "FAIL: admin-override identity %s has no conflicting "
+                    "provider-fallback team_memberships row -- the "
+                    "override-vs-fallback proof is not actually a conflict.",
+                    override_identity,
+                )
+                return 1
+            conflicting_provider = str(conflicting_rows[0][0])
+
+            async def _resolve_override():
+                from dev_health_ops.metrics.compute_work_items import (
+                    _resolve_membership,
+                )
+                from dev_health_ops.metrics.loaders.clickhouse import (
+                    ClickHouseDataLoader,
+                )
+
+                loader = ClickHouseDataLoader(client, org_id=_validate_org_id)
+                ctx = await loader.load_team_attribution_context(
+                    as_of=datetime.now(timezone.utc)
+                )
+                return _resolve_membership(
+                    ctx, conflicting_provider, str(override_identity)
+                )
+
+            try:
+                override_candidates, override_reason = asyncio.run(_resolve_override())
+            except Exception as e:
+                logging.error(
+                    f"FAIL: Could not resolve admin-override identity through "
+                    f"the real two-layer resolver: {e}"
+                )
+                return 1
+            resolved_team_ids = {c.team_id for c in override_candidates}
+            if resolved_team_ids != {override_team_id}:
+                logging.error(
+                    "FAIL: admin-override identity did not resolve to the admin "
+                    "team (resolved=%s, reason=%s, expected=%s) -- CHAOS-4321: "
+                    '"manual is override -- if the override exists, use it, '
+                    'else use attribution from providers."',
+                    resolved_team_ids,
+                    override_reason,
+                    override_team_id,
+                )
+                return 1
+            logging.info(
+                "Admin-override proof: identity %s resolved to admin team %s "
+                "despite a conflicting provider_access team_memberships row.",
+                override_identity,
+                override_team_id,
+            )
+
+        if not _table_exists("work_item_team_attributions"):
+            logging.error(
+                "FAIL: work_item_team_attributions missing (run fixtures with "
+                "--with-metrics)."
+            )
+            return 1
+        source_rows = client.query(
+            "SELECT source, count() FROM work_item_team_attributions "
+            "WHERE org_id = {org_id:String} GROUP BY source ORDER BY source",
+            parameters=_org_params,
+        ).result_rows
+        source_counts = {str(source): int(count) for source, count in source_rows}
+        logging.info(
+            "work_item_team_attributions source distribution: %s", source_counts
+        )
+        for required_source in ("project_ownership", "repo_ownership"):
+            if source_counts.get(required_source, 0) == 0:
+                logging.error(
+                    "FAIL: work_item_team_attributions has zero '%s' rows -- "
+                    "team_project_ownership/team_repo_ownership are not "
+                    "reaching the real attribution resolver.",
+                    required_source,
+                )
+                return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate attribution ownership tables: {e}")
+        return 1
+
+    # 1f. team_metrics_daily / file_metrics_daily / estimate_coverage_metrics_daily
+    # (CHAOS-4338 / fixtures audit section 3 CI-oracle gap list).
+    try:
+        for table in ("file_metrics_daily", "estimate_coverage_metrics_daily"):
+            if not _table_exists(table):
+                logging.error(
+                    "FAIL: %s missing (run fixtures with --with-metrics).", table
+                )
+                return 1
+            count = int(client.query(f"SELECT count() FROM {table}").result_rows[0][0])
+            if count == 0:
+                logging.error("FAIL: %s has zero rows.", table)
+                return 1
+            logging.info("%s: %d rows", table, count)
+
+        if not _table_exists("team_metrics_daily"):
+            logging.error(
+                "FAIL: team_metrics_daily missing (run fixtures with --with-metrics)."
+            )
+            return 1
+        tmd_count = int(
+            client.query("SELECT count() FROM team_metrics_daily").result_rows[0][0]
+        )
+        if tmd_count == 0:
+            logging.error("FAIL: team_metrics_daily has zero rows.")
+            return 1
+        has_repo_id = bool(
+            client.query(
+                "SELECT count() FROM system.columns WHERE database = "
+                "currentDatabase() AND table = 'team_metrics_daily' "
+                "AND name = 'repo_id'"
+            ).result_rows[0][0]
+        )
+        if has_repo_id:
+            # CHAOS-4329 (migration 080, merged): team_metrics_daily gains
+            # repo_id -- assert the per-repo grain survived, not collapsed
+            # to a single row (the exact bug CHAOS-4329 was filed for:
+            # every repo but one dropped per team). Schema-gated so this
+            # PR doesn't couple to #1928's merge order -- it activates
+            # automatically once that column lands.
+            #
+            # Proof is topology-independent, not per-team (post-#1928
+            # verification, live run): team_metrics_daily's per-repo
+            # attribution comes from repo_team_resolver (teams.
+            # repo_patterns -- CHAOS-4276's PRIMARY-owner-only map, a
+            # DIFFERENT mechanism than this ticket's team_repo_ownership
+            # co-ownership table), so which SPECIFIC team is primary owner
+            # of >=2 repos is a random draw over the fixture's team/repo
+            # counts, not a guaranteed outcome of any topology this PR
+            # controls (verified: a repo_count=2/team_count=6 run can
+            # legitimately produce zero such teams while every repo still
+            # gets its own correct, non-collapsed row under a DIFFERENT
+            # team). The real regression this proof exists to catch --
+            # rows collapsing to one repo_id (or the legacy '') per team
+            # regardless of how many repos exist -- is instead caught by
+            # asserting >=2 DISTINCT non-empty repo_id values exist in the
+            # table at all, gated on the fixtures run having actually
+            # generated >=2 repos to begin with.
+            distinct_repos_generated = int(
+                client.query("SELECT countDistinct(id) FROM repos").result_rows[0][0]
+            )
+            if distinct_repos_generated < 2:
+                logging.info(
+                    "team_metrics_daily: %d rows (only %d repo generated -- "
+                    "the per-repo grain proof needs --repo-count >= 2).",
+                    tmd_count,
+                    distinct_repos_generated,
+                )
+            else:
+                distinct_tmd_repos = int(
+                    client.query(
+                        "SELECT countDistinct(repo_id) FROM team_metrics_daily "
+                        "WHERE repo_id != ''"
+                    ).result_rows[0][0]
+                )
+                if distinct_tmd_repos < 2:
+                    logging.error(
+                        "FAIL: team_metrics_daily has repo_id but only %d "
+                        "distinct non-legacy repo_id value(s) despite %d "
+                        "repos generated -- the per-repo grain collapsed "
+                        "(CHAOS-4329 regression).",
+                        distinct_tmd_repos,
+                        distinct_repos_generated,
+                    )
+                    return 1
+                logging.info(
+                    "team_metrics_daily: %d rows, %d distinct repo_id values "
+                    "(of %d repos generated)",
+                    tmd_count,
+                    distinct_tmd_repos,
+                    distinct_repos_generated,
+                )
+        else:
+            logging.info(
+                "team_metrics_daily: %d rows (repo_id column not yet present -- "
+                "CHAOS-4329/migration 080 pending; the (team, repo, day) "
+                "grain check activates automatically once it lands)",
+                tmd_count,
+            )
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate metrics families: {e}")
+        return 1
     # 2. Check prerequisites
     try:
         pr_commit_count = int(
@@ -2409,10 +2931,12 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             len(eligible),
             MIN_EVIDENCE_CHARS,
         )
-        return 0
     except Exception as e:
         logging.error(f"FAIL: Evidence sanity check failed: {e}")
         return 1
+
+    logging.info("Fixture validation PASSED.")
+    return 0
 
 
 async def run_product_telemetry_fixtures(ns: argparse.Namespace) -> int:

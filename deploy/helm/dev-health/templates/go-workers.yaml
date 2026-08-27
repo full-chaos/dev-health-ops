@@ -61,6 +61,24 @@ spec:
             {{- end }}
             - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
             - "--http-addr=:8080"
+            {{- /*
+              CHAOS-4351: `heavy` is the only group whose queue set includes
+              `metrics` (see values.yaml's own comment on this group), i.e.
+              the only one that calls the metrics compatibility bridge --
+              point it at the dedicated metricsApi Service instead of api's,
+              same rationale as compose.go-workers.yml's flag-bridge-url-heavy
+              anchor. Falls back to `api` if metricsApi isn't enabled (e.g. a
+              fresh install with goWorkers scaled to 0 everywhere), so this
+              never renders a reference to a Service that doesn't exist.
+              $group.bridgeUrl (values.yaml) overrides either default.
+            */}}
+            {{- if eq $group.name "heavy" }}
+            {{- $defaultBridgeUrl := printf "http://%s-api:8000" (include "dev-health.fullname" $) }}
+            {{- if $.Values.metricsApi.enabled }}
+            {{- $defaultBridgeUrl = printf "http://%s-metrics-api:8000" (include "dev-health.fullname" $) }}
+            {{- end }}
+            - {{ printf "--operational-bridge-url=%s" (default $defaultBridgeUrl $group.bridgeUrl) | quote }}
+            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             - "--domain-transaction-pooler=true"
             - "--queue-database-mode=session"

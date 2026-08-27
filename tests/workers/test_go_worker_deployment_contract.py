@@ -1727,3 +1727,235 @@ def test_compose_merge_flips_api_authority_without_losing_base_fields(
     # The merge must ADD the key, not replace the whole service definition.
     assert api["environment"]["CELERY_BROKER_URL"]
     assert "POSTGRES_URI" in api["environment"]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
+    """CHAOS-4351: `metrics-api` is a second copy of `api` with its OWN
+    memory/pids bound -- the entire point of the split is that a bridge-side
+    OOM inside this container cannot also take `api` down with it (CHAOS-4264/
+    CHAOS-4317/CHAOS-4350's whole incident history). Assert the resource
+    block through the real `docker compose config` engine, and assert prod's
+    copy carries NO `ports:` -- team-lead's ruling that internal DNS-only
+    reachability, not a network/traefik split this file has no mechanism
+    for, is what "no public route" means here.
+    """
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(_PRODUCTION_COMPOSE), "config"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
+    )
+    merged = yaml.safe_load(result.stdout)
+    metrics_api = merged["services"]["metrics-api"]
+    assert metrics_api["image"] == merged["services"]["api"]["image"]
+    assert metrics_api["command"] == merged["services"]["api"]["command"]
+    assert "ports" not in metrics_api
+    # docker compose config normalizes "1G" to its byte count.
+    limits = metrics_api["deploy"]["resources"]["limits"]
+    assert (
+        limits["memory"]
+        == merged["services"]["api"]["deploy"]["resources"]["limits"]["memory"]
+    )
+    assert limits["pids"] == 256
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
+    """CHAOS-4351: `go-worker-heavy` is the only worker group whose queue
+    set includes `metrics` (verified below, not just asserted -- a future
+    queue reshuffle that quietly added `metrics` to another group would
+    silently leave that group's bridge calls pointed at the wrong service).
+    Only that group's rendered command may reference `metrics-api`; every
+    other go-worker-*/go-reconciler/go-scheduler/go-stream-* service must
+    still target `api`, unaffected by this ticket.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--profile",
+            "go-workers",
+            "-f",
+            str(_PRODUCTION_COMPOSE),
+            "-f",
+            str(_GO_COMPOSE),
+            "config",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
+    )
+    merged = yaml.safe_load(result.stdout)
+    services = merged["services"]
+    go_worker_services = {
+        name: svc
+        for name, svc in services.items()
+        if name.startswith("go-worker")
+        or name.startswith("go-reconciler")
+        or name.startswith("go-scheduler")
+        or name.startswith("go-stream")
+    }
+    assert len(go_worker_services) >= 9, sorted(go_worker_services)
+
+    metrics_owners = [
+        name
+        for name, svc in go_worker_services.items()
+        for arg in svc.get("command") or []
+        if isinstance(arg, str)
+        and arg.startswith("--queues=")
+        and "metrics" in arg.split("=", 1)[1].split(",")
+    ]
+    assert metrics_owners == ["go-worker-heavy"], (
+        f"expected only go-worker-heavy to own the metrics queue, found: {metrics_owners}"
+    )
+
+    for name, svc in go_worker_services.items():
+        bridge_args = [
+            arg
+            for arg in svc.get("command") or []
+            if isinstance(arg, str) and arg.startswith("--operational-bridge-url=")
+        ]
+        assert len(bridge_args) == 1, (
+            f"{name}: expected exactly one bridge-url arg, got {bridge_args}"
+        )
+        if name == "go-worker-heavy":
+            assert bridge_args[0] == "--operational-bridge-url=http://metrics-api:8000"
+        else:
+            assert bridge_args[0] == "--operational-bridge-url=http://api:8000", (
+                f"{name}: expected to stay pointed at api, got {bridge_args[0]}"
+            )
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() -> None:
+    """CHAOS-4351: render both states through the real templating engine
+    (a string match on the template source can't prove the conditional
+    actually gates the rendered manifest -- same rationale as the
+    EXPECTED_WORKER_GROUPS test above). With metricsApi disabled (the
+    chart's default), the `heavy` goWorkers group must fall back to `api`
+    so a fresh install never references a Service that doesn't exist; with
+    it enabled, `heavy` alone must point at the dedicated `metrics-api`
+    Service.
+    """
+    disabled = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    disabled_docs = list(yaml.safe_load_all(disabled.stdout))
+    heavy_disabled = next(
+        d
+        for d in disabled_docs
+        if d
+        and d.get("metadata", {}).get("labels", {}).get("dev-health.io/worker-group")
+        == "heavy"
+    )
+    heavy_args_disabled = heavy_disabled["spec"]["template"]["spec"]["containers"][0][
+        "args"
+    ]
+    bridge_disabled = [
+        a for a in heavy_args_disabled if a.startswith("--operational-bridge-url=")
+    ]
+    assert bridge_disabled == [
+        "--operational-bridge-url=http://phase1-dev-health-api:8000"
+    ]
+
+    enabled = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "--set",
+            "metricsApi.enabled=true",
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    enabled_docs = list(yaml.safe_load_all(enabled.stdout))
+    heavy_enabled = next(
+        d
+        for d in enabled_docs
+        if d
+        and d.get("metadata", {}).get("labels", {}).get("dev-health.io/worker-group")
+        == "heavy"
+    )
+    heavy_args_enabled = heavy_enabled["spec"]["template"]["spec"]["containers"][0][
+        "args"
+    ]
+    bridge_enabled = [
+        a for a in heavy_args_enabled if a.startswith("--operational-bridge-url=")
+    ]
+    assert bridge_enabled == [
+        "--operational-bridge-url=http://phase1-dev-health-metrics-api:8000"
+    ]
+
+    # Every other group must be untouched by either state.
+    for docs, expected in (
+        (disabled_docs, "http://phase1-dev-health-api:8000"),
+        (enabled_docs, "http://phase1-dev-health-api:8000"),
+    ):
+        for doc in docs:
+            if not doc or doc.get("kind") != "Deployment":
+                continue
+            group = doc["metadata"]["labels"].get("dev-health.io/worker-group")
+            if group in (None, "heavy"):
+                continue
+            args = doc["spec"]["template"]["spec"]["containers"][0]["args"]
+            bridge = [a for a in args if a.startswith("--operational-bridge-url=")]
+            assert bridge == [], (
+                f"{group}: expected no explicit bridge-url override, got {bridge}"
+            )
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_metrics_api_deployment_only_renders_when_enabled() -> None:
+    """CHAOS-4351: `metricsApi.enabled` (default false) must actually gate
+    the Deployment/Service, and the enabled render must carry the same
+    resources as `api`'s own -- same workload, same bound, per team-lead's
+    ruling that a bridge OOM here must not be able to take `api` down.
+    """
+    disabled = subprocess.run(
+        ["helm", "template", "phase1", str(_HELM_CHART)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "name: phase1-dev-health-metrics-api" not in disabled.stdout
+
+    enabled = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "--set",
+            "metricsApi.enabled=true",
+            "--show-only",
+            "templates/metrics-api-deployment.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    docs = list(yaml.safe_load_all(enabled.stdout))
+    deployment = next(d for d in docs if d and d.get("kind") == "Deployment")
+    service = next(d for d in docs if d and d.get("kind") == "Service")
+    assert service["spec"]["type"] == "ClusterIP"
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"]
+    assert container["resources"]["limits"]["memory"] == "1Gi"

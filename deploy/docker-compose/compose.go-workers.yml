@@ -31,6 +31,20 @@ x-go-worker-flag:
   # bridge until the locked-graph port lands (CUT-20), so it cannot open
   # readiness without a bridge URL.
   bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
+  # CHAOS-4351: `go-worker-heavy` is the ONLY worker group whose queue set
+  # includes `metrics` (confirmed via `rg 'queues='` against every
+  # go-worker-*/go-reconciler/go-scheduler/go-stream-* service below) --
+  # i.e. the only one that ever calls the daily/remaining metrics
+  # compatibility bridge that spawns worker_metrics_runner subprocesses
+  # (CHAOS-4264/4316/4317/4350's whole incident history). Every other
+  # group's operational-bridge traffic (auth/licensing/sync/webhooks/etc.)
+  # has nothing to do with that bridge and stays on `api` via the shared
+  # `flag-bridge-url` above -- only this group's flag is repointed at the
+  # dedicated `metrics-api` service (CHAOS-4351), so a bridge-side pids/
+  # memory incident there can no longer take unrelated `api` request
+  # handling, or unrelated go-worker groups' operational-bridge calls,
+  # down with it.
+  bridge-url-heavy: &flag-bridge-url-heavy "--operational-bridge-url=${DEV_HEALTH_METRICS_BRIDGE_URL:-http://metrics-api:8000}"
   # The default bridge endpoint above is a plaintext Compose service-discovery
   # name, which the runtime rejects unless this opt-in is set. Override to
   # false once the bridge is reachable over an internal HTTPS origin.
@@ -193,7 +207,9 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
+      # CHAOS-4351: only this group gets the metrics-api-pointed flag --
+      # see the anchor's own comment above for why.
+      - *flag-bridge-url-heavy
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level

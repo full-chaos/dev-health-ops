@@ -15,6 +15,16 @@ x-go-worker-flag:
   # bridge until the locked-graph port lands (CUT-20), so it cannot open
   # readiness without a bridge URL.
   bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
+  # CHAOS-4351 GAP (documented, not fixed -- team-lead scoped this ticket
+  # to compose.yml/compose.production.yml + the Helm chart only, same
+  # posture as CHAOS-4317's own Swarm/Kubernetes gaps): this Swarm overlay
+  # has no `metrics-api` service and every worker group here -- including
+  # the one running the `metrics` queue -- still shares `api`'s stack via
+  # this single flag. A bridge-side pids/memory incident on a Swarm
+  # deployment therefore still risks `api` request handling as collateral
+  # damage the way `compose.go-workers.yml`'s `flag-bridge-url-heavy` no
+  # longer does. Add an equivalent `metrics-api` service + a heavy-only
+  # flag override here if this stack is ever a real deploy target again.
   # The default endpoint above is a plaintext Swarm service-discovery name,
   # which the runtime rejects unless this opt-in is set. Override to false once
   # the bridge is reachable over an internal HTTPS origin.

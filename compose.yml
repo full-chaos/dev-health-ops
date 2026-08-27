@@ -366,7 +366,14 @@ services:
   # metrics compatibility bridge -- confirmed via `rg 'queues='`, no other
   # go-worker-* group's queue set includes `metrics`) at this service
   # instead of `api`; every other go-worker-* group is unaffected.
+  #
+  # codex review (PR #1938, P2): only `--profile go-workers` (same gate as
+  # `go-worker-heavy` itself in compose.go-workers.yml) starts this service
+  # -- a bare `docker compose up` with Go workers disabled has nothing
+  # that ever calls it, so starting it unconditionally would be a second
+  # full API process idling for no reason on every default dev-stack up.
   metrics-api:
+    profiles: [go-workers]
     build:
       context: .
       dockerfile: ./docker/Dockerfile

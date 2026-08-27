@@ -265,7 +265,15 @@ services:
   # DNS name `metrics-api`. That absence IS the "no public route"; there
   # is no traefik or ingress layer in this compose file to additionally
   # exclude it from.
+  #
+  # codex review (PR #1938, P2): only `--profile go-workers` (same gate as
+  # `go-worker-heavy` itself in compose.go-workers.yml) starts this
+  # service -- a bare `docker compose -f compose.production.yml up -d`
+  # with Go workers disabled has nothing that ever calls it, so starting
+  # it unconditionally would be a second full API process idling for no
+  # reason on every deploy that hasn't opted into the Go worker overlay.
   metrics-api:
+    profiles: [go-workers]
     image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     container_name: dev-health-metrics-api
     restart: unless-stopped

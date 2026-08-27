@@ -1739,9 +1739,22 @@ def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
     copy carries NO `ports:` -- team-lead's ruling that internal DNS-only
     reachability, not a network/traefik split this file has no mechanism
     for, is what "no public route" means here.
+
+    `--profile go-workers` is required (codex review, PR #1938 P2):
+    `metrics-api` is profile-gated the same as `go-worker-heavy` itself --
+    `docker compose config` (like `up`) omits a profile-gated service
+    entirely unless its profile is active.
     """
     result = subprocess.run(
-        ["docker", "compose", "-f", str(_PRODUCTION_COMPOSE), "config"],
+        [
+            "docker",
+            "compose",
+            "--profile",
+            "go-workers",
+            "-f",
+            str(_PRODUCTION_COMPOSE),
+            "config",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -1759,6 +1772,27 @@ def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
         == merged["services"]["api"]["deploy"]["resources"]["limits"]["memory"]
     )
     assert limits["pids"] == 256
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
+def test_compose_metrics_api_is_absent_without_the_go_workers_profile() -> None:
+    """CHAOS-4351 codex review (PR #1938, P2) falsifier: before this fix,
+    `metrics-api` started unconditionally on a bare `docker compose up`,
+    even in a Celery-only deployment where nothing ever calls it -- a
+    second full API process idling for no reason on every default stack.
+    It must now be gated behind the same `go-workers` profile as
+    `go-worker-heavy` itself, so a plain `docker compose config`/`up` with
+    no `--profile` flag never even sees it.
+    """
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(_PRODUCTION_COMPOSE), "config"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
+    )
+    merged = yaml.safe_load(result.stdout)
+    assert "metrics-api" not in merged["services"]
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")

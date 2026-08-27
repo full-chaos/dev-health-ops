@@ -444,3 +444,70 @@ async def test_historical_failed_case_names_records_telemetry(monkeypatch):
         DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
         == pytest.approx(aggregated_sum_before + 1_100_000)
     )
+
+
+@pytest.mark.asyncio
+async def test_load_work_items_excludes_description_and_bounds_block_size(
+    mock_query_dicts,
+):
+    """CHAOS-4361: `description` (the one unbounded Nullable(String) column
+    on `work_items` -- full issue/PR body text) must never leave ClickHouse
+    for this read. Neither of load_work_items's two callers in job_daily.py
+    reads `.description` -- one only collects `work_item_id` for dependency
+    source-id lookups, the other feeds bug-MTTR/team-attribution/cycle-time
+    computes, none of which touch it. `SELECT * EXCEPT (description)` (not a
+    hand-maintained column list) plus a query-time `max_block_size` bound
+    the peak size of any single `read_str_col` call -- the 2026-08-27
+    incident's traceback -- for a long-lived repo's open-item backlog."""
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(days=1)
+
+    await loader.load_work_items(start, end, repo_id=uuid.uuid4())
+
+    assert mock_query_dicts.call_count == 2
+    item_sql = mock_query_dicts.call_args_list[0].args[1]
+    trans_sql = mock_query_dicts.call_args_list[1].args[1]
+    assert "SELECT * EXCEPT (description)" in item_sql
+    assert "description" not in trans_sql.replace("SELECT * EXCEPT (description)", "")
+    for sql in (item_sql, trans_sql):
+        assert "SETTINGS max_block_size = 8192" in sql
+        assert not DOTTED_PARAM.search(sql), (
+            f"dotted param binding leaked into SQL: {sql}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_load_work_items_row_without_description_key_builds_a_valid_work_item(
+    mock_query_dicts,
+):
+    """A row dict that never carries a `description` key (exactly what the
+    trimmed SELECT now returns) must still build a `WorkItem` -- the field
+    has a `None` default, and `to_dataclass` only sets keys present in the
+    row, so an absent key is not the same failure mode as an explicit
+    `None` value and needs its own coverage."""
+    mock_query_dicts.side_effect = [
+        [
+            {
+                "repo_id": str(uuid.uuid4()),
+                "work_item_id": "gh:owner/repo#1",
+                "provider": "github",
+                "title": "some title",
+                "type": "bug",
+                "status": "open",
+                "status_raw": "open",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+        [],  # transitions: unused by this test
+    ]
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(days=1)
+
+    items, _ = await loader.load_work_items(start, end, repo_id=uuid.uuid4())
+
+    assert len(items) == 1
+    assert items[0].description is None
+    assert items[0].work_item_id == "gh:owner/repo#1"

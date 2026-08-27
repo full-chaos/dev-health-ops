@@ -50,6 +50,68 @@ _MEMORY_LIMIT_ENV_KEY = "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES"
 # control -- see deploy/go-workers/README.md), not to bump this default.
 _DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024  # 640 MiB
 
+# CHAOS-4361: RLIMIT_AS is no longer the primary enforcement -- it counts
+# virtual ADDRESS SPACE (thread stacks, malloc arenas, every mmap mapping
+# clickhouse_connect's C driver makes), not resident memory. The 2026-08-27
+# prod incident hit MemoryError inside
+# clickhouse_connect/driverc/buffer.pyx's ResponseBuffer.read_str_col with
+# RLIMIT_AS==640 MiB while a local direct run of the SAME day (no rlimit)
+# measured only 465 MiB RSS -- the rlimit was firing on address-space
+# bookkeeping, not on real memory pressure. Real enforcement now happens in
+# the PARENT (worker_metrics._run_compatibility_process_locked's RSS
+# watchdog), which polls this process's actual VmRSS via /proc and kills it
+# on a real breach of DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES -- see
+# that module's docstring on _poll_peak_rss_bytes.
+#
+# This self-imposed RLIMIT_AS stays only as a generous backstop: the
+# parent's poll interval (0.25s) means a sufficiently explosive allocation
+# spike could exceed the real budget before the parent observes and kills
+# it. A multiplier well above the configured RSS budget still converts that
+# pathological case into a MemoryError THIS process can catch and report
+# (EXIT_RESOURCE_EXHAUSTED) rather than an un-classified kernel OOM kill of
+# the whole api container -- without re-introducing the false-positive rate
+# that motivated this ticket. RLIMIT_DATA is dropped entirely: it bounds
+# only the brk/sbrk heap, and glibc's malloc routes any allocation at or
+# above its mmap threshold (128 KiB by default) through mmap instead --
+# exactly the class of large String/bytes buffer clickhouse_connect
+# materializes per column, so RLIMIT_DATA was never actually a backstop for
+# this failure mode, only a false sense of one.
+#
+# codex R1 (PR #1940): the raw multiplier alone is not enough -- at the
+# 640 MiB default this is 2.5 GiB, which EXCEEDS the smallest documented
+# container limit (1G, shared `api` service in
+# deploy/docker-compose/compose.production.yml). A backstop bigger than the
+# container it runs in can never fire before the kernel's own memcg OOM
+# killer does, silently reintroducing the un-classified-kill problem
+# CHAOS-4264 exists to close. _cgroup_memory_max_bytes reads this
+# container's REAL cgroup v2 ceiling (when available -- cgroup v1, no
+# permission, or a non-container dev run all return None) and the backstop
+# is clamped to leave headroom for the parent api process.
+#
+# codex R2 (PR #1940): clamping alone over-corrected -- for the SAME 1G
+# container this arithmetic clamps the backstop down to exactly 640 MiB,
+# equal to the RSS limit itself, reintroducing the EXACT false positive
+# this whole ticket exists to close (RLIMIT_AS firing on address-space
+# overhead for a compute that never approached the real RSS budget; prod
+# fired at 640 MiB RLIMIT_AS while real RSS was only 465 MiB, a ~1.38x
+# overhead ratio for that one incident alone -- other workloads with more
+# thread/arena overhead could need more). So the backstop must never drop
+# below `_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER` x the RSS limit, REGARDLESS of
+# the container-derived ceiling: under the smallest documented containers
+# (1G shared api, 2G dedicated metrics-api with a 1.25G RSS limit) there is
+# simply not enough total slack to satisfy both the API's own headroom
+# reservation and a safe address-space margin at the same time. When that
+# happens, this prioritizes NOT reintroducing the false-positive bug (a
+# certain, everyday failure) over guaranteeing the backstop fires before
+# an unclassified kernel OOM for a rare spike-between-polls case (not a
+# new regression for that container size -- the same residual risk that
+# existed before CHAOS-4264 introduced any classified bound at all) --
+# falling back to the plain multiplier and logging so it's operator
+# visible, rather than silently shrinking into unsafe territory.
+_RLIMIT_AS_BACKSTOP_MULTIPLIER = 4
+_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER = 1.5
+_RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES = 384 * 1024 * 1024  # 384 MiB
+
 
 def _configured_memory_limit_bytes() -> int:
     raw = os.environ.get(_MEMORY_LIMIT_ENV_KEY, "").strip()
@@ -62,15 +124,68 @@ def _configured_memory_limit_bytes() -> int:
     return value if value > 0 else _DEFAULT_MEMORY_LIMIT_BYTES
 
 
-def _apply_memory_limit() -> None:
-    """Bound this process's address space so it fails loud, not silently.
+def _cgroup_memory_max_bytes() -> int | None:
+    """Read this container's real cgroup v2 memory ceiling, if observable.
 
-    Enforced via RLIMIT_AS (and RLIMIT_DATA where distinct) rather than left
-    to the container cgroup: the cgroup limit is shared with the parent api
-    process (CHAOS-4264 -- the runner alone reached 1.7 GB inside a 2 GiB
-    container), so a runaway compute here could still starve or kill the API.
-    A self-imposed rlimit turns that into a MemoryError this process can
-    catch and report, well before the container-wide ceiling is reached.
+    Returns None (not a sentinel int) for every case where the value cannot
+    be trusted: cgroup v1, no permission, the file absent (non-container
+    dev run), or an unbounded "max" ceiling -- callers must fall back to
+    the plain multiplier in all of these, not treat None as "no limit
+    applies."
+    """
+    try:
+        with open("/sys/fs/cgroup/memory.max", encoding="ascii") as handle:
+            raw = handle.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    if raw == "max":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _rlimit_as_backstop_bytes() -> int:
+    """The RLIMIT_AS backstop: the configured multiplier, clamped to leave
+    headroom under this container's real cgroup ceiling when one is
+    observable -- but NEVER below ``_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER`` x
+    the RSS limit, or the clamp itself reintroduces the false-positive bug
+    this ticket exists to close. See the module-level comment above
+    ``_RLIMIT_AS_BACKSTOP_MULTIPLIER`` for the full reasoning and the
+    codex R1/R2 history behind both constraints."""
+    configured = _configured_memory_limit_bytes()
+    preferred = configured * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    minimum_safe = int(configured * _RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER)
+    cgroup_max = _cgroup_memory_max_bytes()
+    if cgroup_max is None:
+        return preferred
+    ceiling = cgroup_max - _RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES
+    if ceiling < minimum_safe:
+        # This container cannot fit both the api headroom reservation and a
+        # safe address-space margin above the RSS limit -- see the R2
+        # comment above. Falling back to the plain multiplier (uncapped by
+        # this container's ceiling) is the safer of two imperfect options.
+        print(
+            "metric compatibility runner: cgroup ceiling "
+            f"({cgroup_max} bytes) leaves no room for a safe RLIMIT_AS "
+            f"backstop above the configured RSS limit ({configured} "
+            f"bytes) after reserving "
+            f"{_RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES} bytes for the "
+            "api process -- falling back to the unclamped multiplier; "
+            "consider raising the container's memory limit or lowering "
+            "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES",
+            file=sys.stderr,
+        )
+        return preferred
+    return min(preferred, ceiling)
+
+
+def _apply_memory_limit() -> None:
+    """Set a generous RLIMIT_AS backstop; real enforcement is the parent's.
+
+    See ``_rlimit_as_backstop_bytes`` for how the backstop is derived.
     POSIX-only: the ``resource`` module does not exist on Windows, and this
     process only ever runs inside the Linux container image.
     """
@@ -78,15 +193,14 @@ def _apply_memory_limit() -> None:
         import resource
     except ImportError:
         return
-    limit = _configured_memory_limit_bytes()
-    for kind in ("RLIMIT_AS", "RLIMIT_DATA"):
-        rlimit = getattr(resource, kind, None)
-        if rlimit is None:
-            continue
-        with contextlib.suppress(ValueError, OSError):
-            current_soft, current_hard = resource.getrlimit(rlimit)
-            hard = current_hard if current_hard != resource.RLIM_INFINITY else limit
-            resource.setrlimit(rlimit, (min(limit, hard), hard))
+    limit = _rlimit_as_backstop_bytes()
+    rlimit = getattr(resource, "RLIMIT_AS", None)
+    if rlimit is None:
+        return
+    with contextlib.suppress(ValueError, OSError):
+        current_soft, current_hard = resource.getrlimit(rlimit)
+        hard = current_hard if current_hard != resource.RLIM_INFINITY else limit
+        resource.setrlimit(rlimit, (min(limit, hard), hard))
 
 
 def _payload() -> object:

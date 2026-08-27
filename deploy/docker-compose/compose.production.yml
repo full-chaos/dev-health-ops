@@ -167,18 +167,23 @@ services:
       # Schema is applied by the one-shot `migrate` service (gated via
       # depends_on) — the API must never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
-      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
-      # metrics compatibility bridge's runner subprocess
-      # (worker_metrics_runner), independent of this service's own
-      # `deploy.resources.limits.memory` below (which the runner shares with
-      # the API process itself -- the incident this closes was the runner
-      # alone reaching 1.7 GB inside this container). Hitting this bound
-      # raises a classified MemoryError instead of leaving the container-wide
-      # cgroup OOM killer as the only thing that notices -- see
-      # deploy/go-workers/README.md "Daily-metrics compatibility bridge".
-      # Do NOT raise the limit below to "fix" this; it bounds the runner
-      # underneath whatever that limit already is. 640 MiB leaves ~384 MiB
-      # for the API process under THIS file's 1G limit; paired with
+      # CHAOS-4264: bounds the daily/remaining metrics compatibility
+      # bridge's runner subprocess (worker_metrics_runner), independent of
+      # this service's own `deploy.resources.limits.memory` below (which the
+      # runner shares with the API process itself -- the incident this
+      # closes was the runner alone reaching 1.7 GB inside this container).
+      # CHAOS-4361: enforced primarily by the PARENT polling the runner's
+      # real RSS (/proc/<pid>/status) and killing it on breach -- the
+      # runner's own self-imposed RLIMIT_AS is now only a generous backstop
+      # (4x this value), since RLIMIT_AS counts virtual address space, not
+      # resident memory, and false-fired well under this bound in prod.
+      # Hitting either bound raises a classified MemoryError instead of
+      # leaving the container-wide cgroup OOM killer as the only thing that
+      # notices -- see deploy/go-workers/README.md "Daily-metrics
+      # compatibility bridge". Do NOT raise the limit below to "fix" this;
+      # it bounds the runner underneath whatever that limit already is.
+      # 640 MiB leaves ~384 MiB for the API process under THIS file's 1G
+      # limit; paired with
       # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (default 1) it is the WHOLE
       # per-runner budget, not a slice of a larger aggregate (codex R1: a
       # per-runner limit alone is not an aggregate bound without a

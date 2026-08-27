@@ -684,14 +684,42 @@ Recreating the container resets both.
 Three independent mitigations exist as of CHAOS-4264, none of which raise
 the `api` container's own memory limit:
 
-- The runner subprocess self-limits via `RLIMIT_AS`/`RLIMIT_DATA`
-  (`worker_metrics_runner._apply_memory_limit`), configurable with
+- The PARENT (`worker_metrics._run_compatibility_process_locked`'s
+  `_poll_peak_rss_bytes` watchdog) polls the runner subprocess's real
+  `/proc/<pid>/status` VmRSS every 0.25s and kills it the moment RSS crosses
   `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` (default 640 MiB — see the
   `api`/`worker` service `environment:` block in `compose.yml` and
-  `deploy/docker-compose/compose.production.yml`). Hitting this bound raises
-  a `MemoryError` the runner catches and reports as a classified
-  `resource_exhausted` exit, instead of relying on the kernel to notice the
-  container-wide ceiling first.
+  `deploy/docker-compose/compose.production.yml`). **CHAOS-4361**: this
+  replaced the runner's own `RLIMIT_AS`/`RLIMIT_DATA` self-limit as the
+  primary enforcement — `RLIMIT_AS` counts virtual ADDRESS SPACE (thread
+  stacks, malloc arenas, every mmap mapping the ClickHouse C driver makes),
+  not resident memory, and a 2026-08-27 prod incident showed it firing a
+  classified `MemoryError` while real RSS stayed hundreds of MB under the
+  same configured bound. The runner still sets a generous `RLIMIT_AS`
+  backstop (`_RLIMIT_AS_BACKSTOP_MULTIPLIER`, 4x the configured bound,
+  clamped below this container's real cgroup v2 ceiling when observable and
+  there is room — `_cgroup_memory_max_bytes`/`_rlimit_as_backstop_bytes` —
+  since the raw 4x multiplier on the 640 MiB default is 2.5 GiB, bigger
+  than the 1G shared `api` container itself, which would let the kernel's
+  own memcg OOM killer fire first and defeat the whole point of a
+  classified backstop; codex review, PR #1940 round 1). The clamp itself
+  is bounded below at `_RLIMIT_AS_BACKSTOP_MIN_MULTIPLIER` (1.5x the RSS
+  limit): under the documented 1G container the naive clamp computes
+  exactly 640 MiB — equal to the RSS limit itself, which would reintroduce
+  the precise false positive this ticket exists to close. When a
+  container's ceiling cannot fit both the api headroom AND that minimum
+  safety margin, the runner falls back to the plain (unclamped) multiplier
+  and logs to stderr rather than shrink into unsafe territory (codex
+  review, PR #1940 round 2). Either way this purely converts a
+  pathological allocation spike the parent's poll interval might miss into
+  a `MemoryError` it can catch and report, rather than an un-classified
+  kernel OOM kill; `RLIMIT_DATA` was dropped entirely (it only
+  bounds the brk/sbrk heap, and glibc routes allocations at or above its
+  mmap threshold — exactly clickhouse_connect's large String/bytes column
+  buffers — through mmap instead, so it was never a real backstop for this
+  failure mode). Either enforcement path raises a `MemoryError`/kill the
+  runner reports as a classified `resource_exhausted` exit, instead of
+  relying on the kernel to notice the container-wide ceiling first.
 - A per-runner limit alone is not an aggregate memory bound: N concurrent
   bridge requests each spawning a runner can still exhaust the shared
   container even if every individual runner stays under its own rlimit

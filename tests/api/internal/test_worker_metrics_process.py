@@ -176,6 +176,87 @@ def test_metric_runner_encodes_a_fixed_bounded_outcome() -> None:
     ) == {"outcome": {"family": "complexity", "rows": 1}}
 
 
+def test_rlimit_as_backstop_clamped_below_a_container_ceiling_with_room_to_spare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex R1 (PR #1940): the raw 4x multiplier on the 640 MiB default is
+    2.5 GiB, which can exceed a container's own ceiling -- a backstop
+    bigger than its own container can never fire before the kernel's
+    memcg OOM killer does, silently reintroducing an un-classified kill.
+    When the real cgroup ceiling is observable, leaves room for the api
+    headroom, AND still leaves room for a safe address-space margin above
+    the RSS limit, the backstop is clamped to that ceiling."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(640 * 1024 * 1024)
+    )
+    # A 1.5G container: ceiling = 1536 - 384 = 1152 MiB, which sits between
+    # the 960 MiB safety floor (640 * 1.5) and the 2560 MiB preferred value
+    # (640 * 4) -- this is the one container size that exercises REAL
+    # clamping distinct from both the "plenty of room" and "no room at
+    # all" fallback paths below.
+    monkeypatch.setattr(
+        worker_metrics_runner,
+        "_cgroup_memory_max_bytes",
+        lambda: int(1.5 * 1024 * 1024 * 1024),
+    )
+    backstop = worker_metrics_runner._rlimit_as_backstop_bytes()
+    assert backstop == int(1.5 * 1024 * 1024 * 1024) - (384 * 1024 * 1024)
+    assert backstop < 640 * 1024 * 1024 * 4
+    assert backstop >= 640 * 1024 * 1024 * 1.5
+
+
+def test_rlimit_as_backstop_uses_the_raw_multiplier_when_cgroup_is_unobservable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-Linux dev, cgroup v1, or no permission -- must not raise or
+    silently zero out the backstop; falls back to the plain multiplier."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(64 * 1024 * 1024)
+    )
+    monkeypatch.setattr(worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: None)
+    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024 * 4
+
+
+def test_rlimit_as_backstop_never_drops_to_the_rss_limit_under_the_documented_1g_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex R2 (PR #1940): the R1 clamp over-corrected. Under the exact
+    documented 1G shared `api` container with the 640 MiB RSS-limit
+    default, `ceiling = 1024 MiB - 384 MiB = 640 MiB` -- clamping to that
+    ceiling would set RLIMIT_AS to EXACTLY the RSS limit, reintroducing
+    the precise false positive this ticket exists to close (prod fired at
+    640 MiB RLIMIT_AS while real RSS was only 465 MiB). There is not
+    enough slack in this container to fit both the api headroom AND a
+    safe address-space margin above the RSS limit, so the backstop must
+    fall back to the plain (unclamped) multiplier instead of shrinking
+    into a value at or near the RSS limit itself."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(640 * 1024 * 1024)
+    )
+    monkeypatch.setattr(
+        worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: 1024 * 1024 * 1024
+    )
+    backstop = worker_metrics_runner._rlimit_as_backstop_bytes()
+    assert backstop == 640 * 1024 * 1024 * 4
+    assert backstop > 640 * 1024 * 1024 * 1.5
+
+
+def test_rlimit_as_backstop_falls_back_when_cgroup_smaller_than_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cgroup smaller than the reserved headroom (even negative after
+    subtracting it) is nowhere near enough room for a safe backstop --
+    falls back to the plain multiplier, same as the unobservable-cgroup
+    case, rather than a value at or below the RSS limit itself."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(64 * 1024 * 1024)
+    )
+    monkeypatch.setattr(
+        worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: 100 * 1024 * 1024
+    )
+    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024 * 4
+
+
 @pytest.mark.asyncio
 async def test_metric_compatibility_process_returns_fixed_json(
     monkeypatch: pytest.MonkeyPatch,
@@ -324,6 +405,62 @@ async def test_runner_memory_limit_converts_oversized_allocation_to_memory_error
     assert process.returncode == worker_metrics_runner.EXIT_RESOURCE_EXHAUSTED, (
         f"returncode={process.returncode} stderr={stderr!r}"
     )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="see memory-limit test above")
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_kills_on_rss_breach_below_the_rlimit_backstop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4361: the falsifier for the actual bug -- a child whose real RSS
+    crosses the configured DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES bound
+    but stays well UNDER the child's own RLIMIT_AS backstop (4x the same
+    bound; see worker_metrics_runner._RLIMIT_AS_BACKSTOP_MULTIPLIER) must
+    still be killed and classified resource_exhausted. This is exactly the
+    prod shape: RLIMIT_AS at 640 MiB fired while real RSS was only 465 MB --
+    i.e. a process whose RESIDENT memory alone should be enough to trigger
+    the bound, without ever touching virtual-address-space territory. If
+    this test passes only because the child's own rlimit fired, the parent's
+    RSS watchdog (_poll_peak_rss_bytes) would be untested and this exact
+    regression could reappear silently."""
+    # 160 MiB: comfortably above this process's own import-time RSS baseline
+    # (importing worker_metrics_runner pulls in the whole worker_metrics
+    # module -- FastAPI, SQLAlchemy, pydantic, prometheus_client,
+    # OpenTelemetry -- which alone measures ~103-110 MB RSS before any test
+    # code runs, empirically) so the kill genuinely waits for
+    # _emit_progress and the deliberate allocation below, not for import
+    # overhead alone.
+    monkeypatch.setenv(
+        "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES", str(160 * 1024 * 1024)
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, sys\n"
+            "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+            "runner._apply_memory_limit()\n"
+            "json.load(sys.stdin)\n"
+            "runner._emit_progress(1, 3)\n"
+            # 150 MiB on top of the ~110 MB import baseline clears the 160
+            # MiB configured bound with a wide margin, but stays far below
+            # the 640 MiB RLIMIT_AS backstop (4x) the child sets on itself
+            # -- only the parent's RSS poll can catch this. CPython's
+            # bytearray() zero-fills (and empirically commits) the whole
+            # buffer at allocation time in this build, so RSS jumps by the
+            # full amount immediately -- no separate page-touching needed.
+            "buf = bytearray(150 * 1024 * 1024)\n"
+            "buf[0] = 1\n"
+            "import time; time.sleep(10)\n"
+            "raise SystemExit(97)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    # One progress line was emitted before the breach -- conservative,
+    # same as the child's own MemoryError path with progress already seen.
+    assert excinfo.value.safe_to_retry is False
 
 
 def _synthetic_runner_source(*, allocate_bytes: int, limit_bytes: int) -> str:

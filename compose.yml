@@ -276,14 +276,19 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       SENTRY_TRACES_RATE: ${SENTRY_TRACES_RATE:-0}
       SENTRY_SEND_PII: ${SENTRY_SEND_PII:-true}
-      # CHAOS-4264: self-imposed RLIMIT_AS/RLIMIT_DATA for the daily/remaining
-      # metrics compatibility bridge's runner subprocess
-      # (worker_metrics_runner), independent of this container's own memory
-      # limit (which the runner shares with the API process itself). Hitting
-      # this bound raises a classified MemoryError instead of leaving the
-      # container-wide cgroup OOM killer as the only thing that notices --
-      # see deploy/go-workers/README.md "Daily-metrics compatibility bridge"
-      # for the incident this closes (CHAOS-4264). Paired with
+      # CHAOS-4264: bounds the daily/remaining metrics compatibility
+      # bridge's runner subprocess (worker_metrics_runner), independent of
+      # this container's own memory limit (which the runner shares with the
+      # API process itself). CHAOS-4361: enforced primarily by the PARENT
+      # polling the runner's real RSS (/proc/<pid>/status) and killing it on
+      # breach -- the runner's own self-imposed RLIMIT_AS is now only a
+      # generous backstop (4x this value), since RLIMIT_AS counts virtual
+      # address space, not resident memory, and false-fired well under this
+      # bound in prod. Hitting either bound raises a classified MemoryError
+      # instead of leaving the container-wide cgroup OOM killer as the only
+      # thing that notices -- see deploy/go-workers/README.md
+      # "Daily-metrics compatibility bridge" for the incident this closes.
+      # Paired with
       # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (default 1): this is the
       # WHOLE per-runner budget, not a slice of a larger aggregate -- codex
       # R1 flagged that a per-runner limit without a concurrency bound is

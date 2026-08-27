@@ -495,10 +495,28 @@ class _Session:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("state", ["executing", "ambiguous"])
-async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
-    """A stuck ambiguous/executing row always refuses re-claim with a 409,
-    unconditionally -- exactly as before this ticket.
+@pytest.mark.parametrize(
+    ("state", "claim_active", "reported_state"),
+    [
+        # "ambiguous" never consults the original claim -- already a
+        # definitive terminal outcome, unaffected by CHAOS-4361.
+        ("ambiguous", None, "ambiguous"),
+        # "executing" with a STILL-LIVE original claim: genuinely in
+        # flight, correctly reported as-is (transient, not stuck).
+        ("executing", True, "executing"),
+        # "executing" with a DEAD original claim (CHAOS-4361): the process
+        # that owned it died before marking it ambiguous/retry_authorized/
+        # succeeded, so it can never resolve on its own. Reported as
+        # "ambiguous" so Go's existing state=="ambiguous" classification
+        # (ErrCompatibilityAmbiguousStuck -> failPartitionPermanently)
+        # applies instead of looping as transient-retryable forever.
+        ("executing", False, "ambiguous"),
+    ],
+)
+async def test_ambiguous_ledger_row_never_reexecutes(
+    state: str, claim_active: bool | None, reported_state: str
+) -> None:
+    """A stuck ambiguous/executing row always refuses re-claim with a 409.
 
     CHAOS-4264 R1 first shipped an automatic reap here (any ambiguous/
     executing row whose original claim_token had been superseded was moved
@@ -511,7 +529,13 @@ async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
     automatic resolution this ticket ships is _mark_retry_authorized in
     _execute, which has real same-execution progress evidence (see
     test_worker_metrics_process.py's safe_to_retry tests), not a
-    claim-staleness proxy for it."""
+    claim-staleness proxy for it.
+
+    CHAOS-4361 adds one narrower, still-conservative automatic resolution:
+    the REPORTED state (never the ledger row's own state column, never
+    re-execution) for an "executing" row whose original claim is provably
+    dead. See _original_claim_is_active's docstring and the reported_state
+    parametrize cases above."""
     execution = _execution()
     existing = {
         "worker_kind": execution.worker_kind,
@@ -525,12 +549,15 @@ async def test_ambiguous_ledger_row_never_reexecutes(state: str) -> None:
         "attempt_count": 1,
         "claim_token": execution.claim_token,
     }
-    session = _Session([_Result(), _Result(row=existing)])
+    results = [_Result(), _Result(row=existing)]
+    if state == "executing":
+        results.append(_Result(scalar=claim_active))
+    session = _Session(results)
     with pytest.raises(HTTPException) as exc:
         await worker_metrics._reserve_execution(cast(AsyncSession, session), execution)
     assert exc.value.status_code == 409
     assert isinstance(exc.value.detail, dict)
-    assert exc.value.detail["state"] == state
+    assert exc.value.detail["state"] == reported_state
     assert exc.value.detail["reason"] == "ambiguous_refused"
     assert session.commits == 1
 

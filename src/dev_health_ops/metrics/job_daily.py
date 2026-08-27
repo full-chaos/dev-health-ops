@@ -871,10 +871,23 @@ async def run_daily_metrics_job(
     async def _get_cached_testops_for_window(
         window_start: date, window_end: date
     ) -> tuple[list[Any], list[Any]]:
-        """Load testops suite/case rows for a date range using a per-day cache.
+        """Load testops suite/case rows for a date range.
 
-        Two properties codex round 2 flagged as missing from the first
-        version of this helper, both fixed here:
+        codex round 3 (P1): `worker_metrics.py` invokes this job with
+        `backfill_days=1` per repository for the normal production
+        partition -- that shape has NO cross-day reuse opportunity at all
+        (the `for d in days:` loop below runs exactly once), so splitting
+        into 30 per-day fetches there would replace the original 2 queries
+        with 60 serial `FINAL` queries against un-partitioned-by-time tables
+        for zero caching benefit -- a straight regression. Per-day caching
+        earns its keep only when `backfill_days > 1` actually re-visits
+        overlapping windows across iterations. So: `backfill_days == 1` goes
+        through ONE direct call spanning the whole window (matching the
+        pre-CHAOS-4350 shape, still capped inside `load_testops_test_data`
+        itself); only `backfill_days > 1` uses the per-day cache below.
+
+        Two more properties codex round 2 flagged as missing from the first
+        version of the per-day path, both fixed here:
 
         1. **Cap the ASSEMBLED window, not just each day.** Each day's fetch
            is already capped inside `load_testops_test_data`, but that only
@@ -892,6 +905,15 @@ async def run_daily_metrics_job(
            of staying near 30, and peak RSS grows with backfill length
            instead of staying flat.
         """
+        if backfill_days <= 1:
+            window_start_dt = datetime.combine(
+                window_start, time.min, tzinfo=timezone.utc
+            )
+            window_end_dt = _utc_day_window(window_end)[1]
+            return await testops_loader.load_testops_test_data(
+                window_start_dt, window_end_dt, repo_id=repo_id
+            )
+
         suites: list[Any] = []
         cases: list[Any] = []
         current = window_start

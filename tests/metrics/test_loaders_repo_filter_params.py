@@ -224,3 +224,46 @@ async def test_testops_test_data_refuses_to_compute_on_oversized_result(monkeypa
     # resource_exhausted classification upstream.
     assert "testops_row_cap_exceeded" in str(exc_info.value)
     assert case_counter._value.get() == case_before + 1
+
+
+@pytest.mark.asyncio
+async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
+    monkeypatch,
+):
+    """CHAOS-4350 (codex round 3 P2): if the suite read alone already
+    exceeds the cap, the case query must never even be issued -- with a cap
+    sized near the runner's memory budget, materializing up to another
+    `max_rows + 1` case rows before checking either result could itself
+    trigger an ordinary OOM before this guard's classified exception fires.
+    """
+    from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded
+
+    monkeypatch.setenv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", "1")
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(days=1)
+
+    oversized_suite_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(5)]
+    case_query_calls = 0
+
+    async def fake_query_dicts(client, query, params):
+        nonlocal case_query_calls
+        if "test_case_results" in query and "INNER JOIN" in query:
+            case_query_calls += 1
+            return []
+        return list(oversized_suite_rows)
+
+    with (
+        patch(
+            "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+            fake_query_dicts,
+        ),
+        pytest.raises(TestopsRowCapExceeded) as exc_info,
+    ):
+        await loader.load_testops_test_data(start, end, repo_id=None)
+
+    assert exc_info.value.table == "test_suite_results"
+    assert case_query_calls == 0, (
+        "the case query was issued even though the suite read alone "
+        "already exceeded the cap"
+    )

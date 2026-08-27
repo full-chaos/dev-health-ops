@@ -176,12 +176,19 @@ async def test_backfill_fetches_each_calendar_day_of_testops_history_once(
 
 
 @pytest.mark.asyncio
-async def test_single_day_run_fetches_its_thirty_day_history_once_each(
+async def test_single_day_run_makes_one_call_not_thirty(
     monkeypatch: Any,
 ) -> None:
-    """backfill_days=1 (the common case) still needs the full 30-day history
-    for the recurrence signal, but each of those 30 days is fetched exactly
-    once (never twice, never re-derived).
+    """CHAOS-4350 (codex round 3 P1): backfill_days=1 is the NORMAL
+    production shape (`worker_metrics.py` invokes this job with
+    backfill_days=1 per repository), and it has zero cross-day reuse
+    opportunity -- the day loop below runs exactly once. Splitting it into
+    30 per-day fetches would replace the original 2 queries with 60 serial
+    `FINAL` queries against tables not partitioned by event time for no
+    caching benefit at all -- a straight regression. This case must still
+    make exactly ONE `load_testops_test_data` call spanning the whole
+    30-day window, matching the pre-CHAOS-4350 shape (now capped inside
+    that single call).
     """
     sink = _RecordingSink("clickhouse://test")
     loader = _CountingLoader()
@@ -196,15 +203,50 @@ async def test_single_day_run_fetches_its_thirty_day_history_once_each(
         skip_finalize=True,
     )
 
-    assert len(loader.testops_test_data_calls) == 30
-    expected_days = {
-        datetime.combine(DAY - timedelta(days=29 - i), datetime.min.time()).replace(
-            tzinfo=timezone.utc
-        )
-        for i in range(30)
-    }
-    actual_days = {start for start, _end in loader.testops_test_data_calls}
-    assert actual_days == expected_days
+    assert len(loader.testops_test_data_calls) == 1, (
+        f"expected exactly 1 load_testops_test_data call for a single-day "
+        f"(backfill_days=1) run, got {len(loader.testops_test_data_calls)}: "
+        f"{loader.testops_test_data_calls!r}"
+    )
+    start, end = loader.testops_test_data_calls[0]
+    expected_start = datetime.combine(
+        DAY - timedelta(days=29), datetime.min.time()
+    ).replace(tzinfo=timezone.utc)
+    expected_end = datetime.combine(
+        DAY + timedelta(days=1), datetime.min.time()
+    ).replace(tzinfo=timezone.utc)
+    assert start == expected_start
+    assert end == expected_end
+
+
+@pytest.mark.asyncio
+async def test_multi_day_backfill_still_caches_per_day(
+    monkeypatch: Any,
+) -> None:
+    """backfill_days > 1 IS where per-day caching earns its keep (multiple
+    overlapping windows across the day loop) -- pin that the branch added
+    for the codex round 3 P1 fix didn't regress the round-2 behavior for
+    the case it was actually built for.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    loader = _CountingLoader()
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=loader)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=3,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+    )
+
+    # Same union-window math as test_backfill_fetches_each_calendar_day_of_
+    # testops_history_once: 32 distinct single-day calls, not 3 (one huge
+    # call each) and not 90 (3 * 30, the old uncached-per-day-window shape).
+    assert len(loader.testops_test_data_calls) == 32
+    for start, end in loader.testops_test_data_calls:
+        assert end - start == timedelta(days=1)
 
 
 @pytest.mark.asyncio
@@ -219,6 +261,11 @@ async def test_assembled_thirty_day_window_is_capped_even_when_each_day_is_small
     guard's whole purpose one layer up. 10 rows/day * 30 days = 300 total,
     comfortably over a cap of 50 even though no single day is anywhere
     close to it -- this must now raise, not silently compute on 300 rows.
+
+    Uses backfill_days=2: per the round-3 P1 fix, backfill_days=1 takes a
+    single direct call (no per-day cache, no assembled-window check needed
+    there -- see test_single_day_run_makes_one_call_not_thirty), so this
+    needs the multi-day branch to exercise the assembled-cap path at all.
     """
     monkeypatch.setenv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", "50")
     sink = _RecordingSink("clickhouse://test")
@@ -231,7 +278,7 @@ async def test_assembled_thirty_day_window_is_capped_even_when_each_day_is_small
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
-            backfill_days=1,
+            backfill_days=2,
             provider="auto",
             org_id=ORG_ID,
             skip_finalize=True,

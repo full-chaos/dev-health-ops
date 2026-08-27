@@ -1392,21 +1392,26 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         LIMIT {{_row_cap:UInt64}}
         """
 
-        suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
-        case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
         # CHAOS-4350: a guard, not a degrade -- both tables are ordered by
         # (repo_id, run_id, ...), not event time, so an unordered LIMIT that
         # let computation proceed could silently drop today's rows (or whole
         # repos) while keeping stale ones. Exceeding the cap fails this read
         # (raises TestopsRowCapExceeded, a MemoryError) instead of returning
         # a partial result for compute_test_metrics_daily to compute wrong
-        # numbers from.
+        # numbers from. Enforce the suite cap BEFORE issuing the case query
+        # (codex round 3 P2): if suites alone already exceed the cap, there
+        # is no reason to pay for materializing up to another `max_rows + 1`
+        # case rows before raising -- with a cap sized near the runner's
+        # memory budget, that extra allocation could itself trigger an
+        # ordinary OOM before this guard's classified exception ever fires.
+        suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
         _enforce_row_cap(
             suite_dicts,
             table="test_suite_results",
             org_id=self.org_id,
             max_rows=max_rows,
         )
+        case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
         _enforce_row_cap(
             case_dicts, table="test_case_results", org_id=self.org_id, max_rows=max_rows
         )

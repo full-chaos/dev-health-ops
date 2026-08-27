@@ -182,8 +182,8 @@ services:
       # notices -- see deploy/go-workers/README.md "Daily-metrics
       # compatibility bridge". Do NOT raise the limit below to "fix" this;
       # it bounds the runner underneath whatever that limit already is.
-      # 640 MiB leaves ~384 MiB
-      # for the API process under THIS file's 1G limit; paired with
+      # 640 MiB leaves ~384 MiB for the API process under THIS file's 1G
+      # limit; paired with
       # DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (default 1) it is the WHOLE
       # per-runner budget, not a slice of a larger aggregate (codex R1: a
       # per-runner limit alone is not an aggregate bound without a

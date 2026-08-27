@@ -342,39 +342,35 @@ async def test_metric_compatibility_process_kills_on_rss_breach_below_the_rlimit
     this test passes only because the child's own rlimit fired, the parent's
     RSS watchdog (_poll_peak_rss_bytes) would be untested and this exact
     regression could reappear silently."""
-    # 96 MiB: comfortably above this process's own import-time RSS baseline
+    # 160 MiB: comfortably above this process's own import-time RSS baseline
     # (importing worker_metrics_runner pulls in the whole worker_metrics
     # module -- FastAPI, SQLAlchemy, pydantic, prometheus_client,
-    # OpenTelemetry -- which alone measures ~45 MB RSS before any test code
-    # runs) so the kill genuinely waits for _emit_progress and the
-    # deliberate allocation below, not for import overhead alone.
+    # OpenTelemetry -- which alone measures ~103-110 MB RSS before any test
+    # code runs, empirically) so the kill genuinely waits for
+    # _emit_progress and the deliberate allocation below, not for import
+    # overhead alone.
     monkeypatch.setenv(
-        "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES", str(96 * 1024 * 1024)
+        "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES", str(160 * 1024 * 1024)
     )
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
         _runner_command(
-            "import json, sys, time\n"
+            "import json, sys\n"
             "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
             "runner._apply_memory_limit()\n"
             "json.load(sys.stdin)\n"
             "runner._emit_progress(1, 3)\n"
-            "time.sleep(1)\n"
-            # 150 MiB on top of the ~45 MB import baseline clears the 96 MiB
-            # configured bound with a wide margin, but stays far below the
-            # 384 MiB RLIMIT_AS backstop (4x) the child sets on itself --
-            # only the parent's RSS poll can catch this. bytearray() itself
-            # only reserves ADDRESS SPACE: Linux backs a freshly zeroed
-            # allocation with the shared zero page until each page is
-            # actually written, so touching only buf[0] would leave RSS
-            # basically unchanged. Writing one byte per 4 KiB page forces
-            # every page resident (a single write anywhere in a page makes
-            # the WHOLE page resident) without paying to write every byte.
+            # 150 MiB on top of the ~110 MB import baseline clears the 160
+            # MiB configured bound with a wide margin, but stays far below
+            # the 640 MiB RLIMIT_AS backstop (4x) the child sets on itself
+            # -- only the parent's RSS poll can catch this. CPython's
+            # bytearray() zero-fills (and empirically commits) the whole
+            # buffer at allocation time in this build, so RSS jumps by the
+            # full amount immediately -- no separate page-touching needed.
             "buf = bytearray(150 * 1024 * 1024)\n"
-            "for i in range(0, len(buf), 4096):\n"
-            "    buf[i] = 1\n"
-            "time.sleep(10)\n"
+            "buf[0] = 1\n"
+            "import time; time.sleep(10)\n"
             "raise SystemExit(97)\n"
         ),
     )

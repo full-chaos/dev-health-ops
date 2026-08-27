@@ -541,6 +541,34 @@ if _PROMETHEUS_AVAILABLE:
         "replicas keep working.",
     )
 
+    # CHAOS-4350: per-partition row volume for the ClickHouseDataLoader
+    # testops reads (test_suite_results / test_case_results). These two
+    # tables are the highest-cardinality reads in metrics/loaders/clickhouse.py
+    # -- a single load_testops_test_data call spans a rolling 30-day window
+    # org-wide with no cap -- so this histogram is what makes an
+    # unexpectedly huge partition visible before it OOMs the compatibility
+    # runner, rather than after.
+    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _prometheus_client_module.Histogram(
+        "devhealth_testops_loader_rows_loaded",
+        "Rows returned by a single ClickHouseDataLoader testops query, by "
+        "source table (CHAOS-4350).",
+        ["table"],
+        buckets=(10, 100, 1_000, 10_000, 50_000, 100_000, 200_000, 500_000),
+    )
+
+    # Incremented whenever DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED's query hit
+    # the hard row cap and the loader silently-would-have-been-unbounded
+    # result was truncated instead. Any nonzero rate means a day's testops
+    # metrics for that org were computed from a partial sample -- see the
+    # accompanying log line for the org/day/table.
+    DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_testops_loader_rows_truncated_total",
+        "Testops loader reads that hit the hard row cap and were "
+        "truncated instead of materializing an unbounded result "
+        "(CHAOS-4350).",
+        ["table"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -586,6 +614,8 @@ else:
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
+    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
+    DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()

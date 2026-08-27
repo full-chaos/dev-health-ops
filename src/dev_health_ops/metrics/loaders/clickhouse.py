@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
@@ -63,6 +64,56 @@ async def _clickhouse_query_dicts(
     from dev_health_ops.api.queries.client import query_dicts
 
     return await query_dicts(client, query, params)
+
+
+# CHAOS-4350: hard row cap for the testops loader reads (test_suite_results /
+# test_case_results). `query_dicts` materializes the FULL result set with
+# `list(result.result_rows)` -- no LIMIT, no streaming -- and
+# `load_testops_test_data` is called once per backfilled day with a rolling
+# 30-day window, org-wide (repo_id is frequently None). An org with a heavy
+# CI suite has no natural upper bound on rows in that shape, which is what
+# produced the observed MemoryError in the compatibility-bridge runner.
+# Default is generous (metrics compute over the whole set, so truncating
+# early degrades accuracy) but bounded -- unlike the previous unconditional
+# materialization, which was unbounded and silent.
+_TESTOPS_LOADER_MAX_ROWS_ENV = "DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"
+_TESTOPS_LOADER_DEFAULT_MAX_ROWS = 200_000
+
+
+def _testops_loader_max_rows() -> int:
+    raw = os.environ.get(_TESTOPS_LOADER_MAX_ROWS_ENV, "").strip()
+    if not raw:
+        return _TESTOPS_LOADER_DEFAULT_MAX_ROWS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _TESTOPS_LOADER_DEFAULT_MAX_ROWS
+    return value if value > 0 else _TESTOPS_LOADER_DEFAULT_MAX_ROWS
+
+
+def _cap_rows(
+    rows: list[dict[str, Any]], *, table: str, max_rows: int
+) -> list[dict[str, Any]]:
+    """Bound `rows` to `max_rows`, recording truncation loudly (never silent).
+
+    The caller already asked ClickHouse for at most `max_rows + 1` rows (via
+    a `LIMIT` bound to the same cap), so a length beyond `max_rows` here
+    means the true result set was larger than the cap and got truncated.
+    """
+    from dev_health_ops.metrics.prometheus import (
+        DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED,
+        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL,
+    )
+
+    if len(rows) > max_rows:
+        logger.warning(
+            "testops loader read hit the hard row cap; truncating",
+            extra={"table": table, "max_rows": max_rows, "fetched": len(rows)},
+        )
+        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL.labels(table=table).inc()
+        rows = rows[:max_rows]
+    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED.labels(table=table).observe(len(rows))
+    return rows
 
 
 def _decode_provider_identities_json(value: Any) -> dict[str, list[str]]:
@@ -1210,6 +1261,12 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
+        # CHAOS-4350: cap both reads. `+ 1` lets us detect "the true result
+        # exceeded the cap" (len > max_rows) versus "the true result was
+        # exactly max_rows" without a separate count() round-trip.
+        max_rows = _testops_loader_max_rows()
+        params = {**params, "_row_cap": max_rows + 1}
+
         suite_query = f"""
         SELECT
           repo_id,
@@ -1236,6 +1293,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           AND coalesce(started_at, finished_at) < {{end:DateTime}}
         {repo_filter}
         {org_filter}
+        LIMIT {{_row_cap:UInt64}}
         """
         case_query = f"""
         SELECT
@@ -1263,10 +1321,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
         {case_repo_filter}
         {self._org_filter(alias="s")}
+        LIMIT {{_row_cap:UInt64}}
         """
 
         suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
         case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
+        suite_dicts = _cap_rows(
+            suite_dicts, table="test_suite_results", max_rows=max_rows
+        )
+        case_dicts = _cap_rows(case_dicts, table="test_case_results", max_rows=max_rows)
         return (
             [cast(TestSuiteResultRow, dict(row)) for row in suite_dicts],
             [cast(TestCaseResultRow, dict(row)) for row in case_dicts],

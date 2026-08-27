@@ -114,6 +114,11 @@ class _FakeLoader:
     async def load_testops_test_data(self, *a: Any, **k: Any) -> tuple[list, list]:
         return [], []
 
+    async def load_testops_historical_failed_case_names(
+        self, *a: Any, **k: Any
+    ) -> dict:
+        return {}
+
     async def load_testops_coverage_data(self, *a: Any, **k: Any) -> list:
         return []
 

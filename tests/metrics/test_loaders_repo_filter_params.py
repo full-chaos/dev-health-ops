@@ -85,13 +85,18 @@ async def test_testops_job_and_case_queries_alias_column(mock_query_dicts):
 
     mock_query_dicts.reset_mock()
     await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
+    # CHAOS-4350 PR2 (codex round 2 P2): the case query is no longer joined
+    # to test_suite_results by suite_id/day -- it's scoped by run_id
+    # membership via a semi-join subquery (see load_testops_test_data's
+    # docstring), and the repo_id filter is applied directly on `c`.
     case_sql = mock_query_dicts.call_args_list[1].args[1]
-    assert "s.repo_id = {repo_id:UUID}" in case_sql
+    assert "c.repo_id = {repo_id:UUID}" in case_sql
 
 
 @pytest.mark.asyncio
 async def test_testops_join_predicates_scope_org_id(mock_query_dicts):
-    """Joins must carry org_id equality so cross-org child rows never match."""
+    """Joins (and the case query's run_id semi-join subquery) must carry
+    org_id equality so cross-org child rows never match."""
     loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
     start = datetime.now(timezone.utc)
     end = start + timedelta(days=1)
@@ -102,8 +107,13 @@ async def test_testops_join_predicates_scope_org_id(mock_query_dicts):
 
     mock_query_dicts.reset_mock()
     await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
+    # CHAOS-4350 PR2 (codex round 2 P2): org scoping now applies directly on
+    # `c` (no join partner to compare against) AND inside the semi-join
+    # subquery against test_suite_results (unaliased -- defense in depth,
+    # so a cross-org run_id collision can't leak cases into the wrong org).
     case_sql = mock_query_dicts.call_args_list[1].args[1]
-    assert "(s.org_id = c.org_id)" in case_sql
+    assert "AND c.org_id = {org_id:String}" in case_sql
+    assert "IN (" in case_sql and "AND org_id = {org_id:String}" in case_sql
 
 
 @pytest.mark.asyncio
@@ -133,7 +143,7 @@ async def test_testops_test_data_org_scope_already_applied_without_repo_id(
     suite_params = mock_query_dicts.call_args_list[0].args[2]
     case_params = mock_query_dicts.call_args_list[1].args[2]
     assert "AND org_id = {org_id:String}" in suite_sql
-    assert "AND s.org_id = {org_id:String}" in case_sql
+    assert "AND c.org_id = {org_id:String}" in case_sql
     assert suite_params.get("org_id") == "acme-corp"
     assert case_params.get("org_id") == "acme-corp"
 
@@ -193,7 +203,11 @@ async def test_testops_test_data_refuses_to_compute_on_oversized_result(monkeypa
     oversized_case_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(10)]
 
     async def fake_query_dicts(client, query, params):
-        if "test_case_results" in query and "INNER JOIN" in query:
+        # CHAOS-4350 PR2 (codex round 2 P2): the case query no longer has an
+        # INNER JOIN (it's a semi-join subquery instead) -- test_case_results
+        # only ever appears in the case query, never the suite query, so
+        # that alone still distinguishes them.
+        if "test_case_results" in query:
             return list(oversized_case_rows)
         return list(oversized_suite_rows)
 
@@ -248,7 +262,11 @@ async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
 
     async def fake_query_dicts(client, query, params):
         nonlocal case_query_calls
-        if "test_case_results" in query and "INNER JOIN" in query:
+        # CHAOS-4350 PR2 (codex round 2 P2): the case query no longer has an
+        # INNER JOIN (it's a semi-join subquery instead) -- test_case_results
+        # only ever appears in the case query, never the suite query, so
+        # that alone still distinguishes them.
+        if "test_case_results" in query:
             case_query_calls += 1
             return []
         return list(oversized_suite_rows)
@@ -266,4 +284,163 @@ async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
     assert case_query_calls == 0, (
         "the case query was issued even though the suite read alone "
         "already exceeded the cap"
+    )
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_query_shape(mock_query_dicts):
+    """CHAOS-4350 PR 2: the historical aggregate must be FINAL on both
+    joined tables, org+repo scoped, capped, and filtered on the FULL
+    failure-equivalent status vocabulary (matching
+    compute_testops._normalize_test_status(), not just the literal
+    'failed' string) -- pushed into SQL instead of fetching raw
+    historical case rows.
+    """
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 31, tzinfo=timezone.utc)
+    current_day_end = end + timedelta(days=1)
+    repo_id = uuid.uuid4()
+
+    await loader.load_testops_historical_failed_case_names(
+        start, end, repo_id=repo_id, current_day_end=current_day_end
+    )
+
+    # Two queries now: the GROUP BY aggregate, and (codex round 2) a second
+    # unfiltered count() for the ROWS_AGGREGATED_FROM telemetry.
+    assert mock_query_dicts.call_count == 2
+    agg_call, count_call = mock_query_dicts.call_args_list
+    sql = agg_call.args[1]
+    params = agg_call.args[2]
+    assert "test_case_results AS c FINAL" in sql
+    assert "test_suite_results AS s FINAL" in sql
+    assert "lower(trim(c.status)) IN {_failure_statuses:Array(String)}" in sql
+    assert "GROUP BY s.repo_id, c.case_name" in sql
+    assert "s.repo_id = {repo_id:UUID}" in sql
+    assert "AND s.org_id = {org_id:String}" in sql
+    assert "LIMIT {_row_cap:UInt64}" in sql
+    # codex round 2 P2: today's run_ids (a day-boundary-straddling run's
+    # cases) must be excluded from "historical" via a semi-join subquery,
+    # not just time-sliced on `end`.
+    assert "(s.repo_id, s.run_id) NOT IN" in sql
+    assert "{current_day_end:DateTime}" in sql
+    assert params.get("repo_id") == str(repo_id)
+    assert params.get("org_id") == "acme-corp"
+    assert params.get("start") == start.replace(tzinfo=None)
+    assert params.get("end") == end.replace(tzinfo=None)
+    assert params.get("current_day_end") == current_day_end.replace(tzinfo=None)
+    assert set(params.get("_failure_statuses")) == {
+        "failure",
+        "failed",
+        "error",
+        "errors",
+        "timeout",
+        "timed_out",
+    }
+    assert not DOTTED_PARAM.search(sql)
+
+    count_sql = count_call.args[1]
+    assert "count() AS total" in count_sql
+    assert "test_case_results AS c FINAL" in count_sql
+    assert "test_suite_results AS s FINAL" in count_sql
+    assert "(s.repo_id, s.run_id) NOT IN" in count_sql
+    # Unfiltered by status (the whole point -- it measures the population the
+    # failure-only aggregate replaced, not another failure-only count) and
+    # unbounded by the row cap (a single scalar, never materializes rows).
+    assert "c.status" not in count_sql
+    assert "LIMIT" not in count_sql
+    assert not DOTTED_PARAM.search(count_sql)
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_groups_by_repo(mock_query_dicts):
+    """Returns a dict[repo_id, set[case_name]] built from the aggregate rows,
+    and org-wide (repo_id=None) calls still separate results per repo_id."""
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    repo_a = uuid.uuid4()
+    repo_b = uuid.uuid4()
+    mock_query_dicts.return_value = [
+        {"repo_id": str(repo_a), "case_name": "test_flaky", "occurrences": 3},
+        {"repo_id": str(repo_a), "case_name": "test_broken", "occurrences": 12},
+        {"repo_id": str(repo_b), "case_name": "test_other", "occurrences": 1},
+    ]
+
+    now = datetime.now(timezone.utc)
+    result = await loader.load_testops_historical_failed_case_names(
+        now - timedelta(days=29),
+        now,
+        repo_id=None,
+        current_day_end=now + timedelta(days=1),
+    )
+
+    assert result == {
+        repo_a: {"test_flaky", "test_broken"},
+        repo_b: {"test_other"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_records_telemetry(monkeypatch):
+    """rows_fetched (aggregate row count) vs rows_aggregated_from (the FULL
+    unfiltered joined-row population the aggregation replaced, from a
+    separate count() query -- NOT sum(occurrences), which only reflects the
+    failure-filtered subset and undercounts this metric per codex round 2)
+    -- the gap between the two is the measured win (CHAOS-4350 PR 2,
+    team-lead spec).
+    """
+    from dev_health_ops.metrics.prometheus import (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED,
+    )
+
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    repo_id = uuid.uuid4()
+
+    async def fake_query_dicts(client, query, params):
+        if "GROUP BY" in query:
+            return [
+                {
+                    "repo_id": str(repo_id),
+                    "case_name": "test_a",
+                    "occurrences": 100_000,
+                },
+                {
+                    "repo_id": str(repo_id),
+                    "case_name": "test_b",
+                    "occurrences": 250_000,
+                },
+            ]
+        # The unfiltered count() query -- deliberately a DIFFERENT number
+        # than sum(occurrences)=350_000 above, so this test actually proves
+        # the telemetry is sourced from the count() query, not a coincidence.
+        assert "count() AS total" in query
+        return [{"total": 1_100_000}]
+
+    fetched_sum_before = DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get()
+    aggregated_sum_before = (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
+    )
+
+    now = datetime.now(timezone.utc)
+    with patch(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query_dicts,
+    ):
+        result = await loader.load_testops_historical_failed_case_names(
+            now - timedelta(days=29),
+            now,
+            repo_id=repo_id,
+            current_day_end=now + timedelta(days=1),
+        )
+
+    assert result == {repo_id: {"test_a", "test_b"}}
+    # 2 aggregate rows fetched (small) replaced the full 1.1M-row joined
+    # population (the volume PR 1 alone would still have had to materialize
+    # for this signal) -- that gap is the whole point of PR 2.
+    assert DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get() == pytest.approx(
+        fetched_sum_before + 2
+    )
+    assert (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
+        == pytest.approx(aggregated_sum_before + 1_100_000)
     )

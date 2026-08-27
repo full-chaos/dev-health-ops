@@ -254,11 +254,17 @@ def test_compute_test_metrics_daily_detects_flakes_and_failure_recurrence():
         },
     ]
 
+    # CHAOS-4350 PR 2: historical_failed_names_by_repo is now an INPUT
+    # (computed by the caller via a SQL aggregate), not derived internally
+    # from `case_results` -- this is the same set the old internal logic
+    # would have derived from the "run-a-history"/"test_recurring_failure"
+    # row above (a failed case whose run_id is not in today's runs).
     records = compute_test_metrics_daily(
         day=day,
         suite_results=suite_results,
         case_results=case_results,
         computed_at=datetime(2026, 2, 18, 13, 0, tzinfo=timezone.utc),
+        historical_failed_names_by_repo={repo_a: {"test_recurring_failure"}},
     )
 
     rec_a = next(r for r in records if r.repo_id == repo_a)

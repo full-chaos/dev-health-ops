@@ -853,99 +853,17 @@ async def run_daily_metrics_job(
             current += timedelta(days=1)
         return result
 
-    # CHAOS-4350: testops_loader is just `loader` (kept as its own name for
-    # readability at the testops call sites below). Mirrors
-    # `daily_commit_cache`/`_get_cached_commits_for_window` above: before
-    # this fix, `load_testops_test_data` was called with a fresh rolling
-    # 30-day window on EVERY backfilled day, so a `--backfill N` run
-    # refetched a full org's 30-day test-case history N times over. Fetching
-    # one calendar day at a time and caching it means each day is fetched
-    # from ClickHouse exactly once for the whole run, and each individual
-    # read is bounded to a single day's volume (not 30 days at once) --
-    # both lowering total rows transferred and making the CHAOS-4350 hard
-    # row cap (metrics/loaders/clickhouse.py) far less likely to trip
-    # during ordinary operation.
+    # CHAOS-4350 PR 2: testops_loader is just `loader` (kept as its own name
+    # for readability at the testops call sites below). PR 1 built a per-day
+    # cache here to avoid refetching a rolling 30-day window on every
+    # backfilled day; PR 2 made that machinery unnecessary instead of fixing
+    # it further -- `compute_test_metrics_daily`'s only use of historical
+    # (non-current-day) case data is a small SQL-side aggregate
+    # (`load_testops_historical_failed_case_names`, bounded by distinct
+    # failing case names, not by day count x run count), so every testops
+    # fetch below is naturally single-day-sized regardless of
+    # `backfill_days` -- there is nothing left worth caching across days.
     testops_loader: Any = loader
-    daily_testops_cache: dict[date, tuple[list[Any], list[Any]]] = {}
-
-    async def _get_cached_testops_for_window(
-        window_start: date, window_end: date
-    ) -> tuple[list[Any], list[Any]]:
-        """Load testops suite/case rows for a date range.
-
-        codex round 3 (P1): `worker_metrics.py` invokes this job with
-        `backfill_days=1` per repository for the normal production
-        partition -- that shape has NO cross-day reuse opportunity at all
-        (the `for d in days:` loop below runs exactly once), so splitting
-        into 30 per-day fetches there would replace the original 2 queries
-        with 60 serial `FINAL` queries against un-partitioned-by-time tables
-        for zero caching benefit -- a straight regression. Per-day caching
-        earns its keep only when `backfill_days > 1` actually re-visits
-        overlapping windows across iterations. So: `backfill_days == 1` goes
-        through ONE direct call spanning the whole window (matching the
-        pre-CHAOS-4350 shape, still capped inside `load_testops_test_data`
-        itself); only `backfill_days > 1` uses the per-day cache below.
-
-        Two more properties codex round 2 flagged as missing from the first
-        version of the per-day path, both fixed here:
-
-        1. **Cap the ASSEMBLED window, not just each day.** Each day's fetch
-           is already capped inside `load_testops_test_data`, but that only
-           bounds one day at a time -- concatenating up to 30 already-capped
-           days could still assemble up to `30 * max_rows` rows (nearly 6M
-           at the default cap), which is exactly the unbounded-materialization
-           failure mode this ticket exists to close, just moved up a layer.
-           Re-enforce the same cap on the stitched total before returning it
-           to the caller that actually computes on it.
-        2. **Evict expired days.** Days are processed chronologically by the
-           caller (`for d in days:` below), each needing only its own
-           trailing `[d-29, d]` window, so once day `d` is done, any cached
-           day older than `d-29` can never be needed again. Without this, a
-           long `--backfill N` run's cache grows to `N + 29` entries instead
-           of staying near 30, and peak RSS grows with backfill length
-           instead of staying flat.
-        """
-        if backfill_days <= 1:
-            window_start_dt = datetime.combine(
-                window_start, time.min, tzinfo=timezone.utc
-            )
-            window_end_dt = _utc_day_window(window_end)[1]
-            return await testops_loader.load_testops_test_data(
-                window_start_dt, window_end_dt, repo_id=repo_id
-            )
-
-        suites: list[Any] = []
-        cases: list[Any] = []
-        current = window_start
-        while current <= window_end:
-            if current not in daily_testops_cache:
-                d_start = datetime.combine(current, time.min, tzinfo=timezone.utc)
-                d_end = d_start + timedelta(days=1)
-                day_suites, day_cases = await testops_loader.load_testops_test_data(
-                    d_start, d_end, repo_id=repo_id
-                )
-                daily_testops_cache[current] = (day_suites, day_cases)
-            day_suites, day_cases = daily_testops_cache[current]
-            suites.extend(day_suites)
-            cases.extend(day_cases)
-            current += timedelta(days=1)
-
-        for expired_day in [k for k in daily_testops_cache if k < window_start]:
-            del daily_testops_cache[expired_day]
-
-        from dev_health_ops.metrics.loaders.clickhouse import (
-            _enforce_row_cap,
-            _testops_loader_max_rows,
-        )
-
-        max_rows = _testops_loader_max_rows()
-        _enforce_row_cap(
-            suites, table="test_suite_results:window", org_id=org_id, max_rows=max_rows
-        )
-        _enforce_row_cap(
-            cases, table="test_case_results:window", org_id=org_id, max_rows=max_rows
-        )
-        return suites, cases
 
     # Rolling buffer for pipeline stability (7-day window)
     pipeline_metrics_buffer: list[Any] = []
@@ -1069,10 +987,30 @@ async def run_daily_metrics_job(
             testops_pipeline_rows,
             testops_job_rows,
         ) = await testops_loader.load_testops_pipeline_data(start, end, repo_id=repo_id)
+        # CHAOS-4350 PR 2: today's suite/case rows only (single-day window,
+        # naturally small and capped) -- the 29 days of history before it
+        # are no longer fetched as raw rows at all; see
+        # load_testops_historical_failed_case_names below.
         (
             testops_suite_rows,
             testops_case_rows,
-        ) = await _get_cached_testops_for_window(h_start_date, d)
+        ) = await testops_loader.load_testops_test_data(start, end, repo_id=repo_id)
+        # The window is relative to THIS partition's day `d`, not wall-clock
+        # "now" -- `[d-29, d)`, i.e. up to but excluding today's own window.
+        # `current_day_end=end` (codex round 2 P2, team-lead ruling
+        # 2026-08-27): a run whose suites straddle `start` (UTC midnight for
+        # day `d`) shares one run_id across suites on both sides -- passing
+        # today's full window lets the loader exclude that run_id from
+        # "historical" (it belongs to today, per load_testops_test_data's
+        # own run_id-membership semantics), not just time-slice on `start`.
+        historical_failed_names_by_repo = (
+            await testops_loader.load_testops_historical_failed_case_names(
+                datetime.combine(h_start_date, time.min, tzinfo=timezone.utc),
+                start,
+                repo_id=repo_id,
+                current_day_end=end,
+            )
+        )
         coverage_rows = await testops_loader.load_testops_coverage_data(
             start, end, repo_id=repo_id
         )
@@ -1302,6 +1240,7 @@ async def run_daily_metrics_job(
             computed_at=computed_at,
             repo_team_resolver=repo_team_resolver,
             repo_names_by_id=repo_names_by_id,
+            historical_failed_names_by_repo=historical_failed_names_by_repo,
         )
         testops_coverage_metrics = compute_coverage_metrics_daily(
             day=d,

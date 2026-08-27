@@ -15,6 +15,7 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
+from dev_health_ops.metrics.compute_testops import FAILURE_STATUSES
 from dev_health_ops.metrics.compute_work_items import (
     ManualFallbackRule,
     TeamAttributionCandidate,
@@ -1322,7 +1323,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             repo_filter = " AND repo_id = {repo_id:UUID}"
             # Alias-qualify only the column; the {repo_id:UUID} parameter name
             # must stay dot-free (ClickHouse rejects dotted param names).
-            case_repo_filter = " AND s.repo_id = {repo_id:UUID}"
+            case_repo_filter = " AND c.repo_id = {repo_id:UUID}"
 
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
@@ -1368,6 +1369,33 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # production caller -- at cap-sized volumes those text columns alone
         # can exceed the compatibility runner's memory bound even with a
         # generous row cap, so they never leave ClickHouse for this read path.
+        #
+        # CHAOS-4350 PR2 (codex round 2 P2): cases are scoped by RUN_ID
+        # membership -- "does this case's run have ANY suite in today's
+        # window" -- via the semi-join subquery below, not by joining each
+        # case to its OWN suite's day (which is what this query did before).
+        # JUnit `<testsuite>` elements can carry a per-suite `timestamp` that
+        # `_build_rows_from_parsed` prefers over the run-level fallback, so
+        # two suites sharing one run_id CAN land on different UTC days (a CI
+        # run whose suites straddle midnight). The documented flake_rate
+        # contract is "same run window" (testops_schemas.py), not "same
+        # suite's own day" -- a run_id-scoped semi-join is what makes a
+        # before-midnight failure and an after-midnight retry of the SAME
+        # run still count as one flake, matching the pre-PR-2 Python
+        # behavior (which bucketed cases by run_id membership over a wide
+        # window, not by each case's individual suite). The subquery is
+        # scoped by (repo_id, run_id) together, not run_id alone, so a
+        # same-org different-repo run_id collision can't leak cases across
+        # repos in the org-wide (repo_id=None) case.
+        #
+        # CHAOS-4350 PR2 (codex round 3 P2): run-id membership alone is NOT
+        # enough -- it only proves the run has SOME suite in today's window,
+        # not that every one of its suites does. A second semi-join bounds
+        # each returned case's OWN suite to `< end` so a suite that hasn't
+        # happened yet as of `end` (this run continues into a LATER day)
+        # can't leak its cases backward into an earlier partition on a
+        # backfill computed after that later suite lands -- see the query
+        # below for the exact clause.
         case_query = f"""
         SELECT
           c.repo_id,
@@ -1380,15 +1408,30 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           c.retry_attempt,
           c.org_id
         FROM test_case_results AS c FINAL
-        INNER JOIN test_suite_results AS s FINAL
-          ON (s.repo_id = c.repo_id)
-         AND (s.run_id = c.run_id)
-         AND (s.suite_id = c.suite_id)
-         AND (s.org_id = c.org_id)
-        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
-          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        WHERE (c.repo_id, c.run_id) IN (
+          SELECT repo_id, run_id FROM test_suite_results FINAL
+          WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
+            AND coalesce(started_at, finished_at) < {{end:DateTime}}
+          {repo_filter}
+          {org_filter}
+        )
+        -- codex round 3 P2: the run-membership check above only proves SOME
+        -- suite of this run falls in today's window -- without this second
+        -- semi-join, a case whose OWN suite starts on or after `end` (a
+        -- later day, not yet closed as of this partition) would leak
+        -- backward into today's read on a backfill run computed after that
+        -- later suite lands, making the backfill non-deterministic. Bound
+        -- each returned case's OWN suite to `< end` (no lower bound -- a
+        -- suite from an earlier day sharing this run_id is exactly the
+        -- day-boundary case this method exists to include).
+        AND (c.repo_id, c.run_id, c.suite_id) IN (
+          SELECT repo_id, run_id, suite_id FROM test_suite_results FINAL
+          WHERE coalesce(started_at, finished_at) < {{end:DateTime}}
+          {repo_filter}
+          {org_filter}
+        )
         {case_repo_filter}
-        {self._org_filter(alias="s")}
+        {self._org_filter(alias="c")}
         LIMIT {{_row_cap:UInt64}}
         """
 
@@ -1419,6 +1462,173 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             [cast(TestSuiteResultRow, dict(row)) for row in suite_dicts],
             [cast(TestCaseResultRow, dict(row)) for row in case_dicts],
         )
+
+    async def load_testops_historical_failed_case_names(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None,
+        *,
+        current_day_end: datetime,
+    ) -> dict[uuid.UUID, set[str]]:
+        """Distinct (repo_id, case_name) pairs that failed at least once in
+        `[start, end)`, pushed into SQL instead of materializing raw rows.
+
+        CHAOS-4350 PR 2: `compute_test_metrics_daily`'s only use of
+        historical (non-current-day) case data is
+        `historical_failed_names_by_repo` -- a SET of case names that failed
+        outside today's runs, used solely for `failure_recurrence_score`
+        (`len(current_failed_names & historical_failed_names_by_repo)`).
+        Nothing else about the historical window is ever read: not
+        `duration_seconds`, not `retry_attempt`, not even how MANY times a
+        name failed. PR 1's `load_testops_test_data` fetched every raw
+        historical case row to derive this set in Python -- for a busy repo
+        (1M+ case rows/30 days measured on the real local stack) that is the
+        exact unbounded-materialization failure mode CHAOS-4350 exists to
+        close, moved one query up. `GROUP BY case_name` here is bounded by
+        the number of DISTINCT failing test names (order of hundreds to
+        low thousands even for a huge repo), not by run count x day count.
+
+        `start`/`end` are the PARTITION DAY's own history window
+        (`[day-29, day)`), not wall-clock "now" -- callers must pass the
+        window relative to the day being computed, same as
+        `load_testops_test_data`'s window. `end` doubles as today's window's
+        lower bound; `current_day_end` (required) is today's upper bound
+        (exclusive), i.e. the same `end` passed to `load_testops_test_data`
+        for the same partition day.
+
+        CHAOS-4350 PR2 (codex round 2 P2): a run whose suites straddle
+        `end` (UTC midnight for the partition day) must not have its
+        pre-midnight suite double-counted as "historical" -- that suite's
+        run_id is `load_testops_test_data`'s "today," via the same
+        (repo_id, run_id) semi-join semantics (see that method's docstring).
+        `AND (s.repo_id, s.run_id) NOT IN (...)` excludes today's run_ids
+        from this query the same way `load_testops_test_data`'s case query
+        includes them -- both computed as a semi-join subquery against
+        `test_suite_results`, never as a Python-collected run_id list (so
+        there's no array-size ceiling to fall back from for orgs with many
+        run_ids/day).
+
+        Issues THREE queries: the `GROUP BY case_name` aggregate, a second
+        unfiltered `count()` over the same scope purely for the
+        ROWS_AGGREGATED_FROM telemetry (see prometheus.py), and the run_id
+        exclusion is itself a subquery inside each -- all O(1) in
+        Python-side memory (a handful of aggregate rows, one scalar), so
+        this doesn't reintroduce raw-row materialization.
+        """
+        params: dict[str, Any] = {
+            "start": naive_utc(start),
+            "end": naive_utc(end),
+            "current_day_end": naive_utc(current_day_end),
+        }
+        repo_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            repo_filter = " AND s.repo_id = {repo_id:UUID}"
+
+        org_filter = self._org_filter(alias="s")
+        params = self._inject_org_id(params)
+
+        max_rows = _testops_loader_max_rows()
+        params = {**params, "_row_cap": max_rows + 1}
+        # Must match _normalize_test_status()'s failure vocabulary
+        # (dev_health_ops.metrics.compute_testops) exactly, or historical
+        # rows with a canonical "error"/"timeout"/etc status silently drop
+        # out of failure_recurrence_score. lower(trim(...)) mirrors that
+        # function's `.strip().lower()` normalization.
+        params["_failure_statuses"] = sorted(FAILURE_STATUSES)
+
+        # Unaliased repo/org filters for the exclusion subquery below (it
+        # queries test_suite_results directly, no alias).
+        today_run_ids_filter = ""
+        if repo_id is not None:
+            today_run_ids_filter = " AND repo_id = {repo_id:UUID}"
+        today_run_ids_org_filter = self._org_filter()
+        exclude_today_run_ids = f"""
+          AND (s.repo_id, s.run_id) NOT IN (
+            SELECT repo_id, run_id FROM test_suite_results FINAL
+            WHERE coalesce(started_at, finished_at) >= {{end:DateTime}}
+              AND coalesce(started_at, finished_at) < {{current_day_end:DateTime}}
+            {today_run_ids_filter}
+            {today_run_ids_org_filter}
+          )
+        """
+
+        query = f"""
+        SELECT
+          s.repo_id AS repo_id,
+          c.case_name AS case_name,
+          count() AS occurrences
+        FROM test_case_results AS c FINAL
+        INNER JOIN test_suite_results AS s FINAL
+          ON (s.repo_id = c.repo_id)
+         AND (s.run_id = c.run_id)
+         AND (s.suite_id = c.suite_id)
+         AND (s.org_id = c.org_id)
+        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
+          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+          AND lower(trim(c.status)) IN {{_failure_statuses:Array(String)}}
+        {exclude_today_run_ids}
+        {repo_filter}
+        {org_filter}
+        GROUP BY s.repo_id, c.case_name
+        LIMIT {{_row_cap:UInt64}}
+        """
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
+        # Backstop cap (team-lead: keep it on both queries): the aggregate is
+        # already tiny relative to raw rows, but an org with an enormous or
+        # ever-churning distinct-name set should still fail loud rather than
+        # grow unbounded.
+        _enforce_row_cap(
+            dicts,
+            table="test_case_results:historical_names",
+            org_id=self.org_id,
+            max_rows=max_rows,
+        )
+
+        from dev_health_ops.metrics.prometheus import (
+            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
+            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED,
+        )
+
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED.observe(len(dicts))
+        # (codex round 2) ROWS_AGGREGATED_FROM's contract (see prometheus.py)
+        # is the raw test_case_results row volume this aggregation replaced
+        # -- i.e. the FULL joined population the pre-PR-2 code would have
+        # materialized, not just the failure-filtered rows behind the
+        # `occurrences` sum above. Count that population directly (a single
+        # scalar `count()`, never materializing rows) rather than reusing
+        # `occurrences`, which only ever reflects the failed subset and
+        # silently undercounted this metric (e.g. 29 instead of ~1.1M on the
+        # busiest measured repo). Same run_id exclusion as the aggregate
+        # above, so the telemetry's population matches what the aggregate
+        # actually scans.
+        count_query = f"""
+        SELECT count() AS total
+        FROM test_case_results AS c FINAL
+        INNER JOIN test_suite_results AS s FINAL
+          ON (s.repo_id = c.repo_id)
+         AND (s.run_id = c.run_id)
+         AND (s.suite_id = c.suite_id)
+         AND (s.org_id = c.org_id)
+        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
+          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        {exclude_today_run_ids}
+        {repo_filter}
+        {org_filter}
+        """
+        count_rows = await _clickhouse_query_dicts(self.client, count_query, params)
+        total_population = int(count_rows[0].get("total") or 0) if count_rows else 0
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM.observe(total_population)
+
+        result: dict[uuid.UUID, set[str]] = {}
+        for row in dicts:
+            parsed = parse_uuid(row.get("repo_id"))
+            case_name = row.get("case_name")
+            if parsed is None or not case_name:
+                continue
+            result.setdefault(parsed, set()).add(str(case_name))
+        return result
 
     async def load_testops_coverage_data(
         self,

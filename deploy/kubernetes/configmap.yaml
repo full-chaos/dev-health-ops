@@ -28,6 +28,19 @@ data:
   # so it cannot open readiness without a reachable endpoint. The matching
   # bearer token is a Secret key (dev-health-secrets), never a ConfigMap value.
   WORKER_OPERATIONAL_BRIDGE_URL: "http://dev-health-api.dev-health.svc.cluster.local:8000"
+  # CHAOS-4351 GAP (documented, not fixed -- team-lead scoped this ticket
+  # to compose.yml/compose.production.yml + the Helm chart only, same
+  # posture as CHAOS-4317's own Swarm/Kubernetes gaps): these raw
+  # manifests have no `metrics-api` Deployment/Service and no per-group
+  # override of this single shared value, unlike the Helm chart's
+  # per-group `goWorkers.groups[].bridgeUrl`. Every worker on this surface
+  # -- including whichever one runs the `metrics` queue -- still shares
+  # `api`'s Deployment via this one ConfigMap key, so a bridge-side pids/
+  # memory incident here still risks `api` request handling as collateral
+  # damage. Add an equivalent `metrics-api` Deployment/Service (see
+  # `deploy/helm/dev-health/templates/metrics-api-deployment.yaml` for the
+  # shape) and a per-worker env override here if these manifests are ever
+  # a real deploy target again.
   # The in-cluster endpoint above is plaintext, which the Go runtime rejects
   # unless this opt-in is set. Set it to "false" and repoint the URL at an
   # internal HTTPS origin (mesh/ingress) to drop the exemption.

@@ -70,6 +70,59 @@ api:
   extraEnv: []
 
 # =============================================================================
+# Metrics API (CHAOS-4351)
+# =============================================================================
+# A second copy of `api` -- same image, same args, same env (configMap/
+# secret) -- serving ONLY as the Go daily-runtime's metrics compatibility
+# bridge target (the `heavy` goWorkers group below points its
+# --operational-bridge-url at this Service's DNS name instead of `api`'s).
+# No route split, no code change: `api` still exposes the same bridge
+# routes too. The point is a separate pod/cgroup so a bridge-side pids/
+# memory incident (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take
+# unrelated `api` request handling down with it. `enabled: false` by
+# default, matching `billingEdge`'s off-by-default posture, until an
+# operator opts in for a cluster that runs Go workers.
+metricsApi:
+  enabled: false
+  replicas: 1
+  port: 8000
+  args:
+    - "--host"
+    - "0.0.0.0"
+    - "--port"
+    - "8000"
+  # Same as `api.resources` above -- identical workload, identical bound.
+  # Kubernetes has no per-container pids limit (same CHAOS-4317 gap noted
+  # on api-deployment.yaml -- the only lever is cluster-wide kubelet
+  # `--pod-max-pids`), so there is no `pids` field to mirror here.
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Extra environment variables (list of name/value pairs)
+  extraEnv: []
+
+# =============================================================================
 # Billing Edge API
 # =============================================================================
 billingEdge:
@@ -193,6 +246,16 @@ goWorkers:
       terminationGracePeriodSeconds: 7260
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      # CHAOS-4351: this is the ONLY worker group whose queue set includes
+      # `metrics` (confirmed via `rg 'queues='` against every group in this
+      # file), i.e. the only one that calls the metrics compatibility
+      # bridge. Empty means "use metricsApi's own Service DNS name" (set
+      # by the go-workers.yaml template below); override here (or via
+      # `--set goWorkers.groups[0].bridgeUrl=...`, mirroring compose's
+      # DEV_HEALTH_METRICS_BRIDGE_URL env var) only if metricsApi is
+      # disabled and this group must fall back to `api`, or points at a
+      # differently-named release.
+      bridgeUrl: ""
     - name: ops
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [coverage, heartbeat, retention, webhooks]

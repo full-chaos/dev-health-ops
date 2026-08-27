@@ -199,6 +199,23 @@ services:
   # values below are overrides, not requirements. No ambient
   # STATUS_MAPPING_PATH override is accepted, and an unreadable path fails
   # readiness at startup rather than on the first claim.
+  # CHAOS-4351 (codex review, PR #1938 P2): this topology is `--queues=sync`
+  # only -- it does not run the `metrics` queue at all, so it has no caller
+  # for the dedicated `metrics-api` service the root compose.yml/
+  # compose.production.yml gained under `profiles: [go-workers]`. That
+  # profile name is deliberately DIFFERENT from this file's `profiles: [go]`
+  # -- the two overlays are separate mechanisms (this one for the single
+  # hand-maintained local machine described at the top of this file; the
+  # other, `deploy/docker-compose/compose.go-workers.yml`, for the fully
+  # split heavy/ops/sync/sync-provider/reconciler/scheduler/stream-*
+  # topology that DOES run `metrics` on its `heavy` group). Activating
+  # `--profile go-workers` against a bare root compose.yml without also
+  # loading that other overlay starts `metrics-api` with no caller; if this
+  # single-worker topology ever needs to process the `metrics` queue,
+  # either add it to the `--queues=` list above (there is no caller-
+  # isolation benefit without splitting into a separate service the way
+  # `compose.go-workers.yml` does) or migrate to that split topology
+  # instead of extending this one.
   go-worker:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}

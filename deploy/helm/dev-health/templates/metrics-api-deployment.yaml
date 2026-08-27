@@ -1,0 +1,98 @@
+{{- /*
+CHAOS-4351: a second copy of the api Deployment/Service -- same image, same
+args, same configMap/secret envFrom -- serving ONLY as the Go daily-runtime's
+metrics compatibility bridge target (see go-workers.yaml's `heavy` group,
+which points --operational-bridge-url at this Service's DNS name instead of
+api's when metricsApi.enabled is true). No route split, no code change: api
+still exposes the same bridge routes too. This just gives the bridge its own
+pod/cgroup so a bridge-side pids/memory incident (CHAOS-4264, CHAOS-4317,
+CHAOS-4350) can no longer take unrelated api request handling down with it.
+Deliberately has no ingress.yaml route (unlike api/billing-edge) -- a
+ClusterIP Service reachable only by in-cluster DNS is the "no public route".
+*/}}
+{{- if .Values.metricsApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-metrics-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "metrics-api" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.metricsApi.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "metrics-api" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "metrics-api" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        # CHAOS-4317/CHAOS-4351: same gap as api-deployment.yaml -- Kubernetes
+        # has no per-container pids cgroup limit expressible in a Pod spec,
+        # so there is no pids field to mirror ops/compose.yml's pids_limit
+        # here either.
+        - name: metrics-api
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- toYaml .Values.metricsApi.args | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.metricsApi.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          {{- with .Values.metricsApi.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.metricsApi.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.metricsApi.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.metricsApi.resources | nindent 12 }}
+      {{- with .Values.metricsApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metricsApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metricsApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-metrics-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "metrics-api" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "metrics-api" "context" $) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.metricsApi.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

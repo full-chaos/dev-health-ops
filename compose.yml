@@ -355,6 +355,79 @@ services:
       retries: 3
       start_period: 30s
 
+  # CHAOS-4351: a second copy of `api` -- same image, same command, same
+  # environment (`<<: *env`) -- serving ONLY as the Go daily-runtime's
+  # metrics compatibility bridge target. No route split, no code change:
+  # `worker_metrics.py`'s bridge routes are exposed on `api` too, this is
+  # just a separate process/cgroup so a bridge-side pids/memory incident
+  # (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take unrelated `api`
+  # request handling down with it. `compose.go-workers.yml` points
+  # `go-worker-heavy` (the one worker group that actually calls the
+  # metrics compatibility bridge -- confirmed via `rg 'queues='`, no other
+  # go-worker-* group's queue set includes `metrics`) at this service
+  # instead of `api`; every other go-worker-* group is unaffected.
+  #
+  # codex review (PR #1938, P2): only `--profile go-workers` (same gate as
+  # `go-worker-heavy` itself in compose.go-workers.yml) starts this service
+  # -- a bare `docker compose up` with Go workers disabled has nothing
+  # that ever calls it, so starting it unconditionally would be a second
+  # full API process idling for no reason on every default dev-stack up.
+  # This is the `deploy/docker-compose/compose.go-workers.yml` overlay's
+  # own profile -- `deploy/go-workers/compose-go-workers.yml` is a SEPARATE
+  # overlay (`profiles: [go]`) whose single-worker `--queues=sync` topology
+  # doesn't run the `metrics` queue at all, so it has no caller for this
+  # service; see that file's own comment on its `go-worker` service for
+  # the full explanation.
+  metrics-api:
+    profiles: [go-workers]
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    container_name: dev-health-metrics-api
+    command: |
+      --host 0.0.0.0 --port 8000 --reload
+    environment:
+      <<: *env
+    # CHAOS-4351: same pids formula as `api` above (see that block's
+    # comment) -- this container runs the identical worker_metrics_runner
+    # spawn path, so it needs the identical ceiling.
+    pids_limit: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
+    # CHAOS-4351 (team-lead ruling): `api` has no explicit mem_limit in
+    # this dev-stack file today -- 2g is a stated, not measured, ceiling
+    # (see the ticket's own ENDGAME step 6 for a real peak measurement).
+    # The point of the split is that a bridge OOM (CHAOS-4264/4350) can no
+    # longer take `api` down with it, so this container needs SOME
+    # explicit bound even though its sibling doesn't have one yet.
+    mem_limit: 2g
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+    # CHAOS-4351 (team-lead ruling): local-only exposure for direct
+    # debugging -- prod's compose.production.yml deliberately has NO
+    # `ports:` here (internal DNS only is the "no public route").
+    ports:
+      - "8020:8000"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   billing-edge:
     build:
       context: .

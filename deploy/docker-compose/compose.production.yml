@@ -246,6 +246,123 @@ services:
           memory: 256M
           cpus: "0.1"
 
+  # CHAOS-4351: a second copy of `api` -- same image, same command, same
+  # environment -- serving ONLY as the Go daily-runtime's metrics
+  # compatibility bridge target. No route split, no code change:
+  # worker_metrics.py's bridge routes are exposed on `api` too, this is
+  # just a separate process/cgroup so a bridge-side pids/memory incident
+  # (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take unrelated `api`
+  # request handling down with it. `compose.go-workers.yml` points
+  # `go-worker-heavy` (the one worker group that actually calls the
+  # metrics compatibility bridge -- confirmed via `rg 'queues='` against
+  # every go-worker-*/go-reconciler/go-scheduler/go-stream-* service, no
+  # other group's queue set includes `metrics`) at this service instead of
+  # `api`; every other go-worker-* group is unaffected and stays on `api`.
+  #
+  # Deliberately NO `ports:` here (team-lead ruling, unlike the dev-stack
+  # copy in ops/compose.yml which exposes 8020 for local debugging) --
+  # this service is reachable ONLY via the internal `dev-health` network's
+  # DNS name `metrics-api`. That absence IS the "no public route"; there
+  # is no traefik or ingress layer in this compose file to additionally
+  # exclude it from.
+  #
+  # codex review (PR #1938, P2): only `--profile go-workers` (same gate as
+  # `go-worker-heavy` itself in compose.go-workers.yml) starts this
+  # service -- a bare `docker compose -f compose.production.yml up -d`
+  # with Go workers disabled has nothing that ever calls it, so starting
+  # it unconditionally would be a second full API process idling for no
+  # reason on every deploy that hasn't opted into the Go worker overlay.
+  metrics-api:
+    profiles: [go-workers]
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    container_name: dev-health-metrics-api
+    restart: unless-stopped
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    environment:
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      REDIS_URL: redis://valkey:6379/1
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
+      GRAPHQL_QUERY_TIMEOUT: ${GRAPHQL_QUERY_TIMEOUT:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROVIDER_SYNC_QUEUES_ENABLED: ${PROVIDER_SYNC_QUEUES_ENABLED:-true}
+      SYNC_COST_CLASS_QUEUES: ${SYNC_COST_CLASS_QUEUES:-true}
+      HIDE_MIGRATED_CHILD_CONFIGS: ${HIDE_MIGRATED_CHILD_CONFIGS:-true}
+      SYNC_RUN_MAX_UNITS: ${SYNC_RUN_MAX_UNITS:-1000}
+      SYNC_UNIT_CONCURRENCY_PER_BUCKET: ${SYNC_UNIT_CONCURRENCY_PER_BUCKET:-8}
+      SYNC_UNIT_DISPATCH_STALE_SECONDS: ${SYNC_UNIT_DISPATCH_STALE_SECONDS:-900}
+      SYNC_UNIT_RUNNING_STALE_SECONDS: ${SYNC_UNIT_RUNNING_STALE_SECONDS:-3600}
+      LINEAR_BACKFILL_MAX_WINDOW_DAYS: ${LINEAR_BACKFILL_MAX_WINDOW_DAYS:-14}
+      SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES: ${SYNC_UNIT_EXPIRED_LEASE_MAX_RETRIES:-1}
+      SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS: ${SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS:-60}
+      SYNC_DISPATCH_REDISPATCH_COUNTDOWN: ${SYNC_DISPATCH_REDISPATCH_COUNTDOWN:-60}
+      SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS: ${SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS:-300}
+      SYNC_WATERMARK_OVERLAP: ${SYNC_WATERMARK_OVERLAP:-0}
+      SYNC_BUDGET_BUCKET_LIMITS: ${SYNC_BUDGET_BUCKET_LIMITS:-}
+      SYNC_BUDGET_DEFAULT_LIMIT: ${SYNC_BUDGET_DEFAULT_LIMIT:-1000000}
+      SYNC_BUDGET_DEFERRAL_SECONDS: ${SYNC_BUDGET_DEFERRAL_SECONDS:-60}
+      SYNC_BUDGET_DEFERRAL_JITTER_SECONDS: ${SYNC_BUDGET_DEFERRAL_JITTER_SECONDS:-5}
+      SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS: ${SYNC_BUDGET_DRY_RUN_BUCKET_LIMITS:-}
+      SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT: ${SYNC_BUDGET_DRY_RUN_DEFAULT_LIMIT:-1000000}
+      SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS: ${SYNC_BUDGET_DRY_RUN_DEFERRAL_SECONDS:-60}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_PATH:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITHUB_BASE_URL: ${GITHUB_BASE_URL:-https://api.github.com}
+      GITHUB_LINEAR_LINKBACK_BOTS: ${GITHUB_LINEAR_LINKBACK_BOTS:-linear[bot]}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITLAB_URL: ${GITLAB_URL:-https://gitlab.com}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+      LINEAR_TRUSTED_SCM_HOSTS: ${LINEAR_TRUSTED_SCM_HOSTS:-}
+      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
+      PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
+      AUTO_RUN_MIGRATIONS: "false"
+      DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
+      DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS:-120}
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS:-90}
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER:-3}
+      DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS: ${DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS:-200000}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health
+    deploy:
+      resources:
+        # CHAOS-4351 (team-lead ruling): identical to `api`'s own limits
+        # above -- same image, same workload, and the whole point of the
+        # split is an explicit, equal-sized bound so a bridge-side OOM
+        # inside THIS container cannot also take `api` down with it.
+        limits:
+          memory: 1G
+          cpus: "0.5"
+          pids: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
+        reservations:
+          memory: 256M
+          cpus: "0.1"
+
   billing-edge:
     image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     container_name: dev-health-billing-edge

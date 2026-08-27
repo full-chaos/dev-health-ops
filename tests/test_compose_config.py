@@ -336,7 +336,7 @@ def test_production_compose_has_one_shot_migrate_service() -> None:
 
 def test_production_compose_app_services_gate_on_migrate() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "billing-edge", "worker", "beat"):
+    for name in ("api", "metrics-api", "billing-edge", "worker", "beat"):
         deps = services[name].get("depends_on") or {}
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"
@@ -345,7 +345,7 @@ def test_production_compose_app_services_gate_on_migrate() -> None:
 
 def test_production_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "worker", "beat"):
+    for name in ("api", "metrics-api", "worker", "beat"):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
             f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
@@ -746,7 +746,14 @@ def test_least_privilege_domain_grants_reject_swapped_privilege_blocks(
 
 def test_legacy_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):
+    for name in (
+        "api",
+        "metrics-api",
+        "billing-edge",
+        "worker",
+        "worker-ingest",
+        "worker-heavy",
+    ):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
             f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
@@ -756,7 +763,14 @@ def test_legacy_compose_disables_ambient_migrations() -> None:
 
 def test_legacy_compose_app_services_gate_on_migrate() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    for name in ("api", "billing-edge", "worker", "worker-ingest", "worker-heavy"):
+    for name in (
+        "api",
+        "metrics-api",
+        "billing-edge",
+        "worker",
+        "worker-ingest",
+        "worker-heavy",
+    ):
         deps = services[name].get("depends_on") or {}
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"

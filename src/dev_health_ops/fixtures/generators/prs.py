@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -265,7 +266,7 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
     ) -> list[dict[str, Any]]:
         """Generate work_graph_issue_pr rows with isolated clusters for multiple components.
 
-        CHAOS-4345: two bugs used to make the realized coverage land
+        CHAOS-4345: three bugs used to make the realized coverage land
         systematically below `min_coverage`, so `fixtures validate`'s
         Issue->PR coverage check (which measures epic-EXCLUSIVE coverage,
         `runner.py`'s `linked_non_epic / non_epic_wi_count`) failed on
@@ -277,7 +278,12 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
            below the nominal `min_coverage`. Epics are now excluded from
            `candidates` up front, so `target_count` is computed against
            the same population the validate check measures.
-        2. `num_clusters` used floor division
+        2. `target_count` truncated via `int(...)` instead of rounding up
+           (codex review round 1, P1): a non-multiple candidate count
+           (e.g. 14 candidates * 0.7 = 9.8) still selected only 9 (64.3%)
+           -- below the 70% the validate check requires. `math.ceil`
+           guarantees at least `min_coverage`'s worth of candidates.
+        3. `num_clusters` used floor division
            (`len(linked_items) // cluster_size`), which silently dropped
            up to `cluster_size - 1` trailing selected-but-unwritten items
            every run -- no edge, no log, no counter. Ceiling division
@@ -299,7 +305,12 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
         if not candidates or not pr_numbers:
             return []
 
-        target_count = max(1, int(len(candidates) * float(min_coverage)))
+        # CHAOS-4345 codex round 1, P1: `int(...)` truncates, so a
+        # non-multiple candidate count (e.g. 14 candidates * 0.7 = 9.8)
+        # still selected only 9 (64.3%) -- below the 70% the validate
+        # check requires. Ceiling guarantees at least `min_coverage`'s
+        # worth of candidates are selected.
+        target_count = max(1, math.ceil(len(candidates) * float(min_coverage)))
         random.shuffle(candidates)
         linked_items = candidates[:target_count]
 

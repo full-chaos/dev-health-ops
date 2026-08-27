@@ -1153,3 +1153,36 @@ class TestGenerateIssuePrLinksCoverage:
         non_epic_ids = {str(wi.work_item_id) for wi in non_epics}
         coverage = len(linked_ids & non_epic_ids) / len(non_epic_ids)
         assert coverage >= 0.7
+
+    def test_fractional_target_count_rounds_up_not_down(self):
+        """CHAOS-4345 codex round 1, P1: `int(len(candidates) *
+        min_coverage)` truncates -- a non-multiple candidate count (e.g.
+        14 * 0.7 = 9.8) selected only 9 (64.3%), still below the 70% the
+        validate check requires. Directly pins the fix at a candidate
+        count deliberately NOT a multiple of min_coverage's denominator,
+        bypassing generate_work_items entirely so the count is exact and
+        this test doesn't depend on how many epics a given seed happens to
+        produce (the 30-day tests above use exactly 60 non-epics, which
+        masked this: 60 * 0.7 = 42.0 exactly, no truncation to hide)."""
+        import dataclasses
+
+        generator = SyntheticDataGenerator(repo_name="acme/frac", seed=1)
+        raw_work_items = generator.generate_work_items(days=30)
+        # force non-epic so the count is exactly 14 (WorkItem is frozen)
+        work_items = [
+            dataclasses.replace(wi, type="story") for wi in raw_work_items[:14]
+        ]
+        pr_data = generator.generate_prs(count=10)
+        prs = [item["pr"] for item in pr_data]
+
+        links = generator.generate_issue_pr_links(
+            work_items, prs, min_coverage=0.7, org_id="org-1"
+        )
+        linked_ids = {link["work_item_id"] for link in links} & {
+            str(wi.work_item_id) for wi in work_items
+        }
+        coverage = len(linked_ids) / len(work_items)
+        assert coverage >= 0.7, (
+            f"14 candidates * 0.7 = 9.8 must round UP to 10 (71.4%), not "
+            f"truncate to 9 (64.3%) -- got {coverage:.1%}"
+        )

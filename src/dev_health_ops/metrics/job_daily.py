@@ -871,7 +871,27 @@ async def run_daily_metrics_job(
     async def _get_cached_testops_for_window(
         window_start: date, window_end: date
     ) -> tuple[list[Any], list[Any]]:
-        """Load testops suite/case rows for a date range using a per-day cache."""
+        """Load testops suite/case rows for a date range using a per-day cache.
+
+        Two properties codex round 2 flagged as missing from the first
+        version of this helper, both fixed here:
+
+        1. **Cap the ASSEMBLED window, not just each day.** Each day's fetch
+           is already capped inside `load_testops_test_data`, but that only
+           bounds one day at a time -- concatenating up to 30 already-capped
+           days could still assemble up to `30 * max_rows` rows (nearly 6M
+           at the default cap), which is exactly the unbounded-materialization
+           failure mode this ticket exists to close, just moved up a layer.
+           Re-enforce the same cap on the stitched total before returning it
+           to the caller that actually computes on it.
+        2. **Evict expired days.** Days are processed chronologically by the
+           caller (`for d in days:` below), each needing only its own
+           trailing `[d-29, d]` window, so once day `d` is done, any cached
+           day older than `d-29` can never be needed again. Without this, a
+           long `--backfill N` run's cache grows to `N + 29` entries instead
+           of staying near 30, and peak RSS grows with backfill length
+           instead of staying flat.
+        """
         suites: list[Any] = []
         cases: list[Any] = []
         current = window_start
@@ -887,6 +907,22 @@ async def run_daily_metrics_job(
             suites.extend(day_suites)
             cases.extend(day_cases)
             current += timedelta(days=1)
+
+        for expired_day in [k for k in daily_testops_cache if k < window_start]:
+            del daily_testops_cache[expired_day]
+
+        from dev_health_ops.metrics.loaders.clickhouse import (
+            _enforce_row_cap,
+            _testops_loader_max_rows,
+        )
+
+        max_rows = _testops_loader_max_rows()
+        _enforce_row_cap(
+            suites, table="test_suite_results:window", org_id=org_id, max_rows=max_rows
+        )
+        _enforce_row_cap(
+            cases, table="test_case_results:window", org_id=org_id, max_rows=max_rows
+        )
         return suites, cases
 
     # Rolling buffer for pipeline stability (7-day window)

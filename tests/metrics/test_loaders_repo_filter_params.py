@@ -218,4 +218,9 @@ async def test_testops_test_data_refuses_to_compute_on_oversized_result(monkeypa
     assert isinstance(exc_info.value, MemoryError)
     assert exc_info.value.table == "test_case_results"
     assert exc_info.value.org_id == "acme-corp"
+    # CHAOS-4350 (team-lead ruling): a fixed, SigNoz-searchable token must
+    # appear verbatim so a deliberately-tripped guard is distinguishable
+    # from a real unbounded OOM despite sharing the MemoryError/
+    # resource_exhausted classification upstream.
+    assert "testops_row_cap_exceeded" in str(exc_info.value)
     assert case_counter._value.get() == case_before + 1

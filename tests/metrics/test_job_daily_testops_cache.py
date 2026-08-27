@@ -61,8 +61,9 @@ class _RecordingSink:
 class _CountingLoader:
     """Empty on every read; records every load_testops_test_data window."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, case_rows_per_day: int = 0) -> None:
         self.testops_test_data_calls: list[tuple[datetime, datetime]] = []
+        self._case_rows_per_day = case_rows_per_day
 
     async def load_git_rows(self, *a: Any, **k: Any) -> tuple[list, list, list]:
         return [], [], []
@@ -77,7 +78,11 @@ class _CountingLoader:
         self, start: datetime, end: datetime, *a: Any, **k: Any
     ) -> tuple[list, list]:
         self.testops_test_data_calls.append((start, end))
-        return [], []
+        cases = [
+            {"repo_id": "r", "run_id": f"{start.date()}-{i}", "org_id": ORG_ID}
+            for i in range(self._case_rows_per_day)
+        ]
+        return [], cases
 
     async def load_testops_coverage_data(self, *a: Any, **k: Any) -> list:
         return []
@@ -200,3 +205,37 @@ async def test_single_day_run_fetches_its_thirty_day_history_once_each(
     }
     actual_days = {start for start, _end in loader.testops_test_data_calls}
     assert actual_days == expected_days
+
+
+@pytest.mark.asyncio
+async def test_assembled_thirty_day_window_is_capped_even_when_each_day_is_small(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4350 (codex round 2 P1): each day's fetch is individually
+    capped inside ``load_testops_test_data``, but stitching many
+    under-cap days together (``_get_cached_testops_for_window``) was NOT
+    itself re-capped -- up to ``backfill_days`` * 30 * max_rows could be
+    assembled and handed to ``compute_test_metrics_daily``, defeating the
+    guard's whole purpose one layer up. 10 rows/day * 30 days = 300 total,
+    comfortably over a cap of 50 even though no single day is anywhere
+    close to it -- this must now raise, not silently compute on 300 rows.
+    """
+    monkeypatch.setenv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", "50")
+    sink = _RecordingSink("clickhouse://test")
+    loader = _CountingLoader(case_rows_per_day=10)
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=loader)
+
+    from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded
+
+    with pytest.raises(TestopsRowCapExceeded) as exc_info:
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+        )
+
+    assert exc_info.value.table == "test_case_results:window"
+    assert "testops_row_cap_exceeded" in str(exc_info.value)

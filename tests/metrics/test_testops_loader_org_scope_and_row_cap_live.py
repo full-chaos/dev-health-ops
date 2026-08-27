@@ -342,6 +342,7 @@ async def test_load_testops_test_data_refuses_oversized_case_results(sink, monke
 
         assert exc_info.value.table == "test_case_results"
         assert exc_info.value.org_id == org_id
+        assert "testops_row_cap_exceeded" in str(exc_info.value)
         after = counter._value.get()
         assert after - before == 1, (
             "DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL did not "

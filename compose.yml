@@ -299,6 +299,12 @@ services:
       DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS:-120}
       DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS:-90}
       DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER:-3}
+      # CHAOS-4350: hard row cap for ClickHouseDataLoader testops reads
+      # (test_suite_results/test_case_results). Without this reaching the
+      # runner container, an operator raising it in the host env/.env per
+      # the guard's own exception message has no effect (codex R2) -- the
+      # child process only sees vars this block passes through.
+      DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS: ${DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS:-200000}
     depends_on:
       postgres:
         condition: service_healthy

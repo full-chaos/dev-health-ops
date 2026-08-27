@@ -119,13 +119,20 @@ class TestopsRowCapExceeded(MemoryError):
     counter below -- not silently folded into a generic MemoryError.
     """
 
+    # CHAOS-4350 (team-lead ruling, 2026-08-26): a fixed token, present
+    # verbatim in both this message and the _enforce_row_cap error log line
+    # below, so a SigNoz log search can distinguish a deliberately-tripped
+    # guard from a real, unbounded OOM even though both surface as the same
+    # MemoryError/resource_exhausted classification upstream.
+    TOKEN = "testops_row_cap_exceeded"
+
     def __init__(self, *, table: str, org_id: str, max_rows: int, fetched: int) -> None:
         self.table = table
         self.org_id = org_id
         self.max_rows = max_rows
         self.fetched = fetched
         super().__init__(
-            f"testops loader row cap exceeded: table={table!r} org_id={org_id!r} "
+            f"{self.TOKEN}: table={table!r} org_id={org_id!r} "
             f"max_rows={max_rows} fetched>={fetched} -- refusing to compute "
             "testops metrics on a partial/truncated result "
             f"(override with {_TESTOPS_LOADER_MAX_ROWS_ENV})"
@@ -148,10 +155,20 @@ def _enforce_row_cap(
     )
 
     if len(rows) > max_rows:
+        # CHAOS-4350 (team-lead ruling): the "testops_row_cap_exceeded"
+        # token below is fixed and must match TestopsRowCapExceeded.TOKEN --
+        # it is the SigNoz-searchable marker that separates a deliberately
+        # tripped guard from a real unbounded OOM (both are, upstream, a
+        # MemoryError classified resource_exhausted).
         logger.error(
-            "testops loader read exceeded the hard row cap; refusing to "
-            "compute on a partial result",
+            "testops_row_cap_exceeded: table=%s org_id=%s max_rows=%d "
+            "fetched=%d -- refusing to compute on a partial result",
+            table,
+            org_id,
+            max_rows,
+            len(rows),
             extra={
+                "event": "testops_row_cap_exceeded",
                 "table": table,
                 "org_id": org_id,
                 "max_rows": max_rows,

@@ -588,12 +588,14 @@ if _PROMETHEUS_AVAILABLE:
     )
     DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING = _prometheus_client_module.Gauge(
         "dev_health_metric_compat_pids_ceiling",
-        "The lowest finite pids/thread ceiling visible from inside this "
-        "container at capacity-gate check time (min of cgroup pids.max, "
-        "RLIMIT_NPROC, and host kernel.threads-max, whichever are finite; "
-        "a documented fallback constant if none are). Exists so an alert "
-        "can compare dev_health_metric_compat_pids_current against the "
-        "REAL current limit instead of a hardcoded number (CHAOS-4317 "
+        "This container's cgroup pids.max at capacity-gate check time, or "
+        "a documented fallback constant when pids.max is unset/unbounded "
+        "or unreadable. RLIMIT_NPROC and host kernel.threads-max are "
+        "deliberately NOT consulted (codex review, PR #1931 round 2): "
+        "neither is scoped to this container's cgroup, so mixing them in "
+        "could under-report a real host-wide exhaustion. Exists so an "
+        "alert can compare dev_health_metric_compat_pids_current against "
+        "the REAL current limit instead of a hardcoded number (CHAOS-4317 "
         "to-do item 3: alert at 80% of this ratio).",
     )
     DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS = _prometheus_client_module.Histogram(

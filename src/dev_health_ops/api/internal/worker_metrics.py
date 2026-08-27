@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import hashlib
 import json
 import math
@@ -1802,6 +1803,18 @@ class _CompatibilityProcessFailure(RuntimeError):
 
 _RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE = 2
 
+# CHAOS-4317 (codex round 3, P1): the errno values a spawn-time OSError must
+# carry to be reclassified as capacity_exhausted/retryable. EAGAIN is the
+# literal 2026-08-26 incident ("pthread_create failed: Resource temporarily
+# unavailable"); ENOMEM/EMFILE/ENFILE are the same class of transient,
+# container-capacity-shaped failure. Anything else -- FileNotFoundError
+# (bad command path), PermissionError (bad file mode) -- is a permanent
+# deployment defect that must NOT be silently retried forever; it falls
+# through to _execute's generic handler instead, same as before this ticket.
+_CAPACITY_EXHAUSTED_SPAWN_ERRNOS = frozenset(
+    {errno.EAGAIN, errno.ENOMEM, errno.EMFILE, errno.ENFILE}
+)
+
 
 async def _poll_peak_rss_bytes(
     pid: int, peak_holder: list[int], *, interval_seconds: float = 0.25
@@ -1897,22 +1910,31 @@ async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
         # CHAOS-4316: makes "every slot occupied" directly observable instead
         # of only inferable after the fact from queued-partition latency, as
         # it was during the 2026-08-26 incident.
+        # CHAOS-4317 (codex round 3, P2): the gauge now goes up in the SAME
+        # try that guarantees its dec() -- previously inc() ran before
+        # _reserve_pids_capacity(), so a timeout/cancellation raised while
+        # still waiting for capacity (i.e. before the try/finally below even
+        # started) left the gauge permanently pinned with no matching dec(),
+        # reading as saturation forever after just one capacity refusal.
         DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE.inc()
-        # CHAOS-4317: reserve pids/thread capacity BEFORE spawning (waits,
-        # bounded and capacity-derived, if none is available -- see
-        # _reserve_pids_capacity's docstring). The reservation is released
-        # here, in a finally wrapping the ENTIRE locked call, so every exit
-        # path -- success, a classified _CompatibilityProcessFailure, or any
-        # other exception -- releases exactly once. Held at this outer layer
-        # (not inside _run_compatibility_process_locked) so the reservation
-        # covers the child's full lifetime with a single, unmissable release
-        # point, rather than needing every return/raise inside the locked
-        # function to remember to release it.
-        _waited, reserved = await _reserve_pids_capacity()
         try:
-            return await _run_compatibility_process_locked(execution)
+            # CHAOS-4317: reserve pids/thread capacity BEFORE spawning
+            # (waits, bounded and capacity-derived, if none is available --
+            # see _reserve_pids_capacity's docstring). The reservation is
+            # released below, in a finally wrapping the ENTIRE locked call,
+            # so every exit path -- success, a classified
+            # _CompatibilityProcessFailure, or any other exception --
+            # releases exactly once. Held at this outer layer (not inside
+            # _run_compatibility_process_locked) so the reservation covers
+            # the child's full lifetime with a single, unmissable release
+            # point, rather than needing every return/raise inside the
+            # locked function to remember to release it.
+            _waited, reserved = await _reserve_pids_capacity()
+            try:
+                return await _run_compatibility_process_locked(execution)
+            finally:
+                await _release_pids_capacity_reservation(reserved)
         finally:
-            await _release_pids_capacity_reservation(reserved)
             DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE.dec()
 
 
@@ -1943,6 +1965,15 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             start_new_session=os.name == "posix",
         )
     except OSError as exc:
+        # CHAOS-4317 (codex round 3, P1): only reclassify spawn failures
+        # whose errno is actually resource-shaped -- see
+        # _CAPACITY_EXHAUSTED_SPAWN_ERRNOS. A FileNotFoundError/
+        # PermissionError here means the runner command itself is broken
+        # (bad path, bad mode), not a transient capacity shortage; retrying
+        # that forever would mask a deployment defect as an operational
+        # hiccup, so it propagates unchanged to _execute's generic handler.
+        if exc.errno not in _CAPACITY_EXHAUSTED_SPAWN_ERRNOS:
+            raise
         DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL.inc()
         raise _CompatibilityProcessFailure(
             f"metric compatibility process capacity_exhausted -- spawn "

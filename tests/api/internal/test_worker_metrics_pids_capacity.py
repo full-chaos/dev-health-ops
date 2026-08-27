@@ -12,6 +12,7 @@ measurement, and the durable (queue, never drop) wait gate that replaces it.
 from __future__ import annotations
 
 import asyncio
+import errno
 import sys
 import uuid
 from pathlib import Path
@@ -534,7 +535,11 @@ async def test_run_compatibility_process_reclassifies_spawn_time_oserror(
     monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, "0.0")
 
     async def raise_eagain(*_args: object, **_kwargs: object) -> None:
-        raise BlockingIOError(11, "Resource temporarily unavailable")
+        # errno.EAGAIN is 11 on Linux (where this actually fired,
+        # 2026-08-26) but a different value on macOS/BSD -- use the
+        # platform's own constant so this test is meaningful on both,
+        # matching how PR #1931 round 3's errno-scoped classifier reads it.
+        raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
 
     monkeypatch.setattr(worker_metrics.asyncio, "create_subprocess_exec", raise_eagain)
 
@@ -546,3 +551,60 @@ async def test_run_compatibility_process_reclassifies_spawn_time_oserror(
     # -- otherwise every subsequent call would see a permanently inflated
     # _PIDS_RESERVED_HOLDER for a child that never actually existed.
     assert worker_metrics._PIDS_RESERVED_HOLDER[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_process_does_not_reclassify_permanent_spawn_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 3, P1) falsifier: a
+    FileNotFoundError from a broken runner command path is a permanent
+    deployment defect, not a transient capacity shortage. Reclassifying it
+    as capacity_exhausted/safe_to_retry would retry it forever, silently
+    masking the real problem as an operational hiccup that never surfaces.
+    It must propagate as the original OSError subtype instead.
+    """
+    _isolate_pids_sources(monkeypatch, tmp_path, pids_max=1000, pids_current=10)
+    monkeypatch.setattr(worker_metrics, "_PIDS_PER_CHILD_COST_HOLDER", [10])
+    monkeypatch.setenv(worker_metrics._PIDS_CAPACITY_SAFETY_MARGIN_FRACTION_ENV, "0.0")
+
+    async def raise_enoent(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(worker_metrics.asyncio, "create_subprocess_exec", raise_enoent)
+
+    with pytest.raises(FileNotFoundError):
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    # The reservation must still be released even on the non-reclassified
+    # path -- the outer finally covers every exit, not just the
+    # capacity_exhausted one.
+    assert worker_metrics._PIDS_RESERVED_HOLDER[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_process_gauge_balances_when_reservation_wait_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4317 codex review (PR #1931 round 3, P2) falsifier: before this
+    fix, DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE.inc() ran before
+    _reserve_pids_capacity(), outside any try/finally. An exception raised
+    while waiting for capacity then left the gauge permanently pinned with
+    no matching dec() -- after one capacity refusal, dashboards would read
+    100% runner saturation forever even with slots free. inc() and dec()
+    must now be paired by a single try/finally that also covers the wait.
+    """
+    from dev_health_ops.metrics.prometheus import (
+        DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE as slots_gauge,
+    )
+
+    before = slots_gauge._value.get()
+
+    async def raise_during_wait() -> tuple[bool, int]:
+        raise RuntimeError("simulated cancellation while awaiting capacity")
+
+    monkeypatch.setattr(worker_metrics, "_reserve_pids_capacity", raise_during_wait)
+
+    with pytest.raises(RuntimeError, match="simulated cancellation"):
+        await worker_metrics._run_compatibility_process(_daily_execution())
+
+    assert slots_gauge._value.get() == before

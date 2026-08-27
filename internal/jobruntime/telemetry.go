@@ -1000,6 +1000,7 @@ func (collector *MetricsCollector) ObserveTeamMetricsDailyRepoCount(repoCount in
 	collector.teamMetricsDailyRepoCount.observe(float64(repoCount))
 	return nil
 }
+
 // ObservePostSyncFanout records the outcome of one post_sync job's decision
 // about whether to re-drive daily metrics for its organization (CHAOS-4263,
 // codex adversarial-review round 2).

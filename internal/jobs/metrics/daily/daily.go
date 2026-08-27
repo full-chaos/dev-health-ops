@@ -367,9 +367,30 @@ type PartitionHandler struct {
 // only cmd/dev-health-worker, which additionally wires the operator-tunable
 // config value via SetLivenessCeiling -- gets a safe, nonzero, work-derived
 // bound rather than silently unbounded behavior.
+//
+// Sized as queueDepthBudget(3) * the Python watchdog's own hard ceiling
+// (120s base + 90s/repo, x3 multiplier -- worker_metrics.py), NOT as an
+// independently-tuned Go-side number. A codex review on this ticket found
+// that the compatibility bridge's per-replica runner semaphore
+// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1) means this
+// deadline -- which starts counting from HTTP-send time, before the
+// request even acquires that semaphore slot -- also has to absorb time
+// spent legitimately queued behind another partition's own full compute
+// window, not only this partition's own compute time. queueDepthBudget=3
+// says: tolerate up to two other partitions each legitimately consuming
+// their full Python hard ceiling ahead of this one on the same replica,
+// plus this partition's own hard ceiling, before concluding something is
+// actually wrong. At the default dailyRepositoryPartitionSize (3 repos),
+// that is base(18m) + perRepo(13m30s)*3 = 58m30s, vs. a 19m30s Python hard
+// ceiling -- a 3x multiple, not the earlier 25m/19.5m (~1.3x) margin that
+// left no room for even one legitimately queued neighbor. If either side's
+// per-repo constants are retuned, keep this ratio: the Go base/perRepo
+// pair must equal 3x the Python side's own base/perRepo*multiplier, so the
+// two formulas cannot silently drift apart the way an independent flat
+// number would.
 const (
-	defaultLivenessCeilingBase    = 10 * time.Minute
-	defaultLivenessCeilingPerRepo = 5 * time.Minute
+	defaultLivenessCeilingBase    = 18 * time.Minute
+	defaultLivenessCeilingPerRepo = 13*time.Minute + 30*time.Second
 )
 
 func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
@@ -390,7 +411,14 @@ func NewPartitionHandler(store Store, publisher Publisher, compatibility Compati
 // the bridge's own progress-based watchdog should always win the race under
 // normal conditions, since it can see per-repo progress the Go side cannot.
 // It exists for when that watchdog itself cannot run (e.g. the bridge's
-// event loop is wedged). NewPartitionHandler already seeds a safe nonzero
+// event loop is wedged). The clock starts at HTTP-send time, before the
+// request acquires the bridge's per-replica runner semaphore slot, so base
+// and perRepo must stay sized to absorb legitimate queueing behind other
+// partitions' compute time, not only this partition's own -- see the
+// queueDepthBudget derivation on defaultLivenessCeilingBase/PerRepo above;
+// an override here should keep the same multiple over the Python side's
+// hard ceiling rather than picking an independent number.
+// NewPartitionHandler already seeds a safe nonzero
 // default (defaultLivenessCeilingBase/PerRepo) -- call this to tune it (a
 // larger/smaller bound) or to explicitly opt out by passing base <= 0,
 // which is the ONLY way to disable the ceiling; simply never calling this

@@ -301,6 +301,45 @@ func TestLivenessCeilingEnabledByDefault(t *testing.T) {
 	}
 }
 
+// TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling is a red-first
+// regression for a codex review finding on this ticket: the Go ceiling's
+// clock starts at HTTP-send time, before the request acquires the
+// compatibility bridge's per-replica runner semaphore
+// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1). An earlier
+// constant pairing (10m base + 5m/repo) gave only a ~1.3x margin over the
+// Python watchdog's own hard ceiling (120s base + 90s/repo, x3 multiplier)
+// at the default 3-repo partition size -- not enough to survive even one
+// legitimately queued neighbor that itself consumes its full Python hard
+// ceiling before yielding the semaphore slot, which would let the Go
+// backstop kill a healthy, merely-queued partition. This asserts the
+// documented queueDepthBudget(3) relationship holds: the Go ceiling at N
+// repos must be at least queueDepthBudget * the Python side's own hard
+// ceiling at N repos, so at least two full-length legitimate neighbors can
+// queue ahead of this partition before the backstop fires.
+func TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling(t *testing.T) {
+	const (
+		pythonHardCeilingBasePerRepo = 3 // worker_metrics.py's hard-ceiling multiplier
+		pythonStallBaseSeconds       = 120 * time.Second
+		pythonStallPerRepoSeconds    = 90 * time.Second
+		queueDepthBudget             = 3
+	)
+	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repoCount := range []int{1, 3, 10} {
+		pythonHardCeiling := pythonHardCeilingBasePerRepo * (pythonStallBaseSeconds + pythonStallPerRepoSeconds*time.Duration(repoCount))
+		goCeiling := handler.livenessCeiling(repoCount)
+		minimumTolerated := queueDepthBudget * pythonHardCeiling
+		if goCeiling < minimumTolerated {
+			t.Fatalf(
+				"repoCount=%d: livenessCeiling=%v, want >= %d x the Python hard ceiling (%v) = %v -- a legitimately queued neighbor could be killed as if hung",
+				repoCount, goCeiling, queueDepthBudget, pythonHardCeiling, minimumTolerated,
+			)
+		}
+	}
+}
+
 // TestLivenessCeilingExplicitZeroOptsOut proves the ONE sanctioned way to
 // disable the backstop: SetLivenessCeiling(0, _). Never calling
 // SetLivenessCeiling at all does NOT disable it (see the default-on test

@@ -216,17 +216,25 @@ type Config struct {
 	// the same work-size-derived shape the Python side uses (never a flat
 	// wall-clock number).
 	//
-	// Defaults are deliberately larger than the Python watchdog's own hard
-	// ceiling (120s base + 90s/repo, x3 multiplier) at every realistic
-	// partition size (dailyRepositoryPartitionSize defaults to 3 repos per
-	// partition) so the bridge's finer-grained, better-telemetered
-	// classification always wins the race under normal conditions -- e.g.
-	// at 3 repos, Python's own hard ceiling is ~19.5 minutes and this
-	// backstop is ~25 minutes. This backstop exists for when that watchdog
-	// itself cannot run (e.g. the bridge's event loop is wedged), not as
-	// the primary mechanism. If either side's constants are retuned,
-	// re-check that this one still exceeds the Python hard ceiling at the
-	// deployment's actual dailyRepositoryPartitionSize.
+	// Defaults are queueDepthBudget(3) x the Python watchdog's own hard
+	// ceiling formula (120s base + 90s/repo, x3 multiplier), not an
+	// independently-tuned Go-side number: base = 3*120s*3 = 18m, perRepo =
+	// 3*90s*3 = 13m30s. This clock starts at HTTP-send time, before the
+	// request acquires the bridge's per-replica runner semaphore slot
+	// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1), so it also has
+	// to absorb time spent legitimately queued behind another partition's
+	// full compute window, not only this partition's own compute time -- a
+	// codex review on this ticket found that an earlier ~1.3x margin (25m
+	// backstop vs. a 19.5m Python hard ceiling, at the default 3-repo
+	// partition size) left no room for even one legitimately queued
+	// neighbor before the backstop could kill a healthy partition. At 3
+	// repos this now yields an ~58.5m backstop against a ~19.5m Python hard
+	// ceiling (3x), tolerating up to two other partitions each consuming
+	// their own full hard ceiling ahead of this one on the same replica.
+	// This backstop exists for when that watchdog itself cannot run (e.g.
+	// the bridge's event loop is wedged), not as the primary mechanism. If
+	// either side's constants are retuned, keep this 3x ratio rather than
+	// re-deriving an ad hoc number.
 	//
 	// Ships ON by default with these constants (team-lead ruling
 	// 2026-08-26): deployed compose/helm manifests do not set new env vars,
@@ -399,7 +407,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.DailyPartitionLivenessCeilingBase, err = durationEnvAllowExplicitZero(
 		lookup,
 		"DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_BASE",
-		10*time.Minute,
+		18*time.Minute,
 		30*time.Second,
 		30*time.Minute,
 	)
@@ -409,7 +417,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.DailyPartitionLivenessCeilingPerRepo, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_PER_REPO",
-		5*time.Minute,
+		13*time.Minute+30*time.Second,
 		1*time.Second,
 		30*time.Minute,
 	)

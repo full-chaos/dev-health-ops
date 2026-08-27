@@ -290,6 +290,15 @@ services:
       # not an aggregate memory bound at all.
       DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
       DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}
+      # CHAOS-4316: the daily-partition progress-stall watchdog inside
+      # worker_metrics.py (kills a runner subprocess that stops reporting
+      # per-repo progress). Ships ON by default with these three values;
+      # set the base to 0 to disable the watchdog entirely -- the only
+      # sanctioned opt-out. Without these lines a host/.env override never
+      # reaches this container (codex review, CHAOS-4316).
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS:-120}
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS:-90}
+      DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER: ${DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER:-3}
     depends_on:
       postgres:
         condition: service_healthy

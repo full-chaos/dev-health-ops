@@ -758,6 +758,25 @@ block AND `compose.go-workers.yml`'s `flag-bridge-url-heavy` anchor added
 manually on the next prod touch. This lane has no prod access; flagging for
 whoever runs deploy 5 to carry into that host's compose file.
 
+**Hand-maintained stacks that wire the bridge via env, not the flag**:
+chris's shared local stack (also outside this repo, `dev-health` root
+`compose.yml` + `compose/compose.go.workers.yml`) sets the bridge target
+on its go-worker services via the `WORKER_OPERATIONAL_BRIDGE_URL`
+environment variable on a shared anchor, not the `--operational-bridge-url`
+CLI flag this ticket's `flag-bridge-url-heavy` anchor uses. Both surfaces
+resolve the SAME setting -- `internal/platform/config/options.go`
+declares `operational-bridge-url`/`WORKER_OPERATIONAL_BRIDGE_URL` as one
+option with both a flag and an env name, and `config.go`'s
+`OperationalBridgeURL` resolves through `resolve.go`'s `layeredLookup`
+(flag > env > default), so the env var alone is genuinely honoured when
+no flag is also passed. For a stack like that: set
+`WORKER_OPERATIONAL_BRIDGE_URL=http://metrics-api:8000` on the ONE
+service that runs the `metrics` queue only -- setting it on the shared
+anchor the way `WORKER_OPERATIONAL_BRIDGE_URL`'s default is defined today
+would repoint every worker's bridge traffic at `metrics-api`, the same
+over-broad mistake `flag-bridge-url-heavy` was written to avoid for the
+tracked overlay.
+
 **Not done here (deliberately out of scope, per team-lead)**: the live-stack
 proof that `api`'s `dev_health_metric_compat_runner_slots_in_use` gauge
 drops to 0 and `metrics-api`'s rises above 0 during a real fanout -- that's

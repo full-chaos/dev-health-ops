@@ -176,6 +176,58 @@ def test_metric_runner_encodes_a_fixed_bounded_outcome() -> None:
     ) == {"outcome": {"family": "complexity", "rows": 1}}
 
 
+def test_rlimit_as_backstop_clamped_below_a_smaller_container_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex R1 (PR #1940): the raw 4x multiplier on the 640 MiB default is
+    2.5 GiB, which EXCEEDS the smallest documented deployment (1G shared
+    `api` container) -- a backstop bigger than its own container can never
+    fire before the kernel's memcg OOM killer does, silently reintroducing
+    an un-classified kill. When the real cgroup ceiling is observable and
+    smaller than limit*multiplier, the backstop must be clamped to leave
+    the same headroom the 640 MiB default itself reserves under a 1G
+    container."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(640 * 1024 * 1024)
+    )
+    # A 1G container: 640 MiB * 4 = 2.5 GiB would exceed it entirely.
+    monkeypatch.setattr(
+        worker_metrics_runner,
+        "_cgroup_memory_max_bytes",
+        lambda: 1024 * 1024 * 1024,
+    )
+    backstop = worker_metrics_runner._rlimit_as_backstop_bytes()
+    assert backstop == (1024 * 1024 * 1024) - (384 * 1024 * 1024)
+    assert backstop < 640 * 1024 * 1024 * 4
+
+
+def test_rlimit_as_backstop_uses_the_raw_multiplier_when_cgroup_is_unobservable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-Linux dev, cgroup v1, or no permission -- must not raise or
+    silently zero out the backstop; falls back to the plain multiplier."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(64 * 1024 * 1024)
+    )
+    monkeypatch.setattr(worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: None)
+    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024 * 4
+
+
+def test_rlimit_as_backstop_falls_back_when_cgroup_smaller_than_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cgroup smaller than the reserved headroom is misconfigured for
+    this workload -- fall back to the configured limit alone rather than
+    a zero/negative rlimit, which would reject every allocation outright."""
+    monkeypatch.setenv(
+        worker_metrics_runner._MEMORY_LIMIT_ENV_KEY, str(64 * 1024 * 1024)
+    )
+    monkeypatch.setattr(
+        worker_metrics_runner, "_cgroup_memory_max_bytes", lambda: 100 * 1024 * 1024
+    )
+    assert worker_metrics_runner._rlimit_as_backstop_bytes() == 64 * 1024 * 1024
+
+
 @pytest.mark.asyncio
 async def test_metric_compatibility_process_returns_fixed_json(
     monkeypatch: pytest.MonkeyPatch,

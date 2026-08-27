@@ -696,10 +696,16 @@ the `api` container's own memory limit:
   not resident memory, and a 2026-08-27 prod incident showed it firing a
   classified `MemoryError` while real RSS stayed hundreds of MB under the
   same configured bound. The runner still sets a generous `RLIMIT_AS`
-  backstop (`_RLIMIT_AS_BACKSTOP_MULTIPLIER`, 4x the configured bound) purely
-  to convert a pathological allocation spike the parent's poll interval
-  might miss into a `MemoryError` it can catch and report, rather than an
-  un-classified kernel OOM kill; `RLIMIT_DATA` was dropped entirely (it only
+  backstop (`_RLIMIT_AS_BACKSTOP_MULTIPLIER`, 4x the configured bound,
+  clamped below this container's real cgroup v2 ceiling when observable —
+  `_cgroup_memory_max_bytes`/`_rlimit_as_backstop_bytes` — since the raw
+  4x multiplier on the 640 MiB default is 2.5 GiB, bigger than the 1G
+  shared `api` container itself, which would let the kernel's own memcg
+  OOM killer fire first and defeat the whole point of a classified
+  backstop; codex review, PR #1940 round 1) purely to convert a
+  pathological allocation spike the parent's poll interval might miss into
+  a `MemoryError` it can catch and report, rather than an un-classified
+  kernel OOM kill; `RLIMIT_DATA` was dropped entirely (it only
   bounds the brk/sbrk heap, and glibc routes allocations at or above its
   mmap threshold — exactly clickhouse_connect's large String/bytes column
   buffers — through mmap instead, so it was never a real backstop for this

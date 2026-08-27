@@ -76,7 +76,23 @@ _DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024  # 640 MiB
 # exactly the class of large String/bytes buffer clickhouse_connect
 # materializes per column, so RLIMIT_DATA was never actually a backstop for
 # this failure mode, only a false sense of one.
+#
+# codex R1 (PR #1940): the raw multiplier alone is not enough -- at the
+# 640 MiB default this is 2.5 GiB, which EXCEEDS the smallest documented
+# container limit (1G, shared `api` service in
+# deploy/docker-compose/compose.production.yml). A backstop bigger than the
+# container it runs in can never fire before the kernel's own memcg OOM
+# killer does, silently reintroducing the un-classified-kill problem
+# CHAOS-4264 exists to close. _cgroup_memory_max_bytes reads this
+# container's REAL cgroup v2 ceiling (when available -- cgroup v1, no
+# permission, or a non-container dev run all return None) and the backstop
+# is clamped to leave the SAME ~384 MiB of headroom for the parent api
+# process that the 640 MiB default itself reserves under a 1G container,
+# so the backstop's guarantee ("fires before the container-wide OOM
+# killer") holds regardless of which of this repo's documented container
+# sizes (1G shared api, 2G dedicated metrics-api) it actually runs under.
 _RLIMIT_AS_BACKSTOP_MULTIPLIER = 4
+_RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES = 384 * 1024 * 1024  # 384 MiB
 
 
 def _configured_memory_limit_bytes() -> int:
@@ -90,20 +106,61 @@ def _configured_memory_limit_bytes() -> int:
     return value if value > 0 else _DEFAULT_MEMORY_LIMIT_BYTES
 
 
+def _cgroup_memory_max_bytes() -> int | None:
+    """Read this container's real cgroup v2 memory ceiling, if observable.
+
+    Returns None (not a sentinel int) for every case where the value cannot
+    be trusted: cgroup v1, no permission, the file absent (non-container
+    dev run), or an unbounded "max" ceiling -- callers must fall back to
+    the plain multiplier in all of these, not treat None as "no limit
+    applies."
+    """
+    try:
+        with open("/sys/fs/cgroup/memory.max", encoding="ascii") as handle:
+            raw = handle.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    if raw == "max":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _rlimit_as_backstop_bytes() -> int:
+    """The RLIMIT_AS backstop: the configured multiplier, clamped to leave
+    headroom under this container's real cgroup ceiling when one is
+    observable. See the module-level comment above
+    ``_RLIMIT_AS_BACKSTOP_MULTIPLIER`` for why the unclamped multiplier
+    alone is not sufficient."""
+    limit = _configured_memory_limit_bytes() * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    cgroup_max = _cgroup_memory_max_bytes()
+    if cgroup_max is None:
+        return limit
+    ceiling = cgroup_max - _RLIMIT_AS_BACKSTOP_CONTAINER_HEADROOM_BYTES
+    if ceiling <= 0:
+        # A cgroup smaller than the headroom itself is misconfigured for
+        # this workload entirely -- fall back to the configured limit alone
+        # (still a real bound, just not headroom-derived) rather than a
+        # zero/negative rlimit, which would reject every allocation.
+        return _configured_memory_limit_bytes()
+    return min(limit, ceiling)
+
+
 def _apply_memory_limit() -> None:
     """Set a generous RLIMIT_AS backstop; real enforcement is the parent's.
 
-    See the module-level comment above ``_RLIMIT_AS_BACKSTOP_MULTIPLIER``
-    for why this is a backstop (a multiplier above the configured RSS
-    budget), not the primary bound (RSS, polled and enforced by the
-    parent). POSIX-only: the ``resource`` module does not exist on Windows,
-    and this process only ever runs inside the Linux container image.
+    See ``_rlimit_as_backstop_bytes`` for how the backstop is derived.
+    POSIX-only: the ``resource`` module does not exist on Windows, and this
+    process only ever runs inside the Linux container image.
     """
     try:
         import resource
     except ImportError:
         return
-    limit = _configured_memory_limit_bytes() * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    limit = _rlimit_as_backstop_bytes()
     rlimit = getattr(resource, "RLIMIT_AS", None)
     if rlimit is None:
         return

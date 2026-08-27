@@ -93,7 +93,19 @@ func retryClaim(err error) error {
 // resource-exhausted runner without anyone having to read Sentry/dmesg.
 // Anything else (including the pre-existing ErrUnavailable) is unaffected --
 // Retryable with no reason, exactly as before this ticket.
+//
+// ErrCompatibilityAmbiguousStuck (CHAOS-4319) is the one exception: the
+// Python ledger row it names can never move again without a human /repair
+// call, so marking it Retryable would only ever spend the job's whole
+// attempt budget reproducing the same 409 before River discards it with no
+// trace. It is marked Permanent instead -- PartitionHandler.Work has
+// already durably persisted the failure (failPartitionPermanently) by the
+// time this return value reaches River, so Permanent here means "stop
+// retrying a lost cause," never "the failure went unrecorded."
 func retryCompatibilityError(err error) error {
+	if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
+		return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonAmbiguousRefused)
+	}
 	marked := jobruntime.Retryable(err)
 	switch {
 	case errors.Is(err, ErrCompatibilityProcessSignaled):
@@ -189,6 +201,14 @@ type Store interface {
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
 	ReleasePartition(context.Context, PartitionClaim) error
+	// FailPartitionPermanently durably terminalizes a partition whose
+	// compatibility-bridge ledger row is stuck ambiguous (CHAOS-4319):
+	// unlike ReleasePartition (status='failed', silently re-dispatchable),
+	// this sets status='failed_permanent' with a bounded reason and is
+	// deliberately excluded from DispatchablePartitions's reclaim set, so a
+	// partition that can never succeed without a human /repair call stops
+	// being retried instead of spinning forever back into the same 409.
+	FailPartitionPermanently(ctx context.Context, claim PartitionClaim, reason string) error
 	ClaimFinalize(context.Context, string) (*FinalizeClaim, error)
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
@@ -308,15 +328,16 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 }
 
 type PartitionHandler struct {
-	store             Store
-	publisher         Publisher
-	compatibility     CompatibilityExecutor
-	sourceChecker     SourceDataChecker
-	zeroRowsObserver  jobruntime.DailyMetricsZeroRowsObserver
-	nativeFamilies    map[string]NativeFamilyExecutor
-	nativeFamilyNames []string
-	nativeObserver    jobruntime.DailyMetricsNativeFamilyObserver
-	nativeFamiliesNow func() time.Time
+	store               Store
+	publisher           Publisher
+	compatibility       CompatibilityExecutor
+	sourceChecker       SourceDataChecker
+	zeroRowsObserver    jobruntime.DailyMetricsZeroRowsObserver
+	nativeFamilies      map[string]NativeFamilyExecutor
+	nativeFamilyNames   []string
+	nativeObserver      jobruntime.DailyMetricsNativeFamilyObserver
+	nativeFamiliesNow   func() time.Time
+	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
 }
 
 func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
@@ -378,6 +399,18 @@ func (handler *PartitionHandler) SetNativeFamilyObserver(observer jobruntime.Dai
 		return
 	}
 	handler.nativeObserver = observer
+}
+
+// SetCompatRetryObserver wires the optional telemetry observer for a
+// partition durably persisted as failed_permanent after an unresolvable
+// ambiguous_refused response (CHAOS-4319). Never gates behavior on its own:
+// a nil observer (the default) still fails the partition and writes the
+// durable record, it just does not also increment the counter.
+func (handler *PartitionHandler) SetCompatRetryObserver(observer jobruntime.DailyMetricsCompatRetryObserver) {
+	if handler == nil {
+		return
+	}
+	handler.compatRetryObserver = observer
 }
 
 // computeNativeFamilies runs every registered native family executor for one
@@ -461,6 +494,34 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition, skipFamilies)
 		},
 	); err != nil {
+		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
+			// CHAOS-4319: this ledger row will refuse every future attempt
+			// identically until a human /repair call moves it -- releasing
+			// back to 'failed' (silently re-dispatchable) would only queue
+			// up more guaranteed 409s. Persist the terminal outcome instead
+			// of letting River's eventual discard be the only trace.
+			//
+			// codex round 1 (P1): the durable write itself can fail (a
+			// transient DB error, or the lease already expired by the time
+			// this 5s-detached call runs). Permanent tells River to stop
+			// retrying -- that must never be returned unless the write is
+			// CONFIRMED to have landed, or the partition is lost with
+			// nothing durable to show for it, exactly the failure mode this
+			// ticket exists to close. A failed write falls back to ordinary
+			// Retryable instead: River keeps trying, and either a later
+			// attempt's write succeeds, or the existing discard-after-
+			// exhausted-attempts path is no worse than before this ticket.
+			if failPartitionPermanently(handler.store, ctx, *claim, jobruntime.ReasonAmbiguousRefused.String()) {
+				if handler.compatRetryObserver != nil {
+					_ = handler.compatRetryObserver.ObserveDailyMetricsCompatRetry(
+						jobruntime.DailyMetricsCompatRetryDecisionPersistedFailed,
+					)
+				}
+				return retryCompatibilityError(err)
+			}
+			releasePartition(handler.store, ctx, *claim)
+			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonAmbiguousRefused)
+		}
 		releasePartition(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
 	}
@@ -596,6 +657,22 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleasePartition(releaseCtx, claim)
+}
+
+// failPartitionPermanently durably terminalizes a partition stuck ambiguous
+// (CHAOS-4319), mirroring releasePartition's own-context detachment so the
+// write still lands even when the caller's ctx is already done.
+// failPartitionPermanently durably terminalizes a partition stuck ambiguous
+// (CHAOS-4319), mirroring releasePartition's own-context detachment so the
+// write still lands even when the caller's ctx is already done. Returns
+// whether the write actually succeeded -- the caller must not classify the
+// job Permanent (stop retrying) unless this is true, or a failed durable
+// write would silently drop the partition exactly like the bug this ticket
+// fixes.
+func failPartitionPermanently(store Store, ctx context.Context, claim PartitionClaim, reason string) bool {
+	failCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.FailPartitionPermanently(failCtx, claim, reason) == nil
 }
 
 func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {

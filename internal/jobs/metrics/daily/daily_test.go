@@ -277,6 +277,134 @@ func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
 	}
 }
 
+// TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding is
+// the CHAOS-4319 red-first proof. Before this ticket's fix, an
+// ambiguous_refused response whose ledger state is "ambiguous" was
+// classified identically to every other compatibility-bridge failure --
+// unconditionally Retryable, released back to 'failed' (silently
+// re-dispatchable), with no durable record of why. River would keep
+// re-claiming a partition that could only ever reproduce the same 409 until
+// its attempt budget ran out, then discard the job -- the partition simply
+// vanished, with nothing durable left behind explaining the loss. This test
+// drives Handler.Work with a fake bridge that always returns
+// ErrCompatibilityAmbiguousStuck (the state=="ambiguous" classification) and
+// asserts: (1) the error is Permanent, not Retryable -- River stops
+// retrying a lost cause instead of burning its whole attempt budget on
+// guaranteed 409s; (2) the partition is durably persisted via
+// FailPartitionPermanently (not the ordinary, re-dispatchable
+// ReleasePartition path); (3) the bounded telemetry decision fires. Calling
+// Work a second time proves the SAME durable outcome recurs deterministically
+// rather than eventually silently discarding -- there is no attempt count
+// after which the failure stops being recorded.
+func TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding(t *testing.T) {
+	newHandler := func() (*PartitionHandler, *fakeStore, *recordingCompatRetryObserver) {
+		store := &fakeStore{
+			partitionClaim: &PartitionClaim{
+				Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+				Token:         "00000000-0000-4000-8000-000000000003",
+				LeaseDuration: 30 * time.Millisecond,
+			},
+			run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		}
+		handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousStuck})
+		if err != nil {
+			t.Fatal(err)
+		}
+		observer := &recordingCompatRetryObserver{}
+		handler.SetCompatRetryObserver(observer)
+		return handler, store, observer
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		handler, store, observer := newHandler()
+		err := handler.Work(context.Background(), partitionExecution())
+		if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+			t.Fatalf("attempt %d: ambiguous-stuck failure = %v, want permanent", attempt, err)
+		}
+		if !errors.Is(err, ErrCompatibilityAmbiguousStuck) {
+			t.Fatalf("attempt %d: err = %v, want it to unwrap to ErrCompatibilityAmbiguousStuck", attempt, err)
+		}
+		if store.permanentFailures != 1 {
+			t.Fatalf("attempt %d: permanentFailures = %d, want 1 (durable record must be written)", attempt, store.permanentFailures)
+		}
+		if store.permanentFailureReason != jobruntime.ReasonAmbiguousRefused.String() {
+			t.Fatalf("attempt %d: permanentFailureReason = %q, want %q", attempt, store.permanentFailureReason, jobruntime.ReasonAmbiguousRefused.String())
+		}
+		if store.partitionReleases != 0 {
+			t.Fatalf("attempt %d: partitionReleases = %d, want 0 -- a stuck-ambiguous partition must not go back to the silently re-dispatchable 'failed' status", attempt, store.partitionReleases)
+		}
+		if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionPersistedFailed {
+			t.Fatalf("attempt %d: observer decisions = %v, want exactly [persisted_failed]", attempt, observer.decisions)
+		}
+	}
+}
+
+// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable is the
+// codex-round-1 (P1) red-first proof: the detached, 5s-timeout-boxed
+// FailPartitionPermanently write can itself fail (a transient DB error, or
+// the lease already expired by the time it runs). Before this fix, Work
+// classified the job Permanent unconditionally whenever the bridge
+// response was ErrCompatibilityAmbiguousStuck, regardless of whether the
+// durable write actually landed -- so a failed write meant River stopped
+// retrying with NOTHING durable to show for it, the exact silent-loss shape
+// CHAOS-4319 exists to close. A failed write must fall back to ordinary
+// Retryable so River keeps trying instead of canceling on an unconfirmed
+// write.
+func TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                 Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		permanentFailureErr: ErrUnavailable,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousStuck})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("failed durable write = %v, want retryable (never Permanent on an unconfirmed write)", err)
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("partitionReleases = %d, want 1 -- the fallback path must still release the claim", store.partitionReleases)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- a failed write is not a persisted_failed outcome", observer.decisions)
+	}
+}
+
+// TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable is the
+// control case: a live concurrent claim (state=="executing") is a genuine,
+// self-resolving overlap, not a stuck ledger row, and must keep the
+// pre-CHAOS-4319 Retryable/ReleasePartition behavior exactly.
+func TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousRefused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("transient ambiguous_refused = %v, want retryable", err)
+	}
+	if store.partitionReleases != 1 || store.permanentFailures != 0 {
+		t.Fatalf("partitionReleases=%d permanentFailures=%d, want 1/0", store.partitionReleases, store.permanentFailures)
+	}
+}
+
 func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
@@ -507,6 +635,9 @@ type fakeStore struct {
 	materialized                  int
 	dispatchListCalls             int
 	materializedAfterDispatchList bool
+	permanentFailures             int
+	permanentFailureReason        string
+	permanentFailureErr           error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -552,6 +683,14 @@ func (store *fakeStore) CompletePartition(
 }
 func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error {
 	store.partitionReleases++
+	return nil
+}
+func (store *fakeStore) FailPartitionPermanently(_ context.Context, _ PartitionClaim, reason string) error {
+	store.permanentFailures++
+	if store.permanentFailureErr != nil {
+		return store.permanentFailureErr
+	}
+	store.permanentFailureReason = reason
 	return nil
 }
 func (store *fakeStore) ClaimFinalize(context.Context, string) (*FinalizeClaim, error) {
@@ -658,6 +797,20 @@ func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.calls = append(observer.calls, recordingNativeFamilyObservation{family: family, outcome: outcome, rowsWritten: rowsWritten})
+	return nil
+}
+
+type recordingCompatRetryObserver struct {
+	mu        sync.Mutex
+	decisions []jobruntime.DailyMetricsCompatRetryDecision
+}
+
+func (observer *recordingCompatRetryObserver) ObserveDailyMetricsCompatRetry(
+	decision jobruntime.DailyMetricsCompatRetryDecision,
+) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.decisions = append(observer.decisions, decision)
 	return nil
 }
 

@@ -24,22 +24,40 @@ const maxCompatibilityResponseBytes = 4 * 1024
 var (
 	ErrCompatibilityProcessSignaled   = errors.New("daily metrics compatibility runner was terminated by a signal")
 	ErrCompatibilityResourceExhausted = errors.New("daily metrics compatibility runner exceeded its memory bound")
-	ErrCompatibilityAmbiguousRefused  = errors.New("daily metrics compatibility execution claim was refused")
+	// ErrCompatibilityAmbiguousRefused marks a claim refused because the
+	// ledger row's ORIGINAL claim is still live ("state": "executing") -- a
+	// genuine concurrent overlap that resolves itself once that claim
+	// finishes or its lease expires. Retryable, exactly as before CHAOS-4319.
+	ErrCompatibilityAmbiguousRefused = errors.New("daily metrics compatibility execution claim was refused")
+	// ErrCompatibilityAmbiguousStuck marks a claim refused because the ledger
+	// row is stuck at "ambiguous" (CHAOS-4319). worker_metrics.py's
+	// _reserve_execution never auto-heals this state -- only a human
+	// /metric-executions/v1/{id}/repair call can move it again, so retrying
+	// blindly can only ever reproduce the same 409 until River's attempt
+	// budget runs out and silently discards the job. Permanent, not
+	// Retryable: see retryCompatibilityError and PartitionHandler.Work's
+	// failPartitionPermanently call.
+	ErrCompatibilityAmbiguousStuck = errors.New("daily metrics compatibility execution ledger is stuck ambiguous")
 )
 
 // compatibilityErrorBody is the shape of a non-2xx response body from the
 // Python bridge. FastAPI's HTTPException(detail={...}) serializes as
 // {"detail": {...}} -- NOT a flat top-level object -- so "reason" (and
 // everything else worker_metrics._execute/_reserve_execution puts in
-// detail) is nested one level down. Only "reason" is read here, and only
-// against the fixed switch below -- an unrecognized or missing reason falls
-// back to the pre-existing ErrUnavailable, exactly as if this field did not
-// exist (codex R2: verified against a real FastAPI TestClient response
-// before this shape was checked in -- an earlier version of this struct
-// looked for a top-level "reason" and silently never matched anything).
+// detail) is nested one level down. Only "reason" and "state" are read
+// here, and only against the fixed switches below -- an unrecognized or
+// missing reason falls back to the pre-existing ErrUnavailable, exactly as
+// if this field did not exist (codex R2: verified against a real FastAPI
+// TestClient response before this shape was checked in -- an earlier
+// version of this struct looked for a top-level "reason" and silently never
+// matched anything). "state" (CHAOS-4319) distinguishes a genuinely stuck
+// ambiguous_refused claim ("ambiguous") from a merely transient one
+// ("executing") -- _reserve_execution has always sent this field; Go simply
+// did not read it until this ticket.
 type compatibilityErrorBody struct {
 	Detail struct {
 		Reason string `json:"reason"`
+		State  string `json:"state"`
 	} `json:"detail"`
 }
 
@@ -54,6 +72,9 @@ func classifyCompatibilityError(data []byte) error {
 	case "resource_exhausted":
 		return ErrCompatibilityResourceExhausted
 	case "ambiguous_refused":
+		if body.Detail.State == "ambiguous" {
+			return ErrCompatibilityAmbiguousStuck
+		}
 		return ErrCompatibilityAmbiguousRefused
 	default:
 		return ErrUnavailable

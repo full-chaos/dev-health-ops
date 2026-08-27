@@ -51,9 +51,12 @@ from sqlalchemy.engine import Engine, make_url
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 
-# The last migration that touches daily_metrics_runs: 0057 creates the table,
-# 0095 widens ck_daily_metrics_run_status with the 'no_repositories' outcome.
-_TARGET_REVISION = "0095"
+# The last migration that touches daily_metrics_runs (or a table this gate's
+# query joins against): 0057 creates the table, 0095 widens
+# ck_daily_metrics_run_status with the 'no_repositories' outcome, 0113 adds
+# daily_metrics_partitions.status='failed_permanent' (CHAOS-4319) -- this
+# gate's query joins against that column to surface a stuck partition.
+_TARGET_REVISION = "0113"
 
 _ORG = "00000000-0000-4000-8000-00000000a001"
 _OTHER_ORG = "00000000-0000-4000-8000-00000000a002"
@@ -169,15 +172,17 @@ def _insert_run(
     org_id: str = _ORG,
     target_day: date = _DAY,
     created_at: datetime = _BASE_TIME,
-) -> None:
+) -> uuid.UUID:
     """Seed one daily_metrics_runs row, honouring the migration's constraints.
 
     ``ck_daily_metrics_finalize_lease`` (alembic 0057) requires a claim token
     and a lease expiry for -- and only for -- ``finalization_status='running'``,
     so the fixture supplies exactly what production supplies
-    (internal/jobs/metrics/daily/postgres.go:770-775).
+    (internal/jobs/metrics/daily/postgres.go:770-775). Returns the run id so
+    callers can seed dependent daily_metrics_partitions rows.
     """
     claiming = finalization_status == "running"
+    run_id = uuid.uuid4()
     with engine.begin() as connection:
         connection.execute(
             sa.text(
@@ -196,7 +201,7 @@ def _insert_run(
                 """
             ),
             {
-                "id": uuid.uuid4(),
+                "id": run_id,
                 "org_id": org_id,
                 "target_day": target_day.isoformat(),
                 "generation": generation,
@@ -211,6 +216,27 @@ def _insert_run(
                 else None,
                 "created_at": created_at,
             },
+        )
+    return run_id
+
+
+def _insert_failed_permanent_partition(engine: Engine, *, run_id: uuid.UUID) -> None:
+    """Seed one daily_metrics_partitions row stuck failed_permanent
+    (CHAOS-4319) under ``run_id``."""
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO daily_metrics_partitions (
+                    id, run_id, ordinal, repo_ids, status, failure_reason,
+                    attempt_count, created_at, updated_at
+                ) VALUES (
+                    :id, :run_id, 0, '[]'::jsonb, 'failed_permanent',
+                    'ambiguous_refused', 5, now(), now()
+                )
+                """
+            ),
+            {"id": uuid.uuid4(), "run_id": run_id},
         )
 
 
@@ -462,6 +488,76 @@ def test_canceled_run_is_abandoned_rather_than_in_flight(
     )
 
     assert _ready() is True
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-4319: a stuck failed_permanent partition surfaced without SQL
+# ---------------------------------------------------------------------------
+
+
+def test_stuck_partition_is_surfaced_without_changing_the_gate_verdict(
+    daily_metrics_runs: Engine,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed_permanent partition (CHAOS-4319) can never move again without
+    a human /repair call -- unlike plain 'failed', River retrying will not
+    resolve it. This must not change the gate's existing return-value
+    contract (any non-succeeded finalization_status already correctly means
+    "skip"); it must only make WHY this run may never finalize visible in
+    logs, so an operator does not have to run SQL against
+    daily_metrics_partitions to find it."""
+    run_id = _insert_run(
+        daily_metrics_runs,
+        generation=_FANOUT_GENERATION,
+        status="running",
+        finalization_status="pending",
+    )
+    _insert_failed_permanent_partition(daily_metrics_runs, run_id=run_id)
+
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.workers.recommendations_tasks"
+    ):
+        result = _ready()
+
+    assert result is False, "the gate's existing verdict must be unchanged"
+    stuck_records = [
+        record
+        for record in caplog.records
+        if record.name == "dev_health_ops.workers.recommendations_tasks"
+        and record.levelno == logging.WARNING
+        and "failed_permanent" in record.getMessage()
+    ]
+    assert stuck_records, (
+        "a failed_permanent partition must be logged at WARNING so it is "
+        "visible without a human running SQL against daily_metrics_partitions"
+    )
+    assert any(_ORG in record.getMessage() for record in stuck_records)
+
+
+def test_no_stuck_partition_stays_silent(
+    daily_metrics_runs: Engine,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Control: an ordinary unfinished run (no failed_permanent partition)
+    must not emit the stuck-partition warning."""
+    _insert_run(
+        daily_metrics_runs,
+        generation=_FANOUT_GENERATION,
+        status="running",
+        finalization_status="pending",
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.workers.recommendations_tasks"
+    ):
+        result = _ready()
+
+    assert result is False
+    assert not any(
+        "failed_permanent" in record.getMessage()
+        for record in caplog.records
+        if record.name == "dev_health_ops.workers.recommendations_tasks"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -145,9 +145,22 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityResourceExhausted,
 		},
 		{
-			name:       "refused claim on a 409",
+			// CHAOS-4319: state=="ambiguous" means the ledger row can never
+			// move again without a human /repair call -- this is the stuck,
+			// permanent case, not a transient one worth retrying blindly.
+			name:       "refused claim stuck ambiguous on a 409",
 			statusCode: http.StatusConflict,
 			body:       `{"detail":{"message":"Execution outcome requires readback","state":"ambiguous","reason":"ambiguous_refused"}}`,
+			wantErr:    ErrCompatibilityAmbiguousStuck,
+		},
+		{
+			// CHAOS-4319: state=="executing" means a DIFFERENT claim on the
+			// same execution identity is still live -- a genuine, transient
+			// overlap that resolves itself once that claim finishes or its
+			// lease expires. Must stay the pre-ticket Retryable sentinel.
+			name:       "refused claim transient collision on a 409",
+			statusCode: http.StatusConflict,
+			body:       `{"detail":{"message":"Execution outcome requires readback","state":"executing","reason":"ambiguous_refused"}}`,
 			wantErr:    ErrCompatibilityAmbiguousRefused,
 		},
 		{

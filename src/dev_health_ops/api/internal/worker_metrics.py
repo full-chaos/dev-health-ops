@@ -37,6 +37,7 @@ from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL,
+    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES,
 )
 from dev_health_ops.metrics.remaining_scope_contract import (
@@ -835,6 +836,13 @@ async def _mark_retry_authorized(
         {"id": str(execution.id), "detail": detail[:1024]},
     )
     await session.commit()
+    # CHAOS-4319: mirrors the Go-side dev_health_metric_compat_retry_total
+    # (internal/jobruntime) "persisted_failed" label -- this is the
+    # "retry_authorized" half of the same bounded decision axis, emitted
+    # from whichever side actually made the call.
+    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL.labels(
+        worker_kind=execution.worker_kind, decision="retry_authorized"
+    ).inc()
 
 
 _MARK_SUCCEEDED_REMAINING_PARTITION = """
@@ -1404,6 +1412,27 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # despite having written rows, if worker_kind alone gated this. Both
     # non-partition paths stay ambiguous unconditionally, exactly as before
     # this ticket.
+    #
+    # CHAOS-4319 (considered, NOT applied): an earlier version of this
+    # change also dropped `not progress_seen` for daily/partition, reasoning
+    # that every table run_daily_metrics_job writes is an append-only
+    # MergeTree table readers dedup by design (platform contract), so a
+    # repeated write should be a harmless duplicate. Codex round-1 review
+    # falsified that premise: file_metrics_daily (the file_hotspots family)
+    # IS append-only, but its readers (api/queries/heatmap.py's
+    # fetch_hotspot_risk, and its sibling code-hotspots query) `SUM(...)`
+    # over the raw rows with no `argMax`/`computed_at` dedup at all -- a
+    # retry-caused duplicate row silently inflates hotspot/churn scores, not
+    # a "harmless duplicate a reader already collapses." Proving the
+    # append-only+reader-dedup property per table (team-lead's CHAOS-4319 GO
+    # condition 1) is real work spanning every family in families.json and
+    # every reader of every table it writes -- out of this ticket's scope.
+    # `not progress_seen` stays required here; CHAOS-4319's durable-truth
+    # fix (Go-side FailPartitionPermanently + the state-aware classification
+    # above) still fully closes the "silently discarded" bug on its own --
+    # a progress-having failure now durably persists failed_permanent
+    # (visible, with a reason and telemetry) the FIRST time it lands
+    # ambiguous, rather than looping through 5 guaranteed 409s first.
     safe_to_retry = (
         execution.worker_kind == "daily"
         and execution.operation == "partition"

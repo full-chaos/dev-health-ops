@@ -143,6 +143,12 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				// CHAOS-4319: wires the terminal ambiguous_refused counter.
+				// Optional, like every other observer here: telemetry must
+				// never gate the durable failed_permanent write itself.
+				if compatRetryObserver, ok := observer.(jobruntime.DailyMetricsCompatRetryObserver); ok {
+					handler.SetCompatRetryObserver(compatRetryObserver)
+				}
 				// Optional (CHAOS-4263): a partition whose source data exists
 				// but whose family output is empty must not report success.
 				// Both dependencies are already validated non-nil above, so

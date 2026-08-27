@@ -285,9 +285,12 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
 
     await loader.load_testops_historical_failed_case_names(start, end, repo_id=repo_id)
 
-    assert mock_query_dicts.call_count == 1
-    sql = mock_query_dicts.call_args.args[1]
-    params = mock_query_dicts.call_args.args[2]
+    # Two queries now: the GROUP BY aggregate, and (codex round 2) a second
+    # unfiltered count() for the ROWS_AGGREGATED_FROM telemetry.
+    assert mock_query_dicts.call_count == 2
+    agg_call, count_call = mock_query_dicts.call_args_list
+    sql = agg_call.args[1]
+    params = agg_call.args[2]
     assert "test_case_results AS c FINAL" in sql
     assert "test_suite_results AS s FINAL" in sql
     assert "lower(trim(c.status)) IN {_failure_statuses:Array(String)}" in sql
@@ -308,6 +311,17 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
         "timed_out",
     }
     assert not DOTTED_PARAM.search(sql)
+
+    count_sql = count_call.args[1]
+    assert "count() AS total" in count_sql
+    assert "test_case_results AS c FINAL" in count_sql
+    assert "test_suite_results AS s FINAL" in count_sql
+    # Unfiltered by status (the whole point -- it measures the population the
+    # failure-only aggregate replaced, not another failure-only count) and
+    # unbounded by the row cap (a single scalar, never materializes rows).
+    assert "c.status" not in count_sql
+    assert "LIMIT" not in count_sql
+    assert not DOTTED_PARAM.search(count_sql)
 
 
 @pytest.mark.asyncio
@@ -337,9 +351,12 @@ async def test_historical_failed_case_names_groups_by_repo(mock_query_dicts):
 
 @pytest.mark.asyncio
 async def test_historical_failed_case_names_records_telemetry(monkeypatch):
-    """rows_fetched (aggregate row count) vs rows_aggregated_from
-    (sum(occurrences), the raw row volume the aggregate replaced) -- the gap
-    between the two is the measured win (CHAOS-4350 PR 2, team-lead spec).
+    """rows_fetched (aggregate row count) vs rows_aggregated_from (the FULL
+    unfiltered joined-row population the aggregation replaced, from a
+    separate count() query -- NOT sum(occurrences), which only reflects the
+    failure-filtered subset and undercounts this metric per codex round 2)
+    -- the gap between the two is the measured win (CHAOS-4350 PR 2,
+    team-lead spec).
     """
     from dev_health_ops.metrics.prometheus import (
         DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
@@ -350,10 +367,24 @@ async def test_historical_failed_case_names_records_telemetry(monkeypatch):
     repo_id = uuid.uuid4()
 
     async def fake_query_dicts(client, query, params):
-        return [
-            {"repo_id": str(repo_id), "case_name": "test_a", "occurrences": 100_000},
-            {"repo_id": str(repo_id), "case_name": "test_b", "occurrences": 250_000},
-        ]
+        if "GROUP BY" in query:
+            return [
+                {
+                    "repo_id": str(repo_id),
+                    "case_name": "test_a",
+                    "occurrences": 100_000,
+                },
+                {
+                    "repo_id": str(repo_id),
+                    "case_name": "test_b",
+                    "occurrences": 250_000,
+                },
+            ]
+        # The unfiltered count() query -- deliberately a DIFFERENT number
+        # than sum(occurrences)=350_000 above, so this test actually proves
+        # the telemetry is sourced from the count() query, not a coincidence.
+        assert "count() AS total" in query
+        return [{"total": 1_100_000}]
 
     fetched_sum_before = DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get()
     aggregated_sum_before = (
@@ -371,13 +402,13 @@ async def test_historical_failed_case_names_records_telemetry(monkeypatch):
         )
 
     assert result == {repo_id: {"test_a", "test_b"}}
-    # 2 aggregate rows fetched (small) replaced 350,000 raw row occurrences
-    # (the volume PR 1 alone would still have had to materialize for this
-    # signal) -- that gap is the whole point of PR 2.
+    # 2 aggregate rows fetched (small) replaced the full 1.1M-row joined
+    # population (the volume PR 1 alone would still have had to materialize
+    # for this signal) -- that gap is the whole point of PR 2.
     assert DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get() == pytest.approx(
         fetched_sum_before + 2
     )
     assert (
         DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
-        == pytest.approx(aggregated_sum_before + 350_000)
+        == pytest.approx(aggregated_sum_before + 1_100_000)
     )

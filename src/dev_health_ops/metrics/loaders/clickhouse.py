@@ -1449,6 +1449,12 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         (`[day-29, day)`), not wall-clock "now" -- callers must pass the
         window relative to the day being computed, same as
         `load_testops_test_data`'s window.
+
+        Issues TWO queries: the `GROUP BY case_name` aggregate above, and a
+        second unfiltered `count()` over the same joined window/scope purely
+        for the ROWS_AGGREGATED_FROM telemetry (see prometheus.py) -- both
+        stay O(1) in Python-side memory (a handful of aggregate rows, one
+        scalar), so this doesn't reintroduce raw-row materialization.
         """
         params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
@@ -1505,9 +1511,31 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         )
 
         DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED.observe(len(dicts))
-        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM.observe(
-            sum(int(row.get("occurrences") or 0) for row in dicts)
-        )
+        # (codex round 2) ROWS_AGGREGATED_FROM's contract (see prometheus.py)
+        # is the raw test_case_results row volume this aggregation replaced
+        # -- i.e. the FULL joined population the pre-PR-2 code would have
+        # materialized, not just the failure-filtered rows behind the
+        # `occurrences` sum above. Count that population directly (a single
+        # scalar `count()`, never materializing rows) rather than reusing
+        # `occurrences`, which only ever reflects the failed subset and
+        # silently undercounted this metric (e.g. 29 instead of ~1.1M on the
+        # busiest measured repo).
+        count_query = f"""
+        SELECT count() AS total
+        FROM test_case_results AS c FINAL
+        INNER JOIN test_suite_results AS s FINAL
+          ON (s.repo_id = c.repo_id)
+         AND (s.run_id = c.run_id)
+         AND (s.suite_id = c.suite_id)
+         AND (s.org_id = c.org_id)
+        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
+          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        {repo_filter}
+        {org_filter}
+        """
+        count_rows = await _clickhouse_query_dicts(self.client, count_query, params)
+        total_population = int(count_rows[0].get("total") or 0) if count_rows else 0
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM.observe(total_population)
 
         result: dict[uuid.UUID, set[str]] = {}
         for row in dicts:

@@ -635,12 +635,14 @@ if _PROMETHEUS_AVAILABLE:
     # 29-day historical window with a `GROUP BY case_name` bounded by
     # distinct failing test names. ROWS_FETCHED is what actually crossed the
     # wire into Python (the aggregate row count -- small); ROWS_AGGREGATED_FROM
-    # is `sum(occurrences)` from the same query, i.e. the raw case-row volume
-    # this aggregation replaced -- the gap between the two IS the measured
-    # win. On the real local-stack repo that motivated this (org 70d529e0 /
-    # repo 7b9583ee, ~1.1M raw case rows/30d), ROWS_AGGREGATED_FROM tracks
-    # what PR 1 alone would still have had to materialize for this signal;
-    # ROWS_FETCHED tracks what this query actually returns.
+    # is a separate unfiltered `count()` over the same joined window/scope
+    # (codex round 2: summing the failure-only aggregate's `occurrences`
+    # undercounted this -- it only ever reflected failed rows), i.e. the raw
+    # case-row volume this aggregation replaced -- the gap between the two IS
+    # the measured win. On the real local-stack repo that motivated this (org
+    # 70d529e0 / repo 7b9583ee, ~1.1M raw case rows/30d), ROWS_AGGREGATED_FROM
+    # tracks what PR 1 alone would still have had to materialize for this
+    # signal; ROWS_FETCHED tracks what this query actually returns.
     DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _prometheus_client_module.Histogram(
         "devhealth_testops_historical_rows_fetched",
         "Distinct (repo_id, case_name) rows returned by the historical "

@@ -287,6 +287,24 @@ func TestNativeReferenceDiscoveryRetriesARetryableFailure(t *testing.T) {
 		t.Fatalf("reference_discovery self-wakeup rows=%d want=1", selfWakeupRows)
 	}
 
+	// CHAOS-4357: seedDiscoveryRoute above seeds the outbox row already
+	// 'dispatched' (the exact shape a real prior River delivery leaves it in
+	// -- this is not a fresh INSERT, it is the ON CONFLICT DO UPDATE path).
+	// The reconciler's dispatch gate (referenceDiscoverySucceeded) only ever
+	// looks at the LEDGER, but nothing re-attempts the discovery job unless
+	// this OUTBOX row comes back to 'pending' so the kernel can reclaim and
+	// republish it. Local/prod evidence (org 70d529e0) showed this row stuck
+	// at 'dispatched' for 25+ minutes after the ledger went 'retrying' with a
+	// past available_at -- pin that it must not happen.
+	var outboxStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind='reference_discovery'`,
+		discoveryTestRun).Scan(&outboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if outboxStatus != "pending" {
+		t.Fatalf("reference_discovery outbox status=%q, want pending -- a retryable failure must re-arm the outbox row so the kernel can reclaim it, not leave it stranded at 'dispatched'", outboxStatus)
+	}
+
 	// A finalize/dispatch wakeup must NOT have been armed for a retryable,
 	// non-terminal failure.
 	var otherWakeupRows int

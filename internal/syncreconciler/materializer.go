@@ -78,6 +78,17 @@ type MaterializerResult struct {
 	Finalize  int64
 	Discovery int64
 	PostSync  int64
+	// DiscoveryRearmed is the CHAOS-4357 round-2 (codex P2) narrow count: of
+	// the rows Discovery above reports as touched, exactly how many were
+	// previously the stranded shape (status='dispatched',
+	// dispatched_transport='river') this pass reset to 'pending'. Discovery
+	// itself also counts fresh INSERTs for a candidate that had no outbox
+	// row yet, and UPDATEs of a 'dispatched' row on a NON-river transport --
+	// neither of those is a "recovered from stranding" event, so the
+	// sync_dispatch_discovery_rearmed_total metric (whose HELP text
+	// specifically claims only that recovery) is sourced from this field,
+	// not Discovery.
+	DiscoveryRearmed int64
 	// Runaway is the CHAOS-4097 report: a bounded SAMPLE, worst-first, never
 	// more than runawayDispatchScan entries. It is what a log line can carry.
 	Runaway []RunawayDispatchWakeup
@@ -285,8 +296,6 @@ func (materializer *Materializer) Step(
 	}{
 		{materializeDispatchSQL, []any{now, staleDispatchCutoff, limit}, &result.Dispatch, materializerStepDispatch},
 		{materializeFinalizeSQL, []any{now, limit}, &result.Finalize, materializerStepFinalize},
-		{materializeDiscoverySQL, []any{now, limit}, &result.Discovery, materializerStepDiscovery},
-		{materializePostSyncSQL, []any{now, limit}, &result.PostSync, materializerStepPostSync},
 	}
 	for _, step := range steps {
 		tag, execErr := tx.Exec(ctx, step.sql, step.args...)
@@ -299,6 +308,51 @@ func (materializer *Materializer) Step(
 		}
 		*step.count = affected
 	}
+
+	// Discovery runs separately (not through the generic Exec loop above)
+	// because it RETURNs a per-row "recovered" flag rather than reporting a
+	// single RowsAffected total (CHAOS-4357 round 2, codex P2): the flag is
+	// computed by the SAME statement, from the SAME pre-write snapshot that
+	// gates whether each row is touched at all, so there is no window
+	// between "decide what's stale" and "act on it" for a concurrent claim
+	// to invalidate -- unlike a separate preceding COUNT query would have.
+	discoveryRows, queryErr := tx.Query(ctx, materializeDiscoverySQL, now, limit, staleDispatchCutoff)
+	if queryErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, queryErr)
+	}
+	var discoveryTotal, discoveryRecovered int64
+	for discoveryRows.Next() {
+		var recovered bool
+		if err := discoveryRows.Scan(&recovered); err != nil {
+			discoveryRows.Close()
+			return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, err)
+		}
+		discoveryTotal++
+		if recovered {
+			discoveryRecovered++
+		}
+	}
+	rowsErr := discoveryRows.Err()
+	discoveryRows.Close()
+	if rowsErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, rowsErr)
+	}
+	if discoveryTotal < 0 || discoveryTotal > int64(limit) {
+		return MaterializerResult{}, materializerUnavailable(materializerStepRowCount, nil)
+	}
+	result.Discovery = discoveryTotal
+	result.DiscoveryRearmed = discoveryRecovered
+
+	postSyncTag, postSyncErr := tx.Exec(ctx, materializePostSyncSQL, now, limit)
+	if postSyncErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepPostSync, postSyncErr)
+	}
+	postSyncAffected := postSyncTag.RowsAffected()
+	if postSyncAffected < 0 || postSyncAffected > int64(limit) {
+		return MaterializerResult{}, materializerUnavailable(materializerStepRowCount, nil)
+	}
+	result.PostSync = postSyncAffected
+
 	// The report runs in the SAME transaction as the writes above, and after
 	// them, so what it reports is the state this pass leaves behind rather
 	// than the one it found.
@@ -694,6 +748,47 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 	)
 `
 
+// materializeDiscoverySQL's UPDATE guard used to unconditionally refuse a
+// 'dispatched'+'river' outbox row (CHAOS-4357): once a reference_discovery
+// River job was delivered once, the outbox row was permanently stranded at
+// 'dispatched' forever after -- no other path ever resets it. Unlike a fresh
+// dispatch, the underlying discovery WORK can finish (successfully-no-op,
+// retryably-failed, or terminally-failed) entirely independently of the
+// outbox row's own status; only the ledger (sync_run_reference_discoveries)
+// says whether a "dispatched" delivery is stale.
+//
+// CHAOS-4357 round 2 (codex P1): the candidates CTE proving the LEDGER is
+// due is not, by itself, proof the CURRENT outbox delivery is stale -- a
+// retry can be published, and genuinely still be in flight (not yet
+// claimed), while the ledger's available_at is already in the past (it was
+// due the moment it was published). Without a grace period, the very next
+// one-second reconciler tick would see the same due ledger, reset the
+// freshly dispatched row back to 'pending', and the kernel would publish a
+// SECOND River job for the same retry -- repeating every tick until the
+// first job finally executes, amplifying one retry into an unbounded
+// stream of duplicate jobs (DeliveryAttempt makes each one a distinct River
+// row, so River's own dedupe never catches this). stale_dispatched below
+// closes that: a river-dispatched row is only eligible once its OWN
+// dispatched_at is at or before staleDispatchCutoff ($3), the same
+// operator-tunable grace window (SYNC_UNIT_DISPATCH_STALE_SECONDS,
+// mirrored from materializeDispatchSQL) a fresh delivery gets to actually
+// be claimed and start executing before the materializer will touch it
+// again.
+//
+// A genuinely in-flight row (running, live lease) is never a candidate in
+// the first place, so this cannot resurrect a row a concurrent kernel claim
+// just published within the grace window either.
+//
+// stale_dispatched ALSO closes CHAOS-4357 round 2's P2: it is read ONCE,
+// by this same statement, from the same pre-write MVCC snapshot that gates
+// the UPDATE -- not by a separate preceding query, which would leave a
+// window for a concurrent claim to change the outbox row between "count it
+// as stale" and "act on it" (undercounting or overcounting a recovery that
+// did or didn't actually happen). RETURNING reports, per row this
+// statement actually touched, whether it was that exact recovered shape --
+// Go sums the total (Discovery) and the recovered subset (DiscoveryRearmed)
+// from the SAME result set, so the two counts can never diverge from what
+// this one atomic statement did.
 const materializeDiscoverySQL = `
 WITH candidates AS (
 	SELECT discovery.sync_run_id AS id, run.org_id
@@ -713,6 +808,17 @@ WITH candidates AS (
 		)
 	ORDER BY discovery.available_at, discovery.sync_run_id
 	LIMIT $2
+),
+stale_dispatched AS (
+	SELECT outbox.sync_run_id AS id
+	FROM public.sync_dispatch_outbox AS outbox
+	JOIN candidates ON candidates.id = outbox.sync_run_id
+	WHERE outbox.kind = 'reference_discovery'
+		AND outbox.status = 'dispatched'
+		AND outbox.dispatched_transport = 'river'
+		AND outbox.dispatched_at IS NOT NULL
+		AND outbox.dispatched_at <= $3
+		AND outbox.last_error IS DISTINCT FROM 'feature_disabled'
 )
 INSERT INTO public.sync_dispatch_outbox (
 	id, org_id, sync_run_id, kind, status, available_at, attempts,
@@ -802,10 +908,12 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
-	AND NOT (
-		sync_dispatch_outbox.status = 'dispatched'
-		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
+	AND (
+		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
+		OR sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)
 	)
+RETURNING (sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)) AS recovered
 `
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

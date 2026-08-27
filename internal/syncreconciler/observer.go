@@ -143,6 +143,19 @@ type Observation struct {
 	// repair down with the safety net would trade a bounded strand for an
 	// unbounded one), so a counter is the only thing that can carry it.
 	UnreclaimableSweepFailures int64
+	// DiscoveryRearmed counts sync_dispatch_outbox rows the materializer
+	// reset from a stranded 'dispatched' state back to 'pending' for the
+	// reference_discovery kind this pass (CHAOS-4357). Like
+	// ExhaustedDeliveriesRecovered, it is an EVENT that already happened, not
+	// outbox state, so the read-only Observer always leaves it zero; it lives
+	// here for the same "Loop is the only component holding the metrics
+	// registration" reason. Before the fix this was unconditionally zero
+	// forever once a discovery outbox row reached 'dispatched' via river --
+	// the retry-refire bug had no counter of its own, so its absence read
+	// exactly like a healthy idle system. A sustained nonzero rate here is
+	// the expected signal of provider failures being retried, not a fault by
+	// itself; watch it alongside sync_run_reference_discoveries.status.
+	DiscoveryRearmed int64
 	// RunawayMeasured and UnreclaimableMeasured say whether this pass actually
 	// TOOK each measurement, as opposed to reporting a zero it never made.
 	//

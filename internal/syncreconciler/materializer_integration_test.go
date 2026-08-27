@@ -29,6 +29,7 @@ const (
 	materializerFreshDispatch    = "00000000-0000-4000-8000-00000000410b"
 	materializerRetryingDispatch = "00000000-0000-4000-8000-00000000410c"
 	materializerFeatureDisabled  = "00000000-0000-4000-8000-00000000410d"
+	materializerDiscoveryRetry   = "00000000-0000-4000-8000-00000000410e"
 )
 
 func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
@@ -151,6 +152,123 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 			t.Fatalf("feature-disabled row rearmed unexpectedly: %#v", result)
 		}
 		assertMaterializerDispatchState(t, ctx, pool, materializerFeatureDisabled, "dispatched", ptrString("river"), 1)
+	})
+
+	// CHAOS-4357: reproduces the live prod/local state verbatim -- a
+	// reference-discovery ledger that went back to 'retrying' with a past
+	// available_at, whose sync_dispatch_outbox row is still sitting
+	// 'dispatched' from its PRIOR (now-stale) attempt with every claim field
+	// NULL (the normal shape markRiverDispatchedSQL leaves behind -- NOT the
+	// live/still-claimed shape "feature-disabled row stays protected" above
+	// covers). Read-only queries against the affected local stack
+	// (org 70d529e0, run c5b61360-...) showed exactly this row shape stuck
+	// for 25+ minutes across multiple healthy reconciler ticks. This proves
+	// whether Materializer.Step alone re-arms it.
+	t.Run("retrying reference discovery past available_at re-arms its stale dispatched outbox row", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 5, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerDiscoveryRetry, "planned", now.Add(-2*time.Hour))
+		seedDiscoveryLedger(t, ctx, pool, materializerDiscoveryRetry, "retrying",
+			now.Add(-time.Minute), nil, 1, ptrString("Reference discovery failed"))
+		seedMaterializerDiscoveryDispatchedOutbox(t, ctx, pool, materializerDiscoveryRetry,
+			"discovery-river-job", now.Add(-30*time.Minute), 3)
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 1 {
+			t.Fatalf("retrying discovery graph did not rearm exactly once: %#v", result)
+		}
+		// CHAOS-4357 round 2 (codex P2): DiscoveryRearmed is the narrow
+		// stale-dispatched-recovery count the sync_dispatch_discovery_rearmed_total
+		// metric publishes -- this row IS that exact case, so both counts
+		// agree here (they diverge only for a fresh insert or a non-river
+		// dispatched row, neither of which this subtest seeds).
+		if result.DiscoveryRearmed != 1 {
+			t.Fatalf("retrying discovery graph did not count as a stale-dispatched recovery: %#v", result)
+		}
+		// Materializer.Step alone re-arms status only -- attempts is the
+		// KERNEL's claim counter (claimRiverRoutesSQL), so it stays whatever
+		// it was (3, from the prior stale attempt) until something actually
+		// claims this row again.
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 3)
+
+		result, err = materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 0 {
+			t.Fatalf("retrying discovery graph amplified on second pass: %#v", result)
+		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("retrying discovery graph recounted a recovery on second pass: %#v", result)
+		}
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 3)
+	})
+
+	// CHAOS-4357 round 2 (codex P2): a fresh discovery ledger with NO prior
+	// outbox row at all is a real, ordinary materialization (Discovery
+	// counts it), but it is NOT a "recovered a stranded dispatched row"
+	// event -- nothing was ever dispatched, let alone stranded. Before this
+	// fix DiscoveryRearmed didn't exist and the metric was sourced straight
+	// from Discovery, so this exact case would have inflated
+	// sync_dispatch_discovery_rearmed_total with a false recovery signal.
+	t.Run("a fresh discovery materialization is not counted as a recovery", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerDiscoveryRetry, "planned", now.Add(-2*time.Hour))
+		seedDiscoveryLedger(t, ctx, pool, materializerDiscoveryRetry, "planned",
+			now.Add(-time.Minute), nil, 0, nil)
+		// Deliberately no seedMaterializerDiscoveryDispatchedOutbox call --
+		// this run has never had an outbox row of any kind.
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 1 {
+			t.Fatalf("fresh discovery graph did not materialize exactly once: %#v", result)
+		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("fresh discovery materialization miscounted as a stale-dispatched recovery: %#v", result)
+		}
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 0)
+	})
+
+	// CHAOS-4357 round 2 (codex P1): a FRESH river delivery -- dispatched
+	// well within the staleDispatchCutoff grace window -- must NOT be
+	// re-armed even though the ledger's available_at already reads as due
+	// (it was due the moment the retry was published). Before this fix, the
+	// very next materializer tick would reset this row to 'pending' and the
+	// kernel would publish a SECOND River job for the same retry, repeating
+	// every tick until the first job finally executed -- amplifying one
+	// retry into an unbounded stream of duplicate jobs.
+	t.Run("a freshly dispatched retry within the grace window is not amplified", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 7, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerDiscoveryRetry, "planned", now.Add(-2*time.Hour))
+		seedDiscoveryLedger(t, ctx, pool, materializerDiscoveryRetry, "retrying",
+			now.Add(-time.Minute), nil, 1, ptrString("Reference discovery failed"))
+		// Dispatched 5 minutes ago -- well after cutoff (15 minutes ago), so
+		// still within its grace period to actually be claimed and start.
+		seedMaterializerDiscoveryDispatchedOutbox(t, ctx, pool, materializerDiscoveryRetry,
+			"discovery-fresh-job", now.Add(-5*time.Minute), 1)
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 0 {
+			t.Fatalf("fresh in-flight delivery was touched: %#v", result)
+		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("fresh in-flight delivery was counted as recovered: %#v", result)
+		}
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "dispatched", 1)
 	})
 }
 
@@ -309,7 +427,6 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		}{
 			{materializerDispatchMissing, "dispatch_sync_run", "river-dispatch-queued"},
 			{materializerFinalize, "finalize_sync_run", "river-finalize-queued"},
-			{materializerRiverQueued, "reference_discovery", "river-discovery-queued"},
 		} {
 			var riverStatus string
 			var riverTransport, riverJobID *string
@@ -327,6 +444,36 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 				t.Fatalf("queued River %s delivery was rearmed: %s/%v/%v/%d",
 					queued.kind, riverStatus, riverTransport, riverJobID, riverAttempts)
 			}
+		}
+
+		// CHAOS-4357: materializerRiverQueued's ledger is seeded 'retrying'
+		// with a past available_at (same seed as materializerDiscovery just
+		// above) -- its outbox row being 'dispatched'+'river' does NOT mean a
+		// live delivery is still in flight; it means a PRIOR delivery already
+		// ran and the ledger has since proven it needs another attempt. Before
+		// the fix this row -- like the real org-70d529e0 incident -- would
+		// have stayed 'dispatched' forever, identical to every other kind
+		// above, because nothing else re-arms a reference_discovery outbox
+		// row once handleFailure's own direct upsert loses its race with an
+		// early "not_claimed" River no-op. The ledger is the source of truth
+		// here (unlike dispatch_sync_run/finalize_sync_run, it has no
+		// separate live-claim signal of its own to fall back on), so it must
+		// be re-armed, not left stranded.
+		var riverQueuedStatus string
+		var riverQueuedTransport, riverQueuedJobID *string
+		var riverQueuedAttempts int
+		if err := pool.QueryRow(ctx, `
+			SELECT status, dispatched_transport, transport_job_id, attempts
+			FROM public.sync_dispatch_outbox
+			WHERE sync_run_id = $1 AND kind = 'reference_discovery'`,
+			materializerRiverQueued,
+		).Scan(&riverQueuedStatus, &riverQueuedTransport, &riverQueuedJobID, &riverQueuedAttempts); err != nil {
+			t.Fatal(err)
+		}
+		if riverQueuedStatus != "pending" || riverQueuedTransport != nil || riverQueuedJobID != nil ||
+			riverQueuedAttempts != 1 {
+			t.Fatalf("stale reference_discovery delivery was not rearmed: %s/%v/%v/%d",
+				riverQueuedStatus, riverQueuedTransport, riverQueuedJobID, riverQueuedAttempts)
 		}
 
 		var postStatus string
@@ -753,6 +900,81 @@ func seedUnit(
 		VALUES ($1, $2, $3, $4, $5)`,
 		id, runID, status, availableAt, updatedAt); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func seedDiscoveryLedger(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, status string,
+	availableAt time.Time,
+	leaseExpiresAt *time.Time,
+	_ int,
+	_ *string,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_run_reference_discoveries (
+			sync_run_id, status, available_at, lease_expires_at
+		) VALUES ($1, $2, $3, $4)`,
+		runID, status, availableAt, leaseExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedMaterializerDiscoveryDispatchedOutbox seeds a reference_discovery
+// outbox row in the exact shape markRiverDispatchedSQL leaves behind after a
+// normal successful publish -- every claim field NULL, status 'dispatched'
+// via 'river'. This is NOT the "live/still-claimed" shape the
+// materializerDiscovery fixture in seedMaterializerIntegrationGraph covers;
+// it is the shape a River job leaves once delivery itself completed, whether
+// or not the underlying discovery work it triggered ever ran to a
+// terminal outcome.
+func seedMaterializerDiscoveryDispatchedOutbox(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, jobID string,
+	dispatchedAt time.Time,
+	attempts int,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, dispatched_transport, dispatched_route_generation,
+			transport_job_id, created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'reference_discovery',
+			'dispatched', $2, $3, $2, 'river', 1, $4, $2, $2
+		)`,
+		runID, dispatchedAt, attempts, jobID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertMaterializerDiscoveryOutboxState(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, wantStatus string,
+	wantAttempts int,
+) {
+	t.Helper()
+	var status string
+	var attempts int
+	if err := pool.QueryRow(ctx, `
+		SELECT status, attempts
+		FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'reference_discovery'`,
+		runID,
+	).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != wantStatus || attempts != wantAttempts {
+		t.Fatalf("discovery outbox state for %s = %s/%d, want %s/%d",
+			runID, status, attempts, wantStatus, wantAttempts)
 	}
 }
 

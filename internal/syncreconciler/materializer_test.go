@@ -45,9 +45,38 @@ type fakeMaterializerTx struct {
 	failQuery    bool
 	failScan     bool
 	failRowsIter bool
+	// discoveryReturning is what materializeDiscoverySQL's RETURNING clause
+	// answers with (CHAOS-4357 round 2, codex P2): one bool per row the
+	// statement touched, true iff that row was the stale-dispatched
+	// recovery shape. nil (the default) is the healthy "nothing touched"
+	// case every pre-existing case here asserts, matching runaway above.
+	// Routed through the SAME Query method as the runaway report -- the two
+	// statements are told apart by SQL text (materializeDiscoverySQL is the
+	// only one with a RETURNING clause), the same way a real driver would
+	// dispatch on the prepared statement, not on caller intent.
+	discoveryReturning    []bool
+	failDiscoveryQuery    bool
+	failDiscoveryScan     bool
+	failDiscoveryRowsIter bool
+	discoveryQuery        string
+	discoveryArgs         []any
 }
 
-func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	// materializeDiscoverySQL is the only Query call with a RETURNING
+	// clause; the runaway report is a plain SELECT. A real driver
+	// dispatches on the prepared statement text the same way.
+	if strings.Contains(sql, "RETURNING") {
+		tx.discoveryQuery = sql
+		tx.discoveryArgs = append([]any(nil), args...)
+		if tx.failDiscoveryQuery {
+			return nil, errors.New("injected discovery materialization query failure")
+		}
+		return &fakeDiscoveryRows{
+			recovered: tx.discoveryReturning,
+			failScan:  tx.failDiscoveryScan, failIter: tx.failDiscoveryRowsIter,
+		}, nil
+	}
 	tx.runawayQuery = sql
 	if tx.failQuery {
 		return nil, errors.New("injected runaway report query failure")
@@ -61,6 +90,40 @@ func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pg
 		failScan: tx.failScan, failIter: tx.failRowsIter,
 	}, nil
 }
+
+type fakeDiscoveryRows struct {
+	pgx.Rows
+	recovered []bool
+	index     int
+	failScan  bool
+	failIter  bool
+}
+
+func (rows *fakeDiscoveryRows) Next() bool {
+	rows.index++
+	return rows.index <= len(rows.recovered)
+}
+
+func (rows *fakeDiscoveryRows) Scan(dest ...any) error {
+	if rows.failScan {
+		return errors.New("injected discovery materialization scan failure")
+	}
+	target, ok := dest[0].(*bool)
+	if len(dest) != 1 || !ok {
+		return errors.New("unexpected discovery materialization projection")
+	}
+	*target = rows.recovered[rows.index-1]
+	return nil
+}
+
+func (rows *fakeDiscoveryRows) Err() error {
+	if rows.failIter {
+		return errors.New("injected discovery materialization iteration failure")
+	}
+	return nil
+}
+
+func (rows *fakeDiscoveryRows) Close() {}
 
 type fakeRunawayRows struct {
 	pgx.Rows
@@ -142,7 +205,13 @@ func (tx *fakeMaterializerTx) Rollback(context.Context) error {
 func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
 	cutoff := now.Add(-15 * time.Minute)
-	tx := &fakeMaterializerTx{affected: []int64{0, 2, 1, 2, 1}}
+	// CHAOS-4357 round 2: discovery no longer runs through Exec (it RETURNs
+	// per-row recovery flags, so it goes through Query instead) -- execs now
+	// covers JIT-disable, dispatch, finalize, post_sync in that order.
+	tx := &fakeMaterializerTx{
+		affected:           []int64{0, 2, 1, 1},
+		discoveryReturning: []bool{true, false},
+	}
 	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
 		return tx, nil
 	})
@@ -154,15 +223,15 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(result, MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, PostSync: 1}) {
+	if !reflect.DeepEqual(result, MaterializerResult{Dispatch: 2, Finalize: 1, Discovery: 2, DiscoveryRearmed: 1, PostSync: 1}) {
 		t.Fatalf("Step() result = %#v", result)
 	}
-	if !tx.committed || !tx.rolled || len(tx.execs) != 5 {
+	if !tx.committed || !tx.rolled || len(tx.execs) != 4 {
 		t.Fatalf("transaction = committed:%t rolled:%t execs:%d", tx.committed, tx.rolled, len(tx.execs))
 	}
 
 	// CHAOS-4262: the transaction's very first statement disables JIT before
-	// any of the four materialization statements run, and takes no arguments.
+	// any materialization statement runs, and takes no arguments.
 	if got := strings.TrimSpace(tx.execs[0].sql); got != "SET LOCAL jit = off" {
 		t.Fatalf("first statement = %q, want the JIT-disable SET LOCAL", got)
 	}
@@ -172,7 +241,6 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 
 	wantArgs := [][]any{
 		{now, cutoff, 2},
-		{now, 2},
 		{now, 2},
 		{now, 2},
 	}
@@ -211,29 +279,51 @@ func TestMaterializerRunsOneBoundedTransportNeutralTransaction(t *testing.T) {
 			t.Fatalf("rearm SQL missing %q:\n%s", required, tx.execs[1].sql)
 		}
 	}
-	postSyncUpper := strings.ToUpper(tx.execs[4].sql)
+	postSyncUpper := strings.ToUpper(tx.execs[3].sql)
 	if !strings.Contains(postSyncUpper, "LEFT JOIN PUBLIC.SYNC_DISPATCH_OUTBOX") ||
 		!strings.Contains(postSyncUpper, "OUTBOX.ID IS NULL") ||
 		!strings.Contains(postSyncUpper, "DO NOTHING") ||
 		strings.Contains(postSyncUpper, "DO UPDATE") {
-		t.Fatalf("post_sync must remain insert-only:\n%s", tx.execs[4].sql)
+		t.Fatalf("post_sync must remain insert-only:\n%s", tx.execs[3].sql)
+	}
+
+	// CHAOS-4357 round 2 (codex P1): the discovery statement's own
+	// stale-dispatched re-arm eligibility is gated by staleDispatchCutoff,
+	// the same grace-period argument dispatch's own rearm uses, not just
+	// now/limit.
+	if !reflect.DeepEqual(tx.discoveryArgs, []any{now, 2, cutoff}) {
+		t.Fatalf("discovery query args = %#v, want [now, limit, cutoff]", tx.discoveryArgs)
+	}
+	discoveryUpper := strings.ToUpper(tx.discoveryQuery)
+	for _, required := range []string{
+		"RETURNING",
+		"STALE_DISPATCHED",
+		"OUTBOX.DISPATCHED_AT <= $3",
+		"LAST_ERROR IS DISTINCT FROM 'FEATURE_DISABLED'",
+	} {
+		if !strings.Contains(discoveryUpper, required) {
+			t.Fatalf("discovery SQL missing %q:\n%s", required, tx.discoveryQuery)
+		}
 	}
 }
 
 func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
-	// materializeFailAt names which of the four materialization statements
-	// fails (1=dispatch .. 4=post_sync); the JIT-disable SET LOCAL always
-	// runs first, so the actual failing exec index is materializeFailAt+1.
+	// materializeFailAt names which of the three Exec-based materialization
+	// statements fails (1=dispatch .. 3=post_sync); the JIT-disable SET
+	// LOCAL always runs first, so the actual failing exec index is
+	// materializeFailAt+1. Discovery is no longer one of these -- it runs
+	// through Query (RETURNING), not Exec (CHAOS-4357 round 2); its own
+	// failure modes are covered by TestMaterializerDiscoveryQueryFailure*
+	// below, mirroring the runaway report's three-part fault injection.
 	wantSteps := []string{
 		materializerStepDispatch,
 		materializerStepFinalize,
-		materializerStepDiscovery,
 		materializerStepPostSync,
 	}
-	for materializeFailAt := 1; materializeFailAt <= 4; materializeFailAt++ {
+	for materializeFailAt := 1; materializeFailAt <= 3; materializeFailAt++ {
 		t.Run(strconv.Itoa(materializeFailAt), func(t *testing.T) {
-			tx := &fakeMaterializerTx{affected: []int64{0, 1, 1, 1, 1}, failAt: materializeFailAt + 1}
+			tx := &fakeMaterializerTx{affected: []int64{0, 1, 1, 1}, failAt: materializeFailAt + 1}
 			materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
 				return tx, nil
 			})
@@ -250,6 +340,56 @@ func TestMaterializerStatementFailureRollsBackWholeStep(t *testing.T) {
 			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != materializeFailAt+1 {
 				t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
 					result, tx.committed, tx.rolled, len(tx.execs))
+			}
+		})
+	}
+}
+
+// TestMaterializerDiscoveryQueryFailureRollsBackWholeStep covers discovery's
+// own three-part fault injection (CHAOS-4357 round 2), the same discipline
+// TestMaterializerReportsWhenTheRunawayReportItselfFails already applies to
+// the runaway report's own Query call: a shared "make it fail" switch would
+// let a fix that only handled the query error still pass, which is exactly
+// the coverage gap this ticket is about.
+func TestMaterializerDiscoveryQueryFailureRollsBackWholeStep(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		fault func(*fakeMaterializerTx)
+	}{
+		{"query fails", func(tx *fakeMaterializerTx) { tx.failDiscoveryQuery = true }},
+		{"scan fails", func(tx *fakeMaterializerTx) {
+			tx.discoveryReturning = []bool{true}
+			tx.failDiscoveryScan = true
+		}},
+		{"rows iteration fails", func(tx *fakeMaterializerTx) {
+			tx.discoveryReturning = []bool{true}
+			tx.failDiscoveryRowsIter = true
+		}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			tx := &fakeMaterializerTx{affected: []int64{0, 1, 1, 1}}
+			testCase.fault(tx)
+			materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
+				return tx, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := materializer.Step(context.Background(), now, now.Add(-time.Minute), 1)
+			if !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("Step() error = %v", err)
+			}
+			if got := MaterializerStepIdentity(err); got != materializerStepDiscovery {
+				t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDiscovery)
+			}
+			// dispatch and finalize already committed their execs before
+			// discovery's Query runs; only the transaction-level rollback
+			// undoes them, which is what committed/rolled asserts.
+			if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled {
+				t.Fatalf("failed step = result:%#v committed:%t rolled:%t",
+					result, tx.committed, tx.rolled)
 			}
 		})
 	}

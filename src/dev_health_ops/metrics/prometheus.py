@@ -139,6 +139,21 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_team_autoimport_reference_subitem_skipped_total",
+            "A team-autoimport populate skipped one reference sub-item "
+            "(e.g. a single Jira board's sprint listing) after it raised, "
+            "instead of failing the whole provider populate (CHAOS-4357). "
+            "A single board without sprint support, or a transient 4xx/"
+            "timeout on one sub-item, must not fail strict reference "
+            "discovery for the entire run -- this counter is the signal "
+            "that data for that one sub-item is incomplete, even though "
+            "the populate as a whole still reports success.",
+            ["provider", "kind"],
+        )
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -678,6 +693,7 @@ else:
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL = _noop_counter()
@@ -852,6 +868,24 @@ def record_team_autoimport_roster_preservation_failed(*, provider: str) -> None:
     """
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL.labels(
         provider=provider,
+    ).inc()
+
+
+def record_team_autoimport_reference_subitem_skipped(
+    *, provider: str, kind: str
+) -> None:
+    """Record a team-autoimport populate skipping one reference sub-item
+    after it raised, instead of failing the whole provider populate
+    (CHAOS-4357).
+
+    Called wherever a populator isolates a per-item fetch (e.g. Jira's
+    per-board sprint listing in team_autoimport_jira.py) so one bad board/
+    project/team does not abort strict reference discovery for the entire
+    run.
+    """
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL.labels(
+        provider=provider,
+        kind=kind,
     ).inc()
 
 

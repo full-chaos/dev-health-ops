@@ -635,3 +635,214 @@ async def test_run_daily_direct_reports_progress_before_a_repo_crashes_mid_write
     assert progress == [(1, 2)], (
         "the crashed repo's write-starting signal must still have fired"
     )
+
+
+# --------------------------------------------------------------------------
+# CHAOS-4316: progress-based liveness bound on ComputePartition. Prod
+# incident (deploy-4 readback, 2026-08-26): a hung worker_metrics_runner
+# child on api-2 held a partition `executing` for 74 minutes with no
+# progress and no wall-clock bound, pinning that replica's only slot. These
+# tests use tiny, monkeypatched stall windows/poll interval so the whole
+# suite runs in well under a second while proving the SAME mechanism that
+# would fire on a real multi-minute hang.
+# --------------------------------------------------------------------------
+
+
+def _set_tiny_stall_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base_seconds: float = 0.3,
+    per_repo_seconds: float = 0.0,
+    hard_ceiling_multiplier: float = 3.0,
+) -> None:
+    monkeypatch.setenv(
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS", str(base_seconds)
+    )
+    monkeypatch.setenv(
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
+        str(per_repo_seconds),
+    )
+    monkeypatch.setenv(
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
+        str(hard_ceiling_multiplier),
+    )
+    # The watchdog's own poll interval is not env-configurable (it is a
+    # constant sized for production, not a knob operators should tune) --
+    # monkeypatch the module attribute directly so these tests still run
+    # fast. worker_metrics._run_compatibility_process_locked reads this at
+    # call time (not as a bound default), so the patch takes effect.
+    monkeypatch.setattr(worker_metrics, "_PROGRESS_STALL_WATCHDOG_POLL_SECONDS", 0.01)
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_stalled_child_is_killed_and_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The falsifier for CHAOS-4316: a child that reads its input and then
+    reports ZERO progress, forever, must be killed within the derived stall
+    window rather than holding the slot indefinitely (today's bug on
+    origin/main -- runWithLeaseRenewal has nothing that would ever return
+    here). Zero progress ever observed -> safe_to_retry."""
+    _set_tiny_stall_env(monkeypatch)
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command("import json, sys, time; json.load(sys.stdin); time.sleep(60)"),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "progress_stalled"
+    assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_stalled_after_progress_is_not_safe_to_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same stall, but one repo's progress line already arrived -- must stay
+    conservative (ambiguous-eligible), matching CHAOS-4264's existing
+    safe_to_retry contract exactly (this ticket reuses that rule verbatim,
+    it does not introduce a new one). Writes the NDJSON progress line
+    directly (the exact wire shape worker_metrics_runner._emit_progress
+    produces) rather than importing that module, so this test's timing
+    depends only on bare subprocess startup, not dev_health_ops's own
+    (heavy, ~0.5-1s) import chain."""
+    _set_tiny_stall_env(monkeypatch)
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, sys, time\n"
+            "json.load(sys.stdin)\n"
+            "sys.__stdout__.write(json.dumps({'progress': {'repo_index': 1, 'repo_count': 2}}) + chr(10))\n"
+            "sys.__stdout__.flush()\n"
+            "time.sleep(60)\n"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "progress_stalled"
+    assert excinfo.value.safe_to_retry is False
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_liveness_kill_only_scoped_to_daily_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remaining-metrics family (no progress instrumentation, CHAOS-4331 is
+    the follow-up to add one) must NOT be killed by this watchdog -- there is
+    no signal to derive a bound from, and a guessed one would be exactly the
+    anti-pattern this ticket avoids. Uses a bounded sleep (not 60s) so the
+    test still finishes quickly while proving no liveness kill occurred."""
+    _set_tiny_stall_env(monkeypatch, base_seconds=0.02)
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, sys, time; json.load(sys.stdin); time.sleep(0.2); "
+            "raise SystemExit(1)"
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_execution())
+    assert excinfo.value.reason == "process_failed", (
+        "a remaining-metrics execution must fall through to the ordinary "
+        "CHAOS-4264 exit-code classification, never progress_stalled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_hard_ceiling_fires_despite_trickling_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backstop half of CHAOS-4316: a child that emits progress often
+    enough to dodge the per-interval stall check must still be reclaimed by
+    the hard ceiling (base * multiplier) rather than running unbounded
+    forever. Distinguishable from a real stall in the local Prometheus
+    counter's reason label (wire-level reason to Go is progress_stalled
+    either way -- Go's retry decision does not need the finer cut). Writes
+    the NDJSON progress line directly (see the sibling test above) so the
+    0.03s emit interval is not swamped by dev_health_ops's own import time."""
+    _set_tiny_stall_env(
+        monkeypatch, base_seconds=0.3, hard_ceiling_multiplier=2.0
+    )  # hard ceiling = 0.6s
+    before = worker_metrics.DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
+        reason="timeout"
+    )._value.get()
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, sys, time\n"
+            "json.load(sys.stdin)\n"
+            "while True:\n"
+            "    sys.__stdout__.write(json.dumps({'progress': {'repo_index': 1, 'repo_count': 1}}) + chr(10))\n"
+            "    sys.__stdout__.flush()\n"
+            "    time.sleep(0.03)\n"  # well under the 0.3s stall window
+        ),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "progress_stalled"
+    assert excinfo.value.safe_to_retry is False  # progress was seen
+    after = worker_metrics.DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
+        reason="timeout"
+    )._value.get()
+    assert after == before + 1, (
+        "the hard-ceiling kill must be counted with reason='timeout', "
+        "distinct from an ordinary interval stall"
+    )
+
+
+def test_liveness_ceiling_derived_from_repo_count_not_a_flat_number() -> None:
+    """Standing rule: timeouts never fix capacity races. Both bounds must
+    scale with the partition's own repo_count, never be a fixed constant."""
+    small = worker_metrics._progress_stall_window_seconds(1)
+    large = worker_metrics._progress_stall_window_seconds(20)
+    assert large > small
+    assert worker_metrics._progress_hard_ceiling_seconds(
+        1
+    ) > worker_metrics._progress_stall_window_seconds(1)
+
+
+def test_progress_stall_watchdog_enabled_by_default() -> None:
+    """Team-lead ruling 2026-08-26: on by default, since deployed
+    configuration never sets DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_
+    SECONDS -- an opt-in design would silently never activate in prod."""
+    assert worker_metrics._progress_stall_watchdog_enabled() is True
+
+
+def test_progress_stall_watchdog_explicit_zero_opts_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS", "0")
+    assert worker_metrics._progress_stall_watchdog_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_explicit_opt_out_never_kills_a_stalled_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even with a stall window tiny enough to kill within milliseconds,
+    forcing _progress_stall_watchdog_enabled() False must let a
+    zero-progress child run to its own completion -- proves the opt-out
+    actually disables the watchdog's wiring (liveness_watched), not just
+    the env-lookup helper tested in isolation above. The tiny window is
+    the point: if the opt-out wiring were broken, the child would be
+    killed well before its own (deliberately longer) sleep completes."""
+    _set_tiny_stall_env(monkeypatch, base_seconds=0.02)
+    monkeypatch.setattr(
+        worker_metrics, "_progress_stall_watchdog_enabled", lambda: False
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(
+            "import json, sys, time\n"
+            "json.load(sys.stdin)\n"
+            "time.sleep(0.15)\n"
+            "print(json.dumps({'outcome': {'family': 'daily', 'rows': 0}}))\n"
+        ),
+    )
+    result = await worker_metrics._run_compatibility_process(_daily_execution())
+    assert result == {"family": "daily", "rows": 0}

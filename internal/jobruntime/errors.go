@@ -98,6 +98,18 @@ var (
 	// (where the original claim had already been superseded and the bridge
 	// now reaps the row automatically instead of refusing it).
 	ReasonAmbiguousRefused = reason("ambiguous_refused")
+	// ReasonProgressStalled marks a daily-metrics compatibility bridge
+	// attempt whose Python runner subprocess was killed by the bridge's own
+	// liveness watchdog (CHAOS-4316) -- no progress line arrived within the
+	// partition's work-size-derived stall window, or the hard-ceiling
+	// backstop fired despite trickling progress. Distinct from
+	// ReasonProcessSignaled (an external/kernel kill, e.g. OOM) and
+	// ReasonResourceExhausted (the runner's own memory bound): this is the
+	// bridge choosing to kill its own child because runWithLeaseRenewal's
+	// lease-renewal loop otherwise has no bound on the compatibility call at
+	// all -- the lease renews forever as long as the independent PG UPDATE
+	// keeps succeeding, regardless of whether real work is progressing.
+	ReasonProgressStalled = reason("progress_stalled")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

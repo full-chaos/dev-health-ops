@@ -164,6 +164,18 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityAmbiguousRefused,
 		},
 		{
+			// CHAOS-4316: the falsifier for this reason -- before
+			// classifyCompatibilityError recognized "progress_stalled", this
+			// case fell through to the "unrecognized reason value" default
+			// (ErrUnavailable) below, exactly as it would for a typo. A
+			// liveness kill must be its own classified, bounded reason, not
+			// silently indistinguishable from an unclassified failure.
+			name:       "liveness watchdog kill on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"progress_stalled"}}`,
+			wantErr:    ErrCompatibilityProgressStalled,
+		},
+		{
 			name:       "true ambiguous 503 with no reason predates this ticket",
 			statusCode: http.StatusServiceUnavailable,
 			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous"}}`,
@@ -225,6 +237,75 @@ func TestHTTPCompatibilityExecutorAllowsContractOwnedDeadlineBeyondThirtySeconds
 	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
 	if err := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// CHAOS-4316 (codex review finding): when the caller's ctx carries the Go
+// backstop's own liveness ceiling (PartitionHandler.Work's
+// context.WithTimeout) and it fires, client.Do returns a transport error --
+// before this fix that collapsed into the generic ErrUnavailable exactly
+// like a DNS failure or connection refusal, so the ONE case this backstop
+// exists for (the bridge's own watchdog could not run) was the single
+// liveness-kill path with no bounded, observable Reason. A real http.Client
+// with no Client.Timeout (matching production's contractDeadlineHTTPClient)
+// against a server that never responds proves the ctx's own deadline --
+// not the client's -- is what classifies this as ErrCompatibilityProgressStalled.
+func TestHTTPCompatibilityExecutorClassifiesItsOwnCtxDeadlineAsProgressStalled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		// A fixed sleep well past the client's ctx deadline below, rather
+		// than blocking on request.Context().Done(): this test cares only
+		// that the CLIENT gave up on ITS ctx before a response arrived, not
+		// on how promptly (or whether) the server observes the client's
+		// disconnect -- avoiding any dependency on httptest/net-http
+		// context-propagation timing that isn't this fix's concern.
+		time.Sleep(300 * time.Millisecond)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{},
+		HTTPCompatibilityConfig{Endpoint: server.URL + "/internal/worker/daily-metrics/v1/execute", BearerToken: "token"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
+	got := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}, nil)
+	if !errors.Is(got, ErrCompatibilityProgressStalled) {
+		t.Fatalf("ComputePartition() = %v, want ErrCompatibilityProgressStalled", got)
+	}
+}
+
+// A context canceled for a reason OTHER than its own deadline (e.g. the
+// caller giving up, process shutdown) must NOT be reclassified as a
+// liveness kill -- only a genuine deadline means the CHAOS-4316 backstop.
+func TestHTTPCompatibilityExecutorDoesNotReclassifyPlainCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	executor, err := NewHTTPCompatibilityExecutor(
+		&http.Client{},
+		HTTPCompatibilityConfig{Endpoint: server.URL + "/internal/worker/daily-metrics/v1/execute", BearerToken: "token"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	run := Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"}
+	got := executor.ComputePartition(ctx, run, Partition{ID: testPartitionID, RunID: testRunID}, nil)
+	if errors.Is(got, ErrCompatibilityProgressStalled) {
+		t.Fatalf("ComputePartition() = %v, plain cancellation must not classify as a liveness kill", got)
+	}
+	if !errors.Is(got, ErrUnavailable) {
+		t.Fatalf("ComputePartition() = %v, want ErrUnavailable for a plain cancellation", got)
 	}
 }
 

@@ -853,7 +853,8 @@ CREATE TABLE daily_metrics_runs (
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
  repo_ids jsonb NOT NULL, status varchar(16) NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+ attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ failure_reason varchar(64) NULL
 );
 CREATE TABLE worker_job_outbox (
  id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,

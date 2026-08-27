@@ -205,6 +205,39 @@ type Config struct {
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
 
+	// DailyPartitionLivenessCeilingBase/PerRepo (CHAOS-4316) bound one
+	// daily_partition ComputePartition call from the Go side, as a backstop
+	// behind the compatibility bridge's own progress-based watchdog
+	// (worker_metrics.py _watch_progress_stall). runWithLeaseRenewal
+	// otherwise renews the partition's lease forever as long as the cheap
+	// PG UPDATE succeeds, independent of whether the bridge call is making
+	// progress -- and the HTTP client to the bridge deliberately has no
+	// Client.Timeout. The ceiling is base + per-repo*len(partition.RepoIDs),
+	// the same work-size-derived shape the Python side uses (never a flat
+	// wall-clock number).
+	//
+	// Defaults are deliberately larger than the Python watchdog's own hard
+	// ceiling (120s base + 90s/repo, x3 multiplier) at every realistic
+	// partition size (dailyRepositoryPartitionSize defaults to 3 repos per
+	// partition) so the bridge's finer-grained, better-telemetered
+	// classification always wins the race under normal conditions -- e.g.
+	// at 3 repos, Python's own hard ceiling is ~19.5 minutes and this
+	// backstop is ~25 minutes. This backstop exists for when that watchdog
+	// itself cannot run (e.g. the bridge's event loop is wedged), not as
+	// the primary mechanism. If either side's constants are retuned,
+	// re-check that this one still exceeds the Python hard ceiling at the
+	// deployment's actual dailyRepositoryPartitionSize.
+	//
+	// Ships ON by default with these constants (team-lead ruling
+	// 2026-08-26): deployed compose/helm manifests do not set new env vars,
+	// so an opt-in design would silently never activate in production. Set
+	// DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_BASE explicitly to "0" to
+	// disable the backstop entirely -- the only sanctioned opt-out; any
+	// other value is validated against the [30s, 30m] bound like any other
+	// duration setting.
+	DailyPartitionLivenessCeilingBase    time.Duration
+	DailyPartitionLivenessCeilingPerRepo time.Duration
+
 	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
 	// for the two Python-parity config engines. Production has no source-relative
 	// default; a local deployment falls back to artifacts packaged at fixed
@@ -359,6 +392,26 @@ func Load(spec Spec) (Config, error) {
 		10*time.Second,
 		100*time.Millisecond,
 		30*time.Second,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DailyPartitionLivenessCeilingBase, err = durationEnvAllowExplicitZero(
+		lookup,
+		"DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_BASE",
+		10*time.Minute,
+		30*time.Second,
+		30*time.Minute,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DailyPartitionLivenessCeilingPerRepo, err = durationEnv(
+		lookup,
+		"DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_PER_REPO",
+		5*time.Minute,
+		1*time.Second,
+		30*time.Minute,
 	)
 	if err != nil {
 		return Config{}, err
@@ -689,6 +742,28 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// durationEnvAllowExplicitZero behaves exactly like durationEnv, except a
+// value that parses to exactly zero (e.g. "0", "0s") is accepted as a
+// deliberate opt-out and returned as-is, bypassing the minimum/maximum
+// bounds check. Use only for a setting whose zero value has a defined,
+// intentional "disabled" meaning to the caller (CHAOS-4316: an operator
+// explicitly disabling the daily-partition liveness ceiling backstop) --
+// durationEnv's ordinary bounds still apply to every non-zero value.
+func durationEnvAllowExplicitZero(
+	lookup secrets.LookupEnv,
+	key string,
+	fallback, minimum, maximum time.Duration,
+) (time.Duration, error) {
+	if raw, ok := lookup(key); ok {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			if parsed, err := time.ParseDuration(trimmed); err == nil && parsed == 0 {
+				return 0, nil
+			}
+		}
+	}
+	return durationEnv(lookup, key, fallback, minimum, maximum)
 }
 
 func durationEnv(

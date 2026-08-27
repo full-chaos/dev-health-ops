@@ -875,7 +875,7 @@ WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); e
 // live lease, so a claimant that has already outlived its lease cannot release
 // it; that outcome is recorded rather than left for the caller to discard.
 func (store *PostgresStore) ReleasePartition(ctx context.Context, claim PartitionClaim) error {
-	err := store.transitionPartition(ctx, claim, "failed")
+	err := store.transitionPartition(ctx, claim, "failed", "")
 	if errors.Is(err, ErrLeaseLost) {
 		store.observeLease(
 			jobruntime.DailyMetricsLeaseStagePartition,
@@ -885,13 +885,48 @@ func (store *PostgresStore) ReleasePartition(ctx context.Context, claim Partitio
 	return err
 }
 
-func (store *PostgresStore) transitionPartition(ctx context.Context, claim PartitionClaim, status string) error {
+// ReleasePartitionWithReason is ReleasePartition plus a bounded
+// failure_reason (CHAOS-4316): the partition stays 'failed' -- silently
+// re-dispatchable by DispatchablePartitions, exactly like an ordinary
+// release -- unlike FailPartitionPermanently's 'failed_permanent', because a
+// liveness kill (the runner reported no progress, or the Go-side backstop's
+// own ceiling fired) is not a claim this row can never satisfy: a fresh
+// attempt might simply not hang. reason must be in
+// dailyMetricsPartitionFailureReasons, the same closed vocabulary
+// FailPartitionPermanently already validates against -- failure_reason is a
+// shared column, not owned exclusively by either status.
+func (store *PostgresStore) ReleasePartitionWithReason(ctx context.Context, claim PartitionClaim, reason string) error {
+	if _, ok := dailyMetricsPartitionFailureReasons[reason]; !ok {
+		return ErrInvalidState
+	}
+	err := store.transitionPartition(ctx, claim, "failed", reason)
+	if errors.Is(err, ErrLeaseLost) {
+		store.observeLease(
+			jobruntime.DailyMetricsLeaseStagePartition,
+			jobruntime.DailyMetricsLeaseResultReleaseLost,
+		)
+	}
+	return err
+}
+
+// transitionPartition sets status and, when reason is non-empty, the shared
+// failure_reason column (CHAOS-4316/CHAOS-4319) in the same statement --
+// this path only ever fires from status='running' (the WHERE clause below),
+// so failure_reason is always NULL going in; an empty reason explicitly
+// clears it rather than leaving a stale value from a hypothetical future
+// caller that reuses a row.
+func (store *PostgresStore) transitionPartition(ctx context.Context, claim PartitionClaim, status string, reason string) error {
 	if !store.valid() || !validUUID(claim.Partition.ID) || !validUUID(claim.Partition.RunID) || !validUUID(claim.Token) {
 		return ErrUnavailable
+	}
+	var reasonArg *string
+	if reason != "" {
+		reasonArg = &reason
 	}
 	command, err := store.pool.Exec(ctx, `
 UPDATE public.daily_metrics_partitions
 SET status = $1::varchar, claim_token = NULL, lease_expires_at = NULL,
+    failure_reason = $6::varchar,
     completed_at = CASE WHEN $1 = 'succeeded' THEN $2 ELSE completed_at END,
     updated_at = $2
 WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token = $5::uuid
@@ -900,7 +935,7 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
       SELECT 1 FROM public.daily_metrics_runs AS run
       WHERE run.id = daily_metrics_partitions.run_id AND run.status = 'running'
   )`,
-		status, store.now().UTC(), claim.Partition.ID, claim.Partition.RunID, claim.Token)
+		status, store.now().UTC(), claim.Partition.ID, claim.Partition.RunID, claim.Token, reasonArg)
 	if err != nil {
 		return ErrUnavailable
 	}
@@ -911,12 +946,14 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
 }
 
 // dailyMetricsPartitionFailureReasons is the closed, bounded vocabulary
-// FailPartitionPermanently accepts (CHAOS-4319) -- durable_partition_failure
-// rows must stay safe for logs, dashboards, and telemetry labels, mirroring
-// jobruntime.Reason's own compile-time-fixed catalog. An unrecognized reason
-// is a caller bug, not a value worth persisting.
+// FailPartitionPermanently and ReleasePartitionWithReason accept (CHAOS-4319,
+// CHAOS-4316) -- daily_metrics_partitions.failure_reason rows must stay safe
+// for logs, dashboards, and telemetry labels, mirroring jobruntime.Reason's
+// own compile-time-fixed catalog. An unrecognized reason is a caller bug,
+// not a value worth persisting.
 var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	"ambiguous_refused": {},
+	"progress_stalled":  {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

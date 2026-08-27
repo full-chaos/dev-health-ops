@@ -218,6 +218,9 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "DEV_HEALTH_ALLOW_PLACEHOLDER_CLICKHOUSE_URI",
         "DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY",
         "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES",
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS",
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
         "DEV_HEALTH_SINK",
         "EMAIL_API_KEY",
         "EMAIL_FROM_ADDRESS",
@@ -514,7 +517,23 @@ def discover_env_example_names(path: Path | None = None) -> set[str]:
 #: is why it stays out of this Python-only scrub without needing an entry
 #: here). Kept as an empty set, not deleted outright, so the NEXT indirection
 #: blind spot has a documented place to land by hand.
-_INDIRECT_ENV_READS: frozenset[str] = frozenset()
+#:
+#: CHAOS-4316's liveness-stall watchdog is the next one: both
+#: ``DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS`` and
+#: ``..._HARD_CEILING_MULTIPLIER`` are read only through the shared
+#: ``_configured_positive_float_env(key, default)`` helper in
+#: ``worker_metrics.py`` -- the module-level constant naming the env var is
+#: passed in as ``key``, one call away from the actual ``os.environ.get``,
+#: so the AST walker (which only follows a literal or module-level constant
+#: given DIRECTLY to ``os.environ.get``) cannot see it. The sibling constant
+#: ``DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS`` does NOT need
+#: an entry here: ``_progress_stall_watchdog_enabled()`` reads it directly.
+_INDIRECT_ENV_READS: frozenset[str] = frozenset(
+    {
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
+        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
+    }
+)
 
 
 def derive_scrub_names() -> set[str]:

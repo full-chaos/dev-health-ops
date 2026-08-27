@@ -958,13 +958,14 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running' AND claim_token
 
 // dailyMetricsPartitionFailureReasons is the closed, bounded vocabulary
 // FailPartitionPermanently and ReleasePartitionWithReason accept (CHAOS-4319,
-// CHAOS-4316) -- daily_metrics_partitions.failure_reason rows must stay safe
-// for logs, dashboards, and telemetry labels, mirroring jobruntime.Reason's
-// own compile-time-fixed catalog. An unrecognized reason is a caller bug,
-// not a value worth persisting.
+// CHAOS-4316, CHAOS-4317) -- daily_metrics_partitions.failure_reason rows
+// must stay safe for logs, dashboards, and telemetry labels, mirroring
+// jobruntime.Reason's own compile-time-fixed catalog. An unrecognized reason
+// is a caller bug, not a value worth persisting.
 var dailyMetricsPartitionFailureReasons = map[string]struct{}{
-	"ambiguous_refused": {},
-	"progress_stalled":  {},
+	"ambiguous_refused":  {},
+	"progress_stalled":   {},
+	"capacity_exhausted": {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

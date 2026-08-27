@@ -826,6 +826,13 @@ func TestPostgresStoreReleaseFailurePathsReachLiveSchema(t *testing.T) {
 // missing them, which is exactly the CHAOS-4043 trap this file exists to
 // close) can catch this -- a mock or a schema missing the constraint would
 // pass regardless of whether ClaimPartition clears the column.
+//
+// CHAOS-4317 extends this table with "capacity_exhausted" (the pids/thread
+// capacity gate's own reason) rather than adding a second, near-duplicate
+// test: the fix this proves -- ClaimPartition's reclaim UPDATE clearing
+// failure_reason -- is reason-agnostic, so one shared container/schema
+// setup exercising both reasons is the more honest proof than two tests
+// that could silently drift apart.
 func TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -841,57 +848,83 @@ func TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason(t *testing.T)
 	defer pool.Close()
 	createDailyTables(t, ctx, pool)
 
-	const (
-		runID       = "00000000-0000-4000-8000-000000000201"
-		partitionID = "00000000-0000-4000-8000-000000000202"
-		orgID       = "00000000-0000-4000-8000-000000000209"
-	)
-	now := time.Date(2026, 8, 26, 3, 0, 0, 0, time.UTC)
-	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-08-25','daily-v1','running','pending',$3,$3)`, runID, orgID, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,$3,$3)`, partitionID, runID, now); err != nil {
-		t.Fatal(err)
-	}
-
 	store, err := NewPostgresStore(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	now := time.Date(2026, 8, 26, 3, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 
-	claim, err := store.ClaimPartition(ctx, partitionID)
-	if err != nil || claim == nil {
-		t.Fatalf("claim partition = %#v, %v", claim, err)
+	cases := []struct {
+		name        string
+		reason      string
+		runID       string
+		partitionID string
+		orgID       string
+	}{
+		{
+			name:        "progress_stalled",
+			reason:      "progress_stalled",
+			runID:       "00000000-0000-4000-8000-000000000201",
+			partitionID: "00000000-0000-4000-8000-000000000202",
+			orgID:       "00000000-0000-4000-8000-000000000209",
+		},
+		{
+			// CHAOS-4317: the pids/thread capacity gate's own reason --
+			// distinct partition/run/org IDs so this shares the container
+			// and schema above without colliding with the progress_stalled
+			// case's rows.
+			name:        "capacity_exhausted",
+			reason:      "capacity_exhausted",
+			runID:       "00000000-0000-4000-8000-000000000301",
+			partitionID: "00000000-0000-4000-8000-000000000302",
+			orgID:       "00000000-0000-4000-8000-000000000309",
+		},
 	}
-	if err := store.ReleasePartitionWithReason(ctx, *claim, "progress_stalled"); err != nil {
-		t.Fatalf("ReleasePartitionWithReason against live schema: %v", err)
-	}
-	var status string
-	var failureReason *string
-	if err := pool.QueryRow(ctx,
-		`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
-	).Scan(&status, &failureReason); err != nil {
-		t.Fatal(err)
-	}
-	if status != "failed" || failureReason == nil || *failureReason != "progress_stalled" {
-		t.Fatalf("released state = status=%s failure_reason=%v, want failed/progress_stalled", status, failureReason)
-	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-08-25','daily-v1','running','pending',$3,$3)`, testCase.runID, testCase.orgID, now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,$3,$3)`, testCase.partitionID, testCase.runID, now); err != nil {
+				t.Fatal(err)
+			}
 
-	// The reclaim itself: before the fix, this UPDATE violates
-	// ck_daily_metrics_partition_failure_reason_scope against the real
-	// schema and ClaimPartition returns ErrUnavailable instead of a claim.
-	reclaimed, err := store.ClaimPartition(ctx, partitionID)
-	if err != nil || reclaimed == nil {
-		t.Fatalf("reclaim after a liveness-kill release = %#v, %v", reclaimed, err)
-	}
-	if err := pool.QueryRow(ctx,
-		`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
-	).Scan(&status, &failureReason); err != nil {
-		t.Fatal(err)
-	}
-	if status != "running" || failureReason != nil {
-		t.Fatalf("reclaimed state = status=%s failure_reason=%v, want running/nil", status, failureReason)
+			claim, err := store.ClaimPartition(ctx, testCase.partitionID)
+			if err != nil || claim == nil {
+				t.Fatalf("claim partition = %#v, %v", claim, err)
+			}
+			if err := store.ReleasePartitionWithReason(ctx, *claim, testCase.reason); err != nil {
+				t.Fatalf("ReleasePartitionWithReason against live schema: %v", err)
+			}
+			var status string
+			var failureReason *string
+			if err := pool.QueryRow(ctx,
+				`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, testCase.partitionID,
+			).Scan(&status, &failureReason); err != nil {
+				t.Fatal(err)
+			}
+			if status != "failed" || failureReason == nil || *failureReason != testCase.reason {
+				t.Fatalf("released state = status=%s failure_reason=%v, want failed/%s", status, failureReason, testCase.reason)
+			}
+
+			// The reclaim itself: before the fix, this UPDATE violates
+			// ck_daily_metrics_partition_failure_reason_scope against the
+			// real schema and ClaimPartition returns ErrUnavailable instead
+			// of a claim.
+			reclaimed, err := store.ClaimPartition(ctx, testCase.partitionID)
+			if err != nil || reclaimed == nil {
+				t.Fatalf("reclaim after a %s release = %#v, %v", testCase.reason, reclaimed, err)
+			}
+			if err := pool.QueryRow(ctx,
+				`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, testCase.partitionID,
+			).Scan(&status, &failureReason); err != nil {
+				t.Fatal(err)
+			}
+			if status != "running" || failureReason != nil {
+				t.Fatalf("reclaimed state = status=%s failure_reason=%v, want running/nil", status, failureReason)
+			}
+		})
 	}
 }
 

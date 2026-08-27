@@ -203,17 +203,6 @@ services:
       # the guard's own exception message has no effect (codex R2) -- the
       # child process only sees vars this block passes through.
       DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS: ${DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS:-200000}
-    # CHAOS-4317: same formula/rationale as ops/compose.yml's dev-stack copy
-    # of this block (see that file for the full comment) -- without an
-    # explicit pids_limit here, this production reference's container-level
-    # cgroup pids.max is unbounded, so worker_metrics.py's capacity reader
-    # falls through to the host-wide kernel.threads-max fallback instead of
-    # a real, container-scoped number. Codex review flagged (2026-08-26)
-    # that this production surface was missed in the first pass -- fixed
-    # here; `compose.go-workers.yml`'s `api:` overlay merges onto this
-    # service and does not redefine pids_limit, so this one edit covers
-    # both the Celery-only and Go-workers-enabled deployment paths.
-    pids_limit: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -236,6 +225,23 @@ services:
         limits:
           memory: 1G
           cpus: "0.5"
+          # CHAOS-4317: same formula/rationale as ops/compose.yml's
+          # dev-stack copy of this block (see that file for the full
+          # comment) -- without an explicit pids limit here, this
+          # production reference's container-level cgroup pids.max is
+          # unbounded, so worker_metrics.py's capacity reader falls
+          # through to the host-wide kernel.threads-max fallback instead
+          # of a real, container-scoped number. Codex review flagged
+          # (2026-08-26) that this production surface was missed in the
+          # first pass -- fixed here, under deploy.resources.limits (not
+          # the top-level `pids_limit` key) because this file already uses
+          # the deploy.resources block for memory/cpus, and modern Compose
+          # treats the two spellings as aliases that must agree if both
+          # are present -- setting only the top-level key here conflicted
+          # with this block. `compose.go-workers.yml`'s `api:` overlay
+          # merges onto this service and does not redefine it, so this one
+          # edit covers both the Celery-only and Go-workers-enabled paths.
+          pids: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
         reservations:
           memory: 256M
           cpus: "0.1"

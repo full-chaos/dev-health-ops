@@ -85,6 +85,16 @@ async def _clickhouse_query_dicts(
 _TESTOPS_LOADER_MAX_ROWS_ENV = "DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"
 _TESTOPS_LOADER_DEFAULT_MAX_ROWS = 200_000
 
+# CHAOS-4361: caps how many rows clickhouse_connect buffers into a single
+# `read_str_col` call for the `load_work_items` reads (see that method).
+# ClickHouse's own default (65536) is tuned for narrow numeric-heavy tables;
+# `work_items` carries several small-but-nonzero String/Array(String)
+# columns per row (assignees, labels, project_key, project_name, url, ...),
+# so a smaller block keeps any single read's peak buffer bounded even for a
+# repo with a large open-item backlog. This is defense in depth alongside
+# excluding `description` from the SELECT below, not a substitute for it.
+_WORK_ITEMS_LOADER_MAX_BLOCK_SIZE = 8_192
+
 
 def _testops_loader_max_rows() -> int:
     raw = os.environ.get(_TESTOPS_LOADER_MAX_ROWS_ENV, "").strip()
@@ -459,12 +469,33 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
+        # CHAOS-4361: `description` is the one Nullable(String) column on
+        # `work_items` that can be arbitrarily large (full issue/PR body
+        # text) -- everything else on this table is a short scalar, a
+        # timestamp, or a small Array(String) (assignees/labels). Neither
+        # call site of this method (job_daily.py's dependency-source-id
+        # collection, or its bug-MTTR/team-attribution/cycle-time compute)
+        # ever reads `.description`; `WorkItem.description` stays a valid
+        # `None` default when the column is absent from the row. Dropping
+        # it from the SELECT (`* EXCEPT`, not a hand-maintained column
+        # list, so a future schema column is included by default rather
+        # than silently dropped) is what CHAOS-4350 already did for
+        # testops's unused wide text columns -- the same fix, one table
+        # over, for the read the 2026-08-27 incident's `read_str_col`
+        # MemoryError traced back to for a long-lived repo's open-item
+        # backlog. `SETTINGS max_block_size` additionally caps how many
+        # rows clickhouse_connect buffers into one `read_str_col` call at a
+        # time, trading a little throughput for a much lower peak per read
+        # -- defense in depth alongside the column drop, not a substitute
+        # for it (a single 8192-row block of only short strings/timestamps
+        # is small regardless).
         item_query = f"""
-        SELECT * FROM {WORK_ITEMS_DEDUPED}
+        SELECT * EXCEPT (description) FROM {WORK_ITEMS_DEDUPED}
         WHERE (created_at < {{end:DateTime}})
         AND (status != 'done' OR completed_at >= {{start:DateTime}})
         {repo_filter}
         {org_filter}
+        SETTINGS max_block_size = {_WORK_ITEMS_LOADER_MAX_BLOCK_SIZE}
         """
 
         trans_query = f"""
@@ -472,6 +503,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         WHERE (occurred_at < {{end:DateTime}})
         {repo_filter}
         {org_filter}
+        SETTINGS max_block_size = {_WORK_ITEMS_LOADER_MAX_BLOCK_SIZE}
         """
 
         item_dicts = await _clickhouse_query_dicts(self.client, item_query, params)

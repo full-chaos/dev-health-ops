@@ -556,17 +556,22 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(10, 100, 1_000, 10_000, 50_000, 100_000, 200_000, 500_000),
     )
 
-    # Incremented whenever DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED's query hit
-    # the hard row cap and the loader silently-would-have-been-unbounded
-    # result was truncated instead. Any nonzero rate means a day's testops
-    # metrics for that org were computed from a partial sample -- see the
-    # accompanying log line for the org/day/table.
-    DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL = _prometheus_client_module.Counter(
-        "devhealth_testops_loader_rows_truncated_total",
-        "Testops loader reads that hit the hard row cap and were "
-        "truncated instead of materializing an unbounded result "
-        "(CHAOS-4350).",
-        ["table"],
+    # Incremented whenever a testops loader read hit the hard row cap. Unlike
+    # an ordinary degrade counter, a nonzero rate here means the READ FAILED
+    # (TestopsRowCapExceeded, a MemoryError subclass) rather than returning a
+    # partial/truncated sample -- test_suite_results/test_case_results are
+    # ordered by (repo_id, run_id, ...), not event time, so letting compute
+    # proceed on a capped-but-unordered result could silently produce wrong
+    # testops metrics (drop today's rows or whole repos while keeping stale
+    # ones). See the accompanying error log line for the org/table/count.
+    DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_testops_loader_row_cap_exceeded_total",
+            "Testops loader reads that hit the hard row cap and were refused "
+            "(the read raises instead of computing on a partial result) "
+            "(CHAOS-4350).",
+            ["table"],
+        )
     )
 
 else:
@@ -615,7 +620,7 @@ else:
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
-    DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL = _noop_counter()
+    DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()

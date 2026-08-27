@@ -165,14 +165,23 @@ async def test_testops_test_data_queries_are_row_capped(mock_query_dicts, monkey
 
 
 @pytest.mark.asyncio
-async def test_testops_test_data_truncates_oversized_result_loudly(monkeypatch):
-    """Red on unmodified origin/main: no cap existed, so an oversized organic
-    result (more rows than the configured cap) was returned/materialized in
-    full rather than bounded. After the fix, the loader truncates to the cap
-    and records a Prometheus counter + log line -- never silently.
+async def test_testops_test_data_refuses_to_compute_on_oversized_result(monkeypatch):
+    """Red on unmodified origin/main (no cap exists at all -- ImportError on
+    the guard's counter): an oversized organic result must FAIL the read,
+    never be silently truncated and computed on.
+
+    chris's ruling (2026-08-26): a LIMIT that lets computation proceed on a
+    truncated window produces WRONG testops metrics silently-ish -- not
+    allowed. `test_suite_results`/`test_case_results` are ordered by
+    `(repo_id, run_id, ...)`, not event time, so an unordered LIMIT could
+    drop today's rows (or whole repos) while keeping stale ones (codex
+    review of the first, truncating version of this fix). So exceeding the
+    cap raises `TestopsRowCapExceeded` (a `MemoryError` subclass -- see its
+    docstring for why) instead of returning a partial result.
     """
+    from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded
     from dev_health_ops.metrics.prometheus import (
-        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL,
+        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL,
     )
 
     monkeypatch.setenv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", "3")
@@ -180,7 +189,7 @@ async def test_testops_test_data_truncates_oversized_result_loudly(monkeypatch):
     start = datetime.now(timezone.utc)
     end = start + timedelta(days=1)
 
-    oversized_suite_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(4)]
+    oversized_suite_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(2)]
     oversized_case_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(10)]
 
     async def fake_query_dicts(client, query, params):
@@ -188,23 +197,25 @@ async def test_testops_test_data_truncates_oversized_result_loudly(monkeypatch):
             return list(oversized_case_rows)
         return list(oversized_suite_rows)
 
-    suite_counter = DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL.labels(
-        table="test_suite_results"
-    )
-    case_counter = DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL.labels(
+    case_counter = DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL.labels(
         table="test_case_results"
     )
-    suite_before = suite_counter._value.get()
     case_before = case_counter._value.get()
 
-    with patch(
-        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
-        fake_query_dicts,
+    with (
+        patch(
+            "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+            fake_query_dicts,
+        ),
+        pytest.raises(TestopsRowCapExceeded) as exc_info,
     ):
-        suites, cases = await loader.load_testops_test_data(start, end, repo_id=None)
+        await loader.load_testops_test_data(start, end, repo_id=None)
 
-    # Bounded to the cap (3), never the oversized organic result (4 / 10).
-    assert len(suites) == 3
-    assert len(cases) == 3
-    assert suite_counter._value.get() == suite_before + 1
+    # A MemoryError subclass -- worker_metrics_runner.py's bare `except
+    # MemoryError` classifies this the same as an rlimit OOM
+    # (EXIT_RESOURCE_EXHAUSTED), reusing the existing durable
+    # failure_reason='resource_exhausted' persistence path.
+    assert isinstance(exc_info.value, MemoryError)
+    assert exc_info.value.table == "test_case_results"
+    assert exc_info.value.org_id == "acme-corp"
     assert case_counter._value.get() == case_before + 1

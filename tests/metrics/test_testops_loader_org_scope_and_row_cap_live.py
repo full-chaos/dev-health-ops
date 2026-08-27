@@ -14,13 +14,18 @@ the fix's red-first proof.
 
 The REAL, reproducible defect: ``query_dicts`` (``api/queries/client.py``)
 materializes the full ClickHouse result with ``list(result.result_rows)`` --
-no LIMIT, no streaming, no cap -- and ``load_testops_test_data`` is called
+no LIMIT, no streaming, no cap -- and ``load_testops_test_data`` was called
 once per backfilled day with a rolling 30-day window, org-wide (``repo_id``
 is frequently ``None``). That is genuinely unbounded and is what produced
 the observed MemoryError in the compatibility-bridge runner, independent of
-org scoping. The second test proves a real ClickHouse ``LIMIT`` now bounds
-the case-query read and that going over the configured cap is recorded
-loudly (Prometheus counter), not silently returned/crashed on.
+org scoping. The second test proves a real ClickHouse read now REFUSES
+(raises ``TestopsRowCapExceeded``, a ``MemoryError`` subclass) once a
+result exceeds the configured cap, recorded loudly via a Prometheus
+counter -- rather than either materializing it in full (the original bug)
+or silently truncating and computing wrong metrics from a partial,
+arbitrarily-ordered slice (chris's ruling against the first version of
+this fix; ``test_case_results`` is ordered by ``(repo_id, run_id, ...)``,
+not event time).
 
 Opt-in (filtered from unit/CI runs): ``pytest -m clickhouse``.
 """
@@ -267,18 +272,26 @@ async def test_load_testops_test_data_does_not_leak_other_org_rows(sink):
 
 
 @pytest.mark.asyncio
-async def test_load_testops_test_data_caps_oversized_case_results(sink, monkeypatch):
+async def test_load_testops_test_data_refuses_oversized_case_results(sink, monkeypatch):
     """Real defect: an org's case-result volume for the window has no bound.
 
     Seeds MORE case rows than a small configured cap and proves a real
-    ClickHouse ``LIMIT`` now bounds what ``load_testops_test_data`` returns,
-    with the excess recorded via
-    ``DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL`` -- never silently
-    dropped or materialized in full.
+    ClickHouse read now REFUSES rather than silently computing on a partial
+    result -- ``load_testops_test_data`` raises ``TestopsRowCapExceeded`` (a
+    ``MemoryError`` subclass) and records
+    ``DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL``. chris's ruling
+    (2026-08-26): a LIMIT that lets computation proceed on a truncated
+    window would produce wrong testops metrics -- not allowed, since
+    ``test_case_results`` is ordered by ``(repo_id, run_id, ...)``, not
+    event time, so an unordered LIMIT could arbitrarily keep stale rows over
+    today's.
     """
-    from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+    from dev_health_ops.metrics.loaders.clickhouse import (
+        ClickHouseDataLoader,
+        TestopsRowCapExceeded,
+    )
     from dev_health_ops.metrics.prometheus import (
-        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL,
+        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL,
     )
 
     monkeypatch.setenv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", "5")
@@ -302,7 +315,7 @@ async def test_load_testops_test_data_caps_oversized_case_results(sink, monkeypa
         for i in range(case_count)
     ]
 
-    counter = DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL.labels(
+    counter = DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL.labels(
         table="test_case_results"
     )
     before = counter._value.get()
@@ -324,16 +337,15 @@ async def test_load_testops_test_data_caps_oversized_case_results(sink, monkeypa
         sink.client.insert("test_case_results", case_rows, column_names=_case_cols())
 
         loader = ClickHouseDataLoader(sink.client, org_id=org_id)
-        _suites, cases = await loader.load_testops_test_data(start, end, repo_id=None)
+        with pytest.raises(TestopsRowCapExceeded) as exc_info:
+            await loader.load_testops_test_data(start, end, repo_id=None)
 
-        assert len(cases) == 5, (
-            f"expected the read bounded to the 5-row cap, got {len(cases)} "
-            f"(seeded {case_count})"
-        )
+        assert exc_info.value.table == "test_case_results"
+        assert exc_info.value.org_id == org_id
         after = counter._value.get()
         assert after - before == 1, (
-            "DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL did not record "
-            f"the truncation (before={before}, after={after})"
+            "DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL did not "
+            f"record the guard tripping (before={before}, after={after})"
         )
     finally:
         sink.client.command(

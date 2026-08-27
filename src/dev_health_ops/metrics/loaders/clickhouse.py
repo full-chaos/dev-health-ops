@@ -69,13 +69,18 @@ async def _clickhouse_query_dicts(
 # CHAOS-4350: hard row cap for the testops loader reads (test_suite_results /
 # test_case_results). `query_dicts` materializes the FULL result set with
 # `list(result.result_rows)` -- no LIMIT, no streaming -- and
-# `load_testops_test_data` is called once per backfilled day with a rolling
-# 30-day window, org-wide (repo_id is frequently None). An org with a heavy
-# CI suite has no natural upper bound on rows in that shape, which is what
-# produced the observed MemoryError in the compatibility-bridge runner.
-# Default is generous (metrics compute over the whole set, so truncating
-# early degrades accuracy) but bounded -- unlike the previous unconditional
-# materialization, which was unbounded and silent.
+# `load_testops_test_data` was previously called once per backfilled day with
+# a rolling 30-day window, org-wide (repo_id is frequently None). An org with
+# a heavy CI suite has no natural upper bound on rows in that shape, which is
+# what produced the observed MemoryError in the compatibility-bridge runner.
+#
+# This is a GUARD, not a degrade: chris's ruling (2026-08-26) is that a LIMIT
+# which lets computation proceed on a truncated window produces WRONG testops
+# metrics silently-ish -- not allowed. `test_suite_results`/`test_case_results`
+# are ordered by (repo_id, run_id, ...), not event time, so an unordered LIMIT
+# can drop today's rows (or whole repos) while keeping stale ones -- confirmed
+# by codex review of the first (truncating) version of this fix. So exceeding
+# the cap FAILS the read instead of returning a partial result.
 _TESTOPS_LOADER_MAX_ROWS_ENV = "DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"
 _TESTOPS_LOADER_DEFAULT_MAX_ROWS = 200_000
 
@@ -91,29 +96,73 @@ def _testops_loader_max_rows() -> int:
     return value if value > 0 else _TESTOPS_LOADER_DEFAULT_MAX_ROWS
 
 
-def _cap_rows(
-    rows: list[dict[str, Any]], *, table: str, max_rows: int
-) -> list[dict[str, Any]]:
-    """Bound `rows` to `max_rows`, recording truncation loudly (never silent).
+class TestopsRowCapExceeded(MemoryError):
+    """A testops loader read exceeded its configured hard row cap.
+
+    Deliberately a ``MemoryError`` subclass, not a new exception hierarchy.
+    ``worker_metrics_runner.py``'s ``main()`` already classifies a bare
+    ``MemoryError`` as ``EXIT_RESOURCE_EXHAUSTED`` (CHAOS-4264), which the
+    parent (``worker_metrics.py``) durably persists as a classified
+    ``_CompatibilityProcessFailure(reason="resource_exhausted")`` -- the same
+    failure_reason column and counter this ticket asked to use, already wired
+    end to end, with `safe_to_retry` correctly derived from whether any
+    progress lines were emitted before the failure. Raising a new,
+    unclassified exception type here would either fall through to the
+    generic ``process_failed`` bucket (losing the distinction) or require
+    extending the ``{process_signaled, resource_exhausted, process_failed}``
+    cross-process/cross-language vocabulary while CHAOS-4316/CHAOS-4317 are
+    concurrently extending the same shared classification -- reusing the
+    resource-exhaustion bucket (this genuinely IS a resource bound, just
+    enforced before the OS/rlimit would have) avoids that collision. The
+    table/org_id/row counts are still visible via this exception's message,
+    the log line, and the ``DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL``
+    counter below -- not silently folded into a generic MemoryError.
+    """
+
+    def __init__(self, *, table: str, org_id: str, max_rows: int, fetched: int) -> None:
+        self.table = table
+        self.org_id = org_id
+        self.max_rows = max_rows
+        self.fetched = fetched
+        super().__init__(
+            f"testops loader row cap exceeded: table={table!r} org_id={org_id!r} "
+            f"max_rows={max_rows} fetched>={fetched} -- refusing to compute "
+            "testops metrics on a partial/truncated result "
+            f"(override with {_TESTOPS_LOADER_MAX_ROWS_ENV})"
+        )
+
+
+def _enforce_row_cap(
+    rows: list[dict[str, Any]], *, table: str, org_id: str, max_rows: int
+) -> None:
+    """Raise :class:`TestopsRowCapExceeded` if `rows` exceeds `max_rows`.
 
     The caller already asked ClickHouse for at most `max_rows + 1` rows (via
     a `LIMIT` bound to the same cap), so a length beyond `max_rows` here
-    means the true result set was larger than the cap and got truncated.
+    means the true result set was larger than the cap -- never silently
+    truncate; the caller must not proceed to compute on it.
     """
     from dev_health_ops.metrics.prometheus import (
+        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL,
         DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED,
-        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL,
     )
 
     if len(rows) > max_rows:
-        logger.warning(
-            "testops loader read hit the hard row cap; truncating",
-            extra={"table": table, "max_rows": max_rows, "fetched": len(rows)},
+        logger.error(
+            "testops loader read exceeded the hard row cap; refusing to "
+            "compute on a partial result",
+            extra={
+                "table": table,
+                "org_id": org_id,
+                "max_rows": max_rows,
+                "fetched": len(rows),
+            },
         )
-        DEV_HEALTH_TESTOPS_LOADER_ROWS_TRUNCATED_TOTAL.labels(table=table).inc()
-        rows = rows[:max_rows]
+        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL.labels(table=table).inc()
+        raise TestopsRowCapExceeded(
+            table=table, org_id=org_id, max_rows=max_rows, fetched=len(rows)
+        )
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED.labels(table=table).observe(len(rows))
-    return rows
 
 
 def _decode_provider_identities_json(value: Any) -> dict[str, list[str]]:
@@ -1295,6 +1344,13 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         {org_filter}
         LIMIT {{_row_cap:UInt64}}
         """
+        # CHAOS-4350 (codex P1): project only what compute_test_metrics_daily
+        # (and callers that inspect org_id, e.g. this method's own org-scope
+        # tests) actually read. `failure_message`/`failure_type`/`stack_trace`
+        # (up to 4KB each) and `class_name`/`is_quarantined` are unused by any
+        # production caller -- at cap-sized volumes those text columns alone
+        # can exceed the compatibility runner's memory bound even with a
+        # generous row cap, so they never leave ClickHouse for this read path.
         case_query = f"""
         SELECT
           c.repo_id,
@@ -1302,14 +1358,9 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           c.suite_id,
           c.case_id,
           c.case_name,
-          c.class_name,
           c.status,
           c.duration_seconds,
           c.retry_attempt,
-          c.failure_message,
-          c.failure_type,
-          c.stack_trace,
-          c.is_quarantined,
           c.org_id
         FROM test_case_results AS c FINAL
         INNER JOIN test_suite_results AS s FINAL
@@ -1326,10 +1377,22 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
 
         suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
         case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
-        suite_dicts = _cap_rows(
-            suite_dicts, table="test_suite_results", max_rows=max_rows
+        # CHAOS-4350: a guard, not a degrade -- both tables are ordered by
+        # (repo_id, run_id, ...), not event time, so an unordered LIMIT that
+        # let computation proceed could silently drop today's rows (or whole
+        # repos) while keeping stale ones. Exceeding the cap fails this read
+        # (raises TestopsRowCapExceeded, a MemoryError) instead of returning
+        # a partial result for compute_test_metrics_daily to compute wrong
+        # numbers from.
+        _enforce_row_cap(
+            suite_dicts,
+            table="test_suite_results",
+            org_id=self.org_id,
+            max_rows=max_rows,
         )
-        case_dicts = _cap_rows(case_dicts, table="test_case_results", max_rows=max_rows)
+        _enforce_row_cap(
+            case_dicts, table="test_case_results", org_id=self.org_id, max_rows=max_rows
+        )
         return (
             [cast(TestSuiteResultRow, dict(row)) for row in suite_dicts],
             [cast(TestCaseResultRow, dict(row)) for row in case_dicts],

@@ -853,6 +853,42 @@ async def run_daily_metrics_job(
             current += timedelta(days=1)
         return result
 
+    # CHAOS-4350: testops_loader is just `loader` (kept as its own name for
+    # readability at the testops call sites below). Mirrors
+    # `daily_commit_cache`/`_get_cached_commits_for_window` above: before
+    # this fix, `load_testops_test_data` was called with a fresh rolling
+    # 30-day window on EVERY backfilled day, so a `--backfill N` run
+    # refetched a full org's 30-day test-case history N times over. Fetching
+    # one calendar day at a time and caching it means each day is fetched
+    # from ClickHouse exactly once for the whole run, and each individual
+    # read is bounded to a single day's volume (not 30 days at once) --
+    # both lowering total rows transferred and making the CHAOS-4350 hard
+    # row cap (metrics/loaders/clickhouse.py) far less likely to trip
+    # during ordinary operation.
+    testops_loader: Any = loader
+    daily_testops_cache: dict[date, tuple[list[Any], list[Any]]] = {}
+
+    async def _get_cached_testops_for_window(
+        window_start: date, window_end: date
+    ) -> tuple[list[Any], list[Any]]:
+        """Load testops suite/case rows for a date range using a per-day cache."""
+        suites: list[Any] = []
+        cases: list[Any] = []
+        current = window_start
+        while current <= window_end:
+            if current not in daily_testops_cache:
+                d_start = datetime.combine(current, time.min, tzinfo=timezone.utc)
+                d_end = d_start + timedelta(days=1)
+                day_suites, day_cases = await testops_loader.load_testops_test_data(
+                    d_start, d_end, repo_id=repo_id
+                )
+                daily_testops_cache[current] = (day_suites, day_cases)
+            day_suites, day_cases = daily_testops_cache[current]
+            suites.extend(day_suites)
+            cases.extend(day_cases)
+            current += timedelta(days=1)
+        return suites, cases
+
     # Rolling buffer for pipeline stability (7-day window)
     pipeline_metrics_buffer: list[Any] = []
 
@@ -967,7 +1003,6 @@ async def run_daily_metrics_job(
         )
         daily_commit_cache[d] = commit_rows
 
-        testops_loader: Any = loader
         pipeline_rows, deployment_rows = await loader.load_cicd_data(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
@@ -979,11 +1014,7 @@ async def run_daily_metrics_job(
         (
             testops_suite_rows,
             testops_case_rows,
-        ) = await testops_loader.load_testops_test_data(
-            datetime.combine(h_start_date, time.min, tzinfo=timezone.utc),
-            end,
-            repo_id=repo_id,
-        )
+        ) = await _get_cached_testops_for_window(h_start_date, d)
         coverage_rows = await testops_loader.load_testops_coverage_data(
             start, end, repo_id=repo_id
         )

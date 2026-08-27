@@ -1420,6 +1420,97 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             [cast(TestCaseResultRow, dict(row)) for row in case_dicts],
         )
 
+    async def load_testops_historical_failed_case_names(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None,
+    ) -> dict[uuid.UUID, set[str]]:
+        """Distinct (repo_id, case_name) pairs that failed at least once in
+        `[start, end)`, pushed into SQL instead of materializing raw rows.
+
+        CHAOS-4350 PR 2: `compute_test_metrics_daily`'s only use of
+        historical (non-current-day) case data is
+        `historical_failed_names_by_repo` -- a SET of case names that failed
+        outside today's runs, used solely for `failure_recurrence_score`
+        (`len(current_failed_names & historical_failed_names_by_repo)`).
+        Nothing else about the historical window is ever read: not
+        `duration_seconds`, not `retry_attempt`, not even how MANY times a
+        name failed. PR 1's `load_testops_test_data` fetched every raw
+        historical case row to derive this set in Python -- for a busy repo
+        (1M+ case rows/30 days measured on the real local stack) that is the
+        exact unbounded-materialization failure mode CHAOS-4350 exists to
+        close, moved one query up. `GROUP BY case_name` here is bounded by
+        the number of DISTINCT failing test names (order of hundreds to
+        low thousands even for a huge repo), not by run count x day count.
+
+        `start`/`end` are the PARTITION DAY's own history window
+        (`[day-29, day)`), not wall-clock "now" -- callers must pass the
+        window relative to the day being computed, same as
+        `load_testops_test_data`'s window.
+        """
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            repo_filter = " AND s.repo_id = {repo_id:UUID}"
+
+        org_filter = self._org_filter(alias="s")
+        params = self._inject_org_id(params)
+
+        max_rows = _testops_loader_max_rows()
+        params = {**params, "_row_cap": max_rows + 1}
+
+        query = f"""
+        SELECT
+          s.repo_id AS repo_id,
+          c.case_name AS case_name,
+          count() AS occurrences
+        FROM test_case_results AS c FINAL
+        INNER JOIN test_suite_results AS s FINAL
+          ON (s.repo_id = c.repo_id)
+         AND (s.run_id = c.run_id)
+         AND (s.suite_id = c.suite_id)
+         AND (s.org_id = c.org_id)
+        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
+          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+          AND c.status = 'failed'
+        {repo_filter}
+        {org_filter}
+        GROUP BY s.repo_id, c.case_name
+        LIMIT {{_row_cap:UInt64}}
+        """
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
+        # Backstop cap (team-lead: keep it on both queries): the aggregate is
+        # already tiny relative to raw rows, but an org with an enormous or
+        # ever-churning distinct-name set should still fail loud rather than
+        # grow unbounded.
+        _enforce_row_cap(
+            dicts,
+            table="test_case_results:historical_names",
+            org_id=self.org_id,
+            max_rows=max_rows,
+        )
+
+        from dev_health_ops.metrics.prometheus import (
+            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
+            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED,
+        )
+
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED.observe(len(dicts))
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM.observe(
+            sum(int(row.get("occurrences") or 0) for row in dicts)
+        )
+
+        result: dict[uuid.UUID, set[str]] = {}
+        for row in dicts:
+            parsed = parse_uuid(row.get("repo_id"))
+            case_name = row.get("case_name")
+            if parsed is None or not case_name:
+                continue
+            result.setdefault(parsed, set()).add(str(case_name))
+        return result
+
     async def load_testops_coverage_data(
         self,
         start: datetime,

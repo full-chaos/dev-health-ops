@@ -267,3 +267,106 @@ async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
         "the case query was issued even though the suite read alone "
         "already exceeded the cap"
     )
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_query_shape(mock_query_dicts):
+    """CHAOS-4350 PR 2: the historical aggregate must be FINAL on both
+    joined tables, org+repo scoped, capped, and status='failed'-filtered --
+    pushed into SQL instead of fetching raw historical case rows.
+    """
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 31, tzinfo=timezone.utc)
+    repo_id = uuid.uuid4()
+
+    await loader.load_testops_historical_failed_case_names(start, end, repo_id=repo_id)
+
+    assert mock_query_dicts.call_count == 1
+    sql = mock_query_dicts.call_args.args[1]
+    params = mock_query_dicts.call_args.args[2]
+    assert "test_case_results AS c FINAL" in sql
+    assert "test_suite_results AS s FINAL" in sql
+    assert "c.status = 'failed'" in sql
+    assert "GROUP BY s.repo_id, c.case_name" in sql
+    assert "s.repo_id = {repo_id:UUID}" in sql
+    assert "AND s.org_id = {org_id:String}" in sql
+    assert "LIMIT {_row_cap:UInt64}" in sql
+    assert params.get("repo_id") == str(repo_id)
+    assert params.get("org_id") == "acme-corp"
+    assert params.get("start") == start.replace(tzinfo=None)
+    assert params.get("end") == end.replace(tzinfo=None)
+    assert not DOTTED_PARAM.search(sql)
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_groups_by_repo(mock_query_dicts):
+    """Returns a dict[repo_id, set[case_name]] built from the aggregate rows,
+    and org-wide (repo_id=None) calls still separate results per repo_id."""
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    repo_a = uuid.uuid4()
+    repo_b = uuid.uuid4()
+    mock_query_dicts.return_value = [
+        {"repo_id": str(repo_a), "case_name": "test_flaky", "occurrences": 3},
+        {"repo_id": str(repo_a), "case_name": "test_broken", "occurrences": 12},
+        {"repo_id": str(repo_b), "case_name": "test_other", "occurrences": 1},
+    ]
+
+    result = await loader.load_testops_historical_failed_case_names(
+        datetime.now(timezone.utc) - timedelta(days=29),
+        datetime.now(timezone.utc),
+        repo_id=None,
+    )
+
+    assert result == {
+        repo_a: {"test_flaky", "test_broken"},
+        repo_b: {"test_other"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_historical_failed_case_names_records_telemetry(monkeypatch):
+    """rows_fetched (aggregate row count) vs rows_aggregated_from
+    (sum(occurrences), the raw row volume the aggregate replaced) -- the gap
+    between the two is the measured win (CHAOS-4350 PR 2, team-lead spec).
+    """
+    from dev_health_ops.metrics.prometheus import (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED,
+    )
+
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    repo_id = uuid.uuid4()
+
+    async def fake_query_dicts(client, query, params):
+        return [
+            {"repo_id": str(repo_id), "case_name": "test_a", "occurrences": 100_000},
+            {"repo_id": str(repo_id), "case_name": "test_b", "occurrences": 250_000},
+        ]
+
+    fetched_sum_before = DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get()
+    aggregated_sum_before = (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
+    )
+
+    with patch(
+        "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
+        fake_query_dicts,
+    ):
+        result = await loader.load_testops_historical_failed_case_names(
+            datetime.now(timezone.utc) - timedelta(days=29),
+            datetime.now(timezone.utc),
+            repo_id=repo_id,
+        )
+
+    assert result == {repo_id: {"test_a", "test_b"}}
+    # 2 aggregate rows fetched (small) replaced 350,000 raw row occurrences
+    # (the volume PR 1 alone would still have had to materialize for this
+    # signal) -- that gap is the whole point of PR 2.
+    assert DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED._sum.get() == pytest.approx(
+        fetched_sum_before + 2
+    )
+    assert (
+        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
+        == pytest.approx(aggregated_sum_before + 350_000)
+    )

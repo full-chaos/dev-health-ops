@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -212,9 +212,25 @@ def compute_test_metrics_daily(
     computed_at: datetime,
     repo_team_resolver: RepoPatternTeamResolver | None = None,
     repo_names_by_id: dict[uuid.UUID, str] | None = None,
+    historical_failed_names_by_repo: Mapping[uuid.UUID, set[str]] | None = None,
 ) -> list[TestMetricsDailyRecord]:
+    """Compute per-repo testops metrics for `day`.
+
+    CHAOS-4350 PR 2: `historical_failed_names_by_repo` -- case names that
+    failed at least once outside today's runs, used only for
+    `failure_recurrence_score` -- is now an INPUT, computed by the caller
+    via a SQL `GROUP BY` aggregate
+    (`ClickHouseDataLoader.load_testops_historical_failed_case_names`)
+    instead of being derived here from raw historical case rows. This
+    function no longer needs (or expects) `case_results` to contain
+    anything but the current day's cases; the `run_id`-membership filter
+    below still guards against a caller accidentally passing wider data
+    (harmless, not required for correctness on the intended single-day
+    input).
+    """
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
+    historical_failed_names_by_repo = historical_failed_names_by_repo or {}
 
     current_suites_by_repo: dict[uuid.UUID, list[TestSuiteResultRow]] = defaultdict(
         list
@@ -232,20 +248,11 @@ def compute_test_metrics_daily(
         current_run_ids_by_repo[repo_id].add(str(row["run_id"]))
 
     current_cases_by_repo: dict[uuid.UUID, list[TestCaseResultRow]] = defaultdict(list)
-    historical_failed_names_by_repo: dict[uuid.UUID, set[str]] = defaultdict(set)
     for case_row in case_results:
         repo_id = case_row["repo_id"]
         run_id = str(case_row["run_id"])
-        raw_status = case_row.get("status")
-        normalized_status = _normalize_test_status(
-            raw_status if isinstance(raw_status, str) else None
-        )
         if run_id in current_run_ids_by_repo.get(repo_id, set()):
             current_cases_by_repo[repo_id].append(case_row)
-        elif normalized_status == "failed":
-            historical_failed_names_by_repo[repo_id].add(
-                str(case_row.get("case_name") or "")
-            )
 
     records: list[TestMetricsDailyRecord] = []
     repo_ids = sorted(

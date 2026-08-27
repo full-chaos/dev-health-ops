@@ -630,6 +630,43 @@ if _PROMETHEUS_AVAILABLE:
         ["attempt"],
     )
 
+    # CHAOS-4350 PR 2: per-call size of the historical-failed-case-names
+    # aggregate query, which replaced fetching every raw case row for the
+    # 29-day historical window with a `GROUP BY case_name` bounded by
+    # distinct failing test names. ROWS_FETCHED is what actually crossed the
+    # wire into Python (the aggregate row count -- small); ROWS_AGGREGATED_FROM
+    # is `sum(occurrences)` from the same query, i.e. the raw case-row volume
+    # this aggregation replaced -- the gap between the two IS the measured
+    # win. On the real local-stack repo that motivated this (org 70d529e0 /
+    # repo 7b9583ee, ~1.1M raw case rows/30d), ROWS_AGGREGATED_FROM tracks
+    # what PR 1 alone would still have had to materialize for this signal;
+    # ROWS_FETCHED tracks what this query actually returns.
+    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _prometheus_client_module.Histogram(
+        "devhealth_testops_historical_rows_fetched",
+        "Distinct (repo_id, case_name) rows returned by the historical "
+        "failed-case-names aggregate query per call (CHAOS-4350 PR 2).",
+        buckets=(1, 10, 50, 100, 500, 1_000, 5_000, 10_000),
+    )
+    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM = (
+        _prometheus_client_module.Histogram(
+            "devhealth_testops_historical_rows_aggregated_from",
+            "Sum of per-case-name occurrence counts behind one historical "
+            "failed-case-names aggregate call -- the raw test_case_results "
+            "row volume this query's GROUP BY replaced (CHAOS-4350 PR 2).",
+            buckets=(
+                1,
+                100,
+                1_000,
+                10_000,
+                50_000,
+                100_000,
+                500_000,
+                1_000_000,
+                2_000_000,
+            ),
+        )
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -677,6 +714,8 @@ else:
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
     DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL = _noop_counter()
+    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _noop_histogram()
+    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM = _noop_histogram()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()

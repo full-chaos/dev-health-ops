@@ -1625,6 +1625,12 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             await rss_task
         if stall_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
+                # Same CodeQL py/ineffectual-statement false positive as
+                # await rss_task above (dismissed at the GitHub
+                # code-scanning API level, alert #2155): the await blocks
+                # until the watchdog reacts to cancel(), guaranteeing its
+                # final state is visible before the classification below
+                # reads it -- the discarded return value is not the point.
                 await stall_task
         # codex R2: read the shared holder, NOT the task's return value --
         # cancelling rss_task almost always interrupts it inside

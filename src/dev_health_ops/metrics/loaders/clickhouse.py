@@ -15,6 +15,7 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
+from dev_health_ops.metrics.compute_testops import FAILURE_STATUSES
 from dev_health_ops.metrics.compute_work_items import (
     ManualFallbackRule,
     TeamAttributionCandidate,
@@ -1460,6 +1461,12 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
 
         max_rows = _testops_loader_max_rows()
         params = {**params, "_row_cap": max_rows + 1}
+        # Must match _normalize_test_status()'s failure vocabulary
+        # (dev_health_ops.metrics.compute_testops) exactly, or historical
+        # rows with a canonical "error"/"timeout"/etc status silently drop
+        # out of failure_recurrence_score. lower(trim(...)) mirrors that
+        # function's `.strip().lower()` normalization.
+        params["_failure_statuses"] = sorted(FAILURE_STATUSES)
 
         query = f"""
         SELECT
@@ -1474,7 +1481,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
          AND (s.org_id = c.org_id)
         WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
-          AND c.status = 'failed'
+          AND lower(trim(c.status)) IN {{_failure_statuses:Array(String)}}
         {repo_filter}
         {org_filter}
         GROUP BY s.repo_id, c.case_name

@@ -6,9 +6,13 @@ historical case row with a `GROUP BY case_name` aggregate. This test proves
 that swap is loss-free for what `compute_test_metrics_daily` actually needs:
 seeds real cross-day data (today's cases -- some flaky, some clean -- plus
 historical failures on earlier days, including one case name that fails
-both historically AND today), fetches the historical set via the SQL
-aggregate, independently derives the same set from the raw historical rows
-in Python (the pre-PR-2 algorithm, inlined here as the reference), and
+both historically AND today, and one that recurs via a non-literal
+failure-equivalent status ("error", per
+`compute_testops._normalize_test_status`) rather than the literal
+"failed" string), fetches the historical set via the SQL aggregate,
+independently derives the same set from the raw historical rows in Python
+(the pre-PR-2 algorithm, inlined here as the reference -- using the SAME
+normalizer, since that is what the pre-PR-2 code actually did), and
 asserts they're identical. Then runs `compute_test_metrics_daily` with each
 and asserts `flake_rate` AND `failure_recurrence_score` match -- flake_rate
 should be unaffected by the historical-fetch change (it's computed purely
@@ -188,9 +192,14 @@ async def _reference_historical_failed_names(
     sink, *, repo_id: uuid.UUID, org_id: str, start: datetime, end: datetime
 ) -> dict[uuid.UUID, set[str]]:
     """Pre-PR-2 algorithm, inlined: iterate every raw historical case row
-    and collect failed case_names. This is the ground truth PR 2's SQL
-    aggregate must match.
+    and collect failed case_names, using the SAME failure-equivalent
+    vocabulary as `_normalize_test_status` (the pre-PR-2 code ran every
+    historical row through that normalizer too -- a literal `status ==
+    "failed"` check here would NOT be ground truth, it would just be the
+    other place CHAOS-4350 PR 2's regression could hide). This is the
+    ground truth PR 2's SQL aggregate must match.
     """
+    from dev_health_ops.metrics.compute_testops import _normalize_test_status
     from dev_health_ops.metrics.loaders.clickhouse import _clickhouse_query_dicts
 
     query = """
@@ -214,7 +223,7 @@ async def _reference_historical_failed_names(
     )
     result: dict[uuid.UUID, set[str]] = {}
     for row in rows:
-        if row.get("status") != "failed":
+        if _normalize_test_status(row.get("status")) != "failed":
             continue
         rid = row["repo_id"]
         result.setdefault(rid, set()).add(str(row["case_name"]))
@@ -238,7 +247,11 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
     rows_to_insert_cases = []
 
     # Historical day (5 days ago): "test_recurring" fails (will recur
-    # today), "test_only_historical" also fails (won't recur).
+    # today), "test_only_historical" also fails (won't recur),
+    # "test_error_recurring" fails with the canonical "error" status (NOT
+    # the literal "failed" string) -- CHAOS-4350 PR2 round-1 codex finding:
+    # this must still count as a historical failure, per
+    # _normalize_test_status's full failure-equivalent vocabulary.
     rows_to_insert_suites.append(
         _suite_row(
             repo_id=repo_id,
@@ -246,9 +259,9 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
             suite_id="suite-hist",
             org_id=org_id,
             when=five_days_ago,
-            total=2,
+            total=3,
             passed=0,
-            failed=2,
+            failed=3,
         )
     )
     rows_to_insert_cases += [
@@ -272,11 +285,22 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
             org_id=org_id,
             when=five_days_ago,
         ),
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-hist",
+            suite_id="suite-hist",
+            case_id="h3",
+            case_name="test_error_recurring",
+            status="error",
+            org_id=org_id,
+            when=five_days_ago,
+        ),
     ]
 
     # Today: "test_flaky" fails then passes on retry (same-day flake, must
     # be detected regardless of history); "test_recurring" fails again
-    # (recurrence); "test_clean" passes cleanly.
+    # (recurrence); "test_clean" passes cleanly; "test_error_recurring"
+    # fails again today (recurrence of the historical "error"-status case).
     rows_to_insert_suites.append(
         _suite_row(
             repo_id=repo_id,
@@ -284,9 +308,9 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
             suite_id="suite-today",
             org_id=org_id,
             when=today_start + timedelta(hours=1),
-            total=4,
+            total=5,
             passed=2,
-            failed=2,
+            failed=3,
         )
     )
     rows_to_insert_cases += [
@@ -332,6 +356,16 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
             org_id=org_id,
             when=today_start,
         ),
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-today",
+            suite_id="suite-today",
+            case_id="t4",
+            case_name="test_error_recurring",
+            status="failed",
+            org_id=org_id,
+            when=today_start,
+        ),
     ]
 
     try:
@@ -361,7 +395,13 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
         assert (
             aggregated_historical
             == reference_historical
-            == {repo_id: {"test_recurring", "test_only_historical"}}
+            == {
+                repo_id: {
+                    "test_recurring",
+                    "test_only_historical",
+                    "test_error_recurring",
+                }
+            }
         )
 
         suite_rows, case_rows = await loader.load_testops_test_data(
@@ -390,14 +430,17 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
         # (and must actually detect test_flaky) regardless of which
         # historical source was used.
         assert rec_agg.flake_rate == rec_ref.flake_rate
-        assert rec_agg.flake_rate == pytest.approx(1 / 3)  # 1 of 3 distinct
+        assert rec_agg.flake_rate == pytest.approx(1 / 4)  # 1 of 4 distinct
 
         # failure_recurrence_score: the whole point of the aggregate --
         # must match between the SQL-aggregated and raw-row-reference paths.
         assert rec_agg.failure_recurrence_score == rec_ref.failure_recurrence_score
-        # 1 of 2 today-failed names ("test_recurring") also failed
-        # historically; "test_flaky" failed today but not historically.
-        assert rec_agg.failure_recurrence_score == pytest.approx(0.5)
+        # 2 of 3 today-failed names ("test_recurring", "test_error_recurring")
+        # also failed historically; "test_flaky" failed today but not
+        # historically. Pre-fix (literal status='failed' in SQL), the
+        # historical set would have excluded "test_error_recurring" (its
+        # historical status is "error"), giving a wrong 1/3 here instead.
+        assert rec_agg.failure_recurrence_score == pytest.approx(2 / 3)
     finally:
         sink.client.command(
             "ALTER TABLE test_suite_results DELETE WHERE org_id = {org:String}",

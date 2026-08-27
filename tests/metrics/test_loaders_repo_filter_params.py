@@ -272,8 +272,11 @@ async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
 @pytest.mark.asyncio
 async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     """CHAOS-4350 PR 2: the historical aggregate must be FINAL on both
-    joined tables, org+repo scoped, capped, and status='failed'-filtered --
-    pushed into SQL instead of fetching raw historical case rows.
+    joined tables, org+repo scoped, capped, and filtered on the FULL
+    failure-equivalent status vocabulary (matching
+    compute_testops._normalize_test_status(), not just the literal
+    'failed' string) -- pushed into SQL instead of fetching raw
+    historical case rows.
     """
     loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -287,7 +290,7 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     params = mock_query_dicts.call_args.args[2]
     assert "test_case_results AS c FINAL" in sql
     assert "test_suite_results AS s FINAL" in sql
-    assert "c.status = 'failed'" in sql
+    assert "lower(trim(c.status)) IN {_failure_statuses:Array(String)}" in sql
     assert "GROUP BY s.repo_id, c.case_name" in sql
     assert "s.repo_id = {repo_id:UUID}" in sql
     assert "AND s.org_id = {org_id:String}" in sql
@@ -296,6 +299,14 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     assert params.get("org_id") == "acme-corp"
     assert params.get("start") == start.replace(tzinfo=None)
     assert params.get("end") == end.replace(tzinfo=None)
+    assert set(params.get("_failure_statuses")) == {
+        "failure",
+        "failed",
+        "error",
+        "errors",
+        "timeout",
+        "timed_out",
+    }
     assert not DOTTED_PARAM.search(sql)
 
 

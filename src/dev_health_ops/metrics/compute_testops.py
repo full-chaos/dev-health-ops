@@ -47,11 +47,20 @@ def _normalize_pipeline_status(status: str | None) -> str:
     return normalized
 
 
+# Statuses that _normalize_test_status() treats as failure-equivalent. Exposed as a
+# module-level constant so other call sites (e.g. the historical-failure SQL aggregate
+# in loaders/clickhouse.py) can match this exact vocabulary instead of re-deriving it --
+# a second hardcoded copy is what let CHAOS-4350 PR2's SQL predicate drift from this set.
+FAILURE_STATUSES = frozenset(
+    {"failure", "failed", "error", "errors", "timeout", "timed_out"}
+)
+
+
 def _normalize_test_status(status: str | None) -> str:
     normalized = (status or "").strip().lower()
     if normalized in {"success", "succeeded", "passed"}:
         return "passed"
-    if normalized in {"failure", "failed", "error", "errors", "timeout", "timed_out"}:
+    if normalized in FAILURE_STATUSES:
         return "failed"
     if normalized in {"quarantined", "quarantine"}:
         return "quarantined"

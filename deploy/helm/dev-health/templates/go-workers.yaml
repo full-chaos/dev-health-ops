@@ -62,22 +62,29 @@ spec:
             - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
             - "--http-addr=:8080"
             {{- /*
-              CHAOS-4351: `heavy` is the only group whose queue set includes
-              `metrics` (see values.yaml's own comment on this group), i.e.
-              the only one that calls the metrics compatibility bridge --
-              point it at the dedicated metricsApi Service instead of api's,
-              same rationale as compose.go-workers.yml's flag-bridge-url-heavy
-              anchor. Falls back to `api` if metricsApi isn't enabled (e.g. a
+              CHAOS-4351: whichever group's queue set includes `metrics` is
+              the one that calls the metrics compatibility bridge -- point
+              it at the dedicated metricsApi Service instead of api's, same
+              rationale as compose.go-workers.yml's flag-bridge-url-heavy
+              anchor. Selected by QUEUE MEMBERSHIP, not the group's `name`
+              (codex review, PR #1938 round-3 P2) -- a name match silently
+              stops overriding the right group the moment an operator's
+              values.yaml reassigns the `metrics` queue away from `heavy`
+              (or onto a second group too), leaving that group's bridge
+              calls quietly still sharing api's cgroup. `has` needs a real
+              list even for groups (reconciler/scheduler) that declare no
+              `queues` key at all, hence the `default (list)`.
+              Falls back to `api` if metricsApi isn't enabled (e.g. a
               fresh install with goWorkers scaled to 0 everywhere), so this
               never renders a reference to a Service that doesn't exist.
               $group.bridgeUrl (values.yaml) overrides either default. Both
               defaults read the target's own .port value (codex review, PR
-              #1938 P2) -- a hardcoded :8000 would silently break if an
-              operator overrides api.port/metricsApi.port, since the
+              #1938 round-1 P2) -- a hardcoded :8000 would silently break if
+              an operator overrides api.port/metricsApi.port, since the
               Service's actual listening port would no longer match what
               this flag tells the Go binary to dial.
             */}}
-            {{- if eq $group.name "heavy" }}
+            {{- if has "metrics" ($group.queues | default (list)) }}
             {{- $defaultBridgeUrl := printf "http://%s-api:%v" (include "dev-health.fullname" $) $.Values.api.port }}
             {{- if $.Values.metricsApi.enabled }}
             {{- $defaultBridgeUrl = printf "http://%s-metrics-api:%v" (include "dev-health.fullname" $) $.Values.metricsApi.port }}

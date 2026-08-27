@@ -220,6 +220,17 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      # codex review (PR #1938, P1): this group's --operational-bridge-url
+      # points at metrics-api, a separate profile-gated service with no
+      # other dependency edge into it -- a targeted `docker compose up -d
+      # go-worker-heavy` would otherwise start this worker with nothing
+      # ever bringing metrics-api up, so every compatibility-bridge call
+      # fails against a container that was never started. Gating on its
+      # healthcheck (not just container-started) also means this worker
+      # doesn't start dispatching metrics/workgraph jobs before the
+      # bridge target can actually answer them.
+      metrics-api:
+        condition: service_healthy
     deploy: &go-worker-resources
       replicas: 0
       resources:

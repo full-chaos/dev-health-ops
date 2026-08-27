@@ -1862,6 +1862,16 @@ def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
                 f"{name}: expected to stay pointed at api, got {bridge_args[0]}"
             )
 
+    # codex review (PR #1938, round-3 P1) falsifier: a targeted
+    # `docker compose up -d go-worker-heavy` starts only the requested
+    # service plus its depends_on graph -- without metrics-api in that
+    # graph, this worker would start dispatching metrics/workgraph jobs
+    # against a bridge target that was never brought up.
+    heavy_deps = go_worker_services["go-worker-heavy"].get("depends_on") or {}
+    assert heavy_deps.get("metrics-api", {}).get("condition") == "service_healthy", (
+        f"go-worker-heavy must depend on metrics-api being healthy, got {heavy_deps}"
+    )
+
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() -> None:
@@ -1954,6 +1964,105 @@ def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() ->
             assert bridge == [], (
                 f"{group}: expected no explicit bridge-url override, got {bridge}"
             )
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_bridge_url_override_follows_the_metrics_queue_not_the_group_name(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-4351 codex review (PR #1938 round-3 P2) falsifier: the previous
+    `{{- if eq $group.name "heavy" }}` selection silently stopped overriding
+    anything the moment an operator's values.yaml reassigned the `metrics`
+    queue to a differently-named group -- that group's bridge calls would
+    keep sharing api's cgroup with no error, no warning, nothing. Render
+    with `metrics` moved onto a group named `ops` instead of `heavy` and
+    confirm the override follows the QUEUE, not the name.
+    """
+    overrides = tmp_path / "values-override.yaml"
+    overrides.write_text(
+        yaml.safe_dump(
+            {
+                "metricsApi": {"enabled": True},
+                "goWorkers": {
+                    "groups": [
+                        {
+                            "name": "heavy",
+                            "image": "ghcr.io/full-chaos/dev-health-go-worker:latest",
+                            "queues": ["investment", "reports", "workgraph"],
+                            "queueConcurrency": {
+                                "investment": 1,
+                                "reports": 2,
+                                "workgraph": 1,
+                            },
+                            "replicas": 0,
+                            "terminationGracePeriodSeconds": 7260,
+                            "resources": {
+                                "requests": {"cpu": "250m", "memory": "256Mi"},
+                                "limits": {"cpu": "1", "memory": "1Gi"},
+                            },
+                            "autoscaling": {"enabled": False},
+                        },
+                        {
+                            "name": "ops",
+                            "image": "ghcr.io/full-chaos/dev-health-go-worker:latest",
+                            "queues": [
+                                "coverage",
+                                "heartbeat",
+                                "retention",
+                                "webhooks",
+                                "metrics",
+                            ],
+                            "queueConcurrency": {
+                                "coverage": 1,
+                                "heartbeat": 1,
+                                "retention": 1,
+                                "webhooks": 4,
+                                "metrics": 2,
+                            },
+                            "replicas": 0,
+                            "terminationGracePeriodSeconds": 960,
+                            "resources": {
+                                "requests": {"cpu": "250m", "memory": "256Mi"},
+                                "limits": {"cpu": "1", "memory": "1Gi"},
+                            },
+                            "autoscaling": {"enabled": False},
+                        },
+                    ]
+                },
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "phase1",
+            str(_HELM_CHART),
+            "-f",
+            str(overrides),
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    docs = list(yaml.safe_load_all(result.stdout))
+    by_group = {
+        doc["metadata"]["labels"]["dev-health.io/worker-group"]: doc
+        for doc in docs
+        if doc and doc.get("kind") == "Deployment"
+    }
+    assert set(by_group) == {"heavy", "ops"}
+
+    def bridge_args(group: str) -> list[str]:
+        args = by_group[group]["spec"]["template"]["spec"]["containers"][0]["args"]
+        return [a for a in args if a.startswith("--operational-bridge-url=")]
+
+    assert bridge_args("ops") == [
+        "--operational-bridge-url=http://phase1-dev-health-metrics-api:8000"
+    ]
+    assert bridge_args("heavy") == []
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")

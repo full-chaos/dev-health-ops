@@ -928,6 +928,92 @@ func TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason(t *testing.T)
 	}
 }
 
+// TestPostgresStoreFailPartitionPermanentlyPersistsAgainstLiveSchema is the
+// CHAOS-4361 live-Postgres proof for the write PartitionHandler.Work relies
+// on when the compatibility bridge reports a claim stuck "ambiguous"
+// (CHAOS-4319): a freshly claimed partition (real lease, real claim_token,
+// real 'running' status, exactly what ClaimPartition just produced) must let
+// FailPartitionPermanently land 'failed_permanent' with the given reason,
+// clear claim_token/lease_expires_at, and leave the row excluded from
+// DispatchablePartitions's reclaim set. daily_test.go's fakeStore-backed
+// tests (TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding)
+// already prove PartitionHandler.Work calls this correctly; they cannot
+// prove the real SQL against the real schema/constraints actually persists
+// it -- exactly the class of gap CHAOS-4043 exists to close, and exactly
+// what prod's 2026-08-27 incident showed happening: FailPartitionPermanently
+// "not landing" for real ambiguous_refused rows, three days running.
+func TestPostgresStoreFailPartitionPermanentlyPersistsAgainstLiveSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000401"
+		partitionID = "00000000-0000-4000-8000-000000000402"
+		orgID       = "00000000-0000-4000-8000-000000000409"
+	)
+	now := time.Date(2026, 8, 27, 16, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-08-26','daily-v1','running','pending',$3,$3)`, runID, orgID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,$3,$3)`, partitionID, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || claim == nil {
+		t.Fatalf("claim partition = %#v, %v", claim, err)
+	}
+
+	// This is the exact call PartitionHandler.Work makes on
+	// ErrCompatibilityAmbiguousStuck, against the exact claim ClaimPartition
+	// just returned -- no elapsed time, no renewal, nothing else touching the
+	// row in between, precisely daily.go:614.
+	if err := store.FailPartitionPermanently(ctx, *claim, "ambiguous_refused"); err != nil {
+		t.Fatalf("FailPartitionPermanently against live schema: %v", err)
+	}
+
+	var status string
+	var failureReason, claimToken *string
+	var leaseExpiresAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT status, failure_reason, claim_token::text, lease_expires_at FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
+	).Scan(&status, &failureReason, &claimToken, &leaseExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed_permanent" || failureReason == nil || *failureReason != "ambiguous_refused" || claimToken != nil || leaseExpiresAt != nil {
+		t.Fatalf("failed_permanent state = status=%s failure_reason=%v claim_token=%v lease_expires_at=%v, want failed_permanent/ambiguous_refused/nil/nil",
+			status, failureReason, claimToken, leaseExpiresAt)
+	}
+
+	// DispatchablePartitions' own filter (status IN ('pending', 'failed'))
+	// must now exclude this row -- the whole point of failed_permanent.
+	dispatchable, err := pool.Query(ctx, `SELECT id FROM daily_metrics_partitions WHERE id = $1::uuid AND status IN ('pending', 'failed')`, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatchable.Close()
+	if dispatchable.Next() {
+		t.Fatalf("failed_permanent partition %s is still dispatchable", partitionID)
+	}
+}
+
 // assertLeaseHeld requires a claim to have reported a live lease and to have
 // carried the exact remaining time on it. Each call site states the remainder
 // it predicts, so a claim that reports the wrong deadline cannot pass.

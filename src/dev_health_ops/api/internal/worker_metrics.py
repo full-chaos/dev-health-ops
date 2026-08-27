@@ -1106,13 +1106,40 @@ async def _reserve_execution(
     # resolution this ticket adds is _mark_retry_authorized in _execute,
     # which has real same-execution evidence (see safe_to_retry above) --
     # not a claim-staleness proxy for it.
+    reported_state = str(existing["state"])
+    # CHAOS-4361: a row stuck at "executing" -- not "ambiguous" -- means the
+    # process that owned it (worker_metrics._execute) died before any of its
+    # exception handlers could run: a kernel OOM kill of the whole api
+    # process, a container restart, a hard crash. Nothing ever marks that
+    # row ambiguous/retry_authorized/succeeded, so it sits at "executing"
+    # forever. Go's classifyCompatibilityError treats "executing" as
+    # transient (ErrCompatibilityAmbiguousRefused -- "resolves itself once
+    # that claim finishes or its lease expires"), which is correct ONLY
+    # while the original Go-side claim could still be alive. Once
+    # _original_claim_is_active is false, the original claim is provably
+    # dead (a fresh claim_token/lease already exists, or the lease itself
+    # expired) and this row can never resolve on its own -- every future
+    # retry will hit this identical 409 until River exhausts its attempt
+    # budget and silently discards the job, leaving the partition 'failed'
+    # with no failure_reason (the exact 2026-08-27 incident). Reporting
+    # "ambiguous" here does NOT resume or re-execute anything -- it only
+    # feeds Go's EXISTING state=="ambiguous" classification
+    # (ErrCompatibilityAmbiguousStuck), which durably fails the partition
+    # permanently and still requires a human /repair call before this
+    # ledger row can move again. That is strictly safer than today's
+    # infinite-retry loop, and no less conservative than a genuine
+    # 'ambiguous' row about whether partial output exists.
+    if reported_state == "executing" and not await _original_claim_is_active(
+        session, existing
+    ):
+        reported_state = "ambiguous"
     await session.commit()
     raise HTTPException(
         status_code=409,
         detail={
             "message": "Execution outcome requires readback",
             "execution_id": str(execution.id),
-            "state": str(existing["state"]),
+            "state": reported_state,
             "reason": "ambiguous_refused",
         },
     )
@@ -1817,9 +1844,14 @@ _CAPACITY_EXHAUSTED_SPAWN_ERRNOS = frozenset(
 
 
 async def _poll_peak_rss_bytes(
-    pid: int, peak_holder: list[int], *, interval_seconds: float = 0.25
+    process: asyncio.subprocess.Process,
+    peak_holder: list[int],
+    rss_kill_holder: list[bool],
+    *,
+    interval_seconds: float = 0.25,
 ) -> None:
-    """Sample /proc/<pid>/status while the runner subprocess is alive.
+    """Sample /proc/<pid>/status while the runner subprocess is alive, and
+    kill it the moment real RSS crosses the configured memory bound.
 
     A watermark read after the fact (e.g. resource.getrusage(RUSAGE_CHILDREN))
     is unusable here: ru_maxrss is a lifetime max across every child the api
@@ -1836,8 +1868,26 @@ async def _poll_peak_rss_bytes(
     raises CancelledError there and never reaches a ``return`` statement. A
     return-value-only design silently reported 0 for every execution in
     practice, discarding the one signal this metric exists to expose.
+
+    CHAOS-4361: this is now the PRIMARY memory enforcement, not just
+    telemetry. worker_metrics_runner.py's child-side RLIMIT_AS self-bound
+    measures virtual address space (thread stacks, malloc arenas,
+    interpreter mappings), not resident memory, so it fires a classified
+    MemoryError far below the real ceiling -- prod's 640 MiB RLIMIT_AS
+    killed a child that peaked at 465 MB RSS with no rlimit applied at all.
+    RSS is what the container's memcg actually accounts, so bounding on it
+    here (the same real /proc/<pid>/status VmRSS this function already
+    reads for telemetry) tracks the resource that actually matters and
+    cannot false-fire on interpreter/driver overhead the way RLIMIT_AS does.
+    ``rss_kill_holder`` (the same mutable-one-element-list pattern as
+    ``peak_holder``) records that THIS watcher initiated the kill, so the
+    caller's post-mortem classification can label it "resource_exhausted"
+    regardless of the exact signal/exit code a SIGKILL produces -- the same
+    reason a child's own RLIMIT_AS MemoryError has always been classified
+    as, just enforced one layer up where the real number lives.
     """
-    status_path = f"/proc/{pid}/status"
+    status_path = f"/proc/{process.pid}/status"
+    ceiling = _configured_runner_memory_limit_bytes()
     while True:
         try:
             with open(status_path, encoding="ascii") as handle:
@@ -1848,6 +1898,10 @@ async def _poll_peak_rss_bytes(
                             peak_holder[0] = max(peak_holder[0], int(parts[1]) * 1024)
                         break
         except (FileNotFoundError, ProcessLookupError, OSError):
+            return
+        if peak_holder[0] >= ceiling:
+            rss_kill_holder[0] = True
+            await _terminate_compatibility_process(process)
             return
         await asyncio.sleep(interval_seconds)
 
@@ -2011,7 +2065,10 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         )
     )
     peak_rss_holder = [0]
-    rss_task = asyncio.create_task(_poll_peak_rss_bytes(process.pid, peak_rss_holder))
+    rss_kill_holder = [False]
+    rss_task = asyncio.create_task(
+        _poll_peak_rss_bytes(process, peak_rss_holder, rss_kill_holder)
+    )
     stall_task: asyncio.Task[None] | None = None
     oom_kill_before = _read_cgroup_oom_kill_count()
     if liveness_watched:
@@ -2140,6 +2197,37 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 "metric compatibility process returned an invalid response"
             )
         return decoded["outcome"]
+
+    if rss_kill_holder[0]:
+        # CHAOS-4361: this exit is OURS -- _poll_peak_rss_bytes observed real
+        # RSS cross the configured DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES
+        # bound and killed the child via the same _terminate_compatibility_
+        # process every other kill path uses. Classified identically to the
+        # child's own (now-secondary) RLIMIT_AS backstop MemoryError exit
+        # -- "resource_exhausted" -- since both mean the same thing: this
+        # execution needed more memory than its configured budget. Checked
+        # BEFORE stall_reason_holder: an RSS breach can itself stop progress
+        # lines from arriving (the child stalls while thrashing/allocating
+        # right before it dies), and the memory diagnosis is the more
+        # specific, more actionable one when both would otherwise apply.
+        safe_to_retry = (
+            execution.worker_kind == "daily"
+            and execution.operation == "partition"
+            and not progress_seen
+        )
+        DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
+            reason="resource_exhausted"
+        ).inc()
+        DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(
+            reason="resource_exhausted"
+        ).inc()
+        raise _CompatibilityProcessFailure(
+            f"metric compatibility process exceeded its memory bound "
+            f"({peak_rss_holder[0]} bytes RSS >= "
+            f"{_configured_runner_memory_limit_bytes()} bytes configured)",
+            reason="resource_exhausted",
+            safe_to_retry=safe_to_retry,
+        )
 
     if stall_reason_holder[0] is not None:
         # CHAOS-4316: this exit is OURS -- the liveness watchdog decided the

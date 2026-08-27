@@ -50,6 +50,34 @@ _MEMORY_LIMIT_ENV_KEY = "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES"
 # control -- see deploy/go-workers/README.md), not to bump this default.
 _DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024  # 640 MiB
 
+# CHAOS-4361: RLIMIT_AS is no longer the primary enforcement -- it counts
+# virtual ADDRESS SPACE (thread stacks, malloc arenas, every mmap mapping
+# clickhouse_connect's C driver makes), not resident memory. The 2026-08-27
+# prod incident hit MemoryError inside
+# clickhouse_connect/driverc/buffer.pyx's ResponseBuffer.read_str_col with
+# RLIMIT_AS==640 MiB while a local direct run of the SAME day (no rlimit)
+# measured only 465 MiB RSS -- the rlimit was firing on address-space
+# bookkeeping, not on real memory pressure. Real enforcement now happens in
+# the PARENT (worker_metrics._run_compatibility_process_locked's RSS
+# watchdog), which polls this process's actual VmRSS via /proc and kills it
+# on a real breach of DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES -- see
+# that module's docstring on _poll_peak_rss_bytes.
+#
+# This self-imposed RLIMIT_AS stays only as a generous backstop: the
+# parent's poll interval (0.25s) means a sufficiently explosive allocation
+# spike could exceed the real budget before the parent observes and kills
+# it. A multiplier well above the configured RSS budget still converts that
+# pathological case into a MemoryError THIS process can catch and report
+# (EXIT_RESOURCE_EXHAUSTED) rather than an un-classified kernel OOM kill of
+# the whole api container -- without re-introducing the false-positive rate
+# that motivated this ticket. RLIMIT_DATA is dropped entirely: it bounds
+# only the brk/sbrk heap, and glibc's malloc routes any allocation at or
+# above its mmap threshold (128 KiB by default) through mmap instead --
+# exactly the class of large String/bytes buffer clickhouse_connect
+# materializes per column, so RLIMIT_DATA was never actually a backstop for
+# this failure mode, only a false sense of one.
+_RLIMIT_AS_BACKSTOP_MULTIPLIER = 4
+
 
 def _configured_memory_limit_bytes() -> int:
     raw = os.environ.get(_MEMORY_LIMIT_ENV_KEY, "").strip()
@@ -63,30 +91,26 @@ def _configured_memory_limit_bytes() -> int:
 
 
 def _apply_memory_limit() -> None:
-    """Bound this process's address space so it fails loud, not silently.
+    """Set a generous RLIMIT_AS backstop; real enforcement is the parent's.
 
-    Enforced via RLIMIT_AS (and RLIMIT_DATA where distinct) rather than left
-    to the container cgroup: the cgroup limit is shared with the parent api
-    process (CHAOS-4264 -- the runner alone reached 1.7 GB inside a 2 GiB
-    container), so a runaway compute here could still starve or kill the API.
-    A self-imposed rlimit turns that into a MemoryError this process can
-    catch and report, well before the container-wide ceiling is reached.
-    POSIX-only: the ``resource`` module does not exist on Windows, and this
-    process only ever runs inside the Linux container image.
+    See the module-level comment above ``_RLIMIT_AS_BACKSTOP_MULTIPLIER``
+    for why this is a backstop (a multiplier above the configured RSS
+    budget), not the primary bound (RSS, polled and enforced by the
+    parent). POSIX-only: the ``resource`` module does not exist on Windows,
+    and this process only ever runs inside the Linux container image.
     """
     try:
         import resource
     except ImportError:
         return
-    limit = _configured_memory_limit_bytes()
-    for kind in ("RLIMIT_AS", "RLIMIT_DATA"):
-        rlimit = getattr(resource, kind, None)
-        if rlimit is None:
-            continue
-        with contextlib.suppress(ValueError, OSError):
-            current_soft, current_hard = resource.getrlimit(rlimit)
-            hard = current_hard if current_hard != resource.RLIM_INFINITY else limit
-            resource.setrlimit(rlimit, (min(limit, hard), hard))
+    limit = _configured_memory_limit_bytes() * _RLIMIT_AS_BACKSTOP_MULTIPLIER
+    rlimit = getattr(resource, "RLIMIT_AS", None)
+    if rlimit is None:
+        return
+    with contextlib.suppress(ValueError, OSError):
+        current_soft, current_hard = resource.getrlimit(rlimit)
+        hard = current_hard if current_hard != resource.RLIM_INFINITY else limit
+        resource.setrlimit(rlimit, (min(limit, hard), hard))
 
 
 def _payload() -> object:

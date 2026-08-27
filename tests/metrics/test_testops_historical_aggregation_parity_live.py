@@ -578,3 +578,103 @@ async def test_run_straddling_midnight_not_split_between_today_and_historical(si
             "ALTER TABLE test_case_results DELETE WHERE org_id = {org:String}",
             parameters={"org": org_id},
         )
+
+
+@pytest.mark.asyncio
+async def test_run_extending_into_a_later_day_does_not_leak_into_earlier_partition(
+    sink,
+):
+    """CHAOS-4350 PR2 (codex round 3 P2): the run-id-membership semi-join
+    added for the midnight-straddling fix above only proves a run has SOME
+    suite in today's window -- without also bounding each returned case's
+    OWN suite to `< end`, a run that CONTINUES into a LATER day would leak
+    that later suite's cases backward into an EARLIER day's partition on a
+    backfill computed after the later suite lands, making the backfill
+    non-deterministic (today's compute vs. a re-run tomorrow would disagree
+    on today's own numbers).
+
+    One run_id ("run-future-leak") has a suite on day `d` (today, the
+    partition being computed) and ANOTHER suite on day `d+1` (tomorrow --
+    not yet "closed" as of `end`). Computing day `d` must see ONLY the
+    day-`d` suite's case, never the day-`d+1` suite's.
+    """
+    from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+
+    org_id = f"test-chaos-4350-futureleak-{uuid.uuid4()}"
+    repo_id = uuid.uuid4()
+    today = datetime(2026, 3, 25, tzinfo=timezone.utc)
+    today_start = today
+    today_end = today + timedelta(days=1)
+    within_today = today + timedelta(hours=1)
+    within_tomorrow = today_end + timedelta(hours=1)  # day d+1 -- NOT part of day d
+
+    suites = [
+        _suite_row(
+            repo_id=repo_id,
+            run_id="run-future-leak",
+            suite_id="suite-day-d",
+            org_id=org_id,
+            when=within_today,
+            total=1,
+            passed=0,
+            failed=1,
+        ),
+        _suite_row(
+            repo_id=repo_id,
+            run_id="run-future-leak",
+            suite_id="suite-day-d-plus-1",
+            org_id=org_id,
+            when=within_tomorrow,
+            total=1,
+            passed=1,
+            failed=0,
+        ),
+    ]
+    cases = [
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-future-leak",
+            suite_id="suite-day-d",
+            case_id="today1",
+            case_name="test_future_leak",
+            status="failed",
+            org_id=org_id,
+            when=within_today,
+        ),
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-future-leak",
+            suite_id="suite-day-d-plus-1",
+            case_id="tomorrow1",
+            case_name="test_future_leak",
+            status="passed",
+            org_id=org_id,
+            when=within_tomorrow,
+        ),
+    ]
+
+    try:
+        sink.client.insert("test_suite_results", suites, column_names=_suite_cols())
+        sink.client.insert("test_case_results", cases, column_names=_case_cols())
+
+        loader = ClickHouseDataLoader(sink.client, org_id=org_id)
+
+        suite_rows, case_rows = await loader.load_testops_test_data(
+            today_start, today_end, repo_id=repo_id
+        )
+
+        # Only the day-d suite's case must come back -- the day-(d+1)
+        # suite's "passed" case must NOT leak backward into day d's read
+        # (it would falsely turn a clean failure into a same-day flake).
+        assert len(case_rows) == 1
+        assert case_rows[0]["suite_id"] == "suite-day-d"
+        assert case_rows[0]["status"] == "failed"
+    finally:
+        sink.client.command(
+            "ALTER TABLE test_suite_results DELETE WHERE org_id = {org:String}",
+            parameters={"org": org_id},
+        )
+        sink.client.command(
+            "ALTER TABLE test_case_results DELETE WHERE org_id = {org:String}",
+            parameters={"org": org_id},
+        )

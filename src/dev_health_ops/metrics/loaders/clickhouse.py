@@ -1387,6 +1387,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # scoped by (repo_id, run_id) together, not run_id alone, so a
         # same-org different-repo run_id collision can't leak cases across
         # repos in the org-wide (repo_id=None) case.
+        #
+        # CHAOS-4350 PR2 (codex round 3 P2): run-id membership alone is NOT
+        # enough -- it only proves the run has SOME suite in today's window,
+        # not that every one of its suites does. A second semi-join bounds
+        # each returned case's OWN suite to `< end` so a suite that hasn't
+        # happened yet as of `end` (this run continues into a LATER day)
+        # can't leak its cases backward into an earlier partition on a
+        # backfill computed after that later suite lands -- see the query
+        # below for the exact clause.
         case_query = f"""
         SELECT
           c.repo_id,
@@ -1403,6 +1412,21 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           SELECT repo_id, run_id FROM test_suite_results FINAL
           WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
             AND coalesce(started_at, finished_at) < {{end:DateTime}}
+          {repo_filter}
+          {org_filter}
+        )
+        -- codex round 3 P2: the run-membership check above only proves SOME
+        -- suite of this run falls in today's window -- without this second
+        -- semi-join, a case whose OWN suite starts on or after `end` (a
+        -- later day, not yet closed as of this partition) would leak
+        -- backward into today's read on a backfill run computed after that
+        -- later suite lands, making the backfill non-deterministic. Bound
+        -- each returned case's OWN suite to `< end` (no lower bound -- a
+        -- suite from an earlier day sharing this run_id is exactly the
+        -- day-boundary case this method exists to include).
+        AND (c.repo_id, c.run_id, c.suite_id) IN (
+          SELECT repo_id, run_id, suite_id FROM test_suite_results FINAL
+          WHERE coalesce(started_at, finished_at) < {{end:DateTime}}
           {repo_filter}
           {org_filter}
         )

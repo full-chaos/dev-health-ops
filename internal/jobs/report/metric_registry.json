@@ -39,11 +39,13 @@
     },
     {
       "canonical_name": "after_hours_commit_ratio",
+      "denominator": "commits_count",
       "dimensions": [
         "team",
         "day"
       ],
       "display_name": "After Hours Commit Ratio",
+      "numerator": "after_hours_commits_count",
       "source_table": "team_metrics_daily",
       "unit": "ratio"
     },
@@ -1679,11 +1681,13 @@
     },
     {
       "canonical_name": "weekend_commit_ratio",
+      "denominator": "commits_count",
       "dimensions": [
         "team",
         "day"
       ],
       "display_name": "Weekend Commit Ratio",
+      "numerator": "weekend_commits_count",
       "source_table": "team_metrics_daily",
       "unit": "ratio"
     },

@@ -41,7 +41,15 @@ RERUN_DEDUPED_DAILY_TABLES = frozenset(
 _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     "repo_metrics_daily": ("org_id", "repo_id", "day"),
     "user_metrics_daily": ("org_id", "repo_id", "author_email", "day"),
-    "team_metrics_daily": ("org_id", "team_id", "day"),
+    # CHAOS-4329: repo_id added so a team owning N repos keeps every repo's
+    # row instead of collapsing to one via LIMIT 1 BY (org_id, team_id, day).
+    # Legacy rows (written before repo_id existed) all share repo_id='' --
+    # see migration 080's comment -- so they still collapse to exactly the
+    # one row they always did; only NEW per-repo rows are kept apart. A
+    # caller that wants the team-day TOTAL must SUM the additive counts
+    # across the rows this yields and recompute the ratio -- it is not
+    # additive -- never average the per-repo ratios directly.
+    "team_metrics_daily": ("org_id", "team_id", "repo_id", "day"),
     "testops_pipeline_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_test_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_coverage_metrics_daily": ("org_id", "repo_id", "day"),

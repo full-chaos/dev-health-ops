@@ -112,6 +112,7 @@ def _case(
             {
                 "team_id": r.team_id,
                 "team_name": r.team_name,
+                "repo_id": r.repo_id,
                 "commits_count": r.commits_count,
                 "after_hours_commits_count": r.after_hours_commits_count,
                 "weekend_commits_count": r.weekend_commits_count,
@@ -453,6 +454,7 @@ def _multi_repo_partition_case(
             {
                 "team_id": r.team_id,
                 "team_name": r.team_name,
+                "repo_id": r.repo_id,
                 "commits_count": r.commits_count,
                 "after_hours_commits_count": r.after_hours_commits_count,
                 "weekend_commits_count": r.weekend_commits_count,

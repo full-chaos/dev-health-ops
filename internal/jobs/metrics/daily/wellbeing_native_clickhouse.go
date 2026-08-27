@@ -310,17 +310,19 @@ type wellbeingBatchConn interface {
 // memory can still collapse to an identical persisted value if two groups
 // are computed within the same wall-clock second. Round 3 initially tried
 // to paper over that by spacing timestamps a fabricated full second apart
-// per group index; that was REJECTED -- computed_at must stay truthful,
-// and the real defect a tie exposes is one level deeper: team_metrics_daily
-// has no repo_id column at all, so ANY tie-break (real or fabricated) still
-// only ever surfaces ONE repo's slice of a multi-repo team's day, silently
-// dropping the others -- a property Python's own write_team_metrics already
-// has today (see TeamWellbeingExecutor's package doc comment item 4 in
-// wellbeing_native_executor.go, and this PR's RISK-NOTES). Fixing that is a
-// writer/reader contract change applied
-// to both languages, tracked separately; this function keeps honest,
-// real-wall-clock per-group timestamps, which is at minimum no worse than
-// Python's existing behavior and never fabricates data.
+// per group index; that was REJECTED -- computed_at must stay truthful, and
+// the real defect a same-second tie exposed was one level deeper:
+// team_metrics_daily had no repo_id column at all, so ANY tie-break (real or
+// fabricated) still only ever surfaced ONE repo's slice of a multi-repo
+// team's day, silently dropping the others -- CHAOS-4329 fixed that
+// underlying defect (migration 080 adds repo_id; every row here now carries
+// its own real repo_id, so a same-second computed_at tie across two DIFFERENT
+// repos' rows no longer collapses them -- they are distinct keys). This
+// function still keeps honest, real-wall-clock per-group timestamps and
+// never fabricates data; distinct per-group timestamps are no longer load-
+// bearing for correctness now that repo_id disambiguates the rows, but
+// remain harmless and are kept for continuity with computeWellbeingPerRepo's
+// existing per-repo-group structure.
 //
 // perRepoRows and computedAtByRepo must be the same length and share index
 // order; every row in perRepoRows[i] is stamped with computedAtByRepo[i].
@@ -346,7 +348,7 @@ func WriteTeamMetricsDailyPerRepo(
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO team_metrics_daily (
 		day, team_id, team_name, commits_count, after_hours_commits_count,
 		weekend_commits_count, after_hours_commit_ratio, weekend_commit_ratio,
-		computed_at, org_id)`)
+		computed_at, org_id, repo_id)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare team_metrics_daily batch: %w", err)
 	}
@@ -358,7 +360,7 @@ func WriteTeamMetricsDailyPerRepo(
 				dayValue, row.TeamID, row.TeamName, uint32(row.CommitsCount),
 				uint32(row.AfterHoursCommitsCount), uint32(row.WeekendCommitsCount),
 				row.AfterHoursCommitRatio, row.WeekendCommitRatio,
-				computedAt, organizationID,
+				computedAt, organizationID, row.RepoID,
 			); err != nil {
 				return 0, fmt.Errorf("append team_metrics_daily row: %w", err)
 			}

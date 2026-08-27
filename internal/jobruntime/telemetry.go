@@ -228,6 +228,12 @@ var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
 
+// repoCountBuckets (CHAOS-4329) matches Python's
+// DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT buckets exactly
+// (metrics/prometheus.py) -- small-integer repo fan-out counts, not
+// durations.
+var repoCountBuckets = []float64{1, 2, 3, 5, 8, 13, 21, 34, 55}
+
 // StreamLabels are pre-registered so stream telemetry cannot create an
 // unbounded consumer-group label set.
 type StreamLabels struct {
@@ -311,18 +317,28 @@ type poolAcquireLabels struct {
 }
 
 type histogram struct {
+	bounds  []float64
 	buckets []uint64
 	count   uint64
 	sum     float64
 }
 
 func newHistogram() *histogram {
-	return &histogram{buckets: make([]uint64, len(durationBuckets)+1)}
+	return newHistogramWithBounds(durationBuckets)
+}
+
+// newHistogramWithBounds builds a histogram over a caller-supplied bucket
+// boundary set instead of the package-default duration buckets (CHAOS-4329:
+// teamMetricsDailyRepoCount is a small-integer repo-fan-out count, not a
+// duration, so the 0.01s..3600s duration buckets would put every real
+// observation in the same bucket).
+func newHistogramWithBounds(bounds []float64) *histogram {
+	return &histogram{bounds: bounds, buckets: make([]uint64, len(bounds)+1)}
 }
 
 func (histogram *histogram) observe(value float64) {
-	index := len(durationBuckets)
-	for candidate, upperBound := range durationBuckets {
+	index := len(histogram.bounds)
+	for candidate, upperBound := range histogram.bounds {
 		if value <= upperBound {
 			index = candidate
 			break
@@ -378,10 +394,15 @@ type MetricsCollector struct {
 	// DailyMetricsCompatRetryDecision's doc comment for why Go only ever
 	// records the "persisted_failed" half of this decision axis.
 	dailyMetricsCompatRetry map[DailyMetricsCompatRetryDecision]uint64
-	postSyncFanout          map[PostSyncFanoutOutcome]uint64
-	workGraphReleaseLost    uint64
-	remainingReleaseLost    uint64
-	zeroUnitFinalizations   map[zeroUnitFinalizationLabels]uint64
+	// teamMetricsDailyRepoCount (CHAOS-4329): distinct repo_id rows written
+	// per (team_id, day) in one team_metrics_daily write. Unlabeled --
+	// deliberately no team_id label, same cardinality discipline as every
+	// other per-tenant-identity signal in this file.
+	teamMetricsDailyRepoCount *histogram
+	postSyncFanout            map[PostSyncFanoutOutcome]uint64
+	workGraphReleaseLost      uint64
+	remainingReleaseLost      uint64
+	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -471,6 +492,7 @@ var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
+var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -495,6 +517,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
 		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dailyMetricsNativeFamilies)),
 		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dailyMetricsNativeFamilies)),
+		teamMetricsDailyRepoCount:            newHistogramWithBounds(repoCountBuckets),
 		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
 		jobOldestAge:                         make(map[queueLabels]float64),
 		jobsRunning:                          make(map[JobLabels]int64, len(dimensions.Jobs)),
@@ -958,6 +981,23 @@ func (collector *MetricsCollector) ObserveDailyMetricsCompatRetry(decision Daily
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsCompatRetry[decision]++
+	return nil
+}
+
+// ObserveTeamMetricsDailyRepoCount records the distinct repo_id count for
+// ONE team_id in one team_metrics_daily write (CHAOS-4329). Callers must
+// call this once per team per write, AFTER the write durably lands (mirrors
+// ObserveZeroUnitFinalization's post-commit rule), never once per row --
+// TeamWellbeingExecutor's ComputeFamily computes this by grouping the exact
+// rows it just wrote by team_id and counting each team's distinct repo_id,
+// exactly like Python's record_team_metrics_daily_repo_rows.
+func (collector *MetricsCollector) ObserveTeamMetricsDailyRepoCount(repoCount int) error {
+	if repoCount <= 0 {
+		return errors.New("team metrics daily repo count must be positive")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamMetricsDailyRepoCount.observe(float64(repoCount))
 	return nil
 }
 
@@ -1547,6 +1587,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
+	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
@@ -1882,6 +1923,17 @@ func (collector *MetricsCollector) writeDailyMetricsCompatRetry(output *strings.
 	}
 }
 
+// writeTeamMetricsDailyRepoCount exposes team_metrics_daily's per-team repo
+// fan-out (CHAOS-4329) under the SAME metric name Python's identical
+// histogram uses (dev_health_team_metrics_daily_repo_count,
+// metrics/prometheus.py) -- deliberately breaking this file's worker_
+// prefix convention so one Grafana query covers rows written by either
+// language, the same reasoning writeDailyMetricsFamilyZeroRowsWithSource
+// already documents for its own cross-language metric name.
+func (collector *MetricsCollector) writeTeamMetricsDailyRepoCount(output *strings.Builder) {
+	writeMetadata(output, "dev_health_team_metrics_daily_repo_count", "Distinct repo_id rows written to team_metrics_daily per (team_id, day) in one write. A value of 1 is an ordinary single-repo team, not a defect (CHAOS-4329).", "histogram")
+	writeHistogram(output, "dev_health_team_metrics_daily_repo_count", nil, collector.teamMetricsDailyRepoCount)
+}
 func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) {
 	writeMetadata(output, "dev_health_post_sync_fanout_total", "Post-sync fanout outcomes: whether a completed sync's post_sync job published a daily-metrics re-drive (CHAOS-4263).", "counter")
 	for _, outcome := range postSyncFanoutOutcomes() {
@@ -2041,12 +2093,12 @@ func writeFloatSample(output *strings.Builder, name string, labels []metricLabel
 
 func writeHistogram(output *strings.Builder, name string, labels []metricLabel, metric *histogram) {
 	cumulative := uint64(0)
-	for index, bound := range durationBuckets {
+	for index, bound := range metric.bounds {
 		cumulative += metric.buckets[index]
 		bucketLabels := append(append([]metricLabel(nil), labels...), metricLabel{"le", formatMetricFloat(bound)})
 		writeUintSample(output, name+"_bucket", bucketLabels, cumulative)
 	}
-	cumulative += metric.buckets[len(durationBuckets)]
+	cumulative += metric.buckets[len(metric.bounds)]
 	infLabels := append(append([]metricLabel(nil), labels...), metricLabel{"le", "+Inf"})
 	writeUintSample(output, name+"_bucket", infLabels, cumulative)
 	writeFloatSample(output, name+"_sum", labels, metric.sum)

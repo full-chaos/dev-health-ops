@@ -55,12 +55,14 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
     committer_when DateTime64(3, 'UTC'), org_id String, last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
 		// Exact production schema (001_metrics_v2.sql + 024_add_org_id.sql +
-		// 027_add_org_id_to_sorting_keys.py).
+		// 027_add_org_id_to_sorting_keys.py + 080_team_metrics_daily_repo_id.sql
+		// (CHAOS-4329, repo_id) + CHAOS-4332's computed_at DateTime64(6,'UTC')
+		// promotion, folded into the same migration).
 		`CREATE TABLE team_metrics_daily (
     day Date, team_id LowCardinality(String), team_name String,
     commits_count UInt32, after_hours_commits_count UInt32, weekend_commits_count UInt32,
     after_hours_commit_ratio Float64, weekend_commit_ratio Float64,
-    computed_at DateTime('UTC'), org_id String
+    computed_at DateTime64(6, 'UTC'), org_id String, repo_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
@@ -105,6 +107,12 @@ INSERT INTO git_commits (repo_id, hash, author_name, author_email, committer_whe
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4329: fake observer proves the per-team repo-fan-out telemetry
+	// fires exactly once for "shared-team" with the true repo count (2),
+	// from the real ComputeFamily entry point -- not a unit test of the
+	// grouping logic in isolation.
+	telemetry := &fakeRepoCountObserver{}
+	executor.SetRepoCountObserver(telemetry)
 	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)}
 	partition := Partition{
 		ID:      "00000000-0000-4000-8000-000000000121",
@@ -119,9 +127,12 @@ INSERT INTO git_commits (repo_id, hash, author_name, author_email, committer_whe
 	if written != 2 {
 		t.Fatalf("written=%d, want 2 (one row per repo for the one shared team)", written)
 	}
+	if got := telemetry.observed; len(got) != 1 || got[0] != 2 {
+		t.Fatalf("repoCountObserver observed=%v, want exactly one observation of 2 (shared-team spans repo-a and repo-b)", got)
+	}
 
 	rows, err := conn.Query(ctx, `
-SELECT commits_count FROM team_metrics_daily
+SELECT commits_count, repo_id FROM team_metrics_daily
 WHERE org_id = ? AND team_id = 'shared-team'
 ORDER BY commits_count`, orgID)
 	if err != nil {
@@ -129,12 +140,15 @@ ORDER BY commits_count`, orgID)
 	}
 	defer rows.Close()
 	var commitCounts []uint32
+	var repoIDs []string
 	for rows.Next() {
 		var count uint32
-		if err := rows.Scan(&count); err != nil {
+		var repoID string
+		if err := rows.Scan(&count, &repoID); err != nil {
 			t.Fatal(err)
 		}
 		commitCounts = append(commitCounts, count)
+		repoIDs = append(repoIDs, repoID)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -147,4 +161,20 @@ ORDER BY commits_count`, orgID)
 	if commitCounts[0] != 3 || commitCounts[1] != 5 {
 		t.Fatalf("commits_count values=%v, want [3, 5] (repo-b's and repo-a's counts kept separate, never summed)", commitCounts)
 	}
+	// CHAOS-4329: each row carries its OWN repo_id -- the fix's whole point.
+	if repoIDs[0] != repoB || repoIDs[1] != repoA {
+		t.Fatalf("repo_id values=%v, want [%s, %s] (paired with their own commits_count, never blank/shared)", repoIDs, repoB, repoA)
+	}
+}
+
+// fakeRepoCountObserver records every ObserveTeamMetricsDailyRepoCount call
+// (CHAOS-4329) -- a minimal jobruntime.TeamMetricsDailyRepoCountObserver
+// implementation, not a mock framework.
+type fakeRepoCountObserver struct {
+	observed []int
+}
+
+func (f *fakeRepoCountObserver) ObserveTeamMetricsDailyRepoCount(repoCount int) error {
+	f.observed = append(f.observed, repoCount)
+	return nil
 }

@@ -207,14 +207,47 @@ class ClickHouseMetricsLoader:
         oc = self._oc()
         params = self._p(team_id, ws, we)
 
-        # Average after_hours_commit_ratio over window
+        # Average after_hours_commit_ratio over window.
+        #
+        # CHAOS-4329: team_metrics_daily carries repo_id (''-legacy on rows
+        # from before migration 080). Dedup per (day, repo_id) via
+        # argMax(computed_at) -- team_id is already pinned by the WHERE
+        # clause, so it is not needed in this inner GROUP BY. Drop the
+        # legacy repo_id='' bucket for a day whenever real per-repo buckets
+        # also exist for that day -- a historical day backfilled/re-driven
+        # with real per-repo rows after migration 080 must not have its old
+        # pre-migration aggregate summed together with the new rows, which
+        # would double-count that day (codex CHAOS-4329 round 1, P1). SUM
+        # the remaining additive counts across repos, and recompute the
+        # ratio from those sums (never average per-repo ratios directly)
+        # before the outer avg() across days, which is unchanged. Without
+        # this a team owning more than one repo lost every repo but the
+        # last-written one to the old argMax(day)-only collapse.
         q_ah = f"""
             SELECT avg(ratio) AS avg_ratio
             FROM (
-                SELECT day, argMax(after_hours_commit_ratio, computed_at) AS ratio
-                FROM team_metrics_daily
-                WHERE team_id = %(team_id)s
-                  AND day >= %(start)s AND day < %(end)s {oc}
+                SELECT
+                    day,
+                    if(sum(commits_count) > 0,
+                       sum(after_hours_commits_count) / sum(commits_count), 0.0
+                    ) AS ratio
+                FROM (
+                    SELECT day, repo_id, commits_count, after_hours_commits_count
+                    FROM (
+                        SELECT
+                            day,
+                            repo_id,
+                            argMax(commits_count, computed_at) AS commits_count,
+                            argMax(after_hours_commits_count, computed_at)
+                                AS after_hours_commits_count,
+                            countIf(repo_id != '') OVER (PARTITION BY day) AS real_repo_count
+                        FROM team_metrics_daily
+                        WHERE team_id = %(team_id)s
+                          AND day >= %(start)s AND day < %(end)s {oc}
+                        GROUP BY day, repo_id
+                    )
+                    WHERE repo_id != '' OR real_repo_count = 0
+                )
                 GROUP BY day
             )
         """

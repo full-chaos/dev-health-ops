@@ -61,7 +61,7 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"testops_pipeline_stability", "(SELECT * FROM testops_pipeline_stability ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_stability"},
 		{"testops_quality_drag", "(SELECT * FROM testops_quality_drag ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_quality_drag"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
-		{"team_metrics_daily", "(SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, day) AS team_metrics_daily"},
+		{"team_metrics_daily", "(SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},

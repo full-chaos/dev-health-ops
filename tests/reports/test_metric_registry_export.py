@@ -27,3 +27,11 @@ def test_go_report_metric_registry_matches_every_python_definition() -> None:
         assert metric["source_table"] == definition.source_table
         assert metric["unit"] == definition.unit
         assert tuple(metric["dimensions"]) == definition.dimensions
+        # CHAOS-4329: numerator/denominator are omitted (not null) unless
+        # the Python definition declares both.
+        if definition.numerator and definition.denominator:
+            assert metric["numerator"] == definition.numerator
+            assert metric["denominator"] == definition.denominator
+        else:
+            assert "numerator" not in metric
+            assert "denominator" not in metric

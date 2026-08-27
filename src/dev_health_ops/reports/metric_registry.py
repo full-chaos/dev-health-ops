@@ -168,6 +168,32 @@ class MetricDefinition:
     unit: str
     dimensions: tuple[str, ...]
     source_table: str
+    #: CHAOS-4329: table-local numerator/denominator column pair for a
+    #: ratio metric whose source table can now yield MORE THAN ONE row per
+    #: chart-key (team_metrics_daily gained repo_id -- a team owning N
+    #: repos writes N rows). When both are set, build_chart_query recomputes
+    #: the ratio as SUM(numerator)/SUM(denominator) instead of AVG(metric)
+    #: -- a plain average-of-per-repo-ratios would be wrong the moment a
+    #: chart key can span more than one physical row (codex CHAOS-4329
+    #: round 2, "no regression" ruling). None for every metric whose
+    #: source table stays single-row-per-key; this is deliberately
+    #: table-local metadata, not a generic ratio-metric redesign (see
+    #: RISK-NOTES / the follow-up ticket for the generic registry
+    #: mechanism).
+    numerator: str | None = None
+    denominator: str | None = None
+
+
+#: CHAOS-4329: table-local numerator/denominator overrides for ratio
+#: metrics whose source table can yield more than one physical row per
+#: chart key. See MetricDefinition.numerator's docstring. Keyed by
+#: canonical metric name -- both of team_metrics_daily's ratio metrics are
+#: globally unique names (no other RegistrySource defines them), so no
+#: source-table qualifier is needed to disambiguate.
+RATIO_NUMERATOR_DENOMINATOR: dict[str, tuple[str, str]] = {
+    "after_hours_commit_ratio": ("after_hours_commits_count", "commits_count"),
+    "weekend_commit_ratio": ("weekend_commits_count", "commits_count"),
+}
 
 
 @dataclass(frozen=True)
@@ -333,6 +359,9 @@ def build_metric_registry() -> dict[str, MetricDefinition]:
     registry: dict[str, MetricDefinition] = {}
     for source in REGISTRY_SOURCES:
         for field_name in _metric_field_names(source.record_type):
+            numerator, denominator = RATIO_NUMERATOR_DENOMINATOR.get(
+                field_name, (None, None)
+            )
             registry.setdefault(
                 field_name,
                 MetricDefinition(
@@ -342,6 +371,8 @@ def build_metric_registry() -> dict[str, MetricDefinition]:
                     unit=_infer_unit(field_name),
                     dimensions=source.dimensions,
                     source_table=source.source_table,
+                    numerator=numerator,
+                    denominator=denominator,
                 ),
             )
     return registry

@@ -71,7 +71,10 @@ from dev_health_ops.metrics.knowledge import (
 )
 from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-from dev_health_ops.metrics.prometheus import record_metrics_family_zero_rows
+from dev_health_ops.metrics.prometheus import (
+    record_metrics_family_zero_rows,
+    record_team_metrics_daily_repo_rows,
+)
 from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
@@ -1478,6 +1481,13 @@ async def run_daily_metrics_job(
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
         )
+
+        # CHAOS-4329: observe distinct repo_id fan-out per team_id AFTER the
+        # write above durably lands (mirrors ObserveZeroUnitFinalization's
+        # post-commit rule) -- once per write, not once per sink (team_metrics
+        # is the exact same list every sink in a dual-sink write received, so
+        # observing inside that loop would double-count).
+        record_team_metrics_daily_repo_rows(team_metrics)
 
         # TestOps risk metrics (release confidence, quality drag, pipeline stability)
         release_conf = compute_release_confidence(

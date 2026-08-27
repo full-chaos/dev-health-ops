@@ -106,12 +106,66 @@ def test_build_chart_query_with_month_grouping_uses_time_bucket():
     assert "LIMIT 1 BY org_id, repo_id, day" in query
 
 
+def test_build_chart_query_recomputes_team_metrics_daily_ratio_from_summed_counts():
+    """CHAOS-4329 ('no regression' ruling, codex rounds 1 and 2):
+    team_metrics_daily gained repo_id, so its dedup source can now yield
+    MORE THAN ONE row per (team_id, day) key (a team owning N repos writes
+    N rows). A plain avg(metric) over those rows would average unweighted
+    per-repo ratios, wrong whenever repo sizes/ratios differ.
+    after_hours_commit_ratio and weekend_commit_ratio declare a table-local
+    numerator/denominator pair (metric_registry.py::RATIO_NUMERATOR_DENOMINATOR)
+    so the query FIRST collapses to one row per (org_id, team_id, day),
+    summing the additive counts and recomputing the ratio in a nested
+    subquery -- THEN the outer query's avg(metric) runs on top of that
+    already-team-collapsed view (codex round 2: summing across TEAMS, not
+    just repos, would silently change an org-wide chart's existing
+    equal-weighted "avg across teams" semantics -- see the org-wide test
+    below).
+    """
+    spec = _chart_spec("after_hours_commit_ratio", chart_id="chart-ratio")
+    query, _ = build_chart_query(spec)
+    normalized = " ".join(query.split())
+
+    assert (
+        "if(sum(commits_count) > 0, "
+        "sum(after_hours_commits_count) / sum(commits_count), 0.0 ) "
+        "AS after_hours_commit_ratio" in normalized
+    )
+    assert "GROUP BY org_id, team_id, day" in normalized
+    assert "avg(after_hours_commit_ratio) AS y" in normalized
+
+
+def test_build_chart_query_org_wide_ratio_averages_teams_not_repos():
+    """CHAOS-4329 codex round 2 red-first: an org-wide chart (no team
+    filter) must keep averaging EACH TEAM's own ratio equally, never sum
+    numerator/denominator across teams. Only asserts the query SHAPE here
+    (no team_id filter in the nested subquery's WHERE, team_id present in
+    its GROUP BY) -- the live-ClickHouse value proof (0.5, not the
+    commit-weighted 0.01) is
+    tests/reports/test_team_metrics_daily_ratio_live.py.
+    """
+    spec = _chart_spec(
+        "after_hours_commit_ratio", chart_id="chart-org-wide", group_by="day"
+    )
+    spec.filter_teams.clear()
+    query, _ = build_chart_query(spec)
+    normalized = " ".join(query.split())
+
+    assert "GROUP BY org_id, team_id, day" in normalized
+    assert "team_id IN {filter_teams:Array(String)}" not in normalized
+    assert "avg(after_hours_commit_ratio) AS y" in normalized
+
+
 @pytest.mark.parametrize(
     ("metric", "table", "key"),
     [
         ("loc_touched", "user_metrics_daily", "org_id, repo_id, author_email, day"),
         ("total_loc_touched", "repo_metrics_daily", "org_id, repo_id, day"),
-        ("after_hours_commit_ratio", "team_metrics_daily", "org_id, team_id, day"),
+        (
+            "after_hours_commit_ratio",
+            "team_metrics_daily",
+            "org_id, team_id, repo_id, day",
+        ),
         (
             "median_duration_seconds",
             "testops_pipeline_metrics_daily",

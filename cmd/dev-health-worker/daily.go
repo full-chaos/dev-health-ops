@@ -179,6 +179,12 @@ func buildDailyWorker(
 				nativeFamilies := map[string]daily.NativeFamilyExecutor{}
 				if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 					nativeFamilies["team_wellbeing"] = teamWellbeingExecutor
+					// CHAOS-4329: per-team repo fan-out telemetry -- optional,
+					// same fail-open discipline as the native family observer
+					// registered below once every native family is accumulated.
+					if repoCountObserver, ok := observer.(jobruntime.TeamMetricsDailyRepoCountObserver); ok {
+						teamWellbeingExecutor.SetRepoCountObserver(repoCountObserver)
+					}
 				} else {
 					logger.Error(
 						"team_wellbeing native executor refused; the family "+

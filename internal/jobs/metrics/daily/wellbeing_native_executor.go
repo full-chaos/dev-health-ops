@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
@@ -50,27 +51,43 @@ import (
 //     runs numerical.ComputeTeamWellbeing once per repo in the partition and
 //     concatenates the results, rather than aggregating every repo's commits
 //     into one call.
-//  4. A TEAM SPANNING MULTIPLE REPOS ONLY EVER SURFACES ONE REPO'S SLICE
-//     (pre-existing in Python, not something this port fixes -- CHAOS-4276
-//     codex round-3, chris/team-lead's ruling): team_metrics_daily has NO
-//     repo_id column and every known reader dedups purely on
-//     (org_id, team_id, day) (cognitive_load.py, native_team_workload.py,
-//     metrics/scoring/wellbeing.py all GROUP BY day, team_id). Both this
-//     executor and job_daily.py's write_team_metrics write one row PER
-//     REPO for a multi-repo team, so whichever repo's row has the latest
-//     computed_at is the only one a reader ever sees -- the other repos'
-//     contributions to that team's day are silently invisible, in BOTH
-//     languages, today. Do not "fix" this by fabricating timestamps (see
-//     ComputeFamily) or by changing only the Go side: it needs a real
-//     writer/reader contract change (sum across repos, or add repo_id to
-//     the key) applied to both implementations. Tracked separately; see
-//     this PR's RISK-NOTES.
+//  4. A TEAM SPANNING MULTIPLE REPOS NOW SURFACES EVERY REPO'S SLICE
+//     (CHAOS-4329 -- was pre-existing in Python and mirrored, not fixed, by
+//     this port's original CHAOS-4276 landing; codex round-3 on THAT PR
+//     found and deliberately deferred it). team_metrics_daily gained a
+//     repo_id column (migration 080, empty string on legacy rows written before it)
+//     and every known reader (cognitive_load.py, native_team_workload.py,
+//     metrics/scoring/wellbeing.py, recommendations/loader.py) now dedups
+//     per (org_id, team_id, repo_id, day) THEN sums the additive counts
+//     across repos and recomputes the ratio, instead of collapsing straight
+//     to (org_id, team_id, day). This executor and job_daily.py's
+//     write_team_metrics both still write one row PER REPO for a multi-repo
+//     team -- that no longer loses data now that repo_id makes each row's
+//     key distinct.
 type TeamWellbeingExecutor struct {
 	conn               driver.Conn
 	businessTZ         *time.Location
 	businessHoursStart int
 	businessHoursEnd   int
 	nowUTC             func() time.Time
+	// repoCountObserver (CHAOS-4329) is optional -- set via
+	// SetRepoCountObserver, mirroring PartitionHandler's
+	// SetZeroRowsObserver/SetNativeFamilyObserver pattern (cmd/dev-health-worker/
+	// daily.go asserts the runtime's Observer against the narrow
+	// jobruntime.TeamMetricsDailyRepoCountObserver interface). nil means no
+	// observer wired -- ComputeFamily degrades to not recording, never panics.
+	repoCountObserver jobruntime.TeamMetricsDailyRepoCountObserver
+}
+
+// SetRepoCountObserver wires the optional per-team repo-fan-out observer
+// (CHAOS-4329). Never required for construction: a nil observer (the
+// default) simply means this deployment does not yet have telemetry wired,
+// exactly like PartitionHandler's other optional observers.
+func (executor *TeamWellbeingExecutor) SetRepoCountObserver(observer jobruntime.TeamMetricsDailyRepoCountObserver) {
+	if executor == nil {
+		return
+	}
+	executor.repoCountObserver = observer
 }
 
 var errTeamWellbeingUnavailable = errors.New("team_wellbeing native executor unavailable")
@@ -186,6 +203,31 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
+
+	// CHAOS-4329: observe AFTER the write durably lands (mirrors
+	// ObserveZeroUnitFinalization's post-commit rule elsewhere in this
+	// repo), once per team, from the EXACT rows just written -- grouping
+	// perRepoMetrics by TeamID and counting each team's distinct RepoID,
+	// exactly like Python's record_team_metrics_daily_repo_rows groups the
+	// list it was handed. A nil observer (not yet wired) is a no-op, never
+	// a failure.
+	if executor.repoCountObserver != nil {
+		reposByTeam := make(map[string]map[string]struct{})
+		for _, group := range perRepoMetrics {
+			for _, metric := range group {
+				repos := reposByTeam[metric.TeamID]
+				if repos == nil {
+					repos = make(map[string]struct{})
+					reposByTeam[metric.TeamID] = repos
+				}
+				repos[metric.RepoID] = struct{}{}
+			}
+		}
+		for _, repos := range reposByTeam {
+			_ = executor.repoCountObserver.ObserveTeamMetricsDailyRepoCount(len(repos))
+		}
+	}
+
 	return written, nil
 }
 
@@ -202,14 +244,8 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 // `for repo_id in repo_ids` loop, CHAOS-4264 -- "each run_daily_metrics_job
 // call loads and releases only that repo's source rows"), scoping every
 // call's commit set -- and therefore every team's commit/after-hours/weekend
-// bucket -- to that one repo alone. team_metrics_daily is deduped downstream
-// by (org_id, team_id, day) (internal/jobs/report/dedup.go,
-// clickhouse_dedup.py): whichever row a reader picks for a key is a
-// repo-scoped slice, never a cross-repo sum. A single call aggregating every
-// repo in the partition into one row produces a materially different number
-// for any team whose repos span more than one entry in this partition -- not
-// a rounding difference, a different row. Running ComputeTeamWellbeing once
-// per repo mirrors the Python loop's bucket-reset boundary exactly, so a
+// bucket -- to that one repo alone. Running ComputeTeamWellbeing once per
+// repo here mirrors that loop's bucket-reset boundary exactly, so a
 // multi-repo partition writes the same per-repo-scoped rows Python does.
 // Iterating in repoIDs' own (sorted, deterministic -- see
 // normalizeRepositoryPartitions) order keeps this reproducible run to run
@@ -218,6 +254,16 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 // never emits an empty chunk -- so it is not specially handled here: an
 // empty repoIDs simply loops zero times and writes nothing, matching
 // Python's `for repo_id in repo_ids` loop body never running either.
+//
+// CHAOS-4329: this per-repo call structure is no longer load-bearing for
+// correctness the way it originally was -- ComputeTeamWellbeing itself now
+// buckets by (teamID, repoID) internally (see its doc comment), so a single
+// call over every repo's commits combined would produce the identical
+// per-repo-keyed rows this function's repo-by-repo loop produces. The loop
+// is kept anyway: it is what gives WriteTeamMetricsDailyPerRepo a distinct
+// computedAtByRepo group per repo (harmless, no longer required either --
+// see that function's doc comment), and changing it is out of this ticket's
+// scope.
 func computeWellbeingPerRepo(
 	day time.Time,
 	repoIDs []uuid.UUID,

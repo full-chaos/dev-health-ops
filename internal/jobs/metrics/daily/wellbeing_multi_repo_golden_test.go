@@ -20,6 +20,7 @@ import (
 type wellbeingMultiRepoGoldenExpectedRow struct {
 	TeamID                 string  `json:"team_id"`
 	TeamName               string  `json:"team_name"`
+	RepoID                 string  `json:"repo_id"`
 	CommitsCount           int     `json:"commits_count"`
 	AfterHoursCommitsCount int     `json:"after_hours_commits_count"`
 	WeekendCommitsCount    int     `json:"weekend_commits_count"`

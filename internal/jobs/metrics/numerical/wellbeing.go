@@ -23,9 +23,16 @@ type Commit struct {
 
 // TeamWellbeingMetric is one team's after-hours/weekend commit activity for a
 // day -- the row shape team_metrics_daily persists.
+//
+// RepoID (CHAOS-4329) is the repo this bucket's commits came from --
+// team_metrics_daily now keys one row per (team_id, repo_id, day) instead of
+// (team_id, day) alone, so a team owning several repos keeps every repo's
+// slice instead of losing all but the last-written one to the old reader
+// argMax collapse.
 type TeamWellbeingMetric struct {
 	TeamID                 string
 	TeamName               string
+	RepoID                 string
 	CommitsCount           int
 	AfterHoursCommitsCount int
 	WeekendCommitsCount    int
@@ -77,6 +84,15 @@ const (
 // values job_daily.py resolves from BUSINESS_TIMEZONE / BUSINESS_HOURS_START
 // / BUSINESS_HOURS_END (default "UTC", 9, 17) -- this function does not read
 // the environment itself.
+//
+// CHAOS-4329: buckets are keyed by (teamID, repoID), not teamID alone, so a
+// commit set spanning more than one repo (the normal case for the
+// team_wellbeing native executor's whole-partition LoadWellbeingCommits, and
+// for compute_team_wellbeing_metrics_daily whenever job_daily.py runs with
+// repo_id=None -- e.g. dev-hops fixtures generate --with-metrics) produces
+// one TeamWellbeingMetric PER (team, repo) instead of silently merging every
+// repo's commits into one row. This mirrors the identical fix in Python's
+// compute_team_wellbeing_metrics_daily (compute_wellbeing.py).
 func ComputeTeamWellbeing(
 	day time.Time,
 	commits []Commit,
@@ -89,13 +105,17 @@ func ComputeTeamWellbeing(
 	start := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
+	type bucketKey struct {
+		teamID string
+		repoID string
+	}
 	type bucket struct {
 		teamName   string
 		commits    int
 		afterHours int
 		weekend    int
 	}
-	byTeam := make(map[string]*bucket)
+	byTeamRepo := make(map[bucketKey]*bucket)
 
 	for _, commit := range commits {
 		committedAt := commit.CommitterWhen.UTC()
@@ -115,14 +135,15 @@ func ComputeTeamWellbeing(
 			teamID, teamName = UnknownTeamID, UnknownTeamName
 		}
 
-		entry := byTeam[teamID]
+		key := bucketKey{teamID: teamID, repoID: commit.RepoID}
+		entry := byTeamRepo[key]
 		if entry == nil {
 			name := teamName
 			if name == "" {
 				name = teamID
 			}
 			entry = &bucket{teamName: name}
-			byTeam[teamID] = entry
+			byTeamRepo[key] = entry
 		}
 		entry.commits++
 
@@ -134,23 +155,29 @@ func ComputeTeamWellbeing(
 		}
 	}
 
-	teamIDs := make([]string, 0, len(byTeam))
-	for teamID := range byTeam {
-		teamIDs = append(teamIDs, teamID)
+	keys := make([]bucketKey, 0, len(byTeamRepo))
+	for key := range byTeamRepo {
+		keys = append(keys, key)
 	}
-	sort.Strings(teamIDs)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].teamID != keys[j].teamID {
+			return keys[i].teamID < keys[j].teamID
+		}
+		return keys[i].repoID < keys[j].repoID
+	})
 
-	metrics := make([]TeamWellbeingMetric, 0, len(teamIDs))
-	for _, teamID := range teamIDs {
-		entry := byTeam[teamID]
+	metrics := make([]TeamWellbeingMetric, 0, len(keys))
+	for _, key := range keys {
+		entry := byTeamRepo[key]
 		var afterHoursRatio, weekendRatio float64
 		if entry.commits > 0 {
 			afterHoursRatio = float64(entry.afterHours) / float64(entry.commits)
 			weekendRatio = float64(entry.weekend) / float64(entry.commits)
 		}
 		metrics = append(metrics, TeamWellbeingMetric{
-			TeamID:                 teamID,
+			TeamID:                 key.teamID,
 			TeamName:               entry.teamName,
+			RepoID:                 key.repoID,
 			CommitsCount:           entry.commits,
 			AfterHoursCommitsCount: entry.afterHours,
 			WeekendCommitsCount:    entry.weekend,

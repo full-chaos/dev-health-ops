@@ -167,6 +167,21 @@ type DailyMetricsCompatRetryObserver interface {
 	ObserveDailyMetricsCompatRetry(decision DailyMetricsCompatRetryDecision) error
 }
 
+// TeamMetricsDailyRepoCountObserver is the narrow capability
+// TeamWellbeingExecutor depends on after a team_metrics_daily write lands
+// (CHAOS-4329). team_metrics_daily now writes one row PER (team, repo, day)
+// instead of one row per (team, day) that silently overwrote the previous
+// repo's slice -- this observer makes that per-team repo fan-out an
+// observable series (unlabeled: no team_id label, to avoid unbounded
+// cardinality -- see ObserveTeamMetricsDailyRepoCount) instead of something
+// only a bug report could surface. Direct Go counterpart of Python's
+// dev_health_team_metrics_daily_repo_count (metrics/prometheus.py); the
+// exposed metric NAME matches exactly so one Grafana query covers rows
+// written by either language.
+type TeamMetricsDailyRepoCountObserver interface {
+	ObserveTeamMetricsDailyRepoCount(repoCount int) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

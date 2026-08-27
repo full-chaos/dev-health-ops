@@ -248,6 +248,14 @@ type metricDefinition struct {
 	Unit          string   `json:"unit"`
 	Dimensions    []string `json:"dimensions"`
 	SourceTable   string   `json:"source_table"`
+	// Numerator/Denominator (CHAOS-4329) are the table-local additive
+	// columns a ratio metric recomputes from when its source table can
+	// yield more than one physical row per chart key (team_metrics_daily
+	// gained repo_id: a team owning N repos writes N rows). Empty for
+	// every metric whose source table stays single-row-per-key -- see
+	// metricDefinition.numeratorDenominator's caller in buildChartQuery.
+	Numerator   string `json:"numerator,omitempty"`
+	Denominator string `json:"denominator,omitempty"`
 }
 
 type metricRegistryArtifact struct {
@@ -352,10 +360,19 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		definition.hasDimension("day") {
 		xExpression, xType, temporal = "toDate(day)", "Date", true
 	}
-	aggregate := "avg"
+	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
-		aggregate = "sum"
+		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
 	}
+	// yExpression for a numerator/denominator ratio metric stays a plain
+	// avg(metric) -- CHAOS-4329 codex round 2 ("preserve team-level
+	// averaging"): the recompute happens one layer down, in the FROM
+	// source built below, which pre-collapses to (org_id, team_id, day)
+	// BEFORE this aggregate ever runs. Recomputing SUM(numerator)/
+	// SUM(denominator) at THIS layer would sum across every team in
+	// scope, not just a team's own repos, silently changing an org-wide
+	// chart's existing equal-weighted "avg across teams" semantics into a
+	// commit-weighted ratio across the whole org.
 	clauses := []string{spec.Metric + " IS NOT NULL"}
 	parameters := make([]any, 0, 5)
 	if spec.OrganizationID != "" {
@@ -389,15 +406,15 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// latest-generation source (see dedup.go) so a re-drive is never summed
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
-	source := dedupFromSource(definition.SourceTable)
+	source := sourceFrom(spec.Metric, definition)
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
         CAST('total', '%s') AS x,
         CAST(NULL, 'Nullable(String)') AS group_value,
-        %s(%s) AS y
+        %s AS y
     FROM %s
     WHERE
-        %s`, xType, aggregate, spec.Metric, source, where), parameters, nil
+        %s`, xType, yExpression, source, where), parameters, nil
 	}
 	order := "y DESC, x"
 	if temporal {
@@ -406,12 +423,75 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	return fmt.Sprintf(`SELECT
         %s AS x,
         CAST(NULL, 'Nullable(String)') AS group_value,
-        %s(%s) AS y
+        %s AS y
     FROM %s
     WHERE
         %s
     GROUP BY x
-    ORDER BY %s`, xExpression, aggregate, spec.Metric, source, where, order), parameters, nil
+    ORDER BY %s`, xExpression, yExpression, source, where, order), parameters, nil
+}
+
+// sourceFrom is the FROM source for buildChartQuery's outer SELECT.
+//
+// For an ordinary metric this is just the table's dedup source (latest
+// generation per natural key -- dedupFromSource). For a metric declaring a
+// numerator/denominator pair (CHAOS-4329, table-local -- see
+// metricDefinition.Numerator's doc comment), it is a nested subquery that
+// FIRST collapses to one row per (org_id, team_id, day), summing the
+// additive numerator/denominator across a team's repos and recomputing the
+// ratio -- exactly the SUM-then-recompute pattern the 4 named
+// team_metrics_daily readers use (Python mirror:
+// reports/charts.py::_source_from). The outer query then applies its
+// EXISTING avg()/GROUP BY x logic on top of this already-team-collapsed
+// view, so a team's repos are summed together but teams are never summed
+// into each other: an org-wide chart (no team filter) still averages EACH
+// team's own ratio, unchanged from before this table had a repo_id column.
+// sourceFrom mirrors Python's _source_from (reports/charts.py). For a
+// numerator/denominator metric (CHAOS-4329, table-local) it also drops the
+// legacy empty-string repo_id bucket for any (team_id, day) key that also
+// has real per-repo rows -- the same legacy-bucket-suppression every other
+// team_metrics_daily reader applies (codex round 3, P1). Without this, a
+// historical day re-driven with real per-repo rows after migration 080
+// would sum the old pre-migration aggregate together with the new per-repo
+// rows and double-count that day.
+//
+// The window's PARTITION BY includes org_id (unlike the 4 named readers'
+// equivalent window, which can omit it because THEY embed a
+// "WHERE org_id = ..." filter inside their own innermost subquery, before
+// their window runs). This function has no such caller-scoped filter
+// available -- buildChartQuery's org_id/day-range/team WHERE clause is
+// applied in the OUTER query, after this subquery's own GROUP BY has
+// already collapsed rows. Without org_id in the PARTITION BY, a
+// legacy-only day for one org would incorrectly read another org's
+// unrelated real per-repo rows sharing the same (day, team_id) and see a
+// nonzero real_repo_count, wrongly dropping its own legacy row and
+// returning no data for that org's untouched historical day
+// (independent-review coverage gap, verified as a real defect once a
+// legacy-only-day test was added).
+func sourceFrom(metric string, definition metricDefinition) string {
+	dedupSource := dedupFromSource(definition.SourceTable)
+	if definition.Numerator == "" || definition.Denominator == "" {
+		return dedupSource
+	}
+	return fmt.Sprintf(`(
+        SELECT
+            org_id,
+            team_id,
+            day,
+            if(sum(%s) > 0,
+               sum(%s) / sum(%s), 0.0
+            ) AS %s
+        FROM (
+            SELECT
+                *,
+                countIf(repo_id != '') OVER (PARTITION BY org_id, day, team_id) AS real_repo_count
+            FROM %s
+        )
+        WHERE repo_id != '' OR real_repo_count = 0
+        GROUP BY org_id, team_id, day
+    ) AS %s`,
+		definition.Denominator, definition.Numerator, definition.Denominator,
+		metric, dedupSource, definition.SourceTable)
 }
 
 func (definition metricDefinition) hasDimension(target string) bool {

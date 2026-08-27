@@ -74,6 +74,19 @@ class WellbeingScorer(DimensionScorer):
             if rerun_rate is not None:
                 signals["rerun_rate_inverse"] = _clamp(1.0 - float(rerun_rate))
 
+        # CHAOS-4329: team_metrics_daily carries repo_id (''-legacy on rows
+        # from before migration 080). Dedup per (day, team_id, repo_id) via
+        # argMax(computed_at); drop the legacy repo_id='' bucket for a
+        # (team_id, day) key whenever real per-repo buckets also exist for
+        # that key -- a historical day backfilled/re-driven with real
+        # per-repo rows after migration 080 must not have its old
+        # pre-migration aggregate summed together with the new rows, which
+        # would double-count that day (codex CHAOS-4329 round 1, P1). SUM
+        # the remaining additive counts across a team's repos, and
+        # recompute the ratio from those sums (never average per-repo
+        # ratios directly) before the outer avg() across teams -- unchanged.
+        # Without this a multi-repo team lost every repo but the
+        # last-written one.
         team_filter = "AND team_id = {team_id:String}" if team_id else ""
         team_query = f"""
             SELECT
@@ -83,14 +96,35 @@ class WellbeingScorer(DimensionScorer):
                 SELECT
                     day,
                     team_id,
-                    argMax(after_hours_commit_ratio, computed_at)
-                        AS after_hours_commit_ratio,
-                    argMax(weekend_commit_ratio, computed_at)
-                        AS weekend_commit_ratio
-                FROM {_TEAM_TABLE}
-                WHERE org_id = {{org_id:String}}
-                  AND day = {{day:Date}}
-                  {team_filter}
+                    if(sum(commits_count) > 0,
+                       sum(after_hours_commits_count) / sum(commits_count), 0.0
+                    ) AS after_hours_commit_ratio,
+                    if(sum(commits_count) > 0,
+                       sum(weekend_commits_count) / sum(commits_count), 0.0
+                    ) AS weekend_commit_ratio
+                FROM (
+                    SELECT day, team_id, repo_id, commits_count, after_hours_commits_count, weekend_commits_count
+                    FROM (
+                        SELECT
+                            day,
+                            team_id,
+                            repo_id,
+                            argMax(commits_count, computed_at)
+                                AS commits_count,
+                            argMax(after_hours_commits_count, computed_at)
+                                AS after_hours_commits_count,
+                            argMax(weekend_commits_count, computed_at)
+                                AS weekend_commits_count,
+                            countIf(repo_id != '') OVER (PARTITION BY day, team_id)
+                                AS real_repo_count
+                        FROM {_TEAM_TABLE}
+                        WHERE org_id = {{org_id:String}}
+                          AND day = {{day:Date}}
+                          {team_filter}
+                        GROUP BY day, team_id, repo_id
+                    )
+                    WHERE repo_id != '' OR real_repo_count = 0
+                )
                 GROUP BY day, team_id
             )
         """

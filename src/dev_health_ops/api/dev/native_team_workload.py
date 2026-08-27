@@ -184,6 +184,18 @@ FROM (
 )
 """
 
+#: CHAOS-4329: team_metrics_daily carries repo_id (''-legacy on rows written
+#: before migration 080). Four layers: dedup per (day, team_id, repo_id) via
+#: argMax(computed_at); drop the legacy repo_id='' bucket for a (team_id,
+#: day) key whenever real per-repo buckets also exist for that key -- a
+#: historical day backfilled/re-driven with real per-repo rows after
+#: migration 080 must not have its old pre-migration aggregate summed
+#: together with the new rows, which would double-count that day (codex
+#: CHAOS-4329 round 1, P1); SUM the remaining additive counts across repos
+#: into one (day, team_id) total and recompute the ratio from those sums (a
+#: ratio is not additive), THEN avg() across days -- unchanged from before.
+#: Without this a team owning more than one repo lost every repo but the
+#: last-written one to the old (day, team_id)-only argMax collapse.
 _TEAM_COGNITIVE_LOAD_TEAM_SQL = """
 SELECT
     avg(after_hours_commit_ratio) AS after_hours_commit_ratio,
@@ -193,13 +205,32 @@ FROM (
     SELECT
         day,
         team_id,
-        argMax(after_hours_commit_ratio, computed_at) AS after_hours_commit_ratio,
-        argMax(weekend_commit_ratio,     computed_at) AS weekend_commit_ratio
-    FROM team_metrics_daily
-    WHERE org_id = {org_id:String}
-      AND team_id = {team_id:String}
-      AND day >= {start_date:Date}
-      AND day < {end_date:Date}
+        if(sum(commits_count) > 0,
+           sum(after_hours_commits_count) / sum(commits_count), 0.0
+        ) AS after_hours_commit_ratio,
+        if(sum(commits_count) > 0,
+           sum(weekend_commits_count) / sum(commits_count), 0.0
+        ) AS weekend_commit_ratio
+    FROM (
+        SELECT day, team_id, repo_id, commits_count, after_hours_commits_count, weekend_commits_count
+        FROM (
+            SELECT
+                day,
+                team_id,
+                repo_id,
+                argMax(commits_count,             computed_at) AS commits_count,
+                argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
+                argMax(weekend_commits_count,      computed_at) AS weekend_commits_count,
+                countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+            FROM team_metrics_daily
+            WHERE org_id = {org_id:String}
+              AND team_id = {team_id:String}
+              AND day >= {start_date:Date}
+              AND day < {end_date:Date}
+            GROUP BY day, team_id, repo_id
+        )
+        WHERE repo_id != '' OR real_repo_count = 0
+    )
     GROUP BY day, team_id
 )
 """

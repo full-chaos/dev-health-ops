@@ -31,9 +31,18 @@ var rerunDedupedDailyTables = map[string]bool{
 // per natural key must be selected explicitly. Keys mirror
 // clickhouse_dedup._APPEND_ONLY_DAILY_KEYS exactly.
 var appendOnlyDailyKeys = map[string][]string{
-	"repo_metrics_daily":             {"org_id", "repo_id", "day"},
-	"user_metrics_daily":             {"org_id", "repo_id", "author_email", "day"},
-	"team_metrics_daily":             {"org_id", "team_id", "day"},
+	"repo_metrics_daily": {"org_id", "repo_id", "day"},
+	"user_metrics_daily": {"org_id", "repo_id", "author_email", "day"},
+	// CHAOS-4329: repo_id added -- mirrors clickhouse_dedup.py's identical
+	// change. Legacy rows all share repo_id='' (migration 080) so they
+	// still collapse to one row per (team_id, day); new per-repo rows are
+	// kept apart. This package's own bare avg()/sum() aggregate
+	// (buildChartQuery) over this dedup source now sums additive counts
+	// correctly across repos; an avg()-based series here is a coarser
+	// average-of-per-repo-values than the recomputed-from-summed-counts
+	// ratio the Python readers use, tracked as a known follow-up rather
+	// than blocking this fix (see this PR's RISK-NOTES).
+	"team_metrics_daily":             {"org_id", "team_id", "repo_id", "day"},
 	"testops_pipeline_metrics_daily": {"org_id", "repo_id", "day"},
 	"testops_test_metrics_daily":     {"org_id", "repo_id", "day"},
 	"testops_coverage_metrics_daily": {"org_id", "repo_id", "day"},

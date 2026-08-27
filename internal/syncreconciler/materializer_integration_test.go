@@ -237,6 +237,39 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		}
 		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 0)
 	})
+
+	// CHAOS-4357 round 2 (codex P1): a FRESH river delivery -- dispatched
+	// well within the staleDispatchCutoff grace window -- must NOT be
+	// re-armed even though the ledger's available_at already reads as due
+	// (it was due the moment the retry was published). Before this fix, the
+	// very next materializer tick would reset this row to 'pending' and the
+	// kernel would publish a SECOND River job for the same retry, repeating
+	// every tick until the first job finally executed -- amplifying one
+	// retry into an unbounded stream of duplicate jobs.
+	t.Run("a freshly dispatched retry within the grace window is not amplified", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 7, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerDiscoveryRetry, "planned", now.Add(-2*time.Hour))
+		seedDiscoveryLedger(t, ctx, pool, materializerDiscoveryRetry, "retrying",
+			now.Add(-time.Minute), nil, 1, ptrString("Reference discovery failed"))
+		// Dispatched 5 minutes ago -- well after cutoff (15 minutes ago), so
+		// still within its grace period to actually be claimed and start.
+		seedMaterializerDiscoveryDispatchedOutbox(t, ctx, pool, materializerDiscoveryRetry,
+			"discovery-fresh-job", now.Add(-5*time.Minute), 1)
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 0 {
+			t.Fatalf("fresh in-flight delivery was touched: %#v", result)
+		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("fresh in-flight delivery was counted as recovered: %#v", result)
+		}
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "dispatched", 1)
+	})
 }
 
 func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {

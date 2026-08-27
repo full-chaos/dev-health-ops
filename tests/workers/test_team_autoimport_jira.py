@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -620,10 +621,14 @@ class _FakeSprintJiraClient:
 
     def iter_board_sprints(self, *, board_id: int):
         if board_id == 81:
-            import requests
-
             response = requests.Response()
             response.status_code = 400
+            # CHAOS-4357 round 2 (codex P1): a bare 400 with no body is no
+            # longer skippable -- only Jira's documented errorMessages
+            # envelope for this endpoint is.
+            response._content = json.dumps(
+                {"errorMessages": ["The board does not support sprints"]}
+            ).encode()
             raise requests.HTTPError(
                 "400 Client Error: Bad Request for url: "
                 ".../rest/agile/1.0/board/81/sprint",
@@ -767,6 +772,97 @@ def test_jira_populate_reraises_a_403_sprint_listing_failure_under_strict_refere
     )
     monkeypatch.setattr(
         team_autoimport_jira, "JiraClient", _FakeForbiddenSprintJiraClient
+    )
+
+    sink = _fake_sink()
+
+    with pytest.raises(requests.HTTPError):
+        team_autoimport_jira.populate(
+            org_id="org-1",
+            credentials={
+                "email": "jira@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://jira.example.com",
+            },
+            scope={
+                "mode": "sync_reference_discovery",
+                "strict_reference_discovery": True,
+            },
+            sink=sink,
+        )
+
+
+class _FakeBoardListing400JiraClient:
+    """iter_boards itself answers 400 (e.g. a malformed projectKeyOrId) --
+    the same errorMessages envelope Jira uses for a benign "no sprints"
+    response, but board LISTING has no such benign shape. CHAOS-4357 round
+    2 (codex P1): this must propagate, never be treated as a per-project
+    skip."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def iter_boards(self, *, project_key: str):
+        response = requests.Response()
+        response.status_code = 400
+        response._content = json.dumps(
+            {"errorMessages": [f"The project key or id '{project_key}' does not exist"]}
+        ).encode()
+        raise requests.HTTPError(
+            "400 Client Error: Bad Request for url: .../rest/agile/1.0/board",
+            response=response,
+        )
+        yield  # pragma: no cover - generator shape only
+
+    def iter_board_sprints(self, *, board_id: int):
+        yield {"id": 501, "name": "Sprint 1", "state": "active"}  # pragma: no cover
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_reraises_a_board_listing_400_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4357 round 2 (codex P1): board listing has no documented benign
+    400 shape -- Jira's generic errorMessages envelope covers both "no
+    boards" and "malformed input" indistinguishably, so isolating it per
+    project risks silently omitting a real project's reference data while
+    strict discovery still reports success. A 400 here must propagate."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakeBoardListing400JiraClient
     )
 
     sink = _fake_sink()

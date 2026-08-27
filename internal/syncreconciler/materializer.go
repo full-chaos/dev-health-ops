@@ -160,15 +160,14 @@ func newMaterializer(begin materializerBeginFunc) (*Materializer, error) {
 // estimate crossing the stage budget), not a database outage, and the two
 // demand opposite first responses from an operator.
 const (
-	materializerStepBegin                 = "begin coordinator transaction"
-	materializerStepDisableJIT            = "disable JIT for the materializer transaction"
-	materializerStepDispatch              = "dispatch materialization upsert of public.sync_dispatch_outbox"
-	materializerStepFinalize              = "finalize materialization upsert of public.sync_dispatch_outbox"
-	materializerStepDiscovery             = "discovery materialization upsert of public.sync_dispatch_outbox"
-	materializerStepDiscoveryRearmedCount = "discovery stale-dispatched-recovery count of public.sync_dispatch_outbox"
-	materializerStepPostSync              = "post_sync materialization insert of public.sync_dispatch_outbox"
-	materializerStepRowCount              = "materialization affected-row count"
-	materializerStepCommit                = "commit coordinator transaction"
+	materializerStepBegin      = "begin coordinator transaction"
+	materializerStepDisableJIT = "disable JIT for the materializer transaction"
+	materializerStepDispatch   = "dispatch materialization upsert of public.sync_dispatch_outbox"
+	materializerStepFinalize   = "finalize materialization upsert of public.sync_dispatch_outbox"
+	materializerStepDiscovery  = "discovery materialization upsert of public.sync_dispatch_outbox"
+	materializerStepPostSync   = "post_sync materialization insert of public.sync_dispatch_outbox"
+	materializerStepRowCount   = "materialization affected-row count"
+	materializerStepCommit     = "commit coordinator transaction"
 )
 
 // materializerStepError names the Step statement that failed while keeping
@@ -289,14 +288,6 @@ func (materializer *Materializer) Step(
 	}
 
 	result := MaterializerResult{}
-
-	// Must run BEFORE the discovery step below: it reads the PRE-upsert
-	// outbox state that materializeDiscoverySQL's own UPDATE overwrites.
-	if err := tx.QueryRow(ctx, countStaleDispatchedDiscoverySQL, now, limit).
-		Scan(&result.DiscoveryRearmed); err != nil {
-		return MaterializerResult{}, materializerUnavailable(materializerStepDiscoveryRearmedCount, err)
-	}
-
 	steps := []struct {
 		sql   string
 		args  []any
@@ -305,8 +296,6 @@ func (materializer *Materializer) Step(
 	}{
 		{materializeDispatchSQL, []any{now, staleDispatchCutoff, limit}, &result.Dispatch, materializerStepDispatch},
 		{materializeFinalizeSQL, []any{now, limit}, &result.Finalize, materializerStepFinalize},
-		{materializeDiscoverySQL, []any{now, limit}, &result.Discovery, materializerStepDiscovery},
-		{materializePostSyncSQL, []any{now, limit}, &result.PostSync, materializerStepPostSync},
 	}
 	for _, step := range steps {
 		tag, execErr := tx.Exec(ctx, step.sql, step.args...)
@@ -319,6 +308,51 @@ func (materializer *Materializer) Step(
 		}
 		*step.count = affected
 	}
+
+	// Discovery runs separately (not through the generic Exec loop above)
+	// because it RETURNs a per-row "recovered" flag rather than reporting a
+	// single RowsAffected total (CHAOS-4357 round 2, codex P2): the flag is
+	// computed by the SAME statement, from the SAME pre-write snapshot that
+	// gates whether each row is touched at all, so there is no window
+	// between "decide what's stale" and "act on it" for a concurrent claim
+	// to invalidate -- unlike a separate preceding COUNT query would have.
+	discoveryRows, queryErr := tx.Query(ctx, materializeDiscoverySQL, now, limit, staleDispatchCutoff)
+	if queryErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, queryErr)
+	}
+	var discoveryTotal, discoveryRecovered int64
+	for discoveryRows.Next() {
+		var recovered bool
+		if err := discoveryRows.Scan(&recovered); err != nil {
+			discoveryRows.Close()
+			return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, err)
+		}
+		discoveryTotal++
+		if recovered {
+			discoveryRecovered++
+		}
+	}
+	rowsErr := discoveryRows.Err()
+	discoveryRows.Close()
+	if rowsErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDiscovery, rowsErr)
+	}
+	if discoveryTotal < 0 || discoveryTotal > int64(limit) {
+		return MaterializerResult{}, materializerUnavailable(materializerStepRowCount, nil)
+	}
+	result.Discovery = discoveryTotal
+	result.DiscoveryRearmed = discoveryRecovered
+
+	postSyncTag, postSyncErr := tx.Exec(ctx, materializePostSyncSQL, now, limit)
+	if postSyncErr != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepPostSync, postSyncErr)
+	}
+	postSyncAffected := postSyncTag.RowsAffected()
+	if postSyncAffected < 0 || postSyncAffected > int64(limit) {
+		return MaterializerResult{}, materializerUnavailable(materializerStepRowCount, nil)
+	}
+	result.PostSync = postSyncAffected
+
 	// The report runs in the SAME transaction as the writes above, and after
 	// them, so what it reports is the state this pass leaves behind rather
 	// than the one it found.
@@ -721,17 +755,40 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 // dispatch, the underlying discovery WORK can finish (successfully-no-op,
 // retryably-failed, or terminally-failed) entirely independently of the
 // outbox row's own status; only the ledger (sync_run_reference_discoveries)
-// says whether a "dispatched" delivery is stale. The candidates CTE above
-// already re-derives that from the ledger -- a row only reaches this UPDATE
-// because the ledger currently proves it due (planned/retrying past
-// available_at, or running with an expired lease); a genuinely in-flight
-// row (running, live lease) is never a candidate in the first place. The
-// EXISTS re-check below mirrors materializeDispatchSQL's own
-// dispatched-but-EXISTS-a-stale-unit pattern -- both close the same class of
-// bug -- and additionally re-confirms staleness at UPDATE time rather than
-// trusting the CTE's earlier snapshot, narrowing the race window further.
-// A truly live river claim (running, unexpired lease) still cannot match,
-// so this cannot resurrect a row a concurrent kernel claim just published.
+// says whether a "dispatched" delivery is stale.
+//
+// CHAOS-4357 round 2 (codex P1): the candidates CTE proving the LEDGER is
+// due is not, by itself, proof the CURRENT outbox delivery is stale -- a
+// retry can be published, and genuinely still be in flight (not yet
+// claimed), while the ledger's available_at is already in the past (it was
+// due the moment it was published). Without a grace period, the very next
+// one-second reconciler tick would see the same due ledger, reset the
+// freshly dispatched row back to 'pending', and the kernel would publish a
+// SECOND River job for the same retry -- repeating every tick until the
+// first job finally executes, amplifying one retry into an unbounded
+// stream of duplicate jobs (DeliveryAttempt makes each one a distinct River
+// row, so River's own dedupe never catches this). stale_dispatched below
+// closes that: a river-dispatched row is only eligible once its OWN
+// dispatched_at is at or before staleDispatchCutoff ($3), the same
+// operator-tunable grace window (SYNC_UNIT_DISPATCH_STALE_SECONDS,
+// mirrored from materializeDispatchSQL) a fresh delivery gets to actually
+// be claimed and start executing before the materializer will touch it
+// again.
+//
+// A genuinely in-flight row (running, live lease) is never a candidate in
+// the first place, so this cannot resurrect a row a concurrent kernel claim
+// just published within the grace window either.
+//
+// stale_dispatched ALSO closes CHAOS-4357 round 2's P2: it is read ONCE,
+// by this same statement, from the same pre-write MVCC snapshot that gates
+// the UPDATE -- not by a separate preceding query, which would leave a
+// window for a concurrent claim to change the outbox row between "count it
+// as stale" and "act on it" (undercounting or overcounting a recovery that
+// did or didn't actually happen). RETURNING reports, per row this
+// statement actually touched, whether it was that exact recovered shape --
+// Go sums the total (Discovery) and the recovered subset (DiscoveryRearmed)
+// from the SAME result set, so the two counts can never diverge from what
+// this one atomic statement did.
 const materializeDiscoverySQL = `
 WITH candidates AS (
 	SELECT discovery.sync_run_id AS id, run.org_id
@@ -751,6 +808,17 @@ WITH candidates AS (
 		)
 	ORDER BY discovery.available_at, discovery.sync_run_id
 	LIMIT $2
+),
+stale_dispatched AS (
+	SELECT outbox.sync_run_id AS id
+	FROM public.sync_dispatch_outbox AS outbox
+	JOIN candidates ON candidates.id = outbox.sync_run_id
+	WHERE outbox.kind = 'reference_discovery'
+		AND outbox.status = 'dispatched'
+		AND outbox.dispatched_transport = 'river'
+		AND outbox.dispatched_at IS NOT NULL
+		AND outbox.dispatched_at <= $3
+		AND outbox.last_error IS DISTINCT FROM 'feature_disabled'
 )
 INSERT INTO public.sync_dispatch_outbox (
 	id, org_id, sync_run_id, kind, status, available_at, attempts,
@@ -843,62 +911,9 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
 	AND (
 		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
-		OR EXISTS (
-			SELECT 1
-			FROM public.sync_run_reference_discoveries AS discovery
-			WHERE discovery.sync_run_id = sync_dispatch_outbox.sync_run_id
-				AND (
-					(
-						discovery.status IN ('planned', 'retrying')
-						AND discovery.available_at <= $1
-					)
-					OR (
-						discovery.status = 'running'
-						AND discovery.lease_expires_at IS NOT NULL
-						AND discovery.lease_expires_at <= $1
-					)
-				)
-		)
+		OR sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)
 	)
-`
-
-// countStaleDispatchedDiscoverySQL is CHAOS-4357 round 2's (codex P2)
-// narrow count: the SAME candidate window materializeDiscoverySQL just
-// selected (identical predicate, ORDER BY, and LIMIT, so it can only
-// undercount relative to what that statement actually touches, never
-// overcount), joined against the outbox row each candidate currently has,
-// counting only the ones that were the specific stranded shape
-// (dispatched via river, not feature_disabled) about to be reset to
-// 'pending'. Must run BEFORE materializeDiscoverySQL in the same
-// transaction -- it reads the outbox row's PRE-upsert state, which
-// materializeDiscoverySQL's own UPDATE overwrites.
-const countStaleDispatchedDiscoverySQL = `
-WITH candidates AS (
-	SELECT discovery.sync_run_id AS id
-	FROM public.sync_run_reference_discoveries AS discovery
-	JOIN public.sync_runs AS run ON run.id = discovery.sync_run_id
-	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
-		AND (
-			(
-				discovery.status IN ('planned', 'retrying')
-				AND discovery.available_at <= $1
-			)
-			OR (
-				discovery.status = 'running'
-				AND discovery.lease_expires_at IS NOT NULL
-				AND discovery.lease_expires_at <= $1
-			)
-		)
-	ORDER BY discovery.available_at, discovery.sync_run_id
-	LIMIT $2
-)
-SELECT count(*)
-FROM candidates
-JOIN public.sync_dispatch_outbox AS outbox
-	ON outbox.sync_run_id = candidates.id AND outbox.kind = 'reference_discovery'
-WHERE outbox.status = 'dispatched'
-	AND outbox.dispatched_transport = 'river'
-	AND outbox.last_error IS DISTINCT FROM 'feature_disabled'
+RETURNING (sync_dispatch_outbox.sync_run_id IN (SELECT id FROM stale_dispatched)) AS recovered
 `
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

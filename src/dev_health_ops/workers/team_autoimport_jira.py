@@ -181,24 +181,26 @@ def _skippable_jira_400_detail(exc: Exception) -> str | None:
     so, the best diagnostic detail available for the warning log.
 
     Returns ``None`` for everything else: 401/403 (auth), 429 (rate limit),
-    5xx (server error), timeouts, connection errors, and any other
-    exception. CHAOS-4357 round-2 (codex P1): the original per-board/
-    per-project catch was a bare ``except Exception``, which under
-    ``strict_reference_discovery=True`` let a NON-skippable failure --
-    revoked credentials, a rate limit, an outage -- silently pass as if it
-    were the expected "this board has no sprints" 400, handing back an
-    incomplete reference set as a reported success. Strict discovery's
-    contract is guaranteed-complete-or-raise (see
+    5xx (server error), timeouts, connection errors, a 400 with no body or
+    an unparseable/empty body, and any other exception. CHAOS-4357 round-2
+    (codex P1, both rounds): the original per-board/per-project catch was a
+    bare ``except Exception``, which under ``strict_reference_discovery=True``
+    let a NON-skippable failure -- revoked credentials, a rate limit, an
+    outage, or (round 2's finding) a plain 400 for an unrelated reason such
+    as a malformed ``projectKeyOrId`` -- silently pass as if it were the
+    expected "this board has no sprints" 400, handing back an incomplete
+    reference set as a reported success. Strict discovery's contract is
+    guaranteed-complete-or-raise (see
     ``test_strict_reference_discovery_fails_on_an_incomplete_enumeration``
     in ``tests/workers/test_team_autoimport_linear_projects.py``), so only
     this one documented, narrow shape may be swallowed.
 
-    A 400 from these endpoints is Jira's own documented signal for "this
-    board's type does not support sprints" (typically carrying an
-    ``errorMessages`` array in the response body, e.g. a kanban-only
-    board) -- not a transient condition and not something a caller can
-    work around, so it is safe to treat as per-item, expected data, not an
-    error requiring a retry or a hard failure.
+    Jira's documented signal for "this board's type does not support
+    sprints" is a 400 carrying a non-empty ``errorMessages`` array in the
+    response body -- round 2 requires that array to actually be present
+    (not merely a bare 400) before treating the failure as benign; a 400
+    with no parseable body, or a body without ``errorMessages``, is treated
+    as NOT skippable and propagates like any other unrecognized failure.
     """
     if not isinstance(exc, requests.HTTPError):
         return None
@@ -208,12 +210,13 @@ def _skippable_jira_400_detail(exc: Exception) -> str | None:
     try:
         payload = response.json()
     except ValueError:
-        return str(exc)
-    if isinstance(payload, dict):
-        messages = payload.get("errorMessages")
-        if isinstance(messages, list) and messages:
-            return "; ".join(str(message) for message in messages)
-    return str(exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    messages = payload.get("errorMessages")
+    if isinstance(messages, list) and messages:
+        return "; ".join(str(message) for message in messages)
+    return None
 
 
 def _member_id(provider: str, provider_identity: str) -> str:
@@ -484,30 +487,19 @@ def populate(
             for project_key in {
                 row.project_key for row in project_rows if row.project_key
             }:
-                try:
-                    boards = list(client.iter_boards(project_key=project_key))
-                except Exception as exc:
-                    # CHAOS-4357 round 2 (codex P1): only the documented
-                    # benign shape (a plain Jira 400) is skippable per
-                    # project -- 401/403/429/5xx/timeouts/connection errors
-                    # propagate to the outer strict/non-strict handler below,
-                    # exactly as they did before this isolation existed.
-                    # Silently treating a rate limit or a revoked credential
-                    # as "this project just has no boards" would hand strict
-                    # discovery an incomplete set it reports as complete.
-                    detail = _skippable_jira_400_detail(exc)
-                    if detail is None:
-                        raise
-                    logging.getLogger(__name__).warning(
-                        "Jira board listing failed for org_id=%s project_key=%s: %s",
-                        org_id,
-                        project_key,
-                        detail,
-                    )
-                    record_team_autoimport_reference_subitem_skipped(
-                        provider="jira", kind="boards"
-                    )
-                    continue
+                # CHAOS-4357 round 2 (codex P1): NOT wrapped in a per-project
+                # skip. Unlike the per-board sprint endpoint below, a 400 from
+                # board LISTING has no documented benign shape -- Jira's
+                # generic error envelope (an ``errorMessages`` array) covers
+                # both "this project just has no boards" and "this
+                # projectKeyOrId is malformed", and the two are
+                # indistinguishable from the response alone. Isolating this
+                # per project would risk silently omitting a real project's
+                # reference data and still reporting strict discovery
+                # complete. Any failure here propagates to the outer
+                # strict/non-strict handler below, exactly as it did before
+                # this whole board/sprint block existed.
+                boards = list(client.iter_boards(project_key=project_key))
                 for board in boards:
                     board_id = board.get("id")
                     if board_id is None:

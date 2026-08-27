@@ -38,6 +38,15 @@ var (
 	// Retryable: see retryCompatibilityError and PartitionHandler.Work's
 	// failPartitionPermanently call.
 	ErrCompatibilityAmbiguousStuck = errors.New("daily metrics compatibility execution ledger is stuck ambiguous")
+	// ErrCompatibilityProgressStalled (CHAOS-4316) marks a runner subprocess
+	// the bridge's own liveness watchdog killed for reporting no progress
+	// within the derived stall window, or for exceeding the hard-ceiling
+	// backstop despite trickling progress -- distinct from
+	// ErrCompatibilityProcessSignaled (an external/kernel kill) and
+	// ErrCompatibilityResourceExhausted (the runner's own RLIMIT_AS): this
+	// one is the bridge choosing to kill its own child because it judged it
+	// unresponsive, not reacting to an external signal or memory ceiling.
+	ErrCompatibilityProgressStalled = errors.New("daily metrics compatibility runner reported no progress within its liveness bound")
 )
 
 // compatibilityErrorBody is the shape of a non-2xx response body from the
@@ -76,6 +85,8 @@ func classifyCompatibilityError(data []byte) error {
 			return ErrCompatibilityAmbiguousStuck
 		}
 		return ErrCompatibilityAmbiguousRefused
+	case "progress_stalled":
+		return ErrCompatibilityProgressStalled
 	default:
 		return ErrUnavailable
 	}
@@ -154,6 +165,21 @@ func (executor *HTTPCompatibilityExecutor) post(ctx context.Context, value compa
 	request.Header.Set("Content-Type", "application/json")
 	response, err := executor.client.Do(request)
 	if err != nil {
+		// CHAOS-4316: when the caller's ctx carries the Go-side liveness
+		// ceiling (PartitionHandler.Work's context.WithTimeout backstop) and
+		// it fires, client.Do returns a transport error wrapping this exact
+		// ctx's own deadline -- classify it the same as the bridge's own
+		// progress_stalled kill instead of collapsing it into the generic
+		// ErrUnavailable every other transport failure gets. Without this,
+		// the backstop firing (the one case it exists for: the bridge's own
+		// watchdog could not run) was the single liveness-kill path with NO
+		// bounded Reason, silently indistinguishable from an ordinary
+		// network blip (codex review). context.Canceled (e.g. graceful
+		// shutdown) is deliberately NOT reclassified here -- only a
+		// genuine deadline means this specific backstop.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return ErrCompatibilityProgressStalled
+		}
 		return ErrUnavailable
 	}
 	defer response.Body.Close()

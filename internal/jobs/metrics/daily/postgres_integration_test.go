@@ -814,6 +814,87 @@ func TestPostgresStoreReleaseFailurePathsReachLiveSchema(t *testing.T) {
 	}
 }
 
+// TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason is the
+// CHAOS-4316 codex-review P1 regression control: ReleasePartitionWithReason
+// persists status='failed' with a non-NULL failure_reason (migration 0113's
+// ck_daily_metrics_partition_failure_reason_scope permits this), but
+// ClaimPartition's reclaim UPDATE moved status to 'running' WITHOUT clearing
+// failure_reason -- a live schema then rejects that UPDATE outright
+// ("violates check constraint"), permanently stranding the exact partition
+// this ticket's whole "stays retryable" design depends on. Only a real
+// Postgres with the real CHECK constraints (not a hand-authored schema
+// missing them, which is exactly the CHAOS-4043 trap this file exists to
+// close) can catch this -- a mock or a schema missing the constraint would
+// pass regardless of whether ClaimPartition clears the column.
+func TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000201"
+		partitionID = "00000000-0000-4000-8000-000000000202"
+		orgID       = "00000000-0000-4000-8000-000000000209"
+	)
+	now := time.Date(2026, 8, 26, 3, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-08-25','daily-v1','running','pending',$3,$3)`, runID, orgID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'pending',0,$3,$3)`, partitionID, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || claim == nil {
+		t.Fatalf("claim partition = %#v, %v", claim, err)
+	}
+	if err := store.ReleasePartitionWithReason(ctx, *claim, "progress_stalled"); err != nil {
+		t.Fatalf("ReleasePartitionWithReason against live schema: %v", err)
+	}
+	var status string
+	var failureReason *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
+	).Scan(&status, &failureReason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || failureReason == nil || *failureReason != "progress_stalled" {
+		t.Fatalf("released state = status=%s failure_reason=%v, want failed/progress_stalled", status, failureReason)
+	}
+
+	// The reclaim itself: before the fix, this UPDATE violates
+	// ck_daily_metrics_partition_failure_reason_scope against the real
+	// schema and ClaimPartition returns ErrUnavailable instead of a claim.
+	reclaimed, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || reclaimed == nil {
+		t.Fatalf("reclaim after a liveness-kill release = %#v, %v", reclaimed, err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, partitionID,
+	).Scan(&status, &failureReason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || failureReason != nil {
+		t.Fatalf("reclaimed state = status=%s failure_reason=%v, want running/nil", status, failureReason)
+	}
+}
+
 // assertLeaseHeld requires a claim to have reported a live lease and to have
 // carried the exact remaining time on it. Each call site states the remainder
 // it predicts, so a claim that reports the wrong deadline cannot pass.
@@ -853,7 +934,10 @@ CREATE TABLE daily_metrics_runs (
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
  repo_ids jsonb NOT NULL, status varchar(16) NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
+ attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ failure_reason varchar(64) NULL,
+ CONSTRAINT ck_daily_metrics_partition_failure_reason_scope CHECK (failure_reason IS NULL OR status IN ('failed', 'failed_permanent')),
+ CONSTRAINT ck_daily_metrics_partition_failed_permanent_has_reason CHECK (status <> 'failed_permanent' OR failure_reason IS NOT NULL)
 );
 CREATE TABLE worker_job_outbox (
  id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,

@@ -149,6 +149,14 @@ func buildDailyWorker(
 				if compatRetryObserver, ok := observer.(jobruntime.DailyMetricsCompatRetryObserver); ok {
 					handler.SetCompatRetryObserver(compatRetryObserver)
 				}
+				// CHAOS-4316: work-size-derived backstop ceiling on the
+				// compatibility bridge call, behind the bridge's own
+				// progress-based watchdog. See SetLivenessCeiling's doc
+				// comment for why this is a backstop, not the primary bound.
+				handler.SetLivenessCeiling(
+					cfg.DailyPartitionLivenessCeilingBase,
+					cfg.DailyPartitionLivenessCeilingPerRepo,
+				)
 				// Optional (CHAOS-4263): a partition whose source data exists
 				// but whose family output is empty must not report success.
 				// Both dependencies are already validated non-nil above, so

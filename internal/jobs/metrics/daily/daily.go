@@ -114,6 +114,8 @@ func retryCompatibilityError(err error) error {
 		return jobruntime.WithReason(marked, jobruntime.ReasonResourceExhausted)
 	case errors.Is(err, ErrCompatibilityAmbiguousRefused):
 		return jobruntime.WithReason(marked, jobruntime.ReasonAmbiguousRefused)
+	case errors.Is(err, ErrCompatibilityProgressStalled):
+		return jobruntime.WithReason(marked, jobruntime.ReasonProgressStalled)
 	default:
 		return marked
 	}
@@ -201,6 +203,13 @@ type Store interface {
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
 	ReleasePartition(context.Context, PartitionClaim) error
+	// ReleasePartitionWithReason is ReleasePartition plus a bounded
+	// failure_reason (CHAOS-4316): status stays 'failed' (silently
+	// re-dispatchable, unlike FailPartitionPermanently's 'failed_permanent')
+	// -- a liveness kill is not a claim this row can never satisfy, a fresh
+	// attempt might simply not hang. reason must be in the same closed
+	// vocabulary FailPartitionPermanently validates against.
+	ReleasePartitionWithReason(ctx context.Context, claim PartitionClaim, reason string) error
 	// FailPartitionPermanently durably terminalizes a partition whose
 	// compatibility-bridge ledger row is stuck ambiguous (CHAOS-4319):
 	// unlike ReleasePartition (status='failed', silently re-dispatchable),
@@ -338,7 +347,51 @@ type PartitionHandler struct {
 	nativeObserver      jobruntime.DailyMetricsNativeFamilyObserver
 	nativeFamiliesNow   func() time.Time
 	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
+
+	// livenessCeilingBase/PerRepo (CHAOS-4316) bound the compatibility
+	// bridge call from the Go side, as a backstop behind the bridge's own
+	// progress-based watchdog (worker_metrics.py _watch_progress_stall).
+	// NewPartitionHandler seeds these with a nonzero, work-derived default
+	// (defaultLivenessCeilingBase/PerRepo below) -- team-lead ruling
+	// 2026-08-26: the fix must ship ON by default, because deployed
+	// compose/helm manifests do not set the new env vars that would
+	// otherwise be the only way to enable it. SetLivenessCeiling(0, 0) is
+	// the one explicit, deliberate way to opt out.
+	livenessCeilingBase    time.Duration
+	livenessCeilingPerRepo time.Duration
 }
+
+// defaultLivenessCeilingBase/PerRepo mirror config.Config's own defaults
+// (internal/platform/config/config.go, DEV_HEALTH_DAILY_PARTITION_LIVENESS_
+// CEILING_BASE/PER_REPO) so that ANY caller of NewPartitionHandler -- not
+// only cmd/dev-health-worker, which additionally wires the operator-tunable
+// config value via SetLivenessCeiling -- gets a safe, nonzero, work-derived
+// bound rather than silently unbounded behavior.
+//
+// Sized as queueDepthBudget(3) * the Python watchdog's own hard ceiling
+// (120s base + 90s/repo, x3 multiplier -- worker_metrics.py), NOT as an
+// independently-tuned Go-side number. A codex review on this ticket found
+// that the compatibility bridge's per-replica runner semaphore
+// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1) means this
+// deadline -- which starts counting from HTTP-send time, before the
+// request even acquires that semaphore slot -- also has to absorb time
+// spent legitimately queued behind another partition's own full compute
+// window, not only this partition's own compute time. queueDepthBudget=3
+// says: tolerate up to two other partitions each legitimately consuming
+// their full Python hard ceiling ahead of this one on the same replica,
+// plus this partition's own hard ceiling, before concluding something is
+// actually wrong. At the default dailyRepositoryPartitionSize (3 repos),
+// that is base(18m) + perRepo(13m30s)*3 = 58m30s, vs. a 19m30s Python hard
+// ceiling -- a 3x multiple, not the earlier 25m/19.5m (~1.3x) margin that
+// left no room for even one legitimately queued neighbor. If either side's
+// per-repo constants are retuned, keep this ratio: the Go base/perRepo
+// pair must equal 3x the Python side's own base/perRepo*multiplier, so the
+// two formulas cannot silently drift apart the way an independent flat
+// number would.
+const (
+	defaultLivenessCeilingBase    = 18 * time.Minute
+	defaultLivenessCeilingPerRepo = 13*time.Minute + 30*time.Second
+)
 
 func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
 	if store == nil || publisher == nil || compatibility == nil {
@@ -346,8 +399,45 @@ func NewPartitionHandler(store Store, publisher Publisher, compatibility Compati
 	}
 	return &PartitionHandler{
 		store: store, publisher: publisher, compatibility: compatibility,
-		nativeFamiliesNow: func() time.Time { return time.Now().UTC() },
+		nativeFamiliesNow:      func() time.Time { return time.Now().UTC() },
+		livenessCeilingBase:    defaultLivenessCeilingBase,
+		livenessCeilingPerRepo: defaultLivenessCeilingPerRepo,
 	}, nil
+}
+
+// SetLivenessCeiling overrides the work-size-derived hard ceiling on the
+// compatibility bridge call (CHAOS-4316): base + perRepo*len(RepoIDs), never
+// a flat wall-clock number. This is a backstop, not the primary mechanism --
+// the bridge's own progress-based watchdog should always win the race under
+// normal conditions, since it can see per-repo progress the Go side cannot.
+// It exists for when that watchdog itself cannot run (e.g. the bridge's
+// event loop is wedged). The clock starts at HTTP-send time, before the
+// request acquires the bridge's per-replica runner semaphore slot, so base
+// and perRepo must stay sized to absorb legitimate queueing behind other
+// partitions' compute time, not only this partition's own -- see the
+// queueDepthBudget derivation on defaultLivenessCeilingBase/PerRepo above;
+// an override here should keep the same multiple over the Python side's
+// hard ceiling rather than picking an independent number.
+// NewPartitionHandler already seeds a safe nonzero
+// default (defaultLivenessCeilingBase/PerRepo) -- call this to tune it (a
+// larger/smaller bound) or to explicitly opt out by passing base <= 0,
+// which is the ONLY way to disable the ceiling; simply never calling this
+// method does NOT disable it.
+func (handler *PartitionHandler) SetLivenessCeiling(base, perRepo time.Duration) {
+	if handler == nil {
+		return
+	}
+	handler.livenessCeilingBase = base
+	handler.livenessCeilingPerRepo = perRepo
+}
+
+// livenessCeiling returns 0 (no ceiling) only when SetLivenessCeiling(0, _)
+// was called explicitly -- the constructor default is always nonzero.
+func (handler *PartitionHandler) livenessCeiling(repoCount int) time.Duration {
+	if handler == nil || handler.livenessCeilingBase <= 0 {
+		return 0
+	}
+	return handler.livenessCeilingBase + handler.livenessCeilingPerRepo*time.Duration(repoCount)
 }
 
 // SetSourceDataChecker wires the optional zero-rows-with-source-data check
@@ -491,6 +581,14 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		},
 		func(workCtx context.Context) error {
 			skipFamilies := handler.computeNativeFamilies(workCtx, run, claim.Partition)
+			// CHAOS-4316: bound only the compatibility bridge call, not the
+			// native-family compute above -- that is a separate, fast,
+			// ClickHouse-only path with none of the bridge's liveness gap.
+			if ceiling := handler.livenessCeiling(len(claim.Partition.RepoIDs)); ceiling > 0 {
+				var cancel context.CancelFunc
+				workCtx, cancel = context.WithTimeout(workCtx, ceiling)
+				defer cancel()
+			}
 			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition, skipFamilies)
 		},
 	); err != nil {
@@ -521,6 +619,18 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			}
 			releasePartition(handler.store, ctx, *claim)
 			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonAmbiguousRefused)
+		}
+		if errors.Is(err, ErrCompatibilityProgressStalled) {
+			// CHAOS-4316: unlike the ambiguous_stuck case above, a liveness
+			// kill is NOT a claim this row can never satisfy -- a fresh
+			// attempt might simply not hang -- so this stays 'failed'
+			// (silently re-dispatchable), with a bounded failure_reason
+			// attached in the same atomic write so an operator reading the
+			// partition row can tell a liveness kill apart from any other
+			// 'failed' outcome without cross-referencing River's attempt
+			// log or Sentry.
+			releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled")
+			return retryCompatibilityError(err)
 		}
 		releasePartition(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
@@ -657,6 +767,18 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleasePartition(releaseCtx, claim)
+}
+
+// releasePartitionWithReason mirrors releasePartition's own-context
+// detachment, additionally persisting the bounded failure_reason (CHAOS-4316)
+// in the SAME atomic write as the status transition -- a failed call here
+// means the row was not transitioned at all (e.g. the lease already expired
+// out from under this attempt), exactly releasePartition's existing
+// best-effort failure semantics, not a partial write missing only the reason.
+func releasePartitionWithReason(store Store, ctx context.Context, claim PartitionClaim, reason string) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.ReleasePartitionWithReason(releaseCtx, claim, reason)
 }
 
 // failPartitionPermanently durably terminalizes a partition stuck ambiguous

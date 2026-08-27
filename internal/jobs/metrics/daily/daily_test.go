@@ -220,6 +220,141 @@ func TestPartitionCompletionFailureReleasesTheClaim(t *testing.T) {
 	}
 }
 
+// CHAOS-4316: without SetLivenessCeiling, runWithLeaseRenewal has no bound on
+// a compatibility call other than the lease renewal loop -- which keeps
+// succeeding forever as long as the store's RenewPartition call succeeds,
+// completely independent of whether the compatibility call is making any
+// progress. blockingCompatibility{waitForCancellation: true} models exactly
+// that: a hung bridge call that only ever returns when its ctx is canceled.
+// On origin/main (no SetLivenessCeiling call anywhere), nothing ever cancels
+// that ctx here -- fakeStore's RenewPartition always succeeds and the lease
+// is generous -- so Work would block for the full test timeout. This test
+// asserts the FIXED behavior (the ceiling fires and Work returns quickly);
+// verified manually before this commit that removing the SetLivenessCeiling
+// call below reproduces the hang (Work does not return within the 2s guard,
+// confirming the bug this ticket fixes).
+func TestPartitionLivenessCeilingReclaimsAHungCompatibilityCall(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID, RepoIDs: []RepositoryID{"repo-1", "repo-2"}},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: time.Hour, // generous: renewal must never be what unblocks this
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &blockingCompatibility{waitForCancellation: true}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Tiny, work-size-derived ceiling: base 10ms + perRepo 5ms * 2 repos =
+	// 20ms -- proportional to len(RepoIDs), never a flat number, matching
+	// the production formula exactly (see SetLivenessCeiling's doc comment).
+	handler.SetLivenessCeiling(10*time.Millisecond, 5*time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() { done <- handler.Work(context.Background(), partitionExecution()) }()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+			t.Fatalf("Work() = %v, want retryable", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Work did not return within the liveness ceiling -- CHAOS-4316 backstop regression")
+	}
+	compatibility.mu.Lock()
+	canceled := compatibility.partitionCanceled
+	compatibility.mu.Unlock()
+	if !canceled {
+		t.Fatal("compatibility call never observed ctx cancellation -- ceiling did not fire")
+	}
+	if store.partitionReleases != 1 {
+		t.Fatalf("partitionReleases=%d, want 1 (a ceiling-fired attempt must release its claim)", store.partitionReleases)
+	}
+}
+
+// SetLivenessCeiling with a zero/unset base must leave Work's ctx exactly as
+// unbounded as before this capability existed -- existing callers/tests that
+// never call it (every other test in this file) must see no behavior change.
+// TestLivenessCeilingEnabledByDefault proves the backstop ships ON by
+// default (team-lead ruling 2026-08-26): deployed compose/helm manifests do
+// not set the new env vars, so an opt-in design would never activate in
+// production. NewPartitionHandler alone (no SetLivenessCeiling call) must
+// already produce a nonzero, repo_count-derived bound.
+func TestLivenessCeilingEnabledByDefault(t *testing.T) {
+	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := handler.livenessCeiling(0)
+	if zero != defaultLivenessCeilingBase {
+		t.Fatalf("livenessCeiling(0) = %v, want the default base %v", zero, defaultLivenessCeilingBase)
+	}
+	three := handler.livenessCeiling(3)
+	want := defaultLivenessCeilingBase + 3*defaultLivenessCeilingPerRepo
+	if three != want {
+		t.Fatalf("livenessCeiling(3) = %v, want %v (base + 3*perRepo)", three, want)
+	}
+	if three <= zero {
+		t.Fatalf("livenessCeiling(3) = %v must exceed livenessCeiling(0) = %v -- derived from repo_count, not flat", three, zero)
+	}
+}
+
+// TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling is a red-first
+// regression for a codex review finding on this ticket: the Go ceiling's
+// clock starts at HTTP-send time, before the request acquires the
+// compatibility bridge's per-replica runner semaphore
+// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1). An earlier
+// constant pairing (10m base + 5m/repo) gave only a ~1.3x margin over the
+// Python watchdog's own hard ceiling (120s base + 90s/repo, x3 multiplier)
+// at the default 3-repo partition size -- not enough to survive even one
+// legitimately queued neighbor that itself consumes its full Python hard
+// ceiling before yielding the semaphore slot, which would let the Go
+// backstop kill a healthy, merely-queued partition. This asserts the
+// documented queueDepthBudget(3) relationship holds: the Go ceiling at N
+// repos must be at least queueDepthBudget * the Python side's own hard
+// ceiling at N repos, so at least two full-length legitimate neighbors can
+// queue ahead of this partition before the backstop fires.
+func TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling(t *testing.T) {
+	const (
+		pythonHardCeilingBasePerRepo = 3 // worker_metrics.py's hard-ceiling multiplier
+		pythonStallBaseSeconds       = 120 * time.Second
+		pythonStallPerRepoSeconds    = 90 * time.Second
+		queueDepthBudget             = 3
+	)
+	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repoCount := range []int{1, 3, 10} {
+		pythonHardCeiling := pythonHardCeilingBasePerRepo * (pythonStallBaseSeconds + pythonStallPerRepoSeconds*time.Duration(repoCount))
+		goCeiling := handler.livenessCeiling(repoCount)
+		minimumTolerated := queueDepthBudget * pythonHardCeiling
+		if goCeiling < minimumTolerated {
+			t.Fatalf(
+				"repoCount=%d: livenessCeiling=%v, want >= %d x the Python hard ceiling (%v) = %v -- a legitimately queued neighbor could be killed as if hung",
+				repoCount, goCeiling, queueDepthBudget, pythonHardCeiling, minimumTolerated,
+			)
+		}
+	}
+}
+
+// TestLivenessCeilingExplicitZeroOptsOut proves the ONE sanctioned way to
+// disable the backstop: SetLivenessCeiling(0, _). Never calling
+// SetLivenessCeiling at all does NOT disable it (see the default-on test
+// above) -- only an explicit zero base does.
+func TestLivenessCeilingExplicitZeroOptsOut(t *testing.T) {
+	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetLivenessCeiling(0, 0)
+	if got := handler.livenessCeiling(5); got != 0 {
+		t.Fatalf("livenessCeiling() = %v, want 0 after an explicit SetLivenessCeiling(0, 0) opt-out", got)
+	}
+}
+
 // CHAOS-4264: a signaled/resource-exhausted/refused compatibility bridge
 // attempt must still be Retryable (no behavior change to River's retry
 // decision) but must carry the matching bounded jobruntime.Reason instead of
@@ -233,6 +368,7 @@ func TestRetryCompatibilityErrorAttachesBoundedReasonAndPreservesCause(t *testin
 		{name: "signaled", cause: ErrCompatibilityProcessSignaled},
 		{name: "resource_exhausted", cause: ErrCompatibilityResourceExhausted},
 		{name: "ambiguous_refused", cause: ErrCompatibilityAmbiguousRefused},
+		{name: "progress_stalled", cause: ErrCompatibilityProgressStalled},
 		{name: "unclassified", cause: ErrUnavailable},
 	}
 	for _, testCase := range cases {
@@ -274,6 +410,41 @@ func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
 	}
 	if store.partitionReleases != 1 {
 		t.Fatalf("partitionReleases = %d, want 1", store.partitionReleases)
+	}
+}
+
+// TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable proves
+// CHAOS-4316's liveness-kill path writes the shared failure_reason column
+// (migration 0113, CHAOS-4319) through ReleasePartitionWithReason instead of
+// the plain ReleasePartition every other compatibility failure uses --
+// status stays 'failed' (silently re-dispatchable, unlike
+// ErrCompatibilityAmbiguousStuck's 'failed_permanent': a liveness kill is
+// not a claim this row can never satisfy).
+func TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProgressStalled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if !errors.Is(err, ErrCompatibilityProgressStalled) {
+		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProgressStalled", err)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != "progress_stalled" {
+		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/progress_stalled", store.releasesWithReason, store.releaseReason)
+	}
+	if store.partitionReleases != 0 {
+		t.Fatalf("partitionReleases = %d, want 0 -- a liveness kill must release WITH a reason, not through the plain path", store.partitionReleases)
 	}
 }
 
@@ -638,6 +809,8 @@ type fakeStore struct {
 	permanentFailures             int
 	permanentFailureReason        string
 	permanentFailureErr           error
+	releasesWithReason            int
+	releaseReason                 string
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -683,6 +856,11 @@ func (store *fakeStore) CompletePartition(
 }
 func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error {
 	store.partitionReleases++
+	return nil
+}
+func (store *fakeStore) ReleasePartitionWithReason(_ context.Context, _ PartitionClaim, reason string) error {
+	store.releasesWithReason++
+	store.releaseReason = reason
 	return nil
 }
 func (store *fakeStore) FailPartitionPermanently(_ context.Context, _ PartitionClaim, reason string) error {

@@ -502,6 +502,45 @@ if _PROMETHEUS_AVAILABLE:
         ["worker_kind", "decision"],
     )
 
+    # ---------------------------------------------------------------------------
+    # Metric compatibility bridge liveness bound (CHAOS-4316)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_metric_compat_liveness_kill_total",
+        "Daily-metrics compatibility bridge runner subprocesses killed by "
+        "the bridge's own liveness watchdog because ComputePartition had no "
+        "wall-clock/renewal-based bound (CHAOS-4316). 'stalled' means no "
+        "progress line arrived within the per-repo-derived stall window; "
+        "'timeout' means the hard ceiling backstop fired despite trickling "
+        "progress; 'oom' means the kill coincided with a real memcg OOM "
+        "signal (preferred) or, when that signal is unavailable, peak RSS "
+        "near the configured memory bound (CHAOS-4264) -- distinguishing a "
+        "genuine hang from a memory-pressure kill misclassified as a hang.",
+        ["reason"],
+    )
+    DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = (
+        _prometheus_client_module.Histogram(
+            "dev_health_metric_compat_child_silence_seconds",
+            "Seconds since the last progress line (or process start, if "
+            "none was ever seen) at the moment the CHAOS-4316 liveness "
+            "watchdog decided to kill the runner subprocess. High values "
+            "with reason='stalled' point at a genuinely hung child; the "
+            "same metric for 'timeout' shows how close trickling progress "
+            "came to dodging the interval check before the hard ceiling won.",
+            ["reason"],
+            buckets=(30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0),
+        )
+    )
+    DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _prometheus_client_module.Gauge(
+        "dev_health_metric_compat_runner_slots_in_use",
+        "Runner subprocess slots currently held against this replica's "
+        "process-local _RUNNER_CONCURRENCY_SEMAPHORE (CHAOS-4316). A value "
+        "pinned at the configured max concurrency for an extended period is "
+        "the same signature the 2026-08-26 incident showed: every partition "
+        "routed to this replica queues behind one stuck child while sibling "
+        "replicas keep working.",
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -548,6 +587,9 @@ else:
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
+    DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
+    DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()
+    DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _noop_gauge()
 
 
 # ---------------------------------------------------------------------------

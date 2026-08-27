@@ -83,12 +83,13 @@ type Option struct {
 
 // Help section headings, in display order.
 const (
-	GroupWorker      = "Worker"
-	GroupRuntime     = "Process runtime"
-	GroupDatabase    = "Database and River"
-	GroupRoutes      = "Provider routes"
-	GroupBridge      = "Operational bridge"
-	GroupCredentials = "Credentials"
+	GroupWorker       = "Worker"
+	GroupRuntime      = "Process runtime"
+	GroupDatabase     = "Database and River"
+	GroupRoutes       = "Provider routes"
+	GroupBridge       = "Operational bridge"
+	GroupDailyMetrics = "Daily metrics"
+	GroupCredentials  = "Credentials"
 )
 
 var groupOrder = []string{
@@ -97,6 +98,7 @@ var groupOrder = []string{
 	GroupDatabase,
 	GroupRoutes,
 	GroupBridge,
+	GroupDailyMetrics,
 	GroupCredentials,
 }
 
@@ -301,6 +303,22 @@ var optionRegistry = []Option{
 		Flag: "operational-bridge-allow-insecure", Env: "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
 		Kind: KindBool, Default: "false", Group: GroupBridge,
 		Usage: "permit a plaintext operational bridge origin",
+	},
+
+	// Daily metrics (CHAOS-4316): the Go-side liveness backstop on the
+	// daily_partition compatibility bridge call. Set the base to 0 to
+	// disable the backstop entirely -- the only sanctioned opt-out.
+	{
+		Flag: "daily-partition-liveness-ceiling-base",
+		Env:  "DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_BASE",
+		Kind: KindDuration, Default: "18m0s", Group: GroupDailyMetrics,
+		Usage: "daily-partition liveness backstop base (30s-30m, or 0 to disable)",
+	},
+	{
+		Flag: "daily-partition-liveness-ceiling-per-repo",
+		Env:  "DEV_HEALTH_DAILY_PARTITION_LIVENESS_CEILING_PER_REPO",
+		Kind: KindDuration, Default: "13m30s", Group: GroupDailyMetrics,
+		Usage: "daily-partition liveness backstop added per repo in the partition (1s-30m)",
 	},
 
 	// Credentials: environment only, on purpose.

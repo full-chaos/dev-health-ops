@@ -601,3 +601,98 @@ def test_jira_members_dedupe_to_one_row_per_member_id(
         ].raw_provider_user_id
         == "jira:accountid:acc-2"
     )
+
+
+class _FakeSprintJiraClient:
+    """Stands in for JiraClient: board 81 answers the real-world 400 (no
+    sprint support -- e.g. a kanban-only board), board 82 returns a sprint
+    normally. CHAOS-4357 requires this NOT to abort the whole populate,
+    strict_reference_discovery included."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def iter_boards(self, *, project_key: str):
+        yield {"id": 81}
+        yield {"id": 82}
+
+    def iter_board_sprints(self, *, board_id: int):
+        if board_id == 81:
+            import requests
+
+            response = requests.Response()
+            response.status_code = 400
+            raise requests.HTTPError(
+                "400 Client Error: Bad Request for url: "
+                ".../rest/agile/1.0/board/81/sprint",
+                response=response,
+            )
+        yield {"id": 501, "name": "Sprint 1", "state": "active"}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_skips_one_boards_sprint_400_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4357: a single board's 400 on GET .../board/{id}/sprint (typical
+    for a board without sprint support) must be skipped, not raised -- even
+    under strict_reference_discovery=True, where the prior behavior let one
+    bad board fail the ENTIRE org's reference discovery (and, by cascading
+    through run_reference_discovery_populate_strict, block that run's own
+    dispatch forever)."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(team_autoimport_jira, "JiraClient", _FakeSprintJiraClient)
+
+    sink = _fake_sink()
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_reference_discovery", "strict_reference_discovery": True},
+        sink=sink,
+    )
+
+    # The whole populate must succeed (no raise), the healthy board's team
+    # data AND sprint must both still land, and the failing board is simply
+    # absent from the output rather than poisoning the run.
+    assert summary["teams_imported"] == 1
+    assert summary["reference_team_keys"] == ["OPS"]
+    assert summary["sprints_imported"] == 1
+    assert summary["reference_sprint_ids"] == ["501"]

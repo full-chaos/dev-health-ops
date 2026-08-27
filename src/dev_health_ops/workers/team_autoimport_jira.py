@@ -27,6 +27,7 @@ from dev_health_ops.api.services.configuration.team_membership import (
 )
 from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
 from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_reference_subitem_skipped,
     record_team_autoimport_roster_preservation_failed,
 )
 from dev_health_ops.metrics.schemas import (
@@ -441,14 +442,51 @@ def populate(
             for project_key in {
                 row.project_key for row in project_rows if row.project_key
             }:
-                for board in client.iter_boards(project_key=project_key):
+                try:
+                    boards = list(client.iter_boards(project_key=project_key))
+                except Exception as exc:
+                    # CHAOS-4357: a board-listing failure for ONE project must not
+                    # abort sprint discovery for every other project (and, under
+                    # strict_reference_discovery, must not fail the org's whole
+                    # reference discovery). Skip this project's boards and keep
+                    # going.
+                    logging.getLogger(__name__).warning(
+                        "Jira board listing failed for org_id=%s project_key=%s: %s",
+                        org_id,
+                        project_key,
+                        exc,
+                    )
+                    record_team_autoimport_reference_subitem_skipped(
+                        provider="jira", kind="boards"
+                    )
+                    continue
+                for board in boards:
                     board_id = board.get("id")
                     if board_id is None:
                         continue
-                    for payload in client.iter_board_sprints(board_id=board_id):
-                        sprint = jira_sprint_payload_to_model(payload)
-                        if sprint:
-                            sprint_rows.append(replace(sprint, org_id=org_id))
+                    try:
+                        for payload in client.iter_board_sprints(board_id=board_id):
+                            sprint = jira_sprint_payload_to_model(payload)
+                            if sprint:
+                                sprint_rows.append(replace(sprint, org_id=org_id))
+                    except Exception as exc:
+                        # CHAOS-4357: Jira answers 400 for a board that does not
+                        # support sprints (kanban-only boards, or a board that
+                        # changed shape) -- that is a per-board fact, not an
+                        # org-wide failure. Skip this board's sprints (logging a
+                        # warning + counting it) and continue with the rest; never
+                        # let one board's 400 kill the whole populate, strict mode
+                        # included.
+                        logging.getLogger(__name__).warning(
+                            "Jira sprint listing failed for org_id=%s board_id=%s: %s",
+                            org_id,
+                            board_id,
+                            exc,
+                        )
+                        record_team_autoimport_reference_subitem_skipped(
+                            provider="jira", kind="board_sprints"
+                        )
+                        continue
         finally:
             client.close()
     except Exception:

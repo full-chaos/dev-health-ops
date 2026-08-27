@@ -625,6 +625,13 @@ func (pipeline *MutationPipeline) Step(
 	// the previous value standing rather than overwriting a real count with a
 	// zero nobody took (review finding).
 	recovered.RunawayMeasured = reportDelivered
+	// CHAOS-4357: materialized.Discovery is populated whether or not repair
+	// aborted the rest of the pass (it is set by its own WITH-statements loop
+	// above, unconditionally on !aborted before that guard is checked), so no
+	// separate aborted-guard is needed here -- a zero-value MaterializerResult
+	// on an aborted pass already reports Discovery=0, the correct "materializer
+	// never ran" answer.
+	recovered.DiscoveryRearmed = materialized.Discovery
 
 	if !aborted {
 		if err := pipeline.runStage(ctx, StageKernel, func(stageCtx context.Context) error {
@@ -664,6 +671,7 @@ func (pipeline *MutationPipeline) Step(
 	observation.UnreclaimableCandidates = recovered.UnreclaimableCandidates
 	observation.UnreclaimableTerminalized = recovered.UnreclaimableTerminalized
 	observation.UnreclaimableSweepFailures = recovered.UnreclaimableSweepFailures
+	observation.DiscoveryRearmed = recovered.DiscoveryRearmed
 	observation.RunawayMeasured = recovered.RunawayMeasured
 	observation.UnreclaimableMeasured = recovered.UnreclaimableMeasured
 	if observerErr != nil {

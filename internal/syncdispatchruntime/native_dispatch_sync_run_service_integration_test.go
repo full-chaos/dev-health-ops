@@ -548,3 +548,129 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 		}
 	})
 }
+
+const (
+	// A second run in the SAME org (discoveryTestOrg) as discoveryTestRun,
+	// on a different provider (jira instead of github), for
+	// TestDispatchIsolatesReferenceDiscoveryPerRunAcrossProviders below.
+	isolationTestJiraRun         = "00000000-0000-4000-8000-0000000000c1"
+	isolationTestJiraOutbox      = "00000000-0000-4000-8000-0000000000c2"
+	isolationTestJiraIntegration = "00000000-0000-4000-8000-0000000000c3"
+)
+
+func isolationJiraDispatchArgs() DispatchSyncRunArgs {
+	return DispatchSyncRunArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: isolationTestJiraRun,
+		DispatchOutbox: isolationTestJiraOutbox, RouteGeneration: 1,
+	}}
+}
+
+// TestDispatchIsolatesReferenceDiscoveryPerRunAcrossProviders is CHAOS-4357's
+// scope-item-1 readback: reference_discovery is gated per sync_run_id
+// (referenceDiscoverySucceeded queries WHERE sync_run_id = $1, and
+// sync_run_reference_discoveries.sync_run_id is UNIQUE), and
+// run_reference_discovery_populate_strict resolves context["provider"] from
+// the RUN'S OWN integration -- there is no code path where one provider's
+// team-autoimport failure is consulted while dispatching a different
+// provider's run. This test proves that isolation holds at the one place
+// that actually matters operationally: Dispatch() itself. Two runs share an
+// org (discoveryTestOrg): discoveryTestRun (github) has a SUCCEEDED
+// discovery and a claimable unit; isolationTestJiraRun (jira) has a
+// permanently RETRYING discovery, mirroring the org-70d529e0 incident
+// exactly. Dispatching the jira run must block (same as
+// TestDispatchBlocksOnReferenceDiscoveryAndArmsAWakeup); dispatching the
+// github run in the SAME org, in the SAME test, must proceed to actually
+// claim and queue its unit -- completely unaffected by the jira run's
+// failing discovery.
+func TestDispatchIsolatesReferenceDiscoveryPerRunAcrossProviders(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		// --- github run: seeded to succeed ---
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000c4"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+
+		// --- jira run: same org, own outbox row (dispatch_sync_run route is
+		// keyed by kind only, so seedDispatchRoute's route row already covers
+		// this run too), own integration, discovery permanently 'retrying'
+		// (the exact shape handleFailure leaves a still-retryable, not-yet-
+		// exhausted failure in -- e.g. the Jira board 400 from scope item 2,
+		// before this run's own retry has had a chance to succeed).
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
+VALUES ($1,$2,$3,'dispatch_sync_run','dispatched',now(),'river',1,now(),now())`,
+			isolationTestJiraOutbox, isolationTestJiraRun, discoveryTestOrg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
+			isolationTestJiraRun, discoveryTestOrg, isolationTestJiraIntegration); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO integrations (id,org_id,provider) VALUES ($1,$2,'jira')`,
+			isolationTestJiraIntegration, discoveryTestOrg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,error)
+VALUES ('00000000-0000-4000-8000-0000000000c5',$1,$2,$3,1,now(),'Reference discovery failed')`,
+			isolationTestJiraRun, discoveryTestOrg, discoveryStatusRetrying); err != nil {
+			t.Fatal(err)
+		}
+
+		service := newTestDispatchService(t, pool)
+
+		// Dispatch the FAILING jira run first -- it must block, not error.
+		if err := service.Dispatch(ctx, isolationJiraDispatchArgs()); err != nil {
+			t.Fatalf("Dispatch(jira): %v, want nil", err)
+		}
+		// Dispatch()'s blocked_on_reference_discovery branch never writes
+		// sync_runs.status at all (it only arms the wakeup and commits) --
+		// this test's fixture schema defaults a freshly inserted run to
+		// 'dispatching' (see CREATE TABLE sync_runs above), so "unchanged"
+		// here means it must NOT have become 'failed' or 'success'.
+		var jiraRunStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, isolationTestJiraRun).Scan(&jiraRunStatus); err != nil {
+			t.Fatal(err)
+		}
+		if jiraRunStatus == syncRunStatusFailed {
+			t.Fatalf("jira run status=%q, want non-terminal (blocked on its own reference discovery, not failed)", jiraRunStatus)
+		}
+		var jiraWakeupCount int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind='reference_discovery'`,
+			isolationTestJiraRun).Scan(&jiraWakeupCount); err != nil {
+			t.Fatal(err)
+		}
+		if jiraWakeupCount != 1 {
+			t.Fatalf("got %d jira reference_discovery wakeups, want 1", jiraWakeupCount)
+		}
+
+		// Dispatch the github run in the SAME org -- must proceed and claim
+		// its unit, completely unaffected by the jira run above.
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch(github): %v, want nil (successful dispatch)", err)
+		}
+		var githubRunStatus string
+		var startedAt *time.Time
+		if err := pool.QueryRow(ctx, `SELECT status, started_at FROM sync_runs WHERE id=$1`, discoveryTestRun).
+			Scan(&githubRunStatus, &startedAt); err != nil {
+			t.Fatal(err)
+		}
+		if githubRunStatus != syncRunStatusDispatching || startedAt == nil {
+			t.Fatalf("github run status=%q startedAt=%v, want dispatching/non-nil -- a failing jira discovery in the same org must not block it", githubRunStatus, startedAt)
+		}
+		var githubOutboxCount int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`, jobcontract.KindSyncProviderUnit).
+			Scan(&githubOutboxCount); err != nil {
+			t.Fatal(err)
+		}
+		if githubOutboxCount != 1 {
+			t.Fatalf("got %d worker_job_outbox rows for the github unit, want 1", githubOutboxCount)
+		}
+	})
+}

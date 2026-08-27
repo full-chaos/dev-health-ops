@@ -694,6 +694,24 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 	)
 `
 
+// materializeDiscoverySQL's UPDATE guard used to unconditionally refuse a
+// 'dispatched'+'river' outbox row (CHAOS-4357): once a reference_discovery
+// River job was delivered once, the outbox row was permanently stranded at
+// 'dispatched' forever after -- no other path ever resets it. Unlike a fresh
+// dispatch, the underlying discovery WORK can finish (successfully-no-op,
+// retryably-failed, or terminally-failed) entirely independently of the
+// outbox row's own status; only the ledger (sync_run_reference_discoveries)
+// says whether a "dispatched" delivery is stale. The candidates CTE above
+// already re-derives that from the ledger -- a row only reaches this UPDATE
+// because the ledger currently proves it due (planned/retrying past
+// available_at, or running with an expired lease); a genuinely in-flight
+// row (running, live lease) is never a candidate in the first place. The
+// EXISTS re-check below mirrors materializeDispatchSQL's own
+// dispatched-but-EXISTS-a-stale-unit pattern -- both close the same class of
+// bug -- and additionally re-confirms staleness at UPDATE time rather than
+// trusting the CTE's earlier snapshot, narrowing the race window further.
+// A truly live river claim (running, unexpired lease) still cannot match,
+// so this cannot resurrect a row a concurrent kernel claim just published.
 const materializeDiscoverySQL = `
 WITH candidates AS (
 	SELECT discovery.sync_run_id AS id, run.org_id
@@ -802,9 +820,25 @@ SET available_at = CASE
 	END,
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
-	AND NOT (
-		sync_dispatch_outbox.status = 'dispatched'
-		AND sync_dispatch_outbox.dispatched_transport = 'river'
+	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
+	AND (
+		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
+		OR EXISTS (
+			SELECT 1
+			FROM public.sync_run_reference_discoveries AS discovery
+			WHERE discovery.sync_run_id = sync_dispatch_outbox.sync_run_id
+				AND (
+					(
+						discovery.status IN ('planned', 'retrying')
+						AND discovery.available_at <= $1
+					)
+					OR (
+						discovery.status = 'running'
+						AND discovery.lease_expires_at IS NOT NULL
+						AND discovery.lease_expires_at <= $1
+					)
+				)
+		)
 	)
 `
 

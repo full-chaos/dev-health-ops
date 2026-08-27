@@ -207,6 +207,11 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 		// production life precisely because nothing outside a log could see
 		// it, and a gauge would clear the evidence on the next pass.
 		"# TYPE sync_dispatch_unreclaimable_sweep_failures_total counter": true,
+		// CHAOS-4357: a reference_discovery outbox row the materializer reset
+		// from stranded 'dispatched' back to 'pending' is an event count for
+		// the same reason -- the row is stranded the instant it happens, and
+		// a gauge would clear the only evidence a stuck retry was recovered.
+		"# TYPE sync_dispatch_discovery_rearmed_total counter": true,
 	}
 	for _, line := range strings.Split(metrics.String(), "\n") {
 		if !strings.HasSuffix(line, " counter") {

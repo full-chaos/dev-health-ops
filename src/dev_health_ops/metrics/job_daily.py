@@ -996,14 +996,19 @@ async def run_daily_metrics_job(
             testops_case_rows,
         ) = await testops_loader.load_testops_test_data(start, end, repo_id=repo_id)
         # The window is relative to THIS partition's day `d`, not wall-clock
-        # "now" -- `[d-29, d)`, i.e. up to but excluding today's own window
-        # (`start` == today's lower bound, so history and today never
-        # overlap and no run_id de-duplication is needed between them).
+        # "now" -- `[d-29, d)`, i.e. up to but excluding today's own window.
+        # `current_day_end=end` (codex round 2 P2, team-lead ruling
+        # 2026-08-27): a run whose suites straddle `start` (UTC midnight for
+        # day `d`) shares one run_id across suites on both sides -- passing
+        # today's full window lets the loader exclude that run_id from
+        # "historical" (it belongs to today, per load_testops_test_data's
+        # own run_id-membership semantics), not just time-slice on `start`.
         historical_failed_names_by_repo = (
             await testops_loader.load_testops_historical_failed_case_names(
                 datetime.combine(h_start_date, time.min, tzinfo=timezone.utc),
                 start,
                 repo_id=repo_id,
+                current_day_end=end,
             )
         )
         coverage_rows = await testops_loader.load_testops_coverage_data(

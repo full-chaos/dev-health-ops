@@ -380,7 +380,7 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
 
         # SQL-aggregated path (PR 2).
         aggregated_historical = await loader.load_testops_historical_failed_case_names(
-            history_start, today_start, repo_id=repo_id
+            history_start, today_start, repo_id=repo_id, current_day_end=today_end
         )
 
         # Raw-row Python reference (pre-PR-2 algorithm, inlined).
@@ -441,6 +441,134 @@ async def test_historical_aggregate_matches_raw_row_reference(sink):
         # historical set would have excluded "test_error_recurring" (its
         # historical status is "error"), giving a wrong 1/3 here instead.
         assert rec_agg.failure_recurrence_score == pytest.approx(2 / 3)
+    finally:
+        sink.client.command(
+            "ALTER TABLE test_suite_results DELETE WHERE org_id = {org:String}",
+            parameters={"org": org_id},
+        )
+        sink.client.command(
+            "ALTER TABLE test_case_results DELETE WHERE org_id = {org:String}",
+            parameters={"org": org_id},
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_straddling_midnight_not_split_between_today_and_historical(sink):
+    """CHAOS-4350 PR2 (codex round 2 P2, team-lead ruling 2026-08-27): a
+    single CI run whose suites straddle UTC midnight must not have its
+    pre-midnight failure silently dropped from today's flake detection, nor
+    double-counted as a "historical" failure by the separate historical
+    query. Both would happen if cases were bucketed by their OWN suite's
+    day instead of by RUN_ID membership -- which is the pre-PR-2 (and
+    documented, "same run window", testops_schemas.py) semantics.
+
+    One run_id ("run-boundary") has two suites: one just before midnight
+    (day d-1) where "test_boundary" fails, and one just after midnight
+    (day d, i.e. `today`) where "test_boundary" passes on retry -- a
+    same-run flake that happens to straddle the UTC day boundary. JUnit
+    `<testsuite>` elements can carry their own timestamp (preferred over
+    the run-level fallback -- see `_build_rows_from_parsed`), so this is a
+    real, reachable ingestion shape, not a contrived one.
+    """
+    from dev_health_ops.metrics.compute_testops import compute_test_metrics_daily
+    from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+
+    org_id = f"test-chaos-4350-boundary-{uuid.uuid4()}"
+    repo_id = uuid.uuid4()
+    today = datetime(2026, 3, 20, tzinfo=timezone.utc)
+    today_start = today
+    today_end = today + timedelta(days=1)
+    history_start = today - timedelta(days=29)
+    just_before_midnight = today - timedelta(minutes=10)  # day d-1, 23:50 UTC
+    just_after_midnight = today + timedelta(minutes=10)  # day d, 00:10 UTC
+
+    suites = [
+        _suite_row(
+            repo_id=repo_id,
+            run_id="run-boundary",
+            suite_id="suite-pre-midnight",
+            org_id=org_id,
+            when=just_before_midnight,
+            total=1,
+            passed=0,
+            failed=1,
+        ),
+        _suite_row(
+            repo_id=repo_id,
+            run_id="run-boundary",
+            suite_id="suite-post-midnight",
+            org_id=org_id,
+            when=just_after_midnight,
+            total=1,
+            passed=1,
+            failed=0,
+        ),
+    ]
+    cases = [
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-boundary",
+            suite_id="suite-pre-midnight",
+            case_id="pre1",
+            case_name="test_boundary",
+            status="failed",
+            org_id=org_id,
+            when=just_before_midnight,
+            retry_attempt=0,
+        ),
+        _case_row(
+            repo_id=repo_id,
+            run_id="run-boundary",
+            suite_id="suite-post-midnight",
+            case_id="post1",
+            case_name="test_boundary",
+            status="passed",
+            org_id=org_id,
+            when=just_after_midnight,
+            retry_attempt=1,
+        ),
+    ]
+
+    try:
+        sink.client.insert("test_suite_results", suites, column_names=_suite_cols())
+        sink.client.insert("test_case_results", cases, column_names=_case_cols())
+
+        loader = ClickHouseDataLoader(sink.client, org_id=org_id)
+
+        historical = await loader.load_testops_historical_failed_case_names(
+            history_start, today_start, repo_id=repo_id, current_day_end=today_end
+        )
+        # The pre-midnight failure belongs to TODAY's run (run-boundary has
+        # a suite in today's window too) -- it must NOT appear as a
+        # historical failure, even though its own suite's timestamp falls
+        # inside the historical window on its own.
+        assert "test_boundary" not in historical.get(repo_id, set())
+
+        suite_rows, case_rows = await loader.load_testops_test_data(
+            today_start, today_end, repo_id=repo_id
+        )
+        # Both the pre- and post-midnight case rows must come back for
+        # "today" -- they share run_id "run-boundary", which has a suite in
+        # today's window (suite-post-midnight).
+        assert len(case_rows) == 2
+
+        records = compute_test_metrics_daily(
+            day=today.date(),
+            suite_results=suite_rows,
+            case_results=case_rows,
+            computed_at=today,
+            historical_failed_names_by_repo=historical,
+        )
+        rec = next(r for r in records if r.repo_id == repo_id)
+
+        # flake_rate: the pair (failed pre-midnight, passed post-midnight,
+        # same run_id) must be recognized as ONE flaky case.
+        assert rec.flake_rate == pytest.approx(1.0)
+        # failure_recurrence_score: "test_boundary" IS in current_failed_names
+        # (it failed at least once today, via the pre-midnight row) but must
+        # NOT be counted as a recurrence of a historical failure -- there is
+        # no genuinely prior-day failure here, just this one straddling run.
+        assert rec.failure_recurrence_score == pytest.approx(0.0)
     finally:
         sink.client.command(
             "ALTER TABLE test_suite_results DELETE WHERE org_id = {org:String}",

@@ -85,13 +85,18 @@ async def test_testops_job_and_case_queries_alias_column(mock_query_dicts):
 
     mock_query_dicts.reset_mock()
     await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
+    # CHAOS-4350 PR2 (codex round 2 P2): the case query is no longer joined
+    # to test_suite_results by suite_id/day -- it's scoped by run_id
+    # membership via a semi-join subquery (see load_testops_test_data's
+    # docstring), and the repo_id filter is applied directly on `c`.
     case_sql = mock_query_dicts.call_args_list[1].args[1]
-    assert "s.repo_id = {repo_id:UUID}" in case_sql
+    assert "c.repo_id = {repo_id:UUID}" in case_sql
 
 
 @pytest.mark.asyncio
 async def test_testops_join_predicates_scope_org_id(mock_query_dicts):
-    """Joins must carry org_id equality so cross-org child rows never match."""
+    """Joins (and the case query's run_id semi-join subquery) must carry
+    org_id equality so cross-org child rows never match."""
     loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
     start = datetime.now(timezone.utc)
     end = start + timedelta(days=1)
@@ -102,8 +107,13 @@ async def test_testops_join_predicates_scope_org_id(mock_query_dicts):
 
     mock_query_dicts.reset_mock()
     await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
+    # CHAOS-4350 PR2 (codex round 2 P2): org scoping now applies directly on
+    # `c` (no join partner to compare against) AND inside the semi-join
+    # subquery against test_suite_results (unaliased -- defense in depth,
+    # so a cross-org run_id collision can't leak cases into the wrong org).
     case_sql = mock_query_dicts.call_args_list[1].args[1]
-    assert "(s.org_id = c.org_id)" in case_sql
+    assert "AND c.org_id = {org_id:String}" in case_sql
+    assert "IN (" in case_sql and "AND org_id = {org_id:String}" in case_sql
 
 
 @pytest.mark.asyncio
@@ -133,7 +143,7 @@ async def test_testops_test_data_org_scope_already_applied_without_repo_id(
     suite_params = mock_query_dicts.call_args_list[0].args[2]
     case_params = mock_query_dicts.call_args_list[1].args[2]
     assert "AND org_id = {org_id:String}" in suite_sql
-    assert "AND s.org_id = {org_id:String}" in case_sql
+    assert "AND c.org_id = {org_id:String}" in case_sql
     assert suite_params.get("org_id") == "acme-corp"
     assert case_params.get("org_id") == "acme-corp"
 
@@ -193,7 +203,11 @@ async def test_testops_test_data_refuses_to_compute_on_oversized_result(monkeypa
     oversized_case_rows = [{"repo_id": "r", "org_id": "acme-corp"} for _ in range(10)]
 
     async def fake_query_dicts(client, query, params):
-        if "test_case_results" in query and "INNER JOIN" in query:
+        # CHAOS-4350 PR2 (codex round 2 P2): the case query no longer has an
+        # INNER JOIN (it's a semi-join subquery instead) -- test_case_results
+        # only ever appears in the case query, never the suite query, so
+        # that alone still distinguishes them.
+        if "test_case_results" in query:
             return list(oversized_case_rows)
         return list(oversized_suite_rows)
 
@@ -248,7 +262,11 @@ async def test_testops_test_data_checks_suite_cap_before_issuing_case_query(
 
     async def fake_query_dicts(client, query, params):
         nonlocal case_query_calls
-        if "test_case_results" in query and "INNER JOIN" in query:
+        # CHAOS-4350 PR2 (codex round 2 P2): the case query no longer has an
+        # INNER JOIN (it's a semi-join subquery instead) -- test_case_results
+        # only ever appears in the case query, never the suite query, so
+        # that alone still distinguishes them.
+        if "test_case_results" in query:
             case_query_calls += 1
             return []
         return list(oversized_suite_rows)
@@ -281,9 +299,12 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2026, 1, 31, tzinfo=timezone.utc)
+    current_day_end = end + timedelta(days=1)
     repo_id = uuid.uuid4()
 
-    await loader.load_testops_historical_failed_case_names(start, end, repo_id=repo_id)
+    await loader.load_testops_historical_failed_case_names(
+        start, end, repo_id=repo_id, current_day_end=current_day_end
+    )
 
     # Two queries now: the GROUP BY aggregate, and (codex round 2) a second
     # unfiltered count() for the ROWS_AGGREGATED_FROM telemetry.
@@ -298,10 +319,16 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     assert "s.repo_id = {repo_id:UUID}" in sql
     assert "AND s.org_id = {org_id:String}" in sql
     assert "LIMIT {_row_cap:UInt64}" in sql
+    # codex round 2 P2: today's run_ids (a day-boundary-straddling run's
+    # cases) must be excluded from "historical" via a semi-join subquery,
+    # not just time-sliced on `end`.
+    assert "(s.repo_id, s.run_id) NOT IN" in sql
+    assert "{current_day_end:DateTime}" in sql
     assert params.get("repo_id") == str(repo_id)
     assert params.get("org_id") == "acme-corp"
     assert params.get("start") == start.replace(tzinfo=None)
     assert params.get("end") == end.replace(tzinfo=None)
+    assert params.get("current_day_end") == current_day_end.replace(tzinfo=None)
     assert set(params.get("_failure_statuses")) == {
         "failure",
         "failed",
@@ -316,6 +343,7 @@ async def test_historical_failed_case_names_query_shape(mock_query_dicts):
     assert "count() AS total" in count_sql
     assert "test_case_results AS c FINAL" in count_sql
     assert "test_suite_results AS s FINAL" in count_sql
+    assert "(s.repo_id, s.run_id) NOT IN" in count_sql
     # Unfiltered by status (the whole point -- it measures the population the
     # failure-only aggregate replaced, not another failure-only count) and
     # unbounded by the row cap (a single scalar, never materializes rows).
@@ -337,10 +365,12 @@ async def test_historical_failed_case_names_groups_by_repo(mock_query_dicts):
         {"repo_id": str(repo_b), "case_name": "test_other", "occurrences": 1},
     ]
 
+    now = datetime.now(timezone.utc)
     result = await loader.load_testops_historical_failed_case_names(
-        datetime.now(timezone.utc) - timedelta(days=29),
-        datetime.now(timezone.utc),
+        now - timedelta(days=29),
+        now,
         repo_id=None,
+        current_day_end=now + timedelta(days=1),
     )
 
     assert result == {
@@ -391,14 +421,16 @@ async def test_historical_failed_case_names_records_telemetry(monkeypatch):
         DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM._sum.get()
     )
 
+    now = datetime.now(timezone.utc)
     with patch(
         "dev_health_ops.metrics.loaders.clickhouse._clickhouse_query_dicts",
         fake_query_dicts,
     ):
         result = await loader.load_testops_historical_failed_case_names(
-            datetime.now(timezone.utc) - timedelta(days=29),
-            datetime.now(timezone.utc),
+            now - timedelta(days=29),
+            now,
             repo_id=repo_id,
+            current_day_end=now + timedelta(days=1),
         )
 
     assert result == {repo_id: {"test_a", "test_b"}}

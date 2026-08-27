@@ -1323,7 +1323,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             repo_filter = " AND repo_id = {repo_id:UUID}"
             # Alias-qualify only the column; the {repo_id:UUID} parameter name
             # must stay dot-free (ClickHouse rejects dotted param names).
-            case_repo_filter = " AND s.repo_id = {repo_id:UUID}"
+            case_repo_filter = " AND c.repo_id = {repo_id:UUID}"
 
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
@@ -1369,6 +1369,24 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # production caller -- at cap-sized volumes those text columns alone
         # can exceed the compatibility runner's memory bound even with a
         # generous row cap, so they never leave ClickHouse for this read path.
+        #
+        # CHAOS-4350 PR2 (codex round 2 P2): cases are scoped by RUN_ID
+        # membership -- "does this case's run have ANY suite in today's
+        # window" -- via the semi-join subquery below, not by joining each
+        # case to its OWN suite's day (which is what this query did before).
+        # JUnit `<testsuite>` elements can carry a per-suite `timestamp` that
+        # `_build_rows_from_parsed` prefers over the run-level fallback, so
+        # two suites sharing one run_id CAN land on different UTC days (a CI
+        # run whose suites straddle midnight). The documented flake_rate
+        # contract is "same run window" (testops_schemas.py), not "same
+        # suite's own day" -- a run_id-scoped semi-join is what makes a
+        # before-midnight failure and an after-midnight retry of the SAME
+        # run still count as one flake, matching the pre-PR-2 Python
+        # behavior (which bucketed cases by run_id membership over a wide
+        # window, not by each case's individual suite). The subquery is
+        # scoped by (repo_id, run_id) together, not run_id alone, so a
+        # same-org different-repo run_id collision can't leak cases across
+        # repos in the org-wide (repo_id=None) case.
         case_query = f"""
         SELECT
           c.repo_id,
@@ -1381,15 +1399,15 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           c.retry_attempt,
           c.org_id
         FROM test_case_results AS c FINAL
-        INNER JOIN test_suite_results AS s FINAL
-          ON (s.repo_id = c.repo_id)
-         AND (s.run_id = c.run_id)
-         AND (s.suite_id = c.suite_id)
-         AND (s.org_id = c.org_id)
-        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
-          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        WHERE (c.repo_id, c.run_id) IN (
+          SELECT repo_id, run_id FROM test_suite_results FINAL
+          WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
+            AND coalesce(started_at, finished_at) < {{end:DateTime}}
+          {repo_filter}
+          {org_filter}
+        )
         {case_repo_filter}
-        {self._org_filter(alias="s")}
+        {self._org_filter(alias="c")}
         LIMIT {{_row_cap:UInt64}}
         """
 
@@ -1426,6 +1444,8 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         start: datetime,
         end: datetime,
         repo_id: uuid.UUID | None,
+        *,
+        current_day_end: datetime,
     ) -> dict[uuid.UUID, set[str]]:
         """Distinct (repo_id, case_name) pairs that failed at least once in
         `[start, end)`, pushed into SQL instead of materializing raw rows.
@@ -1448,15 +1468,35 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         `start`/`end` are the PARTITION DAY's own history window
         (`[day-29, day)`), not wall-clock "now" -- callers must pass the
         window relative to the day being computed, same as
-        `load_testops_test_data`'s window.
+        `load_testops_test_data`'s window. `end` doubles as today's window's
+        lower bound; `current_day_end` (required) is today's upper bound
+        (exclusive), i.e. the same `end` passed to `load_testops_test_data`
+        for the same partition day.
 
-        Issues TWO queries: the `GROUP BY case_name` aggregate above, and a
-        second unfiltered `count()` over the same joined window/scope purely
-        for the ROWS_AGGREGATED_FROM telemetry (see prometheus.py) -- both
-        stay O(1) in Python-side memory (a handful of aggregate rows, one
-        scalar), so this doesn't reintroduce raw-row materialization.
+        CHAOS-4350 PR2 (codex round 2 P2): a run whose suites straddle
+        `end` (UTC midnight for the partition day) must not have its
+        pre-midnight suite double-counted as "historical" -- that suite's
+        run_id is `load_testops_test_data`'s "today," via the same
+        (repo_id, run_id) semi-join semantics (see that method's docstring).
+        `AND (s.repo_id, s.run_id) NOT IN (...)` excludes today's run_ids
+        from this query the same way `load_testops_test_data`'s case query
+        includes them -- both computed as a semi-join subquery against
+        `test_suite_results`, never as a Python-collected run_id list (so
+        there's no array-size ceiling to fall back from for orgs with many
+        run_ids/day).
+
+        Issues THREE queries: the `GROUP BY case_name` aggregate, a second
+        unfiltered `count()` over the same scope purely for the
+        ROWS_AGGREGATED_FROM telemetry (see prometheus.py), and the run_id
+        exclusion is itself a subquery inside each -- all O(1) in
+        Python-side memory (a handful of aggregate rows, one scalar), so
+        this doesn't reintroduce raw-row materialization.
         """
-        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        params: dict[str, Any] = {
+            "start": naive_utc(start),
+            "end": naive_utc(end),
+            "current_day_end": naive_utc(current_day_end),
+        }
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -1474,6 +1514,22 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # function's `.strip().lower()` normalization.
         params["_failure_statuses"] = sorted(FAILURE_STATUSES)
 
+        # Unaliased repo/org filters for the exclusion subquery below (it
+        # queries test_suite_results directly, no alias).
+        today_run_ids_filter = ""
+        if repo_id is not None:
+            today_run_ids_filter = " AND repo_id = {repo_id:UUID}"
+        today_run_ids_org_filter = self._org_filter()
+        exclude_today_run_ids = f"""
+          AND (s.repo_id, s.run_id) NOT IN (
+            SELECT repo_id, run_id FROM test_suite_results FINAL
+            WHERE coalesce(started_at, finished_at) >= {{end:DateTime}}
+              AND coalesce(started_at, finished_at) < {{current_day_end:DateTime}}
+            {today_run_ids_filter}
+            {today_run_ids_org_filter}
+          )
+        """
+
         query = f"""
         SELECT
           s.repo_id AS repo_id,
@@ -1488,6 +1544,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
           AND lower(trim(c.status)) IN {{_failure_statuses:Array(String)}}
+        {exclude_today_run_ids}
         {repo_filter}
         {org_filter}
         GROUP BY s.repo_id, c.case_name
@@ -1519,7 +1576,9 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         # scalar `count()`, never materializing rows) rather than reusing
         # `occurrences`, which only ever reflects the failed subset and
         # silently undercounted this metric (e.g. 29 instead of ~1.1M on the
-        # busiest measured repo).
+        # busiest measured repo). Same run_id exclusion as the aggregate
+        # above, so the telemetry's population matches what the aggregate
+        # actually scans.
         count_query = f"""
         SELECT count() AS total
         FROM test_case_results AS c FINAL
@@ -1530,6 +1589,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
          AND (s.org_id = c.org_id)
         WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        {exclude_today_run_ids}
         {repo_filter}
         {org_filter}
         """

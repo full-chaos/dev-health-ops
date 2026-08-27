@@ -758,10 +758,21 @@ FOR UPDATE OF partition`, partitionID).Scan(&status, &leaseExpiresAt, &runStatus
 	}
 	var claim PartitionClaim
 	var repoIDs string
+	// failure_reason = NULL (CHAOS-4316 codex review, P1): a partition
+	// reclaimed here can arrive from status='failed' carrying a
+	// failure_reason from a previous liveness kill (ReleasePartitionWithReason).
+	// Migration 0113's ck_daily_metrics_partition_failure_reason_scope
+	// constraint only permits a non-NULL reason when status is 'failed' or
+	// 'failed_permanent' -- moving to 'running' while leaving a stale reason
+	// in place violates that constraint and this UPDATE would fail outright,
+	// permanently stranding the exact "stays retryable" partition this
+	// ticket's whole design depends on. Clearing it here keeps the row
+	// consistent with the constraint on every claim, reclaimed or fresh.
 	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_partitions
 SET status = 'running', claim_token = $2, lease_expires_at = $3,
-    attempt_count = attempt_count + 1, updated_at = $1
+    attempt_count = attempt_count + 1, updated_at = $1,
+    failure_reason = NULL
 WHERE id = $4::uuid
 RETURNING id::text, run_id::text, claim_token::text, repo_ids::text`,
 		now, token, now.Add(store.lease), partitionID,

@@ -527,6 +527,7 @@ if _PROMETHEUS_AVAILABLE:
             "with reason='stalled' point at a genuinely hung child; the "
             "same metric for 'timeout' shows how close trickling progress "
             "came to dodging the interval check before the hard ceiling won.",
+            ["reason"],
             buckets=(30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0),
         )
     )

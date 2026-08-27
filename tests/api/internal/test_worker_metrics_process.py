@@ -769,6 +769,11 @@ async def test_metric_compatibility_process_hard_ceiling_fires_despite_trickling
     before = worker_metrics.DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
         reason="timeout"
     )._value.get()
+    silence_before = (
+        worker_metrics.DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
+            reason="timeout"
+        )._sum.get()
+    )
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -791,6 +796,16 @@ async def test_metric_compatibility_process_hard_ceiling_fires_despite_trickling
     assert after == before + 1, (
         "the hard-ceiling kill must be counted with reason='timeout', "
         "distinct from an ordinary interval stall"
+    )
+    silence_after = (
+        worker_metrics.DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
+            reason="timeout"
+        )._sum.get()
+    )
+    assert silence_after > silence_before, (
+        "child-silence-seconds must be labeled by reason (codex review P2) "
+        "so 'stalled' and 'timeout' samples are queryable separately, "
+        "matching the metric's own help text"
     )
 
 

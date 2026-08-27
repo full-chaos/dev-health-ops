@@ -1707,7 +1707,9 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         else:
             local_reason = stall_reason_holder[0]
         DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(reason=local_reason).inc()
-        DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.observe(silence_seconds)
+        DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
+            reason=local_reason
+        ).observe(silence_seconds)
         DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(
             reason="progress_stalled"
         ).inc()

@@ -181,6 +181,14 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		if result.Discovery != 1 {
 			t.Fatalf("retrying discovery graph did not rearm exactly once: %#v", result)
 		}
+		// CHAOS-4357 round 2 (codex P2): DiscoveryRearmed is the narrow
+		// stale-dispatched-recovery count the sync_dispatch_discovery_rearmed_total
+		// metric publishes -- this row IS that exact case, so both counts
+		// agree here (they diverge only for a fresh insert or a non-river
+		// dispatched row, neither of which this subtest seeds).
+		if result.DiscoveryRearmed != 1 {
+			t.Fatalf("retrying discovery graph did not count as a stale-dispatched recovery: %#v", result)
+		}
 		// Materializer.Step alone re-arms status only -- attempts is the
 		// KERNEL's claim counter (claimRiverRoutesSQL), so it stays whatever
 		// it was (3, from the prior stale attempt) until something actually
@@ -194,7 +202,40 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		if result.Discovery != 0 {
 			t.Fatalf("retrying discovery graph amplified on second pass: %#v", result)
 		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("retrying discovery graph recounted a recovery on second pass: %#v", result)
+		}
 		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 3)
+	})
+
+	// CHAOS-4357 round 2 (codex P2): a fresh discovery ledger with NO prior
+	// outbox row at all is a real, ordinary materialization (Discovery
+	// counts it), but it is NOT a "recovered a stranded dispatched row"
+	// event -- nothing was ever dispatched, let alone stranded. Before this
+	// fix DiscoveryRearmed didn't exist and the metric was sourced straight
+	// from Discovery, so this exact case would have inflated
+	// sync_dispatch_discovery_rearmed_total with a false recovery signal.
+	t.Run("a fresh discovery materialization is not counted as a recovery", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 6, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerDiscoveryRetry, "planned", now.Add(-2*time.Hour))
+		seedDiscoveryLedger(t, ctx, pool, materializerDiscoveryRetry, "planned",
+			now.Add(-time.Minute), nil, 0, nil)
+		// Deliberately no seedMaterializerDiscoveryDispatchedOutbox call --
+		// this run has never had an outbox row of any kind.
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Discovery != 1 {
+			t.Fatalf("fresh discovery graph did not materialize exactly once: %#v", result)
+		}
+		if result.DiscoveryRearmed != 0 {
+			t.Fatalf("fresh discovery materialization miscounted as a stale-dispatched recovery: %#v", result)
+		}
+		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "pending", 0)
 	})
 }
 

@@ -45,7 +45,39 @@ type fakeMaterializerTx struct {
 	failQuery    bool
 	failScan     bool
 	failRowsIter bool
+	// discoveryRearmed is what the CHAOS-4357 round-2 (codex P2)
+	// countStaleDispatchedDiscoverySQL QueryRow answers with. Zero (the
+	// default) is the healthy "nothing stranded" case every pre-existing
+	// case here asserts, matching runaway above.
+	discoveryRearmed          int64
+	failDiscoveryRearmedCount bool
+	discoveryRearmedQuery     string
+	discoveryRearmedArgs      []any
 }
+
+func (tx *fakeMaterializerTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	tx.discoveryRearmedQuery = sql
+	tx.discoveryRearmedArgs = append([]any(nil), args...)
+	if tx.failDiscoveryRearmedCount {
+		return &fakeErrRow{err: errors.New("injected discovery-rearmed count failure")}
+	}
+	return &fakeCountRow{count: tx.discoveryRearmed}
+}
+
+type fakeCountRow struct{ count int64 }
+
+func (row *fakeCountRow) Scan(dest ...any) error {
+	target, ok := dest[0].(*int64)
+	if len(dest) != 1 || !ok {
+		return errors.New("unexpected discovery-rearmed count target")
+	}
+	*target = row.count
+	return nil
+}
+
+type fakeErrRow struct{ err error }
+
+func (row *fakeErrRow) Scan(...any) error { return row.err }
 
 func (tx *fakeMaterializerTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	tx.runawayQuery = sql
@@ -273,6 +305,33 @@ func TestMaterializerJITDisableFailureRollsBackWholeStep(t *testing.T) {
 	}
 	if got := MaterializerStepIdentity(err); got != materializerStepDisableJIT {
 		t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDisableJIT)
+	}
+	if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != 1 {
+		t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",
+			result, tx.committed, tx.rolled, len(tx.execs))
+	}
+}
+
+// CHAOS-4357 round 2 (codex P2): the DiscoveryRearmed count runs as its own
+// QueryRow, between the JIT-disable exec and the four materialization
+// execs (never counted in tx.execs) -- its failure must roll back cleanly,
+// report its own step identity, and run no materialization exec at all,
+// same discipline as every other fallible statement in this transaction.
+func TestMaterializerDiscoveryRearmedCountFailureRollsBackWholeStep(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+	tx := &fakeMaterializerTx{failDiscoveryRearmedCount: true}
+	materializer, err := newMaterializer(func(context.Context) (pgx.Tx, error) {
+		return tx, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := materializer.Step(context.Background(), now, now.Add(-time.Minute), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v", err)
+	}
+	if got := MaterializerStepIdentity(err); got != materializerStepDiscoveryRearmedCount {
+		t.Fatalf("MaterializerStepIdentity(err) = %q, want %q", got, materializerStepDiscoveryRearmedCount)
 	}
 	if !reflect.DeepEqual(result, MaterializerResult{}) || tx.committed || !tx.rolled || len(tx.execs) != 1 {
 		t.Fatalf("failed step = result:%#v committed:%t rolled:%t execs:%d",

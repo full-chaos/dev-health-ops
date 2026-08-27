@@ -625,13 +625,17 @@ func (pipeline *MutationPipeline) Step(
 	// the previous value standing rather than overwriting a real count with a
 	// zero nobody took (review finding).
 	recovered.RunawayMeasured = reportDelivered
-	// CHAOS-4357: materialized.Discovery is populated whether or not repair
-	// aborted the rest of the pass (it is set by its own WITH-statements loop
-	// above, unconditionally on !aborted before that guard is checked), so no
-	// separate aborted-guard is needed here -- a zero-value MaterializerResult
-	// on an aborted pass already reports Discovery=0, the correct "materializer
-	// never ran" answer.
-	recovered.DiscoveryRearmed = materialized.Discovery
+	// CHAOS-4357 round 2 (codex P2): sourced from the narrow
+	// DiscoveryRearmed field, not the general Discovery affected-row count
+	// -- Discovery also counts fresh inserts and non-river transitions,
+	// neither of which is the "recovered a stranded row" event this metric's
+	// HELP text claims. materialized.DiscoveryRearmed is populated whether
+	// or not repair aborted the rest of the pass (set unconditionally on
+	// !aborted before that guard is checked), so no separate aborted-guard
+	// is needed here -- a zero-value MaterializerResult on an aborted pass
+	// already reports DiscoveryRearmed=0, the correct "materializer never
+	// ran" answer.
+	recovered.DiscoveryRearmed = materialized.DiscoveryRearmed
 
 	if !aborted {
 		if err := pipeline.runStage(ctx, StageKernel, func(stageCtx context.Context) error {

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+import requests
 
 from dev_health_ops.api.admin.schemas_flat import DiscoveredMember, DiscoveredTeam
 from dev_health_ops.metrics.schemas import (
@@ -696,3 +697,91 @@ def test_jira_populate_skips_one_boards_sprint_400_under_strict_reference_discov
     assert summary["reference_team_keys"] == ["OPS"]
     assert summary["sprints_imported"] == 1
     assert summary["reference_sprint_ids"] == ["501"]
+
+
+class _FakeForbiddenSprintJiraClient:
+    """Board 81 answers 403 (a revoked/insufficiently-scoped credential),
+    NOT the documented "no sprint support" 400. CHAOS-4357 round 2 (codex
+    P1): this must propagate, never be silently treated as a per-board
+    skip -- a 403 means the whole reference set may be wrong/incomplete,
+    which strict reference discovery must not report as a success."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def iter_boards(self, *, project_key: str):
+        yield {"id": 81}
+
+    def iter_board_sprints(self, *, board_id: int):
+        response = requests.Response()
+        response.status_code = 403
+        raise requests.HTTPError(
+            "403 Client Error: Forbidden for url: .../rest/agile/1.0/board/81/sprint",
+            response=response,
+        )
+        yield  # pragma: no cover - generator shape only
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_reraises_a_403_sprint_listing_failure_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4357 round 2 (codex P1): only the documented Jira 400 ("board
+    does not support sprints") is a per-board skip. A 403 -- revoked or
+    insufficiently-scoped credentials -- is NOT that case and must still
+    fail strict reference discovery instead of being silently absorbed as
+    if the board simply had no sprints."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakeForbiddenSprintJiraClient
+    )
+
+    sink = _fake_sink()
+
+    with pytest.raises(requests.HTTPError):
+        team_autoimport_jira.populate(
+            org_id="org-1",
+            credentials={
+                "email": "jira@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://jira.example.com",
+            },
+            scope={
+                "mode": "sync_reference_discovery",
+                "strict_reference_discovery": True,
+            },
+            sink=sink,
+        )

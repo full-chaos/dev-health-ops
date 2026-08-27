@@ -78,6 +78,17 @@ type MaterializerResult struct {
 	Finalize  int64
 	Discovery int64
 	PostSync  int64
+	// DiscoveryRearmed is the CHAOS-4357 round-2 (codex P2) narrow count: of
+	// the rows Discovery above reports as touched, exactly how many were
+	// previously the stranded shape (status='dispatched',
+	// dispatched_transport='river') this pass reset to 'pending'. Discovery
+	// itself also counts fresh INSERTs for a candidate that had no outbox
+	// row yet, and UPDATEs of a 'dispatched' row on a NON-river transport --
+	// neither of those is a "recovered from stranding" event, so the
+	// sync_dispatch_discovery_rearmed_total metric (whose HELP text
+	// specifically claims only that recovery) is sourced from this field,
+	// not Discovery.
+	DiscoveryRearmed int64
 	// Runaway is the CHAOS-4097 report: a bounded SAMPLE, worst-first, never
 	// more than runawayDispatchScan entries. It is what a log line can carry.
 	Runaway []RunawayDispatchWakeup
@@ -149,14 +160,15 @@ func newMaterializer(begin materializerBeginFunc) (*Materializer, error) {
 // estimate crossing the stage budget), not a database outage, and the two
 // demand opposite first responses from an operator.
 const (
-	materializerStepBegin      = "begin coordinator transaction"
-	materializerStepDisableJIT = "disable JIT for the materializer transaction"
-	materializerStepDispatch   = "dispatch materialization upsert of public.sync_dispatch_outbox"
-	materializerStepFinalize   = "finalize materialization upsert of public.sync_dispatch_outbox"
-	materializerStepDiscovery  = "discovery materialization upsert of public.sync_dispatch_outbox"
-	materializerStepPostSync   = "post_sync materialization insert of public.sync_dispatch_outbox"
-	materializerStepRowCount   = "materialization affected-row count"
-	materializerStepCommit     = "commit coordinator transaction"
+	materializerStepBegin                 = "begin coordinator transaction"
+	materializerStepDisableJIT            = "disable JIT for the materializer transaction"
+	materializerStepDispatch              = "dispatch materialization upsert of public.sync_dispatch_outbox"
+	materializerStepFinalize              = "finalize materialization upsert of public.sync_dispatch_outbox"
+	materializerStepDiscovery             = "discovery materialization upsert of public.sync_dispatch_outbox"
+	materializerStepDiscoveryRearmedCount = "discovery stale-dispatched-recovery count of public.sync_dispatch_outbox"
+	materializerStepPostSync              = "post_sync materialization insert of public.sync_dispatch_outbox"
+	materializerStepRowCount              = "materialization affected-row count"
+	materializerStepCommit                = "commit coordinator transaction"
 )
 
 // materializerStepError names the Step statement that failed while keeping
@@ -277,6 +289,14 @@ func (materializer *Materializer) Step(
 	}
 
 	result := MaterializerResult{}
+
+	// Must run BEFORE the discovery step below: it reads the PRE-upsert
+	// outbox state that materializeDiscoverySQL's own UPDATE overwrites.
+	if err := tx.QueryRow(ctx, countStaleDispatchedDiscoverySQL, now, limit).
+		Scan(&result.DiscoveryRearmed); err != nil {
+		return MaterializerResult{}, materializerUnavailable(materializerStepDiscoveryRearmedCount, err)
+	}
+
 	steps := []struct {
 		sql   string
 		args  []any
@@ -840,6 +860,45 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 				)
 		)
 	)
+`
+
+// countStaleDispatchedDiscoverySQL is CHAOS-4357 round 2's (codex P2)
+// narrow count: the SAME candidate window materializeDiscoverySQL just
+// selected (identical predicate, ORDER BY, and LIMIT, so it can only
+// undercount relative to what that statement actually touches, never
+// overcount), joined against the outbox row each candidate currently has,
+// counting only the ones that were the specific stranded shape
+// (dispatched via river, not feature_disabled) about to be reset to
+// 'pending'. Must run BEFORE materializeDiscoverySQL in the same
+// transaction -- it reads the outbox row's PRE-upsert state, which
+// materializeDiscoverySQL's own UPDATE overwrites.
+const countStaleDispatchedDiscoverySQL = `
+WITH candidates AS (
+	SELECT discovery.sync_run_id AS id
+	FROM public.sync_run_reference_discoveries AS discovery
+	JOIN public.sync_runs AS run ON run.id = discovery.sync_run_id
+	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+		AND (
+			(
+				discovery.status IN ('planned', 'retrying')
+				AND discovery.available_at <= $1
+			)
+			OR (
+				discovery.status = 'running'
+				AND discovery.lease_expires_at IS NOT NULL
+				AND discovery.lease_expires_at <= $1
+			)
+		)
+	ORDER BY discovery.available_at, discovery.sync_run_id
+	LIMIT $2
+)
+SELECT count(*)
+FROM candidates
+JOIN public.sync_dispatch_outbox AS outbox
+	ON outbox.sync_run_id = candidates.id AND outbox.kind = 'reference_discovery'
+WHERE outbox.status = 'dispatched'
+	AND outbox.dispatched_transport = 'river'
+	AND outbox.last_error IS DISTINCT FROM 'feature_disabled'
 `
 
 // post_sync is reconstructed only when the once-only finalizer ledger exists and the

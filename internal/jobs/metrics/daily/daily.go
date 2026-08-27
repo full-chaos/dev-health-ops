@@ -116,6 +116,8 @@ func retryCompatibilityError(err error) error {
 		return jobruntime.WithReason(marked, jobruntime.ReasonAmbiguousRefused)
 	case errors.Is(err, ErrCompatibilityProgressStalled):
 		return jobruntime.WithReason(marked, jobruntime.ReasonProgressStalled)
+	case errors.Is(err, ErrCompatibilityCapacityExhausted):
+		return jobruntime.WithReason(marked, jobruntime.ReasonCapacityExhausted)
 	default:
 		return marked
 	}
@@ -630,6 +632,17 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// 'failed' outcome without cross-referencing River's attempt
 			// log or Sentry.
 			releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled")
+			return retryCompatibilityError(err)
+		}
+		if errors.Is(err, ErrCompatibilityCapacityExhausted) {
+			// CHAOS-4317: same rationale as ErrCompatibilityProgressStalled
+			// above -- capacity pressure is transient container state, never
+			// a claim this row can't satisfy on a fresh attempt, so this
+			// stays 'failed' (silently re-dispatchable) with a bounded
+			// failure_reason attached so an operator reading the partition
+			// row can tell a pids-capacity refusal apart from any other
+			// 'failed' outcome without cross-referencing River's attempt log.
+			releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted")
 			return retryCompatibilityError(err)
 		}
 		releasePartition(handler.store, ctx, *claim)

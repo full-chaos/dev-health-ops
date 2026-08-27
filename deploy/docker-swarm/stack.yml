@@ -158,6 +158,16 @@ services:
       # Schema is applied by the one-shot `migrate` service — the API must
       # never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
+    # CHAOS-4317: unlike compose.production.yml, Swarm mode has NO
+    # equivalent of the classic `pids_limit` service key -- `deploy.resources
+    # .limits` (below) only supports cpus/memory, and Docker does not expose
+    # a per-service pids cgroup cap in the Swarm spec at all. This means the
+    # capacity gate's worker_metrics.py reader falls through to the
+    # host-wide kernel.threads-max fallback on this deployment surface, with
+    # no container-scoped ceiling available to set. Flagged, not fixed (no
+    # platform mechanism exists) -- if this surface sees the same pids
+    # exhaustion class, the fix has to be host-level (e.g. a dockerd
+    # default-pids-limit daemon.json setting), not expressible per-stack here.
     secrets:
       - github_token
       - gitlab_token

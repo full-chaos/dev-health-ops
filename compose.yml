@@ -305,6 +305,33 @@ services:
       # the guard's own exception message has no effect (codex R2) -- the
       # child process only sees vars this block passes through.
       DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS: ${DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS:-200000}
+    # CHAOS-4317: no compose file (this one, the dev-health root's
+    # hand-maintained mirror, or prod's own copy) has ever set an explicit
+    # pids_limit -- confirmed by grep 2026-08-26. That means the container's
+    # cgroup pids.max reads "max" (unbounded) in every environment today, so
+    # the only ceiling the 2026-08-26 incident's pthread_create failures
+    # could have hit was a host-wide one (ulimit -u / kernel.threads-max),
+    # shared across every container on the host and invisible to this
+    # container's own cgroup accounting. Setting a finite, explicit
+    # pids_limit here gives worker_metrics.py's capacity reader
+    # (_effective_pids_ceiling) a real, container-scoped number to read
+    # instead of falling through to that host-wide fallback, AND gives the
+    # container a predictable hard backstop of its own.
+    #
+    # Formula, not a blessed number (team-lead direction 2026-08-26): the
+    # default below is
+    #   DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY (1) *
+    #     (seeded per-child pids cost, 32 -- converges upward at runtime to
+    #      the real observed peak, see worker_metrics.py
+    #      _PIDS_PER_CHILD_COST_HOLDER) *
+    #   4x headroom for the api process's own baseline threads (uvicorn
+    #     workers, OTel batch processor, the event loop) plus the ambient
+    #     burst this ticket exists for (sync_run threads, hourly fanout) =
+    #   1 * 32 * 4 = 128, rounded up to a round number with margin: 256.
+    # Retune alongside DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY -- raising
+    # concurrency without raising this proportionally reintroduces the
+    # exact gap CHAOS-4264's memory bound warns about for its own limit.
+    pids_limit: ${DEV_HEALTH_API_PIDS_LIMIT:-256}
     depends_on:
       postgres:
         condition: service_healthy

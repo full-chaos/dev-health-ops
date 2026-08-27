@@ -574,6 +574,62 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    # ---------------------------------------------------------------------------
+    # Metric compatibility bridge pids/thread capacity bound (CHAOS-4317)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT = _prometheus_client_module.Gauge(
+        "dev_health_metric_compat_pids_current",
+        "This api container's live cgroup pids.current, sampled every time "
+        "the CHAOS-4317 capacity gate checks headroom before spawning a "
+        "runner subprocess. Reacts to every thread/process consumer in the "
+        "container -- OTel init, sync_run threads, other requests -- not "
+        "just this feature's own subprocess count, which is what the "
+        "2026-08-26 incident's pthread_create failures actually exhausted.",
+    )
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING = _prometheus_client_module.Gauge(
+        "dev_health_metric_compat_pids_ceiling",
+        "This container's cgroup pids.max at capacity-gate check time, or "
+        "a documented fallback constant when pids.max is unset/unbounded "
+        "or unreadable. RLIMIT_NPROC and host kernel.threads-max are "
+        "deliberately NOT consulted (codex review, PR #1931 round 2): "
+        "neither is scoped to this container's cgroup, so mixing them in "
+        "could under-report a real host-wide exhaustion. Exists so an "
+        "alert can compare dev_health_metric_compat_pids_current against "
+        "the REAL current limit instead of a hardcoded number (CHAOS-4317 "
+        "to-do item 3: alert at 80% of this ratio).",
+    )
+    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS = _prometheus_client_module.Histogram(
+        "dev_health_metric_compat_pids_wait_seconds",
+        "Seconds one partition's runner spawn waited on the CHAOS-4317 "
+        "capacity gate before pids headroom was available. Zero in the "
+        "common case; the visible proof that a partition queued for "
+        "capacity rather than being dropped or erroring immediately.",
+        buckets=(0.0, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0),
+    )
+    DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_metric_compat_capacity_wait_exhausted_total",
+            "Runner spawns that waited past the CHAOS-4317 capacity gate's "
+            "derived wait ceiling and gave up, returning a retryable "
+            "capacity_exhausted outcome to the Go caller instead of "
+            "spawning over budget. Should be near-zero in steady state; a "
+            "real alert signal for sustained (not burst) pids starvation.",
+        )
+    )
+
+    DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL = _prometheus_client_module.Counter(
+        "dev_health_otel_init_failures_total",
+        "OpenTelemetry tracer initialisation failures (tracing.py "
+        "init_tracing), by attempt. Before CHAOS-4317 a failure here (e.g. "
+        "pthread_create hitting the same pids ceiling metric-bridge "
+        "spawning does) was a bare logger.warning that never surfaced "
+        "anywhere else -- tracing silently stayed off for the rest of the "
+        "process. 'final' means the retry was also exhausted: the process "
+        "is still running (a disabled tracer is not worth crashing the api "
+        "over) but this counter is the durable, alertable signal that it is.",
+        ["attempt"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -625,6 +681,11 @@ else:
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _noop_gauge()
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT = _noop_gauge()
+    DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING = _noop_gauge()
+    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS = _noop_histogram()
+    DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL = _noop_counter()
+    DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL = _noop_counter()
 
 
 # ---------------------------------------------------------------------------

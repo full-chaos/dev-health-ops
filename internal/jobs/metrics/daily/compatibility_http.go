@@ -47,6 +47,14 @@ var (
 	// one is the bridge choosing to kill its own child because it judged it
 	// unresponsive, not reacting to an external signal or memory ceiling.
 	ErrCompatibilityProgressStalled = errors.New("daily metrics compatibility runner reported no progress within its liveness bound")
+	// ErrCompatibilityCapacityExhausted (CHAOS-4317) marks a bridge attempt
+	// the Python side refused to even spawn: its pids/thread capacity gate
+	// waited past its derived ceiling for the api container's cgroup pids
+	// budget to free up and gave up rather than spawn over budget (the
+	// resource the 2026-08-26 incident's pthread_create failures actually
+	// exhausted -- see worker_metrics.py's _await_pids_capacity). Always
+	// retryable: capacity pressure is transient container state.
+	ErrCompatibilityCapacityExhausted = errors.New("daily metrics compatibility runner capacity was exhausted")
 )
 
 // compatibilityErrorBody is the shape of a non-2xx response body from the
@@ -87,6 +95,8 @@ func classifyCompatibilityError(data []byte) error {
 		return ErrCompatibilityAmbiguousRefused
 	case "progress_stalled":
 		return ErrCompatibilityProgressStalled
+	case "capacity_exhausted":
+		return ErrCompatibilityCapacityExhausted
 	default:
 		return ErrUnavailable
 	}

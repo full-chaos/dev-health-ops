@@ -176,6 +176,20 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityProgressStalled,
 		},
 		{
+			// CHAOS-4317: the falsifier for this reason -- before
+			// classifyCompatibilityError recognized "capacity_exhausted",
+			// this case fell through to the "unrecognized reason value"
+			// default (ErrUnavailable) below. A pids-capacity refusal must
+			// be its own classified, always-retryable reason, distinct from
+			// process_signaled/resource_exhausted (both about a runner
+			// that DID spawn) -- this is the bridge refusing to spawn at
+			// all.
+			name:       "capacity-exhausted refusal on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"capacity_exhausted"}}`,
+			wantErr:    ErrCompatibilityCapacityExhausted,
+		},
+		{
 			name:       "true ambiguous 503 with no reason predates this ticket",
 			statusCode: http.StatusServiceUnavailable,
 			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous"}}`,

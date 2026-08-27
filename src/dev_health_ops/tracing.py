@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -31,6 +32,20 @@ logger = logging.getLogger(__name__)
 _initialized = False
 _metrics_initialized = False
 _meter_provider: Any = None
+
+# CHAOS-4317: init_tracing runs once at process startup (api/main.py,
+# workers/celery_app.py), during the same top-of-hour burst that can exhaust
+# the container's pids/thread budget (pthread_create failing is exactly how
+# OTel's own init failed in the 2026-08-26 incident, one line before the
+# metrics-bridge subprocess hang). A bare try/except that silently returned
+# False left tracing permanently off for the rest of the process with no
+# telemetry anywhere. This retries once after a short, fixed backoff (the
+# pressure that caused a pthread_create failure at :00 is typically gone a
+# fraction of a second later, once the burst's other thread creators finish)
+# and always counts the outcome -- never fatal to the api process itself,
+# since crashing over a disabled tracer is a worse outage than a silently
+# degraded one, but the failure is now durable and alertable either way.
+_INIT_RETRY_BACKOFF_SECONDS = 0.5
 
 
 def init_tracing(*, configure_metrics: bool = True) -> bool:
@@ -47,6 +62,48 @@ def init_tracing(*, configure_metrics: bool = True) -> bool:
         logger.debug("OpenTelemetry tracing disabled via OTEL_ENABLED=false")
         return False
 
+    for attempt in (1, 2):
+        activated, retryable_exc = _try_init_tracing(
+            configure_metrics=configure_metrics
+        )
+        if activated:
+            return True
+        if retryable_exc is None:
+            # ImportError: opentelemetry packages not installed. Retrying
+            # cannot help and is not a capacity/timing failure -- return
+            # immediately, exactly as before this ticket.
+            return False
+        from dev_health_ops.metrics.prometheus import (
+            DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL,
+        )
+
+        DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL.labels(
+            attempt="initial" if attempt == 1 else "final"
+        ).inc()
+        if attempt == 1:
+            logger.warning(
+                "OpenTelemetry initialisation failed, retrying once: %s",
+                retryable_exc,
+            )
+            time.sleep(_INIT_RETRY_BACKOFF_SECONDS)
+            continue
+        logger.error(
+            "OpenTelemetry initialisation failed after retry -- tracing "
+            "stays disabled for this process, not crashing the api over "
+            "it: %s",
+            retryable_exc,
+        )
+    return False
+
+
+def _try_init_tracing(*, configure_metrics: bool) -> tuple[bool, Exception | None]:
+    """One initialisation attempt. Returns (activated, retryable_exception).
+
+    retryable_exception is None for an ImportError (retrying cannot help)
+    and for success; it carries the exception for any other failure so the
+    caller can decide whether to retry.
+    """
+    global _initialized
     try:
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -100,16 +157,15 @@ def init_tracing(*, configure_metrics: bool = True) -> bool:
                 "sample_rate": sample_rate,
             },
         )
-        return True
+        return True, None
 
     except ImportError as exc:
         logger.warning(
             "opentelemetry packages not installed — tracing disabled: %s", exc
         )
-        return False
+        return False, None
     except Exception as exc:
-        logger.warning("OpenTelemetry initialisation failed: %s", exc)
-        return False
+        return False, exc
 
 
 def init_metrics(

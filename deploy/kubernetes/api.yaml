@@ -65,6 +65,14 @@ spec:
         - name: api
           image: ghcr.io/your-org/dev-health-ops:latest
           # Or use: your-registry/dev-health-ops:latest
+          # CHAOS-4317: vanilla Kubernetes has no per-container pids cgroup
+          # limit in the Pod spec (unlike Compose's `pids_limit`) -- the only
+          # lever is cluster-wide kubelet config (`--pod-max-pids` behind the
+          # SupportPodPidsLimit feature gate), which is not expressible per
+          # manifest here. worker_metrics.py's capacity reader falls through
+          # to its host-wide kernel.threads-max fallback on this surface.
+          # Flagged, not fixed -- a cluster operator who wants a real ceiling
+          # on this deployment must set the kubelet flag, not this file.
           securityContext:
             allowPrivilegeEscalation: false
           args:

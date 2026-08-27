@@ -667,6 +667,26 @@ class MetricExecutionRepairRequest(_StrictRequest):
         return self
 
 
+class DailyMetricsRedriveRequest(_StrictRequest):
+    """CHAOS-4304: bulk-unblock ledger rows for a set of runs an operator has
+    already scoped for redrive (typically via the Go-side
+    daily.RedriveStrandedPartitions, CHAOS-4358). Distinct from
+    MetricExecutionRepairRequest: that endpoint repairs ONE execution id an
+    operator must already know; this one takes the run ids the operator
+    actually has (from the stranding evidence) and finds every ambiguous
+    daily/partition row underneath them itself.
+    """
+
+    run_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+    review_evidence: str = Field(min_length=1, max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_review_evidence(self) -> DailyMetricsRedriveRequest:
+        if len(self.review_evidence.encode()) > 2048:
+            raise ValueError("review_evidence must not exceed 2048 UTF-8 bytes")
+        return self
+
+
 @dataclass(frozen=True)
 class _Execution:
     id: uuid.UUID
@@ -1345,6 +1365,79 @@ async def _repair_execution(
         "execution_id": str(execution_id),
         "state": target_state,
     }
+
+
+async def _bulk_redrive_ambiguous_executions(
+    session: AsyncSession, run_ids: list[uuid.UUID], review_evidence: str
+) -> dict[str, int]:
+    """CHAOS-4304: the ledger-side half of a stranded daily-metrics redrive.
+
+    A run's daily/partition ledger row can be stuck at "ambiguous" (a
+    progress-having failure -- see _mark_ambiguous) long after the run itself
+    has been stranded by CHAOS-4358 (River discarded every daily_partition
+    job for it). _reserve_execution refuses that row 409 ambiguous_refused
+    forever, identically on every future attempt at the SAME (run,
+    partition, family, generation, scope_digest) identity -- it is never
+    "skipped" (that only happens for a genuine 'succeeded' row), but it is
+    just as permanently unable to recompute without this repair, exactly the
+    CHAOS-4304 gap: "a failed partition can never be recomputed" without an
+    operator-authorized transition out of ambiguous first.
+
+    This does not invent a new ledger rule: it applies _repair_execution's
+    existing "retry_safe" resolution (gated on the original claim being
+    provably dead) to every daily/partition row under the named runs whose
+    state is either 'ambiguous' (a progress-having failure) or stuck
+    'executing' (CHAOS-4361: the owning api process died before any
+    exception handler ran), in one pass, so an operator who has already
+    identified stranded RUNS (from daily_metrics_partitions/
+    daily_metrics_runs evidence, or the Go-side redrive's
+    RedispatchedRunIDs) does not also have to enumerate and repair each
+    execution id by hand. A row whose original claim is still active is left
+    untouched and counted "skipped_claim_active", exactly as a single
+    /repair call against it would refuse with 409 today -- this bulk path
+    changes nothing about that safety rule (a live 'executing' claim is
+    real, still-in-flight work, never something to repair out from under),
+    only how many rows one operator action can advance.
+    """
+    if not run_ids:
+        return {"repaired": 0, "skipped_claim_active": 0}
+    candidates = await session.execute(
+        text(
+            """
+            SELECT id, state, attempt_count
+            FROM metric_compatibility_executions
+            WHERE run_id = ANY(CAST(:run_ids AS uuid[]))
+              AND worker_kind = 'daily' AND operation = 'partition'
+              AND state IN ('ambiguous', 'executing')
+            """
+        ),
+        {"run_ids": [str(run_id) for run_id in run_ids]},
+    )
+    rows = candidates.mappings().all()
+    repaired = 0
+    skipped = 0
+    for row in rows:
+        try:
+            await _repair_execution(
+                session,
+                row["id"],
+                MetricExecutionRepairRequest(
+                    expected_state=row["state"],
+                    expected_attempt_count=row["attempt_count"],
+                    resolution="retry_safe",
+                    review_evidence=review_evidence,
+                ),
+            )
+            repaired += 1
+        except HTTPException as exc:
+            # A CAS/claim-active refusal on ONE row (409) must not abort the
+            # rest of the batch -- the whole point of a bulk redrive is to
+            # make progress on every row that is actually safe, not to be as
+            # fragile as calling /repair once per execution id by hand.
+            if exc.status_code != 409:
+                raise
+            skipped += 1
+    return {"repaired": repaired, "skipped_claim_active": skipped}
 
 
 async def _mark_ambiguous(
@@ -2558,3 +2651,17 @@ async def repair_metric_execution(
 ) -> dict[str, str]:
     authorize_metric_repair(authorization)
     return await _repair_execution(session, execution_id, request)
+
+
+@router.post("/daily-metrics/v1/redrive")
+async def redrive_daily_metrics(
+    request: DailyMetricsRedriveRequest,
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, int]:
+    authorize_metric_repair(authorization)
+    result = await _bulk_redrive_ambiguous_executions(
+        session, request.run_ids, request.review_evidence
+    )
+    await session.commit()
+    return result

@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -30,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,6 +57,11 @@ type operatorRuntime struct {
 	streams               []streamProfileStatus
 	queueStatusSource     workerQueueStatusSource
 	queueControlMode      platformconfig.QueueControlMode
+	// registry is the same job-descriptor registry configureRuntime already
+	// loads for jobRouteController -- `metrics daily-redrive` (CHAOS-4358)
+	// reuses it to construct a daily.PostgresPublisher without a second
+	// contracts/jobs/v1 load.
+	registry *jobruntime.Registry
 }
 
 type streamProfileStatus struct {
@@ -465,6 +472,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
+		registry: registry,
 	}
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
@@ -548,6 +556,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		})
 	case "jobs":
 		return dispatchJobs(ctx, runtime, args[1:], stdout, stderr)
+	case "metrics":
+		return dispatchMetrics(ctx, runtime, args[1:], stdout, stderr)
 	case "queues":
 		return dispatchQueues(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":
@@ -734,6 +744,61 @@ func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, 
 			return writeServiceError(stderr, err)
 		}
 		return writeResult(stdout, stderr, job)
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+}
+
+// dispatchMetrics handles `metrics daily-redrive` (CHAOS-4358): the operator
+// entry point that repairs a daily-metrics run stranded because River
+// discarded every daily_partition job it ever dispatched for it, and nothing
+// else ever re-enqueues metrics.daily_dispatch for that run on its own.
+//
+// This deliberately bypasses joboperator.Service's Action/audit pipeline
+// (Cancel/Retry's path) -- it is gated only by the same WORKER_OPERATOR_TOKEN
+// authentication configureRuntime already requires for every workerctl
+// command. See the PR's RISK-NOTES for why that scope limit was accepted
+// here rather than adding a new Action end-to-end under time pressure.
+func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "daily-redrive":
+		flags := quietFlags("metrics daily-redrive")
+		org := flags.String("org", "", "organization id (uuid)")
+		from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+		to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
+			return writeError(stderr, "invalid_request")
+		}
+		if _, err := uuid.Parse(*org); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		fromDay, err := time.Parse("2006-01-02", *from)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		toDay, err := time.Parse("2006-01-02", *to)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, outcome)
 	default:
 		return writeError(stderr, "invalid_request")
 	}

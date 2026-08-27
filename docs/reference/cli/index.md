@@ -1099,7 +1099,42 @@ with no hint that a different container would work.
     configuration makes either verb work. The refusal is deliberate: the frozen
     contracts name domain links that have no authoritative semantic table yet.
     Treat them as unavailable until CHAOS-4030 lands. There is currently no
-    supported path to re-drive a stranded job by hand.
+    generic supported path to re-drive a stranded job by hand — `metrics
+    daily-redrive` below is a narrow, daily-metrics-specific exception, not a
+    counterexample to this warning.
+
+### `dev-health-workerctl metrics`
+
+Repair a daily-metrics run stranded by CHAOS-4358: every `daily_partition`
+River job for it already failed and was discarded, and nothing else ever
+re-enqueues work for that run on its own (a fresh `metrics.daily_dispatch`
+run still hits the SAME permanent per-partition outbox dedupe key its
+original dispatch used, so a bare re-dispatch alone is not enough — see
+[job-recovery-lifecycle.md](../../operate/run/job-recovery-lifecycle.md)).
+
+```bash
+dev-health-workerctl metrics daily-redrive \
+  --org 70d529e0-3c06-4597-8480-794fd02328b6 \
+  --from 2026-08-08 \
+  --to 2026-08-27
+```
+
+Scoped to one organization and an inclusive UTC calendar-day range. It resets
+any `failed_permanent` partition back to `failed` (clearing `failure_reason`),
+then publishes a fresh `metrics.daily_partition` job for every
+`pending`/`failed` partition in scope, under a redrive-scoped dedupe key
+distinct from the partition's original dispatch. Returns
+`{"PermanentReset", "RedispatchedRunIDs", "RedrivenPartitions"}`.
+
+This does not repair the Python compatibility-bridge ledger
+(`metric_compatibility_executions`) — CHAOS-4304. A partition whose ledger row
+is stuck `ambiguous` (or a dead-claim `executing`) still answers
+`ambiguous_refused` on the redriven attempt until an operator separately
+authorizes retry for the same run ids via
+`POST /internal/worker/daily-metrics/v1/redrive` (`WORKER_METRIC_REPAIR_TOKEN`
+bearer auth), which applies the SAME `retry_safe` CAS the single-execution
+`/metric-executions/v1/{id}/repair` endpoint already uses, across every
+ambiguous/stuck-executing row under the named runs in one call.
 
 ### `dev-health-workerctl routes`
 

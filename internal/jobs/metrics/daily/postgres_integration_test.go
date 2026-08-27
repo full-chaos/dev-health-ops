@@ -1125,3 +1125,201 @@ func (publisher failingFinalizePublisher) PublishFinalizeTx(
 	publisher.cancel()
 	return errors.New("injected crash after outbox insert")
 }
+
+// TestRedriveStrandedPartitionsReachesDispatchablePartitions is the CHAOS-4358
+// red-first proof: a run stranded by River discarding every daily_partition
+// job it ever dispatched (a plain 'failed' partition with no live dispatch)
+// PLUS a partition CHAOS-4319 durably terminalized to 'failed_permanent' must
+// both become reachable again after an operator names the org+day window,
+// and the run must gain a genuinely NEW metrics.daily_dispatch outbox row --
+// not a silent no-op against the original publish's permanent dedupe key.
+func TestRedriveStrandedPartitionsReachesDispatchablePartitions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var redriven []struct {
+		reason string
+		count  int
+	}
+	store.SetRedriveObserver(recordingRedriveObserver{sink: &redriven})
+
+	const (
+		orgID                = "00000000-0000-4000-8000-000000000501"
+		runID                = "00000000-0000-4000-8000-000000000502"
+		permanentPartition   = "00000000-0000-4000-8000-000000000503"
+		plainFailedPartition = "00000000-0000-4000-8000-000000000504"
+		succeededPartition   = "00000000-0000-4000-8000-000000000505"
+	)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,$3,'post-sync:stranded-501','running','pending',$4,$4)`, runID, orgID, targetDay, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,failure_reason,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'failed_permanent','ambiguous_refused',5,$3,$3)`, permanentPartition, runID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,1,'[]'::jsonb,'failed',5,$3,$3)`, plainFailedPartition, runID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,2,'[]'::jsonb,'succeeded',1,$3,$3)`, succeededPartition, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Precondition: DispatchablePartitions's raw query already matches the
+	// plain 'failed' partition (it reflects durable state, not whether
+	// anything is about to invoke it) -- failed_permanent stays excluded by
+	// design. The actual CHAOS-4358 bug is one level up: nothing ever
+	// re-enqueues the metrics.daily_dispatch job that would RUN this query
+	// again for a stranded run, so this durable eligibility never gets acted
+	// on without the redrive below.
+	before, err := store.DispatchablePartitions(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].ID != plainFailedPartition {
+		t.Fatalf("DispatchablePartitions before redrive = %#v, want exactly [%s]", before, plainFailedPartition)
+	}
+
+	// Both partitions already have a PERMANENT ordinary dedupe row from their
+	// original (now-failed) dispatch -- exactly the real stranded-partition
+	// shape (proven live against the local stack): re-publishing under the
+	// SAME ordinary key would silently no-op via "ON CONFLICT (dedupe_key)
+	// DO NOTHING", which is the deeper wall RedriveStrandedPartitions must
+	// route around, not just the run-level dispatch dedupe.
+	for _, partitionID := range []string{permanentPartition, plainFailedPartition} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO worker_job_outbox (
+				id, dedupe_key, job_kind, contract_version, args, payload_hash,
+				queue, priority, max_attempts, scheduled_at, status, attempt_count,
+				next_attempt_at, created_at, updated_at
+			) VALUES (
+				$1, $2, 'metrics.daily_partition', 1, '{}', 'sha256:0',
+				'metrics', 1, 5, $3, 'discarded', 5, $3, $3, $3
+			)`,
+			uuid.New().String(), "metrics.daily_partition:"+partitionID, now,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outcome, err := store.RedriveStrandedPartitions(ctx, publisher, orgID, targetDay, targetDay, "redrive-nonce-1")
+	if err != nil {
+		t.Fatalf("RedriveStrandedPartitions: %v", err)
+	}
+	if outcome.PermanentReset != 1 {
+		t.Fatalf("PermanentReset = %d, want 1", outcome.PermanentReset)
+	}
+	if outcome.RedrivenPartitions != 2 {
+		t.Fatalf("RedrivenPartitions = %d, want 2 (the reset failed_permanent + the plain failed)", outcome.RedrivenPartitions)
+	}
+	if len(outcome.RedispatchedRunIDs) != 1 || outcome.RedispatchedRunIDs[0] != runID {
+		t.Fatalf("RedispatchedRunIDs = %v, want [%s]", outcome.RedispatchedRunIDs, runID)
+	}
+
+	// The load-bearing assertion: the redrive lands through
+	// DispatchablePartitions, the exact query metrics.daily_dispatch's
+	// handler uses to decide what to compute next.
+	after, err := store.DispatchablePartitions(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 2 {
+		t.Fatalf("DispatchablePartitions after redrive = %d, want 2", len(after))
+	}
+
+	var permanentStatus, permanentReason *string
+	if err := pool.QueryRow(ctx, `SELECT status, failure_reason FROM daily_metrics_partitions WHERE id = $1::uuid`, permanentPartition).
+		Scan(&permanentStatus, &permanentReason); err != nil {
+		t.Fatal(err)
+	}
+	if permanentStatus == nil || *permanentStatus != "failed" || permanentReason != nil {
+		t.Fatalf("reset partition status/reason = %v/%v, want failed/nil", permanentStatus, permanentReason)
+	}
+
+	// The load-bearing assertion this whole redrive exists to prove: a
+	// metrics.daily_PARTITION job actually got published for each partition,
+	// with a fresh dedupe_key -- not the ordinary "metrics.daily_partition:"
+	// +partition.ID key every one of these partitions ALREADY has a
+	// permanent outbox row under from its original, now-failed dispatch (a
+	// bare re-publish under that key would silently no-op, exactly the
+	// deeper CHAOS-4358 wall a fresh dispatch-job-only redrive still hit).
+	for _, partitionID := range []string{permanentPartition, plainFailedPartition} {
+		var outboxCount int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_partition' AND dedupe_key = $1`,
+			"metrics.daily_partition:redrive:"+partitionID+":redrive-nonce-1").Scan(&outboxCount); err != nil {
+			t.Fatal(err)
+		}
+		if outboxCount != 1 {
+			t.Fatalf("redrive outbox row count for partition %s = %d, want 1", partitionID, outboxCount)
+		}
+	}
+
+	// Telemetry from the first call alone: one failed_permanent_reset (1
+	// partition) and one dispatch_redriven (2 partitions redriven).
+	if len(redriven) != 2 || redriven[0].reason != "failed_permanent_reset" || redriven[0].count != 1 ||
+		redriven[1].reason != "dispatch_redriven" || redriven[1].count != 2 {
+		t.Fatalf("telemetry after first redrive = %v, want [{failed_permanent_reset 1} {dispatch_redriven 2}]", redriven)
+	}
+
+	// A second redrive with a DIFFERENT nonce must publish ANOTHER new row
+	// per partition, not collide with the first redrive's dedupe_key --
+	// proving this is not just a one-shot escape hatch that itself becomes
+	// unusable on retry.
+	if _, err := store.RedriveStrandedPartitions(ctx, publisher, orgID, targetDay, targetDay, "redrive-nonce-2"); err != nil {
+		t.Fatalf("second RedriveStrandedPartitions: %v", err)
+	}
+	var secondOutboxCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_partition' AND dedupe_key LIKE 'metrics.daily_partition:redrive:%'`).
+		Scan(&secondOutboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if secondOutboxCount != 4 {
+		t.Fatalf("redrive outbox rows after two distinct-nonce redrives = %d, want 4 (2 partitions x 2 redrives)", secondOutboxCount)
+	}
+
+	// The second call finds nothing left in failed_permanent (already reset),
+	// so it must not emit a zero-count failed_permanent_reset sample; it must
+	// still emit dispatch_redriven for the same 2 still-'failed' partitions
+	// (redriving does not itself change partition status -- only a live
+	// dispatch/compute pass does that).
+	if len(redriven) != 3 || redriven[2].reason != "dispatch_redriven" || redriven[2].count != 2 {
+		t.Fatalf("telemetry after second redrive = %v, want a 3rd sample {dispatch_redriven 2}", redriven)
+	}
+}
+
+type recordingRedriveObserver struct {
+	sink *[]struct {
+		reason string
+		count  int
+	}
+}
+
+func (observer recordingRedriveObserver) ObserveDailyMetricsRedrive(reason string, count int) error {
+	*observer.sink = append(*observer.sink, struct {
+		reason string
+		count  int
+	}{reason: reason, count: count})
+	return nil
+}

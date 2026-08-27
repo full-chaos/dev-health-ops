@@ -101,6 +101,9 @@ func buildDailyWorker(
 		if discoveryObserver, ok := observer.(jobruntime.DailyMetricsDiscoveryObserver); ok {
 			store.SetDiscoveryObserver(discoveryObserver)
 		}
+		if redriveObserver, ok := observer.(jobruntime.DailyMetricsRedriveObserver); ok {
+			store.SetRedriveObserver(redriveObserver)
+		}
 		publisher, publisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 		clickhouseConnection, clickhouseErr := clickhousestore.Open(
 			context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),

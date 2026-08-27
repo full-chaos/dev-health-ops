@@ -1071,3 +1071,118 @@ class TestTeamOwnershipEdges:
             assert row["provider"] == "synthetic"
             assert row["source"] in {"native", "provider_access"}
             assert row["valid_to"] is None
+
+
+class TestGenerateIssuePrLinksCoverage:
+    """CHAOS-4345: generate_issue_pr_links's realized coverage used to land
+    systematically below its own min_coverage parameter, making
+    `fixtures validate`'s Issue->PR coverage check
+    (`linked_non_epic / non_epic_wi_count`, epic-EXCLUSIVE on both sides)
+    fail on every run regardless of seed/size. Two compounding bugs:
+    target_count computed against an epic-INCLUSIVE candidate list, and a
+    floor-division cluster count that silently dropped up to
+    cluster_size-1 trailing selected-but-unwritten items."""
+
+    def _build_inputs(self, *, seed=11, days=30, pr_count=40):
+        generator = SyntheticDataGenerator(repo_name="acme/pr-coverage", seed=seed)
+        work_items = generator.generate_work_items(days=days)
+        pr_data = generator.generate_prs(count=pr_count)
+        prs = [item["pr"] for item in pr_data]
+        return generator, work_items, prs
+
+    def test_target_count_excludes_epics_from_candidates(self):
+        generator, work_items, prs = self._build_inputs()
+        epics = [wi for wi in work_items if wi.type == "epic"]
+        non_epics = [wi for wi in work_items if wi.type != "epic"]
+        assert epics, "fixture setup drifted: expected at least one epic"
+        assert non_epics, "fixture setup drifted: expected non-epic items"
+
+        links = generator.generate_issue_pr_links(
+            work_items, prs, min_coverage=0.7, org_id="org-1"
+        )
+        linked_ids = {link["work_item_id"] for link in links}
+        epic_ids = {str(wi.work_item_id) for wi in epics}
+        assert not (linked_ids & epic_ids), (
+            "an epic was linked -- target_count must be computed against "
+            "non-epic candidates only, matching what fixtures validate's "
+            "Issue->PR coverage check measures"
+        )
+
+        non_epic_ids = {str(wi.work_item_id) for wi in non_epics}
+        coverage = len(linked_ids & non_epic_ids) / len(non_epic_ids)
+        assert coverage >= 0.7, (
+            f"realized non-epic coverage {coverage:.1%} fell below the "
+            f"min_coverage=0.7 target -- CHAOS-4345 regression"
+        )
+
+    def test_no_selected_item_is_silently_dropped_by_cluster_flooring(self):
+        """A floor-divided cluster count used to drop up to cluster_size-1
+        trailing items from `linked_items` without ever writing an edge for
+        them. Every item counted toward target_count must get >=1 edge."""
+        generator, work_items, prs = self._build_inputs(pr_count=60)
+        non_epics = [wi for wi in work_items if wi.type != "epic"]
+        target_count = max(1, int(len(non_epics) * 0.7))
+
+        links = generator.generate_issue_pr_links(
+            work_items, prs, min_coverage=0.7, cluster_size=5, org_id="org-1"
+        )
+        distinct_linked = {link["work_item_id"] for link in links}
+        # Allow for the shuffle picking epics out (none should be linked,
+        # per the other test) -- the key invariant is that essentially all
+        # of target_count's worth of non-epic items got an edge, not just
+        # target_count rounded down to the nearest multiple of
+        # cluster_size.
+        assert len(distinct_linked) >= target_count - 1, (
+            f"only {len(distinct_linked)} distinct work items got a "
+            f"work_graph_issue_pr edge, expected >= {target_count - 1} "
+            f"(target_count={target_count}) -- cluster-remainder items "
+            f"were silently dropped (CHAOS-4345 regression)"
+        )
+
+    def test_realistic_scale_clears_the_validate_threshold(self):
+        """End-to-end shape check at roughly the size `fixtures validate`
+        exercises: non-epic coverage must clear the 70% threshold with
+        margin, not just barely, so normal per-run randomness doesn't flake
+        the real validate command."""
+        generator, work_items, prs = self._build_inputs(seed=7, days=30, pr_count=30)
+        non_epics = [wi for wi in work_items if wi.type != "epic"]
+        links = generator.generate_issue_pr_links(
+            work_items, prs, min_coverage=0.7, org_id="org-1"
+        )
+        linked_ids = {link["work_item_id"] for link in links}
+        non_epic_ids = {str(wi.work_item_id) for wi in non_epics}
+        coverage = len(linked_ids & non_epic_ids) / len(non_epic_ids)
+        assert coverage >= 0.7
+
+    def test_fractional_target_count_rounds_up_not_down(self):
+        """CHAOS-4345 codex round 1, P1: `int(len(candidates) *
+        min_coverage)` truncates -- a non-multiple candidate count (e.g.
+        14 * 0.7 = 9.8) selected only 9 (64.3%), still below the 70% the
+        validate check requires. Directly pins the fix at a candidate
+        count deliberately NOT a multiple of min_coverage's denominator,
+        bypassing generate_work_items entirely so the count is exact and
+        this test doesn't depend on how many epics a given seed happens to
+        produce (the 30-day tests above use exactly 60 non-epics, which
+        masked this: 60 * 0.7 = 42.0 exactly, no truncation to hide)."""
+        import dataclasses
+
+        generator = SyntheticDataGenerator(repo_name="acme/frac", seed=1)
+        raw_work_items = generator.generate_work_items(days=30)
+        # force non-epic so the count is exactly 14 (WorkItem is frozen)
+        work_items = [
+            dataclasses.replace(wi, type="story") for wi in raw_work_items[:14]
+        ]
+        pr_data = generator.generate_prs(count=10)
+        prs = [item["pr"] for item in pr_data]
+
+        links = generator.generate_issue_pr_links(
+            work_items, prs, min_coverage=0.7, org_id="org-1"
+        )
+        linked_ids = {link["work_item_id"] for link in links} & {
+            str(wi.work_item_id) for wi in work_items
+        }
+        coverage = len(linked_ids) / len(work_items)
+        assert coverage >= 0.7, (
+            f"14 candidates * 0.7 = 9.8 must round UP to 10 (71.4%), not "
+            f"truncate to 9 (64.3%) -- got {coverage:.1%}"
+        )

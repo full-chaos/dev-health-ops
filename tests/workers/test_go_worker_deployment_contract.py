@@ -1872,6 +1872,23 @@ def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
         f"go-worker-heavy must depend on metrics-api being healthy, got {heavy_deps}"
     )
 
+    # Independent post-cap review falsifier: the metrics-api dependency was
+    # first added inside the shared &go-worker anchor go-worker-heavy
+    # itself defines, so every sibling that merges via `<<: *go-worker`
+    # without its own depends_on override silently inherited it too --
+    # `docker compose up -d go-worker-sync` (or any other sibling) would
+    # then also start a full metrics-api process for no reason, the exact
+    # "second idle API process" scenario the profile gate exists to
+    # prevent. Every sibling must depend on go-contractcheck only.
+    for name, svc in go_worker_services.items():
+        if name == "go-worker-heavy":
+            continue
+        deps = svc.get("depends_on") or {}
+        assert "metrics-api" not in deps, (
+            f"{name} must NOT depend on metrics-api (only go-worker-heavy "
+            f"calls the metrics bridge), got depends_on={deps}"
+        )
+
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() -> None:

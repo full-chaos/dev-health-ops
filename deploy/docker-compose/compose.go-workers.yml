@@ -257,6 +257,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -283,6 +293,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -316,6 +336,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -338,6 +368,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
       COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
@@ -361,6 +401,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
       COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
@@ -385,6 +435,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 60s
@@ -408,6 +468,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 60s
@@ -433,6 +503,16 @@ services:
       - *flag-bridge-insecure
       - *flag-pagerduty-transport
       - *flag-log-level
+    # codex review (PR #1938, independent post-cap review): the shared
+    # &go-worker anchor's own depends_on now includes metrics-api
+    # (needed by go-worker-heavy only, for its --operational-bridge-url).
+    # This service does not touch the metrics queue -- explicit override
+    # (not a merge) so it does NOT inherit that dependency and does not
+    # start metrics-api on a targeted `docker compose up -d` of just this
+    # service.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 60s

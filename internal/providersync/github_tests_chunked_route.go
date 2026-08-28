@@ -541,6 +541,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if batchErr != nil {
 			return batchErr
 		}
+		// CHAOS-4394 telemetry: a unit that advanced its watermark while still
+		// carrying incomplete evidence is a real partial success, not a clean
+		// one -- distinct from RecordArtifactSkipped's per-artifact count, this
+		// is the UNIT-level signal an operator uses to find which repos are
+		// running with a durable, recorded gap.
+		if batch.Watermark != nil && len(cursor.Incomplete) > 0 && client != nil {
+			client.Metrics.RecordCicdPartialSuccess(
+				cursor.Repo, githubTestsCicdPartialSuccessReason(cursor.Incomplete),
+			)
+		}
 		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
@@ -881,6 +891,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactUnavailableCause,
 								)
+								// Durable per-artifact marker (CHAOS-4394, extending
+								// CHAOS-4315's oversized-only marker to every
+								// report_member cause that now advances the
+								// watermark): an operator needs the run/artifact id
+								// to target a backfill regardless of which of the
+								// three causes skipped it.
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+									GitHubTestsSkippedArtifact{
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										Cause: githubTestsArtifactUnavailableCause,
+									},
+								)
 								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
@@ -917,6 +940,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 										GitHubTestsSkippedArtifact{
 											RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+											Cause:     githubTestsArtifactOversizedCause,
 											SizeBytes: sizeErr.SizeBytes, CapBytes: sizeErr.CapBytes,
 										},
 									)
@@ -978,6 +1002,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								githubTestsUnreadableArchiveCause,
 							)
+							// Durable per-artifact marker (CHAOS-4394): see the
+							// identical comment on the artifact_unavailable branch
+							// above.
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+								GitHubTestsSkippedArtifact{
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+									Cause: githubTestsUnreadableArchiveCause,
+								},
+							)
 							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
@@ -992,6 +1026,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsUnreadableArchiveCause,
+								)
+								// Durable per-artifact marker (CHAOS-4394): see the
+								// identical comment on the artifact_unavailable
+								// branch above.
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+									GitHubTestsSkippedArtifact{
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										Cause: githubTestsUnreadableArchiveCause,
+									},
 								)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue

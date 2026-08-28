@@ -187,15 +187,32 @@ func TestGitHubTestsArtifactDownloadMissingLocationDoesNotSinkTheUnit(t *testing
 			observation, githubTestsArtifactUnavailableCause,
 		)
 	}
-	// artifact_unavailable stays WATERMARK-WITHHOLDING (CHAOS-4153's
-	// pre-CHAOS-4142 behavior, deliberately UNCHANGED by CHAOS-4315): it is a
-	// TRANSIENT fact about this one download attempt, so a later re-walk of
-	// the same window might genuinely observe this artifact differently, and
-	// withholding buys a real chance at full coverage next time. Contrast
-	// with the oversized case in TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause,
-	// which is deterministic and DOES advance.
-	if walk.final.Watermark != nil {
-		t.Fatalf("watermark=%v, want nil -- artifact_unavailable must still withhold", walk.final.Watermark)
+	// CHAOS-4394: artifact_unavailable now ADVANCES the watermark, reversing
+	// the CHAOS-4153/CHAOS-4315 disposition pinned in this test's prior
+	// comment. That disposition assumed a redirect with no Location header is
+	// a TRANSIENT property of one download attempt, so withholding would buy a
+	// real chance at full coverage on a later re-walk. Prod evidence
+	// falsified the assumption: CHAOS-4394 found sync_watermarks for
+	// ops/acr/web pinned at 2026-08-19 for nine days straight, with the SAME
+	// artifacts recurring as artifact_unavailable on every hourly attempt --
+	// identically, not intermittently. See
+	// githubTestsWatermarkAdvancingPairs's doc comment.
+	want := nativeTestClaim("github", "cicd").BeforeAt
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*want) {
+		t.Fatalf(
+			"watermark=%v, want %v -- artifact_unavailable must advance (CHAOS-4394)",
+			walk.final.Watermark, want,
+		)
+	}
+	// The durable per-artifact marker (CHAOS-4315's mechanism, extended in
+	// CHAOS-4394 to this cause) is what lets an operator target a backfill at
+	// exactly this artifact.
+	skippedArtifacts, ok := walk.final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
+	if !ok || len(skippedArtifacts) != 1 {
+		t.Fatalf("skipped_artifacts=%#v, want exactly 1 durable marker record", walk.final.Result["skipped_artifacts"])
+	}
+	if marker := skippedArtifacts[0]; marker.RunID == "" || marker.ArtifactID != "1" || marker.Cause != githubTestsArtifactUnavailableCause {
+		t.Fatalf("marker=%+v, want a non-empty run id, artifact_id=1, cause=%s", marker, githubTestsArtifactUnavailableCause)
 	}
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(
 		context.Background(), nativeTestClaim("github", "cicd"), walk.final,
@@ -431,8 +448,8 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 			t.Fatalf("skipped_artifacts=%#v, want exactly 1 durable marker record", walk.final.Result["skipped_artifacts"])
 		}
 		marker := skippedArtifacts[0]
-		if marker.RunID == "" || marker.ArtifactID != "1" {
-			t.Fatalf("marker=%+v, want a non-empty run id and artifact_id=1 (the oversized artifact)", marker)
+		if marker.RunID == "" || marker.ArtifactID != "1" || marker.Cause != githubTestsArtifactOversizedCause {
+			t.Fatalf("marker=%+v, want a non-empty run id, artifact_id=1, cause=%s", marker, githubTestsArtifactOversizedCause)
 		}
 		if marker.CapBytes != githubTestsMaxDownloadSize {
 			t.Fatalf("marker.CapBytes=%d, want %d", marker.CapBytes, githubTestsMaxDownloadSize)
@@ -496,14 +513,21 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 		if unavailableCount != 1 {
 			t.Fatalf("unavailable report_member count=%d, want 1 -- must stay distinct from the oversized cause", unavailableCount)
 		}
-		// githubTestsBlocksWatermark checks EVERY observation, not "any
-		// advancing one is enough": one artifact_unavailable in the mix must
-		// still withhold the watermark even though artifact_oversized alone
-		// would not. This is the per-CAUSE (not per-component) allowlist
-		// actually being exercised with a mixed cause set, not just asserted
-		// in isolation by the two single-cause subtests above.
-		if walk.final.Watermark != nil {
-			t.Fatalf("watermark=%v, want nil -- the unavailable cause in this mix must still withhold", walk.final.Watermark)
+		// CHAOS-4394: both causes now advance, so a mix of the two must still
+		// advance -- githubTestsBlocksWatermark checks EVERY observation, so
+		// this exercises the allowlist against a mixed cause set rather than
+		// just asserting each cause in isolation via the two single-cause
+		// subtests above. The reason label collapses to "mixed" precisely
+		// because more than one distinct advancing cause contributed.
+		want := nativeTestClaim("github", "cicd").BeforeAt
+		if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*want) {
+			t.Fatalf(
+				"watermark=%v, want %v -- a mix of two advancing causes must still advance",
+				walk.final.Watermark, want,
+			)
+		}
+		if got := githubTestsCicdPartialSuccessReason(walk.cursor.Incomplete); got != "mixed" {
+			t.Fatalf("githubTestsCicdPartialSuccessReason=%q, want mixed", got)
 		}
 	})
 
@@ -580,4 +604,50 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 			t.Fatalf("metrics did not carry the skip:\nwant line: %s\ngot:\n%s", want, buffer.String())
 		}
 	})
+}
+
+// RED on the pre-CHAOS-4394 baseline: a unit that skips one artifact as
+// artifact_unavailable and still finalizes with an advanced watermark is
+// exactly the "partial success" this counter exists to surface, distinct
+// from dev_health_provider_artifact_skipped_total's per-artifact count. On
+// main this unit's watermark stayed nil, so RecordCicdPartialSuccess was
+// never called at all and this metric line would be entirely absent.
+func TestGitHubTestsCicdPartialSuccessTelemetry(t *testing.T) {
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	want := `dev_health_cicd_partial_success_total{repo="Acme/API",reason="artifact_unavailable"} 1`
+	if !strings.Contains(buffer.String(), want) {
+		t.Fatalf("metrics did not carry the partial success:\nwant line: %s\ngot:\n%s", want, buffer.String())
+	}
+}
+
+// A unit with nothing incomplete must never touch this counter: it is
+// specifically a signal for "success, but with a durable, recorded gap", not
+// a count of every successful unit.
+func TestGitHubTestsCicdPartialSuccessDoesNotFireOnACleanUnit(t *testing.T) {
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1}
+	client := githubTestsClient(t, doer)
+	client.Metrics = providerfoundation.NewMetrics()
+
+	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
+		t.Fatalf("WritePrometheus: %v", err)
+	}
+	if strings.Contains(buffer.String(), "dev_health_cicd_partial_success_total{") {
+		t.Fatalf("a clean unit must not record a partial success:\n%s", buffer.String())
+	}
 }

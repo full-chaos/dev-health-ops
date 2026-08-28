@@ -260,6 +260,15 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		// reclassification is CHAOS-4153.
 		{githubTestsReportMemberComponent, "malformed", true},
 		{githubTestsReportMemberComponent, "unreadable", true},
+		// RED on the pre-CHAOS-4394 baseline for the last two: prod evidence
+		// (sync_watermarks pinned nine days past CHAOS-4315, with the same
+		// artifact_unavailable/unreadable_archive artifacts recurring hourly)
+		// falsified the "transient download attempt" assumption that kept
+		// these two withholding. All three whole-artifact report_member
+		// causes now advance alike.
+		{githubTestsReportMemberComponent, githubTestsArtifactOversizedCause, false},
+		{githubTestsReportMemberComponent, githubTestsArtifactUnavailableCause, false},
+		{githubTestsReportMemberComponent, githubTestsUnreadableArchiveCause, false},
 		// Positively observed item caps advance.
 		{githubTestsRunJobsComponent, githubTestsPerRunCapCause, false},
 		{githubTestsRunArtifactsComponent, githubTestsPerRunCapCause, false},

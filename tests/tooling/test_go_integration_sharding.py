@@ -765,7 +765,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (work_item_alias_completion_test.go):
     # TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases.
     # Only the provider count moves: 1083 -> 1084; 119 stays.
-    assert len(expected_provider_tests) == 1084
+    #
+    # CHAOS-4394 added TWO ordinary top-level tests in
+    # github_tests_download_failure_test.go pinning the new
+    # dev_health_cicd_partial_success_total{repo,reason} telemetry (1084 ->
+    # 1086): TestGitHubTestsCicdPartialSuccessTelemetry (fires when a unit
+    # advances its watermark despite a report_member skip) and
+    # TestGitHubTestsCicdPartialSuccessDoesNotFireOnACleanUnit (must not fire
+    # on a unit with nothing incomplete). Neither touches a database, so the
+    # integration-tagged count stays 119.
+    assert len(expected_provider_tests) == 1086
     assert len(expected_integration_tests) == 119
     assert expected_integration_tests < expected_provider_tests
 
@@ -782,7 +791,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1084
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1086
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -843,7 +852,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1084
+    assert len(selected_tests) == len(set(selected_tests)) == 1086
     assert set(selected_tests) == expected_tests
 
 

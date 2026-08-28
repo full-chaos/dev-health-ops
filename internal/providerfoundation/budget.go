@@ -275,6 +275,7 @@ type Metrics struct {
 	projectsV2DegradedSnapshots    map[string]uint64
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
+	cicdPartialSuccess             map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -295,6 +296,7 @@ func NewMetrics() *Metrics {
 		projectsV2DegradedSnapshots:    map[string]uint64{},
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
+		cicdPartialSuccess:             map[string]uint64{},
 	}
 }
 
@@ -464,13 +466,16 @@ func MetricArtifactSkipReasonLabel(value string) string {
 // observed. (Its other cause, per_run_page_budget, withholds -- the series is
 // not uniformly advancing, which is precisely why its cause label matters.)
 //
-// A skipped artifact is neither: its contents were never observed, so it
-// always withholds -- report_member is absent from
-// githubTestsWatermarkAdvancingPairs entirely, at the component level rather
-// than per cause. Folding it in as a third cause on the truncation series
-// would put a permanently-withholding condition beside a
-// conditionally-advancing one, so an operator could no longer read the series
-// as "bounded truncation" at all (CHAOS-4177).
+// A skipped artifact is different again: this series counts every skip
+// regardless of whether that skip's cause advances or withholds the
+// watermark (report_member's per-cause split lives in
+// githubTestsWatermarkAdvancingPairs, providersync/github_tests_reports.go
+// -- as of CHAOS-4394 all three whole-artifact causes advance; the doc
+// comment there is the up-to-date statement of which pairs do). Folding this
+// into a cause on the truncation series would still be wrong: that series is
+// about RUNS truncated by a per-run cap, a different unit of measure than
+// artifacts skipped, so an operator could no longer read either series
+// cleanly (CHAOS-4177).
 func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	if m == nil {
 		return
@@ -479,6 +484,71 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// metricCicdPartialSuccessReasonVocabulary bounds the reason label on
+// RecordCicdPartialSuccess to the report_member causes that can advance the
+// watermark (see githubTestsWatermarkAdvancingPairs), plus "mixed" for a unit
+// whose incomplete observations span more than one distinct cause. Anything
+// else -- including an as-yet-unregistered cause -- collapses to "other"
+// rather than opening the label.
+var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
+	"artifact_oversized":   {},
+	"artifact_unavailable": {},
+	"unreadable_archive":   {},
+	"per_run_cap":          {},
+	"mixed":                {},
+}
+
+// MetricCicdPartialSuccessReasonLabel bounds the RecordCicdPartialSuccess
+// reason label the same way MetricArtifactSkipReasonLabel bounds its own.
+func MetricCicdPartialSuccessReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricCicdPartialSuccessReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// metricRepoLabel bounds a provider-supplied repository identifier before it
+// becomes a Prometheus label. Unlike a run id or artifact id (deliberately
+// kept OFF every label in this file -- see RecordPerRunTruncation and
+// recordGitHubTestsSkippedArtifact's doc comments), a synced repository is a
+// human-configured integration target: its cardinality is bounded by how many
+// repositories an org actually connects, not by ongoing provider activity.
+// This still truncates defensively and strips a key-composing delimiter byte,
+// rather than trusting an upstream string never to misbehave.
+const metricRepoLabelMaxBytes = 200
+
+func metricRepoLabel(repo string) string {
+	trimmed := strings.TrimSpace(repo)
+	trimmed = strings.ReplaceAll(trimmed, "\x00", "")
+	if trimmed == "" {
+		return "unknown"
+	}
+	if len(trimmed) > metricRepoLabelMaxBytes {
+		trimmed = trimmed[:metricRepoLabelMaxBytes]
+	}
+	return trimmed
+}
+
+// RecordCicdPartialSuccess counts ONE completed cicd/tests unit that
+// advanced its watermark despite carrying non-empty incomplete evidence
+// (CHAOS-4394): a real partial success, not a stall, because every
+// contributing cause is on githubTestsWatermarkAdvancingPairs and its
+// artifacts are durably recorded (GitHubTestsSkippedArtifact) for a targeted
+// backfill. This is a UNIT-level signal, distinct from RecordArtifactSkipped
+// (which counts per-artifact) and RecordPerRunTruncation (which counts
+// per-run): it is what lets an operator see, by repo, how much of a source's
+// hourly coverage is arriving as "success with a durable, recorded gap"
+// rather than a clean success.
+func (m *Metrics) RecordCicdPartialSuccess(repo, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cicdPartialSuccess[metricRepoLabel(repo)+"\x00"+MetricCicdPartialSuccessReasonLabel(reason)]++
 }
 
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
@@ -1045,6 +1115,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			return err
 		}
 	}
+	if err := writeRepoReasonCounter(
+		writer, "dev_health_cicd_partial_success_total",
+		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by repo and the report_member/per-run cause that made it partial (CHAOS-4394).",
+		m.cicdPartialSuccess,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1071,6 +1148,36 @@ func writeLabeledCounter(
 	for _, key := range keys {
 		if _, err := fmt.Fprintf(
 			writer, "%s{%s=%q} %d\n", name, labelName, key, values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeRepoReasonCounter is the repo/reason twin of writeProviderDatasetReasonCounter.
+// It splits on NUL rather than ":" because, unlike every other compound key in
+// this file, repo is not drawn from a closed vocabulary and could in
+// principle contain ":" itself; metricRepoLabel already strips NUL bytes from
+// the label value, so NUL is safe as the ONLY delimiter and SplitN into
+// exactly two parts is total.
+func writeRepoReasonCounter(writer io.Writer, name, help string, values map[string]uint64) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s{repo=%q,reason=%q} %d\n",
+			name, parts[0], parts[1], values[key],
 		); err != nil {
 			return err
 		}

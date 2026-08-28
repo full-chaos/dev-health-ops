@@ -252,6 +252,24 @@ func TestGitHubTestsCorruptArtifactDoesNotSinkTheUnit(t *testing.T) {
 			observation, githubTestsUnreadableArchiveCause,
 		)
 	}
+	// CHAOS-4394: unreadable_archive now ADVANCES the watermark alongside
+	// artifact_oversized and artifact_unavailable -- see
+	// githubTestsWatermarkAdvancingPairs's doc comment for the prod evidence
+	// that reversed the prior withholding disposition.
+	want := nativeTestClaim("github", "cicd").BeforeAt
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*want) {
+		t.Fatalf(
+			"watermark=%v, want %v -- unreadable_archive must advance (CHAOS-4394)",
+			walk.final.Watermark, want,
+		)
+	}
+	skippedArtifacts, ok := walk.final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
+	if !ok || len(skippedArtifacts) != 1 {
+		t.Fatalf("skipped_artifacts=%#v, want exactly 1 durable marker record", walk.final.Result["skipped_artifacts"])
+	}
+	if marker := skippedArtifacts[0]; marker.RunID == "" || marker.ArtifactID != "1" || marker.Cause != githubTestsUnreadableArchiveCause {
+		t.Fatalf("marker=%+v, want a non-empty run id, artifact_id=1, cause=%s", marker, githubTestsUnreadableArchiveCause)
+	}
 	// The fail-closed gate the chunked executor runs before a completion
 	// becomes durable must accept this shape too.
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(

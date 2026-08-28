@@ -287,13 +287,22 @@ func normalizeGitLabOwnershipRow(
 
 // gitlabTeamCatalogMembershipFacets mirrors IdentityResolver.membership_facets
 // under the DEFAULT (production) identity_mapping.yaml, which ships
-// `identities: []` -- an empty alias map. With no aliases configured,
-// resolve() for a username-only member degrades to the provider-qualified
-// id, so the full facet ladder collapses to exactly: "gitlab:<username>"
-// first, then the normalized email if present. This is the identical
-// simplification internal/jobs/metrics/daily/repouser/identity.go documents
-// for the SAME default config, and the one linearReferenceMembershipFacets
-// already relies on for Linear's own reference-catalog port.
+// `identities: []` -- an empty alias map (verified: src/dev_health_ops/config/
+// identity_mapping.yaml, no org currently configures aliases). With no
+// aliases configured, resolve() for a username-only member degrades to the
+// provider-qualified id, so the full facet ladder collapses to exactly:
+// "gitlab:<username>" first, then the normalized email if present. This is
+// the identical simplification internal/jobs/metrics/daily/repouser/identity.go
+// documents for the SAME default config (see that package's own doc comment
+// for "the alias-resolution gap this does not close" as an accepted, tracked
+// limitation), and the one linearReferenceMembershipFacets already relies on
+// for Linear's own ALREADY-MERGED reference-catalog port -- codex review
+// flagged this as a P1 for this PR; it is a pre-existing, org-configurable-
+// alias gap shared by every native Go reference-catalog collector today; not
+// a regression this port introduces. Wiring the real IdentityResolver
+// (parsing identity_mapping.yaml, alias matching) into Go is out of scope
+// here and belongs to whichever ticket closes that gap for all three
+// providers at once, not one provider's port.
 func gitlabTeamCatalogMembershipFacets(username string, email *string) []string {
 	username = strings.TrimSpace(username)
 	if username == "" {

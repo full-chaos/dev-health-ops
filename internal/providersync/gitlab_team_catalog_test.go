@@ -289,6 +289,67 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	}
 }
 
+type fakeGitLabSourceSelectionResolver struct {
+	ids    map[string]bool
+	scoped bool
+}
+
+func (resolver fakeGitLabSourceSelectionResolver) ResolveSourceExternalIDs(
+	context.Context, TeamCatalogReference,
+) (map[string]bool, bool, error) {
+	return resolver.ids, resolver.scoped, nil
+}
+
+// TestGitLabTeamCatalogSourceSelectionFiltersNativeProjectCatalog proves the
+// native project catalog (CHAOS-3380) respects a scoped
+// SourceSelectionResolver -- codex review finding: unfiltered import makes
+// every credential-visible project a resolvable Ask Dev subject regardless
+// of sync selection, matching team_autoimport_gitlab._gitlab_project_catalog_rows's
+// source_external_ids filter.
+func TestGitLabTeamCatalogSourceSelectionFiltersNativeProjectCatalog(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServer(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Projects: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	// Unscoped (no resolver): every discovered project is cataloged --
+	// Python's own "not scoped" default.
+	unscoped, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(unscoped.Rows.Projects) != 3 {
+		t.Fatalf("unscoped native projects = %d, want 3", len(unscoped.Rows.Projects))
+	}
+
+	// Scoped to a single native id: only that project is cataloged, even
+	// though discovery still sees all three.
+	handler := GitLabTeamCatalogRouteHandler{
+		SourceSelectionResolver: fakeGitLabSourceSelectionResolver{ids: map[string]bool{"100": true}, scoped: true},
+	}
+	scoped, err := handler.CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(scoped.Rows.Projects) != 1 || scoped.Rows.Projects[0].ID != "org-1:gitlab:100" {
+		t.Fatalf("scoped native projects = %+v, want exactly project 100", scoped.Rows.Projects)
+	}
+
+	// Scoped to zero sources: filters everything out, never everything in.
+	handlerEmpty := GitLabTeamCatalogRouteHandler{
+		SourceSelectionResolver: fakeGitLabSourceSelectionResolver{ids: map[string]bool{}, scoped: true},
+	}
+	empty, err := handlerEmpty.CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(empty.Rows.Projects) != 0 {
+		t.Fatalf("zero-source-scoped native projects = %+v, want none", empty.Rows.Projects)
+	}
+}
+
 func TestGitLabTeamCatalogTeamsOnlySkipsMembersAndProjects(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)

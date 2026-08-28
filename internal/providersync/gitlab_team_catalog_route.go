@@ -35,6 +35,14 @@ type GitLabTeamCatalogRouteHandler struct {
 	// _gitlab_group reads credentials first then falls back to
 	// scope.sync_options). Left nil, a credential-less lookup fails closed.
 	GroupPathResolver GitLabGroupPathResolver
+	// SourceSelectionResolver mirrors team_autoimport_gitlab.py's
+	// source_external_ids (populated ONLY by the reference-discovery scope,
+	// workers/reference_discovery.py's _load_discovery_context -- the more
+	// common post-sync trigger path never threads it, a no-op filter Python
+	// itself documents). Left nil, every discovered project is cataloged
+	// (identical to Python's "not scoped" None default), matching this
+	// collector's registration today.
+	SourceSelectionResolver GitLabSourceSelectionResolver
 }
 
 // GitLabGroupPathResolver resolves the GitLab group full_path this sync
@@ -47,6 +55,18 @@ type GitLabTeamCatalogRouteHandler struct {
 // LinearTeamCatalogCollector never needed one.
 type GitLabGroupPathResolver interface {
 	ResolveGroupPath(ctx context.Context, ref TeamCatalogReference) (string, error)
+}
+
+// GitLabSourceSelectionResolver resolves the enabled IntegrationSource
+// external_id set for this sync run (GitLab's numeric project id, as a
+// string), the same set team_autoimport_gitlab._gitlab_project_catalog_rows
+// filters the native project catalog against. scoped=false (the common
+// case: this run's caller never threaded a selection at all) means "every
+// discovered project is cataloged" -- Python's own None-means-unscoped
+// default. scoped=true with an EMPTY set means "zero enabled sources",
+// filtering everything out, never everything in -- also matching Python.
+type GitLabSourceSelectionResolver interface {
+	ResolveSourceExternalIDs(ctx context.Context, ref TeamCatalogReference) (ids map[string]bool, scoped bool, err error)
 }
 
 type GitLabTeamCatalogEvidence struct {
@@ -262,6 +282,14 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	if selections.Projects {
+		var sourceExternalIDs map[string]bool
+		sourceScoped := false
+		if handler.SourceSelectionResolver != nil {
+			sourceExternalIDs, sourceScoped, err = handler.SourceSelectionResolver.ResolveSourceExternalIDs(ctx, ref)
+			if err != nil {
+				return GitLabTeamCatalogBatch{}, err
+			}
+		}
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path: rootPath + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
@@ -278,6 +306,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			var project gitlabTeamCatalogProjectPayload
 			if err := json.Unmarshal(raw, &project); err != nil {
 				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			if sourceScoped && !sourceExternalIDs[project.ID.String()] {
+				continue
 			}
 			row, ok := normalizeGitLabProjectCatalogRow(ref.OrgID, project, normalizedAt)
 			if !ok {

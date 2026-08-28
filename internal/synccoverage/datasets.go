@@ -95,7 +95,14 @@ func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []stri
 	if len(keys) == 0 {
 		return []string{dataset}
 	}
-	foldedKeyResolutionMetrics.observe(dataset, len(keys))
+	// Only a GENUINE alias fold counts: when the sole contributing member is
+	// the canonical key itself (e.g. only family_dataset_cicd=true, no
+	// family_dataset_tests), the result is identical to the no-fold fallback
+	// above and must not inflate the "folding happened" signal (Codex
+	// review, CHAOS-4393 round 1).
+	if !(len(keys) == 1 && keys[0] == dataset) {
+		foldedKeyResolutionMetrics.observe(dataset, len(keys))
+	}
 	return keys
 }
 

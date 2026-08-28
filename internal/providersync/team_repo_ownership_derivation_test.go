@@ -3,6 +3,7 @@ package providersync
 import (
 	"sort"
 	"testing"
+	"time"
 )
 
 func sortedDerivedRows(rows []DerivedTeamRepoOwnershipRow) []DerivedTeamRepoOwnershipRow {
@@ -79,13 +80,135 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
-		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9"},
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
 	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via dependency-donor walk, got %+v", got)
+	}
+}
+
+// TestBlockingRelationshipTypeNeverInherits: CHAOS-4321's "never guess" applied
+// to the donor walk -- a blocks/blocked_by edge routinely spans teams, so it
+// must NOT transfer a team, exactly like compute_work_items.py's
+// _INHERITABLE_RELATIONSHIP_TYPES gate.
+func TestBlockingRelationshipTypeNeverInherits(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 0 {
+		t.Fatalf("expected no inheritance through a blocking relationship, got %+v", got)
+	}
+}
+
+// TestLatestEdgeByLastSyncedWinsPerPair: a relationship-type flip on the same
+// (source, target) pair supersedes the stale row -- the newer edge (here,
+// blocked_by superseding an earlier relates_to) decides whether inheritance
+// happens, not whichever row happens to be scanned first.
+func TestLatestEdgeByLastSyncedWinsPerPair(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+	}
+	older := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to", LastSynced: older},
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by", LastSynced: newer},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 0 {
+		t.Fatalf("expected the newer blocked_by edge to supersede the older relates_to edge, got %+v", got)
+	}
+}
+
+// TestExtkeyDependencyTargetResolvesCrossProvider: a PR's dependency edge can
+// target the provider-neutral `extkey:KEY` form emitted by PR parsers; it
+// must resolve against the Linear/Jira work-item-key index, same as
+// compute_work_items.py's donor resolution.
+func TestExtkeyDependencyTargetResolvesCrossProvider(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:PLAT-9", Provider: "linear", RepoID: "", ProjectID: "proj-1"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-platform via extkey resolution, got %+v", got)
+	}
+}
+
+// TestAmbiguousExtkeyDependencyTargetIsNeverGuessed: the same issue key
+// claimed by two work items (e.g. a Linear and a Jira item both use "PLAT-9")
+// is genuinely ambiguous -- CHAOS-4321 drops it rather than picking one.
+func TestAmbiguousExtkeyDependencyTargetIsNeverGuessed(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:PLAT-9", Provider: "linear", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "jira:PLAT-9", Provider: "jira", RepoID: "", ProjectID: "proj-1"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 0 {
+		t.Fatalf("expected no inheritance through an ambiguous cross-provider key, got %+v", got)
+	}
+}
+
+// TestMultipleDonorCandidatesPickLexicographicallySmallestTarget: when a
+// source has more than one valid donor, the choice must be deterministic and
+// run-independent (ClickHouse rows are unordered) -- the smallest canonical
+// target wins, same as compute_work_items.py.
+func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+		{ProjectID: "proj-2", TeamID: "team-growth", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-2"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:ZETA-1", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	// "linear:PLAT-9" < "linear:ZETA-1" lexicographically -> team-platform wins.
+	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected the lexicographically smallest donor target to win, got %+v", got)
 	}
 }
 

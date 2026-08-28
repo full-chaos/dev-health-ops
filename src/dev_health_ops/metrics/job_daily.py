@@ -789,6 +789,19 @@ def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[An
     Returned objects are duck-typed enough to satisfy
     ``build_team_complexity_rows_for_day`` -- it only reads attributes via
     ``getattr(row, name, None)``.
+
+    CHAOS-4365 codex R1 (P1): ``repo_complexity_daily.computed_at`` is a
+    second-precision ``DateTime`` (``007_complexity_investment_issues.sql``),
+    not a ``DateTime64`` -- coarse enough that two recomputes for the same
+    repo/day can land in the same second. A separate ``argMax(col,
+    computed_at)`` per column (as this query originally had) resolves each
+    column's tie independently, which can pick DIFFERENT physical rows per
+    column and assemble a "Frankenstein" row the aggregator then computes an
+    inconsistent ratio from. Collapsed to a SINGLE
+    ``argMax(tuple(...), computed_at)`` instead -- exactly one row wins, and
+    every value is unwrapped from that one row via ``tupleElement`` --
+    matching the same fix ``discover_repos`` already applies to ``repos``
+    (see that function's docstring) for the identical tie class.
     """
 
     class _Row:
@@ -812,13 +825,26 @@ def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[An
     query = """
         SELECT
             repo_id,
-            argMax(loc_total,                       computed_at) AS loc_total,
-            argMax(cyclomatic_total,                 computed_at) AS cyclomatic_total,
-            argMax(high_complexity_functions,        computed_at) AS high_complexity_functions,
-            argMax(very_high_complexity_functions,   computed_at) AS very_high_complexity_functions
-        FROM repo_complexity_daily
-        WHERE org_id = {org_id:String} AND day = {day:Date}
-        GROUP BY repo_id
+            tupleElement(latest, 1) AS loc_total,
+            tupleElement(latest, 2) AS cyclomatic_total,
+            tupleElement(latest, 3) AS high_complexity_functions,
+            tupleElement(latest, 4) AS very_high_complexity_functions
+        FROM (
+            SELECT
+                repo_id,
+                argMax(
+                    tuple(
+                        loc_total,
+                        cyclomatic_total,
+                        high_complexity_functions,
+                        very_high_complexity_functions
+                    ),
+                    computed_at
+                ) AS latest
+            FROM repo_complexity_daily
+            WHERE org_id = {org_id:String} AND day = {day:Date}
+            GROUP BY repo_id
+        )
     """
     raw = sink.query_dicts(query, {"org_id": org_id, "day": day})
     return [_Row(r) for r in raw]

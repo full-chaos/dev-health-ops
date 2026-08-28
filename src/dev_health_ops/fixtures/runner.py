@@ -1447,6 +1447,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             backfill_days=ns.days,
             provider="auto",
             org_id=org_id,
+            # CHAOS-4365 item 3 codex R1 (P2): without this, run_daily_
+            # metrics_job's own per-repo loop ALSO runs its older inline
+            # finalize block (IC metrics/landscape writes, job_daily.py's
+            # `if not skip_finalize:` branch) once per day -- then the
+            # explicit run_daily_metrics_finalize call below runs the SAME
+            # IC metrics/landscape writes again, so append-only tables would
+            # receive two generations per day from one fixtures run.
+            # skip_finalize=True matches _cmd_metrics_daily's own CLI
+            # pattern exactly (job_daily.py's _cmd_metrics_daily comment:
+            # "the standalone finalizer below already recomputes IC
+            # metrics/landscape for the whole org -- skip_finalize=True here
+            # avoids running that same inline logic TWICE per day").
+            skip_finalize=True,
         )
 
         # CHAOS-4365 item 3 finding: run_daily_metrics_job's own per-repo

@@ -177,6 +177,19 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 // rather than sequenced against those other producers' own completion.
 // "error" is a genuine ClickHouse read/write failure the worker's own
 // retry/backoff will re-attempt.
+// "route_missing" (team-lead ruling, 2026-08-28: "non-fatal != silent") is a
+// DISTINCT failure surfaced from the PUBLISH side, not the worker side: the
+// Fanout's sibling writer (native_post_sync.go's
+// publishTeamRepoOwnershipDerivation) swallows a deterministic outbox
+// rejection (worker_job_routes has no row for this kind, or the row is
+// paused -- exactly the CHAOS-4365 item 1b deploy-ordering gap: migration
+// 0115 must land before/with the worker image, or every publish attempt
+// hits this) so the rest of the fanout's handoffs are never taken down with
+// it (CHAOS-3946) -- but a swallowed rejection must never also be a SILENT
+// one. This outcome, plus an ERROR-level slog line
+// (PostSyncTeamRepoOwnershipDerivationFailedMessage), makes a persistently
+// missing/paused route visible instead of indistinguishable from a
+// healthy no-op.
 type TeamRepoOwnershipDerivationOutcome string
 
 const (
@@ -184,6 +197,7 @@ const (
 	TeamRepoOwnershipDerivationOutcomeNoSignal       TeamRepoOwnershipDerivationOutcome = "no_signal"
 	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
 	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
+	TeamRepoOwnershipDerivationOutcomeRouteMissing   TeamRepoOwnershipDerivationOutcome = "route_missing"
 )
 
 func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
@@ -192,6 +206,7 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 		TeamRepoOwnershipDerivationOutcomeNoSignal,
 		TeamRepoOwnershipDerivationOutcomeInputsNotReady,
 		TeamRepoOwnershipDerivationOutcomeError,
+		TeamRepoOwnershipDerivationOutcomeRouteMissing,
 	}
 }
 

@@ -65,15 +65,16 @@ type TeamRepoOwnershipPostSyncWriter interface {
 }
 
 type NativePostSyncService struct {
-	pool              *pgxpool.Pool
-	daily             DailyPostSyncWriter
-	remaining         RemainingPostSyncWriter
-	workGraph         WorkGraphInvestmentPostSyncWriter
-	teamImport        TeamAutoimportPostSyncWriter
-	teamRepoOwnership TeamRepoOwnershipPostSyncWriter
-	logger            *slog.Logger
-	fanoutObserver    jobruntime.PostSyncFanoutObserver
-	now               func() time.Time
+	pool                                *pgxpool.Pool
+	daily                               DailyPostSyncWriter
+	remaining                           RemainingPostSyncWriter
+	workGraph                           WorkGraphInvestmentPostSyncWriter
+	teamImport                          TeamAutoimportPostSyncWriter
+	teamRepoOwnership                   TeamRepoOwnershipPostSyncWriter
+	logger                              *slog.Logger
+	fanoutObserver                      jobruntime.PostSyncFanoutObserver
+	teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
+	now                                 func() time.Time
 }
 
 // SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
@@ -84,6 +85,19 @@ func (service *NativePostSyncService) SetFanoutObserver(observer jobruntime.Post
 		return
 	}
 	service.fanoutObserver = observer
+}
+
+// SetTeamRepoOwnershipDerivationObserver wires the optional CHAOS-4365 item
+// 1b route_missing telemetry (team-lead ruling, 2026-08-28: "non-fatal !=
+// silent" -- a deterministic outbox rejection this Fanout swallows must
+// still be COUNTABLE, not only logged). A nil observer (the default) means
+// publishTeamRepoOwnershipDerivation still logs the drop at ERROR, it just
+// has nothing to count.
+func (service *NativePostSyncService) SetTeamRepoOwnershipDerivationObserver(observer jobruntime.TeamRepoOwnershipDerivationObserver) {
+	if service == nil {
+		return
+	}
+	service.teamRepoOwnershipDerivationObserver = observer
 }
 
 // NewNativePostSyncService constructs the fanout. logger receives the
@@ -401,6 +415,15 @@ func (service *NativePostSyncService) observeTeamRepoOwnershipDerivationFailure(
 		slog.String("sync_run_id", plan.SyncRunID),
 		slog.String("error", err.Error()),
 	)
+	// team-lead ruling, 2026-08-28: "non-fatal != silent" -- a swallowed
+	// deterministic rejection (worker_job_routes has no row for this kind, or
+	// the row is paused) must be COUNTABLE, not only logged, so a
+	// persistently missing/paused route is diagnosable from telemetry alone.
+	if service.teamRepoOwnershipDerivationObserver != nil {
+		_ = service.teamRepoOwnershipDerivationObserver.ObserveTeamRepoOwnershipDerivation(
+			jobruntime.TeamRepoOwnershipDerivationOutcomeRouteMissing, 0,
+		)
+	}
 }
 
 // deterministicHandoffRejection reports whether the outbox refused the envelope

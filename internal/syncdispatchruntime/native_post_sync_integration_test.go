@@ -945,6 +945,99 @@ func TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy(t *testing
 	}
 }
 
+// recordingTeamRepoOwnershipDerivationObserver captures every
+// jobruntime.TeamRepoOwnershipDerivationOutcome ObserveTeamRepoOwnershipDerivation
+// reports, mirroring recordingFanoutObserver's shape.
+type recordingTeamRepoOwnershipDerivationObserver struct {
+	outcomes []jobruntime.TeamRepoOwnershipDerivationOutcome
+}
+
+func (observer *recordingTeamRepoOwnershipDerivationObserver) ObserveTeamRepoOwnershipDerivation(
+	outcome jobruntime.TeamRepoOwnershipDerivationOutcome, _ int,
+) error {
+	observer.outcomes = append(observer.outcomes, outcome)
+	return nil
+}
+
+// TestNativePostSyncFanoutTeamRepoOwnershipDerivationRecordsRouteMissingOnDeterministicRejection
+// is the team-lead ruling (2026-08-28, "non-fatal != silent"): the exact
+// same deterministic-rejection swallow TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy
+// already proves is non-fatal must ALSO be countable, not only logged --
+// this asserts the route_missing outcome is recorded on the swallow, and
+// that every OTHER handoff still commits (the counter's presence changes
+// nothing about the non-fatal guarantee itself).
+func TestNativePostSyncFanoutTeamRepoOwnershipDerivationRecordsRouteMissingOnDeterministicRejection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000111"
+		runID         = "00000000-0000-4000-8000-000000000112"
+		outboxID      = "00000000-0000-4000-8000-000000000113"
+		integrationID = "00000000-0000-4000-8000-000000000114"
+		repositoryID  = "00000000-0000-4000-8000-000000000115"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	service, err := NewNativePostSyncService(
+		pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{},
+		rejectingTeamRepoOwnershipWriter{}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	observer := &recordingTeamRepoOwnershipDerivationObserver{}
+	service.SetTeamRepoOwnershipDerivationObserver(observer)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+
+	if err := service.Fanout(ctx, args); err != nil {
+		t.Fatalf("Fanout() = %v, want nil: a deterministic rejection must never break the metric fanout", err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeRouteMissing {
+		t.Fatalf("observed outcomes = %v, want [route_missing]", observer.outcomes)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT kind FROM post_sync_markers WHERE sync_run_id=$1 ORDER BY kind`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	committed := []string{}
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			t.Fatal(err)
+		}
+		committed = append(committed, kind)
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	want := []string{
+		"complexity", "daily", "dora", "investment.materialize",
+		"membership_backfill", "team_autoimport", "workgraph.build",
+	}
+	slices.Sort(committed)
+	slices.Sort(want)
+	if !slices.Equal(committed, want) {
+		t.Fatalf("committed handoffs = %v, want %v -- the route_missing counter must not change which handoffs commit", committed, want)
+	}
+}
+
 // seedPostSyncWithSyncOptions mirrors seedPostSync but takes an explicit
 // sync_options JSON literal instead of the hardcoded '{"auto_import_teams":true}',
 // so a caller can pin the CHAOS-4323 three-flag gate for each flag combination.

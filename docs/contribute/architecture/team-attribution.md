@@ -579,6 +579,19 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > landed their own writes, observed as the `inputs_not_ready` telemetry outcome rather than an
 > error -- it converges on that org's next qualifying sync, since this producer is idempotent and
 > re-triggered by every sync with git-or-work-items data.
+>
+> **Deploy 5.5 ordering (team-lead ruling, 2026-08-28, "non-fatal != silent"):** this producer's
+> `worker_job_routes` route row (alembic migration seeding `sync.team_repo_ownership_derivation`,
+> river/unconditional/no Celery rollback) must land in Postgres BEFORE or WITH the worker image that
+> carries this code -- if the worker image ships first, every publish attempt hits a deterministic
+> outbox rejection (`publish_not_permitted_for_route`) that `publishTeamRepoOwnershipDerivation`
+> swallows by design (non-fatal, same as team-autoimport, CHAOS-3946), so the fanout's OTHER
+> handoffs keep succeeding while this one silently never queues. Confirmed live on the local compose
+> stack, 2026-08-28: the worker image was rebuilt and running before the Postgres migration had been
+> applied, and this exact rejection fired on the very next fanout cycle. "Non-fatal" was never meant
+> to mean "silent," so the swallow now also records the `route_missing` telemetry outcome (ERROR-level
+> slog too) -- but the deploy-ordering requirement itself does not go away: land the migration
+> first or with the image, every time.
 
 **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 

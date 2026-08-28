@@ -467,6 +467,12 @@ func buildSyncCoordinatorWorker(
 	if fanoutObserver, ok := observer.(jobruntime.PostSyncFanoutObserver); ok {
 		postSync.SetFanoutObserver(fanoutObserver)
 	}
+	// The route_missing counter reports directly for the same reason (team-lead
+	// ruling, 2026-08-28: "non-fatal != silent") -- only publishTeamRepoOwnershipDerivation
+	// knows when its own swallowed deterministic rejection happened.
+	if teamRepoOwnershipDerivationObserver, ok := observer.(jobruntime.TeamRepoOwnershipDerivationObserver); ok {
+		postSync.SetTeamRepoOwnershipDerivationObserver(teamRepoOwnershipDerivationObserver)
+	}
 	// The zero-unit finalization counter reports directly, the same way the
 	// work-graph store reports a release-lost lease directly (cmd/dev-health-worker/workgraph.go):
 	// generic runtime middleware has no way to know a run planned zero units

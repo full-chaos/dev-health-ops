@@ -1914,6 +1914,14 @@ async def run_daily_metrics_finalize(
 
     git_metrics: list[Any] = []
     wi_user_metrics: list[Any] = []
+    # CodeQL (py/uninitialized-local-variable): ch_client is only assigned
+    # inside the `backend == "clickhouse"` branch below, but the
+    # team_metrics_daily readback further down (CHAOS-4365) references it
+    # unconditionally. backend is already guaranteed "clickhouse" by the
+    # ValueError raised earlier in this function for any other backend, so
+    # this is unreachable in practice -- explicit None satisfies static
+    # analysis without relying on that far-away invariant.
+    ch_client: Any = None
 
     if backend == "clickhouse":
         ch_client = await deps.get_global_client(db_url)

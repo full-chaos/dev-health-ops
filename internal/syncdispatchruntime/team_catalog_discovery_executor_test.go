@@ -67,13 +67,13 @@ func (collector *fakeTeamCatalogCollector) CollectTeamCatalog(
 	return collector.result, collector.err
 }
 
-type fakeDiscoveryExecutor struct {
+type fakeTeamCatalogFallbackExecutor struct {
 	gotOrgID, gotRunID, gotProvider string
 	summary                         map[string]any
 	err                             error
 }
 
-func (executor *fakeDiscoveryExecutor) Discover(_ context.Context, orgID, runID, provider string) (map[string]any, error) {
+func (executor *fakeTeamCatalogFallbackExecutor) Discover(_ context.Context, orgID, runID, provider string) (map[string]any, error) {
 	executor.gotOrgID, executor.gotRunID, executor.gotProvider = orgID, runID, provider
 	return executor.summary, executor.err
 }
@@ -100,7 +100,7 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
 		TeamsWritten: 3, TeamKeys: []string{"ENG", "OPS"},
 	}}
-	fallback := &fakeDiscoveryExecutor{}
+	fallback := &fakeTeamCatalogFallbackExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
@@ -158,7 +158,7 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 // complement: a provider with no native collector goes through the bridge,
 // exactly as it does today, untouched.
 func TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders(t *testing.T) {
-	fallback := &fakeDiscoveryExecutor{summary: map[string]any{"provider": "github", "outcome": "bridge"}}
+	fallback := &fakeTeamCatalogFallbackExecutor{summary: map[string]any{"provider": "github", "outcome": "bridge"}}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
 		Native:   map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},

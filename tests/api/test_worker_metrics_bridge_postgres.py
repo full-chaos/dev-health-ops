@@ -597,6 +597,125 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_partitions() ->
 
 
 @pytest.mark.asyncio
+async def test_finalize_execution_is_skipped_not_reexecuted_for_the_same_identity_after_reclaim() -> (
+    None
+):
+    """Go<->bridge ledger-identity contract (pins the exact assumption
+    CHAOS-4405's finalize-redrive design got wrong, per the finding posted
+    on CHAOS-4405/#1971): a daily/finalize execution's identity is
+    uuid5(run_id, family, generation, scope_digest) -- NOT anything derived
+    from daily_metrics_runs.status/finalization_status. Once that identity
+    has reached 'succeeded', reclaiming the run's finalization lease (a
+    fresh finalization_claim_token/finalization_lease_expires_at, exactly
+    what ClaimFinalize does on every redrive, including a hypothetical
+    status='succeeded'->'running' reset that leaves generation unchanged)
+    does NOT create a new execution to run: _reserve_execution finds the
+    SAME row already 'succeeded' and returns "skipped" -- the real work
+    (run_daily_metrics_finalize) is never invoked again, and attempt_count
+    never advances. Any caller that resets a run's Go-side state expecting
+    a "succeeded" identity to redo real work MUST first change generation
+    (or otherwise repair the ledger row itself, CHAOS-4409's own pattern) --
+    a bare Go-side status reset is a guaranteed silent no-op through this
+    endpoint, not a retry."""
+    assert _TEST_URI is not None
+    engine = create_async_engine(_TEST_URI)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    first_claim = uuid.uuid4()
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO daily_metrics_runs (
+                        id, org_id, target_day, generation, status,
+                        finalization_status, finalization_claim_token,
+                        finalization_lease_expires_at, created_at, updated_at
+                    ) VALUES (
+                        CAST(:run_id AS uuid), CAST(:org_id AS uuid),
+                        '2026-08-20', :generation, 'running', 'running',
+                        CAST(:claim_token AS uuid),
+                        statement_timestamp() + interval '10 minutes',
+                        now(), now()
+                    )
+                    """
+                ),
+                {
+                    "run_id": str(run_id),
+                    "org_id": str(org_id),
+                    "generation": f"daily-v1:{run_id}",
+                    "claim_token": str(first_claim),
+                },
+            )
+            await session.commit()
+
+            finalize_request = worker_metrics.DailyMetricsExecutionRequest(
+                operation="finalize", run_id=run_id
+            )
+            first_execution = await worker_metrics._load_daily_execution(
+                session, finalize_request
+            )
+            assert await worker_metrics._reserve_execution(
+                session, first_execution
+            ) == ("execute")
+            await worker_metrics._mark_succeeded(session, first_execution, {})
+
+            succeeded_state = (
+                await session.execute(
+                    text(
+                        "SELECT state, attempt_count FROM metric_compatibility_executions WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {"id": str(first_execution.id)},
+                )
+            ).one()
+            assert succeeded_state.state == "succeeded"
+            attempt_count_after_success = succeeded_state.attempt_count
+
+            # Reclaim the run's finalization lease with a FRESH claim token --
+            # exactly what ClaimFinalize does on every redrive -- WITHOUT
+            # bumping generation. This is the precise shape a Go-side
+            # status='succeeded'->'running' reset (CHAOS-4405) produces.
+            await session.execute(
+                text(
+                    """
+                    UPDATE daily_metrics_runs
+                    SET finalization_claim_token = CAST(:claim_token AS uuid),
+                        finalization_lease_expires_at = statement_timestamp() + interval '10 minutes'
+                    WHERE id = CAST(:run_id AS uuid)
+                    """
+                ),
+                {"claim_token": str(uuid.uuid4()), "run_id": str(run_id)},
+            )
+            await session.commit()
+
+            reclaimed_execution = await worker_metrics._load_daily_execution(
+                session, finalize_request
+            )
+            # Same identity: the reclaim did not change run_id, family,
+            # generation, or scope_digest.
+            assert reclaimed_execution.id == first_execution.id
+
+            outcome = await worker_metrics._reserve_execution(
+                session, reclaimed_execution
+            )
+            assert outcome == "skipped"
+
+            unchanged_state = (
+                await session.execute(
+                    text(
+                        "SELECT state, attempt_count FROM metric_compatibility_executions WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {"id": str(first_execution.id)},
+                )
+            ).one()
+            assert unchanged_state.state == "succeeded"
+            assert unchanged_state.attempt_count == attempt_count_after_success
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> None:
     """CHAOS-4409: a daily/finalize ledger row can get stuck 'ambiguous' or
     stuck-'executing' the exact same way a partition row can (the owning api

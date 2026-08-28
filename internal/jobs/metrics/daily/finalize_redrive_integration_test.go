@@ -103,6 +103,25 @@ func processFinalizeJob(t *testing.T, ctx context.Context, store *PostgresStore,
 	}
 }
 
+// processFinalizeJobAndFail simulates one metrics.daily_finalize River
+// execution reaching FinalizeHandler.Work and FAILING: claim, then release
+// as failed. It stands in for the compatibility-bridge Finalize() call
+// itself failing (e.g. a genuine downstream error, not a ledger-identity
+// no-op), which is out of scope for this Store-level test.
+func processFinalizeJobAndFail(t *testing.T, ctx context.Context, store *PostgresStore, runID string) {
+	t.Helper()
+	claim, err := store.ClaimFinalize(ctx, runID)
+	if err != nil {
+		t.Fatalf("ClaimFinalize: %v", err)
+	}
+	if claim == nil {
+		t.Fatalf("ClaimFinalize: run %s had nothing claimable", runID)
+	}
+	if err := store.ReleaseFinalize(ctx, *claim); err != nil {
+		t.Fatalf("ReleaseFinalize: %v", err)
+	}
+}
+
 func assertFinalizeTestRunStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID, want string) {
 	t.Helper()
 	var status string

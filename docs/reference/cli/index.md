@@ -1335,6 +1335,145 @@ an automatic reconciler sweep) invokes the same Go functions. The
 `ledger_repair` field in this command's own JSON result (above) is the
 actual audit trail for a manual invocation today.
 
+#### `metrics finalize-redrive` (CHAOS-4405)
+
+Historical backfill: re-run `metrics.daily_finalize` for one organization
+across `[--from, --to]`, one calendar day at a time — **even for a day whose
+run already reached `status='succeeded'`**. Distinct from `daily-finalize`
+above, which only ever repairs a run still stuck non-terminal: this
+command's whole point is re-executing a day's finalize AFTER it already
+completed, because `run_daily_metrics_finalize` now also writes
+`compounding_risk_daily`(scope='team') and `team_cognitive_load_daily`
+(CHAOS-4399, #1963) — a day finalized before that landed has zero rows in
+either table and needs finalize re-run purely to backfill them.
+
+First preview with `--dry-run` — lists the days and current run state with
+**zero writes** (no reset, no provenance row, no publish; every transaction
+it opens is rolled back, never committed), and does not require
+`--review-evidence` since nothing yet needs justifying:
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics finalize-redrive \
+  --org c6a38355-dad6-42e4-8cc9-4c712450827d \
+  --from 2026-05-01 --to 2026-05-31 \
+  --dry-run
+```
+
+Then run for real:
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics finalize-redrive \
+  --org c6a38355-dad6-42e4-8cc9-4c712450827d \
+  --from 2026-05-01 --to 2026-05-31 \
+  --review-evidence "CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write"
+```
+
+`--review-evidence` is **required** for a real invocation, with no default —
+the same bar every operator-authorized repeat execution in this CLI
+mirrors, and if anything more consequential here: this verb deliberately
+re-executes days that already completed, across a potentially wide date
+range.
+
+Both Go's `ClaimFinalize` and the Python compat bridge's own claim-row query
+(`worker_metrics.py`'s `_load_daily_execution`) hard-require
+`status='running'` before `Finalize()` can run at all — publishing a fresh
+`metrics.daily_finalize` job for an already-`'succeeded'` row through the
+ordinary pipeline is a guaranteed silent no-op. `--include-succeeded`
+(defaults `true`, since touching already-succeeded days is this verb's whole
+purpose) makes this work by transactionally resetting an eligible
+`'succeeded'` run back to `status='running'`,
+`finalization_status='pending'`, **and a fresh `generation`**, in the SAME
+transaction as the publish — it either fully lands (reset + fresh outbox
+row) or fully rolls back, never a reset with no way to reach
+`FinalizeHandler.Work` again. Pass `--include-succeeded=false` to restrict to
+the safe never-attempted/failed/expired-lease subset (`daily-finalize
+--all-complete`'s own eligibility, scoped to this org+day-range) instead of
+authorizing the state-mutating case.
+
+The `generation` reset is load-bearing, not cosmetic (a finding from this
+verb's own design review, posted on CHAOS-4405): the Python compatibility
+bridge's execution-ledger identity is `uuid5(run_id, family, generation,
+scope_digest)`. A bare `status`/`finalization_status` reset alone would
+leave the SAME identity that already reached `'succeeded'` the first time
+this run finalized — `_reserve_execution` would find it, return
+`{"status": "skipped"}`, and never call `run_daily_metrics_finalize` again
+at all, even though Go reports a clean success. The fresh `generation` (a
+short `redrive:<nonce>` value, always well inside the column's 64-byte
+bound) gives the redriven attempt a genuinely new identity, so the write
+this whole command exists for actually happens.
+
+One run per calendar day is targeted (whichever run for that day has every
+partition succeeded, preferring the most recently updated when more than
+one generation qualifies) — the team-aggregation block re-reads ClickHouse
+for the whole org/day, not a specific run's own partition rows, so any one
+qualifying run is equally valid to redrive through. Safe to re-run for the
+same day: `run_daily_metrics_finalize`'s outputs are read back via
+`argMax(computed_at)` dedup, the same convention every other daily-metrics
+reader in this schema already uses, so a second full write changes nothing
+a correctly-written reader observes (confirmed live: two runs for the same
+org/day left 2 raw rows in `team_cognitive_load_daily` but an identical
+argMax-deduped read both times).
+
+**Provenance.** Every terminal-state reset writes one row to
+`daily_metrics_finalize_redrive_events` — `run_id`, `org_id`, `target_day`,
+the run's exact prior `status`/`finalization_status`, `actor` (always
+`'finalize-redrive'`), the operator's `reason` (their `--review-evidence`
+text, verbatim), and the redrive `nonce` — in the SAME transaction as the
+reset and the publish. Either all three (provenance + reset + fresh outbox
+row) land, or none do; a `--dry-run` pass writes none of them. This is the
+durable, queryable record of WHY and BY WHOM a `'succeeded'` row was ever
+touched, independent of River/outbox history (which only shows a fresh
+dedupe key).
+
+**While this command's own redriven finalize is plausibly still in flight,
+`daily-finalize --all-complete`'s sweep steps back from it** —
+`FindStrandedFinalizeRuns` excludes a run with an `'open'` row in
+`daily_metrics_finalize_redrive_events`, so an unattended sweep running
+concurrently cannot double-dispatch it. This is deliberately NOT permanent
+(a design correction from this verb's initial review, posted on
+CHAOS-4405/#1971): `CompleteFinalize`/`ReleaseFinalize` close this run's own
+open row — to `'closed_succeeded'` or `'closed_failed'` — the instant that
+SPECIFIC claim resolves, same transaction as the run's own completion. A
+**failed** redriven finalize therefore reappears in `FindStrandedFinalizeRuns`
+immediately, exactly like any other ordinary CHAOS-4389 discard — an
+unattended sweep (or `daily-finalize --run <id>`) can recover it without an
+operator needing to remember which runs this verb specifically touched. The
+one residual gap: a redriven job discarded before `ClaimFinalize` is ever
+called for it (the outbox row itself lost, never the finalize logic
+failing) has no completion path to fire at all, so its event stays `'open'`
+indefinitely — `daily-finalize --run <id>` still recovers it at any time
+(that command never consults this table), just not an unattended
+`--all-complete` sweep. `daily-redrive`'s own partition-level query is
+unaffected by construction regardless: the reset never touches
+`daily_metrics_partitions`, so a redriven run's partitions stay 100%
+`'succeeded'` throughout.
+
+Returns `{"finalize_redrive": {"Days": [{"Day": "...", "RunID": "...",
+"Outcome": "...", "ResetFromSucceeded": true|false}, ...]}, "dry_run":
+true|false}`, one entry per calendar day in the requested range. `Outcome`
+is `"redriven"` or `"redriven_reset_from_succeeded"` for a real pass that
+touched a day (the latter whenever `ResetFromSucceeded` is true),
+`"skipped_ineligible"` for a day with no eligible run, or the `"would_"`-
+prefixed equivalents (`"would_redrive"`, `"would_redrive_reset_from_succeeded"`,
+`"would_skip_ineligible"`) under `--dry-run` — the prefix makes a preview
+result impossible to mistake for a completed write. `RunID` is empty when no
+eligible run exists at all for that day (never dispatched, or aged out),
+distinguishing "nothing to redrive here" from "found something, chose not
+to touch it".
+
+**Observability**: `dev_health_daily_metrics_finalize_redrive_days_total{outcome}`
+(`redriven`/`redriven_reset_from_succeeded`/`skipped_ineligible`, one sample
+per calendar day considered — `--dry-run` never observes, since it makes no
+real work to count) is wired but not live for THIS caller, for the same
+reason every other `workerctl` counter above is not: a one-shot CLI with no
+Prometheus scrape endpoint. `redriven_failed` is different: it is observed
+by `PostgresStore.transitionFinalize`, called from the long-running worker's
+`ReleaseFinalize` path whenever it closes a run's finalize-redrive event as
+`'closed_failed'` — this one IS live, scraped from the worker process that
+actually processes the redriven job, not from this CLI.
+
 #### `metrics remaining start` (CHAOS-4254)
 
 Dispatch a **new** remaining-metrics run for a historical `(organization,

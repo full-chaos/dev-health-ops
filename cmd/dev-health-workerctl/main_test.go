@@ -829,6 +829,89 @@ func TestDispatchMetricsDailyFinalizeAcceptsUppercaseRunID(t *testing.T) {
 	}
 }
 
+// TestDispatchMetricsFinalizeRedriveRequiresReviewEvidence mirrors
+// daily-redrive/daily-finalize for the CHAOS-4405 `metrics finalize-redrive`
+// command: no default, no generic hardcoded justification, even though this
+// verb's `--include-succeeded` defaults true.
+func TestDispatchMetricsFinalizeRedriveRequiresReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-05-01", "--to", "2026-05-01",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsFinalizeRedriveRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "not-a-uuid",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsFinalizeRedriveRejectsInvalidDateRange(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "not-a-date", "--to", "2026-05-01", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid --from not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsFinalizeRedriveDefaultsIncludeSucceededTrue proves the
+// flag parses with no explicit value and still reaches past validation --
+// this verb's entire purpose is touching already-succeeded days, so a typo
+// or an omitted flag must not silently narrow it to the safe subset.
+func TestDispatchMetricsFinalizeRedriveDefaultsIncludeSucceededTrue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("valid request rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsFinalizeRedriveAcceptsExplicitIncludeSucceededFalse(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--include-succeeded=false",
+		"--review-evidence", "testing",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("valid request with --include-succeeded=false rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsFinalizeRedriveDryRunDoesNotRequireReviewEvidence is
+// team-lead's approval condition (4): a --dry-run preview makes no durable
+// write, so there is nothing yet to justify -- it must reach past
+// validation with NO --review-evidence at all, unlike every real invocation
+// of this command.
+func TestDispatchMetricsFinalizeRedriveDryRunDoesNotRequireReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--dry-run",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("--dry-run without --review-evidence rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestDispatchMetricsRemainingStartRequiresReviewEvidence(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{

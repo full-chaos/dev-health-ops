@@ -384,6 +384,32 @@ var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 // stuck finalize row answer ambiguous_refused forever.
 var dailyMetricsFinalizeLedgerRepairOutcomes = []string{"repaired", "skipped_claim_active"}
 
+// dailyMetricsFinalizeRedriveOutcomes is the closed set of bounded outcomes
+// a CHAOS-4405 historical finalize-redrive pass can report. "redriven"
+// counts days a fresh metrics.daily_finalize job was actually enqueued for a
+// run that was already eligible (never attempted, or failed/expired-lease);
+// "redriven_reset_from_succeeded" counts days that additionally required
+// resetting an already-'succeeded' run back to a claimable state (team-lead's
+// approval condition (5), so a dashboard can tell "an ordinary redrive" apart
+// from "we mutated a terminal row" at a glance); "skipped_ineligible" counts
+// days in the requested range with no eligible run (none exists for that day,
+// or its partitions are not 100% succeeded). A dry run (RedriveFinalizeForRange's
+// dryRun=true) never calls this observer for the three outcomes above -- it
+// makes no durable state change, so it must never move a counter meant to
+// describe real work.
+//
+// "redriven_failed" (team-lead escalation on conditions (2)/(3),
+// 2026-08-28) is different: it is observed by
+// PostgresStore.transitionFinalize (postgres.go), not
+// RedriveFinalizeForRange, the moment a redriven finalize's own claim
+// resolves as a failure and this run's finalize-redrive event closes
+// 'closed_failed' -- an indefinite time after the original redrive call
+// returned. Counted in runs, not calendar days (transitionFinalize has no
+// day-range concept), unlike the other three outcomes here.
+var dailyMetricsFinalizeRedriveOutcomes = []string{
+	"redriven", "redriven_reset_from_succeeded", "skipped_ineligible", "redriven_failed",
+}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -561,6 +587,11 @@ type MetricsCollector struct {
 	// ObserveRemainingMetricsManualBackfill's precedent for the identical
 	// one-shot-CLI-cannot-be-scraped constraint.
 	dailyMetricsFinalizeLedgerRepair map[string]uint64
+	// dailyMetricsFinalizeRedrive (CHAOS-4405) counts operator-invoked
+	// historical finalize-redrive activity by bounded outcome, per calendar
+	// day considered. See dailyMetricsFinalizeRedriveOutcomes for the
+	// vocabulary.
+	dailyMetricsFinalizeRedrive map[string]uint64
 	// Native family compute (CHAOS-4276, the daily bridge's per-partition
 	// counterpart to the DORA/capacity counters above). Duration is tracked
 	// per family since native families are cut over independently and one
@@ -706,6 +737,7 @@ var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsFinalizeRedriveObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -753,6 +785,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
+		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
@@ -848,6 +881,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeLedgerRepairOutcomes {
 		collector.dailyMetricsFinalizeLedgerRepair[outcome] = 0
+	}
+	for _, outcome := range dailyMetricsFinalizeRedriveOutcomes {
+		collector.dailyMetricsFinalizeRedrive[outcome] = 0
 	}
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		collector.dailyMetricsCompatRetry[decision] = 0
@@ -1240,6 +1276,24 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeLedgerRepair(outco
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFinalizeLedgerRepair[outcome] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsFinalizeRedrive records count calendar days for one
+// bounded outcome during a CHAOS-4405 historical finalize-redrive pass.
+// count must be >= 0, matching every other bounded-vocabulary observer in
+// this package: a pass that touched nothing still calls this with 0 so the
+// series stays present, not absent.
+func (collector *MetricsCollector) ObserveDailyMetricsFinalizeRedrive(outcome string, count int) error {
+	if !slices.Contains(dailyMetricsFinalizeRedriveOutcomes, outcome) {
+		return errors.New("daily metrics finalize redrive outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics finalize redrive count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsFinalizeRedrive[outcome] += uint64(count)
 	return nil
 }
 
@@ -1991,6 +2045,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsFinalizeSweep(&output)
 	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
+	collector.writeDailyMetricsFinalizeRedrive(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
@@ -2312,6 +2367,20 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeLedgerRepair(output 
 	for _, outcome := range dailyMetricsFinalizeLedgerRepairOutcomes {
 		writeUintSample(output, "dev_health_daily_metrics_finalize_ledger_repair_rows_total",
 			[]metricLabel{{"outcome", outcome}}, collector.dailyMetricsFinalizeLedgerRepair[outcome])
+	}
+}
+
+// writeDailyMetricsFinalizeRedrive exposes the CHAOS-4405 historical
+// finalize-redrive counter, by bounded outcome (redriven vs
+// skipped_ineligible) -- one metric, label-split, since both outcomes
+// describe the SAME unit of work (a calendar day considered), unlike
+// writeDailyMetricsFinalizeSweep's two independently-alertable metrics
+// above.
+func (collector *MetricsCollector) writeDailyMetricsFinalizeRedrive(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_finalize_redrive_days_total", "Calendar days considered by an operator-invoked CHAOS-4405 historical finalize-redrive pass, by bounded outcome.", "counter")
+	for _, outcome := range dailyMetricsFinalizeRedriveOutcomes {
+		writeUintSample(output, "dev_health_daily_metrics_finalize_redrive_days_total",
+			[]metricLabel{{"outcome", outcome}}, collector.dailyMetricsFinalizeRedrive[outcome])
 	}
 }
 

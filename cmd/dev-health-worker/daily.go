@@ -107,6 +107,9 @@ func buildDailyWorker(
 		if finalizeSweepObserver, ok := observer.(jobruntime.DailyMetricsFinalizeSweepObserver); ok {
 			store.SetFinalizeSweepObserver(finalizeSweepObserver)
 		}
+		if finalizeRedriveObserver, ok := observer.(jobruntime.DailyMetricsFinalizeRedriveObserver); ok {
+			store.SetFinalizeRedriveObserver(finalizeRedriveObserver)
+		}
 		publisher, publisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 		clickhouseConnection, clickhouseErr := clickhousestore.Open(
 			context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),

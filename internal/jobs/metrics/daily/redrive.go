@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -263,6 +265,26 @@ const defaultFinalizeSweepLimit = 500
 // blind (see RedriveStrandedFinalize's allowPriorAttempt parameter). An
 // operator sweep still needs to know about those to decide what to do with
 // them by hand; only the redrive step itself narrows further.
+//
+// CHAOS-4405 (team-lead's approval condition (2)/(3) on that ticket's
+// finalize-redrive verb, escalated 2026-08-28): a run with an 'open' row in
+// daily_metrics_finalize_redrive_events is excluded here while that
+// specific redrive's claim is plausibly still in flight -- an unattended
+// `daily-finalize --all-complete` sweep running concurrently must never
+// double-dispatch it. This is deliberately NOT permanent: the first
+// version of this exclusion covered any row at all, whether the redriven
+// finalize eventually succeeded or failed -- a silent-failure shape, since
+// a failed redrive would then leave the run running-with-failed-finalize
+// forever invisible to this sweep (and every other recovery tool). Now
+// CompleteFinalize/ReleaseFinalize (postgres.go) close the run's own open
+// row the instant that SPECIFIC claim resolves -- 'closed_succeeded' (moot,
+// the run's status='succeeded' already drops it out of the WHERE clause
+// above) or 'closed_failed' (the interesting case: the run reappears here
+// immediately, exactly like any other ordinary CHAOS-4389 discard, since
+// nothing but 'open' rows are excluded). This does not weaken detection of
+// the ordinary CHAOS-4389 discard shape: that class of run was never
+// touched by finalize-redrive, so its provenance table has no row for it
+// and this EXISTS check changes nothing.
 func (store *PostgresStore) FindStrandedFinalizeRuns(ctx context.Context, limit int) ([]string, error) {
 	if !store.valid() {
 		return nil, ErrUnavailable
@@ -292,6 +314,10 @@ WHERE run.status = 'running'
   AND NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
+      WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
   )
 -- codex review (P2, round 2): a bare ORDER BY updated_at lets a page of
 -- older 'failed'/expired-'running' rows -- exactly the ones --all-complete's
@@ -462,4 +488,354 @@ FOR UPDATE OF run`, runID).Scan(
 		return false, ErrUnavailable
 	}
 	return true, nil
+}
+
+// FinalizeRangeRedriveDay is one calendar day's outcome from
+// RedriveFinalizeForRange.
+type FinalizeRangeRedriveDay struct {
+	Day time.Time
+	// RunID is the daily_metrics_runs id this day's finalize was (or would
+	// have been) redriven through. Empty when no eligible run exists at all
+	// for this day.
+	RunID string
+	// Outcome is "redriven" or "skipped_ineligible" for a real pass, or
+	// "would_redrive"/"would_skip_ineligible" under DryRun -- prefixed
+	// distinctly so a caller can never mistake a preview result for a
+	// completed write.
+	Outcome string
+	// ResetFromSucceeded is true when this day's run was (or, under DryRun,
+	// would have been) already status='succeeded' and needed the
+	// terminal-state reset to become reachable again -- team-lead's
+	// approval condition (5): telemetry and the per-day result must
+	// distinguish this from an ordinary never-attempted/failed/
+	// expired-lease redrive.
+	ResetFromSucceeded bool
+}
+
+// FinalizeRangeRedriveOutcome summarizes one CHAOS-4405 historical
+// finalize-redrive pass, one entry per calendar day in the requested range.
+type FinalizeRangeRedriveOutcome struct {
+	Days []FinalizeRangeRedriveDay
+}
+
+// RedriveFinalizeForRange (CHAOS-4405) re-runs metrics.daily_finalize for
+// orgID across [fromDay, toDay], one calendar day at a time, for the
+// historical team-aggregation backfill: run_daily_metrics_finalize
+// (job_daily.py) now writes compounding_risk_daily(scope='team') and ALL of
+// team_cognitive_load_daily exactly once per org/day (CHAOS-4399's fix,
+// #1963) -- any day finalized BEFORE that fix landed has zero rows in
+// either table and needs finalize re-run purely to backfill them, even
+// though the run itself already reached a terminal 'succeeded' state.
+//
+// Unlike RedriveStrandedFinalize (CHAOS-4389, which only ever touches a run
+// still stuck non-terminal), this function's whole point is to re-execute a
+// run's finalize AFTER it already completed. Both Go's ClaimFinalize and the
+// Python compat bridge's own claim-row query (worker_metrics.py's
+// _load_daily_execution) hard-require status='running' before Finalize()
+// can run at all -- publishing a fresh metrics.daily_finalize job for an
+// already-'succeeded' row through the ordinary pipeline is a guaranteed
+// silent no-op (ClaimFinalize's own `if status != "running" { return nil,
+// nil }` refuses it before any HTTP call is even made). So when
+// includeSucceeded is true and a day's run is 'succeeded', this function
+// transactionally resets it back to status='running',
+// finalization_status='pending' (clearing any stale claim/lease) in the
+// SAME transaction as the publish below -- it either fully lands (reset +
+// fresh outbox row) or fully rolls back, never a reset with no way to reach
+// FinalizeHandler.Work again. This is a deliberate, explicit,
+// operator-invoked re-execution of a day the operator has already reviewed;
+// run_daily_metrics_finalize's outputs are read back via
+// argMax(computed_at) dedup, the same convention every other daily-metrics
+// reader in this schema already uses, so a second full write for the same
+// day changes nothing a correctly-written reader observes.
+//
+// includeSucceeded=false restricts this to the same safe subset
+// RedriveStrandedFinalize's bulk path uses (never-attempted/failed/expired-
+// lease), scoped to this org+day-range instead of globally -- useful for a
+// dry run of the eligibility scan before authorizing the
+// state-mutating 'succeeded' case.
+//
+// reason is the operator's own --review-evidence text, recorded verbatim in
+// daily_metrics_finalize_redrive_events for every day actually reset (team-
+// lead's approval condition (1)) -- never persisted when dryRun is true,
+// since a dry run makes no durable writes at all (condition (4)).
+//
+// dryRun computes and reports exactly what a real pass would do -- the same
+// eligibility scan, the same per-day row lock -- without executing the
+// reset, the provenance insert, or the publish; every transaction this
+// function opens under dryRun is rolled back, never committed.
+//
+// nonce must be unique per invocation, matching the sibling redrive
+// functions' contract. Ignored (and may be empty) when dryRun is true.
+func (store *PostgresStore) RedriveFinalizeForRange(
+	ctx context.Context,
+	publisher *PostgresPublisher,
+	orgID string,
+	fromDay, toDay time.Time,
+	nonce string,
+	includeSucceeded bool,
+	reason string,
+	dryRun bool,
+) (FinalizeRangeRedriveOutcome, error) {
+	var outcome FinalizeRangeRedriveOutcome
+	if !store.valid() || !validUUID(orgID) || publisher == nil || (!dryRun && nonce == "") {
+		return outcome, ErrUnavailable
+	}
+	if !dryRun && strings.TrimSpace(reason) == "" {
+		return outcome, ErrUnavailable
+	}
+	if toDay.Before(fromDay) {
+		return outcome, ErrInvalidState
+	}
+	from := fromDay.UTC().Truncate(24 * time.Hour)
+	to := toDay.UTC().Truncate(24 * time.Hour)
+	now := store.now().UTC()
+
+	// One candidate run per calendar day: whichever run for that day has
+	// every partition succeeded, preferring the most recently updated when
+	// more than one generation qualifies (team-scope aggregation re-reads
+	// ClickHouse for the whole org/day, not a specific run's own partition
+	// rows, so any one qualifying run for that day is equally valid to
+	// redrive through).
+	rows, err := store.pool.Query(ctx, `
+SELECT DISTINCT ON (run.target_day) run.target_day::text, run.id::text
+FROM public.daily_metrics_runs AS run
+WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2 AND $3
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+ORDER BY run.target_day, run.updated_at DESC`, orgID, from, to)
+	if err != nil {
+		return outcome, ErrUnavailable
+	}
+	candidateRunByDay := make(map[string]string)
+	for rows.Next() {
+		var day, runID string
+		if err := rows.Scan(&day, &runID); err != nil {
+			rows.Close()
+			return outcome, ErrUnavailable
+		}
+		candidateRunByDay[day] = runID
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return outcome, ErrUnavailable
+	}
+
+	redrivenPrefix, skippedOutcome := "redriven", "skipped_ineligible"
+	if dryRun {
+		redrivenPrefix, skippedOutcome = "would_redrive", "would_skip_ineligible"
+	}
+	var redrivenDays, redrivenFromSucceededDays, skippedDays int
+	for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
+		dayKey := day.Format(dailyTargetDayLayout)
+		runID, ok := candidateRunByDay[dayKey]
+		if !ok {
+			outcome.Days = append(outcome.Days, FinalizeRangeRedriveDay{Day: day, Outcome: skippedOutcome})
+			skippedDays++
+			continue
+		}
+		matched, resetFromSucceeded, err := store.redriveOneFinalizeForRange(
+			ctx, publisher, runID, nonce, now, includeSucceeded, reason, dryRun,
+		)
+		if err != nil {
+			return outcome, err
+		}
+		if matched {
+			dayOutcome := redrivenPrefix
+			if resetFromSucceeded {
+				dayOutcome = redrivenPrefix + "_reset_from_succeeded"
+			}
+			outcome.Days = append(outcome.Days, FinalizeRangeRedriveDay{
+				Day: day, RunID: runID, Outcome: dayOutcome, ResetFromSucceeded: resetFromSucceeded,
+			})
+			redrivenDays++
+			if resetFromSucceeded {
+				redrivenFromSucceededDays++
+			}
+		} else {
+			outcome.Days = append(outcome.Days, FinalizeRangeRedriveDay{Day: day, RunID: runID, Outcome: skippedOutcome})
+			skippedDays++
+		}
+	}
+	if !dryRun {
+		// Team-lead's approval condition (5): the redriven-from-succeeded
+		// subset gets its own telemetry outcome label, distinct from an
+		// ordinary never-attempted/failed/expired-lease redrive -- a dry run
+		// makes no durable state change at all, so it must never move a
+		// counter meant to describe real work.
+		store.observeFinalizeRedrive("redriven", redrivenDays-redrivenFromSucceededDays)
+		store.observeFinalizeRedrive("redriven_reset_from_succeeded", redrivenFromSucceededDays)
+		store.observeFinalizeRedrive("skipped_ineligible", skippedDays)
+	}
+	return outcome, nil
+}
+
+// redriveOneFinalizeForRange re-verifies and, if still eligible, redrives
+// exactly one day's finalize inside its own transaction, so one day's
+// dedupe/policy rejection cannot roll back an otherwise-successful range.
+// Returns whether it matched (would redrive / redrove) and whether that
+// required resetting a terminal 'succeeded' state. dryRun performs the
+// identical read and eligibility check under the identical row lock, but
+// never executes the reset, the provenance insert, or the publish -- the
+// transaction is always rolled back, never committed, so a dry run is
+// provably free of durable side effects (team-lead's approval condition
+// (4)).
+func (store *PostgresStore) redriveOneFinalizeForRange(
+	ctx context.Context,
+	publisher *PostgresPublisher,
+	runID, nonce string,
+	now time.Time,
+	includeSucceeded bool,
+	reason string,
+	dryRun bool,
+) (matched, resetFromSucceeded bool, err error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return false, false, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+
+	var run Run
+	var targetDay, status, finalizationStatus string
+	var leaseExpiresAt *time.Time
+	var hasPartitions, allPartitionsSucceeded bool
+	err = tx.QueryRow(ctx, `
+SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
+  run.finalization_status, run.finalization_lease_expires_at,
+  EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
+  ),
+  NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+FROM public.daily_metrics_runs AS run
+WHERE run.id = $1::uuid
+FOR UPDATE OF run`, runID).Scan(
+		&run.ID, &run.OrganizationID, &run.Generation, &status, &targetDay,
+		&finalizationStatus, &leaseExpiresAt, &hasPartitions, &allPartitionsSucceeded,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, ErrUnavailable
+	}
+	if !hasPartitions || !allPartitionsSucceeded {
+		return false, false, nil
+	}
+	run.Status = status
+	priorStatus, priorFinalizationStatus := status, finalizationStatus
+
+	needsReset := false
+	switch status {
+	case "running":
+		// Same eligibility RedriveStrandedFinalize uses -- a run still
+		// legitimately in flight for another reason (a live finalize lease)
+		// must not be touched.
+		priorAttempt := finalizationStatus == "failed" ||
+			(finalizationStatus == "running" && (leaseExpiresAt == nil || leaseExpiresAt.Before(now)))
+		if finalizationStatus != "pending" && !priorAttempt {
+			return false, false, nil
+		}
+	case "succeeded":
+		if !includeSucceeded {
+			return false, false, nil
+		}
+		needsReset = true
+	default:
+		// pending/failed/canceled/no_repositories: never this function's
+		// concern -- CHAOS-4389's own sweep (or nothing at all) owns those.
+		return false, false, nil
+	}
+
+	if dryRun {
+		// Eligibility is fully determined -- report it and roll back
+		// without touching anything durable.
+		return true, needsReset, nil
+	}
+
+	if needsReset {
+		// Provenance FIRST (approval condition (1)): a reset is a state
+		// write on a succeeded run and must be traceable, in the SAME
+		// transaction as the reset and the publish below -- either the
+		// whole triple (provenance + reset + publish) lands, or none of it
+		// does. Written before the reset itself so the row this transaction
+		// is about to overwrite is captured exactly as it read.
+		if _, err := tx.Exec(ctx, `
+INSERT INTO public.daily_metrics_finalize_redrive_events
+    (id, run_id, org_id, target_day, prior_status, prior_finalization_status, actor, reason, nonce)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, 'finalize-redrive', $7, $8)`,
+			uuid.New(), runID, run.OrganizationID, targetDay, priorStatus, priorFinalizationStatus, reason, nonce,
+		); err != nil {
+			return false, false, ErrUnavailable
+		}
+		// Reset the terminal state back to claimable in the SAME
+		// transaction as the provenance row above and the publish below --
+		// either this fully lands (provenance + reset + fresh outbox row)
+		// or fully rolls back, never a reset with no way to reach
+		// FinalizeHandler.Work again.
+		//
+		// generation is ALSO reset here, to a fresh value derived from
+		// nonce (CHAOS-4405 finding, posted on #1971): the Python
+		// compatibility bridge's execution-ledger identity is
+		// uuid5(run_id, family, generation, scope_digest) -- unchanged
+		// generation means the SAME identity, and that identity already
+		// reached 'succeeded' the first time this run finalized.
+		// _reserve_execution's existing-row check would find it, return
+		// {"status": "skipped"}, and never call run_daily_metrics_finalize
+		// again -- a bare status reset through this endpoint is a
+		// guaranteed silent no-op, not a retry (see
+		// test_finalize_execution_is_skipped_not_reexecuted_for_the_same_identity_after_reclaim,
+		// CHAOS-4409's own contract test pinning exactly this). A fresh
+		// generation gives the redriven attempt a genuinely new identity,
+		// so run_daily_metrics_finalize actually executes again. Bounded
+		// to the column's 64-byte limit: "redrive:" (8) + a UUID nonce
+		// (36) = 44 bytes, well inside it, and independent of how long the
+		// run's ORIGINAL generation string was (e.g. a "post-sync:<uuid>"
+		// prefix) -- this run's partitions are all already 'succeeded' and
+		// will never be redispatched under any generation, so nothing else
+		// ever reads this run's stored generation value for partition
+		// identity again.
+		newGeneration := "redrive:" + nonce
+		command, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'running', finalization_status = 'pending',
+    finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
+    generation = $3, updated_at = $1
+WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeeded'`,
+			now, runID, newGeneration)
+		if err != nil {
+			return false, false, ErrUnavailable
+		}
+		if command.RowsAffected() != 1 {
+			// Settled differently under us since the row lock above (e.g. a
+			// concurrent caller already reset it) -- skip, don't force it.
+			return false, false, nil
+		}
+		run.Status = "running"
+		run.Generation = newGeneration
+	}
+
+	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {
+		return false, false, ErrInvalidState
+	}
+	if err := publisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
+		return false, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, ErrUnavailable
+	}
+	return true, needsReset, nil
 }

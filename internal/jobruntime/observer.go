@@ -249,6 +249,25 @@ type DailyMetricsFinalizeLedgerRepairObserver interface {
 	ObserveDailyMetricsFinalizeLedgerRepair(outcome string, count int) error
 }
 
+// DailyMetricsFinalizeRedriveObserver is the narrow capability
+// PostgresStore.RedriveFinalizeForRange depends on (CHAOS-4405): an
+// operator-invoked historical backfill that re-runs
+// run_daily_metrics_finalize for one org across a [from, to] calendar-day
+// range, one day at a time -- distinct from DailyMetricsFinalizeSweepObserver
+// (CHAOS-4389), which counts UNATTENDED discovery/repair of a stuck run, not
+// a deliberate, explicit re-execution of an already-terminal one. "redriven"
+// counts calendar days a fresh metrics.daily_finalize job was actually
+// enqueued for; "skipped_ineligible" counts days in the requested range that
+// had no eligible run (no run at all for that day, or partitions not 100%
+// succeeded); "redriven_failed" (CHAOS-4405 escalation) is observed by
+// PostgresStore.transitionFinalize instead, the moment a redriven finalize's
+// own claim resolves as a failure -- see that outcome's own doc comment in
+// telemetry.go for why it is counted differently from the other three. A nil
+// observer makes this a silent no-op, matching every other observer in this
+// package: telemetry must never gate durable state.
+type DailyMetricsFinalizeRedriveObserver interface {
+	ObserveDailyMetricsFinalizeRedrive(outcome string, count int) error
+}
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

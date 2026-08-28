@@ -738,3 +738,83 @@ func TestObserveDailyMetricsFinalizeLedgerRepairRejectsUnregisteredOutcomeAndNeg
 		t.Fatal("negative finalize ledger repair count was accepted")
 	}
 }
+
+// TestObserveDailyMetricsFinalizeRedriveRecordsByOutcome (CHAOS-4405) pins
+// the historical finalize-redrive counter's exposition shape: one metric
+// name, split by the "redriven"/"skipped_ineligible" outcome label -- unlike
+// writeDailyMetricsFinalizeSweep's two independently-named metrics, since
+// both outcomes here describe the SAME unit of work (a calendar day
+// considered).
+func TestObserveDailyMetricsFinalizeRedriveRecordsByOutcome(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("redriven", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("skipped_ineligible", 2); err != nil {
+		t.Fatal(err)
+	}
+	// Team-lead's approval condition (5): the reset-from-succeeded subset
+	// gets its own distinct outcome label.
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("redriven_reset_from_succeeded", 3); err != nil {
+		t.Fatal(err)
+	}
+	// A second pass accumulates rather than replacing.
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("redriven", 1); err != nil {
+		t.Fatal(err)
+	}
+	// Team-lead's escalation on conditions (2)/(3): a redriven finalize that
+	// later fails gets its own distinct outcome label, observed by
+	// PostgresStore.transitionFinalize, not RedriveFinalizeForRange.
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("redriven_failed", 1); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		"# HELP dev_health_daily_metrics_finalize_redrive_days_total ",
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven"} 6`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven_reset_from_succeeded"} 3`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="skipped_ineligible"} 2`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven_failed"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing exposition content %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestObserveDailyMetricsFinalizeRedriveIsPreSeededAtZero(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven"} 0`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven_reset_from_succeeded"} 0`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="skipped_ineligible"} 0`,
+		`dev_health_daily_metrics_finalize_redrive_days_total{outcome="redriven_failed"} 0`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing pre-seeded zero %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestObserveDailyMetricsFinalizeRedriveRejectsUnregisteredOutcomeAndNegativeCount(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("succeeded", 1); err == nil {
+		t.Fatal("unbounded finalize redrive outcome was accepted into a metric")
+	}
+	if err := collector.ObserveDailyMetricsFinalizeRedrive("redriven", -1); err == nil {
+		t.Fatal("negative finalize redrive count was accepted")
+	}
+}

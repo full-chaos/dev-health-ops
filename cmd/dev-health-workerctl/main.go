@@ -879,6 +879,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		})
 	case "daily-finalize":
 		return dispatchMetricsDailyFinalize(ctx, runtime, args[1:], stdout, stderr)
+	case "finalize-redrive":
+		return dispatchMetricsFinalizeRedrive(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1067,6 +1069,91 @@ func finalizeLedgerRepairGate(
 		return nil, false, err
 	}
 	return ledgerRepair, ledgerRepairWasIncomplete(ledgerRepair), nil
+}
+
+// dispatchMetricsFinalizeRedrive handles `metrics finalize-redrive`
+// (CHAOS-4405): the historical-backfill operator entry point that re-runs
+// metrics.daily_finalize for one organization across [--from, --to], one
+// calendar day at a time. Distinct from `daily-finalize` (CHAOS-4389, which
+// only ever repairs a run still stuck non-terminal): this command's whole
+// point is to re-execute a day's finalize AFTER it already completed,
+// because run_daily_metrics_finalize now also writes
+// compounding_risk_daily(scope='team') and team_cognitive_load_daily
+// (CHAOS-4399, #1963) -- a day finalized before that landed has zero rows
+// in either table and needs finalize re-run purely to backfill them.
+//
+// --include-succeeded defaults true (this verb exists specifically to touch
+// already-succeeded days); pass --include-succeeded=false to restrict this
+// pass to the same safe never-attempted/failed/expired-lease subset
+// `daily-finalize --all-complete` uses, scoped to this org+day-range --
+// useful as a dry run of the eligibility scan before authorizing the
+// state-mutating succeeded case. See RedriveFinalizeForRange's doc comment
+// for exactly why an already-'succeeded' row needs a transient state reset
+// (not a bare republish) to reach FinalizeHandler.Work again at all.
+func dispatchMetricsFinalizeRedrive(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics finalize-redrive")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	includeSucceeded := flags.Bool("include-succeeded", true, "also redrive a day whose run already reached status='succeeded' -- the whole point of this verb; set false to restrict to the never-attempted/failed/expired-lease subset")
+	// codex review round 3 on daily-redrive (CHAOS-4358) established the bar
+	// every operator-authorized repeat execution in this CLI mirrors: state
+	// in your own words what you verified, no default, no generic hardcoded
+	// string. This verb is the most consequential of the three (it
+	// deliberately re-executes a day that already completed, across a
+	// potentially wide date range), so the bar applies here too, not just
+	// to the narrower single-run daily-finalize --run case. Not required
+	// under --dry-run: a preview makes no durable write, so there is
+	// nothing yet to justify.
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED unless --dry-run: why this historical re-run is authorized (e.g. \"CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write\")")
+	// Team-lead's approval condition (4): list days + current state before
+	// any write. Computes and reports the identical eligibility scan a real
+	// pass would, under the identical row lock, but every transaction it
+	// opens is rolled back, never committed -- see
+	// RedriveFinalizeForRange's dryRun doc comment.
+	dryRun := flags.Bool("dry-run", false, "report what a real pass would do (which days, which runs, which would need a terminal-state reset) without writing anything -- no reset, no provenance row, no publish")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if !*dryRun && strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	nonce := ""
+	if !*dryRun {
+		nonce = uuid.NewString()
+	}
+	outcome, err := store.RedriveFinalizeForRange(ctx, publisher, *org, fromDay, toDay, nonce, *includeSucceeded, *reviewEvidence, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"finalize_redrive": outcome,
+		"dry_run":          *dryRun,
+	})
 }
 
 // manualBackfillGeneration derives a deterministic generation for one

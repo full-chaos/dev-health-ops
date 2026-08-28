@@ -95,15 +95,25 @@ func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []stri
 	if len(keys) == 0 {
 		return []string{dataset}
 	}
-	// Only a GENUINE alias fold counts: when the sole contributing member is
-	// the canonical key itself (e.g. only family_dataset_cicd=true, no
-	// family_dataset_tests), the result is identical to the no-fold fallback
-	// above and must not inflate the "folding happened" signal (Codex
-	// review, CHAOS-4393 round 1).
-	if !(len(keys) == 1 && keys[0] == dataset) {
-		foldedKeyResolutionMetrics.observe(dataset, len(keys))
-	}
 	return keys
+}
+
+// recordFoldedKeyResolution records ONE genuine alias-fold coverage
+// resolution. Call once per accepted effective key (after any scope filter
+// a call site already applies for its own logic -- an alias whose scope was
+// excluded never produced a projected window and must not inflate the
+// "folding happened" signal), and never for the canonical key resolving to
+// itself (e.g. a "cicd" unit carrying only family_dataset_cicd=true, no
+// family_dataset_tests -- that member IS the canonical identity, not an
+// alias fold). Deliberately NOT inside effectiveDatasetKeys itself, so a
+// multi-member result (both family_dataset_cicd and family_dataset_tests
+// true) counts only its genuine alias members, not the canonical one too
+// (Codex review, CHAOS-4393 rounds 1-2).
+func recordFoldedKeyResolution(dataset, effectiveKey string) {
+	if effectiveKey == dataset {
+		return
+	}
+	foldedKeyResolutionMetrics.observe(dataset, 1)
 }
 
 // queryDatasetKeys expands scope dataset keys with each requested key's

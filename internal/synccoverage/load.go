@@ -124,6 +124,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			if !containsString(scope.DatasetKeys, effectiveKey) {
 				continue
 			}
+			recordFoldedKeyResolution(dataset, effectiveKey)
 			key := sourceID.String() + "\x00" + effectiveKey
 			state := states[key]
 			if state == nil {
@@ -199,6 +200,7 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 		}
 		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
 			if containsString(scope.DatasetKeys, effectiveKey) {
+				recordFoldedKeyResolution(dataset, effectiveKey)
 				pairs[sourceID.String()+"\x00"+effectiveKey] = struct{}{}
 			}
 		}
@@ -304,6 +306,7 @@ WHERE org_id = $1 AND sync_run_id = $2
 			return nil, fmt.Errorf("scan linked backfill unit: %w", err)
 		}
 		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
+			recordFoldedKeyResolution(dataset, effectiveKey)
 			key := sourceID.String() + "\x00" + effectiveKey
 			result[key] = append(result[key], coverageInterval{Since: since.UTC(), Before: before.UTC()})
 		}

@@ -579,31 +579,32 @@ def _effective_dataset_keys(
     return family_keys or [str(dataset_key)]
 
 
-def _record_folded_key_resolution(dataset_key: str, effective_keys: list[str]) -> None:
-    """Record a genuine alias-fold coverage resolution.
+def _record_folded_key_resolution(dataset_key: str, effective_key: str) -> None:
+    """Record ONE genuine alias-fold coverage resolution.
 
-    Coverage call sites ONLY -- ``_effective_dataset_keys`` is also imported
-    by ``IntegrationRunService.build_dataset_freshness``
+    Call once per accepted effective key (after any scope filter a call site
+    already applies for its own logic -- an alias whose scope was excluded
+    never produced a projected window and must not inflate the "folding
+    happened" signal), and never for the canonical key resolving to itself
+    (e.g. a ``cicd`` unit carrying only ``family_dataset_cicd=true``, no
+    ``family_dataset_tests`` -- that member IS the canonical identity, not an
+    alias fold). Coverage call sites ONLY -- ``_effective_dataset_keys`` is
+    also imported by ``IntegrationRunService.build_dataset_freshness``
     (``api/services/integrations.py``) to render admin watermark-lag reads
-    that never build a coverage projection; incrementing inside the shared
-    helper would count those unrelated reads too (Codex review, CHAOS-4393
-    round 1). Also excludes the trivial case where the sole contributing
-    member is the canonical key itself (e.g. only ``family_dataset_cicd``
-    true, no ``family_dataset_tests``) -- that result is identical to the
-    no-fold fallback and must not inflate the "folding happened" signal.
+    that never build a coverage projection, so the increment lives at each
+    coverage call site rather than inside that shared helper (Codex review,
+    CHAOS-4393 rounds 1-2).
     """
-    if effective_keys == [str(dataset_key)]:
+    if effective_key == str(dataset_key):
         return
     SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL.labels(
         canonical_dataset_key=str(dataset_key)
-    ).inc(len(effective_keys))
+    ).inc()
 
 
 def _effective_dataset_keys_for_unit(unit: _DatasetKeyUnit) -> list[str]:
     """Expand a projected sync unit into its effective coverage dataset keys."""
-    keys = _effective_dataset_keys(unit.dataset_key, unit.processor_flags)
-    _record_folded_key_resolution(str(unit.dataset_key), keys)
-    return keys
+    return _effective_dataset_keys(unit.dataset_key, unit.processor_flags)
 
 
 def _is_family_child_dataset_key(dataset_key: str) -> bool:
@@ -1189,6 +1190,7 @@ async def _terminal_unit_windows(
         for effective_key in _effective_dataset_keys_for_unit(unit):
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(str(unit.dataset_key), effective_key)
             if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
                 raise SyncCoverageComplexityError(
                     stage="expanded_unit_windows",
@@ -1269,10 +1271,10 @@ async def _stream_compact_unit_windows(
         effective_keys = _effective_dataset_keys(
             str(row.dataset_key), row.processor_flags
         )
-        _record_folded_key_resolution(str(row.dataset_key), effective_keys)
         for effective_key in effective_keys:
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(str(row.dataset_key), effective_key)
             pair = (str(row.source_id), effective_key)
             state = states[pair]
             interval = CoverageInterval(since=since, before=before)
@@ -1389,10 +1391,10 @@ async def _active_run_ids(
         stage="active_units",
     ):
         effective_keys = _effective_dataset_keys(dataset_key, processor_flags)
-        _record_folded_key_resolution(dataset_key, effective_keys)
         for effective_key in effective_keys:
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(dataset_key, effective_key)
             pairs.add((str(source_id), effective_key))
     return pairs
 
@@ -1467,8 +1469,8 @@ async def _backfill_job_run_pair_windows(
             since=ensure_utc(since_at), before=ensure_utc(before_at)
         )
         effective_keys = _effective_dataset_keys(dataset_key, processor_flags)
-        _record_folded_key_resolution(dataset_key, effective_keys)
         for effective_key in effective_keys:
+            _record_folded_key_resolution(dataset_key, effective_key)
             pair = (str(source_id), effective_key)
             raw_windows[pair].append(interval)
     return {pair: merge_intervals(intervals) for pair, intervals in raw_windows.items()}

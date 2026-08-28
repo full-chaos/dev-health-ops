@@ -257,6 +257,12 @@ const defaultFinalizeSweepLimit = 500
 // naming this stranding shape does not know in advance which orgs/days it
 // hit -- that is exactly what this scan answers. limit <= 0 uses
 // defaultFinalizeSweepLimit.
+//
+// This is a DETECTION query only -- it reports every run in this shape,
+// including 'failed'/expired-'running' ones a caller should NOT bulk-redrive
+// blind (see RedriveStrandedFinalize's allowPriorAttempt parameter). An
+// operator sweep still needs to know about those to decide what to do with
+// them by hand; only the redrive step itself narrows further.
 func (store *PostgresStore) FindStrandedFinalizeRuns(ctx context.Context, limit int) ([]string, error) {
 	if !store.valid() {
 		return nil, ErrUnavailable
@@ -272,6 +278,16 @@ WHERE run.status = 'running'
   AND (
     run.finalization_status IN ('pending', 'failed')
     OR (run.finalization_status = 'running' AND run.finalization_lease_expires_at < $1)
+  )
+  -- codex review (P1): EXISTS, not just the sibling NOT EXISTS below, is
+  -- load-bearing. A run between ClaimDispatch (status='running') and
+  -- MaterializeScheduledFanout (which inserts the first partition rows) has
+  -- ZERO partitions -- the NOT EXISTS alone is vacuously true for it, which
+  -- would let this scan treat "hasn't started" identically to "100%
+  -- succeeded" and finalize a run with no computed work at all.
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
   )
   AND NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
@@ -319,11 +335,31 @@ type FinalizeRedriveOutcome struct {
 // contract -- reused across every runID in this call, since each run's
 // dedupe key already embeds its own run.ID and this call is one coherent
 // operator/sweep action.
+//
+// allowPriorAttempt gates whether a run whose finalize was already CLAIMED
+// at least once (finalization_status 'failed', or 'running' with an expired
+// lease) is eligible, versus only a run whose finalize was never attempted
+// at all ('pending'). codex review (P1): 'failed' does not mean "nothing
+// happened" -- FinalizeHandler.Work sets it both when the compatibility call
+// itself failed AND when the call SUCCEEDED (writing real, durable
+// user_metrics_daily/compounding_risk_daily/team_cognitive_load_daily rows)
+// but the subsequent CompleteFinalize bookkeeping write failed. Blindly
+// redriving that shape re-runs Finalize() and appends a second full set of
+// rows to tables that are plain MergeTree, not ReplacingMergeTree -- safe
+// for a consumer that dedupes by argMax(computed_at) (the established
+// convention in this codebase), a real risk for one that does not. Mirrors
+// `daily-redrive`'s own established split for the identical class of risk:
+// a bulk pass only ever authorizes the provably-safe subset (there,
+// retry_safe; here, never-attempted); the riskier subset needs a human
+// naming ONE specific run they have actually reviewed, matching
+// `daily-redrive`'s confirm_succeeded needing the single-execution endpoint,
+// never the bulk one.
 func (store *PostgresStore) RedriveStrandedFinalize(
 	ctx context.Context,
 	publisher *PostgresPublisher,
 	runIDs []string,
 	nonce string,
+	allowPriorAttempt bool,
 ) (FinalizeRedriveOutcome, error) {
 	var outcome FinalizeRedriveOutcome
 	if !store.valid() || publisher == nil || nonce == "" {
@@ -334,7 +370,7 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 		if !validUUID(runID) {
 			return outcome, ErrInvalidState
 		}
-		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now)
+		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, allowPriorAttempt)
 		if err != nil {
 			return outcome, err
 		}
@@ -355,6 +391,7 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 	publisher *PostgresPublisher,
 	runID, nonce string,
 	now time.Time,
+	allowPriorAttempt bool,
 ) (bool, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -369,10 +406,14 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 	var run Run
 	var targetDay, finalizationStatus string
 	var leaseExpiresAt *time.Time
-	var partitionsReady bool
+	var hasPartitions, allPartitionsSucceeded bool
 	err = tx.QueryRow(ctx, `
 SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
   run.finalization_status, run.finalization_lease_expires_at,
+  EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
+  ),
   NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
@@ -381,7 +422,7 @@ FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
 FOR UPDATE OF run`, runID).Scan(
 		&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay,
-		&finalizationStatus, &leaseExpiresAt, &partitionsReady,
+		&finalizationStatus, &leaseExpiresAt, &hasPartitions, &allPartitionsSucceeded,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -389,11 +430,18 @@ FOR UPDATE OF run`, runID).Scan(
 	if err != nil {
 		return false, ErrUnavailable
 	}
-	if run.Status != "running" || !partitionsReady {
+	// codex review (P1): hasPartitions is load-bearing on its own, not just
+	// the boolean AND below -- a run with zero partitions (still between
+	// ClaimDispatch and MaterializeScheduledFanout) makes
+	// allPartitionsSucceeded's NOT EXISTS vacuously true, which would
+	// otherwise let this function finalize a run that has not computed
+	// anything at all.
+	if run.Status != "running" || !hasPartitions || !allPartitionsSucceeded {
 		return false, nil
 	}
-	eligible := finalizationStatus == "pending" || finalizationStatus == "failed" ||
+	priorAttempt := finalizationStatus == "failed" ||
 		(finalizationStatus == "running" && (leaseExpiresAt == nil || leaseExpiresAt.Before(now)))
+	eligible := finalizationStatus == "pending" || (allowPriorAttempt && priorAttempt)
 	if !eligible {
 		return false, nil
 	}

@@ -293,7 +293,7 @@ func TestDailyMetricsRunStaysRunningWhenFinalizeJobIsDiscardedByRiverUntilRedriv
 		t.Fatalf("FindStrandedFinalizeRuns = %v, want [%s]", strandedRunIDs, runID)
 	}
 
-	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, strandedRunIDs, "finalize-redrive-nonce-1")
+	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, strandedRunIDs, "finalize-redrive-nonce-1", false)
 	if err != nil {
 		t.Fatalf("RedriveStrandedFinalize: %v", err)
 	}
@@ -339,11 +339,118 @@ func TestDailyMetricsRunStaysRunningWhenFinalizeJobIsDiscardedByRiverUntilRedriv
 	if len(finalSweep) != 0 {
 		t.Fatalf("FindStrandedFinalizeRuns after completion = %v, want none", finalSweep)
 	}
-	repeatOutcome, err := store.RedriveStrandedFinalize(ctx, publisher, []string{runID}, "finalize-redrive-nonce-2")
+	repeatOutcome, err := store.RedriveStrandedFinalize(ctx, publisher, []string{runID}, "finalize-redrive-nonce-2", false)
 	if err != nil {
 		t.Fatalf("repeat RedriveStrandedFinalize: %v", err)
 	}
 	if len(repeatOutcome.FinalizedRunIDs) != 0 {
 		t.Fatalf("repeat RedriveStrandedFinalize on a completed run = %#v, want no-op", repeatOutcome)
 	}
+}
+
+// TestFindStrandedFinalizeRunsExcludesRunWithZeroPartitions is the codex
+// review red-first proof (P1, round 1): a run between ClaimDispatch (which
+// sets status='running') and MaterializeScheduledFanout (which inserts the
+// first partition rows) has ZERO partitions. The "every partition succeeded"
+// check is a bare NOT EXISTS(status <> 'succeeded'), which is vacuously true
+// when there are no partition rows at all -- without an explicit EXISTS
+// check alongside it, this function would treat "hasn't started" identically
+// to "100% succeeded" and finalize a run that has computed nothing.
+func TestFindStrandedFinalizeRunsExcludesRunWithZeroPartitions(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID = "00000000-0000-4000-8000-000000001001"
+		runID = "00000000-0000-4000-8000-000000001002"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	// Deliberately NO partition rows inserted: this is the window between
+	// ClaimDispatch and MaterializeScheduledFanout, not a stranded finalize.
+
+	strandedRunIDs, err := store.FindStrandedFinalizeRuns(ctx, 0)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns: %v", err)
+	}
+	if len(strandedRunIDs) != 0 {
+		t.Fatalf("FindStrandedFinalizeRuns = %v, want none (run has zero partitions, not 100%% succeeded)", strandedRunIDs)
+	}
+
+	// Even an operator explicitly naming this run (as --run would) must not
+	// finalize it: the transactional recheck has the identical obligation.
+	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, []string{runID}, "zero-partition-nonce", true)
+	if err != nil {
+		t.Fatalf("RedriveStrandedFinalize: %v", err)
+	}
+	if len(outcome.FinalizedRunIDs) != 0 {
+		t.Fatalf("RedriveStrandedFinalize on a zero-partition run = %#v, want no-op", outcome)
+	}
+	assertFinalizeTestRunStatus(t, ctx, pool, runID, "running")
+}
+
+// TestRedriveStrandedFinalizeRequiresExplicitRunForPriorAttempt is the codex
+// review red-first proof (P1, round 1): finalization_status='failed' does
+// NOT mean finalize never ran -- FinalizeHandler.Work sets it both when the
+// compatibility call itself failed AND when it SUCCEEDED (writing real,
+// durable output) but the subsequent CompleteFinalize bookkeeping write
+// failed. A bulk sweep (allowPriorAttempt=false, what --all-complete passes)
+// must never blindly redrive that shape -- only an operator naming one
+// specific run (allowPriorAttempt=true, what --run passes) after actually
+// checking it may.
+func TestRedriveStrandedFinalizeRequiresExplicitRunForPriorAttempt(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000001101"
+		runID       = "00000000-0000-4000-8000-000000001102"
+		partitionID = "00000000-0000-4000-8000-000000001103"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
+	// Simulate a finalize attempt that reached Finalize() (and, in the real
+	// system, may have already written durable output) before its
+	// CompleteFinalize bookkeeping write failed: finalization_status='failed'
+	// with everything else already terminal.
+	if _, err := pool.Exec(ctx, `UPDATE daily_metrics_runs SET finalization_status = 'failed' WHERE id = $1::uuid`, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Detection still surfaces it -- an operator needs to know about it even
+	// though the bulk path below will not touch it.
+	detected, err := store.FindStrandedFinalizeRuns(ctx, 0)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns: %v", err)
+	}
+	if len(detected) != 1 || detected[0] != runID {
+		t.Fatalf("FindStrandedFinalizeRuns = %v, want [%s]", detected, runID)
+	}
+
+	// The bulk/--all-complete path (allowPriorAttempt=false) must skip it.
+	bulkOutcome, err := store.RedriveStrandedFinalize(ctx, publisher, detected, "bulk-nonce", false)
+	if err != nil {
+		t.Fatalf("bulk RedriveStrandedFinalize: %v", err)
+	}
+	if len(bulkOutcome.FinalizedRunIDs) != 0 {
+		t.Fatalf("bulk RedriveStrandedFinalize (allowPriorAttempt=false) = %#v, want no-op for a 'failed' finalization_status", bulkOutcome)
+	}
+	assertFinalizeTestRunStatus(t, ctx, pool, runID, "running")
+
+	// The explicit --run path (allowPriorAttempt=true) may.
+	explicitOutcome, err := store.RedriveStrandedFinalize(ctx, publisher, []string{runID}, "explicit-nonce", true)
+	if err != nil {
+		t.Fatalf("explicit RedriveStrandedFinalize: %v", err)
+	}
+	if len(explicitOutcome.FinalizedRunIDs) != 1 || explicitOutcome.FinalizedRunIDs[0] != runID {
+		t.Fatalf("explicit RedriveStrandedFinalize (allowPriorAttempt=true) = %#v, want FinalizedRunIDs=[%s]", explicitOutcome, runID)
+	}
+
+	processFinalizeJob(t, ctx, store, runID)
+	assertFinalizeTestRunStatus(t, ctx, pool, runID, "succeeded")
 }

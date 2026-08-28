@@ -901,7 +901,7 @@ func dispatchMetricsDailyFinalize(
 ) int {
 	flags := quietFlags("metrics daily-finalize")
 	run := flags.String("run", "", "single daily_metrics_runs id (uuid) to finalize")
-	allComplete := flags.Bool("all-complete", false, "sweep every organization for runs status='running' with 100% partitions succeeded whose finalize never reached a terminal state, and redrive each one found")
+	allComplete := flags.Bool("all-complete", false, "sweep every organization for runs status='running' with 100% partitions succeeded whose finalize was NEVER attempted (finalization_status='pending'), and redrive each one found -- see --run for a run whose finalize already ran at least once")
 	limit := flags.Int("limit", 0, "max runs one --all-complete sweep pass redrives (default 500)")
 	// codex review round 3 on daily-redrive (CHAOS-4358) established the bar
 	// this mirrors: an operator authorizing a repeat execution must state in
@@ -912,7 +912,20 @@ func dispatchMetricsDailyFinalize(
 	// never durably wrote (e.g. no completion fence, no rows for the run's
 	// target_day yet) rather than the partition-redrive concern about
 	// per-row output_evidence.
-	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing a repeat finalize (e.g. \"confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize\")")
+	//
+	// codex review (CHAOS-4389, P1): finalization_status='failed' does NOT
+	// mean finalize never ran -- FinalizeHandler.Work sets it both when the
+	// compatibility call itself failed AND when it SUCCEEDED (writing real
+	// user_metrics_daily/compounding_risk_daily/team_cognitive_load_daily
+	// rows) but the bookkeeping CompleteFinalize write failed afterward.
+	// --all-complete's bulk sweep only ever redrives the provably-safe
+	// 'pending' (never attempted) subset for exactly this reason; a run
+	// whose finalize was already claimed at least once needs a human to
+	// name it individually with --run, after actually checking whether it
+	// already wrote real output -- mirrors `daily-redrive`'s own split
+	// between its bulk retry_safe path and confirm_succeeded's
+	// single-execution-only endpoint.
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing a repeat finalize -- for --run, state whether the run's finalize already wrote real output (e.g. \"confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d/compounding_risk_daily rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize\"); for --all-complete, why this sweep is authorized now (--all-complete never touches a run whose finalize already ran at least once, regardless of this text)")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
@@ -950,7 +963,12 @@ func dispatchMetricsDailyFinalize(
 			return writeServiceError(stderr, err)
 		}
 	}
-	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, candidates, uuid.NewString())
+	// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
+	// single-target operator action that MAY authorize redriving a run whose
+	// finalize already ran at least once; --all-complete's bulk sweep never
+	// does, regardless of --review-evidence's text (see the flag's own help
+	// and RedriveStrandedFinalize's doc comment for why).
+	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, candidates, uuid.NewString(), hasRun)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

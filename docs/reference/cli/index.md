@@ -1219,18 +1219,36 @@ authorizing a repeat run — e.g. confirmed no rows exist yet for this run's
 
 Exactly one of two scopes is required:
 
-- `--run <id>` repairs one named `daily_metrics_runs` row.
+- `--run <id>` repairs one named `daily_metrics_runs` row. May redrive a run
+  whose finalize was already claimed at least once (`finalization_status`
+  `failed`, or `running` with an expired lease) — appropriate ONLY once you
+  have personally checked whether that prior attempt already wrote real
+  output (see `--review-evidence` above): `finalization_status='failed'`
+  does not mean finalize never ran — it is set both when the compatibility
+  call failed AND when it succeeded (writing real
+  `user_metrics_daily`/`compounding_risk_daily`/`team_cognitive_load_daily`
+  rows) but the bookkeeping write afterward failed.
 - `--all-complete` sweeps every organization for runs `status='running'`
-  with every partition `succeeded` but finalization not settled (`--limit`
-  bounds one pass, default 500) and redrives each one found.
+  with every partition `succeeded` whose finalize was **never attempted at
+  all** (`finalization_status='pending'` only — `--limit` bounds one pass,
+  default 500) and redrives each one found. Deliberately narrower than
+  `--run`: a bulk, unattended sweep must never risk writing a second full
+  set of rows on top of a prior attempt's possibly-already-durable output,
+  so it only ever touches the provably-safe "genuinely never ran" subset —
+  mirrors `daily-redrive`'s own split between its bulk `retry_safe` path and
+  `confirm_succeeded`'s single-execution-only endpoint. A run stuck in the
+  riskier `failed`/expired-lease shape still shows up in
+  `--all-complete`'s own detection pass (and the `_detected_total` counter
+  below) for visibility, but needs `--run` to actually redrive it.
 
-Both re-verify eligibility (run still `running`, every partition
-`succeeded`, finalization `pending`/`failed`/`running`-with-an-expired-lease)
-under a row lock immediately before publishing, so a run that settled
-between being named and this call running is silently skipped rather than
-double-published — safe to run repeatedly, including against a run that
-already finalized (a no-op). Publishes under a fresh, nonce-scoped dedupe
-key (`metrics.daily_finalize:redrive:<run id>:<nonce>`), never the original
+Both re-verify eligibility (run still `running`, at least one partition
+exists, every partition `succeeded`) under a row lock immediately before
+publishing, so a run that settled between being named and this call running
+is silently skipped rather than double-published — safe to run repeatedly,
+including against a run that already finalized (a no-op) or one still
+between dispatch and repository discovery (zero partitions is never treated
+as "100% succeeded"). Publishes under a fresh, nonce-scoped dedupe key
+(`metrics.daily_finalize:redrive:<run id>:<nonce>`), never the original
 permanently-deduped one:
 
 ```sql

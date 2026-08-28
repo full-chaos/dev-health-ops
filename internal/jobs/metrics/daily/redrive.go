@@ -3,12 +3,14 @@ package daily
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const dailyTargetDayLayout = "2006-01-02"
@@ -838,4 +840,168 @@ WHERE id = $2::uuid AND status = 'succeeded' AND finalization_status = 'succeede
 		return false, false, ErrUnavailable
 	}
 	return true, needsReset, nil
+}
+
+// riverSchemaPattern validates a Postgres schema name before it is
+// interpolated into SQL identifier position -- pgx has no bind-param form
+// for identifiers. Duplicated from (unexported)
+// internal/joboutbox/terminal_delivery_repair.go's riverSchemaPattern: this
+// package cannot import that one, and a duplicate is intentional/precedented
+// (see that file's own comment on the same constant).
+var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// ReconcileOrphanedFinalizeRedriveRuns closes the CHAOS-4405 residual gap
+// (team-lead escalation, 2026-08-28, same day as the redriven_failed
+// escalation): a finalize-redrive event stays 'open' forever if the River
+// job it published is discarded/cancelled, or never reaches River at all,
+// BEFORE ClaimFinalize is ever called for it. Neither
+// CompleteFinalize/ReleaseFinalize (postgres.go, which only ever fire once a
+// claim resolves) nor transitionFinalize's own "redriven_failed" close-out
+// can ever see this shape, because no claim happens at all -- the run stays
+// excluded from FindStrandedFinalizeRuns by its own 'open' row forever,
+// invisible to every recovery tool including an unattended
+// `daily-finalize --all-complete` sweep.
+//
+// Two independent orphan shapes, both closed the same way:
+//   - The redrive's outbox row never reached River at all: relay-level
+//     status='dead' (internal/joboutbox/repository.go exhausts its own
+//     delivery attempts and sets this), or the row itself is simply absent
+//     (defensive -- the publish that should have created it never landed).
+//     Neither needs the queue-control pool or River at all.
+//   - The outbox row WAS delivered into River (status='delivered',
+//     river_job_id set -- worker_job_outbox's own delivery-state check
+//     constraint guarantees the two travel together), but River itself
+//     discarded or cancelled that job before a worker ever reached
+//     ClaimFinalize. This needs a SEPARATE read against queueControlPool:
+//     the domain pool (store.pool) has no grants on the river schema,
+//     matching every other caller of river_job in this codebase (e.g.
+//     internal/joboutbox/strand_repair.go's NewStrandRepair).
+//
+// For each event found orphaned, this closes it 'closed_orphaned' with its
+// own small UPDATE ... WHERE status = 'open' on the domain pool -- one exec
+// per row, not one shared transaction, since the two reads above already
+// come from different pools and cannot share one anyway. Re-checking
+// status = 'open' on the UPDATE guards the race against
+// CompleteFinalize/ReleaseFinalize closing the SAME row concurrently: if
+// that already happened between this function's read and its write, the
+// UPDATE affects zero rows and this function silently does not double-count
+// or overwrite a real outcome with 'closed_orphaned'.
+//
+// riverSchema must pass riverSchemaPattern -- it is interpolated into SQL
+// identifier position, not bound as a parameter. queueControlPool may be nil
+// (and riverSchema may be anything) as long as no candidate actually needs
+// the River-side check; a candidate that does need it with no pool
+// configured is a hard ErrUnavailable, never a silent skip, since silently
+// leaving it 'open' is exactly the invisible-forever failure this function
+// exists to close.
+func (store *PostgresStore) ReconcileOrphanedFinalizeRedriveRuns(
+	ctx context.Context,
+	queueControlPool *pgxpool.Pool,
+	riverSchema string,
+) (int, error) {
+	if !store.valid() {
+		return 0, ErrUnavailable
+	}
+
+	rows, err := store.pool.Query(ctx, `
+SELECT event.id::text, outbox.status, outbox.river_job_id
+FROM public.daily_metrics_finalize_redrive_events AS event
+LEFT JOIN public.worker_job_outbox AS outbox
+  ON outbox.dedupe_key = 'metrics.daily_finalize:redrive:' || event.run_id::text || ':' || event.nonce
+WHERE event.status = 'open'`)
+	if err != nil {
+		return 0, ErrUnavailable
+	}
+	type pendingRiverCheck struct {
+		eventID    string
+		riverJobID int64
+	}
+	var orphanedEventIDs []string
+	var riverCandidates []pendingRiverCheck
+	for rows.Next() {
+		var eventID string
+		var outboxStatus *string
+		var riverJobID *int64
+		if err := rows.Scan(&eventID, &outboxStatus, &riverJobID); err != nil {
+			rows.Close()
+			return 0, ErrUnavailable
+		}
+		switch {
+		case outboxStatus == nil:
+			// No outbox row at all -- defensive: the publish that should
+			// have created it alongside this event, in the same
+			// transaction, never landed (or it was already cleaned up).
+			// Either way, nothing will ever complete this claim.
+			orphanedEventIDs = append(orphanedEventIDs, eventID)
+		case *outboxStatus == "dead":
+			// Relay-level: exhausted its own delivery attempts before this
+			// job ever reached River (internal/joboutbox/repository.go).
+			// Nothing River-side to check.
+			orphanedEventIDs = append(orphanedEventIDs, eventID)
+		case *outboxStatus == "delivered" && riverJobID != nil:
+			riverCandidates = append(riverCandidates, pendingRiverCheck{eventID: eventID, riverJobID: *riverJobID})
+		default:
+			// 'pending'/'claimed' -- the relay itself is plausibly still
+			// working this job; leave it 'open'. ('delivered' with a NULL
+			// river_job_id cannot happen: worker_job_outbox's own
+			// ck_worker_job_outbox_delivery_state check constraint forbids
+			// it.)
+		}
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return 0, ErrUnavailable
+	}
+
+	if len(riverCandidates) > 0 {
+		if queueControlPool == nil || !riverSchemaPattern.MatchString(riverSchema) {
+			return 0, ErrUnavailable
+		}
+		jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
+		riverJobIDs := make([]int64, len(riverCandidates))
+		for i, candidate := range riverCandidates {
+			riverJobIDs[i] = candidate.riverJobID
+		}
+		riverRows, err := queueControlPool.Query(ctx,
+			"SELECT id FROM "+jobTable+" WHERE id = ANY($1) AND state::text IN ('discarded', 'cancelled')",
+			riverJobIDs)
+		if err != nil {
+			return 0, ErrUnavailable
+		}
+		discardedOrCancelled := make(map[int64]struct{}, len(riverJobIDs))
+		for riverRows.Next() {
+			var riverJobID int64
+			if err := riverRows.Scan(&riverJobID); err != nil {
+				riverRows.Close()
+				return 0, ErrUnavailable
+			}
+			discardedOrCancelled[riverJobID] = struct{}{}
+		}
+		riverRowsErr := riverRows.Err()
+		riverRows.Close()
+		if riverRowsErr != nil {
+			return 0, ErrUnavailable
+		}
+		for _, candidate := range riverCandidates {
+			if _, ok := discardedOrCancelled[candidate.riverJobID]; ok {
+				orphanedEventIDs = append(orphanedEventIDs, candidate.eventID)
+			}
+		}
+	}
+
+	now := store.now().UTC()
+	closed := 0
+	for _, eventID := range orphanedEventIDs {
+		command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_finalize_redrive_events
+SET status = 'closed_orphaned', closed_at = $1
+WHERE id = $2::uuid AND status = 'open'`, now, eventID)
+		if err != nil {
+			return closed, ErrUnavailable
+		}
+		closed += int(command.RowsAffected())
+	}
+	store.observeFinalizeRedrive("redriven_orphaned", closed)
+	return closed, nil
 }

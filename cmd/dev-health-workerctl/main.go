@@ -992,6 +992,25 @@ func dispatchMetricsDailyFinalize(
 	if hasRun {
 		candidates = []string{*run}
 	} else {
+		// CHAOS-4405 (team-lead escalation, 2026-08-28): close the residual
+		// silent-exclusion gap before scanning for stranded runs -- a
+		// finalize-redrive event whose published River job was
+		// discarded/cancelled (or never reached River at all) before
+		// ClaimFinalize ever ran for it stays 'open' forever otherwise,
+		// permanently excluding its run from the scan below. Only this
+		// branch runs it: --run never consults FindStrandedFinalizeRuns or
+		// this table's exclusion at all, so it has nothing to reconcile.
+		// riverSchema is resolved directly from the env var here (matching
+		// configureRuntime's own default) rather than threading a new field
+		// through operatorRuntime, since this is the ONLY call site that
+		// needs it.
+		riverSchema := os.Getenv("RIVER_DATABASE_SCHEMA")
+		if strings.TrimSpace(riverSchema) == "" {
+			riverSchema = "river"
+		}
+		if _, err := store.ReconcileOrphanedFinalizeRedriveRuns(ctx, runtime.pools.QueueControl, riverSchema); err != nil {
+			return writeServiceError(stderr, err)
+		}
 		candidates, err = store.FindStrandedFinalizeRuns(ctx, *limit)
 		if err != nil {
 			return writeServiceError(stderr, err)

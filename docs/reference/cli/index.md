@@ -1251,6 +1251,12 @@ Exactly one of two scopes is required:
   riskier `failed`/expired-lease shape still shows up in
   `--all-complete`'s own detection pass (and the `_detected_total` counter
   below) for visibility, but needs `--run` to actually redrive it.
+  Before the detection pass itself, `--all-complete` also runs
+  `ReconcileOrphanedFinalizeRedriveRuns` (CHAOS-4405, see `metrics
+  finalize-redrive` below) to close out any `finalize-redrive`-published job
+  that never reached a claim at all — otherwise that run's `'open'`
+  provenance row would silently exclude it from this very detection pass
+  forever.
 
 Both re-verify eligibility (run still `running`, at least one partition
 exists, every partition `succeeded`) under a row lock immediately before
@@ -1439,16 +1445,25 @@ SPECIFIC claim resolves, same transaction as the run's own completion. A
 **failed** redriven finalize therefore reappears in `FindStrandedFinalizeRuns`
 immediately, exactly like any other ordinary CHAOS-4389 discard — an
 unattended sweep (or `daily-finalize --run <id>`) can recover it without an
-operator needing to remember which runs this verb specifically touched. The
-one residual gap: a redriven job discarded before `ClaimFinalize` is ever
-called for it (the outbox row itself lost, never the finalize logic
-failing) has no completion path to fire at all, so its event stays `'open'`
-indefinitely — `daily-finalize --run <id>` still recovers it at any time
-(that command never consults this table), just not an unattended
-`--all-complete` sweep. `daily-redrive`'s own partition-level query is
-unaffected by construction regardless: the reset never touches
-`daily_metrics_partitions`, so a redriven run's partitions stay 100%
-`'succeeded'` throughout.
+operator needing to remember which runs this verb specifically touched.
+
+**A redriven job that never reaches a claim at all is also recovered
+automatically.** A job discarded/cancelled by River, or never delivered
+into River at all (a relay-level `'dead'` outbox row), before `ClaimFinalize`
+is ever called for it has no completion path to fire
+`CompleteFinalize`/`ReleaseFinalize` — nothing would otherwise ever close its
+`'open'` row. `daily-finalize --all-complete` now runs
+`ReconcileOrphanedFinalizeRedriveRuns` right before its own
+`FindStrandedFinalizeRuns` scan: it checks each `'open'` row's outbox
+delivery state (and, when delivered, the actual River job state via the
+queue-control pool) and closes it `'closed_orphaned'` the moment either
+orphan shape is detected, observed as the `"redriven_orphaned"` telemetry
+outcome. The run then reappears in `FindStrandedFinalizeRuns` exactly like
+any other recovered stranded run — an unattended sweep no longer needs an
+operator to notice and fall back to `--run <id>` by hand.
+`daily-redrive`'s own partition-level query is unaffected by construction
+regardless: the reset never touches `daily_metrics_partitions`, so a
+redriven run's partitions stay 100% `'succeeded'` throughout.
 
 Returns `{"finalize_redrive": {"Days": [{"Day": "...", "RunID": "...",
 "Outcome": "...", "ResetFromSucceeded": true|false}, ...]}, "dry_run":
@@ -1468,8 +1483,13 @@ to touch it".
 per calendar day considered — `--dry-run` never observes, since it makes no
 real work to count) is wired but not live for THIS caller, for the same
 reason every other `workerctl` counter above is not: a one-shot CLI with no
-Prometheus scrape endpoint. `redriven_failed` is different: it is observed
-by `PostgresStore.transitionFinalize`, called from the long-running worker's
+Prometheus scrape endpoint. `redriven_orphaned` is observed the identical
+way: by `PostgresStore.ReconcileOrphanedFinalizeRedriveRuns`, called from
+`daily-finalize --all-complete` right before its own `FindStrandedFinalizeRuns`
+scan, whenever it closes an event `'closed_orphaned'` — counted in runs, not
+calendar days, and not live for the same reason (this CLI, not a scraped
+process). `redriven_failed` is different: it is observed by
+`PostgresStore.transitionFinalize`, called from the long-running worker's
 `ReleaseFinalize` path whenever it closes a run's finalize-redrive event as
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.

@@ -336,7 +336,13 @@ is plausibly still in flight — not permanently: the moment that specific
 claim resolves (success or failure), the same completion path that settles
 the run also closes this row, and a **failed** redriven finalize reappears
 in the sweep immediately, exactly like any other ordinary CHAOS-4389
-discard. See [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+discard. A redriven job that never reaches a claim AT ALL — discarded/
+cancelled by River, or never delivered into River at all — has no
+completion path to close this row either, so `daily-finalize --all-complete`
+also runs `ReconcileOrphanedFinalizeRedriveRuns` right before its own sweep,
+closing any such row `'closed_orphaned'` once it confirms (via the
+queue-control pool) the job is really gone, not merely still in flight. See
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
 for the full command shape, the `--include-succeeded` gate, and why
 re-running finalize twice for the same day is safe (argMax dedup).
 

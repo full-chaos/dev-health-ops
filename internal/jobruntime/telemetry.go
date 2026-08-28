@@ -406,8 +406,19 @@ var dailyMetricsFinalizeLedgerRepairOutcomes = []string{"repaired", "skipped_cla
 // 'closed_failed' -- an indefinite time after the original redrive call
 // returned. Counted in runs, not calendar days (transitionFinalize has no
 // day-range concept), unlike the other three outcomes here.
+//
+// "redriven_orphaned" (team-lead escalation, same day, closing the
+// remaining residual gap) is observed by
+// PostgresStore.ReconcileOrphanedFinalizeRedriveRuns (redrive.go), called
+// from `daily-finalize --all-complete` right before FindStrandedFinalizeRuns
+// itself. It closes an 'open' event whose redriven River job was
+// discarded/cancelled, or never reached River at all, before ClaimFinalize
+// was ever called for it -- the one shape neither "redriven_failed" (a claim
+// that DID resolve) nor CompleteFinalize/ReleaseFinalize (which only ever
+// fire for a claim that happens) can ever observe, since no claim happens
+// here at all. Counted in runs, like "redriven_failed".
 var dailyMetricsFinalizeRedriveOutcomes = []string{
-	"redriven", "redriven_reset_from_succeeded", "skipped_ineligible", "redriven_failed",
+	"redriven", "redriven_reset_from_succeeded", "skipped_ineligible", "redriven_failed", "redriven_orphaned",
 }
 
 var durationBuckets = []float64{

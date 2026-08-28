@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -484,6 +485,21 @@ func configureWorkerDependenciesWithSources(
 		queueTelemetry:         dependencies.queueTelemetry,
 		queueTelemetryRequired: dependencies.queueTelemetryRequired,
 	}); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4308: synccoverage.ScopeIntentMetrics is a process-wide singleton
+	// (internal/synccoverage/metrics.go) incremented by every worker group
+	// that runs the coverage queue (repository.go's observeExcluded, hit by
+	// KindSyncCoverageRefresh -- go-worker-ops in production), but its doc
+	// comment's own instruction -- "Register it on a binary's health
+	// registry with RegisterMetrics to expose it" -- had never been followed
+	// by any cmd/ binary. Registered here, once, on every worker group's
+	// registry rather than only inside the coverage-queue composition
+	// branch, so the family name is always present (reading zero on groups
+	// that never touch the coverage queue) instead of only existing on
+	// scrapes lucky enough to hit an ops-group replica.
+	if err := registry.RegisterMetrics("sync_coverage_scope_intent", synccoverage.ScopeIntentMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

@@ -43,10 +43,21 @@ def build_case_id(suite_id: str, case_name: str, occurrence: int = 0) -> str:
     batch``, since two identically named cases hashed to the same case_id).
     It is folded into the hash ONLY when non-zero, so the first (and every
     non-colliding) case keeps the exact case_id it always has.
+
+    The ordinal is hashed together with the already-computed digest, not
+    joined as a third raw ``_hash_identifier(suite_id, case_name, str(n))``
+    part (matching a codex review finding on the identical Go fix): since
+    ``_hash_identifier`` joins parts with an unescaped ``"::"``, a case
+    literally named ``"foo::1"`` would otherwise hash identically to a
+    duplicate case named ``"foo"`` at occurrence 1 -- both join to
+    ``"suite_id::foo::1"`` before hashing. The intermediate digest is a
+    fixed-length hex string that can never itself contain ``"::"``, so
+    hashing it with the ordinal has no such ambiguity.
     """
+    base = _hash_identifier(suite_id, case_name)
     if occurrence:
-        return _hash_identifier(suite_id, case_name, str(occurrence))
-    return _hash_identifier(suite_id, case_name)
+        return _hash_identifier(base, str(occurrence))
+    return base
 
 
 def attribute_service_from_path(

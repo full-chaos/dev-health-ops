@@ -963,13 +963,20 @@ func parseJUnitRows(
 		// and WriteEffect's recordGitHubTestsKey rejects the whole batch with
 		// a bare ErrInvalidConfiguration -- the unit then burns all 5 River
 		// attempts on the same deterministic collision (prod run 33149651369,
-		// full-chaos/dev-health-ops). Keyed on the RAW name (pre-"unnamed"
-		// normalization) so two empty-named cases collide with each other,
-		// exactly like two cases literally named "unnamed" would.
+		// full-chaos/dev-health-ops). Keyed on the NORMALIZED name (codex
+		// review finding, P2): an empty name="" and a literal name="unnamed"
+		// both normalize to "unnamed" in newJUnitCaseRow, so keying on the
+		// raw pre-normalization string let each reach occurrence=0
+		// independently and still collide on the same CaseID -- the exact
+		// defect this fix exists to remove.
 		caseOccurrence := map[string]int{}
 		for _, testCase := range suite.Cases {
-			occurrence := caseOccurrence[testCase.Name]
-			caseOccurrence[testCase.Name] = occurrence + 1
+			name := testCase.Name
+			if name == "" {
+				name = "unnamed"
+			}
+			occurrence := caseOccurrence[name]
+			caseOccurrence[name] = occurrence + 1
 			caseRow := newJUnitCaseRow(testCase, row, normalizedAt, occurrence)
 			switch caseRow.Status {
 			case "passed":
@@ -1033,7 +1040,21 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 	}
 	caseID := hashTestIdentifier(suite.SuiteID, name)
 	if occurrence > 0 {
-		caseID = hashTestIdentifier(suite.SuiteID, name, strconv.Itoa(occurrence))
+		// Hash the ALREADY-COMPUTED digest with the ordinal, rather than
+		// joining (suite.SuiteID, name, ordinal) as three raw parts through
+		// hashTestIdentifier's unescaped "::" separator (codex review
+		// finding, P2): a case literally named "foo::1" would otherwise hash
+		// to hashTestIdentifier(suite.SuiteID, "foo::1"), which is
+		// byte-for-byte the same input hashTestIdentifier joins for a
+		// DIFFERENT case named "foo" at occurrence=1 --
+		// hashTestIdentifier(suite.SuiteID, "foo", "1") -- both produce
+		// "suiteID::foo::1" before hashing. caseID is already a fixed-length
+		// hex digest that can never itself contain "::", so hashing it
+		// together with the ordinal has no such ambiguity, matching the
+		// hash-of-a-hash pattern this package already uses for SuiteID
+		// (itself hashTestIdentifier(runID, artifactID, name, "")) feeding
+		// into this very call.
+		caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
 	}
 	return testCaseResultRow{
 		RepoID: suite.RepoID, RunID: suite.RunID, SuiteID: suite.SuiteID,

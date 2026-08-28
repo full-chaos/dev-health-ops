@@ -351,50 +351,90 @@ func (b *githubTestsDuplicateKeyBatch) Abort() error        { return nil }
 // mirrors (CHAOS-4315) -- and the batch never collides at WriteEffect at
 // all.
 func TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds(t *testing.T) {
-	const duplicateNameFixture = `<testsuite name="matrix">` +
-		`<testcase name="flaky" classname="pkg.TestA"/>` +
-		`<testcase name="flaky" classname="pkg.TestB"><failure message="boom" type="AssertionError">trace</failure></testcase>` +
-		`</testsuite>`
-	claim := nativeTestClaim("github", "cicd")
-	rows, err := parseGitHubTestsArtifact(
-		githubTestsZip(t, map[string]string{"reports/junit.xml": duplicateNameFixture}),
-		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "33149651369", claim.OrgID,
-		nil, nil, time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
-	)
-	if err != nil {
-		t.Fatalf("parse of a within-suite duplicate case name failed closed: %v", err)
-	}
-	if len(rows.Cases) != 2 {
-		t.Fatalf("cases=%+v, want both duplicate-named cases retained (no skip, unlike the artifact-oversized precedent)", rows.Cases)
-	}
-	if rows.Cases[0].CaseID == "" || rows.Cases[1].CaseID == "" || rows.Cases[0].CaseID == rows.Cases[1].CaseID {
-		t.Fatalf(
-			"case IDs=[%q,%q], want both non-empty and distinct -- an identical CaseID is exactly CHAOS-4392's collision",
-			rows.Cases[0].CaseID, rows.Cases[1].CaseID,
+	parseAndCommit := func(t *testing.T, fixture string, wantCases int) githubTestsReportRows {
+		t.Helper()
+		claim := nativeTestClaim("github", "cicd")
+		rows, err := parseGitHubTestsArtifact(
+			githubTestsZip(t, map[string]string{"reports/junit.xml": fixture}),
+			"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "33149651369", claim.OrgID,
+			nil, nil, time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
 		)
-	}
-	if rows.Cases[0].CaseName != "flaky" || rows.Cases[1].CaseName != "flaky" {
-		t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows despite the disambiguated ID", rows.Cases)
-	}
-	if rows.DuplicateCases != 1 {
-		t.Fatalf("DuplicateCases=%d, want 1 (the telemetry input for dev_health_cicd_duplicate_test_case_total)", rows.DuplicateCases)
+		if err != nil {
+			t.Fatalf("parse of a within-suite duplicate case name failed closed: %v", err)
+		}
+		if len(rows.Cases) != wantCases {
+			t.Fatalf("cases=%+v, want %d rows retained (no skip, unlike the artifact-oversized precedent)", rows.Cases, wantCases)
+		}
+		ids := make(map[string]struct{}, len(rows.Cases))
+		for _, row := range rows.Cases {
+			if row.CaseID == "" {
+				t.Fatalf("case=%+v has an empty CaseID", row)
+			}
+			if _, collided := ids[row.CaseID]; collided {
+				t.Fatalf("cases=%+v, CaseID %q is not unique -- exactly CHAOS-4392's collision", rows.Cases, row.CaseID)
+			}
+			ids[row.CaseID] = struct{}{}
+		}
+		effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, rows.Cases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batchConn := &githubTestsDuplicateKeyConn{}
+		sink := TestOpsClickHouseEffects{
+			Conn:  batchConn,
+			Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		}
+		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
+			t.Fatalf(
+				"CHAOS-4392: WriteEffect rejected within-suite duplicate-named cases after disambiguation: %v", err,
+			)
+		}
+		if batchConn.batch == nil || batchConn.batch.appends != wantCases {
+			t.Fatalf("committed appends=%v, want all %d disambiguated case rows written", batchConn.batch, wantCases)
+		}
+		return rows
 	}
 
-	effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, rows.Cases)
-	if err != nil {
-		t.Fatal(err)
-	}
-	batchConn := &githubTestsDuplicateKeyConn{}
-	sink := TestOpsClickHouseEffects{
-		Conn:  batchConn,
-		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
-	}
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatalf(
-			"CHAOS-4392: WriteEffect rejected two within-suite duplicate-named cases after disambiguation: %v", err,
-		)
-	}
-	if batchConn.batch == nil || batchConn.batch.appends != 2 {
-		t.Fatalf("committed appends=%v, want both disambiguated case rows written", batchConn.batch)
-	}
+	t.Run("two identically named cases get distinct ids", func(t *testing.T) {
+		const fixture = `<testsuite name="matrix">` +
+			`<testcase name="flaky" classname="pkg.TestA"/>` +
+			`<testcase name="flaky" classname="pkg.TestB"><failure message="boom" type="AssertionError">trace</failure></testcase>` +
+			`</testsuite>`
+		rows := parseAndCommit(t, fixture, 2)
+		if rows.Cases[0].CaseName != "flaky" || rows.Cases[1].CaseName != "flaky" {
+			t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows despite the disambiguated ID", rows.Cases)
+		}
+		if rows.DuplicateCases != 1 {
+			t.Fatalf("DuplicateCases=%d, want 1 (the telemetry input for dev_health_cicd_duplicate_test_case_total)", rows.DuplicateCases)
+		}
+	})
+
+	// Codex review finding (P2): an empty name="" and a literal
+	// name="unnamed" both normalize to "unnamed" in newJUnitCaseRow. Keying
+	// caseOccurrence on the RAW pre-normalization name let each reach
+	// occurrence=0 independently and still collide on the identical CaseID
+	// -- the fix keys the occurrence map on the NORMALIZED name instead.
+	t.Run("empty name and literal unnamed still get distinct ids", func(t *testing.T) {
+		const fixture = `<testsuite name="matrix">` +
+			`<testcase name="" classname="pkg.TestA"/>` +
+			`<testcase name="unnamed" classname="pkg.TestB"/>` +
+			`</testsuite>`
+		parseAndCommit(t, fixture, 2)
+	})
+
+	// Codex review finding (P2): hashTestIdentifier joins parts with an
+	// unescaped "::", so hashTestIdentifier(suiteID, "foo", "1") (a
+	// duplicate "foo" at occurrence 1) and hashTestIdentifier(suiteID,
+	// "foo::1") (a case genuinely named "foo::1") both join to the same
+	// "suiteID::foo::1" before hashing -- a real collision class the ordinal
+	// disambiguation introduced. The fix hashes the already-computed digest
+	// with the ordinal instead of joining three raw parts.
+	t.Run("an ordinal-shaped case name does not collide with a real duplicate", func(t *testing.T) {
+		const fixture = `<testsuite name="matrix">` +
+			`<testcase name="foo" classname="pkg.TestA"/>` +
+			`<testcase name="foo" classname="pkg.TestB"/>` +
+			`<testcase name="foo::1" classname="pkg.TestC"/>` +
+			`</testsuite>`
+		parseAndCommit(t, fixture, 3)
+	})
 }

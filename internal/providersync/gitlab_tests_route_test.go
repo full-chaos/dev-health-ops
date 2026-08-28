@@ -462,34 +462,55 @@ func TestGitLabTestsRedirectTargetFailuresPreserveProviderClassification(t *test
 // (suiteID, caseName) alone, so two test_cases sharing a name in one
 // test_suite collided exactly like the JUnit path did.
 func TestGitLabNativeTestReportWithinSuiteDuplicateCaseNamesGetDistinctIDs(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "cicd")
-	report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{{
-		Name: "matrix",
-		Cases: []gitLabTestsCasePayload{
+	normalize := func(t *testing.T, payload []gitLabTestsCasePayload, wantCases int) []testCaseResultRow {
+		t.Helper()
+		claim := nativeTestClaim("gitlab", "cicd")
+		report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{{Name: "matrix", Cases: payload}}}
+		_, cases, err := normalizeGitLabNativeTestReport(
+			claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
+			time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+		)
+		if err != nil {
+			t.Fatalf("normalize of a within-suite duplicate case name failed closed: %v", err)
+		}
+		if len(cases) != wantCases {
+			t.Fatalf("cases=%+v, want %d rows retained", cases, wantCases)
+		}
+		ids := make(map[string]struct{}, len(cases))
+		for _, row := range cases {
+			if row.CaseID == "" {
+				t.Fatalf("case=%+v has an empty CaseID", row)
+			}
+			if _, collided := ids[row.CaseID]; collided {
+				t.Fatalf("cases=%+v, CaseID %q is not unique -- CHAOS-4392's collision", cases, row.CaseID)
+			}
+			ids[row.CaseID] = struct{}{}
+		}
+		return cases
+	}
+
+	t.Run("two identically named cases get distinct ids", func(t *testing.T) {
+		cases := normalize(t, []gitLabTestsCasePayload{
 			{Name: "flaky", ClassName: "pkg.TestA", Status: "success"},
 			{Name: "flaky", ClassName: "pkg.TestB", Status: "failed"},
-		},
-	}}}
-	_, cases, err := normalizeGitLabNativeTestReport(
-		claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
-		time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
-	)
-	if err != nil {
-		t.Fatalf("normalize of a within-suite duplicate case name failed closed: %v", err)
-	}
-	if len(cases) != 2 {
-		t.Fatalf("cases=%+v, want both duplicate-named cases retained", cases)
-	}
-	if cases[0].CaseID == "" || cases[1].CaseID == "" || cases[0].CaseID == cases[1].CaseID {
-		t.Fatalf(
-			"case IDs=[%q,%q], want both non-empty and distinct -- an identical CaseID is CHAOS-4392's collision",
-			cases[0].CaseID, cases[1].CaseID,
-		)
-	}
-	if cases[0].CaseName != "flaky" || cases[1].CaseName != "flaky" {
-		t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows", cases)
-	}
-	if countDuplicateTestCases(cases) != 1 {
-		t.Fatalf("countDuplicateTestCases=%d, want 1", countDuplicateTestCases(cases))
-	}
+		}, 2)
+		if cases[0].CaseName != "flaky" || cases[1].CaseName != "flaky" {
+			t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows", cases)
+		}
+		if countDuplicateTestCases(cases) != 1 {
+			t.Fatalf("countDuplicateTestCases=%d, want 1", countDuplicateTestCases(cases))
+		}
+	})
+
+	// GitLab twin of the codex review finding on the JUnit path: an
+	// ordinal-shaped real case name ("foo::1") must not collide with a
+	// disambiguated duplicate of "foo" via hashTestIdentifier's unescaped
+	// "::" join.
+	t.Run("an ordinal-shaped case name does not collide with a real duplicate", func(t *testing.T) {
+		normalize(t, []gitLabTestsCasePayload{
+			{Name: "foo", ClassName: "pkg.TestA", Status: "success"},
+			{Name: "foo", ClassName: "pkg.TestB", Status: "failed"},
+			{Name: "foo::1", ClassName: "pkg.TestC", Status: "success"},
+		}, 3)
+	})
 }

@@ -730,7 +730,13 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 			caseOccurrence[caseName] = occurrence + 1
 			caseID := hashTestIdentifier(suiteID, caseName)
 			if occurrence > 0 {
-				caseID = hashTestIdentifier(suiteID, caseName, strconv.Itoa(occurrence))
+				// Hash the digest, not three raw joined parts -- see the
+				// identical fix and rationale in newJUnitCaseRow
+				// (github_tests_reports.go, codex review finding P2): a case
+				// literally named "foo::1" would otherwise collide with a
+				// duplicate "foo" at occurrence=1 through
+				// hashTestIdentifier's unescaped "::" join.
+				caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
 			}
 			cases = append(cases, testCaseResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
 				CaseID: caseID, CaseName: caseName, ClassName: testsOptionalString(stringValue(rawCase.ClassName)),

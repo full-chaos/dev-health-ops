@@ -93,6 +93,16 @@ def test_build_case_id_disambiguates_by_occurrence() -> None:
     # every non-colliding case_id already persisted keeps its exact value.
     assert build_case_id("suite-1", "flaky", occurrence=0) == first
 
+    # Codex review finding on the identical Go fix (P2): _hash_identifier
+    # joins parts with an unescaped "::", so a naive
+    # _hash_identifier(suite_id, case_name, "1") would collide with a case
+    # genuinely named "foo::1" -- both join to "suite-1::foo::1". Hashing
+    # the already-computed digest with the ordinal (rather than joining
+    # three raw parts) avoids that ambiguity.
+    real_case_named_like_the_ordinal_join = build_case_id("suite-1", "foo::1")
+    duplicate_foo_at_occurrence_1 = build_case_id("suite-1", "foo", occurrence=1)
+    assert real_case_named_like_the_ordinal_join != duplicate_foo_at_occurrence_1
+
 
 @pytest.mark.asyncio
 async def test_process_test_report_disambiguates_within_suite_duplicate_case_names() -> (

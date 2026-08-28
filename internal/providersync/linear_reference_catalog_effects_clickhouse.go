@@ -162,9 +162,17 @@ func (sink LinearReferenceCatalogClickHouseEffects) InspectEffect(ctx context.Co
 	}
 }
 
+// validateRequest deliberately does NOT call claim.Validate(): CHAOS-4431
+// (team-lead ruling, 2026-08-28, option (c)) made the caller claim-free --
+// this sink is now written to from a once-per-sync-run reference-catalog
+// walk with no lease or claimed provider-unit behind it, not from inside the
+// work-items route's Collect(). claim.Validate() requires a live lease and
+// claim.Dataset=="work-items" belonged to that retired call shape; the only
+// properties this write path still needs are "this really is Linear" and
+// "this really is this org" (every row below also re-checks OrgID itself).
 func (sink LinearReferenceCatalogClickHouseEffects) validateRequest(ctx context.Context, claim Claim, effect EffectBatch) error {
-	if ctx == nil || sink.Lease == nil || sink.Conn == nil || claim.Validate() != nil ||
-		claim.Provider != "linear" || claim.Dataset != "work-items" ||
+	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
+		claim.Provider != "linear" || strings.TrimSpace(claim.OrgID) == "" ||
 		effect.Recovery != EffectReadbackRequired || !validDigest(effect.ContentDigest) ||
 		effect.PayloadBytes < 0 || !linearReferenceCatalogDestination(effect.Destination) {
 		return ErrInvalidConfiguration

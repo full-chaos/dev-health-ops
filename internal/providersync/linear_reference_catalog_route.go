@@ -96,12 +96,11 @@ type LinearReferenceCatalogResult struct {
 }
 
 type LinearReferenceCatalogBatch struct {
-	Rows      LinearReferenceCatalogRows     `json:"rows"`
-	Effects   LinearReferenceCatalogEffects  `json:"effects"`
-	Result    LinearReferenceCatalogResult   `json:"result"`
-	Evidence  LinearReferenceCatalogEvidence `json:"evidence"`
-	Watermark *time.Time                     `json:"watermark"`
-	Failure   *LinearReferenceCatalogFailure `json:"failure"`
+	Rows     LinearReferenceCatalogRows     `json:"rows"`
+	Effects  LinearReferenceCatalogEffects  `json:"effects"`
+	Result   LinearReferenceCatalogResult   `json:"result"`
+	Evidence LinearReferenceCatalogEvidence `json:"evidence"`
+	Failure  *LinearReferenceCatalogFailure `json:"failure"`
 }
 
 // LinearReferenceCatalogRouteHandler owns the provider-only team/member/
@@ -127,20 +126,30 @@ func (handler LinearReferenceCatalogRouteHandler) limits() (int, int, error) {
 	return perPage, maxPages, nil
 }
 
+// CollectReferenceCatalog walks Linear's teams/members/projects once per
+// sync run (CHAOS-4431 ruling, team-lead 2026-08-28, option (c)): claim-free,
+// by a TeamCatalogReference rather than a claimed provider-unit Claim. It was
+// originally gated on claim.Dataset=="work-items" because the catalog was
+// designed to be invoked from inside the work-items unit's Collect(); that
+// precondition belonged to a route this code never actually ran on and is
+// dropped here along with the Claim parameter itself. Internally it still
+// builds a minimal Claim{OrgID, Provider} (never claim.Validate()'d) purely
+// because the row normalizers below read claim.OrgID/claim.Provider -- no
+// lease or generation semantics attach to it.
 func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	ctx context.Context,
-	claim Claim,
+	ref TeamCatalogReference,
 	credential providerfoundation.Credential,
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
 ) (LinearReferenceCatalogBatch, error) {
-	if ctx == nil || claim.Validate() != nil || claim.Provider != "linear" ||
-		claim.Dataset != "work-items" || credential.Provider != "linear" ||
-		credential.ID == "" || credential.ID != claim.CredentialID || client == nil ||
+	if ctx == nil || ref.validate() != nil || credential.Provider != "linear" ||
+		credential.ID == "" || client == nil ||
 		client.Provider != "linear" || client.BaseURL == nil || client.Doer == nil ||
 		client.Lease == nil || normalizedAt.IsZero() {
 		return LinearReferenceCatalogBatch{}, ErrInvalidConfiguration
 	}
+	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: "linear"}}
 	perPage, maxPages, err := handler.limits()
 	if err != nil {
 		return LinearReferenceCatalogBatch{}, err
@@ -293,12 +302,10 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		Projects: len(rows.Projects), Ownership: len(rows.Ownership), Complete: true,
 	}
 	evidence.Records = result.Teams + result.Members + result.Memberships + result.Projects + result.Ownership
-	var watermark *time.Time
-	if claim.BeforeAt != nil {
-		value := claim.BeforeAt.UTC()
-		watermark = &value
-	}
-	return LinearReferenceCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence, Watermark: watermark}, nil
+	// No claim, no lease window: this walk has no watermark concept (it was
+	// never load-bearing here -- CollectReferenceCatalog filters nothing by
+	// SinceAt/BeforeAt, it always walks the whole catalog).
+	return LinearReferenceCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
 }
 
 func linearReferenceCatalogFailureBatch(

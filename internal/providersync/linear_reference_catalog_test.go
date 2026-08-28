@@ -60,31 +60,37 @@ func TestLinearReferenceCatalogTreatsTrashedProjectAsRetired(t *testing.T) {
 
 func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 	baseClaim := nativeTestClaim("linear", "work-items")
+	baseRef := teamCatalogRefFromClaim(baseClaim)
 	observed := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	for _, testCase := range []struct {
 		name       string
-		claim      Claim
+		ref        TeamCatalogReference
 		credential providerfoundation.Credential
 		client     func(*providerfoundation.HTTPClient)
 	}{
 		{
-			name:       "wrong claim provider",
-			claim:      nativeTestClaim("github", "work-items"),
+			name:       "invalid reference: missing org id",
+			ref:        TeamCatalogReference{SyncRunID: baseRef.SyncRunID},
+			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
+		},
+		{
+			name:       "invalid reference: missing sync run id",
+			ref:        TeamCatalogReference{OrgID: baseRef.OrgID},
 			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
 		},
 		{
 			name:       "wrong credential provider",
-			claim:      baseClaim,
+			ref:        baseRef,
 			credential: providerfoundation.Credential{Provider: "github", ID: baseClaim.CredentialID},
 		},
 		{
-			name:       "wrong credential id",
-			claim:      baseClaim,
-			credential: providerfoundation.Credential{Provider: "linear", ID: "credential-other"},
+			name:       "missing credential id",
+			ref:        baseRef,
+			credential: providerfoundation.Credential{Provider: "linear", ID: ""},
 		},
 		{
 			name:       "wrong client provider",
-			claim:      baseClaim,
+			ref:        baseRef,
 			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
 			client:     func(client *providerfoundation.HTTPClient) { client.Provider = "github" },
 		},
@@ -96,12 +102,22 @@ func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 				testCase.client(client)
 			}
 			batch, err := (LinearReferenceCatalogRouteHandler{}).CollectReferenceCatalog(
-				context.Background(), testCase.claim, testCase.credential, client, observed,
+				context.Background(), testCase.ref, testCase.credential, client, observed,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) || batch.Result.Complete || len(doer.requests) != 0 {
 				t.Fatalf("batch=%+v error=%v requests=%d", batch, err, len(doer.requests))
 			}
 		})
+	}
+}
+
+// teamCatalogRefFromClaim lets existing tests keep building scenarios off
+// nativeTestClaim's fixture data (CHAOS-4431 dropped the Claim parameter
+// from CollectReferenceCatalog; it is now fed a claim-free reference).
+func teamCatalogRefFromClaim(claim Claim) TeamCatalogReference {
+	return TeamCatalogReference{
+		OrgID: claim.OrgID, SyncRunID: claim.SyncRunID,
+		IntegrationID: claim.IntegrationID, SourceID: claim.SourceID,
 	}
 }
 
@@ -193,14 +209,14 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 		`{"data":{"projects":{"nodes":[{"id":"project-42","name":"Platform","description":"Platform project","status":{"id":"status-1","name":"Completed","type":"completed"},"trashed":false,"targetDate":"2026-09-30","archivedAt":null,"url":"https://linear.app/project-42","lead":{"id":"user-1","name":"Alice","email":"alice@example.com"},"teams":{"nodes":[{"id":"team-raw-1","key":"ENG"}]} }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 		linearWorkItemsClient(t, doer), observed,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.Failure != nil || !batch.Result.Complete || batch.Watermark == nil ||
+	if batch.Failure != nil || !batch.Result.Complete ||
 		batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 ||
 		!batch.Evidence.TeamsComplete || !batch.Evidence.MembersComplete || !batch.Evidence.ProjectsComplete {
 		t.Fatalf("batch=%+v", batch)
@@ -268,11 +284,11 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 		t.Run(testCase.name, func(t *testing.T) {
 			doer := &linearWorkItemsDoer{responses: testCase.responses}
 			batch, err := testCase.handler.CollectReferenceCatalog(
-				context.Background(), claim,
+				context.Background(), teamCatalogRefFromClaim(claim),
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 				linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 			)
-			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Watermark != nil || batch.Effects.Batches()[0].Destination != "" {
+			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Effects.Batches()[0].Destination != "" {
 				t.Fatalf("batch=%+v err=%v", batch, err)
 			}
 		})
@@ -288,7 +304,7 @@ func TestLinearReferenceCatalogPaginatesLargeTeamMemberships(t *testing.T) {
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
@@ -306,7 +322,7 @@ func TestLinearReferenceCatalogCountsMultiplePagesOnce(t *testing.T) {
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)

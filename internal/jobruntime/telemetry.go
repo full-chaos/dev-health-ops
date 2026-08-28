@@ -232,6 +232,49 @@ var dailyMetricsZeroRowsWithSourceFamilies = []string{"cicd", "deploy", "inciden
 // CHAOS-4263 daily-family list above is.
 var remainingMetricsOpenDayZeroRowFamilies = []string{"dora"}
 
+// remainingMetricsManualBackfillFamilies is the closed set of remaining-
+// metrics families the CHAOS-4254 `metrics remaining start` operator command
+// accepts -- the same day-scoped set
+// internal/jobs/metrics/remaining.ManualBackfillDayScopedFamilies pins, kept
+// independently here (rather than imported) to avoid a jobruntime ->
+// remaining import: remaining already imports jobruntime for its lease and
+// coverage observers, and a reverse import would cycle.
+var remainingMetricsManualBackfillFamilies = []string{"complexity", "dora", "release_impact"}
+
+// RemainingMetricsManualBackfillOutcome is the bounded durable outcome of one
+// CHAOS-4254 operator-triggered manual backfill request for a historical
+// (organization, family, day) no automatic trigger ever dispatched.
+type RemainingMetricsManualBackfillOutcome string
+
+const (
+	// RemainingMetricsManualBackfillOutcomeStarted means a new run/partition
+	// was inserted and (when a live publisher was wired) dispatched.
+	RemainingMetricsManualBackfillOutcomeStarted RemainingMetricsManualBackfillOutcome = "started"
+	// RemainingMetricsManualBackfillOutcomeAlreadyRan means this exact
+	// (org, family, generation, day) request had already been started by a
+	// prior call -- StartRunTx's ON CONFLICT DO NOTHING idempotency, not an
+	// error.
+	RemainingMetricsManualBackfillOutcomeAlreadyRan RemainingMetricsManualBackfillOutcome = "already_ran"
+	// RemainingMetricsManualBackfillOutcomeAlreadyCovered means the command
+	// refused: a non-zero-row succeeded partition already covers this day,
+	// and inserting another would duplicate rows in an append-only table
+	// with no dedup on replay (CHAOS-4242).
+	RemainingMetricsManualBackfillOutcomeAlreadyCovered RemainingMetricsManualBackfillOutcome = "already_covered"
+)
+
+func remainingMetricsManualBackfillOutcomes() []RemainingMetricsManualBackfillOutcome {
+	return []RemainingMetricsManualBackfillOutcome{
+		RemainingMetricsManualBackfillOutcomeStarted,
+		RemainingMetricsManualBackfillOutcomeAlreadyRan,
+		RemainingMetricsManualBackfillOutcomeAlreadyCovered,
+	}
+}
+
+type remainingMetricsManualBackfillLabels struct {
+	Family  string
+	Outcome RemainingMetricsManualBackfillOutcome
+}
+
 // dailyMetricsRedriveReasons is the closed set of bounded reasons an
 // operator-invoked stranded-partition redrive (CHAOS-4358) can report.
 // "failed_permanent_reset" counts partitions whose terminal failed_permanent
@@ -433,6 +476,9 @@ type MetricsCollector struct {
 	// day that has not closed yet, and therefore refusing to treat it as
 	// terminal coverage.
 	remainingOpenDayZeroRow map[string]uint64
+	// remainingManualBackfill (CHAOS-4254), keyed by family and outcome. See
+	// RemainingMetricsManualBackfillOutcome for the outcome vocabulary.
+	remainingManualBackfill map[remainingMetricsManualBackfillLabels]uint64
 	zeroUnitFinalizations   map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
@@ -535,6 +581,7 @@ var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
+var _ RemainingMetricsManualBackfillObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
@@ -582,6 +629,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
 		remainingOpenDayZeroRow:              make(map[string]uint64, len(remainingMetricsOpenDayZeroRowFamilies)),
+		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
@@ -662,6 +710,11 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
 		collector.remainingOpenDayZeroRow[family] = 0
+	}
+	for _, family := range remainingMetricsManualBackfillFamilies {
+		for _, outcome := range remainingMetricsManualBackfillOutcomes() {
+			collector.remainingManualBackfill[remainingMetricsManualBackfillLabels{Family: family, Outcome: outcome}] = 0
+		}
 	}
 	for _, reason := range dailyMetricsRedriveReasons {
 		collector.dailyMetricsRedrive[reason] = 0
@@ -1344,6 +1397,26 @@ func (collector *MetricsCollector) ObserveRemainingMetricsOpenDayZeroRow(family 
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.remainingOpenDayZeroRow[family]++
+	return nil
+}
+
+// ObserveRemainingMetricsManualBackfill records one CHAOS-4254 operator-
+// triggered manual backfill request outcome. family and outcome are plain
+// strings (not RemainingMetricsManualBackfillOutcome) so
+// internal/jobs/metrics/remaining can implement this capability with a
+// package-local interface and no dependency on jobruntime's exported types
+// -- the same decoupling ObserveRemainingMetricsOpenDayZeroRow uses.
+func (collector *MetricsCollector) ObserveRemainingMetricsManualBackfill(family, outcome string) error {
+	if !slices.Contains(remainingMetricsManualBackfillFamilies, family) {
+		return errors.New("remaining metrics manual backfill family is not registered")
+	}
+	typedOutcome := RemainingMetricsManualBackfillOutcome(outcome)
+	if !slices.Contains(remainingMetricsManualBackfillOutcomes(), typedOutcome) {
+		return errors.New("remaining metrics manual backfill outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.remainingManualBackfill[remainingMetricsManualBackfillLabels{Family: family, Outcome: typedOutcome}]++
 	return nil
 }
 
@@ -2101,6 +2174,19 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
 		writeUintSample(output, "dev_health_remaining_metrics_open_day_zero_row_total",
 			[]metricLabel{{"family", family}}, collector.remainingOpenDayZeroRow[family])
+	}
+
+	// Emitted for every (family, outcome) pair, including zeros -- same
+	// alerting reasoning as worker_dora_native_refused_total below: a series
+	// that only appears once an operator runs the CHAOS-4254 command cannot
+	// be dashboarded ahead of the first use.
+	writeMetadata(output, "dev_health_remaining_metrics_manual_backfill_total", "Operator-triggered CHAOS-4254 `metrics remaining start` requests, by family and outcome.", "counter")
+	for _, family := range remainingMetricsManualBackfillFamilies {
+		for _, outcome := range remainingMetricsManualBackfillOutcomes() {
+			labels := remainingMetricsManualBackfillLabels{Family: family, Outcome: outcome}
+			writeUintSample(output, "dev_health_remaining_metrics_manual_backfill_total",
+				[]metricLabel{{"family", family}, {"outcome", string(outcome)}}, collector.remainingManualBackfill[labels])
+		}
 	}
 
 	writeMetadata(output, "worker_dora_native_partitions_total", "Partitions computed by the native Go DORA executor.", "counter")

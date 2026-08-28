@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -766,6 +767,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return writeError(stderr, "invalid_request")
 	}
 	switch args[0] {
+	case "remaining":
+		return dispatchMetricsRemaining(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-redrive":
 		flags := quietFlags("metrics daily-redrive")
 		org := flags.String("org", "", "organization id (uuid)")
@@ -873,6 +876,143 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return writeResult(stdout, stderr, map[string]any{
 			"ledger_repair": ledgerRepair,
 			"partitions":    outcome,
+		})
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+}
+
+// manualBackfillReadbackTable names the primary ClickHouse table each
+// day-scoped remaining-metrics family writes (families.json's "writes"
+// list), for the readback hint dispatchMetricsRemaining prints after
+// starting a run. All three tables carry an org_id String and a day Date
+// column (migrations 023b/024, 007/024, 034), so the same hint shape works
+// for all of them.
+var manualBackfillReadbackTable = map[string]string{
+	"complexity":     "repo_complexity_daily",
+	"dora":           "dora_metrics_daily",
+	"release_impact": "release_impact_daily",
+}
+
+// manualBackfillMaxDays bounds a single `metrics remaining start` command's
+// [--day, --to] span. This is a manual, human-invoked recovery tool for a
+// handful of never-dispatched historical days (CHAOS-4254's motivating case
+// is 3 days), not a bulk backfill mechanism -- an operator who wants more
+// than a month of days should be reconsidering whether this is the right
+// tool, not stepping through a larger constant.
+const manualBackfillMaxDays = 31
+
+// dispatchMetricsRemaining handles `metrics remaining start` (CHAOS-4254):
+// the operator entry point that dispatches a NEW remaining-metrics run for a
+// historical (organization, family, day) that no automatic trigger
+// (post-sync or fixed-schedule) ever dispatched -- the day was never
+// computed at all, which is outside what `jobs retry` or `metrics
+// daily-redrive` can recover (those both require a run that was dispatched
+// and then discarded/stranded). This is also the prod recovery path for
+// CHAOS-4384: a day frozen at 0 rows by the pre-fix same-day coverage bug is
+// backfillable here even though it already has a "succeeded" partition,
+// because that partition wrote nothing.
+//
+// Mirrors `metrics daily-redrive`'s command shape (WORKER_OPERATOR_TOKEN
+// authentication via configureRuntime, --review-evidence required, quiet
+// invalid_request on any malformed input) but does NOT wire a
+// jobruntime.MetricsCollector to remaining.PostgresStore's
+// SetManualBackfillObserver: workerctl is a one-shot CLI with no metrics
+// endpoint to scrape, so a counter incremented in this process before exit
+// is never observed. dev_health_remaining_metrics_manual_backfill_total
+// exists in internal/jobruntime for when a long-running process calls
+// StartManualBackfillRun; daily-redrive's own SetRedriveObserver is wired
+// the identical way (cmd/dev-health-worker/daily.go only, never here) for
+// the same reason -- see this command's PR RISK-NOTES.
+func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "start":
+		flags := quietFlags("metrics remaining start")
+		family := flags.String("family", "", "day-scoped remaining-metrics family (complexity, dora, release_impact)")
+		day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
+		to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
+		org := flags.String("org", "", "organization id (uuid)")
+		reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this historical day needs a manual backfill (e.g. \"CHAOS-4384 -- day frozen at 0 rows by the pre-fix same-day coverage bug, source data has since landed\")")
+		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
+			return writeError(stderr, "invalid_request")
+		}
+		if !slices.Contains(remaining.ManualBackfillDayScopedFamilies, *family) {
+			return writeError(stderr, "invalid_request")
+		}
+		if _, err := uuid.Parse(*org); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		if strings.TrimSpace(*reviewEvidence) == "" {
+			return writeError(stderr, "invalid_request")
+		}
+		fromDay, err := time.Parse("2006-01-02", *day)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		toRaw := *to
+		if toRaw == "" {
+			toRaw = *day
+		}
+		toDay, err := time.Parse("2006-01-02", toRaw)
+		if err != nil || toDay.Before(fromDay) {
+			return writeError(stderr, "invalid_request")
+		}
+		if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
+			return writeError(stderr, "invalid_request")
+		}
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		generation := "manual-backfill:" + time.Now().UTC().Format(time.RFC3339Nano)
+		type dayResult struct {
+			Day         string `json:"day"`
+			Status      string `json:"status"`
+			RunID       string `json:"run_id,omitempty"`
+			PartitionID string `json:"partition_id,omitempty"`
+			Error       string `json:"error,omitempty"`
+		}
+		var results []dayResult
+		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+			dayString := cursor.Format("2006-01-02")
+			outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+			switch {
+			case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
+				results = append(results, dayResult{
+					Day: dayString, Status: "already_covered", RunID: outcome.RunID,
+				})
+			case startErr != nil:
+				results = append(results, dayResult{Day: dayString, Status: "error", Error: startErr.Error()})
+			case outcome.AlreadyRan:
+				results = append(results, dayResult{
+					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
+				})
+			default:
+				results = append(results, dayResult{
+					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
+				})
+			}
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"family":          *family,
+			"org":             *org,
+			"generation":      generation,
+			"review_evidence": *reviewEvidence,
+			"days":            results,
+			"readback_hint": fmt.Sprintf(
+				"ClickHouse: SELECT day, count() FROM %s WHERE org_id = '%s' AND day BETWEEN '%s' AND '%s' GROUP BY day ORDER BY day",
+				manualBackfillReadbackTable[*family], *org, *day, toRaw,
+			),
 		})
 	default:
 		return writeError(stderr, "invalid_request")

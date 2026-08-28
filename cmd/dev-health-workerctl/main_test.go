@@ -656,3 +656,96 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
+
+const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
+
+func TestDispatchMetricsRemainingStartRequiresReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsNonDayScopedFamily(t *testing.T) {
+	// capacity is a real remaining-metrics family but has no day-keyed
+	// scope (it needs a GenerationSeed the CLI has no flag for) -- CHAOS-4254
+	// only supports the day-scoped families.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "capacity", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("capacity family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26",
+		"--org", "not-a-uuid", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsMalformedDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "not-a-date",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("malformed --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsToBeforeDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26", "--to", "2026-08-20",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("--to before --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsSpanOverTheDayLimit(t *testing.T) {
+	// manualBackfillMaxDays bounds a single command's day span so an
+	// operator cannot accidentally turn this recovery tool into a bulk
+	// backfill mechanism.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-01-01", "--to", "2026-12-31",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("day span over manualBackfillMaxDays not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsUnknownFamilyFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "not-a-real-family", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("unknown family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("unknown remaining subcommand not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}

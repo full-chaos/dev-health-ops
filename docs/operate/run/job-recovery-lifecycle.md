@@ -271,6 +271,26 @@ terminalizes the partition `failed_permanent`, undoing the reset (see
 [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
 for the exact env vars and required-order rationale).
 
+**Neither of the above covers a day that was never dispatched at all.**
+`jobs retry` and `metrics daily-redrive` both recover a run/partition that
+was dispatched and then stranded or discarded — they need a row to already
+exist. A day sync never ran for, or one whose row aged out of River's
+retention, has no row to recover. `dev-health-workerctl metrics remaining
+start --family <family> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --org <uuid>
+--review-evidence "<why>"` (CHAOS-4254) closes this gap for the day-scoped
+remaining-metrics families (`complexity`, `dora`, `release_impact`): it calls
+`remaining.PostgresStore.StartRunTx` directly with a fresh
+`manual-backfill:<timestamp>` generation, going through the same
+idempotency/validation path every automatic producer uses. This is also the
+prod recovery path for CHAOS-4384's dora-frozen-at-0 incident, since a day
+the pre-fix same-day coverage bug froze at 0 rows already has a "succeeded"
+partition — recomputing it needs a rule the automatic dora trigger
+deliberately does not apply (a 0-row day is backfillable regardless of
+whether it has closed; only a non-zero-row day is refused as already
+covered). See
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for the full command shape and coverage rule.
+
 ## Sources
 
 - CHAOS-3991 — a claim conflict reported as success deleted the job that would
@@ -280,3 +300,6 @@ for the exact env vars and required-order rationale).
 - CHAOS-4358 / CHAOS-4304 — targeted redrive for daily-metrics runs stranded by
   discarded `daily_partition` jobs, and the ledger-side ambiguous/executing
   repair that must run alongside it
+- CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
+  was never dispatched at all, and its use as the recovery path for a dora
+  day frozen at 0 rows by the pre-fix same-day coverage bug

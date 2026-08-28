@@ -268,6 +268,7 @@ type DailyMetricsFinalizeLedgerRepairObserver interface {
 type DailyMetricsFinalizeRedriveObserver interface {
 	ObserveDailyMetricsFinalizeRedrive(outcome string, count int) error
 }
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

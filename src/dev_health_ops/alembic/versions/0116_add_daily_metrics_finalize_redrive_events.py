@@ -1,7 +1,7 @@
 """Add the finalize-redrive provenance ledger (CHAOS-4405).
 
-Revision ID: 0115
-Revises: 0114
+Revision ID: 0116
+Revises: 0115
 Create Date: 2026-08-28 00:00:00
 
 ``dev-health-workerctl metrics finalize-redrive`` (CHAOS-4405) is the first
@@ -77,8 +77,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0115"
-down_revision: str | None = "0114"
+revision: str = "0116"
+down_revision: str | None = "0115"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

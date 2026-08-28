@@ -24,6 +24,19 @@ legacy rows -- migration 080). ``_fetch_team_metrics`` dedups per
 and RECOMPUTES the ratio from those summed counts before averaging across
 teams -- a team owning N repos no longer loses N-1 of them to a bare
 ``(team_id, day)`` argMax collapse.
+
+CHAOS-4365 (confirmation-pass finding): a SINGLE-team query (``team_id`` set,
+``repo_id`` unset) instead reads ``team_cognitive_load_daily`` directly
+(``_fetch_team_cognitive_load``) -- one dedup query, no merge. The two-query
+merge above filtered ``user_metrics_daily``/``team_metrics_daily`` on their
+OWN ``team_id`` column, which CHAOS-4396 found can fall back to
+author-membership resolution (or stay unset for a native org whose teams
+have empty ``repo_patterns``): for a real org that column is empty/impure,
+so a single-team filter silently returned zero signals while the org-wide
+query worked. ``team_cognitive_load_daily`` is already team-scoped and
+OWNERSHIP-resolved (CHAOS-4321) at write time. The org-wide path (no
+``team_id``) and the team+repo COMBINED path (``repo_id`` also set -- the
+persisted table has no ``repo_id`` dimension to filter by) are unchanged.
 """
 
 from __future__ import annotations
@@ -233,6 +246,57 @@ async def _fetch_team_metrics(
 
 
 # ---------------------------------------------------------------------------
+# team_cognitive_load_daily (CHAOS-4365 item 2, single-team path)
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_team_cognitive_load(
+    client: Any,
+    *,
+    org_id: str,
+    team_id: str,
+    since_date: str,
+    until_date: str,
+) -> list[dict[str, Any]]:
+    """Read directly from ``team_cognitive_load_daily`` for ONE team.
+
+    CHAOS-4365 confirmation-pass finding: the old single-team path filtered
+    ``user_metrics_daily``/``team_metrics_daily`` on their OWN ``team_id``
+    column, which CHAOS-4396 found can fall back to author-membership
+    resolution (or stay unset for a native org whose teams have empty
+    ``repo_patterns``) -- for a real org that column is empty/impure, so a
+    single-team query silently returned zero signals while the org-wide
+    (no team filter) query worked fine. ``team_cognitive_load_daily`` is
+    already team-scoped and OWNERSHIP-resolved (CHAOS-4321) at write time
+    (``metrics/team_cognitive_load.py``), so this is a single dedup read,
+    not a merge of two tables.
+    """
+    query = """
+        SELECT
+            day,
+            argMax(pr_interruption_load,     computed_at) AS pr_interruption_load,
+            argMax(context_spread_count,     computed_at) AS context_spread_count,
+            argMax(review_request_load,      computed_at) AS review_request_load,
+            argMax(after_hours_commit_ratio, computed_at) AS after_hours_commit_ratio,
+            argMax(weekend_commit_ratio,     computed_at) AS weekend_commit_ratio
+        FROM team_cognitive_load_daily
+        WHERE org_id = {org_id:String}
+          AND team_id = {team_id:String}
+          AND day >= {since_date:Date}
+          AND day <= {until_date:Date}
+        GROUP BY day
+        ORDER BY day
+    """
+    params = {
+        "org_id": org_id,
+        "team_id": team_id,
+        "since_date": since_date,
+        "until_date": until_date,
+    }
+    return await query_dicts(client, query, params)
+
+
+# ---------------------------------------------------------------------------
 # Public resolver
 # ---------------------------------------------------------------------------
 
@@ -246,9 +310,16 @@ async def resolve_cognitive_load(
     Org-gate is enforced via ``require_org_id``; any mismatch between the
     JWT org and the GraphQL ``orgId`` argument is logged and the JWT org wins.
 
-    The resolver fires two queries (user + team), each of which deduplicates
-    append-only rows via ``argMax(..., computed_at)`` before aggregating, then
-    merges them over the UNION of days. A day present only in
+    Single-team path (``team_id`` set, ``repo_id`` NOT set): reads
+    ``team_cognitive_load_daily`` directly -- one dedup query, already
+    team-scoped and OWNERSHIP-resolved (see ``_fetch_team_cognitive_load``).
+
+    Org-wide or team+repo-combined path (``team_id`` unset, or both
+    ``team_id`` and ``repo_id`` set -- the persisted table carries no
+    ``repo_id`` dimension to filter by): the original two-query merge over
+    ``user_metrics_daily``/``team_metrics_daily``, each deduplicating
+    append-only rows via ``argMax(..., computed_at)`` before aggregating,
+    then merged over the UNION of days. A day present only in
     ``team_metrics_daily`` (e.g. a weekend with commit-timing data but no
     per-developer load rows) is still emitted with zero user-side signals.
     """
@@ -264,6 +335,32 @@ async def resolve_cognitive_load(
 
     since_date = input.since_date.isoformat()
     until_date = input.until_date.isoformat()
+
+    if input.team_id and not input.repo_id:
+        team_load_rows = await _fetch_team_cognitive_load(
+            client,
+            org_id=authorized_org_id,
+            team_id=input.team_id,
+            since_date=since_date,
+            until_date=until_date,
+        )
+        team_load_signals = [
+            CognitiveLoadSignal(
+                day=row["day"],
+                pr_interruption_load=float(row.get("pr_interruption_load") or 0.0),
+                context_spread_count=float(row.get("context_spread_count") or 0.0),
+                review_request_load=float(row.get("review_request_load") or 0.0),
+                after_hours_commit_ratio=_nfloat(row, "after_hours_commit_ratio"),
+                weekend_commit_ratio=_nfloat(row, "weekend_commit_ratio"),
+            )
+            for row in team_load_rows
+        ]
+        return CognitiveLoadResult(
+            org_id=authorized_org_id,
+            team_id=input.team_id,
+            signals=team_load_signals,
+            total_days=len(team_load_signals),
+        )
 
     # Fire both queries
     user_rows = await _fetch_user_metrics(

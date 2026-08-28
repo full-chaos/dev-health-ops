@@ -301,6 +301,37 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
                 "reference discovery source inventory incomplete: "
                 f"unresolved_source_ids={unresolved_source_ids}"
             )
+        # CHAOS-4437: ``sync_options`` here MUST be the canonical
+        # SyncConfiguration's sync_options -- the same source
+        # run_post_sync_team_autoimport and run_backfill_for_config already
+        # read from -- not Integration.config. They are different rows:
+        # Integration.config is legacy/never migrated by 0112 (proved on
+        # local org 70d529e0, integration 4477fa2c-...: config still carries
+        # only the pre-split ``auto_import_teams`` key with no
+        # ``auto_import_projects``/``auto_import_members`` at all), while the
+        # canonical SyncConfiguration (a7a44bc9-... for that same
+        # integration) carries the real, current three-flag selection.
+        # run_team_autoimport_strict reads this exact key to build
+        # import_categories, so getting the source wrong here would silently
+        # feed it stale/incomplete selection data. Falls back to
+        # Integration.config only when no canonical SyncConfiguration row
+        # exists at all (matches this scope key's pre-CHAOS-4437 value for
+        # that edge case, and keeps _github_org's "owner" fallback working
+        # either way -- SyncConfiguration.sync_options carries "owner" too).
+        # Local import: matches run_post_sync_team_autoimport's own local
+        # import of the same function -- a module-level import here creates
+        # a circular import (dev_health_ops.api.main -> ... ->
+        # sync.trigger_routing -> sync.planner -> ... -> this module).
+        from dev_health_ops.sync.trigger_routing import (
+            canonical_sync_config_for_sync_run,
+        )
+
+        canonical_config = canonical_sync_config_for_sync_run(session, run)
+        sync_options = (
+            dict(canonical_config.sync_options or {})
+            if canonical_config is not None
+            else dict(integration.config or {})
+        )
         scope = {
             "mode": "sync_reference_discovery",
             "sync_run_id": str(run_uuid),
@@ -309,7 +340,7 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
             "source_external_ids": sorted(
                 source_external_ids[source_id] for source_id in source_ids
             ),
-            "sync_options": dict(integration.config or {}),
+            "sync_options": sync_options,
         }
         return {
             "provider": str(integration.provider).strip().lower(),

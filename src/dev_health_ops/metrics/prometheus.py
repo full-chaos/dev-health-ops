@@ -161,6 +161,22 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_team_autoimport_reference_category_outcome_total",
+            "Per-provider, per-CHAOS-4323-category outcome of strict "
+            "reference discovery's populate call (CHAOS-4437): 'written' "
+            "when the org selected that category (teams/projects/members) "
+            "and the populator wrote it, 'skipped_selection' when the org "
+            "disabled it and reference discovery honoured that selection "
+            "instead of writing it unconditionally. Before CHAOS-4437 this "
+            "path always wrote every category regardless of the org's "
+            "sync-config selection; this counter is the signal that the "
+            "gate is active.",
+            ["provider", "category", "outcome"],
+        )
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -922,6 +938,24 @@ def record_team_autoimport_reference_subitem_skipped(
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL.labels(
         provider=provider,
         kind=kind,
+    ).inc()
+
+
+def record_team_autoimport_reference_category_outcome(
+    *, provider: str, category: str, outcome: str
+) -> None:
+    """Record whether strict reference discovery wrote or skipped one
+    CHAOS-4323 category (teams/projects/members) for one provider populate
+    call (CHAOS-4437).
+
+    Called once per category from ``run_team_autoimport_strict`` after the
+    org's selection is resolved, so the counter reflects the gate's
+    decision independent of whatever the populator itself ends up doing.
+    """
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL.labels(
+        provider=provider,
+        category=category,
+        outcome=outcome,
     ).inc()
 
 

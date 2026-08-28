@@ -737,7 +737,18 @@ def populate(
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
         "roster_preservation_failed": not roster_write_safe,
-        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        # CHAOS-4437: only claim keys actually written this call -- the
+        # readback verifier polls ClickHouse for exactly these native_team_key
+        # values and fails the whole reference-discovery run (blocking
+        # dispatch) if a claimed-but-skipped team never lands. Sprints stay
+        # unconditional: sprint writes are already unconditional above
+        # (CHAOS-4323: "reference data, not a category"), so the claim always
+        # matches what was written.
+        "reference_team_keys": (
+            [str(row["native_team_key"]) for row in team_rows]
+            if (want_teams and roster_write_safe)
+            else []
+        ),
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects) if want_projects else 0,
         # Counted off the deduped rows actually handed to the sink, not the

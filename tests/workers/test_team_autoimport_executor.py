@@ -182,3 +182,98 @@ def test_run_team_autoimport_strict_ignores_org_disabled_selection(
         "projects": False,
         "members": False,
     }
+
+
+@pytest.mark.parametrize(
+    "teams,projects,members",
+    [
+        (True, True, True),
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, False),
+        (True, False, True),
+        (False, True, True),
+    ],
+)
+def test_run_team_autoimport_strict_threads_every_selection_combination(
+    monkeypatch, teams: bool, projects: bool, members: bool
+) -> None:
+    """CHAOS-4437: every one of the 8 CHAOS-4323 selection combinations must
+    reach the populator unchanged, not just the all-off case the red test
+    pinned."""
+    calls: list[dict[str, Any]] = []
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"members_imported": 0}
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    team_autoimport.run_team_autoimport_strict(
+        provider="github",
+        org_id="org-1",
+        credentials={"token": "secret"},
+        scope={
+            "sync_options": {
+                "auto_import_teams": teams,
+                "auto_import_projects": projects,
+                "auto_import_members": members,
+            }
+        },
+    )
+
+    assert calls[0]["scope"]["import_categories"] == {
+        "teams": teams,
+        "projects": projects,
+        "members": members,
+    }
+
+
+def test_run_team_autoimport_strict_records_per_category_telemetry(
+    monkeypatch,
+) -> None:
+    """CHAOS-4437: the strict path must emit a written|skipped_selection
+    outcome per provider per category, independent of what the populator
+    itself does with the selection."""
+    recorded: list[dict[str, Any]] = []
+
+    def fake_recorder(*, provider: str, category: str, outcome: str) -> None:
+        recorded.append(
+            {"provider": provider, "category": category, "outcome": outcome}
+        )
+
+    monkeypatch.setattr(
+        team_autoimport,
+        "record_team_autoimport_reference_category_outcome",
+        fake_recorder,
+    )
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: lambda **_: {}
+    )
+
+    team_autoimport.run_team_autoimport_strict(
+        provider="gitlab",
+        org_id="org-1",
+        credentials={"token": "secret"},
+        scope={
+            "sync_options": {
+                "auto_import_teams": True,
+                "auto_import_projects": False,
+                "auto_import_members": False,
+            }
+        },
+    )
+
+    by_category = {row["category"]: row for row in recorded}
+    assert by_category["teams"] == {
+        "provider": "gitlab",
+        "category": "teams",
+        "outcome": "written",
+    }
+    assert by_category["projects"]["outcome"] == "skipped_selection"
+    assert by_category["members"]["outcome"] == "skipped_selection"
+    assert all(row["provider"] == "gitlab" for row in recorded)

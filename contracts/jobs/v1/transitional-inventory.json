@@ -305,12 +305,12 @@
       "notes": "Beat entry monitor-queue-depths, 60s"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/team_autoimport.py:224",
+      "id": "celery_task:src/dev_health_ops/workers/team_autoimport.py:250",
       "surface": "run_post_sync_team_autoimport",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/team_autoimport.py",
-        "line": 224
+        "line": 250
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",

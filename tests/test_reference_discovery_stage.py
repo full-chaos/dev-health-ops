@@ -22,6 +22,7 @@ from dev_health_ops.models import (
     SyncRunUnit,
     SyncRunUnitStatus,
 )
+from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     OUTBOX_KIND_DISPATCH,
@@ -231,6 +232,151 @@ def test_reference_discovery_fails_when_unit_source_inventory_is_incomplete(
 
     with pytest.raises(ValueError, match="source inventory incomplete"):
         reference_discovery._load_discovery_context(run.id)
+
+
+def test_load_discovery_context_reads_canonical_sync_configuration_not_integration_config(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4437: ``scope["sync_options"]`` must come from the canonical
+    ``SyncConfiguration.sync_options`` -- the SAME source
+    ``run_post_sync_team_autoimport``/``run_backfill_for_config`` already
+    read -- not ``Integration.config``. Proved on local org 70d529e0 that
+    these are different rows: ``Integration.config`` still carries only the
+    pre-CHAOS-4323 single ``auto_import_teams`` flag (never migrated by
+    0112, which only touched ``sync_configurations``), while the real
+    per-category selection lives solely on ``SyncConfiguration.sync_options``.
+    A regression back to ``Integration.config`` here would silently feed
+    ``run_team_autoimport_strict`` stale/incomplete selection data.
+    """
+    from dev_health_ops.workers import reference_discovery
+
+    run, unit = _seed_unitized_run(db_session, provider="github")
+    integration = db_session.query(Integration).filter_by(id=run.integration_id).one()
+    # Legacy Integration.config shape: pre-split flag only, no auto_import_
+    # projects/members keys at all -- exactly what local org 70d529e0's real
+    # github integration row has today.
+    integration.config = {"owner": "full-chaos", "auto_import_teams": False}
+    db_session.add(
+        SyncConfiguration(
+            org_id=run.org_id,
+            name="github canonical",
+            provider="github",
+            integration_id=integration.id,
+            sync_targets=[],
+            sync_options={
+                "owner": "full-chaos",
+                "auto_import_teams": True,
+                "auto_import_projects": False,
+                "auto_import_members": True,
+            },
+        )
+    )
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert context["scope"]["sync_options"] == {
+        "owner": "full-chaos",
+        "auto_import_teams": True,
+        "auto_import_projects": False,
+        "auto_import_members": True,
+    }
+
+
+def test_load_discovery_context_falls_back_to_integration_config_without_canonical_sync_configuration(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When no SyncConfiguration row exists at all (legacy/edge case), the
+    scope falls back to Integration.config exactly as before CHAOS-4437 --
+    org-lookup fallback (e.g. _github_org's "owner" read) keeps working."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, unit = _seed_unitized_run(db_session, provider="github")
+    integration = db_session.query(Integration).filter_by(id=run.integration_id).one()
+    integration.config = {"owner": "full-chaos"}
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert context["scope"]["sync_options"] == {"owner": "full-chaos"}
+
+
+def test_reference_discovery_all_categories_off_still_arms_dispatch(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4437 regression guard: an org with all three CHAOS-4323
+    categories disabled must still reach reference-discovery SUCCESS (and
+    arm dispatch), through the REAL run_team_autoimport_strict + populate +
+    readback path -- not a stub. Proves the fix does not deadlock dispatch:
+    a category-gated populator must stop *claiming* keys it didn't write
+    (reference_team_keys), or the readback verifier would wait forever for
+    a row that never lands and fail the whole run.
+    """
+    from dev_health_ops.workers import reference_discovery, team_autoimport
+
+    run, unit = _seed_unitized_run(db_session, provider="github")
+    integration = db_session.query(Integration).filter_by(id=run.integration_id).one()
+    db_session.add(
+        SyncConfiguration(
+            org_id=run.org_id,
+            name="github canonical",
+            provider="github",
+            integration_id=integration.id,
+            sync_targets=[],
+            sync_options={
+                "auto_import_teams": False,
+                "auto_import_projects": False,
+                "auto_import_members": False,
+            },
+        )
+    )
+    _add_discovery(db_session, run)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/test")
+
+    populate_calls: list[dict[str, Any]] = []
+
+    def fake_populate(**kwargs: Any) -> dict[str, Any]:
+        populate_calls.append(kwargs)
+        # Mirrors the real populators' CHAOS-4437 contract: a category the
+        # gate turned off is neither written NOR claimed in
+        # reference_team_keys/reference_sprint_ids.
+        return {
+            "teams_imported": 0,
+            "team_memberships_imported": 0,
+            "team_repo_ownership_imported": 0,
+            "reference_team_keys": [],
+            "reference_sprint_ids": [],
+        }
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: fake_populate
+    )
+    monkeypatch.setattr(
+        reference_discovery,
+        "resolve_run_auth",
+        lambda *a, **k: (None, {"token": "secret"}),
+    )
+
+    result = reference_discovery.run_sync_reference_discovery(str(run.id))
+
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    dispatch_outbox = _outbox_rows(db_session, run, OUTBOX_KIND_DISPATCH)
+    assert result["status"] == "success"
+    assert ledger.status == "success"
+    assert len(dispatch_outbox) == 1
+    # The gate reached the populator with every category off.
+    assert len(populate_calls) == 1
+    assert populate_calls[0]["scope"]["import_categories"] == {
+        "teams": False,
+        "projects": False,
+        "members": False,
+    }
 
 
 def test_sync_task_bootstrap_marks_linear_provider_name_source_as_org_wide(

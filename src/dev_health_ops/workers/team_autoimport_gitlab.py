@@ -266,7 +266,15 @@ async def _populate_async(
     summary: dict[str, Any] = {
         "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
         "roster_preservation_failed": not roster_write_safe,
-        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        # CHAOS-4437: only claim keys actually written this call -- the
+        # readback verifier polls ClickHouse for exactly these native_team_key
+        # values and fails the whole reference-discovery run (blocking
+        # dispatch) if a claimed-but-skipped team never lands.
+        "reference_team_keys": (
+            [str(row["native_team_key"]) for row in team_rows]
+            if (want_teams and roster_write_safe)
+            else []
+        ),
         "reference_sprint_ids": [],
         "projects_imported": len({row.project_id for row in project_rows})
         if want_projects

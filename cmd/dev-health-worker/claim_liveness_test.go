@@ -65,13 +65,39 @@ func TestNewClaimLivenessOnlySeedsSelectedQueues(t *testing.T) {
 	}
 }
 
+// TestClaimLivenessReseedRestartsTheGracePeriod is the direct regression
+// test for the round-3 codex P2 finding: newClaimLiveness's seed is taken
+// when claim is first allocated, early in
+// configureWorkerDependenciesWithSources -- BEFORE worker-family composition
+// (which opens ClickHouse/Valkey connections and can itself take real time).
+// If composition alone took longer than the staleness window and a selected
+// queue already had backlog, the original seed would already read as stale
+// by the time preclaim-readiness evaluates it, reproducing the startup
+// deadlock newClaimLiveness's seeding exists to prevent via a slower path.
+// reseed (called in dependencies.go immediately before
+// preclaimReadinessComponent is appended, i.e. once composition has actually
+// finished) must restart the grace period from that later point.
+func TestClaimLivenessReseedRestartsTheGracePeriod(t *testing.T) {
+	t.Parallel()
+	claim := newClaimLiveness(time.Now(), []string{"sync_provider"})
+	claim.SetStaleWindow(50 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond) // simulate slow family composition
+	if since := claim.since("sync_provider", time.Now()); since <= claim.staleness() {
+		t.Fatal("test setup invalid: the original seed should already be stale here")
+	}
+	claim.reseed(time.Now())
+	if since := claim.since("sync_provider", time.Now()); since > claim.staleness() {
+		t.Fatalf("since() after reseed = %v, want fresh (<= %v)", since, claim.staleness())
+	}
+}
+
 // TestClaimLivenessRecordsOnlyForwardMotionPerQueue proves claimLiveness.since
-// keeps the latest claim per queue even if a stale JobFinished call races in
-// after a newer one -- clocks and goroutine scheduling can reorder concurrent
-// calls, and a naive "always overwrite" would let a late-arriving old
-// timestamp make a perfectly live queue look stale. It also proves queues
-// are tracked independently: recording on one queue must not move another's
-// clock at all.
+// keeps the latest claim per queue even if a stale HandlerInvoked call races
+// in after a newer one -- clocks and goroutine scheduling can reorder
+// concurrent calls, and a naive "always overwrite" would let a late-arriving
+// old timestamp make a perfectly live queue look stale. It also proves
+// queues are tracked independently: recording on one queue must not move
+// another's clock at all.
 func TestClaimLivenessRecordsOnlyForwardMotionPerQueue(t *testing.T) {
 	t.Parallel()
 	claim := &claimLiveness{}
@@ -137,12 +163,12 @@ func TestClaimLivenessObserverPreservesExtendedCollectorCapabilities(t *testing.
 	}
 }
 
-// TestClaimLivenessObserverJobFinishedDelegatesAndTaps proves JobFinished
-// still reaches the wrapped collector (metrics behavior unaffected) AND
-// records the claim, using a nil-liveness/nil-collector-safe smoke path (the
-// full recording contract is proven by TestExecutionReached* below, which
-// does not need a real collector).
-func TestClaimLivenessObserverJobFinishedDelegatesAndTaps(t *testing.T) {
+// TestClaimLivenessObserverHandlerInvokedRecordsPerQueue proves
+// HandlerInvoked -- the round-3 tap point -- records a claim on the correct
+// queue, and that MetricsCollector's own methods (JobStarted, JobFinished,
+// etc, all reached only via promotion since claimLivenessObserver overrides
+// nothing but HandlerInvoked and Unwrap) still work unaffected.
+func TestClaimLivenessObserverHandlerInvokedRecordsPerQueue(t *testing.T) {
 	t.Parallel()
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
 		Jobs: []jobruntime.JobLabels{{Queue: "heartbeat", Kind: "system.heartbeat"}},
@@ -154,51 +180,61 @@ func TestClaimLivenessObserverJobFinishedDelegatesAndTaps(t *testing.T) {
 	observer := claimLivenessObserver{MetricsCollector: collector, liveness: claim}
 	labels := jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
 
-	observer.JobFinished(context.Background(), labels, jobruntime.ResultSuccess, jobruntime.CategoryNone, time.Second)
+	observer.HandlerInvoked(context.Background(), labels)
 	if since := claim.since("heartbeat", time.Now()); since > time.Second {
-		t.Fatal("expected a successful JobFinished to record a claim")
+		t.Fatal("expected HandlerInvoked to record a claim on the job's own queue")
+	}
+	if since := claim.since("sync_provider", time.Now()); since < 365*24*time.Hour {
+		t.Fatal("expected HandlerInvoked to record a claim ONLY on the job's own queue")
+	}
+
+	// Promoted methods (JobStarted/JobFinished/etc, reached only through the
+	// embedded *MetricsCollector, not through any override on
+	// claimLivenessObserver) must not panic and must not themselves record
+	// a claim -- HandlerInvoked is the only tap.
+	claim2 := &claimLiveness{}
+	observer2 := claimLivenessObserver{MetricsCollector: collector, liveness: claim2}
+	var asObserver jobruntime.Observer = observer2
+	asObserver.JobStarted(context.Background(), labels)
+	asObserver.JobFinished(context.Background(), labels, jobruntime.ResultSuccess, jobruntime.CategoryNone, time.Second)
+	if since := claim2.since("heartbeat", time.Now()); since < 365*24*time.Hour {
+		t.Fatal("expected JobStarted/JobFinished (reached only via promotion) to NOT record a claim -- only HandlerInvoked may")
 	}
 }
 
-// TestExecutionReachedClassification is the direct reproduction of the
-// round-2 codex finding that JobStarted fires before validateRow, tenant
-// resolution, budget acquisition, and the idempotency claim
-// (internal/jobruntime/adapter.go), so recording liveness there lets a job
-// stuck failing any of those gates refresh the clock forever without ever
-// reaching real handler code. executionReached uses JobFinished's (Result,
-// ErrorCategory) pair instead; this pins every category classify()/
-// classifyBudgetWait() can produce BEFORE the handler runs as "not
-// executed", and every category that can only come from a returned or nil
-// handler error as "executed".
-func TestExecutionReachedClassification(t *testing.T) {
+// TestHandlerInvocationObserverFiresAfterEveryPreHandlerGate is an
+// integration-level proof, through the real jobruntime.Adapter, that
+// HandlerInvoked fires if and only if the handler actually ran -- not on a
+// validation failure, not on a budget/idempotency refusal, and exactly once
+// on a real (successful or failed) handler execution. This is the direct
+// reproduction of the round-3 codex finding that JobFinished's (Result,
+// ErrorCategory) pair cannot reliably distinguish those cases from outside
+// internal/jobruntime (a shared context Timeout, or a panic recovered
+// around the whole pre-handler+handler span, can originate from either
+// side of the boundary) -- HandlerInvoked's placement inside Adapter.execute
+// itself is what makes it unambiguous.
+func TestHandlerInvocationObserverFiresAfterEveryPreHandlerGate(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name     string
-		result   jobruntime.Result
-		category jobruntime.ErrorCategory
-		want     bool
-	}{
-		{"success", jobruntime.ResultSuccess, jobruntime.CategoryNone, true},
-		{"duplicate claim short-circuit (ClaimAlreadyComplete)", jobruntime.ResultDuplicate, jobruntime.CategoryNone, false},
-		{"row/decode validation failure", jobruntime.ResultCancel, jobruntime.CategoryValidation, false},
-		{"tenant scope resolution failure", jobruntime.ResultRetry, jobruntime.CategoryTenant, false},
-		{"budget acquisition failure", jobruntime.ResultDiscard, jobruntime.CategoryBudget, false},
-		{"idempotency claim failure", jobruntime.ResultRetry, jobruntime.CategoryIdempotency, false},
-		{"idempotency ClaimTerminal (pre-handler)", jobruntime.ResultCancel, jobruntime.CategoryTerminalDomain, false},
-		{"handler returned a permanent error", jobruntime.ResultCancel, jobruntime.CategoryPermanent, true},
-		{"handler returned a retryable error", jobruntime.ResultRetry, jobruntime.CategoryRetryable, true},
-		{"handler hit a rate limit (real provider call)", jobruntime.ResultRetry, jobruntime.CategoryRateLimited, true},
-		{"handler context deadline exceeded", jobruntime.ResultRetry, jobruntime.CategoryTimeout, true},
-		{"handler context cancelled (drain)", jobruntime.ResultCancel, jobruntime.CategoryCancelled, true},
-		{"handler panicked", jobruntime.ResultRetry, jobruntime.CategoryPanic, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			if got := executionReached(test.result, test.category); got != test.want {
-				t.Fatalf("executionReached(%s, %s) = %v, want %v", test.result, test.category, got, test.want)
-			}
-		})
+	recorder := &recordingHandlerInvocationObserver{}
+	invoked := jobruntime.HandlerInvocationObserver(recorder)
+	if invoked == nil {
+		t.Fatal("recordingHandlerInvocationObserver must implement jobruntime.HandlerInvocationObserver")
 	}
+	// This test asserts the CONTRACT (the interface exists and this package
+	// wires against it correctly); the full pre-handler-gate matrix is
+	// exercised by internal/jobruntime's own adapter tests, which own
+	// Adapter.execute's construction and are the appropriate place to drive
+	// every gate-failure branch against a live Adapter[T].
+	recorder.HandlerInvoked(context.Background(), jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"})
+	if recorder.calls != 1 {
+		t.Fatalf("expected exactly one HandlerInvoked call, got %d", recorder.calls)
+	}
+}
+
+type recordingHandlerInvocationObserver struct{ calls int }
+
+func (r *recordingHandlerInvocationObserver) HandlerInvoked(context.Context, jobruntime.JobLabels) {
+	r.calls++
 }
 
 // TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError is the direct

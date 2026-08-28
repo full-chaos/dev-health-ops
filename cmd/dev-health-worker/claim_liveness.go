@@ -107,6 +107,28 @@ func (c *claimLiveness) recordClaim(queue string, now time.Time) {
 	}
 }
 
+// reseed resets every currently-tracked queue's clock to now (codex round-3
+// finding, P2). newClaimLiveness's construction-time seed only starts the
+// grace period from the moment claim was ALLOCATED, early in
+// configureWorkerDependenciesWithSources -- before worker-family
+// composition, which can itself take real time (opening ClickHouse/Valkey
+// connections, loading provider runtime config). If that takes longer than
+// the staleness window and a selected queue already has backlog, the
+// original seed would already be stale by the time
+// preclaimReadinessComponent evaluates it, and River has still not started
+// -- reproducing the exact startup deadlock newClaimLiveness's seeding
+// exists to prevent, just via a slower path. The production call site
+// (dependencies.go) calls this immediately before preclaimReadinessComponent
+// is added to the returned components, so the grace period restarts from
+// "construction has actually finished," not from struct allocation.
+func (c *claimLiveness) reseed(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for queue := range c.perQueue {
+		c.perQueue[queue] = now
+	}
+}
+
 // since returns how long ago the given queue's last real claim (or the
 // construction-time seed -- see newClaimLiveness) was recorded. A queue
 // with no entry at all (never seeded, never claimed -- the deliberate
@@ -125,14 +147,40 @@ func (c *claimLiveness) since(queue string, now time.Time) time.Duration {
 }
 
 // claimLivenessObserver decorates the production jobruntime.Observer
-// (dependencies.metrics) with exactly one extra tap: JobFinished.
+// (dependencies.metrics) with exactly one extra tap: HandlerInvoked, an
+// OPTIONAL jobruntime capability (internal/jobruntime/observer.go) that
+// fires once, immediately before a job's real handler runs, after every
+// pre-handler gate (validation, tenant resolution, budget acquisition, the
+// idempotency claim) has already passed.
 //
-// It embeds the CONCRETE *jobruntime.MetricsCollector, not the Observer
-// INTERFACE (round-2 codex finding): daily.go, operational.go,
-// provider_sync.go, sync_dispatch.go, and workgraph.go all perform their
-// own optional type assertions against the observer they receive --
-// *jobruntime.MetricsCollector itself, or one of a dozen narrower marker
-// interfaces (jobruntime.DailyMetricsLeaseObserver,
+// Two earlier tap points were tried and rejected on codex review:
+//
+//   - JobStarted fires before all of those gates, so a job stuck failing
+//     any one of them would refresh this clock on every attempt without
+//     ever reaching real handler code -- exactly the "terminal-without-
+//     execution" failure mode this check exists to catch.
+//   - JobFinished's (Result, ErrorCategory) pair looked like it could
+//     substitute by classifying the outcome after the fact, but several
+//     categories genuinely straddle the boundary: a job's registered
+//     Timeout covers every gate AND the handler under one shared deadline,
+//     so CategoryTimeout/CategoryCancelled can originate from tenant
+//     resolution or a budget wait just as easily as from the handler, and
+//     the panic recover() in Adapter.execute wraps the whole function, not
+//     only the handler call. No (Result, ErrorCategory) combination can
+//     resolve that from outside internal/jobruntime.
+//
+// HandlerInvocationObserver's doc comment covers why this is an OPTIONAL
+// capability (a type assertion Adapter.execute checks, costing nothing to
+// implementations that do not need it) rather than a new required Observer
+// method, which every implementation -- production and test -- would have
+// had to grow just to keep compiling.
+//
+// claimLivenessObserver embeds the CONCRETE *jobruntime.MetricsCollector,
+// not the Observer INTERFACE (a separate, round-2 codex finding):
+// daily.go, operational.go, provider_sync.go, sync_dispatch.go, and
+// workgraph.go all perform their own optional type assertions against the
+// observer they receive -- *jobruntime.MetricsCollector itself, or one of a
+// dozen narrower marker interfaces (jobruntime.DailyMetricsLeaseObserver,
 // jobruntime.PostSyncFanoutObserver, jobruntime.ConcurrencyBudgetObserver,
 // and others) -- to reach specialized telemetry the base Observer interface
 // does not expose. Wrapping the interface in a brand-new concrete type broke
@@ -159,76 +207,15 @@ func (observer claimLivenessObserver) Unwrap() *jobruntime.MetricsCollector {
 	return observer.MetricsCollector
 }
 
-// JobFinished shadows the promoted method to add the claim-liveness tap,
-// then delegates to the real collector unconditionally so every metric it
-// already records is unaffected.
-//
-// JobFinished, not JobStarted, is the tap point (round-2 codex finding):
-// JobStarted fires unconditionally before validateRow, tenant resolution,
-// budget acquisition, and the idempotency claim
-// (internal/jobruntime/adapter.go's Work/execute), so a job repeatedly
-// failing any of those gates would refresh this clock on every attempt
-// without ever reaching real handler code -- exactly the "terminal-
-// without-execution" failure mode this check exists to catch. JobFinished
-// carries the SAME (Result, ErrorCategory) pair the runtime already uses to
-// decide what happened, and executionReached below classifies it using
-// only that bounded, exported vocabulary.
-func (observer claimLivenessObserver) JobFinished(
-	ctx context.Context,
-	labels jobruntime.JobLabels,
-	result jobruntime.Result,
-	category jobruntime.ErrorCategory,
-	duration time.Duration,
-) {
-	if observer.liveness != nil && executionReached(result, category) {
+// HandlerInvoked implements jobruntime.HandlerInvocationObserver -- see the
+// type's doc comment for why this, and not JobStarted or JobFinished, is
+// the tap point. *jobruntime.MetricsCollector does not implement
+// HandlerInvocationObserver itself, so there is no promoted method to
+// shadow here (unlike Unwrap's JobFinished-adjacent concern); this is a
+// pure addition to claimLivenessObserver's method set.
+func (observer claimLivenessObserver) HandlerInvoked(_ context.Context, labels jobruntime.JobLabels) {
+	if observer.liveness != nil {
 		observer.liveness.recordClaim(labels.Queue, time.Now())
-	}
-	if observer.MetricsCollector != nil {
-		observer.MetricsCollector.JobFinished(ctx, labels, result, category, duration)
-	}
-}
-
-// executionReached reports whether a finished job's outcome proves it
-// reached real handler code, from the bounded (Result, ErrorCategory) pair
-// alone -- see internal/jobruntime/errors.go for the closed constant sets
-// this switches on, and JobFinished's doc comment for why this is the tap
-// point instead of JobStarted.
-//
-// ResultDuplicate is excluded regardless of category: it is
-// PostgresIdempotency.Begin's ClaimAlreadyComplete short-circuit
-// (internal/jobruntime/adapter.go's execute), which returns BEFORE the
-// handler runs this attempt -- the underlying work unit may be genuinely
-// done, but THIS execution never touched handler code.
-//
-// The category denylist below is exhaustively every category
-// internal/jobruntime/errors.go's classify()/classifyBudgetWait() can
-// return from BEFORE adapter.handler.Work is ever called: row validation
-// (the execute() function's own default-choice fallback for a decode
-// failure), tenant scope resolution, budget acquisition, and the
-// idempotency claim itself. classify() -- the function that classifies
-// handler-returned errors, called only AFTER Work has returned -- never
-// assigns any of these four categories on its own; a handler could only
-// produce one by deliberately re-marking its own error with a category
-// reserved for infra gates, which is not this codebase's convention (see
-// the public Retryable/Permanent constructors handlers actually use).
-// CategoryTerminalDomain is included conservatively: its one confirmed
-// producer (execute()'s ClaimTerminal branch) is also pre-handler, and a
-// handler-returned CategoryTerminalDomain, while structurally possible, is
-// rare enough that excluding it trades a small under-credit for never
-// over-crediting a claim that didn't happen.
-func executionReached(result jobruntime.Result, category jobruntime.ErrorCategory) bool {
-	if result == jobruntime.ResultDuplicate {
-		return false
-	}
-	switch category {
-	case jobruntime.CategoryValidation,
-		jobruntime.CategoryTenant,
-		jobruntime.CategoryBudget,
-		jobruntime.CategoryIdempotency,
-		jobruntime.CategoryTerminalDomain:
-		return false
-	default:
-		return true
 	}
 }
 

@@ -699,6 +699,11 @@ func configureWorkerDependenciesWithSources(
 			return nil, dependencyUnavailable("queue_coverage_validation_failed")
 		}
 	}
+	// CHAOS-4029 (codex round 3, P2): re-seed the claim clock now that
+	// worker-family composition (ClickHouse/Valkey connections, provider
+	// runtime config) has actually finished, not back when claim was first
+	// allocated -- see claimLiveness.reseed's doc comment.
+	claim.reseed(time.Now())
 	components = append(components, preclaimReadinessComponent{registry: registry, logger: logger})
 	if len(active.queues) == 0 {
 		return components, nil

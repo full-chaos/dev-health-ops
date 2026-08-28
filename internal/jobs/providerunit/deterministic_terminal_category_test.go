@@ -93,6 +93,20 @@ func TestDeterministicTerminalCategoryContract(t *testing.T) {
 			err:      &providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404},
 			category: NotFoundCategory,
 		},
+		{
+			// Deterministic given the source bytes: a natural-key collision
+			// recordGitHubTestsKey rejects is built from the same input on
+			// every retry, so it collides identically five times before
+			// burying the cause under provider_unit_exhausted (CHAOS-4392,
+			// prod run 33149651369 for full-chaos/dev-health-ops -- two
+			// identically named test cases inside one suite). Defense in
+			// depth: the known cause is disambiguated before it ever reaches
+			// WriteEffect; this category exists for a collision class no one
+			// has diagnosed yet.
+			name:     "duplicate natural key",
+			err:      providersync.ErrDuplicateNaturalKey,
+			category: DuplicateNaturalKeyCategory,
+		},
 	}
 	for _, testCase := range deterministic {
 		t.Run(testCase.name, func(t *testing.T) {

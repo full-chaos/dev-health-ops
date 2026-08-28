@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -441,6 +442,14 @@ func (handler GitHubTestsRouteHandler) Collect(
 			}
 			for _, observation := range reportIncomplete {
 				incomplete = mergeGitHubTestsIncomplete(incomplete, observation)
+			}
+			client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
+			if rows.DuplicateCases > 0 {
+				slog.Info(
+					"within-suite duplicate test-case names disambiguated with an ordinal suffix",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", repo.FullName, "run", pipeline.RunID, "count", rows.DuplicateCases,
+				)
 			}
 			suites = append(suites, rows.Suites...)
 			cases = append(cases, rows.Cases...)

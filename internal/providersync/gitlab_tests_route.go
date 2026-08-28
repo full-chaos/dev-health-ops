@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -255,6 +256,14 @@ func (handler GitLabTestsRouteHandler) Collect(
 			reportSuites, reportCases, err := normalizeGitLabNativeTestReport(claim, repoID, runID, report, started, finished, normalizedAt)
 			if err != nil {
 				return CompleteRouteBatch{}, err
+			}
+			if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
+				client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, duplicates)
+				slog.Info(
+					"within-suite duplicate test-case names disambiguated with an ordinal suffix",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", fullName, "run", runID, "count", duplicates,
+				)
 			}
 			suites = append(suites, reportSuites...)
 			cases = append(cases, reportCases...)
@@ -686,6 +695,12 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 		row := testSuiteResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
 			SuiteName: name, Framework: testsOptionalString("gitlab_ci"), TotalCount: int64(len(rawSuite.Cases)),
 			DurationSeconds: optionalGitLabTestsFloat(rawSuite.TotalTime), StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}
+		// caseOccurrence disambiguates within-suite duplicate case names,
+		// the GitLab-native twin of parseJUnitRows' identical fix
+		// (CHAOS-4392): two cases sharing a name in the same suite otherwise
+		// hash to the same case_id below and WriteEffect rejects the whole
+		// batch.
+		caseOccurrence := map[string]int{}
 		for _, rawCase := range rawSuite.Cases {
 			status := mapGitLabNativeCaseStatus(stringValue(rawCase.Status))
 			switch status {
@@ -711,8 +726,20 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 			if len(stack) > 4096 {
 				stack = stack[:4096]
 			}
+			occurrence := caseOccurrence[caseName]
+			caseOccurrence[caseName] = occurrence + 1
+			caseID := hashTestIdentifier(suiteID, caseName)
+			if occurrence > 0 {
+				// Hash the digest, not three raw joined parts -- see the
+				// identical fix and rationale in newJUnitCaseRow
+				// (github_tests_reports.go, codex review finding P2): a case
+				// literally named "foo::1" would otherwise collide with a
+				// duplicate "foo" at occurrence=1 through
+				// hashTestIdentifier's unescaped "::" join.
+				caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
+			}
 			cases = append(cases, testCaseResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
-				CaseID: hashTestIdentifier(suiteID, caseName), CaseName: caseName, ClassName: testsOptionalString(stringValue(rawCase.ClassName)),
+				CaseID: caseID, CaseName: caseName, ClassName: testsOptionalString(stringValue(rawCase.ClassName)),
 				Status: status, DurationSeconds: optionalGitLabTestsFloat(rawCase.ExecutionTime), StackTrace: testsOptionalString(stack),
 				IsQuarantined: status == "quarantined", LastSynced: at})
 		}

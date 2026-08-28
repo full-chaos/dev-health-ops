@@ -106,7 +106,13 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
-	issues   []githubTestsReportIssue
+	// DuplicateCases counts within-suite test-case natural-key collisions
+	// this parse disambiguated with an ordinal suffix (CHAOS-4392) -- see
+	// newJUnitCaseRow. Purely observational: the rows themselves are already
+	// unique by construction, this is only the telemetry input for
+	// dev_health_cicd_duplicate_test_case_total.
+	DuplicateCases int
+	issues         []githubTestsReportIssue
 }
 
 // GitHubTestsIncomplete is the bounded, provider-specific evidence retained
@@ -690,6 +696,7 @@ func parseGitHubTestsArtifact(
 			}
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
+			result.DuplicateCases += countDuplicateTestCases(cases)
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
@@ -950,8 +957,27 @@ func parseJUnitRows(
 			StartedAt: started, FinishedAt: finished, ServiceID: service,
 			OrgID: orgID, LastSynced: normalizedAt,
 		}
+		// caseOccurrence disambiguates within-suite duplicate case names
+		// (CHAOS-4392): two <testcase> elements sharing a name in the same
+		// suite otherwise hash to the identical case_id in newJUnitCaseRow,
+		// and WriteEffect's recordGitHubTestsKey rejects the whole batch with
+		// a bare ErrInvalidConfiguration -- the unit then burns all 5 River
+		// attempts on the same deterministic collision (prod run 33149651369,
+		// full-chaos/dev-health-ops). Keyed on the NORMALIZED name (codex
+		// review finding, P2): an empty name="" and a literal name="unnamed"
+		// both normalize to "unnamed" in newJUnitCaseRow, so keying on the
+		// raw pre-normalization string let each reach occurrence=0
+		// independently and still collide on the same CaseID -- the exact
+		// defect this fix exists to remove.
+		caseOccurrence := map[string]int{}
 		for _, testCase := range suite.Cases {
-			caseRow := newJUnitCaseRow(testCase, row, normalizedAt)
+			name := testCase.Name
+			if name == "" {
+				name = "unnamed"
+			}
+			occurrence := caseOccurrence[name]
+			caseOccurrence[name] = occurrence + 1
+			caseRow := newJUnitCaseRow(testCase, row, normalizedAt, occurrence)
 			switch caseRow.Status {
 			case "passed":
 				row.PassedCount++
@@ -971,7 +997,13 @@ func parseJUnitRows(
 	return resultSuites, resultCases, nil
 }
 
-func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time) testCaseResultRow {
+// newJUnitCaseRow builds one test_case_results row. occurrence is 0 for the
+// first case with a given name within the enclosing suite and N for the
+// (N+1)th duplicate (CHAOS-4392, see parseJUnitRows' caseOccurrence); it is
+// folded into the natural-key hash ONLY when non-zero, so the common
+// non-colliding case keeps the exact case_id it always has and no existing
+// row's identity shifts.
+func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time, occurrence int) testCaseResultRow {
 	name := item.Name
 	if name == "" {
 		name = "unnamed"
@@ -1006,9 +1038,27 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 			trace = &value
 		}
 	}
+	caseID := hashTestIdentifier(suite.SuiteID, name)
+	if occurrence > 0 {
+		// Hash the ALREADY-COMPUTED digest with the ordinal, rather than
+		// joining (suite.SuiteID, name, ordinal) as three raw parts through
+		// hashTestIdentifier's unescaped "::" separator (codex review
+		// finding, P2): a case literally named "foo::1" would otherwise hash
+		// to hashTestIdentifier(suite.SuiteID, "foo::1"), which is
+		// byte-for-byte the same input hashTestIdentifier joins for a
+		// DIFFERENT case named "foo" at occurrence=1 --
+		// hashTestIdentifier(suite.SuiteID, "foo", "1") -- both produce
+		// "suiteID::foo::1" before hashing. caseID is already a fixed-length
+		// hex digest that can never itself contain "::", so hashing it
+		// together with the ordinal has no such ambiguity, matching the
+		// hash-of-a-hash pattern this package already uses for SuiteID
+		// (itself hashTestIdentifier(runID, artifactID, name, "")) feeding
+		// into this very call.
+		caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
+	}
 	return testCaseResultRow{
 		RepoID: suite.RepoID, RunID: suite.RunID, SuiteID: suite.SuiteID,
-		CaseID: hashTestIdentifier(suite.SuiteID, name), CaseName: name,
+		CaseID: caseID, CaseName: name,
 		ClassName: testsOptionalString(item.ClassName), Status: status,
 		DurationSeconds: parseOptionalFloat(item.Time), FailureMessage: message,
 		FailureType: failureType, StackTrace: trace, IsQuarantined: status == "quarantined",
@@ -1202,6 +1252,27 @@ func testServiceID(path string) *string {
 func hashTestIdentifier(parts ...string) string {
 	digest := sha256.Sum256([]byte(strings.Join(parts, "::")))
 	return hex.EncodeToString(digest[:])
+}
+
+// countDuplicateTestCases reports how many rows in cases collided on the same
+// (SuiteID, CaseName) pair before newJUnitCaseRow/normalizeGitLabNativeTestReport
+// disambiguated their case_id with an ordinal suffix (CHAOS-4392). The rows
+// are already unique by construction by the time this runs; this exists
+// purely to feed the dev_health_cicd_duplicate_test_case_total counter so an
+// operator can see how often the collision fires, not to detect or fix
+// anything itself.
+func countDuplicateTestCases(cases []testCaseResultRow) int {
+	seen := make(map[string]struct{}, len(cases))
+	duplicates := 0
+	for _, row := range cases {
+		key := row.SuiteID + "\x00" + row.CaseName
+		if _, exists := seen[key]; exists {
+			duplicates++
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+	return duplicates
 }
 
 func parseOptionalFloat(value string) *float64 {

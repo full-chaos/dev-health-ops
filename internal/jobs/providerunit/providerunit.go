@@ -115,6 +115,18 @@ const (
 	// every attempt, so retrying only re-reads the same rows five times before
 	// burying the real cause under provider_unit_exhausted (CHAOS-4219).
 	FeatureDisabledCategory = "feature_disabled"
+	// DuplicateNaturalKeyCategory covers a testops effect batch refused by
+	// recordGitHubTestsKey (providersync.ErrDuplicateNaturalKey) for a
+	// natural-key collision. Deterministic: a colliding batch is built from
+	// the same source bytes on every retry, so it collides identically five
+	// times before collapsing into provider_unit_exhausted (CHAOS-4392,
+	// prod run 33149651369 for full-chaos/dev-health-ops -- two identically
+	// named test cases inside one suite). This is defense-in-depth, not the
+	// primary fix: the known within-suite duplicate-test-case-name cause is
+	// disambiguated before it ever reaches WriteEffect (github_tests_reports.go,
+	// gitlab_tests_route.go), so this category exists to fail fast, once
+	// instead of five times, on a collision class nobody has diagnosed yet.
+	DuplicateNaturalKeyCategory = "duplicate_natural_key"
 )
 
 func deterministicTerminalCategory(err error) (string, bool) {
@@ -133,6 +145,9 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	}
 	if errors.Is(err, providersync.ErrGitHubTestsArtifactOversized) {
 		return GitHubTestsArtifactOversizedCategory, true
+	}
+	if errors.Is(err, providersync.ErrDuplicateNaturalKey) {
+		return DuplicateNaturalKeyCategory, true
 	}
 	if errors.Is(err, providersync.ErrGitHubTestsAllArtifactsUnreadable) {
 		return AllArtifactsUnreadableCategory, true

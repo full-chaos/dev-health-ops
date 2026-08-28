@@ -27,7 +27,7 @@ import (
 // catalog Go route (internal/providersync/linear_reference_catalog*.go), which
 // performs the exact same kind of direct upsert into teams/team_memberships
 // with no drift-review layer. Roster preservation for a members-off run IS
-// ported (githubTeamCatalogExistingMembers in the effects file) since it is a
+// ported (GitHubTeamCatalogClickHouseEffects.ExistingTeamMembers) since it is a
 // simple, self-contained safe-fail read with no policy dependency. The two
 // skipped layers are tracked as a follow-up under CHAOS-4198 (see PR
 // RISK-NOTES) rather than partially/silently reimplemented.
@@ -68,11 +68,23 @@ type githubTeamMemberPayload struct {
 // insert_teams + team_autoimport_github.py's _team_rows). ProjectKeys is
 // always empty: GitHub teams carry no project association at all.
 type githubTeamRow struct {
-	ID            string    `json:"id"`
-	TeamUUID      string    `json:"team_uuid"`
-	Name          string    `json:"name"`
-	Description   *string   `json:"description"`
-	Members       []string  `json:"members"`
+	ID          string   `json:"id"`
+	TeamUUID    string   `json:"team_uuid"`
+	Name        string   `json:"name"`
+	Description *string  `json:"description"`
+	Members     []string `json:"members"`
+	// ManualMembers carries forward the CURRENTLY persisted teams.
+	// manual_members provenance column (CHAOS-4321, migration 079): this
+	// producer never sets it itself (matching Python's _team_rows, which has
+	// no such key either) -- it is always populated by the write layer
+	// (GitHubTeamCatalogClickHouseEffects.WriteTeams) from a pre-write
+	// ClickHouse read, exactly mirroring storage/clickhouse.py's
+	// insert_teams/_preserve_existing_manual_members. Left unset here (nil)
+	// is the correct default for a normalizer that has not yet consulted
+	// ClickHouse; WriteTeams must never send a bare nil straight to the
+	// INSERT without first resolving it, or a brand-new admin override gets
+	// silently wiped on this team's very next sync.
+	ManualMembers []string  `json:"manual_members"`
 	ProjectKeys   []string  `json:"project_keys"`
 	RepoPatterns  []string  `json:"repo_patterns"`
 	IsActive      uint8     `json:"is_active"`

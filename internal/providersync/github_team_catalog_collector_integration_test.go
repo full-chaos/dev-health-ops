@@ -34,28 +34,12 @@ func githubTeamCatalogAdapterClient(t *testing.T, doer providerfoundation.HTTPDo
 	return client
 }
 
-type githubTeamCatalogAdapterRecordingObserver struct {
-	outcome            string
-	teamsWritten       int
-	membershipsWritten int
-	calls              int
-}
-
-func (observer *githubTeamCatalogAdapterRecordingObserver) ObserveGitHubTeamCatalogOutcome(outcome string, teamsWritten, membershipsWritten int) {
-	observer.calls++
-	observer.outcome = outcome
-	observer.teamsWritten = teamsWritten
-	observer.membershipsWritten = membershipsWritten
-}
-
 func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := "github-adapter-org-a"
 	doer := githubTeamCatalogAdapterDoer(t)
-	observer := &githubTeamCatalogAdapterRecordingObserver{}
 	adapter := GitHubTeamCatalogCollector{
-		Sink:     GitHubTeamCatalogClickHouseEffects{Conn: conn},
-		Observer: observer,
+		Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn},
 	}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
 	client := githubTeamCatalogAdapterClient(t, doer)
@@ -73,10 +57,6 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 		result.ProjectsWritten != 0 || result.OwnershipWritten != 0 {
 		t.Fatalf("result=%+v", result)
 	}
-	if observer.calls != 1 || observer.outcome != "written" {
-		t.Fatalf("observer=%+v", observer)
-	}
-
 	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
 	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
 	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
@@ -149,8 +129,7 @@ func TestGitHubTeamCatalogCollectorPreservesRosterOnMembersOffRun(t *testing.T) 
 func TestGitHubTeamCatalogCollectorSkipsWhenOrgNameMissing(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{}}
-	observer := &githubTeamCatalogAdapterRecordingObserver{}
-	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, Observer: observer}
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
 	credential := providerfoundation.Credential{Provider: "github"}
 	client := githubTeamCatalogAdapterClient(t, doer)
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
@@ -167,8 +146,5 @@ func TestGitHubTeamCatalogCollectorSkipsWhenOrgNameMissing(t *testing.T) {
 	}
 	if len(doer.requests) != 0 {
 		t.Fatalf("no request should be issued without a resolvable org name: requests=%v", doer.requests)
-	}
-	if observer.calls != 1 || observer.outcome != "missing_credentials" {
-		t.Fatalf("observer=%+v", observer)
 	}
 }

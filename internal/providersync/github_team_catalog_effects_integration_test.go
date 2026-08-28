@@ -70,6 +70,62 @@ func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	}
 }
 
+// TestGitHubTeamCatalogWriteTeamsPreservesManualMembers is the CHAOS-4321
+// regression proof: teams.manual_members is an admin-override provenance
+// column this producer never sets itself (githubTeamRow.ManualMembers's doc
+// comment) -- WriteTeams MUST carry the currently-persisted value forward on
+// every write, or a bare INSERT with the column omitted sends ClickHouse's
+// [] DEFAULT and permanently erases the admin's override once this row's
+// updated_at wins under ReplacingMergeTree FINAL.
+func TestGitHubTeamCatalogWriteTeamsPreservesManualMembers(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
+	orgID := "github-team-catalog-org-manual-members"
+	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
+
+	// Seed a row with an admin-set manual_members value, exactly as
+	// ClickHouseTeamAdminService.add_members would have written it.
+	if err := conn.Exec(ctx,
+		`INSERT INTO teams (id, team_uuid, name, members, manual_members, is_active, updated_at, org_id, provider) `+
+			`VALUES (?, generateUUIDv4(), 'Platform', [], ?, 1, ?, ?, 'github')`,
+		"gh:platform", []string{"admin:alice"}, now, orgID,
+	); err != nil {
+		t.Fatalf("seed admin override: %v", err)
+	}
+
+	// A later GitHub sync writes this team again, with no knowledge of
+	// manual_members at all (matching _team_rows, which never sets it).
+	team, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform Renamed"}, nil, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{team}); err != nil {
+		t.Fatalf("write teams: %v", err)
+	}
+
+	result, err := conn.Query(ctx,
+		`SELECT name, manual_members FROM teams FINAL WHERE org_id = ? AND id = ?`, orgID, "gh:platform",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if !result.Next() {
+		t.Fatal("team row missing after sync write")
+	}
+	var name string
+	var manualMembers []string
+	if err := result.Scan(&name, &manualMembers); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Platform Renamed" {
+		t.Fatalf("sync write did not take effect: name=%q", name)
+	}
+	if len(manualMembers) != 1 || manualMembers[0] != "admin:alice" {
+		t.Fatalf("manual_members was NOT preserved across a native GitHub sync write: got=%v want=[admin:alice]", manualMembers)
+	}
+}
+
 func TestGitHubTeamCatalogWriteTeamsRejectsCrossOrgRow(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}

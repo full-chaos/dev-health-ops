@@ -519,10 +519,6 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	var githubTeamCatalogObserver jobruntime.GitHubTeamCatalogObserver
-	if typed, ok := observer.(jobruntime.GitHubTeamCatalogObserver); ok {
-		githubTeamCatalogObserver = typed
-	}
 	nativeTeamCatalogCollectors := map[string]providersync.TeamCatalogCollector{
 		"linear": providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
@@ -533,9 +529,10 @@ func buildSyncCoordinatorWorker(
 		// surface exists for GitHub at all (auto_import_capabilities("github").
 		// projects is permanently False in Python); the collector reads
 		// selections.Projects but never produces a Projects/Ownership row.
+		// Telemetry is generic (jobruntime.TeamCatalogObserver, wired below via
+		// teamCatalogObserver) -- no per-provider Observer field needed here.
 		"github": providersync.GitHubTeamCatalogCollector{
-			Sink:     providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
-			Observer: githubTeamCatalogTelemetryBridge{observer: githubTeamCatalogObserver},
+			Sink: providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
 		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{

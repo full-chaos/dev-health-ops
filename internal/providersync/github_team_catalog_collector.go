@@ -17,20 +17,14 @@ import (
 // False in Python): selections.Projects is read but never produces a
 // ProjectsWritten/OwnershipWritten row, matching that permanent capability
 // clamp rather than a temporary gap.
+// Telemetry is generic, not per-provider: the caller (syncdispatchruntime.
+// TeamCatalogDiscoveryExecutor / teamCatalogAutoimportBridge) observes
+// dispatch outcome and rows-written-per-table from this method's own return
+// value via jobruntime.TeamCatalogObserver (CHAOS-4431) -- no bespoke
+// GitHub-specific Observer field needed here.
 type GitHubTeamCatalogCollector struct {
 	Client GitHubTeamCatalogRouteHandler
 	Sink   GitHubTeamCatalogClickHouseEffects
-	// Observer is a narrow, package-local telemetry seam rather than a
-	// direct dependency on jobruntime.GitHubTeamCatalogObserver:
-	// internal/jobruntime already imports internal/providersync
-	// (providersync.Capability), so the reverse import would cycle. The
-	// outcome strings below are chosen to equal jobruntime.
-	// GitHubTeamCatalogOutcome's string values exactly, so the caller that
-	// wires MetricsCollector in (cmd/dev-health-worker) only needs a bare
-	// string-to-typed-string conversion, never a lookup table.
-	Observer interface {
-		ObserveGitHubTeamCatalogOutcome(outcome string, teamsWritten, membershipsWritten int)
-	}
 }
 
 // githubOrgNameConfigKeys mirrors team_autoimport_github.py's _github_org
@@ -79,11 +73,9 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// Matches Python's _populate_async: a missing org is a skip (zero
 		// summary), never a hard error -- an org can have GitHub connected
 		// with no org name set yet.
-		adapter.observe("missing_credentials", 0, 0)
 		return TeamCatalogResult{}, nil
 	}
 	if !selections.Teams && !selections.Members {
-		adapter.observe("no_categories_selected", 0, 0)
 		return TeamCatalogResult{}, nil
 	}
 
@@ -95,7 +87,6 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	rows, _, err := collector.Collect(ctx, ref.OrgID, selections.Teams, selections.Members)
 	if err != nil {
-		adapter.observe("discovery_failed", 0, 0)
 		return TeamCatalogResult{}, err
 	}
 
@@ -127,7 +118,6 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	result := TeamCatalogResult{}
 	if selections.Teams && rosterWriteSafe && len(rows.Teams) > 0 {
 		if err := adapter.Sink.WriteTeams(ctx, ref.OrgID, rows.Teams); err != nil {
-			adapter.observe("error", 0, 0)
 			return result, err
 		}
 		result.TeamsWritten = len(rows.Teams)
@@ -140,7 +130,6 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Members && len(rows.Memberships) > 0 {
 		if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, rows.Memberships); err != nil {
-			adapter.observe("error", 0, 0)
 			return result, err
 		}
 		result.MembershipsWritten = len(rows.Memberships)
@@ -150,22 +139,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		}
 		result.MembersWritten = len(distinctMembers)
 	}
-
-	outcome := "written"
-	switch {
-	case selections.Teams && !rosterWriteSafe:
-		outcome = "roster_preservation_failed"
-	case len(rows.Teams) == 0 && len(rows.Memberships) == 0:
-		outcome = "no_provider_teams"
-	}
-	adapter.observe(outcome, result.TeamsWritten, result.MembershipsWritten)
 	return result, nil
-}
-
-func (adapter GitHubTeamCatalogCollector) observe(outcome string, teamsWritten, membershipsWritten int) {
-	if adapter.Observer != nil {
-		adapter.Observer.ObserveGitHubTeamCatalogOutcome(outcome, teamsWritten, membershipsWritten)
-	}
 }
 
 var _ TeamCatalogCollector = GitHubTeamCatalogCollector{}

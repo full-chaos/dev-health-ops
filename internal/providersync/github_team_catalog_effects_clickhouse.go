@@ -15,7 +15,7 @@ import (
 // clickhouse.go), reusing its exact column lists for the shared "teams" and
 // "team_memberships" tables so both writers stay byte-compatible with every
 // other provider's rows in the same ReplacingMergeTree.
-const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
 const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
 // GitHubTeamCatalogClickHouseEffects writes githubTeamCatalogRows and reads
@@ -37,12 +37,28 @@ func (sink GitHubTeamCatalogClickHouseEffects) validMembership(orgID string, row
 
 // WriteTeams upserts every team row (ReplacingMergeTree on id dedupes by
 // updated_at, matching every other teams writer in this codebase).
+//
+// CHAOS-4321: this producer never populates ManualMembers itself, so every
+// row here is first stamped with its CURRENTLY persisted manual_members
+// value (existingManualMembers, below) before the INSERT -- omitting the
+// column instead would send ClickHouse's [] DEFAULT and, once this row's
+// updated_at wins under FINAL, permanently erase an admin's override. This
+// mirrors storage/clickhouse.py's insert_teams/_preserve_existing_
+// manual_members exactly (see githubTeamRow.ManualMembers's doc comment).
 func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, orgID string, rows []githubTeamRow) error {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" {
 		return ErrInvalidConfiguration
 	}
 	if len(rows) == 0 {
 		return nil
+	}
+	teamIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		teamIDs = append(teamIDs, row.ID)
+	}
+	existingManual, ok := sink.existingManualMembers(ctx, orgID, teamIDs)
+	if !ok {
+		return ErrEffectRecoveryUnsafe
 	}
 	batch, err := sink.Conn.PrepareBatch(ctx, githubTeamCatalogTeamsInsert)
 	if err != nil {
@@ -57,8 +73,12 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
+		manualMembers := existingManual[row.ID]
+		if manualMembers == nil {
+			manualMembers = []string{}
+		}
 		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, row.Members, row.ProjectKeys,
+			row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys,
 			row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
 			row.NativeTeamKey, row.ParentTeamID,
 		); err != nil {
@@ -66,6 +86,41 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 		}
 	}
 	return batch.Send()
+}
+
+// existingManualMembers reads the CURRENTLY persisted manual_members for
+// these team ids, unconditionally, before every WriteTeams call (unlike
+// ExistingTeamMembers/roster preservation below, which is gated on the
+// members-off selection). ok=false means the caller must fail the write
+// rather than risk sending ClickHouse's [] DEFAULT for a column it cannot
+// currently confirm.
+func (sink GitHubTeamCatalogClickHouseEffects) existingManualMembers(
+	ctx context.Context, orgID string, teamIDs []string,
+) (map[string][]string, bool) {
+	if len(teamIDs) == 0 {
+		return map[string][]string{}, true
+	}
+	result, err := sink.Conn.Query(ctx,
+		`SELECT id, manual_members FROM teams FINAL WHERE org_id = ? AND id IN ?`,
+		orgID, teamIDs,
+	)
+	if err != nil {
+		return nil, false
+	}
+	defer result.Close()
+	existing := make(map[string][]string, len(teamIDs))
+	for result.Next() {
+		var id string
+		var manualMembers []string
+		if err := result.Scan(&id, &manualMembers); err != nil {
+			return nil, false
+		}
+		existing[id] = manualMembers
+	}
+	if err := result.Err(); err != nil {
+		return nil, false
+	}
+	return existing, true
 }
 
 // WriteMemberships upserts every membership row.

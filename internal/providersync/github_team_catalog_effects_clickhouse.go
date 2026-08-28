@@ -42,13 +42,13 @@ func (sink GitHubTeamCatalogClickHouseEffects) validMembership(orgID string, row
 // WriteTeams upserts every team row (ReplacingMergeTree on id dedupes by
 // updated_at, matching every other teams writer in this codebase).
 //
-// CHAOS-4321: this producer never populates ManualMembers itself, so every
-// row here is first stamped with its CURRENTLY persisted manual_members
-// value (existingManualMembers, below) before the INSERT -- omitting the
-// column instead would send ClickHouse's [] DEFAULT and, once this row's
-// updated_at wins under FINAL, permanently erase an admin's override. This
-// mirrors storage/clickhouse.py's insert_teams/_preserve_existing_
-// manual_members exactly (see githubTeamRow.ManualMembers's doc comment).
+// CHAOS-4321/CHAOS-4446: this producer never populates ManualMembers
+// itself, so every row here is first stamped with its CURRENTLY persisted
+// manual_members value (PreserveExistingTeamManualMembers, the shared
+// helper every native team-catalog collector uses) before the INSERT --
+// omitting the column instead would send ClickHouse's [] DEFAULT and, once
+// this row's updated_at wins under FINAL, permanently erase an admin's
+// override.
 func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, orgID string, rows []githubTeamRow) error {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" {
 		return ErrInvalidConfiguration
@@ -60,8 +60,8 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 	for _, row := range rows {
 		teamIDs = append(teamIDs, row.ID)
 	}
-	existingManual, ok := sink.existingManualMembers(ctx, orgID, teamIDs)
-	if !ok {
+	existingManual, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, orgID, teamIDs)
+	if err != nil {
 		return ErrEffectRecoveryUnsafe
 	}
 	batch, err := sink.Conn.PrepareBatch(ctx, githubTeamCatalogTeamsInsert)
@@ -90,41 +90,6 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 		}
 	}
 	return batch.Send()
-}
-
-// existingManualMembers reads the CURRENTLY persisted manual_members for
-// these team ids, unconditionally, before every WriteTeams call (unlike
-// ExistingTeamMembers/roster preservation below, which is gated on the
-// members-off selection). ok=false means the caller must fail the write
-// rather than risk sending ClickHouse's [] DEFAULT for a column it cannot
-// currently confirm.
-func (sink GitHubTeamCatalogClickHouseEffects) existingManualMembers(
-	ctx context.Context, orgID string, teamIDs []string,
-) (map[string][]string, bool) {
-	if len(teamIDs) == 0 {
-		return map[string][]string{}, true
-	}
-	result, err := sink.Conn.Query(ctx,
-		`SELECT id, manual_members FROM teams FINAL WHERE org_id = ? AND id IN ?`,
-		orgID, teamIDs,
-	)
-	if err != nil {
-		return nil, false
-	}
-	defer result.Close()
-	existing := make(map[string][]string, len(teamIDs))
-	for result.Next() {
-		var id string
-		var manualMembers []string
-		if err := result.Scan(&id, &manualMembers); err != nil {
-			return nil, false
-		}
-		existing[id] = manualMembers
-	}
-	if err := result.Err(); err != nil {
-		return nil, false
-	}
-	return existing, true
 }
 
 // WriteMemberships upserts every membership row.

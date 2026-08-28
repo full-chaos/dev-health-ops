@@ -174,3 +174,49 @@ func TestGitHubTeamCatalogCollectorSkipsWhenOrgNameMissing(t *testing.T) {
 		t.Fatalf("no request should be issued without a resolvable org name: requests=%v", doer.requests)
 	}
 }
+
+// TestGitHubTeamCatalogCollectorFailsClosedOnMissingOrgUnderStrict is the
+// strict-mode counterpart of the skip-above test: reference discovery
+// (ref.Strict=true) must see a missing org name as a real error, matching
+// Python's _populate_async under strict_reference_discovery ("raise
+// ValueError(missing GitHub credentials or org...)"), never a silent zero.
+func TestGitHubTeamCatalogCollectorFailsClosedOnMissingOrgUnderStrict(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{}}
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github"}
+	client := githubTeamCatalogAdapterClient(t, doer)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	if _, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: "org-x", SyncRunID: "run-1", Strict: true},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
+	); err == nil {
+		t.Fatal("strict CollectTeamCatalog must fail when no org name resolves, not return a silent zero result")
+	}
+}
+
+// TestGitHubTeamCatalogCollectorFallsBackToSyncOptionsOrgName proves the
+// credentials-then-sync_options fallback order Python's _github_org uses:
+// when the credential carries no org, ref.SyncOptions["org"] still resolves
+// one.
+func TestGitHubTeamCatalogCollectorFallsBackToSyncOptionsOrgName(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "github-adapter-org-sync-options"
+	doer := githubTeamCatalogAdapterDoer(t)
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github"}
+	client := githubTeamCatalogAdapterClient(t, doer)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	result, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1", SyncOptions: map[string]any{"org": "acme"}},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TeamsWritten != 1 || len(doer.requests) == 0 {
+		t.Fatalf("sync_options org fallback did not take effect: result=%+v requests=%v", result, doer.requests)
+	}
+}

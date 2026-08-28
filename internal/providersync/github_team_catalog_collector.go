@@ -39,12 +39,13 @@ type GitHubTeamCatalogCollector struct {
 
 // githubOrgNameConfigKeys mirrors team_autoimport_github.py's _github_org
 // fallback order (credentials["org"|"organization"|"org_name"|"owner"], then
-// scope.sync_options[same]). This seam has no per-sync-run scope to fall
-// back to (TeamCatalogReference is claim-free), so only the credential's own
-// fields are checked -- both its unencrypted Config (the web form's non-secret
-// "Organization / Owner" field, ProviderForms.tsx GitHubForm) and its
-// encrypted fields, since it is not yet established which column this
-// deployment actually persisted "org" into.
+// scope.sync_options[same]) exactly: the credential's own fields (both its
+// unencrypted Config -- the web form's non-secret "Organization / Owner"
+// field, ProviderForms.tsx GitHubForm -- and its encrypted fields, since it
+// is not yet established which column this deployment actually persisted
+// "org" into) are checked FIRST, then ref.SyncOptions (this run's own
+// sync_configurations.sync_options, CHAOS-4431's SyncOptions addition) as
+// the fallback -- matching Python's own credentials-before-scope order.
 var githubOrgNameConfigKeys = []string{"org", "organization", "org_name", "owner"}
 
 func githubOrgNameFromCredential(credential providerfoundation.Credential) string {
@@ -57,6 +58,19 @@ func githubOrgNameFromCredential(credential providerfoundation.Credential) strin
 		if value, ok := credential.Secret(key); ok && value.Configured() {
 			if trimmed := strings.TrimSpace(value.Reveal()); trimmed != "" {
 				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func githubOrgNameFromSyncOptions(syncOptions map[string]any) string {
+	for _, key := range githubOrgNameConfigKeys {
+		if raw, ok := syncOptions[key]; ok {
+			if value, ok := raw.(string); ok {
+				if trimmed := strings.TrimSpace(value); trimmed != "" {
+					return trimmed
+				}
 			}
 		}
 	}
@@ -80,9 +94,19 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	orgName := githubOrgNameFromCredential(credential)
 	if orgName == "" {
-		// Matches Python's _populate_async: a missing org is a skip (zero
-		// summary), never a hard error -- an org can have GitHub connected
-		// with no org name set yet.
+		orgName = githubOrgNameFromSyncOptions(ref.SyncOptions)
+	}
+	if orgName == "" {
+		if ref.Strict {
+			// Matches Python's _populate_async under strict_reference_discovery:
+			// "raise ValueError(missing GitHub credentials or org for strict
+			// reference discovery)" -- a strict caller (reference discovery)
+			// must see this as a real failure, never a silent zero result.
+			return TeamCatalogResult{}, ErrInvalidConfiguration
+		}
+		// Non-strict (post-sync): a missing org is a skip (zero summary),
+		// never a hard error -- an org can have GitHub connected with no org
+		// name set yet.
 		return TeamCatalogResult{}, nil
 	}
 	if !selections.Teams && !selections.Members {
@@ -92,6 +116,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	collector := adapter.Client
 	collector.Client = client
 	collector.OrgName = orgName
+	collector.Strict = ref.Strict
 	if collector.Now == nil {
 		collector.Now = func() time.Time { return normalizedAt }
 	}

@@ -206,6 +206,28 @@ func TestGitHubTeamCatalogCollectSkipsTeamOnMemberFetchFailure(t *testing.T) {
 	}
 }
 
+// TestGitHubTeamCatalogCollectFailsClosedOnMemberFetchFailureUnderStrict is
+// the strict-mode counterpart: the reference-discovery caller (ref.Strict via
+// the adapter, Strict on the route handler directly here) must see a
+// member-fetch failure as a real error, matching Python's
+// "except Exception: if strict: raise" -- never a silent partial success.
+func TestGitHubTeamCatalogCollectFailsClosedOnMemberFetchFailureUnderStrict(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"}]`,
+		"/orgs/acme/teams/platform/repos":   `[]`,
+		"/orgs/acme/teams/platform/members": `not json`,
+	}}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Now: func() time.Time { return now }, ResolveEmail: false, Strict: true,
+	}
+	if _, _, err := collector.Collect(context.Background(), "org-1", true, true); err == nil {
+		t.Fatal("strict collect must fail on a member-fetch error, not silently skip the team")
+	}
+}
+
 func TestGitHubTeamCatalogCollectFailsClosedOnInvalidInput(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)

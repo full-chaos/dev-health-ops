@@ -73,6 +73,13 @@ type GitHubTeamCatalogRouteHandler struct {
 	// always reports no email -- useful for a fixture/oracle run with no live
 	// credential, and honest about the extra API cost live callers accept.
 	ResolveEmail bool
+	// Strict mirrors team_autoimport_github.py's `strict` flag
+	// (_populate_async / _membership_rows(..., strict=strict)): false (the
+	// default, matching the non-strict post-sync caller) skips only the
+	// failing team's memberships on a fetch/email/normalization error and
+	// keeps going; true (the reference-discovery caller) re-raises instead,
+	// matching Python's "except Exception: if strict: raise" exactly.
+	Strict bool
 }
 
 func (collector GitHubTeamCatalogRouteHandler) now() time.Time {
@@ -199,19 +206,20 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			// team_membership.py's discover_members_github failure (including a
 			// PyGithub lazy .email completion request raised while building the
 			// DiscoveredMember list) is caught per-team by
-			// team_autoimport_github.py's _membership_rows ("except Exception:
-			// ... continue" -- skip this team's memberships, keep going), never
-			// a whole-org abort. This mirrors that: a member-fetch or
-			// email-lookup failure, or hitting this run's own pagination
-			// ceiling (PyGithub has no such cap and would simply keep paging),
-			// skips only this team.
-			memberships, requests, ok := collector.collectTeamMemberships(
+			// team_autoimport_github.py's _membership_rows: "except Exception:
+			// if strict: raise; else: continue" -- Strict=false (post-sync,
+			// default) skips only this team's memberships and keeps going;
+			// Strict=true (reference discovery) re-raises, matching Python
+			// exactly.
+			memberships, requests, ok, memberErr := collector.collectTeamMemberships(
 				ctx, orgID, org, slug, perPage, maxPages, normalizedAt, emailCache,
 			)
 			evidence.Requests += requests
 			if ok {
 				rows.Memberships = append(rows.Memberships, memberships...)
 				evidence.MembersObserved += len(memberships)
+			} else if collector.Strict {
+				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
 			}
@@ -244,21 +252,24 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	perPage, maxPages int,
 	normalizedAt time.Time,
 	emailCache map[string]*string,
-) ([]githubMembershipRow, int, bool) {
+) ([]githubMembershipRow, int, bool, error) {
 	requests := 0
 	pages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
 		Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members",
 		Query: perPageQuery(perPage), MaxPages: maxPages,
 	})
 	requests += pages.Pages
-	if err != nil || pages.PageBudgetExhausted {
-		return nil, requests, false
+	if err != nil {
+		return nil, requests, false, err
+	}
+	if pages.PageBudgetExhausted {
+		return nil, requests, false, ErrPaginationCapExceeded
 	}
 	memberships := make([]githubMembershipRow, 0, len(pages.Items))
 	for _, memberRaw := range pages.Items {
 		var memberPayload githubTeamMemberPayload
 		if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
-			return nil, requests, false
+			return nil, requests, false, providerfoundation.ErrNormalizationInvalid
 		}
 		login := strings.TrimSpace(memberPayload.Login)
 		if login == "" {
@@ -268,18 +279,18 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		resolved, emailRequests, err := collector.resolveEmail(ctx, emailCache, login)
 		requests += emailRequests
 		if err != nil {
-			return nil, requests, false
+			return nil, requests, false, err
 		}
 		if resolved != nil {
 			email = *resolved
 		}
 		membership, err := normalizeGitHubMembership(orgID, slug, login, email, normalizedAt)
 		if err != nil {
-			return nil, requests, false
+			return nil, requests, false, err
 		}
 		memberships = append(memberships, membership)
 	}
-	return memberships, requests, true
+	return memberships, requests, true, nil
 }
 
 // resolveEmail fetches GET /users/{login} once per login per collection

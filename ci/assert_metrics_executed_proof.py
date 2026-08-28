@@ -70,6 +70,13 @@ REPO_DAY_FAMILIES: dict[str, str] = {
 # team_id be a live repo_id.
 TEAM_DAY_FAMILIES: dict[str, str] = {
     "team_wellbeing": "team_metrics_daily",
+    # CHAOS-4365 item 2 (4347-C): team_cognitive_load_daily is (org_id,
+    # team_id, day)-shaped like team_metrics_daily -- team_id is resolved
+    # from OWNERSHIP only (team_repo_ownership / teams.repo_patterns), never
+    # from a repo/author with no owning team, so unlike team_wellbeing there
+    # is no synthetic "unassigned" bucket here: an org with zero owned repos
+    # for any team on a given day legitimately writes zero rows for it.
+    "team_cognitive_load": "team_cognitive_load_daily",
 }
 
 

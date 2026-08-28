@@ -511,38 +511,41 @@ func buildSyncCoordinatorWorker(
 	// skips the Python populate bridge entirely; every other provider keeps
 	// going through bridgeDiscoveryExecutor exactly as before. ClickHouse
 	// readback verification (readbackVerifier, just above) still wraps the
-	// combined result either way.
+	// combined result either way. The same native-collector map and client
+	// resolver feed the post-sync team-autoimport dispatch below
+	// (teamAutoimportNative/teamCatalogClients), so they are built once here.
 	catalogDecryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	nativeTeamCatalogCollectors := map[string]providersync.TeamCatalogCollector{
+		"linear": providersync.LinearTeamCatalogCollector{
+			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
+				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+			},
+		},
+	}
+	teamCatalogClients := teamCatalogClientResolver{
+		pool: postgresDatabase.pools.Domain,
+		credentials: providerfoundation.CredentialResolver{
+			Repository: providerfoundation.PostgresCredentialRepository{
+				Pool: postgresDatabase.pools.Domain,
+			},
+			Decryptor: catalogDecryptor,
+		},
+		doer: &http.Client{
+			Timeout: 45 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		retry: providerfoundation.DefaultRetryPolicy(),
+	}
 	teamCatalogExecutor := &syncdispatchruntime.TeamCatalogDiscoveryExecutor{
-		Native: map[string]providersync.TeamCatalogCollector{
-			"linear": providersync.LinearTeamCatalogCollector{
-				Sink: providersync.LinearReferenceCatalogClickHouseEffects{
-					Conn: clickhouseConnection, Lease: teamCatalogLease{},
-				},
-			},
-		},
+		Native:   nativeTeamCatalogCollectors,
 		Fallback: bridgeDiscoveryExecutor,
-		Clients: teamCatalogClientResolver{
-			pool: postgresDatabase.pools.Domain,
-			credentials: providerfoundation.CredentialResolver{
-				Repository: providerfoundation.PostgresCredentialRepository{
-					Pool: postgresDatabase.pools.Domain,
-				},
-				Decryptor: catalogDecryptor,
-			},
-			doer: &http.Client{
-				Timeout: 45 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
-			retry: providerfoundation.DefaultRetryPolicy(),
-		},
-		Selections: teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain},
+		Clients:  teamCatalogClients,
 	}
 	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(teamCatalogExecutor, readbackVerifier)
 	if err != nil {
@@ -601,7 +604,22 @@ func buildSyncCoordinatorWorker(
 		cfg.Queues, []string{syncCoordinatorQueue}, cfg.WorkerQueueConcurrency,
 	)
 	if autoimport.Executable() {
-		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, bridge); err != nil {
+		// CHAOS-4431: a sync run whose own provider has a registered native
+		// collector runs it directly (gated by CHAOS-4323 selections,
+		// mirroring Python's non-strict run_team_autoimport) and never calls
+		// the bridge's team-autoimport endpoint; every other provider still
+		// does, unchanged. Reuses the same native-collector map and client
+		// resolver the reference-discovery executor above was built with.
+		teamAutoimportBridge := &teamCatalogAutoimportBridge{
+			CoordinatorBridge: bridge,
+			resolveProvider: func(ctx context.Context, orgID, runID string) (string, error) {
+				return resolveTeamCatalogProvider(ctx, postgresDatabase.pools.Domain, orgID, runID)
+			},
+			native:     nativeTeamCatalogCollectors,
+			clients:    teamCatalogClients,
+			selections: teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain},
+		}
+		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportBridge); err != nil {
 			closeClickHouse()
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}

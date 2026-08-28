@@ -1,0 +1,168 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+)
+
+// linearCollectorSpy records whether/how it was called, standing in for a
+// real TeamCatalogCollector so dispatch tests need no credential resolver,
+// HTTP client, or ClickHouse connection.
+type linearCollectorSpy struct {
+	gotRef        providersync.TeamCatalogReference
+	gotSelections providersync.TeamCatalogSelections
+	called        bool
+	err           error
+}
+
+func (collector *linearCollectorSpy) CollectTeamCatalog(
+	_ context.Context,
+	ref providersync.TeamCatalogReference,
+	_ providerfoundation.Credential,
+	_ *providerfoundation.HTTPClient,
+	selections providersync.TeamCatalogSelections,
+	_ time.Time,
+) (providersync.TeamCatalogResult, error) {
+	collector.called = true
+	collector.gotRef, collector.gotSelections = ref, selections
+	return providersync.TeamCatalogResult{}, collector.err
+}
+
+type fakeCoordinatorBridge struct {
+	teamAutoImportCalled bool
+	err                  error
+}
+
+func (bridge *fakeCoordinatorBridge) Dispatch(context.Context, syncdispatchruntime.DispatchSyncRunArgs) error {
+	return nil
+}
+func (bridge *fakeCoordinatorBridge) Finalize(context.Context, syncdispatchruntime.FinalizeSyncRunArgs) error {
+	return nil
+}
+func (bridge *fakeCoordinatorBridge) Discover(context.Context, syncdispatchruntime.ReferenceDiscoveryArgs) error {
+	return nil
+}
+func (bridge *fakeCoordinatorBridge) TeamAutoImport(context.Context, syncdispatchruntime.DomainReference) error {
+	bridge.teamAutoImportCalled = true
+	return bridge.err
+}
+
+type fakeAutoimportClientResolver struct{}
+
+func (fakeAutoimportClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error) {
+	return providerfoundation.Credential{Provider: "linear"}, &providerfoundation.HTTPClient{}, nil
+}
+
+const (
+	testOrg = "20000000-0000-4000-8000-000000000002"
+	testRun = "30000000-0000-4000-8000-000000000003"
+)
+
+type fakeAutoimportSelectionsResolver struct {
+	selections providersync.TeamCatalogSelections
+	err        error
+}
+
+func (resolver fakeAutoimportSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, error) {
+	return resolver.selections, resolver.err
+}
+
+func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
+	native := &linearCollectorSpy{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: &fakeCoordinatorBridge{},
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:           fakeAutoimportClientResolver{},
+		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true, Members: true}},
+	}
+	err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	})
+	if err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if !native.called {
+		t.Fatal("native collector was not called")
+	}
+	if bridge.CoordinatorBridge.(*fakeCoordinatorBridge).teamAutoImportCalled {
+		t.Fatal("wrapped bridge's TeamAutoImport was called despite a native provider")
+	}
+	if !native.gotSelections.Teams || native.gotSelections.Projects || !native.gotSelections.Members {
+		t.Fatalf("selections not threaded through: %+v", native.gotSelections)
+	}
+}
+
+func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testing.T) {
+	native := &linearCollectorSpy{}
+	fallback := &fakeCoordinatorBridge{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: fallback,
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:           fakeAutoimportClientResolver{},
+		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
+	}
+	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if native.called {
+		t.Fatal("native collector was called despite no selection")
+	}
+	if fallback.teamAutoImportCalled {
+		t.Fatal("wrapped bridge was called despite no selection -- nothing to import either way")
+	}
+}
+
+func TestTeamCatalogAutoimportBridgeFallsBackForNonNativeProviders(t *testing.T) {
+	fallback := &fakeCoordinatorBridge{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: fallback,
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "github", nil },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+	}
+	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if !fallback.teamAutoImportCalled {
+		t.Fatal("non-native provider did not fall through to the wrapped bridge")
+	}
+}
+
+func TestTeamCatalogAutoimportBridgeFallsBackWhenProviderResolutionFails(t *testing.T) {
+	fallback := &fakeCoordinatorBridge{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: fallback,
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "", errors.New("resolution failed") },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+	}
+	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if !fallback.teamAutoImportCalled {
+		t.Fatal("provider-resolution failure did not fall through to the wrapped bridge")
+	}
+}
+
+func TestTeamCatalogAutoimportBridgeFailsClosedWhenUnconstructed(t *testing.T) {
+	var nilBridge *teamCatalogAutoimportBridge
+	if err := nilBridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
+		t.Fatalf("nil bridge error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
+	}
+	zeroBridge := &teamCatalogAutoimportBridge{}
+	if err := zeroBridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
+		t.Fatalf("zero-value bridge error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
+	}
+}

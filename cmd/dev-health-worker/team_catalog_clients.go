@@ -4,12 +4,40 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// resolveTeamCatalogProvider ports the SAME sync_runs-JOIN-integrations
+// lookup native_reference_discovery.go's resolveAuthoritativeProvider uses,
+// without a provider to fence by -- the post-sync team-autoimport dispatch
+// (below) needs to discover which provider a sync run belongs to BEFORE it
+// can decide native vs bridge; resolveTeamCatalogIntegration above requires
+// already knowing it.
+func resolveTeamCatalogProvider(ctx context.Context, pool *pgxpool.Pool, orgID, runID string) (string, error) {
+	if pool == nil || orgID == "" || runID == "" {
+		return "", providersync.ErrInvalidConfiguration
+	}
+	var provider string
+	err := pool.QueryRow(ctx, `
+SELECT lower(trim(integrations.provider))
+FROM public.sync_runs
+JOIN public.integrations ON integrations.id = sync_runs.integration_id
+WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id = $2`,
+		runID, orgID).Scan(&provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", providersync.ErrInvalidConfiguration
+	}
+	if err != nil {
+		return "", err
+	}
+	return provider, nil
+}
 
 // errTeamCatalogUnsupportedProvider means a provider was registered in the
 // native collector map without a matching HTTP-client builder below. Fail
@@ -134,3 +162,65 @@ LIMIT 1`, orgID, integrationID).Scan(&teams, &projects, &members)
 	}
 	return providersync.TeamCatalogSelections{Teams: teams, Projects: projects, Members: members}, nil
 }
+
+// teamCatalogAutoimportBridge decorates a syncdispatchruntime.CoordinatorBridge:
+// a sync run whose OWN provider has a registered native collector runs that
+// collector directly (gated by CHAOS-4323 selections, mirroring Python's
+// non-strict run_team_autoimport -- UNLIKE TeamCatalogDiscoveryExecutor
+// above, which mirrors the selection-blind run_team_autoimport_strict used
+// by the separate reference-discovery seam) and never calls TeamAutoImport
+// on the wrapped bridge at all. Every other provider, and any resolution
+// failure, falls through to the wrapped bridge unchanged -- Dispatch/
+// Finalize/Discover are untouched pass-throughs via the embedded interface.
+type teamCatalogAutoimportBridge struct {
+	syncdispatchruntime.CoordinatorBridge
+	// resolveProvider discovers the sync run's own provider; production
+	// wiring sets this to a closure over resolveTeamCatalogProvider + the
+	// domain pool, tests inject a fake directly.
+	resolveProvider func(ctx context.Context, orgID, runID string) (string, error)
+	native          map[string]providersync.TeamCatalogCollector
+	clients         syncdispatchruntime.ProviderClientResolver
+	selections      syncdispatchruntime.TeamCatalogSelectionsResolver
+	now             func() time.Time
+}
+
+func (bridge *teamCatalogAutoimportBridge) nowUTC() time.Time {
+	if bridge.now != nil {
+		return bridge.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
+	ctx context.Context, reference syncdispatchruntime.DomainReference,
+) error {
+	if bridge == nil || bridge.CoordinatorBridge == nil || bridge.resolveProvider == nil {
+		return syncdispatchruntime.ErrInvalidBridge
+	}
+	orgID, runID := reference.OrganizationID, reference.SyncRunID
+	provider, err := bridge.resolveProvider(ctx, orgID, runID)
+	if err == nil {
+		if collector, ok := bridge.native[provider]; ok {
+			selections, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider)
+			if selectionsErr != nil {
+				return selectionsErr
+			}
+			if !selections.Any() {
+				return nil
+			}
+			credential, client, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
+			if clientErr != nil {
+				return clientErr
+			}
+			_, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
+				OrgID: orgID, SyncRunID: runID,
+			}, credential, client, selections, bridge.nowUTC())
+			return collectErr
+		}
+	}
+	// Provider resolution failed, or the provider is not native: fall back
+	// to the Python path exactly as before CHAOS-4431.
+	return bridge.CoordinatorBridge.TeamAutoImport(ctx, reference)
+}
+
+var _ syncdispatchruntime.CoordinatorBridge = &teamCatalogAutoimportBridge{}

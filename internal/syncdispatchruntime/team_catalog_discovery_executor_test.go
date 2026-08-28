@@ -55,19 +55,14 @@ func (resolver *fakeProviderClientResolver) ResolveClient(context.Context, strin
 	return resolver.credential, resolver.client, resolver.err
 }
 
-type fakeTeamCatalogSelectionsResolver struct {
-	selections providersync.TeamCatalogSelections
-	err        error
-}
-
-func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, error) {
-	return resolver.selections, resolver.err
-}
-
 // TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector pins
 // the core CHAOS-4431 dispatch rule: a provider with a registered native
 // collector never reaches the bridge fallback, and the collector receives
-// the claim-free reference plus the resolved credential/client/selections.
+// the claim-free reference plus the resolved credential/client. Selections
+// are always "every surface" here (Teams/Projects/Members all true):
+// src/dev_health_ops/workers/team_autoimport.py:98-103 documents that
+// run_team_autoimport_strict -- what this seam mirrors -- never consults
+// sync_options, unlike the separate, selection-gated post-sync path.
 func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *testing.T) {
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
 		TeamsWritten: 3, TeamKeys: []string{"ENG", "OPS"},
@@ -75,10 +70,9 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	fallback := &fakeDiscoveryExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:     map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback:   fallback,
-		Clients:    &fakeProviderClientResolver{credential: credential},
-		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Fallback: fallback,
+		Clients:  &fakeProviderClientResolver{credential: credential},
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
 	if err != nil {
@@ -93,8 +87,8 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	if collector.gotCredential.Provider != credential.Provider || collector.gotCredential.ID != credential.ID {
 		t.Fatalf("collector credential=%+v want=%+v", collector.gotCredential, credential)
 	}
-	if !collector.gotSelections.Teams || collector.gotSelections.Projects || collector.gotSelections.Members {
-		t.Fatalf("collector selections=%+v", collector.gotSelections)
+	if !collector.gotSelections.Teams || !collector.gotSelections.Projects || !collector.gotSelections.Members {
+		t.Fatalf("collector selections=%+v want every surface selected (strict semantics)", collector.gotSelections)
 	}
 	if summary["provider"] != "linear" || summary["outcome"] != "native" {
 		t.Fatalf("summary=%#v", summary)
@@ -126,34 +120,6 @@ func TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders(t *testin
 	}
 }
 
-// TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithNoSelection pins the
-// third outcome: a native provider whose org has every CHAOS-4323 flag off
-// writes nothing and never calls the bridge either -- there is nothing to
-// import either way, so paying for the Python round trip would be pure waste.
-func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithNoSelection(t *testing.T) {
-	collector := &fakeTeamCatalogCollector{}
-	fallback := &fakeDiscoveryExecutor{}
-	executor := &TeamCatalogDiscoveryExecutor{
-		Native:     map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback:   fallback,
-		Clients:    &fakeProviderClientResolver{},
-		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
-	}
-	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if collector.gotRef.OrgID != "" {
-		t.Fatalf("collector was called despite no selection: %+v", collector.gotRef)
-	}
-	if fallback.gotProvider != "" {
-		t.Fatalf("bridge was called despite no selection: %+v", fallback)
-	}
-	if summary["outcome"] != "skipped_selection" {
-		t.Fatalf("summary=%#v", summary)
-	}
-}
-
 // TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed matches the
 // nil-safety convention every other executor in this package follows.
 func TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T) {
@@ -167,6 +133,6 @@ func TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T) 
 	}
 	nativeOnly := &TeamCatalogDiscoveryExecutor{Native: map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}}}
 	if _, err := nativeOnly.Discover(context.Background(), testOrg, testRun, "linear"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
-		t.Fatalf("native executor with no Clients/Selections error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
+		t.Fatalf("native executor with no Clients error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
 }

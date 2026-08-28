@@ -27,24 +27,35 @@ type ProviderClientResolver interface {
 // sync_configurations flags (auto_import_teams/auto_import_projects/
 // auto_import_members) for this sync run's own integration, for the same
 // multiple-active-integrations reason ProviderClientResolver's doc comment
-// explains.
+// explains. Used by the POST-SYNC team-autoimport dispatcher only (mirrors
+// Python's non-strict run_team_autoimport, which does gate on these flags) --
+// NOT by TeamCatalogDiscoveryExecutor below, which mirrors run_team_autoimport_strict
+// instead (src/dev_health_ops/workers/team_autoimport.py:98-103: "This is the
+// ONLY call site that threads the resulting selection into the populator
+// scope -- run_team_autoimport_strict deliberately does not... reference
+// discovery and backfill keep importing everything they always have").
 type TeamCatalogSelectionsResolver interface {
 	ResolveSelections(ctx context.Context, orgID, runID, provider string) (providersync.TeamCatalogSelections, error)
 }
 
+// teamCatalogStrictSelections always selects every surface: the strict
+// reference-discovery path (run_team_autoimport_strict) never consults
+// sync_options, so the native equivalent must not invent a gate Python never
+// had.
+var teamCatalogStrictSelections = providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}
+
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
-// a provider with a registered native collector runs it directly and skips
-// the Python bridge entirely; every other provider (and a native provider
-// with every CHAOS-4323 selection off) falls through to Fallback, the
-// existing BridgeDiscoveryExecutor. It implements the same DiscoveryExecutor
-// seam VerifiedDiscoveryExecutor already wraps, so ClickHouse readback
-// verification covers native and bridge providers alike.
+// a provider with a registered native collector runs it directly (importing
+// every surface unconditionally, matching run_team_autoimport_strict) and
+// skips the Python bridge entirely; every other provider falls through to
+// Fallback, the existing BridgeDiscoveryExecutor. It implements the same
+// DiscoveryExecutor seam VerifiedDiscoveryExecutor already wraps, so
+// ClickHouse readback verification covers native and bridge providers alike.
 type TeamCatalogDiscoveryExecutor struct {
-	Native     map[string]providersync.TeamCatalogCollector
-	Fallback   DiscoveryExecutor
-	Clients    ProviderClientResolver
-	Selections TeamCatalogSelectionsResolver
-	Now        func() time.Time
+	Native   map[string]providersync.TeamCatalogCollector
+	Fallback DiscoveryExecutor
+	Clients  ProviderClientResolver
+	Now      func() time.Time
 }
 
 func (executor *TeamCatalogDiscoveryExecutor) now() time.Time {
@@ -68,19 +79,8 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		}
 		return executor.Fallback.Discover(ctx, orgID, runID, provider)
 	}
-	if executor.Clients == nil || executor.Selections == nil {
+	if executor.Clients == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
-	}
-	selections, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
-	if err != nil {
-		return nil, err
-	}
-	if !selections.Any() {
-		// Nothing is selected for this provider: no native write, and no
-		// bridge call either (an org that disabled every CHAOS-4323 flag for
-		// this provider has nothing to import -- the Python path would skip
-		// the same work, it just would not have known to skip it this cheaply).
-		return map[string]any{"provider": normalizedProvider, "outcome": "skipped_selection"}, nil
 	}
 	credential, client, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
@@ -88,7 +88,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	}
 	result, err := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
 		OrgID: orgID, SyncRunID: runID,
-	}, credential, client, selections, executor.now())
+	}, credential, client, teamCatalogStrictSelections, executor.now())
 	if err != nil {
 		return nil, err
 	}

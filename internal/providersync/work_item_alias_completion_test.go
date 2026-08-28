@@ -87,6 +87,57 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 			},
 			wantErr: ErrInvalidConfiguration,
 		},
+		// CHAOS-4078: PR-social and TestOps folds are non-atomic -- unlike
+		// work-items, a subset of members present is the NORMAL shape, not a
+		// malformed claim.
+		{
+			name:     "pr-social fold fans back only the enabled alias",
+			provider: "github", dataset: "prs",
+			flags:     map[string]bool{"family_dataset_pr_comments": true, "sync_prs": true},
+			result:    map[string]any{"prs_synced": 3, "pr_reviews_synced": 0},
+			wantKeys:  []string{"pr-comments"},
+			wantAudit: []string{"pr-comments"},
+		},
+		{
+			name:     "pr-social fold fans back multiple enabled aliases in family order",
+			provider: "gitlab", dataset: "prs",
+			flags: map[string]bool{
+				"family_dataset_pr_reviews":  true,
+				"family_dataset_pr_comments": true,
+			},
+			result:    map[string]any{"records": 4},
+			wantKeys:  []string{"pr-reviews", "pr-comments"},
+			wantAudit: []string{"pr-reviews", "pr-comments"},
+		},
+		{
+			name:     "prs claim with no fold flags fans back only its own identity",
+			provider: "github", dataset: "prs",
+			flags:  map[string]bool{"sync_prs": true},
+			result: map[string]any{"records": 1}, wantKeys: []string{"prs"},
+		},
+		{
+			name:     "testops fold fans back only the enabled alias",
+			provider: "github", dataset: "cicd",
+			flags:     map[string]bool{"family_dataset_tests": true, "sync_cicd": true},
+			result:    map[string]any{"records": 5},
+			wantKeys:  []string{"tests"},
+			wantAudit: []string{"tests"},
+		},
+		{
+			name:     "testops fold predeclared audit fails closed",
+			provider: "gitlab", dataset: "cicd",
+			flags: map[string]bool{"family_dataset_tests": true},
+			result: map[string]any{
+				"records": 1, "family_datasets": []string{"cicd"},
+			},
+			wantErr: ErrInvalidConfiguration,
+		},
+		{
+			name:     "unknown fold flag fails closed",
+			provider: "github", dataset: "prs",
+			flags:  map[string]bool{"family_dataset_bogus": true},
+			result: map[string]any{"records": 1}, wantErr: ErrInvalidConfiguration,
+		},
 	}
 
 	for _, test := range tests {
@@ -185,6 +236,89 @@ func TestWorkItemAliasProcessorFlagsRejectNonBooleanEncoding(t *testing.T) {
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v want=%v", err, ErrInvalidConfiguration)
+	}
+}
+
+// TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases covers
+// codex round 3 finding #4: for an alias-only fold, claim.Dataset is the
+// canonical key ("prs"/"cicd") and the enabled alias lives only in
+// ProcessorFlags. Without this expansion, PostgresRepository's
+// RecordUnitClaimed/RecordUnitFailed calls would record every folded unit
+// under its canonical identity only, hiding the exact per-alias-dataset
+// flatline (pr-comments, pr-reviews, tests) CHAOS-4125's forensics needed.
+func TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		dataset string
+		flags   map[string]bool
+		want    []string
+	}{
+		{
+			name:    "pr-social fold expands to only the enabled alias",
+			dataset: "prs",
+			flags:   map[string]bool{"family_dataset_pr_comments": true},
+			want:    []string{"pr-comments"},
+		},
+		{
+			name:    "pr-social fold expands to every enabled alias",
+			dataset: "prs",
+			flags: map[string]bool{
+				"family_dataset_pr_reviews":  true,
+				"family_dataset_pr_comments": true,
+			},
+			want: []string{"pr-reviews", "pr-comments"},
+		},
+		{
+			name:    "testops fold expands to the enabled alias",
+			dataset: "cicd",
+			flags:   map[string]bool{"family_dataset_tests": true},
+			want:    []string{"tests"},
+		},
+		{
+			name:    "canonical-only fold with no aliases falls back to its own identity",
+			dataset: "cicd",
+			flags:   map[string]bool{},
+			want:    []string{"cicd"},
+		},
+		{
+			name:    "an explicit-false alias flag never attributes to that alias",
+			dataset: "cicd",
+			flags:   map[string]bool{"family_dataset_tests": false},
+			want:    []string{"cicd"},
+		},
+		{
+			name:    "a non-fold dataset always fans back to its own identity",
+			dataset: "commits",
+			flags:   map[string]bool{"family_dataset_tests": true},
+			want:    []string{"commits"},
+		},
+		{
+			// The atomic work-items family is deliberately NOT expanded here,
+			// unlike prs/cicd: buildWorkItemFamilyUnit stamps all five family
+			// flags true unconditionally for every claim (never a subset), so
+			// expanding would record one claim as five counter increments --
+			// silently 5x-inflating the highest-volume sync path's metrics.
+			name:    "the atomic work-items family is never expanded, even with every flag true",
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": true,
+			},
+			want: []string{"work-items"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := metricDatasetKeys(tc.dataset, tc.flags); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("metricDatasetKeys(%q, %v)=%v want=%v", tc.dataset, tc.flags, got, tc.want)
+			}
+		})
 	}
 }
 

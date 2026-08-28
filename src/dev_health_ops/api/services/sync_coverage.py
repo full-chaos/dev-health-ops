@@ -34,7 +34,8 @@ from dev_health_ops.models.settings import JobStatus, ScheduledJob, SyncConfigur
 from dev_health_ops.models.sync_coverage import SyncCoverageProjection
 from dev_health_ops.sync.datasets import supported_datasets
 from dev_health_ops.sync.family_flags import (
-    family_dataset_keys_from_flags,
+    FOLD_FAMILIES,
+    dataset_keys_from_flags,
 )
 
 logger = logging.getLogger(__name__)
@@ -538,12 +539,21 @@ def _unit_window_from_row(
 # work-item-labels, work-item-projects, work-item-history, work-item-comments)
 # into ONE composite SyncRunUnit per (source, window) with canonical
 # dataset_key="work-items" and boolean family_dataset_<key> processor flags
-# per enabled child dataset. Coverage math must expand a persisted unit into
-# its effective child dataset keys before doing interval/status math, or a
-# later successful composite run never supersedes stale child-dataset gaps or
+# per enabled child dataset. CHAOS-4078 adds two more non-atomic folds: the
+# PR-social family (prs/pr-reviews/pr-comments -> prs) and the TestOps family
+# (cicd/tests -> cicd). Coverage math must expand a persisted unit into its
+# effective child dataset keys before doing interval/status math, or a later
+# successful composite run never supersedes stale child-dataset gaps or
 # failures. This mirrors the identical expansion in
 # ``workers/sync_units.py::_watermark_dataset_keys``/``_family_dataset_audit_metadata``.
 _WORK_ITEMS_CANONICAL_DATASET_KEY = "work-items"
+
+# canonical_dataset_key -> member dataset keys, for every collapsible family.
+_CANONICAL_FAMILY_DATASETS: dict[str, tuple[str, ...]] = dict(FOLD_FAMILIES)
+# member dataset key -> the canonical key its family folds onto.
+_FAMILY_CHILD_CANONICAL: dict[str, str] = {
+    member: canonical for canonical, members in FOLD_FAMILIES for member in members
+}
 
 
 def _effective_dataset_keys(
@@ -552,18 +562,19 @@ def _effective_dataset_keys(
     """Expand a raw ``dataset_key``/``processor_flags`` pair into effective
     coverage dataset keys.
 
-    Only the canonical composite key (``"work-items"``) is ever expanded --
-    a raw, non-composite ``dataset_key`` is returned as-is even if stray
-    ``family_dataset_*`` flags are present, since a plain unit never carries
-    a real work-item-family collapse. For the canonical key, returns the
-    enabled work-item-family child keys (canonical order) decoded from
+    Only a canonical composite key (``"work-items"``, ``"prs"``, ``"cicd"``)
+    is ever expanded -- a raw, non-composite ``dataset_key`` is returned as-is
+    even if stray ``family_dataset_*`` flags are present, since a plain unit
+    never carries a real family collapse. For a canonical key, returns the
+    enabled family child keys (canonical order) decoded from
     ``processor_flags`` when any are true; otherwise falls back to the raw
     ``dataset_key`` (missing/false/unknown flags never advance coverage for a
     dataset that was not actually run).
     """
-    if str(dataset_key) != _WORK_ITEMS_CANONICAL_DATASET_KEY:
+    members = _CANONICAL_FAMILY_DATASETS.get(str(dataset_key))
+    if members is None:
         return [str(dataset_key)]
-    family_keys = family_dataset_keys_from_flags(processor_flags)
+    family_keys = dataset_keys_from_flags(members, processor_flags)
     return family_keys or [str(dataset_key)]
 
 
@@ -572,32 +583,28 @@ def _effective_dataset_keys_for_unit(unit: _DatasetKeyUnit) -> list[str]:
     return _effective_dataset_keys(unit.dataset_key, unit.processor_flags)
 
 
-def _is_work_item_family_dataset_key(dataset_key: str) -> bool:
-    """True when ``dataset_key`` is one of the work-item-family child datasets.
-
-    Probes the public ``family_dataset_keys_from_flags`` helper with that key's
-    own synthetic flag rather than importing planner's private
-    ``_WORK_ITEM_FAMILY_DATASETS`` constant, keeping this fix localized to
-    coverage math (mirrors the family-flag naming convention already relied on
-    by ``workers/sync_units.py``).
-    """
-    probe_flag = "family_dataset_" + dataset_key.replace("-", "_")
-    return dataset_key in family_dataset_keys_from_flags({probe_flag: True})
+def _is_family_child_dataset_key(dataset_key: str) -> bool:
+    """True when ``dataset_key`` is a child of any collapsible family (the
+    work-item family, or the CHAOS-4078 PR-social/TestOps folds)."""
+    return dataset_key in _FAMILY_CHILD_CANONICAL
 
 
 def _query_dataset_keys_for_scope(dataset_keys: Sequence[str]) -> tuple[str, ...]:
-    """Expand scope dataset keys with the canonical work-item-family key.
+    """Expand scope dataset keys with each requested key's canonical family key.
 
     Persisted ``SyncRunUnit`` rows carry the collapsed composite key
-    ``"work-items"`` for every enabled work-item-family dataset (CHAOS-2721).
-    A scope covering any family child key (e.g. ``work-item-comments``) must
-    therefore also query for rows keyed ``"work-items"``, or the composite row
-    is invisible to per-dataset coverage queries entirely. Non-family scopes
-    are returned unchanged.
+    (``"work-items"``, ``"prs"``, or ``"cicd"``) for every enabled member of
+    that family. A scope covering any family child key (e.g.
+    ``work-item-comments`` or ``pr-comments``) must therefore also query for
+    rows keyed under its canonical identity, or the composite row is
+    invisible to per-dataset coverage queries entirely. Non-family scopes are
+    returned unchanged.
     """
     keys = set(dataset_keys)
-    if any(_is_work_item_family_dataset_key(key) for key in dataset_keys):
-        keys.add(_WORK_ITEMS_CANONICAL_DATASET_KEY)
+    for key in dataset_keys:
+        canonical = _FAMILY_CHILD_CANONICAL.get(key)
+        if canonical is not None:
+            keys.add(canonical)
     return tuple(sorted(keys))
 
 
@@ -808,11 +815,22 @@ def _terminal_unit_base_filters(
     ]
 
 
-def _work_item_window_weight(scope: EffectiveScope) -> int:
-    return max(
-        sum(1 for key in scope.dataset_keys if _is_work_item_family_dataset_key(key)),
-        1,
-    )
+def _family_window_weight(scope: EffectiveScope, canonical_key: str) -> int:
+    """Weight of ONE persisted unit row keyed under ``canonical_key``: the
+    number of effective coverage windows ``_effective_dataset_keys_for_unit``
+    will expand it into, bounded by how many of THAT family's own members
+    this scope actually asks about (never less than 1).
+
+    CHAOS-4078: this must be computed per canonical family, not as a single
+    flat scalar applied to every composite row. A scope spanning both a
+    work-items child (e.g. ``work-item-comments``) and a PR-social child
+    (e.g. ``pr-comments``) must weight a ``work-items`` row only by the
+    work-items members in scope, and a ``prs`` row only by the PR-social
+    members in scope -- summing across families would overcount one and
+    undercount the other.
+    """
+    members = _CANONICAL_FAMILY_DATASETS.get(canonical_key, ())
+    return max(sum(1 for key in scope.dataset_keys if key in members), 1)
 
 
 async def _weighted_unit_window_count(
@@ -823,18 +841,21 @@ async def _weighted_unit_window_count(
     limit: int,
 ) -> int:
     bounded_units = unit_rows.limit(limit + 1).subquery()
+    # One WHEN branch per canonical family (work-items, prs, cicd) -- a
+    # composite row expands into as many coverage windows as that family has
+    # members in scope. A non-family dataset_key (or a family with none of
+    # its members in scope) falls through to the ELSE weight of 1, matching
+    # _effective_dataset_keys' own raw-key fallback.
+    weight_cases = tuple(
+        (
+            bounded_units.c.dataset_key == canonical_key,
+            _family_window_weight(scope, canonical_key),
+        )
+        for canonical_key in _CANONICAL_FAMILY_DATASETS
+    )
     stmt = select(
         func.coalesce(
-            func.sum(
-                case(
-                    (
-                        bounded_units.c.dataset_key
-                        == _WORK_ITEMS_CANONICAL_DATASET_KEY,
-                        _work_item_window_weight(scope),
-                    ),
-                    else_=1,
-                )
-            ),
+            func.sum(case(*weight_cases, else_=1)),
             0,
         )
     ).select_from(bounded_units)

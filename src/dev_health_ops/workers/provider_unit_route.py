@@ -163,17 +163,22 @@ def is_plannable(provider: str, dataset: str) -> bool:
 def canonical_identity(provider: str, dataset: str) -> str | None:
     """The canonical writer identity that serves this pair, or ``None``.
 
-    This is the registry's answer to "which writer owns this alias", published
-    so the alias-fold work in CHAOS-4078 has one authority to plan from rather
-    than a second hand-maintained alias table. It is deliberately NOT consulted
-    by the planners yet: folding an alias-only selection onto its canonical
-    writer also requires normalising watermark loading and sync-coverage scope
-    matching, and doing it at the planner alone silently breaks both.
+    This is the registry's answer to "which writer owns this alias" -- the
+    one authority CHAOS-4078's alias-fold reads from, on both the Python
+    (``sync.planner._build_fold_family_units``) and Go
+    (``internal/scheduler/sync.foldContributingFamilyUnit``,
+    ``providersync.canonicalRouteIdentity``) sides, so the two cannot drift
+    onto separate hand-maintained alias tables.
 
-    A third surface used to be on that list -- the Celery fallback's processor
-    flags -- but CHAOS-4054 step 4 deleted the fallback, so an alias-only
-    selection can no longer diverge there. The remaining two are what CHAOS-4078
-    still has to normalise.
+    CHAOS-4078 normalised the two surfaces that made an earlier, reverted
+    planner-only fold unsafe: watermark loading resolves each alias's OWN
+    configured row before merging (never the canonical identity's), and
+    sync-coverage scope matching (``api/services/sync_coverage.py``) expands
+    a canonical composite key back to whichever alias child keys its
+    processor flags name. A third surface that used to be on this list --
+    the Celery fallback's processor flags -- is moot: CHAOS-4054 step 4
+    deleted the fallback entirely, so an alias-only selection can no longer
+    diverge there.
     """
 
     key = (provider.strip().lower(), dataset.strip().lower())
@@ -216,6 +221,30 @@ def is_atomic_provider_family_direct_alias(provider: str, dataset: str) -> bool:
     return (
         policy is not None
         and policy.mode is FamilyExecutionMode.ATOMIC_CANONICAL
+        and normalized_dataset != policy.canonical_dataset
+    )
+
+
+def is_fold_family_direct_alias(provider: str, dataset: str) -> bool:
+    """Whether a persisted claim is a non-canonical FOLD_CONTRIBUTING alias.
+
+    CHAOS-4078 gave PR-social (prs) and TestOps (cicd) a fold-family policy: a
+    unit persisted directly under one of their alias identities (``tests``,
+    ``pr-reviews``, ``pr-comments``) rather than the canonical writer is
+    ``validate_provider_family_claim``-malformed, but it is NOT the atomic
+    "reaches provider execution undetected" hazard that check exists to catch
+    -- the capability matrix never marks an alias ``plannable``, so
+    ``routes_to_river`` already fails it closed. Callers use this to route
+    such a claim through per-unit termination (CHAOS-3990) instead of
+    aborting a whole run's dispatch over one unroutable, pre-fold-legacy unit.
+    """
+
+    normalized_provider = provider.strip().lower()
+    normalized_dataset = dataset.strip().lower()
+    policy = provider_family_policy(normalized_provider, normalized_dataset)
+    return (
+        policy is not None
+        and policy.mode is FamilyExecutionMode.FOLD_CONTRIBUTING
         and normalized_dataset != policy.canonical_dataset
     )
 

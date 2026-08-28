@@ -137,12 +137,12 @@
       "notes": "Beat entry prune-external-ingest-batches, crontab(5,15) UTC"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:760",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:761",
       "surface": "dispatch_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 759
+        "line": 760
       },
       "queue_or_cadence": "sync",
       "dispatches": "sync.provider_unit outbox rows (per unit)",
@@ -161,12 +161,12 @@
       "notes": "transport-routes.json kind dispatch_sync_run, route=river, rollback_route=celery. CORRECTION (2026-08-22, CHAOS-4082): this note previously claimed the deployed sync_dispatch_transport_routes row was still transport='celery' because 0049 seeded it that way and no migration flips it. A production dump disproves that -- all four kinds are transport='river', paused=false, generation=2, applied by an operator via `dev-health-workerctl routes apply`. The native Go coordinator is the RUNNING route, not merely the checked-in one. CHAOS-4054 step 4: this task no longer dispatches run_sync_unit -- the Celery fallthrough is deleted and every admitted unit is staged in the durable sync.provider_unit outbox. A pair the capability matrix does not route is terminalized as feature_disabled instead."
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1163",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:1179",
       "surface": "run_sync_unit",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1161
+        "line": 1177
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -185,12 +185,12 @@
       "notes": "matrix inventory: 59/59 provider/dataset pairs route-ready in Go, including GitHub 17/17. CHAOS-4054 deleted the route enablement environment plane (steps 1-3) and step 4 deleted the Celery fallthrough that dispatch_sync_run used to publish this task with, so no Celery producer targets it any more; it survives only as the compute body behind the registry kind's HTTP compatibility bridge."
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2038",
+      "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2054",
       "surface": "finalize_sync_run",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2036
+        "line": 2052
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -1289,12 +1289,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1669",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:1685",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1667
+        "line": 1683
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -1313,12 +1313,12 @@
       "notes": "grep-evading form; internal to unit completion"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2523",
+      "id": "call_site_getattr_indirection:src/dev_health_ops/workers/sync_units.py:2539",
       "surface": "getattr(finalize_sync_run,'apply_async')",
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2658
+        "line": 2674
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

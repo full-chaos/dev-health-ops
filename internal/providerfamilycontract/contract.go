@@ -15,6 +15,13 @@ type ExecutionMode string
 const (
 	AtomicCanonical ExecutionMode = "atomic_canonical"
 	Independent     ExecutionMode = "independent"
+	// FoldContributing families (CHAOS-4078: PR-social prs/pr-reviews/
+	// pr-comments -> prs, TestOps cicd/tests -> cicd) fold an alias-only
+	// selection onto their canonical writer, but -- unlike AtomicCanonical --
+	// membership is not all-or-nothing: a canonical claim may carry any
+	// non-empty subset of its family's flags (including none, for a
+	// canonical-only selection with no enabled aliases).
+	FoldContributing ExecutionMode = "fold_contributing"
 )
 
 var ErrInvalidClaim = errors.New("provider family claim is invalid")
@@ -48,6 +55,18 @@ var policies = []Policy{
 			"incidents", "incident-alerts", "incident-log-entries", "incident-notes",
 		},
 		providers: stringSet("pagerduty"),
+	},
+	{
+		Mode:             FoldContributing,
+		CanonicalDataset: "prs",
+		Datasets:         []string{"prs", "pr-reviews", "pr-comments"},
+		providers:        stringSet("github", "gitlab"),
+	},
+	{
+		Mode:             FoldContributing,
+		CanonicalDataset: "cicd",
+		Datasets:         []string{"cicd", "tests"},
+		providers:        stringSet("github", "gitlab"),
 	},
 }
 
@@ -93,17 +112,38 @@ func ValidateClaim(
 	}
 	expected := make(map[string]struct{}, len(policy.Datasets))
 	for _, familyDataset := range policy.Datasets {
-		flag := familyDatasetFlag(familyDataset)
-		expected[flag] = struct{}{}
-		if !processorFlags[flag] {
-			return ErrInvalidClaim
-		}
+		expected[familyDatasetFlag(familyDataset)] = struct{}{}
 	}
+	// Any family_dataset_* flag present on this claim must belong to THIS
+	// family -- a canonical "prs" claim carrying "family_dataset_tests"
+	// (TestOps' own flag) fails closed here rather than sailing through to
+	// provider execution and only being caught (if at all) by the
+	// completion-side resolver, after work already happened.
 	for flag := range processorFlags {
 		if !strings.HasPrefix(flag, familyDatasetFlagPrefix) {
 			continue
 		}
 		if _, known := expected[flag]; !known {
+			return ErrInvalidClaim
+		}
+	}
+	if policy.Mode == FoldContributing {
+		// Non-atomic by design (CHAOS-4078): any subset of this family's own
+		// flags is valid, including none (a canonical-only selection with no
+		// enabled aliases). The cross-family check above already ran; each
+		// PRESENT flag must still be literal true -- a Go map[string]bool can
+		// store an explicit false, and a malformed claim carrying
+		// "family_dataset_tests": false must fail closed here rather than
+		// having completion silently treat it as absent.
+		for flag := range expected {
+			if value, present := processorFlags[flag]; present && !value {
+				return ErrInvalidClaim
+			}
+		}
+		return nil
+	}
+	for flag := range expected {
+		if !processorFlags[flag] {
 			return ErrInvalidClaim
 		}
 	}

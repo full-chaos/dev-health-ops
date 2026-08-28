@@ -515,22 +515,20 @@ def test_disabled_dataset_produces_zero_units_without_hydrating_credentials(
     ids=["missing-row-is-enabled", "disabled-row-stays-disabled"],
 )
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
-def test_requested_tests_dataset_reconciles_intent_but_never_mints_a_unit(
+def test_requested_tests_dataset_folds_onto_the_canonical_cicd_writer(
     db_session,
     provider: str,
     existing_enabled: bool | None,
 ):
-    """``(github|gitlab, tests)`` is route-ready but not plannable: it is the
-    CI alias identity that folds into the canonical ``cicd`` writer
-    (CHAOS-4054). Requesting it directly still reconciles the persisted
-    ``is_enabled`` intent (a missing row becomes enabled; an explicit
-    disabled row stays disabled) -- intent and routability are independent
-    facts -- but the plan-time capability gate refuses to mint a unit for a
-    non-plannable identity regardless of that intent, exactly like any other
-    alias in the family. This is the CHAOS-4054 successor to the old
-    switch-driven expectation that a "missing row becomes enabled" case also
-    became a routed unit; readiness and plannability now come from the
-    checked-in matrix, not from intent alone.
+    """``(github|gitlab, tests)`` is route-ready but not independently
+    plannable: it is the CI alias identity that folds onto the canonical
+    ``cicd`` writer (CHAOS-4054 registry, CHAOS-4078 planner fold). Requesting
+    it directly still reconciles the persisted ``is_enabled`` intent (a
+    missing row becomes enabled; an explicit disabled row stays disabled),
+    and -- unlike the pre-CHAOS-4078 behaviour -- an enabled alias-only
+    selection now mints exactly ONE unit under the canonical ``cicd``
+    dataset_key, carrying ``family_dataset_tests`` so completion fans the
+    watermark back to the ``tests`` row the org actually configured.
     """
     # Given: an existing code-host integration with a source and either no tests
     # row or an explicitly disabled tests row.
@@ -556,8 +554,7 @@ def test_requested_tests_dataset_reconciles_intent_but_never_mints_a_unit(
         ),
     )
 
-    # Then: intent reconciles independently of routability, but no unit is
-    # ever minted for this non-plannable alias.
+    # Then: intent reconciles independently of routability.
     dataset = (
         db_session.query(IntegrationDataset)
         .filter_by(integration_id=integration.id, dataset_key="tests")
@@ -565,8 +562,180 @@ def test_requested_tests_dataset_reconciles_intent_but_never_mints_a_unit(
     )
     assert dataset is not None
     assert dataset.is_enabled is (existing_enabled is not False)
-    assert plan.total_units == 0
-    assert _planned_units(db_session, plan.sync_run_id) == []
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    if existing_enabled is False:
+        # A disabled row never enters the planner at all -- no fold, no unit.
+        assert plan.total_units == 0
+        assert units == []
+        return
+
+    # An enabled alias-only selection folds onto its canonical writer instead
+    # of vanishing silently (CHAOS-4078 fixes the CHAOS-4125 zero-success
+    # incident: pr-reviews/pr-comments/tests previously planned nothing).
+    assert plan.total_units == 1
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.dataset_key == "cicd"
+    flags = unit.processor_flags or {}
+    assert flags.get("family_dataset_tests") is True
+    assert flags.get("family_dataset_cicd") is not True
+    assert flags.get("sync_cicd") is True
+    assert flags.get("sync_tests") is True
+    # CHAOS-4078 review round 3: the stamped unit ALWAYS carries the
+    # canonical "cicd" identity's own cost class (medium), never "tests"'
+    # heavier one, even though tests is the only enabled member -- the Go
+    # worker's providersync.Unit.Validate() requires cost_class to exactly
+    # match the checked-in capability registry's value for the persisted
+    # dataset_key, so a "heavy"-stamped cicd unit would fail claim
+    # validation and strand the run. See test_testops_fold_stays_medium_...
+    # and test_testops_fold_never_stamps_a_caught_up_sibling for the two
+    # other cost-class shapes this contract covers.
+    assert unit.cost_class == "medium"
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_testops_fold_stays_medium_when_only_cicd_is_enabled(db_session, provider: str):
+    """The inverse of the heavy-cost-class regression: a plain cicd-only
+    selection (no tests alias) must NOT be inflated to heavy -- the weighted
+    max only raises the class, never lowers a genuinely lighter one."""
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "cicd")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            dataset_keys=("cicd",),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].dataset_key == "cicd"
+    assert units[0].cost_class == "medium"
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_requested_pr_comments_dataset_folds_onto_the_canonical_prs_writer(
+    db_session, provider: str
+):
+    """CHAOS-4078 acceptance: an org with ONLY ``pr-comments`` enabled (``prs``
+    disabled/absent) plans exactly one ``prs`` unit, carrying
+    ``family_dataset_pr_comments`` so completion advances the ``pr-comments``
+    watermark. This is the exact CHAOS-4125 failure shape: pr-comments was
+    route-ready but never independently plannable, so it planned nothing."""
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "pr-comments")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            dataset_keys=("pr-comments",),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert plan.total_units == 1
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.dataset_key == "prs"
+    flags = unit.processor_flags or {}
+    assert flags.get("family_dataset_pr_comments") is True
+    assert flags.get("family_dataset_pr_reviews") is not True
+    assert flags.get("family_dataset_prs") is not True
+    assert flags.get("sync_prs") is True
+
+
+def test_pr_social_fold_merges_windows_from_only_the_enabled_aliases(db_session):
+    """Two enabled aliases (pr-reviews, pr-comments; prs itself disabled) merge
+    to the earliest watermark across just those two -- never touching a `prs`
+    watermark row that selection never wrote (CHAOS-4078 surface #1: watermark
+    loading must key on each alias's OWN configured row, not the canonical
+    identity)."""
+    integration = _create_integration(db_session, provider="github")
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "pr-reviews")
+    _create_dataset(db_session, integration, "pr-comments")
+    newer = datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    set_watermark(db_session, ORG_ID, source.external_id, "pr-reviews", newer)
+    set_watermark(db_session, ORG_ID, source.external_id, "pr-comments", older)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.dataset_key == "prs"
+    assert unit.since_at is not None
+    assert unit.since_at.replace(tzinfo=timezone.utc) == older
+    flags = unit.processor_flags or {}
+    assert flags.get("family_dataset_pr_reviews") is True
+
+
+def test_testops_fold_never_stamps_a_caught_up_sibling(db_session):
+    """CHAOS-4078 review finding: a member whose window resolved to EMPTY this
+    tick (already synced past `before`) must be excluded from the merge
+    entirely -- so it gets no completion flag, none of its own processor
+    flags, and does not inflate the unit's cost class. Stamping it anyway
+    would falsely mark a sibling that did not run as processed and would
+    permanently classify a plain cicd claim as heavy the moment tests was
+    ever enabled alongside it."""
+    integration = _create_integration(db_session, provider="github")
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "cicd")
+    _create_dataset(db_session, integration, "tests")
+    before = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    # cicd is stale and still has work; tests is already caught up past
+    # `before` and contributes nothing this tick.
+    set_watermark(db_session, ORG_ID, source.external_id, "cicd", older)
+    set_watermark(db_session, ORG_ID, source.external_id, "tests", before)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.dataset_key == "cicd"
+    flags = unit.processor_flags or {}
+    assert flags.get("family_dataset_cicd") is True
+    assert flags.get("family_dataset_tests") is not True
+    # cicd alone is medium; if the caught-up "tests" member had been folded
+    # in anyway, this would incorrectly read "heavy".
+    assert unit.cost_class == "medium"
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])

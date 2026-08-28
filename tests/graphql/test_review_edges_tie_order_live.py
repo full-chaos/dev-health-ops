@@ -29,6 +29,7 @@ import pytest
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers.review_edges import resolve_review_edges
 from dev_health_ops.api.graphql.types.review_edges import ReviewEdgesInput
+from dev_health_ops.fixtures.world import _require_scratch_database
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
@@ -45,6 +46,14 @@ pytestmark = [
 @pytest.mark.asyncio
 async def test_tied_rows_return_stable_order_and_set_across_repeated_calls() -> None:
     assert CLICKHOUSE_URI is not None
+    # codex review, 2026-08-28 (P1): reject a shared/default database BEFORE
+    # ever constructing the sink or calling ensure_schema/insert/delete --
+    # this test issues destructive-capable ClickHouse calls (schema DDL,
+    # insert, OPTIMIZE, ALTER ... DELETE), which must never reach the real
+    # dev `default` database (AGENTS.md's ops pre-push gate safety rule).
+    # Reuses the same canonical scratch-db guard `dev-hops fixtures world`
+    # uses (CHAOS-3219), rather than a second ad-hoc check.
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
     sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
     sink.ensure_schema(force=True)
 

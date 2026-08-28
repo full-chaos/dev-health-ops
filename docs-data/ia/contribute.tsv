@@ -12,6 +12,7 @@ con-go-worker-runtime	con-arch	/contribute/architecture/go-worker-runtime/	Go wo
 con-ask-dev-v2	con-arch	/contribute/architecture/ask-dev-contracts-v2/	Ask Dev v2 contracts (Wave 3.1)	architecture	true	public	planned	false	
 con-ask-dev-preflight	con-arch	/contribute/architecture/ask-dev-subject-preflight/	Ask Dev subject preflight	architecture	true	public	planned	false	
 con-ask-dev-role-readiness	con-arch	/contribute/architecture/ask-dev-role-readiness/	Ask Dev role readiness	architecture	true	public	planned	false	
+con-go-api-wave-0-proof-infrastructure	con-arch	/contribute/architecture/go-api-wave-0-proof-infrastructure/	Go API Wave 0 proof infrastructure	architecture	true	public	planned	false	Effective-principal envelope contract and operation rollout registry + proof ledger for CHAOS-4366/CHAOS-4352.
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
 con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	

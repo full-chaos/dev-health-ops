@@ -166,6 +166,72 @@ func TestMarshalGQL_AlwaysEmitsCanonicalFormRegardlessOfParsedInputForm(t *testi
 	}
 }
 
+// TestParse_AcceptsPythonReducedAndBasicWeekDateForms is the codex-review
+// round-2 regression proof: round 1 only handled the single extended
+// week-date form "YYYY-Www-D"; Python's fromisoformat also accepts the
+// reduced extended form (no day, defaults to Monday) and both basic
+// (no-separator) variants -- all confirmed against the real interpreter.
+func TestParse_AcceptsPythonReducedAndBasicWeekDateForms(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "2026-W34", want: "2026-08-17"},   // extended, reduced (day omitted -> Monday)
+		{in: "2026W34", want: "2026-08-17"},    // basic, reduced
+		{in: "2026W344", want: "2026-08-20"},   // basic, with day
+		{in: "2026-W34-4", want: "2026-08-20"}, // extended, with day (round-1 case, still works)
+	}
+	for _, tc := range cases {
+		got, err := Parse(tc.in)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.in, err)
+		}
+		if got.String() != tc.want {
+			t.Errorf("Parse(%q).String() = %q, want %q", tc.in, got.String(), tc.want)
+		}
+	}
+}
+
+// TestParse_RejectsWeekNumberTheISOYearDoesNotHave is the codex-review
+// round-2 regression proof for the week-53 finding: most ISO years have
+// 52 weeks; 2025 is one of them (confirmed: Python's fromisoformat
+// rejects "2025-W53-1"), while 2026 has 53 (accepts, resolving to
+// 2026-12-28). Round 1's naive "week <= 53" check accepted both.
+func TestParse_RejectsWeekNumberTheISOYearDoesNotHave(t *testing.T) {
+	if _, err := Parse("2025-W53-1"); err == nil {
+		t.Error("Parse(\"2025-W53-1\") accepted, want an error (2025 has only 52 ISO weeks)")
+	}
+	got, err := Parse("2026-W53-1")
+	if err != nil {
+		t.Fatalf("Parse(\"2026-W53-1\"): %v (2026 genuinely has a week 53)", err)
+	}
+	if want := "2026-12-28"; got.String() != want {
+		t.Errorf("Parse(\"2026-W53-1\").String() = %q, want %q", got.String(), want)
+	}
+}
+
+// TestParse_RejectsYearOutsidePythonDateRange is the codex-review round-2
+// regression proof for the year-range finding: Python's `datetime.date`
+// restricts year to 1..9999 and fromisoformat enforces it; Go's time.Time
+// has no such restriction on its own, so every accepting path needs an
+// explicit check.
+func TestParse_RejectsYearOutsidePythonDateRange(t *testing.T) {
+	cases := []string{
+		"00000101",   // year 0000, basic form
+		"0000-01-01", // year 0000, canonical form
+		"9999-W52-7", // arithmetic rolls this into year 10000
+	}
+	for _, s := range cases {
+		if _, err := Parse(s); err == nil {
+			t.Errorf("Parse(%q) accepted, want an error (year out of Python's 1..9999 range)", s)
+		}
+	}
+	// The in-range boundary must still work.
+	if _, err := Parse("9999-12-31"); err != nil {
+		t.Errorf("Parse(\"9999-12-31\"): %v, want success (in-range boundary)", err)
+	}
+}
+
 func TestParse_MatchesNewForSameCalendarDate(t *testing.T) {
 	parsed, err := Parse("2026-08-27")
 	if err != nil {

@@ -67,30 +67,46 @@ func New(t time.Time) Date {
 // Python 3.11 alongside the canonical extended form.
 const basicLayout = "20060102"
 
-// isoWeekDateRE matches ISO 8601 week-date notation, e.g. "2026-W34-4"
-// (ISO year, ISO week 01-53, ISO weekday 1=Monday..7=Sunday) -- also
-// accepted by `datetime.date.fromisoformat` since Python 3.11. NOTE: an
-// ISO week-date's calendar date does not follow from its digits by simple
+// isoWeekDateRE matches every ISO 8601 week-date form Python's
+// `datetime.date.fromisoformat` accepts (verified empirically, codex
+// review round 2, 2026-08-28 -- round 1's fix only handled the single
+// extended-with-day form "YYYY-Www-D"): extended with day ("2026-W34-4"),
+// extended reduced/no day ("2026-W34", defaults to Monday), basic with
+// day ("2026W344"), and basic reduced ("2026W34"). Both the "-" before
+// "W" and the "-" before the day digit are independently optional, which
+// is exactly what lets one regex cover all four forms. NOTE: an ISO
+// week-date's calendar date does not follow from its digits by simple
 // substitution (e.g. "2026-W34-4" is 2026-08-20, not "26 Aug"-shaped) --
 // see parseISOWeekDate.
-var isoWeekDateRE = regexp.MustCompile(`^(\d{4})-W(\d{2})-([1-7])$`)
+var isoWeekDateRE = regexp.MustCompile(`^(\d{4})-?W(\d{2})(?:-?([1-7]))?$`)
+
+// validYear reports whether t's year is in Python's `datetime.date`
+// range, 1..9999 -- Go's time.Time has no such restriction (year 0 or
+// year 10000 both construct without error), so every Parse success path
+// must check this explicitly (codex review round 2: an earlier version
+// let "00000101" and a week-date that rolls past year 9999 both succeed,
+// where Python's fromisoformat rejects both with
+// "year must be in 1..9999, not <n>").
+func validYear(t time.Time) bool {
+	y := t.Year()
+	return y >= 1 && y <= 9999
+}
 
 // Parse parses a Date string, matching every wire form Python's
-// `datetime.date.fromisoformat` actually accepts (confirmed empirically,
-// not assumed -- codex review, 2026-08-28: an earlier version of this
-// function accepted ONLY the canonical "YYYY-MM-DD" extended form,
-// rejecting valid Strawberry Date inputs like "20260827" (basic format)
-// and "2026-W34-4" (week-date), which Python's real parser accepts --
-// a genuine cross-language divergence for the same registered scalar,
-// even though real web traffic only ever sends the canonical form).
-// MarshalGQL/String always emit the canonical "YYYY-MM-DD" form
-// regardless of which input form was parsed -- this widens what Parse
-// ACCEPTS, it does not change what this type PRODUCES.
+// `datetime.date.fromisoformat` actually accepts (confirmed empirically
+// against the real interpreter, not assumed -- codex review, 2026-08-28,
+// two rounds: round 1 added basic-format and single-form week-date
+// acceptance; round 2 added the reduced/basic week-date variants, ISO
+// week-count validation, and the year-range check, all found to diverge
+// from Python by the same empirical-verification method). MarshalGQL/
+// String always emit the canonical "YYYY-MM-DD" form regardless of which
+// input form was parsed -- this widens what Parse ACCEPTS, it does not
+// change what this type PRODUCES.
 func Parse(s string) (Date, error) {
-	if t, err := time.Parse(Layout, s); err == nil {
+	if t, err := time.Parse(Layout, s); err == nil && validYear(t) {
 		return Date(t), nil
 	}
-	if t, err := time.Parse(basicLayout, s); err == nil {
+	if t, err := time.Parse(basicLayout, s); err == nil && validYear(t) {
 		return Date(t), nil
 	}
 	if t, ok := parseISOWeekDate(s); ok {
@@ -99,11 +115,27 @@ func Parse(s string) (Date, error) {
 	return Date{}, fmt.Errorf("graphqldate: invalid Date %q", s)
 }
 
-// parseISOWeekDate parses ISO 8601 week-date notation ("YYYY-Www-D") into
-// the calendar date it names. ISO 8601 defines week 1 of a year as the
-// week containing that year's first Thursday (equivalently, the week
-// containing January 4th) -- there is no Go stdlib layout for this, since
-// it is not a simple positional substitution the way "2006-01-02" is.
+// parseISOWeekDate parses ISO 8601 week-date notation into the calendar
+// date it names. ISO 8601 defines week 1 of a year as the week containing
+// that year's first Thursday (equivalently, the week containing January
+// 4th) -- there is no Go stdlib layout for this, since it is not a simple
+// positional substitution the way "2006-01-02" is. A day group absent
+// from the input (the reduced form, "YYYY-Www") defaults to weekday 1
+// (Monday), matching Python's fromisoformat.
+//
+// Returns ok=false for a week number the requested ISO YEAR does not
+// actually have -- most years have 52 ISO weeks, but a year whose January
+// 1st falls on a Thursday (or a leap year starting on Wednesday) has 53;
+// "2025-W53-1" is invalid (2025 has 52) while "2026-W53-1" is valid.
+// Rather than re-deriving that 52-vs-53-week rule by hand, this computes
+// the candidate date via the same week1Monday arithmetic as any other
+// week, then ROUND-TRIPS it through Go's own time.Time.ISOWeek() (the
+// stdlib's already-correct implementation of that same rule) and requires
+// the result to name back the exact (year, week) that was asked for --
+// a week/year combination that does not exist lands the arithmetic on a
+// different real ISO (year, week) (typically week 1 of the following ISO
+// year), which this comparison catches without a second, hand-written
+// copy of the leap/weekday rule to keep in sync with the stdlib's.
 func parseISOWeekDate(s string) (time.Time, bool) {
 	m := isoWeekDateRE.FindStringSubmatch(s)
 	if m == nil {
@@ -111,7 +143,10 @@ func parseISOWeekDate(s string) (time.Time, bool) {
 	}
 	year, _ := strconv.Atoi(m[1])
 	week, _ := strconv.Atoi(m[2])
-	weekday, _ := strconv.Atoi(m[3])
+	weekday := 1
+	if m[3] != "" {
+		weekday, _ = strconv.Atoi(m[3])
+	}
 	if week < 1 || week > 53 {
 		return time.Time{}, false
 	}
@@ -121,7 +156,16 @@ func parseISOWeekDate(s string) (time.Time, bool) {
 		isoWeekday = 7 // ISO 8601: Monday=1..Sunday=7
 	}
 	week1Monday := jan4.AddDate(0, 0, -(isoWeekday - 1))
-	return week1Monday.AddDate(0, 0, (week-1)*7+(weekday-1)), true
+	result := week1Monday.AddDate(0, 0, (week-1)*7+(weekday-1))
+
+	gotYear, gotWeek := result.ISOWeek()
+	if gotYear != year || gotWeek != week {
+		return time.Time{}, false
+	}
+	if !validYear(result) {
+		return time.Time{}, false
+	}
+	return result, true
 }
 
 // Time returns the underlying time.Time (UTC midnight on the date).

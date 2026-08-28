@@ -78,11 +78,16 @@ pytestmark = [
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Byte-identical to cmd/query-api/query_route.go's
-# registeredFeatureFlagsDocument -- the dual-run harness sends this exact
-# document to BOTH sides, so any drift between this literal and the Go
-# constant is a real bug this test would catch (a document-digest mismatch
-# would 404 on the Go side rather than degrade gracefully).
-FEATURE_FLAGS_DOCUMENT = """query FeatureFlags($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
+# registeredFeatureFlagsDocument, which is itself byte-identical to the
+# REAL production query (web/src/lib/feature-flags/queries.ts's
+# FEATURE_FLAG_REGISTRY_QUERY, operation name "FeatureFlagRegistry").
+# codex review, 2026-08-28 round 3: an earlier draft used the wrong
+# operation name ("FeatureFlags") on BOTH sides, so this test's own
+# document-digest match stayed green while a real web client's request
+# would have 404'd -- matching digests on two WRONG copies proves nothing
+# about matching a real one. Keep this constant's text sourced from the
+# real client file, not just consistent with the Go constant.
+FEATURE_FLAGS_DOCUMENT = """query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
   featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
     flags {
       flagId

@@ -47,26 +47,26 @@ import (
 // inventory. A later wave sources the registered-document set from that
 // real inventory; Wave 1 does not build that general pipeline.
 //
-// "featureFlags" (this wave's chosen operation key) vs "FeatureFlagRegistry"
-// (codex review, 2026-08-28, citing the operation inventory doc): two
-// Wave-0-era artifacts name this operation differently. The inventory doc
-// (.github/docs-legacy/plans/chaos-4366-operation-inventory.md) labels it
-// "FeatureFlagRegistry" -- the web client's named GraphQL operation
-// (`query FeatureFlagRegistry { featureFlags(...) {...} }`), useful there
-// as a human-readable traffic-frequency label. But plan §5 itself says
-// "operation name is telemetry only -- names collide and don't capture
-// aliases/fragments/changed selections", and Wave 0's OWN registry test
-// fixtures (tests/api/graphql/test_go_api_registry.py, merged before this
-// PR, e.g. line ~114) consistently use `selected_operation="featureFlags"`
-// -- the schema's root field name, not the client operation label. This
-// file follows that existing, already-merged test convention rather than
-// the inventory doc's client-side label, for internal consistency with
-// code that predates this PR. Whichever wave wires the REAL web-operations
-// inventory into the registry (the gap named two paragraphs up) must
-// reconcile this naming choice deliberately; it is not settled by this PR
-// either way, and this comment exists so that reconciliation is a decision,
-// not a rediscovery.
-const registeredFeatureFlagsDocument = `query FeatureFlags($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
+// Document text is byte-for-byte the REAL production query (codex review,
+// 2026-08-28, round 3 -- corrected after round 2's wrong conclusion):
+// web/src/lib/feature-flags/queries.ts's FEATURE_FLAG_REGISTRY_QUERY names
+// its operation "FeatureFlagRegistry", not "FeatureFlags". Round 2 of this
+// review raised the same name mismatch citing only the operation inventory
+// doc, and was dismissed as a documentation-only ambiguity because Wave 0's
+// registry test fixtures use `selected_operation="featureFlags"`internally
+// -- that dismissal was wrong for a different reason than the one being
+// discussed: `selected_operation` is this code's OWN internal map key
+// (Mux.Register / PostgresSwitch.documentDigests), never compared against
+// the document text, so it can stay "featureFlags" (matching that existing
+// test-fixture precedent) with NO effect on reachability. What actually
+// gates reachability is operationForDocument's digest match against this
+// constant's literal text -- and that text previously used the WRONG
+// operation name, so a real web request's digest would never have matched
+// it, 404-ing every real featureFlags query while local tests (which also
+// used the wrong name on both sides) stayed green. Copied verbatim from
+// the real client source so the digest this route checks is the digest a
+// real request actually produces.
+const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
   featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
     flags {
       flagId

@@ -14,6 +14,18 @@
 -- day) via argMax(<col>, computed_at), matching compounding_risk_daily
 -- (040_compounding_risk_daily.sql) and every other daily rollup in this
 -- schema. Never ReplacingMergeTree.
+--
+-- Written EXACTLY ONCE per (org_id, day) from run_daily_metrics_finalize
+-- (job_daily.py), never per-repo -- a row here must always reflect every
+-- repo the team owns, not one partition's slice of them (CHAOS-4365: a
+-- per-repo write silently dropped every owned repo but the last one
+-- written once argMax(computed_at) dedup collapsed the redundant rows).
+--
+-- Column types are also pinned in full-chaos/dev-health-go's schema.go
+-- (ProductionColumns["team_cognitive_load_daily"] / EngineFull) with a
+-- test asserting they match this DDL byte-for-byte -- a column added,
+-- renamed, or retyped here without updating that map breaks that repo's
+-- CI, not this one's.
 
 CREATE TABLE IF NOT EXISTS team_cognitive_load_daily
 (

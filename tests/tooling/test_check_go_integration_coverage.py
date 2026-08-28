@@ -40,4 +40,8 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
     # go_api_registry-backed PostgresSwitch is proved against a real
     # Postgres testcontainer.
-    assert "31 package(s) discovered, 0 denylisted, 31 will run" in result.stdout
+    # CHAOS-4367 added cmd/query-api (31 -> 32): the featureFlags Wave-1
+    # canary's HTTP-level reachability test
+    # (query_route_integration_test.go) is proved against a real Postgres
+    # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
+    assert "32 package(s) discovered, 0 denylisted, 32 will run" in result.stdout

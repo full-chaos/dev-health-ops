@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.metrics import job_compounding_risk
@@ -263,7 +263,11 @@ def test_load_repo_to_team_resolves_via_team_repo_ownership_when_patterns_are_em
         ],
     )
 
-    mapping = asyncio.run(job_compounding_risk._load_repo_to_team(sink, "acme"))
+    mapping = asyncio.run(
+        job_compounding_risk._load_repo_to_team(
+            sink, "acme", as_of=datetime.now(timezone.utc)
+        )
+    )
 
     assert mapping == {str(repo_id): "gh:platform"}
 
@@ -289,6 +293,10 @@ def test_load_repo_to_team_prefers_ownership_row_over_conflicting_pattern() -> N
         ],
     )
 
-    mapping = asyncio.run(job_compounding_risk._load_repo_to_team(sink, "acme"))
+    mapping = asyncio.run(
+        job_compounding_risk._load_repo_to_team(
+            sink, "acme", as_of=datetime.now(timezone.utc)
+        )
+    )
 
     assert mapping == {str(repo_id): "gh:platform"}

@@ -5,6 +5,7 @@ import importlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -277,7 +278,9 @@ def build_repo_pattern_resolver(teams_data: list) -> RepoPatternTeamResolver:
     return RepoPatternTeamResolver(_exact=exact, _prefixes=tuple(prefixes))
 
 
-def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
+def load_team_repo_ownership_map(
+    sink: Any, org_id: str, *, as_of: datetime
+) -> dict[str, str]:
     """Build ``{repo_id_str: team_id}`` straight from ``team_repo_ownership``.
 
     CHAOS-4321 hard rule: team attribution is project/repo OWNERSHIP only,
@@ -326,9 +329,35 @@ def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
     run is a new sort key, not a replacement. Without a full deterministic
     tiebreak, a same-repo, same-rank tie resolves arbitrarily and can flap
     between runs. ``ORDER BY`` now also breaks ties by most-recent
-    ``updated_at`` then ``team_id`` (absolute, stable) and the temporal
-    filter is now two-sided (``valid_from`` not just ``valid_to``), so a
-    future-dated row cannot be eligible early.
+    ``updated_at`` then ``team_id`` (absolute, stable).
+
+    CHAOS-4365 codex round 3 (P1/P2, round 2's fixes had 3 new defects):
+
+    1. ``as_of`` is now a REQUIRED caller-supplied instant, not ``now64()``.
+       Round 2 loaded this map once per run and reused it across every
+       backfilled day; a mapping created after a target day was attributed
+       retroactively, and one valid on the target day but since expired was
+       wrongly omitted. Callers pass the target day's own instant (see
+       ``job_daily.py``/``job_compounding_risk.py``).
+    2. The ``repos`` join now also matches ``provider`` (both tables carry
+       it -- ``051_team_attribution_dimensions.sql``, ``028_repos_provider.sql``).
+       Matching only ``org_id`` + case-insensitive name let a mixed-provider
+       org with two repos of the same full name join to an arbitrary one.
+    3. The join no longer tests ``r.id IS NOT NULL`` to detect a match. This
+       sink does not enable ``join_use_nulls`` (``core.py``'s ClickHouse
+       client settings), and ClickHouse's documented default for an
+       UNMATCHED LEFT JOIN column is the type's zero value, not NULL --
+       confirmed live: `SELECT r.id IS NOT NULL FROM ... LEFT JOIN (SELECT
+       toUUID(...) AS id) AS r ON <false>` returns ``r.id =
+       00000000-0000-0000-0000-000000000000`` and ``IS NOT NULL = true``.
+       So the old predicate treated every UNMATCHED ownership row as matched
+       and resolved it to the zero UUID -- a bogus repo_id would have
+       silently entered the map for any ownership row whose repo_full_name
+       doesn't (yet, or ever) exist in ``repos``. The join subquery now
+       carries an explicit ``1 AS matched`` sentinel column (0 vs 1 is
+       unambiguous under the zero-value default, unlike a UUID's "zero" and
+       "absent" being the same bit pattern) and the WHERE clause tests that
+       instead.
 
     Returns ``{}`` (never raises) when the sink cannot be queried -- the
     caller's pattern-resolver fallback still applies.
@@ -345,16 +374,18 @@ def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
                 o.specificity AS specificity
             FROM team_repo_ownership AS o FINAL
             LEFT JOIN (
-                SELECT org_id, id, repo FROM repos FINAL
+                SELECT org_id, provider, id, repo, 1 AS matched FROM repos FINAL
             ) AS r
-                ON r.org_id = o.org_id AND lower(r.repo) = lower(o.repo_full_name)
+                ON r.org_id = o.org_id
+                   AND r.provider = o.provider
+                   AND lower(r.repo) = lower(o.repo_full_name)
             WHERE o.org_id = {org_id:String}
-              AND (o.repo_id IS NOT NULL OR r.id IS NOT NULL)
-              AND o.valid_from <= now64(3, 'UTC')
-              AND (o.valid_to IS NULL OR o.valid_to > now64(3, 'UTC'))
+              AND (o.repo_id IS NOT NULL OR r.matched = 1)
+              AND o.valid_from <= {as_of:DateTime64(3)}
+              AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3)})
             ORDER BY is_primary DESC, specificity DESC, o.updated_at DESC, o.team_id ASC
             """,
-            {"org_id": org_id},
+            {"org_id": org_id, "as_of": as_of},
         )
     except Exception as exc:  # pragma: no cover - defensive
         import logging

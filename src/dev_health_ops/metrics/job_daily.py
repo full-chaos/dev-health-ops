@@ -567,7 +567,6 @@ def _write_compounding_risk_for_day(
     computed_at: datetime,
     repo_names_by_id: dict[uuid.UUID, str],
     repo_team_resolver: Any,
-    team_repo_ownership_map: dict[str, str] | None = None,
 ) -> int:
     rows_for_compounding = list(repo_metrics_rows)
     if not rows_for_compounding:
@@ -576,6 +575,15 @@ def _write_compounding_risk_for_day(
         return 0
 
     try:
+        # CHAOS-4365 codex round 3 (P1): loaded fresh PER DAY, as-of that
+        # day's own instant -- round 2 loaded this map once per run and
+        # reused it across every backfilled day, so a mapping created after
+        # a target day was wrongly attributed retroactively, and one valid
+        # on the target day but since expired was wrongly omitted.
+        as_of = datetime.combine(day, datetime.max.time(), tzinfo=timezone.utc)
+        team_repo_ownership_map = load_team_repo_ownership_map(
+            primary_sink, org_id, as_of=as_of
+        )
         repo_to_team_map = _repo_to_team_map_for_compounding_risk(
             repo_metrics_rows=rows_for_compounding,
             repo_names_by_id=repo_names_by_id,
@@ -585,7 +593,12 @@ def _write_compounding_risk_for_day(
             day=day,
         )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
+        logger.warning(
+            "repo_team_resolver failed for compounding risk: org_id=%s day=%s %s",
+            org_id,
+            day.isoformat(),
+            exc,
+        )
         repo_to_team_map = {}
 
     compounding_rows = build_compounding_risk_rows_for_day(
@@ -861,10 +874,11 @@ async def run_daily_metrics_job(
     team_resolver = get_team_resolver()
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
-    # CHAOS-4365: compounding-risk-only ownership source (see
-    # _repo_to_team_map_for_compounding_risk); loaded once per run, not per
-    # backfilled day -- org_id doesn't change across the day loop below.
-    team_repo_ownership_map = load_team_repo_ownership_map(primary_sink, org_id)
+    # CHAOS-4365 codex round 3: the team_repo_ownership map for compounding
+    # risk is now loaded PER DAY, as-of that day, inside
+    # _write_compounding_risk_for_day -- not once per run here -- so a
+    # backfilled day's team-scope attribution reflects ownership validity on
+    # that day, not "now".
     # CHAOS-2377: project-key team attribution for the work-item state-duration
     # rollup. Mirrors job_work_items: team-owned-by-project-key items that are
     # unassigned (or assigned to unmapped users) must still land under their
@@ -1568,7 +1582,6 @@ async def run_daily_metrics_job(
             computed_at=computed_at,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
-            team_repo_ownership_map=team_repo_ownership_map,
         )
 
         # CHAOS-4329: observe distinct repo_id fan-out per team_id AFTER the

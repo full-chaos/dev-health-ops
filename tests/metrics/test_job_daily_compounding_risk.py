@@ -102,6 +102,15 @@ def test_daily_job_resolves_team_via_ownership_map_when_pattern_resolver_misses(
     monkeypatch.setattr(
         job_daily, "_fetch_repo_metrics_for_day", fake_fetch_repo_metrics_for_day
     )
+    # CHAOS-4365 codex round 3: _write_compounding_risk_for_day now loads
+    # the ownership map itself (per day, as-of that day) rather than
+    # accepting it as a parameter, so tests inject it via this module-level
+    # loader instead of a direct kwarg.
+    monkeypatch.setattr(
+        job_daily,
+        "load_team_repo_ownership_map",
+        lambda sink, org_id, *, as_of: {str(repo_id): "gh:platform"},
+    )
 
     written_count = job_daily._write_compounding_risk_for_day(
         sinks=[sink],
@@ -114,7 +123,6 @@ def test_daily_job_resolves_team_via_ownership_map_when_pattern_resolver_misses(
         # Resolves nothing for this repo -- mirrors a native GitHub org whose
         # teams all carry repo_patterns=[].
         repo_team_resolver=_Resolver(),
-        team_repo_ownership_map={str(repo_id): "gh:platform"},
     )
 
     assert written_count == 2
@@ -138,6 +146,11 @@ def test_daily_job_prefers_ownership_map_over_conflicting_pattern_resolver(
     monkeypatch.setattr(
         job_daily, "_fetch_repo_metrics_for_day", fake_fetch_repo_metrics_for_day
     )
+    monkeypatch.setattr(
+        job_daily,
+        "load_team_repo_ownership_map",
+        lambda sink, org_id, *, as_of: {str(repo_id): "gh:platform"},
+    )
 
     written_count = job_daily._write_compounding_risk_for_day(
         sinks=[sink],
@@ -149,7 +162,6 @@ def test_daily_job_prefers_ownership_map_over_conflicting_pattern_resolver(
         # _Resolver resolves this exact full_name to "team-platform".
         repo_names_by_id={repo_id: "acme/backend"},
         repo_team_resolver=_Resolver(),
-        team_repo_ownership_map={str(repo_id): "gh:platform"},
     )
 
     assert written_count == 2

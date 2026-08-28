@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 import pytest
@@ -101,7 +101,9 @@ async def test_load_repo_to_team_reads_repo_identifier_from_repos_id():
 
     sink = FakeSink()
 
-    result = await job_compounding_risk._load_repo_to_team(sink, "org-1")
+    result = await job_compounding_risk._load_repo_to_team(
+        sink, "org-1", as_of=datetime.now(timezone.utc)
+    )
 
     assert "toString(id) AS repo_id" in sink.query
     assert "argMax(repo, last_synced) AS full_name" in sink.query

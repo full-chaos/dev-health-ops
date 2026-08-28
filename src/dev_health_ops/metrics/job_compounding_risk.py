@@ -88,7 +88,9 @@ def _fetch_repo_metrics_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
     return [_Row(r) for r in raw]
 
 
-async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
+async def _load_repo_to_team(
+    sink: Any, org_id: str, *, as_of: datetime
+) -> dict[str, str]:
     """Build a ``{repo_id_str: team_id}`` map for compounding-risk team rows.
 
     CHAOS-4365: merges two ownership sources so a real org whose teams carry
@@ -98,6 +100,10 @@ async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
     ownership rows) wins where both resolve a repo; the glob-pattern resolver
     over ``teams.repo_patterns`` fills in the rest (fixtures orgs, teams
     configured with manual repo globs).
+
+    ``as_of`` (codex round 3 P1): the caller's target day's own instant, not
+    "now" -- a backfilled day's ownership must reflect validity on that day,
+    not at compute time (see ``load_team_repo_ownership_map``).
     """
     try:
         teams = await sink.get_all_teams()
@@ -105,7 +111,7 @@ async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
         logger.warning("Could not load teams for compounding risk: %s", exc)
         teams = []
     resolver = build_repo_pattern_resolver(teams or [])
-    ownership_map = load_team_repo_ownership_map(sink, org_id)
+    ownership_map = load_team_repo_ownership_map(sink, org_id, as_of=as_of)
 
     repos = sink.query_dicts(
         """
@@ -167,7 +173,6 @@ async def run_compounding_risk_job(
     if hasattr(sink, "ensure_tables"):
         sink.ensure_tables()
 
-    repo_to_team = await _load_repo_to_team(sink, org_id)
     computed_at = datetime.now(timezone.utc)
 
     total_rows = 0
@@ -187,6 +192,10 @@ async def run_compounding_risk_job(
                 org_id,
             )
             continue
+        # CHAOS-4365 codex round 3 (P1): loaded fresh PER DAY, as-of that
+        # day's own instant -- not once for the whole backfill range.
+        as_of = datetime.combine(d, datetime.max.time(), tzinfo=timezone.utc)
+        repo_to_team = await _load_repo_to_team(sink, org_id, as_of=as_of)
         rows = build_compounding_risk_rows_for_day(
             sink=sink,
             day=d,

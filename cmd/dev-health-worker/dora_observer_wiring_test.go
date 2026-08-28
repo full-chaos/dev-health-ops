@@ -78,3 +78,37 @@ func TestTheRealCollectorSatisfiesTheCapacityObservers(t *testing.T) {
 		t.Fatalf("refusal observation: %v", err)
 	}
 }
+
+// TestTheRealCollectorSatisfiesTheOpenDayZeroRowObserver guards the
+// CHAOS-4384 type assertion in sync_dispatch.go, which is the whole of that
+// telemetry's wiring:
+//
+//	if openDayZeroRowObserver, ok := observer.(remaining.OpenDayZeroRowObserver); ok { ... }
+//
+// A failed assertion there is SILENT, the same shape TestTheRealCollector-
+// SatisfiesTheDORAObserver guards: remainingStore.openDayZeroRowObserver
+// stays nil, every open-day zero-row completion goes unreported, and nothing
+// -- no build error, no test, no log line -- says why. This wiring lives on
+// sync_dispatch.go's remainingStore specifically, NOT the daily.go store
+// (which only ever backs PartitionHandler's Claim/CompletePartition and
+// never reaches StartRunTx) -- see the comment there.
+func TestTheRealCollectorSatisfiesTheOpenDayZeroRowObserver(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	// Through the STATIC type sync_dispatch.go holds, not the concrete one.
+	var observer jobruntime.Observer = collector
+
+	candidate, ok := observer.(remaining.OpenDayZeroRowObserver)
+	if !ok {
+		t.Fatal(
+			"the worker's observer does NOT satisfy remaining.OpenDayZeroRowObserver, " +
+				"so sync_dispatch.go passes nil and the open-day zero-row counter " +
+				"stays at zero with nothing to indicate why",
+		)
+	}
+	if err := candidate.ObserveRemainingMetricsOpenDayZeroRow("dora"); err != nil {
+		t.Fatalf("the wired observer must accept a valid observation: %v", err)
+	}
+}

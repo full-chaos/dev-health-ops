@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -87,14 +88,40 @@ type Claim struct {
 }
 
 type PostgresStore struct {
-	pool          *pgxpool.Pool
-	lease         time.Duration
-	now           func() time.Time
-	leaseObserver jobruntime.RemainingMetricsLeaseObserver
+	pool                   *pgxpool.Pool
+	lease                  time.Duration
+	now                    func() time.Time
+	leaseObserver          jobruntime.RemainingMetricsLeaseObserver
+	openDayZeroRowObserver OpenDayZeroRowObserver
 }
 
 type PartitionPublisher interface {
 	PublishPartitionTx(context.Context, pgx.Tx, Run, Partition, string) error
+}
+
+// OpenDayZeroRowObserver reports a remaining-metrics dora partition that
+// completed with rows_written=0 while its day was still open (CHAOS-4384):
+// the exact prod shape (org c6a38355, 08-26/27/28) where the first post-sync
+// of a UTC day computes that day before any deployments/incidents exist,
+// succeeds with nothing to write, and every later same-day trigger would
+// have reused that empty coverage forever without this fix. An unmoving
+// dora_metrics_daily is otherwise indistinguishable from a genuinely quiet
+// day, so this is the counter an alert binds to.
+type OpenDayZeroRowObserver interface {
+	ObserveRemainingMetricsOpenDayZeroRow(family string) error
+}
+
+// SetOpenDayZeroRowObserver wires the optional CHAOS-4384 signal. A nil
+// observer (the default) means telemetry never gates the dedup decision --
+// observeOpenDayZeroRow is always a safe no-op.
+func (store *PostgresStore) SetOpenDayZeroRowObserver(observer OpenDayZeroRowObserver) {
+	store.openDayZeroRowObserver = observer
+}
+
+func (store *PostgresStore) observeOpenDayZeroRow(family string) {
+	if store.openDayZeroRowObserver != nil {
+		_ = store.openDayZeroRowObserver.ObserveRemainingMetricsOpenDayZeroRow(family)
+	}
 }
 
 // observeReleaseLost records a durably resolved release-lost outcome. Metric
@@ -209,11 +236,24 @@ func (store *PostgresStore) StartRunTx(
 			); err != nil {
 				return Run{}, ErrUnavailable
 			}
-			covering, found, err := store.loadRunCoveringDay(
+			covering, outputEvidence, found, err := store.loadRunCoveringDay(
 				ctx, tx, request.OrganizationID, request.Family, day, backfillDays,
 			)
 			if err != nil {
 				return Run{}, err
+			}
+			// CHAOS-4384: a 0-row partition that succeeded for a day which has
+			// not closed yet is post-sync's own earliest trigger of the UTC
+			// day computing before that day has any deployments/incidents at
+			// all -- not real coverage. Treating it as terminal froze
+			// dora_metrics_daily at 0 forever, because every later same-day
+			// trigger (org c6a38355 syncs hourly, ~23/day) reused this same
+			// empty run instead of recomputing. Once the day CLOSES, a
+			// genuine 0-row day (nothing happened) is real coverage again --
+			// this only widens the window while the day can still gain rows.
+			if found && isZeroRowEvidence(outputEvidence) && dayIsOpen(day, store.now()) {
+				store.observeOpenDayZeroRow(request.Family)
+				found = false
 			}
 			if found {
 				completionKey, keyErr := joboutbox.CompletionKey("remaining_metric_run", covering.ID)
@@ -571,6 +611,19 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 // a generation/scope_key comparison, because the two triggers' scope_key
 // FORMATS also differ (post-sync: the full serialized scope; fixed
 // schedule: the bare day string) -- day is the one field both agree on.
+//
+// CHAOS-4384 (codex round 2): the fixed schedule's own dora binding fires
+// early in its target day too (its generation carries a wall-clock
+// timestamp, e.g. "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+// for that same calendar day) -- so this preflight can see EXACTLY the same
+// open-day 0-row shape StartRunTx's dora block guards against. Without the
+// same exception here, a 0-row post-sync partition for today would make this
+// preflight report "covered" and skip the fixed-schedule producer entirely,
+// silently defeating the self-healing this schedule exists for: if the
+// post-sync delivery that would have recomputed the day never arrives (the
+// case a fixed-schedule catch-up is FOR), the day stays frozen at 0 anyway.
+// On a closed day, any succeeded partition -- 0 rows or not -- still counts:
+// a genuinely quiet closed day is real, terminal coverage.
 func (store *PostgresStore) HasSucceededPartition(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
 ) (bool, error) {
@@ -578,6 +631,7 @@ func (store *PostgresStore) HasSucceededPartition(
 		family == "" || day == "" {
 		return false, ErrUnavailable
 	}
+	dayClosed := !dayIsOpen(day, store.now())
 	// run.status = 'succeeded', not just partition.status -- codex round 3:
 	// CompletePartition and CancelRun are separate statements, so a
 	// partition already marked succeeded whose run was (or is
@@ -592,7 +646,8 @@ SELECT EXISTS (
       AND run.status = 'succeeded'
       AND partition.status = 'succeeded'
       AND partition.scope->>'day' = $3
-)`, organizationID, family, day).Scan(&exists)
+      AND ($4 OR NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false))
+)`, organizationID, family, day, dayClosed).Scan(&exists)
 	if err != nil {
 		return false, ErrUnavailable
 	}
@@ -618,12 +673,37 @@ SELECT EXISTS (
 //     backfill_days=1 run satisfy a later backfill_days=30 request for the
 //     same anchor day, silently leaving the 29 days behind the anchor
 //     uncomputed while the wider request was told "already covered".
+//
+// loadRunCoveringDay also returns the covering partition's output_evidence
+// (CHAOS-4384) so the caller can tell a genuine day-closed 0-row completion
+// apart from an open-day one that must not be terminal -- see StartRunTx's
+// dora block and isZeroRowEvidence/dayIsOpen. output_evidence is nullable at
+// the schema level (migration 0058: `output_evidence IS NULL OR length(...)
+// BETWEEN 1 AND 4096`) -- every partition CompletePartition itself writes
+// carries a non-empty value, but a succeeded row from before this evidence
+// format existed (CHAOS-4242's diagnosis found 144 such rows) can still be
+// NULL, so this scans a nullable pointer rather than failing the whole call
+// with ErrUnavailable on a perfectly valid legacy row (codex round 1, P2).
+//
+// The ORDER BY prefers a partition that is NOT a 0-row completion over one
+// that is, before preferring recency: dora's two independent triggers
+// (post-sync, fixed-schedule) can both complete a run for the same org+day
+// while neither had yet succeeded when the other started (the advisory lock
+// only serializes the START of StartRunTx, not completion), so an earlier
+// run with real rows and a later run that legitimately wrote 0 can both
+// exist. Picking "most recently completed" alone would let CHAOS-4384's
+// open-day exception fire against the 0-row run even though the earlier
+// non-zero run is right there -- and since dora_metrics_daily is append-only
+// with no dedup on replay (CHAOS-4242), that would insert a genuine
+// duplicate rather than a real recompute (codex round 1, P1).
 func (store *PostgresStore) loadRunCoveringDay(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day string, minBackfillDays int,
-) (Run, bool, error) {
+) (Run, *string, bool, error) {
 	var run Run
+	var outputEvidence *string
 	err := tx.QueryRow(ctx, `
-SELECT run.id::text, run.org_id::text, run.family, run.generation, run.scope_key, run.status, run.generation_seed
+SELECT run.id::text, run.org_id::text, run.family, run.generation, run.scope_key, run.status, run.generation_seed,
+       partition.output_evidence
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
@@ -631,17 +711,36 @@ WHERE run.org_id = $1::uuid AND run.family = $2
   AND partition.status = 'succeeded'
   AND partition.scope->>'day' = $3
   AND coalesce((partition.scope->>'backfill_days')::int, 1) >= $4
-ORDER BY partition.completed_at DESC
+ORDER BY coalesce(partition.output_evidence LIKE '%:rows_written=0', false) ASC, partition.completed_at DESC
 LIMIT 1`, organizationID, family, day, minBackfillDays).Scan(
 		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
+		&outputEvidence,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Run{}, false, nil
+		return Run{}, nil, false, nil
 	}
 	if err != nil {
-		return Run{}, false, ErrUnavailable
+		return Run{}, nil, false, ErrUnavailable
 	}
-	return run, true, nil
+	return run, outputEvidence, true, nil
+}
+
+// isZeroRowEvidence reports whether outputEvidence records an explicit
+// rows_written=0 completion, in exactly the format
+// compatibilityCompletionResult (handler.go) writes it. CHAOS-4243 is what
+// guarantees a zero write is never indistinguishable from a plain,
+// unqualified success string here. A nil evidence (a legacy row predating
+// this format, or any other family that never reports rows_written) is
+// never treated as a zero-row completion (codex round 1, P2).
+func isZeroRowEvidence(outputEvidence *string) bool {
+	return outputEvidence != nil && strings.HasSuffix(*outputEvidence, ":rows_written=0")
+}
+
+// dayIsOpen reports whether day (a canonical "2006-01-02" UTC date) has not
+// fully elapsed as of now -- i.e. it is today or later. ISO-8601 dates
+// compare correctly as plain strings, so no time.Parse round-trip is needed.
+func dayIsOpen(day string, now time.Time) bool {
+	return day >= now.UTC().Format("2006-01-02")
 }
 
 // doraScopeDay extracts the "day" field from an already-canonicalized dora

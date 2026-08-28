@@ -257,6 +257,10 @@ func buildDailyWorker(
 			remainingLeaseObservers = append(remainingLeaseObservers, leaseObserver)
 		}
 		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain, remainingLeaseObservers...)
+		// CHAOS-4384's OpenDayZeroRowObserver is NOT wired on this store: it
+		// only ever backs PartitionHandler's Claim/CompletePartition here,
+		// never StartRunTx -- see sync_dispatch.go's remainingStore, the
+		// store post-sync's dora coverage check actually runs through.
 		var compatibilityObserver remaining.CompatibilityObserver
 		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
 			compatibilityObserver = candidate

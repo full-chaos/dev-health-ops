@@ -118,6 +118,17 @@ type RemainingMetricsLeaseObserver interface {
 	ObserveRemainingMetricsLeaseReleaseLost() error
 }
 
+// RemainingMetricsOpenDayZeroRowObserver is the narrow capability the
+// remaining-metrics store depends on (CHAOS-4384) when its dora cross-trigger
+// coverage check finds a 0-row succeeded partition for a day that has not
+// closed yet. Generic runtime middleware cannot infer this: only the store
+// that just refused to treat that partition as terminal coverage knows the
+// refusal happened, and it is exactly the failure mode that froze
+// dora_metrics_daily at 0 for org c6a38355 on 2026-08-26/27/28.
+type RemainingMetricsOpenDayZeroRowObserver interface {
+	ObserveRemainingMetricsOpenDayZeroRow(family string) error
+}
+
 // ReportDedupGuardObserver is the narrow capability the weekly-report query
 // adapter depends on after running a chart read over an append-only daily
 // rollup through its dedup guard (CHAOS-4140). Generic runtime middleware

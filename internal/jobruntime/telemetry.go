@@ -224,6 +224,14 @@ var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit"}
 // families.json are out of this ticket.
 var dailyMetricsZeroRowsWithSourceFamilies = []string{"cicd", "deploy", "incident", "testops_risk"}
 
+// remainingMetricsOpenDayZeroRowFamilies is the closed set of remaining-
+// metrics families CHAOS-4384 scoped this check to. Only dora's own
+// StartRunTx cross-trigger coverage check (postgres.go) calls this today --
+// the same "only dora needs it" scoping doraScopeDayAndBackfill already
+// documents -- but the list stays open to extension the same way the
+// CHAOS-4263 daily-family list above is.
+var remainingMetricsOpenDayZeroRowFamilies = []string{"dora"}
+
 // dailyMetricsRedriveReasons is the closed set of bounded reasons an
 // operator-invoked stranded-partition redrive (CHAOS-4358) can report.
 // "failed_permanent_reset" counts partitions whose terminal failed_permanent
@@ -419,7 +427,13 @@ type MetricsCollector struct {
 	postSyncFanout            map[PostSyncFanoutOutcome]uint64
 	workGraphReleaseLost      uint64
 	remainingReleaseLost      uint64
-	zeroUnitFinalizations     map[zeroUnitFinalizationLabels]uint64
+	// remainingOpenDayZeroRow (CHAOS-4384), keyed by family (only "dora"
+	// today -- remainingMetricsOpenDayZeroRowFamilies). Counts a dora
+	// cross-trigger coverage check finding a 0-row succeeded partition for a
+	// day that has not closed yet, and therefore refusing to treat it as
+	// terminal coverage.
+	remainingOpenDayZeroRow map[string]uint64
+	zeroUnitFinalizations   map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -520,6 +534,7 @@ var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
+var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
@@ -566,6 +581,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsLease:                    make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
+		remainingOpenDayZeroRow:              make(map[string]uint64, len(remainingMetricsOpenDayZeroRowFamilies)),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
@@ -643,6 +659,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
+	}
+	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
+		collector.remainingOpenDayZeroRow[family] = 0
 	}
 	for _, reason := range dailyMetricsRedriveReasons {
 		collector.dailyMetricsRedrive[reason] = 0
@@ -1312,6 +1331,19 @@ func (collector *MetricsCollector) ObserveRemainingMetricsLeaseReleaseLost() err
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.remainingReleaseLost++
+	return nil
+}
+
+// ObserveRemainingMetricsOpenDayZeroRow records one dora cross-trigger
+// coverage check (CHAOS-4384) that found a 0-row succeeded partition for a
+// day that has not closed yet, and refused to treat it as terminal coverage.
+func (collector *MetricsCollector) ObserveRemainingMetricsOpenDayZeroRow(family string) error {
+	if !slices.Contains(remainingMetricsOpenDayZeroRowFamilies, family) {
+		return errors.New("remaining metrics open-day zero-row family is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.remainingOpenDayZeroRow[family]++
 	return nil
 }
 
@@ -2064,6 +2096,12 @@ func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) 
 func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Builder) {
 	writeMetadata(output, "worker_remaining_metrics_lease_release_lost_total", "Remaining-metrics releases that found their own lease already expired.", "counter")
 	writeUintSample(output, "worker_remaining_metrics_lease_release_lost_total", nil, collector.remainingReleaseLost)
+
+	writeMetadata(output, "dev_health_remaining_metrics_open_day_zero_row_total", "Remaining-metrics dora cross-trigger coverage checks that found a 0-row succeeded partition for a day still open, and refused to treat it as terminal (CHAOS-4384).", "counter")
+	for _, family := range remainingMetricsOpenDayZeroRowFamilies {
+		writeUintSample(output, "dev_health_remaining_metrics_open_day_zero_row_total",
+			[]metricLabel{{"family", family}}, collector.remainingOpenDayZeroRow[family])
+	}
 
 	writeMetadata(output, "worker_dora_native_partitions_total", "Partitions computed by the native Go DORA executor.", "counter")
 	writeUintSample(output, "worker_dora_native_partitions_total", nil, collector.doraPartitions)

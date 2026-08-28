@@ -65,11 +65,18 @@ Off by default. See
 for the overlay and how to bring it up explicitly. Not part of the assumed
 local stack — bring it up only for deliberate verification.
 
-## dev-health-go dependency (temporary local `replace`)
+## dev-health-go dependency
 
-`go.mod` currently points `github.com/full-chaos/dev-health-go` at a local
-checkout via `replace` (CHAOS-4377 has not tagged `v0.1.0` yet). Remove the
-`replace` once that tag lands and the module resolves normally.
+`go.mod` requires `github.com/full-chaos/dev-health-go v0.1.0` (tagged by
+CHAOS-4377, no local `replace`). This module is **private** — building
+`cmd/query-api` needs `GOPRIVATE=github.com/full-chaos/*` (set workflow-wide
+in `.github/workflows/go.yml`) AND git credentials able to clone
+`full-chaos/dev-health-go`. Locally this works via your own SSH access; in
+CI it does **not yet work** — no checkout/git-credential step grants any
+job a token or deploy key scoped to that repo. Any CI job that actually
+builds/tests `cmd/query-api` fails on a git auth error until that is wired
+in. Verified locally: `GOPRIVATE=github.com/full-chaos/* go build ./...`
+and `go test ./cmd/query-api/...` both pass.
 
 ## What's NOT here yet (later waves / other lanes)
 

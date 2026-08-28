@@ -5,7 +5,7 @@ go 1.25.9
 require (
 	github.com/99designs/gqlgen v0.17.66
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
-	github.com/full-chaos/dev-health-go v0.0.0-00010101000000-000000000000
+	github.com/full-chaos/dev-health-go v0.1.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -107,8 +107,3 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// dev-health-go is not yet tagged/published (CHAOS-4377, lane-4377) -- this
-// local replace is a documented, temporary bridge, removed once v0.1.0 is
-// tagged and the module resolves normally. See go-api-wave-0-proof-infrastructure.md.
-replace github.com/full-chaos/dev-health-go => /Users/chris/projects/full-chaos/worktrees/dev-health-go

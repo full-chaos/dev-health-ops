@@ -111,6 +111,18 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # cmd/query-api depends on the private github.com/full-chaos/dev-health-go
+  # module (CHAOS-4377). GOPRIVATE stops `go build`/`go mod` from querying
+  # the public module proxy/sumdb for it (which 404s for a private repo --
+  # that is not the same failure as missing auth). This does NOT by itself
+  # grant CI credentials to clone the private repo; until that is wired in
+  # (a checkout/git-credential step with a token or deploy key scoped to
+  # full-chaos/dev-health-go, not yet added -- see CHAOS-4366 PR discussion),
+  # any job that actually builds/tests cmd/query-api still fails on a git
+  # auth error, not a sumdb 404. That is the correct, honest failure mode.
+  GOPRIVATE: github.com/full-chaos/*
+
 jobs:
   go-quality:
     runs-on: ubuntu-latest

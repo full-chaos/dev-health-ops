@@ -25,7 +25,10 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
-from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+from dev_health_ops.metrics.job_daily import (
+    run_daily_metrics_finalize,
+    run_daily_metrics_job,
+)
 from dev_health_ops.metrics.release_impact import (
     _compute_day as _compute_release_impact_day,
 )
@@ -1444,7 +1447,46 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             backfill_days=ns.days,
             provider="auto",
             org_id=org_id,
+            # CHAOS-4365 item 3 codex R1 (P2): without this, run_daily_
+            # metrics_job's own per-repo loop ALSO runs its older inline
+            # finalize block (IC metrics/landscape writes, job_daily.py's
+            # `if not skip_finalize:` branch) once per day -- then the
+            # explicit run_daily_metrics_finalize call below runs the SAME
+            # IC metrics/landscape writes again, so append-only tables would
+            # receive two generations per day from one fixtures run.
+            # skip_finalize=True matches _cmd_metrics_daily's own CLI
+            # pattern exactly (job_daily.py's _cmd_metrics_daily comment:
+            # "the standalone finalizer below already recomputes IC
+            # metrics/landscape for the whole org -- skip_finalize=True here
+            # avoids running that same inline logic TWICE per day").
+            skip_finalize=True,
         )
+
+        # CHAOS-4365 item 3 finding: run_daily_metrics_job's own per-repo
+        # loop only ever ran an OLDER inline finalize block (IC metrics/
+        # landscape only) -- it never called the standalone
+        # run_daily_metrics_finalize that items 1-3's team-scope tables
+        # (compounding_risk_daily scope=team, team_cognitive_load_daily,
+        # team_complexity_daily) are written from exclusively. Every prior
+        # `--with-metrics` fixtures run therefore produced REPO-scope rows
+        # only for all three tables -- zero team-scope rows -- with no
+        # signal that anything was missing (0 rows through no exception).
+        # Only the CLI's bare `dev-hops metrics daily` path
+        # (_cmd_metrics_daily) and `_cmd_metrics_rebuild` called this
+        # explicitly; fixtures generation did not. Mirrors
+        # _cmd_metrics_daily's own date-range loop so `--with-metrics`
+        # fixture runs are non-zero-row proof for all three finalize-step
+        # team tables, not just the repo-scope ones.
+        finalize_end_day = now.date()
+        finalize_days = max(1, ns.days)
+        finalize_start_day = finalize_end_day - timedelta(days=finalize_days - 1)
+        for offset in range(finalize_days):
+            await run_daily_metrics_finalize(
+                db_url=ns.sink,
+                day=finalize_start_day + timedelta(days=offset),
+                org_id=org_id,
+                sink=db_type,
+            )
 
         if fixture_data["work_items"] and fixture_data["transitions"]:
             from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink

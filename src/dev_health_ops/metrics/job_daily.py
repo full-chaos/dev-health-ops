@@ -73,6 +73,7 @@ from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.prometheus import (
     record_metrics_family_zero_rows,
+    record_team_complexity_daily_rows,
     record_team_metrics_daily_repo_rows,
 )
 from dev_health_ops.metrics.quality import (
@@ -88,6 +89,7 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.team_cognitive_load import (
     build_team_cognitive_load_rows_for_day,
 )
+from dev_health_ops.metrics.team_complexity import build_team_complexity_rows_for_day
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
@@ -777,6 +779,141 @@ def _write_team_cognitive_load_for_day(
         if hasattr(s, "write_team_cognitive_load_daily"):
             s.write_team_cognitive_load_daily(cognitive_load_rows)
     return len(cognitive_load_rows)
+
+
+def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
+    """Read the latest ``repo_complexity_daily`` rows for ``day`` as plain
+    dicts, ``argMax(*, computed_at)``-deduped per ``repo_id`` -- mirrors
+    ``job_compounding_risk.py::_fetch_repo_metrics_for_day``.
+
+    Returned objects are duck-typed enough to satisfy
+    ``build_team_complexity_rows_for_day`` -- it only reads attributes via
+    ``getattr(row, name, None)``.
+
+    CHAOS-4365 codex R1 (P1): ``repo_complexity_daily.computed_at`` is a
+    second-precision ``DateTime`` (``007_complexity_investment_issues.sql``),
+    not a ``DateTime64`` -- coarse enough that two recomputes for the same
+    repo/day can land in the same second. A separate ``argMax(col,
+    computed_at)`` per column (as this query originally had) resolves each
+    column's tie independently, which can pick DIFFERENT physical rows per
+    column and assemble a "Frankenstein" row the aggregator then computes an
+    inconsistent ratio from. Collapsed to a SINGLE
+    ``argMax(tuple(...), computed_at)`` instead -- exactly one row wins, and
+    every value is unwrapped from that one row via ``tupleElement`` --
+    matching the same fix ``discover_repos`` already applies to ``repos``
+    (see that function's docstring) for the identical tie class.
+    """
+
+    class _Row:
+        __slots__ = (
+            "repo_id",
+            "loc_total",
+            "cyclomatic_total",
+            "high_complexity_functions",
+            "very_high_complexity_functions",
+        )
+
+        def __init__(self, d: dict[str, Any]) -> None:
+            self.repo_id = d.get("repo_id")
+            self.loc_total = d.get("loc_total")
+            self.cyclomatic_total = d.get("cyclomatic_total")
+            self.high_complexity_functions = d.get("high_complexity_functions")
+            self.very_high_complexity_functions = d.get(
+                "very_high_complexity_functions"
+            )
+
+    query = """
+        SELECT
+            repo_id,
+            tupleElement(latest, 1) AS loc_total,
+            tupleElement(latest, 2) AS cyclomatic_total,
+            tupleElement(latest, 3) AS high_complexity_functions,
+            tupleElement(latest, 4) AS very_high_complexity_functions
+        FROM (
+            SELECT
+                repo_id,
+                argMax(
+                    tuple(
+                        loc_total,
+                        cyclomatic_total,
+                        high_complexity_functions,
+                        very_high_complexity_functions
+                    ),
+                    computed_at
+                ) AS latest
+            FROM repo_complexity_daily
+            WHERE org_id = {org_id:String} AND day = {day:Date}
+            GROUP BY repo_id
+        )
+    """
+    raw = sink.query_dicts(query, {"org_id": org_id, "day": day})
+    return [_Row(r) for r in raw]
+
+
+def _write_team_complexity_for_day(
+    *,
+    sinks: list[Any],
+    primary_sink: Any,
+    day: date,
+    org_id: str,
+    computed_at: datetime,
+    repo_names_by_id: dict[uuid.UUID, str],
+    repo_team_resolver: Any,
+) -> int:
+    """CHAOS-4365 item 3 (4347-C): team-keyed complexity rollup,
+    OWNERSHIP-scoped.
+
+    Reads back this org/day's ``repo_complexity_daily`` rows from ClickHouse
+    (``_fetch_repo_complexity_for_day``, already ``argMax``-deduped) rather
+    than accumulating in-process, the same finalize-step discipline
+    ``_write_compounding_risk_team_rows_for_day`` follows -- correct
+    regardless of how many separate per-repo ``metrics complexity`` runs
+    already landed for this day, and never written per-repo (the CHAOS-4399
+    bug class: a per-repo write lets ``argMax(computed_at)`` dedup silently
+    keep only the last-processed repo's numbers for a multi-repo team).
+    """
+    repo_complexity_rows = _fetch_repo_complexity_for_day(primary_sink, org_id, day)
+    if not repo_complexity_rows:
+        return 0
+
+    try:
+        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        team_repo_ownership_map = load_team_repo_ownership_map(
+            primary_sink, org_id, as_of=as_of
+        )
+        repo_to_team = _repo_to_team_map_for_compounding_risk(
+            repo_metrics_rows=repo_complexity_rows,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
+            team_repo_ownership_map=team_repo_ownership_map,
+            org_id=org_id,
+            day=day,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "repo_team_resolver failed for team complexity: org_id=%s day=%s %s",
+            org_id,
+            day.isoformat(),
+            exc,
+        )
+        repo_to_team = {}
+    if not repo_to_team:
+        return 0
+
+    complexity_rows = build_team_complexity_rows_for_day(
+        day=day,
+        org_id=org_id,
+        repo_complexity_rows=repo_complexity_rows,
+        repo_to_team=repo_to_team,
+        computed_at=computed_at,
+    )
+    if not complexity_rows:
+        return 0
+    for s in sinks:
+        if hasattr(s, "write_team_complexity_daily"):
+            s.write_team_complexity_daily(complexity_rows)
+    record_team_complexity_daily_rows(complexity_rows)
+    return len(complexity_rows)
 
 
 def _secondary_uri_from_env() -> str:
@@ -2135,6 +2272,36 @@ async def run_daily_metrics_finalize(
             "metrics.daily.finalize family produced zero rows",
             extra={
                 "family": "team_cognitive_load",
+                "day": day.isoformat(),
+                "org_id": org_id,
+                "cause": "no_rows_computed",
+            },
+        )
+
+    team_complexity_count = _write_team_complexity_for_day(
+        sinks=sinks_list,
+        primary_sink=primary_sink,
+        day=day,
+        org_id=org_id,
+        computed_at=computed_at,
+        repo_names_by_id=repo_names_by_id,
+        repo_team_resolver=repo_team_resolver,
+    )
+    if not team_complexity_count:
+        # CHAOS-4365 item 3: a resolver failure, an org with no
+        # ownership-resolvable repos, or a day with no repo_complexity_daily
+        # rows yet (the complexity scan job runs on its own cadence,
+        # separate from the daily partition loop) all degrade to zero rows
+        # here, never raise -- same CHAOS-4246 contract every other finalize
+        # family follows. record_metrics_family_zero_rows makes a sustained
+        # gap alertable instead of only visible in logs.
+        record_metrics_family_zero_rows(
+            family="team_complexity", cause="no_rows_computed"
+        )
+        logger.warning(
+            "metrics.daily.finalize family produced zero rows",
+            extra={
+                "family": "team_complexity",
                 "day": day.isoformat(),
                 "org_id": org_id,
                 "cause": "no_rows_computed",

@@ -348,6 +348,38 @@ class TeamCognitiveLoadDailyRecord:
 
 
 @dataclass(frozen=True)
+class TeamComplexityDailyRecord:
+    """CHAOS-4365 item 3: team-keyed cyclomatic-complexity rollup, OWNERSHIP-scoped.
+
+    CHAOS-4321 hard rule: team = project/repo ownership only, never
+    person->membership. Built by aggregating ``repo_complexity_daily`` rows
+    BY ``repo_id``, then mapping repo_id -> team via ``team_repo_ownership``
+    merged over ``teams.repo_patterns`` (the same ownership sources
+    CHAOS-4365 item 1 established), same resolution path as
+    ``TeamCognitiveLoadDailyRecord``.
+    """
+
+    team_id: str
+    day: date
+    #: Summed across every repo_complexity_daily row this team owns.
+    loc_total: int
+    cyclomatic_total: int
+    #: Recomputed from the summed totals above
+    #: (``cyclomatic_total / (loc_total / 1000)``) -- never averaged
+    #: directly across owned repos' own per-repo ratios (a ratio is not
+    #: additive; see append-only daily-tables reader-dedup contract, same
+    #: rule TeamCognitiveLoadDailyRecord's ratio fields follow).
+    cyclomatic_per_kloc: float
+    high_complexity_functions: int
+    very_high_complexity_functions: int
+    #: How many distinct owned repos contributed a repo_complexity_daily
+    #: row this day (diagnosability).
+    contributing_repo_count: int
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class ProjectRecord:
     id: str
     provider: str

@@ -28,6 +28,11 @@ type PostSyncPlan struct {
 	WorkGraph      bool
 	Investment     bool
 	TeamAutoimport bool
+	// TeamRepoOwnershipDerivation (CHAOS-4365 item 1b): whether this sync's
+	// unit mix could have moved team_project_ownership/work_items/
+	// work_item_dependencies/work_graph_issue_pr -- same gate as WorkGraph
+	// (git || hasWorkItems), since that is exactly this producer's input set.
+	TeamRepoOwnershipDerivation bool
 }
 
 type DailyPostSyncWriter interface {
@@ -50,15 +55,25 @@ type TeamAutoimportPostSyncWriter interface {
 	PublishTx(context.Context, pgx.Tx, PostSyncPlan) error
 }
 
+// TeamRepoOwnershipPostSyncWriter stages the CHAOS-4365 item 1b
+// team_repo_ownership-derivation handoff. Same shape as
+// TeamAutoimportPostSyncWriter -- a sibling writer in the same Fanout, not a
+// repurposing of that slot (that one drives the live Python autoimport
+// bridge; this one is Go-only, no provider fetch, no Python at all).
+type TeamRepoOwnershipPostSyncWriter interface {
+	PublishTx(context.Context, pgx.Tx, PostSyncPlan) error
+}
+
 type NativePostSyncService struct {
-	pool           *pgxpool.Pool
-	daily          DailyPostSyncWriter
-	remaining      RemainingPostSyncWriter
-	workGraph      WorkGraphInvestmentPostSyncWriter
-	teamImport     TeamAutoimportPostSyncWriter
-	logger         *slog.Logger
-	fanoutObserver jobruntime.PostSyncFanoutObserver
-	now            func() time.Time
+	pool              *pgxpool.Pool
+	daily             DailyPostSyncWriter
+	remaining         RemainingPostSyncWriter
+	workGraph         WorkGraphInvestmentPostSyncWriter
+	teamImport        TeamAutoimportPostSyncWriter
+	teamRepoOwnership TeamRepoOwnershipPostSyncWriter
+	logger            *slog.Logger
+	fanoutObserver    jobruntime.PostSyncFanoutObserver
+	now               func() time.Time
 }
 
 // SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
@@ -80,9 +95,10 @@ func NewNativePostSyncService(
 	remaining RemainingPostSyncWriter,
 	workGraph WorkGraphInvestmentPostSyncWriter,
 	teamImport TeamAutoimportPostSyncWriter,
+	teamRepoOwnership TeamRepoOwnershipPostSyncWriter,
 	logger *slog.Logger,
 ) (*NativePostSyncService, error) {
-	if pool == nil || daily == nil || remaining == nil || workGraph == nil || teamImport == nil {
+	if pool == nil || daily == nil || remaining == nil || workGraph == nil || teamImport == nil || teamRepoOwnership == nil {
 		return nil, ErrPostSyncUnavailable
 	}
 	if logger == nil {
@@ -90,7 +106,8 @@ func NewNativePostSyncService(
 	}
 	return &NativePostSyncService{
 		pool: pool, daily: daily, remaining: remaining, workGraph: workGraph,
-		teamImport: teamImport, logger: logger, now: time.Now,
+		teamImport: teamImport, teamRepoOwnership: teamRepoOwnership,
+		logger: logger, now: time.Now,
 	}, nil
 }
 
@@ -217,6 +234,9 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if err = service.publishTeamAutoimport(ctx, tx, *plan); err != nil {
 		return err
 	}
+	if err = service.publishTeamRepoOwnershipDerivation(ctx, tx, *plan); err != nil {
+		return err
+	}
 	if commitErr := tx.Commit(ctx); commitErr != nil {
 		err = ErrPostSyncUnavailable
 		return err
@@ -323,6 +343,64 @@ func (service *NativePostSyncService) publishTeamAutoimport(
 		return nil
 	}
 	return nested.Commit(ctx)
+}
+
+// publishTeamRepoOwnershipDerivation stages the CHAOS-4365 item 1b handoff
+// with the exact same non-fatal shape as publishTeamAutoimport just above --
+// a sibling writer's failure must never take the metric fanout down with it,
+// same rationale (CHAOS-3946), same savepoint-and-swallow mechanics, same
+// deterministic-vs-transient distinction. See publishTeamAutoimport's doc
+// comment for the full reasoning; not repeated here since it applies
+// verbatim.
+//
+// Team-repo-ownership derivation takes no prerequisite completion key and
+// produces none, same as team-autoimport: nothing else in the fanout depends
+// on it, and it depends on nothing else in the fanout's ordered chain.
+func (service *NativePostSyncService) publishTeamRepoOwnershipDerivation(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan PostSyncPlan,
+) error {
+	if !plan.TeamRepoOwnershipDerivation {
+		return nil
+	}
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if err := service.teamRepoOwnership.PublishTx(ctx, nested, plan); err != nil {
+		if rollbackErr := nested.Rollback(ctx); rollbackErr != nil {
+			return err
+		}
+		if !deterministicHandoffRejection(err) {
+			return err
+		}
+		service.observeTeamRepoOwnershipDerivationFailure(ctx, plan, err)
+		return nil
+	}
+	return nested.Commit(ctx)
+}
+
+// PostSyncTeamRepoOwnershipDerivationFailedMessage is the log message emitted
+// when the best-effort team-repo-ownership-derivation handoff is dropped.
+// Stable identifier, same pattern as PostSyncTeamAutoimportFailedMessage, so
+// operators (and tests) can find the drops the fanout deliberately survives.
+const PostSyncTeamRepoOwnershipDerivationFailedMessage = "post_sync_team_repo_ownership_derivation_handoff_dropped"
+
+func (service *NativePostSyncService) observeTeamRepoOwnershipDerivationFailure(
+	ctx context.Context,
+	plan PostSyncPlan,
+	err error,
+) {
+	logger := service.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.ErrorContext(ctx, PostSyncTeamRepoOwnershipDerivationFailedMessage,
+		slog.String("org_id", plan.OrganizationID),
+		slog.String("sync_run_id", plan.SyncRunID),
+		slog.String("error", err.Error()),
+	)
 }
 
 // deterministicHandoffRejection reports whether the outbox refused the envelope
@@ -507,7 +585,8 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		BackfillDays: backfillDays, From: from, To: to,
 		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,
-		TeamAutoimport: autoImport,
+		TeamAutoimport:              autoImport,
+		TeamRepoOwnershipDerivation: git || hasWorkItems,
 	}, nil
 }
 

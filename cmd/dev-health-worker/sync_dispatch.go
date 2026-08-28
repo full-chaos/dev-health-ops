@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -218,6 +219,53 @@ func (writer teamAutoimportPostSyncWriter) PublishTx(
 	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, envelope)
 }
 
+// teamRepoOwnershipPostSyncWriter stages the CHAOS-4365 item 1b
+// team_repo_ownership-derivation handoff. A SIBLING of teamAutoimportPostSyncWriter
+// above, not a repurposing of it: that one drives the live Python autoimport
+// bridge (currently a no-op in prod -- GitHub Teams config is off); this one
+// is Go-only, no provider fetch, no Python at all, and its route is river
+// from day one (state=celery_removed, migration-state.json) -- there is no
+// Celery implementation to defer to, unlike team-autoimport's still-live
+// Celery fallback.
+type teamRepoOwnershipPostSyncWriter struct {
+	producer *joboutbox.Producer
+	registry joboutbox.PolicyRegistry
+}
+
+// PublishTx stages the team-repo-ownership-derivation handoff in the fanout's
+// transaction, same route-descriptor-driven publish/deferred choice as
+// teamAutoimportPostSyncWriter.PublishTx (see its doc comment for the
+// CHAOS-3946 rationale) even though this kind's descriptor is always
+// Executable() today -- keeping the same shape means a future route change
+// (a pause, say) degrades the same way every other bounded-registry kind
+// does, rather than needing a special case here.
+func (writer teamRepoOwnershipPostSyncWriter) PublishTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan syncdispatchruntime.PostSyncPlan,
+) error {
+	if writer.producer == nil || writer.registry == nil || tx == nil {
+		return syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	descriptor, ok := writer.registry.Descriptor(jobcontract.KindTeamRepoOwnershipDerivation)
+	if !ok {
+		return syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	organizationID := plan.OrganizationID
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "post-sync:" + plan.SyncRunID,
+		IdempotencyKey:  "post-sync:" + plan.SyncRunID + ":" + jobcontract.KindTeamRepoOwnershipDerivation,
+		Domain:          jobcontract.DomainLink{Type: "sync_run", ID: plan.SyncRunID},
+		Payload:         jobcontract.TeamRepoOwnershipDerivationPayload{SyncRunID: plan.SyncRunID},
+	}
+	if descriptor.Executable() {
+		return writer.producer.Publish(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope)
+	}
+	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope)
+}
+
 var postSyncFanoutNamespace = uuid.MustParse("0713fbcf-ec5c-49dc-b7dc-18ae3de17536")
 
 type workGraphPostSyncWriter struct{ writer *workgraph.RequestWriter }
@@ -404,6 +452,7 @@ func buildSyncCoordinatorWorker(
 		remainingPostSyncWriter{store: remainingStore, publisher: remainingPublisher},
 		workGraphPostSyncWriter{writer: workGraphWriter},
 		teamAutoimportPostSyncWriter{producer: producer, registry: registry},
+		teamRepoOwnershipPostSyncWriter{producer: producer, registry: registry},
 		logger,
 	)
 	if err != nil {
@@ -513,6 +562,29 @@ func buildSyncCoordinatorWorker(
 		}
 		handlers = []jobruntime.HandlerSpec{autoimport}
 	}
+	// sync.team_repo_ownership_derivation (CHAOS-4365 item 1b) is river
+	// unconditionally (state=celery_removed) -- no Executable() gate needed,
+	// unlike team-autoimport above. Its worker reads ClickHouse directly
+	// (clickhouseConnection, already open for reference-discovery readback
+	// above), never the HTTP bridge.
+	teamRepoOwnershipDerivation, ok := registry.Descriptor(jobcontract.KindTeamRepoOwnershipDerivation)
+	if !ok {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	var teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
+	if typed, ok := observer.(jobruntime.TeamRepoOwnershipDerivationObserver); ok {
+		teamRepoOwnershipDerivationObserver = typed
+	}
+	if err := syncdispatchruntime.RegisterTeamRepoOwnershipDerivationWorker(
+		workers,
+		providersync.TeamRepoOwnershipDerivationService{Conn: clickhouseConnection},
+		teamRepoOwnershipDerivationObserver,
+	); err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	handlers = append(handlers, teamRepoOwnershipDerivation)
 	return workerFamily{
 		handlers: handlers,
 		queues:   queues,

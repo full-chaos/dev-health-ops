@@ -158,6 +158,28 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 	}
 }
 
+// TeamRepoOwnershipDerivationOutcome is the bounded result of one
+// sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
+// "no_signal" names an org with no team_project_ownership rows yet (a
+// GitHub-only org, or team auto-import never configured) -- the designed-
+// empty case, not a failure; distinct from "error", a genuine ClickHouse
+// read/write failure the worker's own retry/backoff will re-attempt.
+type TeamRepoOwnershipDerivationOutcome string
+
+const (
+	TeamRepoOwnershipDerivationOutcomeRowsWritten TeamRepoOwnershipDerivationOutcome = "rows_written"
+	TeamRepoOwnershipDerivationOutcomeNoSignal    TeamRepoOwnershipDerivationOutcome = "no_signal"
+	TeamRepoOwnershipDerivationOutcomeError       TeamRepoOwnershipDerivationOutcome = "error"
+)
+
+func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
+	return []TeamRepoOwnershipDerivationOutcome{
+		TeamRepoOwnershipDerivationOutcomeRowsWritten,
+		TeamRepoOwnershipDerivationOutcomeNoSignal,
+		TeamRepoOwnershipDerivationOutcomeError,
+	}
+}
+
 // DailyMetricsNativeFamilyOutcome is the bounded durable outcome of one
 // native family compute attempt inside a metrics.daily partition (CHAOS-4276).
 // Computed means the executor wrote rows (possibly zero, a legitimate quiet
@@ -518,8 +540,15 @@ type MetricsCollector struct {
 	// other per-tenant-identity signal in this file.
 	teamMetricsDailyRepoCount *histogram
 	postSyncFanout            map[PostSyncFanoutOutcome]uint64
-	workGraphReleaseLost      uint64
-	remainingReleaseLost      uint64
+	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
+	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
+	// is the paired rows-written histogram, observed only on the
+	// rows_written outcome -- same pairing convention as
+	// teamMetricsDailyRepoCount above.
+	teamRepoOwnershipDerivation         map[TeamRepoOwnershipDerivationOutcome]uint64
+	teamRepoOwnershipDerivationRowCount *histogram
+	workGraphReleaseLost                uint64
+	remainingReleaseLost                uint64
 	// remainingOpenDayZeroRow (CHAOS-4384), keyed by family (only "dora"
 	// today -- remainingMetricsOpenDayZeroRowFamilies). Counts a dora
 	// cross-trigger coverage check finding a 0-row succeeded partition for a
@@ -628,6 +657,7 @@ var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
+var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
@@ -686,6 +716,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
+		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
+		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
 		coverageCacheInvalidationsConsumed:   make(map[string]uint64),
@@ -1243,6 +1275,23 @@ func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutO
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.postSyncFanout[outcome]++
+	return nil
+}
+
+// ObserveTeamRepoOwnershipDerivation records the outcome of one
+// sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
+// rowCount is only observed into the paired histogram on the rows_written
+// outcome -- a no_signal or error run has no meaningful row count to bucket.
+func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivation(outcome TeamRepoOwnershipDerivationOutcome, rowCount int) error {
+	if !slices.Contains(teamRepoOwnershipDerivationOutcomes(), outcome) {
+		return errors.New("team-repo-ownership-derivation outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamRepoOwnershipDerivation[outcome]++
+	if outcome == TeamRepoOwnershipDerivationOutcomeRowsWritten {
+		collector.teamRepoOwnershipDerivationRowCount.observe(float64(rowCount))
+	}
 	return nil
 }
 

@@ -184,6 +184,17 @@ type PostSyncFanoutObserver interface {
 	ObservePostSyncFanout(PostSyncFanoutOutcome) error
 }
 
+// TeamRepoOwnershipDerivationObserver is the narrow capability
+// sync.team_repo_ownership_derivation's worker (CHAOS-4365 item 1b) depends
+// on to report its own outcome -- distinct from PostSyncFanoutObserver, which
+// only ever sees whether the FANOUT staged the handoff, never whether the
+// worker that later consumed it actually wrote rows. Generic runtime
+// middleware cannot infer rows_written vs no_signal vs error: only the
+// worker that ran Derive() and got a row count (or an error) back knows.
+type TeamRepoOwnershipDerivationObserver interface {
+	ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcome, int) error
+}
+
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
 // partition handler depends on when a family's upstream source data exists
 // for a partition's repositories and day, but that family's output table has

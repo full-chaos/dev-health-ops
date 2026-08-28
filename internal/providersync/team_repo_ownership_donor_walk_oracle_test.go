@@ -169,6 +169,29 @@ func teamRepoOwnershipDonorWalkOracleCases() []oracleCase {
 				"source_work_item_id": "source-1",
 			},
 		},
+		{
+			// codex adversarial review, 2026-08-28, confirmed finding: an
+			// unowned donor ("linear:AAA-1", no project_ownership entry at
+			// all) sorts before the owned donor ("linear:ZETA-1") but must
+			// never suppress it -- only donors that themselves resolve to a
+			// team are valid tie-break candidates.
+			ID: "unowned_donor_never_suppresses_an_owned_donor",
+			Input: map[string]any{
+				"project_ownership": []map[string]any{
+					{"project_id": "proj-owned", "team_id": "team-platform"},
+				},
+				"work_items": []map[string]any{
+					{"work_item_id": "source-1", "project_id": ""},
+					{"work_item_id": "linear:AAA-1", "project_id": "proj-unowned"},
+					{"work_item_id": "linear:ZETA-1", "project_id": "proj-owned"},
+				},
+				"dependencies": []map[string]any{
+					{"source_work_item_id": "source-1", "target_work_item_id": "linear:AAA-1", "relationship_type": "relates_to"},
+					{"source_work_item_id": "source-1", "target_work_item_id": "linear:ZETA-1", "relationship_type": "relates_to"},
+				},
+				"source_work_item_id": "source-1",
+			},
+		},
 	}
 }
 

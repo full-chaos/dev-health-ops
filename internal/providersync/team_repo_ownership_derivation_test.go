@@ -245,6 +245,39 @@ func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T
 	}
 }
 
+// TestUnownedDonorNeverSuppressesAnOwnedDonor is the codex adversarial
+// review fix (2026-08-28, confirmed finding): the lexicographic tie-break
+// only applies AMONG donors that themselves already resolve to a team,
+// mirroring compute_work_items.py::build_linked_issue_team_resolver exactly
+// (its `donor_team` map -- and therefore `candidates` -- is populated ONLY
+// for items with a resolved team_id). "linear:AAA-1" sorts before
+// "linear:ZETA-1" but carries no ownership at all; before this fix, the
+// donor walk would pick it anyway (lexicographically smallest), find it
+// resolves to no team, and silently drop the row -- even though the OTHER
+// donor DOES resolve.
+func TestUnownedDonorNeverSuppressesAnOwnedDonor(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		// proj-unowned has NO entry here at all -- "linear:AAA-1" (below)
+		// carries a project_id that never resolves to any team.
+		{ProjectID: "proj-owned", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "linear:AAA-1", RepoID: "", ProjectID: "proj-unowned"},
+		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-owned"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:AAA-1", RelationshipType: "relates_to"},
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:ZETA-1", RelationshipType: "relates_to"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-platform via the owned donor, unowned donor must never suppress it, got %+v", got)
+	}
+}
+
 // TestPRInheritanceViaIssuePRLink is team-lead's "design check (b)": a PR
 // that never became its own work_items row (or has no useful repo_id of
 // its own) still gets a team, via work_graph_issue_pr linking it to a

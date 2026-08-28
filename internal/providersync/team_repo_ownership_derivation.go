@@ -363,6 +363,14 @@ func buildDonorProjectIDResolver(
 		}
 	}
 
+	// Only a donor that ITSELF already resolves to a team is a valid
+	// candidate -- mirrors compute_work_items.py::build_linked_issue_team_resolver
+	// exactly (its `donor_team` map is populated ONLY for items with a
+	// resolved team_id; `candidates` only ever appends a target present in
+	// `donor_team`). Without this gate, an unowned donor with a
+	// lexicographically smaller work_item_id could win the tie-break over a
+	// second donor that DOES resolve, silently suppressing a valid team
+	// (codex adversarial review, 2026-08-28, confirmed finding).
 	candidateTargets := map[string][]string{}
 	for _, edge := range latestEdge {
 		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
@@ -374,6 +382,10 @@ func buildDonorProjectIDResolver(
 		}
 		donor, ok := byID[target]
 		if !ok || donor.ProjectID == "" {
+			continue
+		}
+		donorRef := teamRepoOwnershipProjectRef{Provider: donor.Provider, ProjectID: donor.ProjectID}
+		if _, resolves := projectToTeam[donorRef]; !resolves {
 			continue
 		}
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)

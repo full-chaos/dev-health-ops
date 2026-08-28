@@ -2066,25 +2066,47 @@ async def run_daily_metrics_finalize(
     # weekend_commits_count off team_wellbeing_rows) -- stamping it with
     # this finalize call's own computed_at is a safe, meaningless-to-omit
     # placeholder, not a value anything downstream depends on.
-    team_metrics_query = """
-        SELECT
-            argMax(team_id, computed_at) AS team_id,
-            argMax(team_name, computed_at) AS team_name,
-            argMax(commits_count, computed_at) AS commits_count,
-            argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
-            argMax(weekend_commits_count, computed_at) AS weekend_commits_count,
-            argMax(after_hours_commit_ratio, computed_at) AS after_hours_commit_ratio,
-            argMax(weekend_commit_ratio, computed_at) AS weekend_commit_ratio,
-            org_id,
-            repo_id
-        FROM team_metrics_daily
-        WHERE day = {day:Date}
-    """
+    # CHAOS-4365 codex R3 (P1): a single-step argMax(..., computed_at)
+    # GROUP BY (org_id, repo_id) picks exactly ONE row per repo -- correct
+    # when a recompute leaves stale OLDER-generation rows behind (that's
+    # the R2 fix), but WRONG when the pattern resolver misses and
+    # team_wellbeing falls back to membership: a repo can then legitimately
+    # get MULTIPLE rows in the SAME compute generation (same computed_at),
+    # one per matched legacy team_id split. argMax would silently pick one
+    # of those arbitrarily, dropping the rest. Two-step instead: find each
+    # repo's latest computed_at (its generation), then INNER JOIN back and
+    # SUM every row that shares that exact timestamp -- so multiple
+    # same-generation splits are summed together, while an older, stale
+    # generation (a different, earlier computed_at) is excluded entirely.
+    day_filter = "day = {day:Date}"
     team_metrics_params: dict[str, Any] = {"day": day}
     if org_id:
-        team_metrics_query += " AND org_id = {org_id:String}"
+        day_filter += " AND org_id = {org_id:String}"
         team_metrics_params["org_id"] = org_id
-    team_metrics_query += " GROUP BY org_id, repo_id"
+    team_metrics_query = f"""
+        SELECT
+            t.org_id AS org_id,
+            t.repo_id AS repo_id,
+            any(t.team_id) AS team_id,
+            any(t.team_name) AS team_name,
+            sum(t.commits_count) AS commits_count,
+            sum(t.after_hours_commits_count) AS after_hours_commits_count,
+            sum(t.weekend_commits_count) AS weekend_commits_count,
+            any(t.after_hours_commit_ratio) AS after_hours_commit_ratio,
+            any(t.weekend_commit_ratio) AS weekend_commit_ratio
+        FROM team_metrics_daily AS t
+        INNER JOIN (
+            SELECT org_id, repo_id, max(computed_at) AS latest_computed_at
+            FROM team_metrics_daily
+            WHERE {day_filter}
+            GROUP BY org_id, repo_id
+        ) AS latest_gen
+        ON t.org_id = latest_gen.org_id
+           AND t.repo_id = latest_gen.repo_id
+           AND t.computed_at = latest_gen.latest_computed_at
+        WHERE {day_filter}
+        GROUP BY t.org_id, t.repo_id
+    """
     org_team_metrics: list[Any] = []
     for row in deps.clickhouse_query_dicts(
         ch_client, team_metrics_query, team_metrics_params

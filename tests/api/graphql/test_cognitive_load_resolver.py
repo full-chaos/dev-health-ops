@@ -14,9 +14,13 @@ Tests exercise the resolver against a mocked ClickHouse client and verify:
   since the mocked client cannot execute argMax).
 * The org-id gate raises ``AuthorizationError`` when ``context.org_id`` is
   missing.
-* The ``team_id`` filter passes through to both SQL queries.
+* The ``team_id`` filter passes through to both SQL queries (org-wide path).
 * The ``repo_id`` filter passes through to the user-metrics query only
-  (``team_metrics_daily`` has no ``repo_id`` column).
+  (``team_metrics_daily`` has no ``repo_id`` column) on the org-wide path.
+* CHAOS-4406: the team+repo COMBINED path checks ``team_repo_ownership``
+  first, then filters both data queries by the resolved ``repo_id`` alone
+  (never the tainted ``team_id`` column); an unowned repo returns an
+  explicit empty result without firing either data query.
 
 All tests are read-only; no ClickHouse tables are modified.
 """
@@ -350,30 +354,356 @@ async def test_cognitive_load_single_team_query_bundles_nullable_ratios_in_one_a
 
 
 @pytest.mark.asyncio
-async def test_cognitive_load_team_and_repo_id_combined_uses_the_old_merge_path() -> (
+async def test_cognitive_load_team_and_repo_id_combined_checks_ownership_first() -> (
     None
 ):
-    """team_id AND repo_id both set: team_cognitive_load_daily has no
-    repo_id dimension to filter by, so this falls through to the original
-    two-query merge over user_metrics_daily/team_metrics_daily (repo_id
-    narrows the user-metrics query only, per CHAOS-2386) -- unchanged by
-    the CHAOS-4365 single-team fix.
+    """CHAOS-4406 RED before the fix: team_id AND repo_id both set used to
+    fall straight into the tainted two-query merge, filtering
+    user_metrics_daily/team_metrics_daily on their OWN team_id column --
+    the same taint CHAOS-4365 fixed for the single-team path. The combined
+    path must instead confirm ownership via team_repo_ownership FIRST
+    (candidate-repo lookup + ranked ownership query), then -- once owned --
+    filter both data queries by repo_id ALONE, never by the tainted
+    team_id column.
     """
     ctx = _ctx()
-    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(  # candidate repos matching the slug
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(  # ranked native ownership rows
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-alpha",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
 
     result = await resolve_cognitive_load(
         ctx, _input(team_id="team-alpha", repo_id="acme/repo")
     )
 
     assert result.team_id == "team-alpha"
+    assert ctx.client.query.call_count == 4
+    candidate_query: str = ctx.client.query.call_args_list[0].args[0]
+    ownership_query: str = ctx.client.query.call_args_list[1].args[0]
+    user_query: str = ctx.client.query.call_args_list[2].args[0]
+    team_query: str = ctx.client.query.call_args_list[3].args[0]
+    assert "FROM repos" in candidate_query
+    assert "team_repo_ownership" in ownership_query
+    assert "is_primary" in ownership_query and "specificity" in ownership_query
+    # Once ownership is confirmed, neither data query FILTERS by the
+    # tainted team_id column -- only by the now-resolved repo_id.
+    # team_query still legitimately GROUPs BY team_id internally (to
+    # collapse/sum across every team_id label team_metrics_daily attached
+    # to this repo's rows before recomputing the ratio -- see
+    # _fetch_repo_scoped_team_metrics), so this checks for the absence of
+    # a team_id equality PREDICATE, not the bare substring.
+    assert "team_id = {team_id:String}" not in user_query
+    assert "team_id = {team_id:String}" not in team_query
+    assert "team_id" not in user_query
+    assert "user_metrics_daily" in user_query
+    assert "team_metrics_daily" in team_query
+    assert "repo_id" in user_query
+    assert "repo_id" in team_query
+    # The resolved canonical UUID from the ownership check, not the
+    # caller's original slug, is what scopes the data queries.
+    assert (
+        ctx.client.query.call_args_list[2].kwargs["parameters"]["repo_id"]
+        == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    )
+    assert (
+        ctx.client.query.call_args_list[3].kwargs["parameters"]["repo_id"]
+        == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_empty_when_repo_not_found() -> (
+    None
+):
+    """The requested repo doesn't resolve to anything in ``repos`` at all:
+    an explicit empty result after exactly the one candidate-lookup query
+    -- never the ownership query or either data query."""
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], [])])
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/nonexistent-repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert result.signals == []
+    assert result.total_days == 0
+    assert ctx.client.query.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_empty_when_owned_by_other_team() -> (
+    None
+):
+    """CHAOS-4406 codex R1 (P1, canonical-owner ranking): the repo exists
+    and DOES have a native ownership row, but its ranked (is_primary,
+    specificity) winner is a DIFFERENT team than the one requested. Must
+    return empty, never that other team's data, and never fall through to
+    the repo_patterns fallback (native ownership DID resolve the repo)."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-beta",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.signals == []
+    assert result.total_days == 0
     assert ctx.client.query.call_count == 2
-    first_query: str = ctx.client.query.call_args_list[0].args[0]
-    second_query: str = ctx.client.query.call_args_list[1].args[0]
-    assert "team_cognitive_load_daily" not in first_query
-    assert "team_cognitive_load_daily" not in second_query
-    assert "team_id" in first_query
-    assert "team_id" in second_query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_falls_back_to_repo_patterns() -> (
+    None
+):
+    """CHAOS-4406 codex R1 (P1, provider coverage): GitLab/Jira/Linear
+    auto-imports never write team_repo_ownership at all -- their repos
+    resolve to a team only via teams.repo_patterns. When native ownership
+    resolves NOTHING for the candidate repo, the resolver must fall back
+    to the org's repo_patterns (via the canonical cross-team resolver)
+    before giving up."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult([], []),  # no native ownership rows at all
+            _qresult(  # every team's patterns, org-wide
+                ["id", "name", "repo_patterns"],
+                [["team-alpha", "Team Alpha", ["acme/repo"]]],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert ctx.client.query.call_count == 5
+    pattern_query: str = ctx.client.query.call_args_list[2].args[0]
+    assert "teams" in pattern_query
+    assert "repo_patterns" in pattern_query
+    # org-wide (not filtered to the requesting team) -- see the next test
+    assert "team_id" not in pattern_query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_pattern_fallback_respects_cross_team_precedence() -> (
+    None
+):
+    """CHAOS-4406 codex R2 (P2, correct): checking only the requesting
+    team's OWN patterns could authorize a repo a DIFFERENT team's more
+    specific pattern actually owns. team-alpha has the broad `acme/*`
+    prefix; team-beta has the exact `acme/payments` pattern. The
+    canonical RepoPatternTeamResolver picks the exact match, so
+    team-alpha must NOT be authorized for acme/payments."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/payments"]],
+            ),
+            _qresult([], []),  # no native ownership rows at all
+            _qresult(
+                ["id", "name", "repo_patterns"],
+                [
+                    ["team-alpha", "Team Alpha", ["acme/*"]],
+                    ["team-beta", "Team Beta", ["acme/payments"]],
+                ],
+            ),
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/payments")
+    )
+
+    assert result.signals == []
+    assert result.total_days == 0
+    assert ctx.client.query.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_team_metrics_dedups_by_latest_generation() -> (
+    None
+):
+    """CHAOS-4406 codex R2 (P1, correct): a naive argMax(col, computed_at)
+    PER (day, team_id) dedupes each team_id label's own latest row, but
+    NOT across recomputation generations -- if this repo's tainted legacy
+    team_id changed between two backfill runs for the same day (both
+    append-only rows surviving), that shape sums BOTH generations,
+    double-counting the same underlying commits. Must instead find this
+    repo's latest computed_at PER DAY and INNER JOIN back so only rows
+    from that exact generation are summed (same-generation team_id
+    splits still combine; a stale earlier generation is excluded)."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-alpha",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    await resolve_cognitive_load(ctx, _input(team_id="team-alpha", repo_id="acme/repo"))
+
+    team_query: str = _squash_ws(ctx.client.query.call_args_list[3].args[0])
+    assert "max(computed_at) AS latest_computed_at" in team_query
+    assert "INNER JOIN" in team_query
+    assert "t.computed_at = latest_gen.latest_computed_at" in team_query
+    assert "sum(t.commits_count)" in team_query
+    # Codex R3 (P1, correct): team_metrics_daily.repo_id is String
+    # (migration 080_team_metrics_daily_repo_id.sql), NOT UUID like
+    # repos.id (migration 000_raw_tables.sql) -- the IN-subquery must
+    # cast repos.id to String on both occurrences, or ClickHouse cannot
+    # reliably build the IN set across the two types.
+    assert team_query.count("SELECT toString(id) FROM repos") == 2
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_pattern_fallback_only_for_unowned_candidates() -> (
+    None
+):
+    """CHAOS-4406 codex R3 (P2, correct): when the slug matches MULTIPLE
+    providers' repos and only SOME have a native ownership row, a
+    candidate with NO native row must still get its own pattern-fallback
+    chance -- the previous version gave up entirely as soon as ANY
+    candidate resolved natively (even to a DIFFERENT team), incorrectly
+    denying a second, pattern-owned candidate the requested team
+    legitimately owns."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(  # two candidates share the slug across providers
+                ["id", "repo"],
+                [
+                    ["11111111-1111-1111-1111-111111111111", "acme/repo"],
+                    ["22222222-2222-2222-2222-222222222222", "acme/repo"],
+                ],
+            ),
+            _qresult(  # only the FIRST candidate has a native ownership row,
+                # and it's owned by a DIFFERENT team
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "11111111-1111-1111-1111-111111111111",
+                        "team-beta",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult(  # the SECOND candidate (no native row) resolves via
+                # pattern to the requesting team
+                ["id", "name", "repo_patterns"],
+                [["team-alpha", "Team Alpha", ["acme/repo"]]],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert ctx.client.query.call_count == 5
+    # The SECOND candidate (pattern-resolved, no native owner) is the one
+    # that ends up scoping the data queries.
+    assert (
+        ctx.client.query.call_args_list[3].kwargs["parameters"]["repo_id"]
+        == "22222222-2222-2222-2222-222222222222"
+    )
 
 
 # ---------------------------------------------------------------------------

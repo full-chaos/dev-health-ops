@@ -442,6 +442,36 @@ means the ClickHouse `teams` dimension is empty.
 > embedded copy in `dev-health-go` and reruns its test — editing only this migration does not, by
 > itself, break `dev-health-go` CI.
 
+> **CHAOS-4406 (fixed): the team+repo COMBINED `resolveCognitiveLoad` path also stopped trusting the
+> tainted `team_id` column.** `team_cognitive_load_daily` carries no `repo_id` dimension, so it
+> cannot serve a query where BOTH `teamId` and `repoId` are set — that combined path used to fall
+> through to the pre-CHAOS-4365 two-query merge over `user_metrics_daily`/`team_metrics_daily`,
+> filtered on those tables' own `team_id` column (the same CHAOS-4396 taint). The fix,
+> `_resolve_owned_repo_id` (`resolvers/cognitive_load.py`), reuses the SAME two-source,
+> ownership-wins-over-pattern merge every other ownership-scoped reader in this codebase applies
+> (`providers/teams.py::load_team_repo_ownership_map`; `job_daily.py`'s
+> `_repo_to_team_map_for_compounding_risk`; `metrics/team_cognitive_load.py`'s own write-time
+> resolution) — an early version of this fix (codex R1) reinvented a narrower, incorrect version
+> that filtered `team_repo_ownership` on a bare `argMax(repo_id, …) IS NOT NULL`, which silently
+> rejected **every** native GitHub ownership row (§0.2's `repo_id is Nullable and often NULL`
+> note): (1) native `team_repo_ownership` wins where it resolves the repo, via the SAME
+> `coalesce(repo_id, name-joined id)` + `matched` sentinel join `load_team_repo_ownership_map`
+> uses; (2) ranked by `(is_primary DESC, specificity DESC, updated_at DESC)` so a non-primary
+> co-owner is never mistaken for the canonical owner; (3) falls back to the requesting team's
+> `teams.repo_patterns` glob strings ONLY when native ownership resolves nothing for the candidate
+> repo — the path GitLab/Jira/Linear auto-imports rely on entirely, since none of them write
+> `team_repo_ownership`. An unowned/nonexistent repo, or one owned by a different team, returns an
+> explicit empty result, never the wrong team's data. Once ownership is confirmed, both data
+> queries filter by the resolved `repo_id` ALONE: `user_metrics_daily` via its existing repo
+> predicate, and a new `_fetch_repo_scoped_team_metrics` for `team_metrics_daily` that sums the
+> additive counts across **every** `team_id` label attached to that repo's rows before
+> recomputing the ratio (mirroring `_fetch_team_metrics`'s SUM-then-recompute discipline for a
+> team's several repos, transposed: here several `team_id` labels collapse onto one repo, since
+> one repo's commits can be split across per-commit membership-fallback team_id fragments —
+> CHAOS-4396). Known residual gap: if the org has the same repo slug under two providers and the
+> requesting team owns both, only one is served (matches `_fetch_user_metrics`'s own pre-existing
+> slug-resolution shape for the org-wide path) — tracked as a follow-up, not closed here.
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |

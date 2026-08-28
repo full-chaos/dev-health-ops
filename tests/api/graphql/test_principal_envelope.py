@@ -166,12 +166,22 @@ def test_envelope_rejects_wrong_audience(signing_key: str) -> None:
 
 
 def test_envelope_reflects_active_impersonation(signing_key: str) -> None:
-    user = _sample_user(impersonated_by="22222222-2222-4222-8222-222222222222")
+    """Every identity claim (sub/org_id/role) must be the TARGET's, not the
+    real admin's -- planted-defect shape: real and target differ on every
+    field, so a claim that silently fell back to the real admin's value
+    (the bug this guards) cannot hide behind values that coincide."""
+    real_admin_id = "22222222-2222-4222-8222-222222222222"
+    user = _sample_user(
+        user_id=real_admin_id,
+        org_id="org-real-admin",
+        role="admin",
+        impersonated_by=None,
+    )
     token_ctx = set_impersonation_context(
-        target_user_id=user.user_id,
-        target_org_id="org-1",
+        target_user_id="33333333-3333-4333-8333-333333333333",
+        target_org_id="org-target",
         target_role="viewer",
-        real_user_id="22222222-2222-4222-8222-222222222222",
+        real_user_id=real_admin_id,
     )
     try:
         token = principal_envelope.issue_effective_principal_envelope(
@@ -186,7 +196,12 @@ def test_envelope_reflects_active_impersonation(signing_key: str) -> None:
     claims = _verify_with_jwks(token, jwks)
 
     assert claims["impersonation_active"] is True
-    assert claims["impersonated_by"] == "22222222-2222-4222-8222-222222222222"
+    assert claims["impersonated_by"] == real_admin_id
+    # The envelope's identity is the TARGET being impersonated, not the real
+    # admin -- a Go consumer authorizes/scopes the request by these claims.
+    assert claims["sub"] == "33333333-3333-4333-8333-333333333333"
+    assert claims["org_id"] == "org-target"
+    assert claims["role"] == "viewer"
     # Impersonating: permissions come from the TARGET role (viewer), not the
     # underlying admin user's own role -- matches services.permissions.
     assert "org:write" not in claims["permissions"]

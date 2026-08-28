@@ -138,7 +138,13 @@ deploy/local/trial-data.sh dsn --env          # DSNs for host-side tools
 ```
 
 NodePorts are **cluster**-scoped, not namespace-scoped, so every lane needs its
-own `ACR_TRIAL_NODEPORT_BASE` (30000–30996, four consecutive ports).
+own `ACR_TRIAL_NODEPORT_BASE`. The base must be a multiple of 10 inside
+30000–30990: each lane uses four consecutive ports, and the 10-port stride is
+what makes two lanes' *ranges* disjoint rather than merely their base values.
+
+`trial-data.sh dsn` reads the ports off the **deployed** Services, not off your
+shell, so a stale or missing `ACR_TRIAL_NODEPORT_BASE` cannot hand you another
+lane's endpoints.
 
 ### 4. Pin the runtime role passwords
 

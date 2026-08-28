@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -534,6 +535,16 @@ func configureWorkerDependenciesWithSources(
 	// that never touch the coverage queue) instead of only existing on
 	// scrapes lucky enough to hit an ops-group replica.
 	if err := registry.RegisterMetrics("sync_coverage_scope_intent", synccoverage.ScopeIntentMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4341: process-wide singleton, registered unconditionally like
+	// sync_coverage_scope_intent above -- repo_user_commit's native writer
+	// increments it on every WriteResult call regardless of which worker
+	// group actually runs the metricsQueue, so the series is always present
+	// (reading zero on groups that never touch it) instead of only existing
+	// on scrapes lucky enough to hit a go-worker-heavy replica.
+	if err := registry.RegisterMetrics("repo_user_commit_writer", repouser.RowsWrittenMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

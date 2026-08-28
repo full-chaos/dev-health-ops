@@ -121,7 +121,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
 
-	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result)
+	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {
 		return 0, err
 	}

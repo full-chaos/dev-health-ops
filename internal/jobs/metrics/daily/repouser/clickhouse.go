@@ -361,13 +361,27 @@ func (loader *ClickHouseLoader) LoadBugWorkItems(
 	return result, nil
 }
 
-// Writer persists a Result. org_id is written as the empty string on all
-// three tables, matching the existing Python sink's ClickHouseMetricsSink._
-// insert_rows call (RepoMetricsDailyRecord/UserMetricsDailyRecord/
-// CommitMetricsRecord all default org_id="" and the sink writes that field
-// verbatim, not the ClickHouse column's 'default' DEFAULT) -- see the
-// comment on writeRepoMetrics for why this is preserved rather than
-// "fixed" to the real org id.
+// Writer persists a Result.
+//
+// CHAOS-4341: this writer used to hard-code org_id="" on all three tables,
+// on the claim that "nothing today reads org_id off these three tables for
+// scoping" (matching what was, at the time, believed to be Python's own
+// behaviour). Both halves of that claim were wrong: Python's
+// run_daily_metrics_job has propagated the real org_id onto its sinks since
+// commit a165ef3c0 ("fix: propagate org_id to metrics sinks for correct
+// data isolation", 2026-02-23) -- the investigation that produced the
+// "nothing sets it" quote grepped ClickHouseCore.__init__'s signature and
+// missed job_daily.py's post-construction `setattr(s, "org_id", org_id)`,
+// exactly the "grepped and found nothing is not evidence of absence" trap
+// AGENTS.md warns about. And multiple org-scoped readers DO filter these
+// tables by org_id directly: acr's devhealthfacts.readRepositoryMetrics /
+// readRepositoryFlow (repo_metrics_daily), and this repo's own
+// cognitive_load.py / home.py / forecast.py / freshness.py GraphQL
+// resolvers (repo_metrics_daily, user_metrics_daily). An org_id="" row is
+// invisible to every one of them -- confirmed on prod for org c6a38355
+// (CHAOS-4341, deploy 5.3 readback #2: 580/580 partitions succeeded, 0
+// org-scoped rows). WriteResult now takes the partition's real org_id and
+// writes it on all three tables, matching Python and every reader.
 type Writer struct {
 	conn conn
 }
@@ -412,31 +426,29 @@ func NewWriter(connection conn) (*Writer, error) {
 // (which gets an unambiguously fresh computed_at), so the worst case is one
 // day of a partial-vs-complete row being ambiguous, not permanent
 // corruption.
-func (writer *Writer) WriteResult(ctx context.Context, result Result) (repoRows, userRows, commitRows int, err error) {
+func (writer *Writer) WriteResult(ctx context.Context, result Result, orgID string) (repoRows, userRows, commitRows int, err error) {
 	if writer == nil || writer.conn == nil {
 		return 0, 0, 0, fmt.Errorf("repouser: writer unavailable")
 	}
-	if repoRows, err = writer.writeRepoMetrics(ctx, result.RepoMetrics); err != nil {
+	if orgID == "" {
+		return 0, 0, 0, fmt.Errorf("repouser: organization id is required to write repo_metrics_daily/user_metrics_daily/commit_metrics")
+	}
+	if repoRows, err = writer.writeRepoMetrics(ctx, result.RepoMetrics, orgID); err != nil {
 		return 0, 0, 0, fmt.Errorf("write repo metrics: %w", err)
 	}
-	if userRows, err = writer.writeUserMetrics(ctx, result.UserMetrics); err != nil {
+	if userRows, err = writer.writeUserMetrics(ctx, result.UserMetrics, orgID); err != nil {
 		return repoRows, 0, 0, fmt.Errorf("write user metrics: %w", err)
 	}
-	if commitRows, err = writer.writeCommitMetrics(ctx, result.CommitMetrics); err != nil {
+	if commitRows, err = writer.writeCommitMetrics(ctx, result.CommitMetrics, orgID); err != nil {
 		return repoRows, userRows, 0, fmt.Errorf("write commit metrics: %w", err)
 	}
+	recordRowsWritten(repoRows+userRows+commitRows, orgID != "")
 	return repoRows, userRows, commitRows, nil
 }
 
-// writeRepoMetrics inserts into repo_metrics_daily.
-//
-// org_id is deliberately "" -- see the Writer doc comment. This is parity
-// with existing Python behaviour, not an oversight: nothing today reads
-// org_id off these three tables for scoping (ci/assert_metrics_executed_
-// proof.py scopes by repo_id alone, which is already org-unique via the
-// repos table), so matching Python's literal is lower risk than silently
-// changing what these rows carry.
-func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric) (int, error) {
+// writeRepoMetrics inserts into repo_metrics_daily, stamping every row with
+// orgID (CHAOS-4341 -- see the Writer doc comment).
+func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, orgID string) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -463,7 +475,7 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric) (
 			row.PRSizeP50LOC, row.PRSizeP90LOC, row.PRCommentsPer100LOC, row.PRReviewsPer100LOC,
 			row.ReworkChurnRatio30d, row.SingleOwnerFileRatio30d, row.ReviewLoadTopReviewerRatio,
 			uint32(row.BusFactor), row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
-			row.ComputedAt, "",
+			row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
 		}
@@ -474,7 +486,9 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric) (
 	return len(rows), nil
 }
 
-func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric) (int, error) {
+// writeUserMetrics inserts into user_metrics_daily, stamping every row with
+// orgID (CHAOS-4341 -- see the Writer doc comment).
+func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric, orgID string) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -503,7 +517,7 @@ func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric) (
 			uint32(row.ReviewsReceived), row.ReviewReciprocity, uint32(row.PRInterruptionLoad),
 			uint32(row.ContextSpreadCount), uint32(row.ReviewRequestLoad), row.TeamID,
 			row.TeamName, row.ActiveHours, uint8(row.WeekendDays), row.IdentityID,
-			row.ComputedAt, "",
+			row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append user_metrics_daily row: %w", err)
 		}
@@ -514,7 +528,9 @@ func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric) (
 	return len(rows), nil
 }
 
-func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetric) (int, error) {
+// writeCommitMetrics inserts into commit_metrics, stamping every row with
+// orgID (CHAOS-4341 -- see the Writer doc comment).
+func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetric, orgID string) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -526,7 +542,7 @@ func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetri
 	for _, row := range rows {
 		if err := batch.Append(
 			row.RepoID, row.CommitHash, row.Day, row.AuthorEmail,
-			uint32(row.TotalLOC), uint32(row.FilesChanged), row.SizeBucket, row.ComputedAt, "",
+			uint32(row.TotalLOC), uint32(row.FilesChanged), row.SizeBucket, row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append commit_metrics row: %w", err)
 		}

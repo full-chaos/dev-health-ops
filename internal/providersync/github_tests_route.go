@@ -452,7 +452,18 @@ func (handler GitHubTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 	watermark := claim.BeforeAt
-	if githubTestsBlocksWatermark(incomplete) {
+	// This route never builds a GitHubTestsSkippedArtifact marker for any
+	// cause -- it has no persisted, resumable cursor to hang one off, and
+	// (per CHAOS-4315) it stays fully terminal on an oversized artifact
+	// rather than skip-and-continue, so it never reaches this point with an
+	// oversized observation in the first place. Passing nil/0 therefore
+	// means this oracle is conservative for artifact_unavailable/
+	// unreadable_archive relative to the chunked production route once that
+	// route actually has markers to show -- an intentional, precedented
+	// divergence (CHAOS-4315 already diverges the two routes on the
+	// oversized disposition itself; production dispatch always executes
+	// CollectChunks, never this route, per execution_registry.go).
+	if githubTestsBlocksWatermark(incomplete, nil, 0) {
 		watermark = nil
 	}
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{

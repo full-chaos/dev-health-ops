@@ -236,7 +236,7 @@ func TestGitHubTestsInventoryTruncationStillWithholdsTheWatermark(t *testing.T) 
 	claim := nativeTestClaim("github", "tests")
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
 
-	if !githubTestsBlocksWatermark(walk.cursor.Incomplete) {
+	if !githubTestsBlocksWatermark(walk.cursor.Incomplete, walk.cursor.SkippedArtifacts, walk.cursor.SkippedArtifactsOverflow) {
 		t.Fatalf("inventory observations %+v must block the watermark", walk.cursor.Incomplete)
 	}
 	if walk.final.Watermark != nil {
@@ -252,42 +252,54 @@ func TestGitHubTestsInventoryTruncationStillWithholdsTheWatermark(t *testing.T) 
 func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 	cases := []struct {
 		component, cause string
-		blocking         bool
+		// marked, when true, supplies a matching GitHubTestsSkippedArtifact
+		// for a report_member case, proving "properly evidenced" rather than
+		// accidentally exercising the SEPARATE legacy-marker guard (which
+		// has its own dedicated coverage:
+		// TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers).
+		// Ignored for non-report_member components.
+		marked   bool
+		blocking bool
 	}{
-		{githubTestsRunInventoryComponent, githubTestsPageBudgetCause, true},
-		{githubTestsArtifactInventoryComponent, githubTestsPageBudgetCause, true},
+		{component: githubTestsRunInventoryComponent, cause: githubTestsPageBudgetCause, blocking: true},
+		{component: githubTestsArtifactInventoryComponent, cause: githubTestsPageBudgetCause, blocking: true},
 		// Preserved from before CHAOS-4142 rather than reclassified; the
 		// reclassification is CHAOS-4153.
-		{githubTestsReportMemberComponent, "malformed", true},
-		{githubTestsReportMemberComponent, "unreadable", true},
+		{component: githubTestsReportMemberComponent, cause: "malformed", marked: true, blocking: true},
+		{component: githubTestsReportMemberComponent, cause: "unreadable", marked: true, blocking: true},
 		// RED on the pre-CHAOS-4394 baseline for the last two: prod evidence
 		// (sync_watermarks pinned nine days past CHAOS-4315, with the same
 		// artifact_unavailable/unreadable_archive artifacts recurring hourly)
 		// falsified the "transient download attempt" assumption that kept
 		// these two withholding. All three whole-artifact report_member
-		// causes now advance alike.
-		{githubTestsReportMemberComponent, githubTestsArtifactOversizedCause, false},
-		{githubTestsReportMemberComponent, githubTestsArtifactUnavailableCause, false},
-		{githubTestsReportMemberComponent, githubTestsUnreadableArchiveCause, false},
+		// causes now advance alike, GIVEN a durable marker (marked: true) --
+		// see the legacy-cursor test for the unmarked case.
+		{component: githubTestsReportMemberComponent, cause: githubTestsArtifactOversizedCause, marked: true, blocking: false},
+		{component: githubTestsReportMemberComponent, cause: githubTestsArtifactUnavailableCause, marked: true, blocking: false},
+		{component: githubTestsReportMemberComponent, cause: githubTestsUnreadableArchiveCause, marked: true, blocking: false},
 		// Positively observed item caps advance.
-		{githubTestsRunJobsComponent, githubTestsPerRunCapCause, false},
-		{githubTestsRunArtifactsComponent, githubTestsPerRunCapCause, false},
-		{githubTestsRunReportsComponent, githubTestsPerRunCapCause, false},
+		{component: githubTestsRunJobsComponent, cause: githubTestsPerRunCapCause, blocking: false},
+		{component: githubTestsRunArtifactsComponent, cause: githubTestsPerRunCapCause, blocking: false},
+		{component: githubTestsRunReportsComponent, cause: githubTestsPerRunCapCause, blocking: false},
 		// The SAME components withhold when the nested page budget was what
 		// stopped the walk, because the remainder was never observed.
-		{githubTestsRunJobsComponent, githubTestsPerRunPageBudgetCause, true},
-		{githubTestsRunArtifactsComponent, githubTestsPerRunPageBudgetCause, true},
+		{component: githubTestsRunJobsComponent, cause: githubTestsPerRunPageBudgetCause, blocking: true},
+		{component: githubTestsRunArtifactsComponent, cause: githubTestsPerRunPageBudgetCause, blocking: true},
 		// Fail-safe: anything not explicitly on the advancing allowlist
 		// withholds, so a future vocabulary entry forgotten there stalls
 		// loudly instead of silently advancing.
-		{githubTestsRunJobsComponent, "", true},
-		{githubTestsRunJobsComponent, "invented_cause", true},
-		{"invented_component", githubTestsPerRunCapCause, true},
+		{component: githubTestsRunJobsComponent, cause: "", blocking: true},
+		{component: githubTestsRunJobsComponent, cause: "invented_cause", blocking: true},
+		{component: "invented_component", cause: githubTestsPerRunCapCause, blocking: true},
 	}
 	for _, testCase := range cases {
+		var markers []GitHubTestsSkippedArtifact
+		if testCase.marked {
+			markers = []GitHubTestsSkippedArtifact{{RunID: "1", ArtifactID: "1", Cause: testCase.cause}}
+		}
 		got := githubTestsBlocksWatermark([]GitHubTestsIncomplete{
 			{Component: testCase.component, Cause: testCase.cause, Count: 1},
-		})
+		}, markers, 0)
 		if got != testCase.blocking {
 			t.Fatalf("%s/%s blocks watermark=%v, want %v",
 				testCase.component, testCase.cause, got, testCase.blocking)
@@ -298,7 +310,7 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
 		{Component: githubTestsRunInventoryComponent, Cause: githubTestsPageBudgetCause, Count: 1},
 	}
-	if !githubTestsBlocksWatermark(mixed) {
+	if !githubTestsBlocksWatermark(mixed, nil, 0) {
 		t.Fatal("a mixed slice containing an inventory observation must withhold the watermark")
 	}
 	// And the per-run page budget dominates its own component's item cap.
@@ -306,7 +318,7 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunPageBudgetCause, Count: 1},
 	}
-	if !githubTestsBlocksWatermark(sameComponent) {
+	if !githubTestsBlocksWatermark(sameComponent, nil, 0) {
 		t.Fatal("a page-budget observation must withhold even alongside an item-cap one")
 	}
 }

@@ -485,15 +485,13 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 		// recovered coverage -- the cap is deterministic -- and pins since_at
 		// forever, which is the CHAOS-4142 defect.
 		Watermark: func() *time.Time {
-			if githubTestsBlocksWatermark(incomplete) {
-				return nil
-			}
-			// Upgrade-boundary guard (codex review round 1, P1, CHAOS-4394):
-			// see githubTestsReportMemberSkippedWithoutDurableMarker's doc
-			// comment.
-			if githubTestsReportMemberSkippedWithoutDurableMarker(
-				incomplete, skippedArtifacts, cursor.SkippedArtifactsOverflow,
-			) {
+			// githubTestsBlocksWatermark is the single source of truth for
+			// this decision -- validateGitHubTestsCompletion (the production
+			// comparator) must reach the identical verdict from the same
+			// evidence, or a legacy cursor that correctly withholds here
+			// fails comparator validation instead of completing safely
+			// (codex review round 3, P1).
+			if githubTestsBlocksWatermark(incomplete, skippedArtifacts, cursor.SkippedArtifactsOverflow) {
 				return nil
 			}
 			return claim.BeforeAt

@@ -295,7 +295,25 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 // of the requested window, or of a run inside it, UNOBSERVED. Coverage honesty
 // is a SEPARATE claim: reports_complete stays false for any observation,
 // withholding or not.
-func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
+//
+// skippedArtifacts and overflow feed the upgrade-boundary guard folded in
+// here (codex review round 3, P1, CHAOS-4394): this function is the SINGLE
+// source of truth for the blocking decision, called identically from
+// githubTestsFinalMetadataBatch (which computes Watermark) and
+// validateGitHubTestsCompletion (which validates it). Round 1 first wrote
+// the guard as a SEPARATE check the Watermark closure applied on top of this
+// function's result -- but validateGitHubTestsCompletion still called only
+// the narrower, unaware function, so a legacy cursor that correctly withheld
+// (nil Watermark) failed comparator validation instead of completing safely:
+// the comparator's bidirectional invariant (githubTestsBlocksWatermark
+// false => Watermark MUST equal BeforeAt, see
+// TestGitHubTestsCompletionWatermarkInvariantIsBidirectional) rejected the
+// batch outright, turning an intended safe fallback into a hard failure.
+// Folding the guard in here, so both callers see the identical verdict, is
+// what makes the invariant hold again.
+func githubTestsBlocksWatermark(
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+) bool {
 	for _, observation := range incomplete {
 		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
 		if !advancing {
@@ -305,7 +323,28 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 			return true
 		}
 	}
-	return false
+	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow)
+}
+
+// githubTestsSkippedArtifactCause returns a marker's cause, recognizing a
+// PRE-CHAOS-4394 marker as artifact_oversized even though it decodes with
+// Cause == "" (codex review round 3, P2): that field did not exist before
+// this change, and oversized was the ONLY cause CHAOS-4315 ever wrote a
+// marker for, so an old marker's absence-of-Cause has exactly one possible
+// meaning. SizeBytes disambiguates it from a genuinely malformed/empty
+// marker: only the oversized branch (github_tests_chunked_route.go) ever
+// sets it, so its presence is unambiguous corroborating evidence, not a
+// guess. Treating a legacy oversized marker as unmarked would needlessly
+// withhold a unit whose oversized skip was ALWAYS durably identified, just
+// under a schema one field narrower.
+func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
+	if marker.Cause != "" {
+		return marker.Cause
+	}
+	if marker.SizeBytes > 0 {
+		return githubTestsArtifactOversizedCause
+	}
+	return ""
 }
 
 // githubTestsReportMemberSkippedWithoutDurableMarker guards a narrow
@@ -314,10 +353,10 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 // artifact_unavailable/unreadable_archive counts on Incomplete with NO
 // GitHubTestsSkippedArtifact marker, because the old binary only ever wrote
 // markers for artifact_oversized. If such a cursor resumes under THIS binary
-// and reaches "done", githubTestsBlocksWatermark alone would let it advance
-// on report_member evidence that has no run/artifact identity behind it --
-// exactly the backfill-targeting promise this change makes, broken for the
-// one unit that straddled the deploy.
+// and reaches "done", the plain per-(component,cause) allowlist alone would
+// let it advance on report_member evidence that has no run/artifact identity
+// behind it -- exactly the backfill-targeting promise this change makes,
+// broken for the one unit that straddled the deploy.
 //
 // The check is PER CAUSE, not aggregate presence (codex review round 2, P1
 // -- round 1's first version checked only "does SkippedArtifacts have ANY
@@ -344,7 +383,9 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 	}
 	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
 	for _, marker := range skippedArtifacts {
-		markedCauses[marker.Cause] = struct{}{}
+		if cause := githubTestsSkippedArtifactCause(marker); cause != "" {
+			markedCauses[cause] = struct{}{}
+		}
 	}
 	for _, observation := range incomplete {
 		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {

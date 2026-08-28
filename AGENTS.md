@@ -125,11 +125,20 @@ cluster, they do not apply to you:
   0115 and 0109 simultaneously with both stacks healthy.
 - **Compose heads-up before a rebuild.** `helm upgrade` touches one namespace,
   so no cross-domain heads-up is needed.
-- **The host-wide `local_validate` lock.** Not required for a gate pointed at
-  your own namespace's DSNs. It is still required for anything run against the
-  Compose stack.
+- **The host-wide `local_validate` lock — NOT YET.** This one is *not* exempt
+  today, and the difference matters. `ci/local_validate.sh`'s `main` calls
+  `acquire_lock` unconditionally (`ci/local_validate.sh:1408`), and its
+  ClickHouse provisioning still probes for the Compose Docker container
+  (`ci/local_validate.sh:901-940`). So a gate run pointed at a lane namespace
+  either still serializes behind the host lock or fails outright when Compose is
+  unavailable. **Keep taking the lock** until the script grows an explicit
+  remote-ClickHouse mode. Tracked as a follow-up on CHAOS-4428.
 - **"Never write to the shared Postgres/ClickHouse."** Write freely inside your
   namespace; the blast radius stops at its boundary.
+
+Everything above except the lock row has been executed: two namespaces held
+Alembic 0115 and 0109 at the same instant on one cluster with both stacks
+healthy. The lock row is the one claim this lane could not make good on.
 
 What does NOT change: never touch another lane's namespace, never
 `kiac down`/`delete`/prune a cluster you did not create, and never run

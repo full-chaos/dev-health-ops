@@ -102,21 +102,48 @@ Check the host first. Start with **one** node and add more only if
 bridge the result into the cluster's containerd:
 
 ```bash
-# ops runtime, from your worktree
+# 1. ops runtime, built from your worktree
 SHA=$(git rev-parse --verify HEAD)
 docker build --target api \
   --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${SHA:0:12}" \
   -f docker/Dockerfile -t "dev-health-ops-local:${SHA:0:12}" .
 
-# every image, one per line (zsh does NOT word-split an unquoted list)
+# 2. the complete set. The Go worker, web and ACR images are the ones the
+#    Compose stack already builds -- `docker images | grep dev-health` shows
+#    them. Substitute your own ops tag on the first line.
+cat > /tmp/image-list.txt <<EOF
+dev-health-ops-local:${SHA:0:12}
+ghcr.io/full-chaos/dev-health-web:0.1.0
+dev-health-acr:dev
+dev-health-go-worker:latest
+dev-health-go-scheduler:latest
+dev-health-go-reconciler:latest
+dev-health-go-stream-ingest:latest
+dev-health-go-stream-external:latest
+dev-health-go-stream-pagerduty:latest
+dev-health-go-worker-migrate:latest
+EOF
+
+# 3. bridge each one into apple/container's image store.
+#    One per line and `while read`, NOT `for i in $LIST` -- zsh does not
+#    word-split an unquoted variable, so a `for` loop passes the whole list
+#    as a single image name and every save fails.
 while IFS= read -r image; do
+  [ -z "$image" ] && continue
   docker save -o /tmp/img.tar "$image"
   container image load -i /tmp/img.tar
-done < image-list.txt
+  rm -f /tmp/img.tar
+done < /tmp/image-list.txt
 
+# 4. load them into every node's containerd
 cd acr && ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
-  deploy/local/kiac.sh load-image <image> [<image>...]
+  deploy/local/kiac.sh load-image $(tr '\n' ' ' < /tmp/image-list.txt)
 ```
+
+One image serves the four River worker groups (`heavy`, `ops`, `sync`,
+`sync-provider`); the three `stream-*` images are separate build targets. The
+`heavy` group is also the metrics compatibility bridge's only caller, so it must
+be present whenever `metricsApi.enabled` is true.
 
 Every workload then uses `imagePullPolicy: Never`. Registry images with
 multi-architecture manifest lists (`edoburu/pgbouncer`, `valkey/valkey`) fail
@@ -186,11 +213,143 @@ helm upgrade --install lane-a-acr <acr-worktree>/deploy/helm/acr \
   -n lane-a -f lane-a-acr.yaml --timeout 10m --wait
 ```
 
-The lane values must set `postgresql.enabled: false` and
-`clickhouse.enabled: false` and point every DSN at the namespace's own
-`trial-postgres` / `trial-clickhouse` Services, with
-`contextFabric.falkor.addr: trial-falkordb:6379`, `tls: false`,
-`allowInsecure: true`.
+Neither values file exists in the repository — write them per lane, because
+the release name is baked into the in-cluster DNS names. Complete non-secret
+templates for a lane named `lane-a` follow; substitute your ops image tag, and
+change every `lane-a` to your own lane name.
+
+`lane-a-ops.yaml`:
+
+```yaml
+image: { repository: dev-health-ops-local, tag: "<your-12-char-sha>", pullPolicy: Never }
+webImage: { repository: ghcr.io/full-chaos/dev-health-web, tag: "0.1.0", pullPolicy: Never }
+
+postgresql: { enabled: false }        # the namespace's trial-postgres instead
+clickhouse: { enabled: false }        # the namespace's trial-clickhouse instead
+valkey: { enabled: true, persistence: { enabled: false } }
+
+api: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
+metricsApi: { enabled: true, replicas: 1 }
+web: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
+billingEdge: { enabled: false }
+cronjobs: { dailyMetrics: { enabled: false }, syncGithub: { enabled: false } }
+networkPolicy: { enabled: false }
+ingress: { enabled: false }
+
+config:
+  LOG_LEVEL: "DEBUG"
+  OTEL_ENABLED: "false"              # there is no local collector; see below
+
+secrets:
+  create: true
+  data:
+    # Python connects DIRECTLY to Postgres, never through a transaction pooler.
+    DATABASE_URI: "postgresql+asyncpg://devhealth:acr-trial-dev@trial-postgres:5432/devhealth"
+    CLICKHOUSE_URI: "clickhouse://ch:acr-trial-dev@trial-clickhouse:8123/default"
+    REDIS_URL: "redis://lane-a-dev-health-valkey:6379/1"
+    VALKEY_URI: "redis://lane-a-dev-health-valkey:6379/1"
+    JWT_SECRET_KEY: "dev-jwt-secret-min-32-chars-change-me"
+    ADMIN_API_KEY: "lane-local-admin"
+    WORKER_OPERATIONAL_BRIDGE_TOKEN: "local-go-worker-bridge-token"
+    EMAIL_PROVIDER: "console"
+
+migrations:
+  hook:
+    enabled: true
+    events: [pre-install, pre-upgrade]
+    localBundledPostgres: false
+    secretData:
+      MIGRATION_DATABASE_URI: ""     # MUST stay empty -- see the note below
+      POSTGRES_URI: "postgresql://postgres:acr-trial-dev@trial-postgres:5432/devhealth"
+      CLICKHOUSE_URI: "clickhouse://ch:acr-trial-dev@trial-clickhouse:8123/default"
+
+goWorkers:
+  enabled: true
+  # Go speaks the NATIVE protocol on 9000, not Python's HTTP 8123. With an
+  # external ClickHouse this is REQUIRED or every worker fails readiness.
+  clickhouseURI: "clickhouse://ch:acr-trial-dev@trial-clickhouse:9000/default"
+  pgbouncer:
+    enabled: true
+    postgres: { host: "trial-postgres", port: 5432, database: "devhealth" }
+    secret:
+      create: true
+      data:
+        RIVER_DOMAIN_DATABASE_PASSWORD: "devhealth_domain"
+        RIVER_QUEUE_DATABASE_PASSWORD: "devhealth_queue"
+        RIVER_COORDINATOR_DATABASE_PASSWORD: "devhealth_coordinator"
+  # The chart's default group images are ghcr `:latest` tags this offline
+  # cluster cannot pull, so every group names a side-loaded image. Keep the
+  # chart's own queues/queueConcurrency for each group; only image and
+  # replicas change.
+  groups:
+    - { name: heavy,             image: dev-health-go-worker:latest,           queues: [investment, metrics, reports, workgraph], queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}, replicas: 1, terminationGracePeriodSeconds: 7260, autoscaling: {enabled: false}, bridgeUrl: "" }
+    - { name: ops,               image: dev-health-go-worker:latest,           queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync,              image: dev-health-go-worker:latest,           queues: [sync], queueConcurrency: {sync: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync-provider,     image: dev-health-go-worker:latest,           queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: reconciler,        image: dev-health-go-reconciler:latest,       replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: scheduler,         image: dev-health-go-scheduler:latest,        replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-external,   image: dev-health-go-stream-external:latest,  runtimeProfile: external,  replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-ingest,     image: dev-health-go-stream-ingest:latest,    runtimeProfile: ingest,    replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-pagerduty,  image: dev-health-go-stream-pagerduty:latest, runtimeProfile: pagerduty, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+```
+
+`lane-a-acr.yaml`:
+
+```yaml
+image: { reference: "dev-health-acr:dev", pullPolicy: Never }
+deployment: { replicaCount: 1, topologySpreadConstraints: [] }
+
+config:
+  environment: test
+  logLevel: debug
+  requireBackingStores: true
+  postgresConnectionKind: direct
+  # A real investigation takes 45-95 s, far past the 15 s default, and
+  # writeTimeout must stay >= requestTimeout + 5 s or config.Validate()
+  # refuses to start (CHAOS-4330).
+  requestTimeout: "490s"
+  writeTimeout: "500s"
+  deviceVerificationUrl: "http://localhost:3000/acr/device"
+
+credentials:
+  runtime:   { existingSecret: "acr-runtime" }
+  migration: { existingSecret: "acr-migration" }
+
+migration: { enabled: true }
+networkPolicy: { enabled: false }
+
+contextFabric:
+  lifecycleEnabled: true
+  readsEnabled: true
+  falkor: { addr: "trial-falkordb:6379", tls: false, allowInsecure: true }
+  embed:
+    baseURL: "https://api.openai.com/v1"
+    provider: "openai"
+    model: "text-embedding-3-large"
+    dimension: "3072"
+    timeout: "45s"
+    maxTransportRetries: "5"
+    existingSecret: "acr-model"
+  model:
+    enabled: true
+    provider: "openai"
+    baseURL: "https://api.openai.com/v1"   # omit it and every call is "unavailable"
+    model: "gpt-5-nano"
+    fallbackModel: "gpt-5.6-luna"
+    existingSecret: "acr-model"
+  falkordb: { enabled: false }             # trial-data.sh already runs one
+  projector:
+    enabled: true
+    replicaCount: 1
+    projectionEnabled: true
+    orgIds: ["<your-org-uuid>"]
+    pollInterval: "1s"
+    concurrency: 4
+```
+
+The ACR chart's values schema has no `httpRoute` key; adding one fails
+rendering. Create the three Secrets in step 7 **before** installing, since the
+migration hook resolves them at deploy time.
 
 Two things the values must NOT do:
 

@@ -1398,6 +1398,19 @@ async def _bulk_redrive_ambiguous_executions(
     changes nothing about that safety rule (a live 'executing' claim is
     real, still-in-flight work, never something to repair out from under),
     only how many rows one operator action can advance.
+
+    codex review (round 3): "ambiguous" means a progress-having failure MAY
+    have already written real output -- claim expiration alone is not
+    evidence retry is safe (see _repair_execution's own docstring history).
+    This function therefore NEVER auto-selects "confirm_succeeded" (which
+    would need per-row output_evidence a bulk call cannot supply); it only
+    ever authorizes "retry_safe", and review_evidence is a caller-supplied
+    string, never a hardcoded default -- callers (the internal HTTP
+    endpoint below, and the Go CLI's --review-evidence flag) MUST require
+    an operator to state what they actually verified before invoking this
+    at scale. A needless retry is not free: families whose readers do not
+    argMax/dedup by computed_at (file_hotspots/file_metrics_daily, which
+    SUMs raw rows) silently inflate their scores on a duplicate write.
     """
     if not run_ids:
         return {"repaired": 0, "skipped_claim_active": 0}

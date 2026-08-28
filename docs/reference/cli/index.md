@@ -1118,8 +1118,23 @@ WORKER_METRIC_REPAIR_TOKEN=<repair-token> \
 dev-health-workerctl metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
-  --to 2026-08-27
+  --to 2026-08-27 \
+  --review-evidence "confirmed via ClickHouse readback that testops_test/dora/cicd have zero rows for these repo+day scopes; safe to re-run"
 ```
+
+`--review-evidence` is **required**, with no default (codex review round 3):
+"ambiguous" means a progress-having failure MAY have already written real
+output, and claim expiration alone is not evidence retry is safe —
+`worker_metrics.py`'s single-execution `/repair` endpoint already requires a
+human to pick `retry_safe` vs `confirm_succeeded` per execution based on
+actual review, and this bulk path must not quietly bypass that by
+auto-authorizing every ambiguous row with a generic hardcoded string. State
+what you actually checked — e.g. the redriven families' zero-row counters,
+or a fresh ClickHouse readback confirming no output landed yet. This matters
+most for families whose readers do not `argMax`/dedup by `computed_at` (e.g.
+`file_hotspots`/`file_metrics_daily`, which `SUM`s raw rows) — a needless
+retry there silently inflates scores rather than landing a harmless
+duplicate.
 
 Scoped to one organization and an inclusive UTC calendar-day range, in two
 steps that MUST run in this order (codex review, round 1: publishing a
@@ -1132,7 +1147,12 @@ and re-terminalizes the partition `failed_permanent`, undoing the reset):
    required) for every `running` run in scope, applying the SAME
    `retry_safe` CAS the single-execution `/metric-executions/v1/{id}/repair`
    endpoint uses (CHAOS-4304) to every `ambiguous`/stuck-`executing`
-   compatibility-bridge ledger row underneath them.
+   compatibility-bridge ledger row underneath them, carrying your
+   `--review-evidence` text. This path only ever authorizes `retry_safe` —
+   never `confirm_succeeded`, which needs per-row `output_evidence` a bulk
+   call cannot supply; an operator who has confirmed a SPECIFIC execution's
+   output already landed correctly should use the single-execution
+   `/repair` endpoint with `confirm_succeeded` instead.
 2. **Partition redrive second.** Resets any `failed_permanent` partition
    back to `failed` (clearing `failure_reason`), then publishes a fresh
    `metrics.daily_partition` job for every `pending`/`failed` partition in

@@ -771,10 +771,29 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		org := flags.String("org", "", "organization id (uuid)")
 		from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
 		to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+		reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing retry for ambiguous/stuck-executing ledger rows in this window (e.g. \"confirmed zero output rows for the affected families via ClickHouse readback\") -- see CHAOS-4304 note below")
 		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
 			return writeError(stderr, "invalid_request")
 		}
 		if _, err := uuid.Parse(*org); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		// codex review round 3: "ambiguous" means a progress-having failure
+		// MAY have partially written real output -- claim expiration alone
+		// is explicitly not evidence retry is safe (worker_metrics.py's own
+		// _repair_execution requires a human to pick retry_safe vs
+		// confirm_succeeded per execution, based on actual review). A bulk
+		// path cannot inspect per-row evidence, so it stays restricted to
+		// retry_safe only (never confirm_succeeded, which needs per-row
+		// output_evidence) and REQUIRES the operator to state in their own
+		// words what they verified -- no default, no generic hardcoded
+		// string. This is friction by design: an operator who has not
+		// actually checked (e.g. the redriven families' zero-row counters,
+		// or a fresh ClickHouse readback showing no output yet for these
+		// partitions) should not be able to bulk-authorize retries for
+		// non-argMax-deduped families (file_hotspots is the known example
+		// where a retry-caused duplicate silently inflates scores).
+		if strings.TrimSpace(*reviewEvidence) == "" {
 			return writeError(stderr, "invalid_request")
 		}
 		fromDay, err := time.Parse("2006-01-02", *from)
@@ -812,7 +831,7 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
-		ledgerRepair, err := redriveDailyMetricsLedger(ctx, runIDs)
+		ledgerRepair, err := redriveDailyMetricsLedger(ctx, runIDs, *reviewEvidence)
 		if err != nil {
 			return writeError(stderr, "ledger_repair_unavailable")
 		}
@@ -826,13 +845,27 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		// partition is re-terminalized failed_permanent, undoing this same
 		// pass. Stop here and report it; the operator re-runs once those
 		// claims have settled (their own owning job will finish or expire).
-		if skipped, _ := ledgerRepair["skipped_claim_active"].(float64); skipped > 0 {
+		if ledgerRepairWasIncomplete(ledgerRepair) {
 			return writeResult(stdout, stderr, map[string]any{
 				"ledger_repair": ledgerRepair,
 				"partitions":    nil,
 				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
 			})
 		}
+		// codex review round 3 (residual, accepted risk): the ledger repair
+		// above takes a SNAPSHOT of run ids and repairs whatever is
+		// ambiguous/stuck-executing at that instant; a partition that
+		// starts a NEW execution and reaches ambiguous in the window
+		// between that call and this one is not covered by it, and this
+		// query will still pick it up (still 'failed'/'pending'/expired-
+		// lease at the moment it runs). Closing that window fully would
+		// need a single fenced transaction spanning both the Python ledger
+		// and the Go partition tables across a network call, which does
+		// not exist today. This is self-healing, not silent: a fresh
+		// ambiguous row here still surfaces as a 409/failed_permanent, and
+		// the NEXT invocation of this same command repairs it (the ledger
+		// repair step is idempotent by construction -- a row already
+		// 'retry_authorized' or 'succeeded' is simply not selected again).
 		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
 		if err != nil {
 			return writeServiceError(stderr, err)
@@ -864,14 +897,14 @@ const dailyMetricsRedriveMaxRunIDsPerRequest = 200
 // redriveDailyMetricsLedger repairs the compatibility-bridge ledger for
 // every run id, chunking into requests no larger than the bridge's own
 // max_length bound and summing the aggregate outcome across chunks.
-func redriveDailyMetricsLedger(ctx context.Context, runIDs []string) (map[string]any, error) {
+func redriveDailyMetricsLedger(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
 	if len(runIDs) == 0 {
-		return redriveDailyMetricsLedgerChunk(ctx, nil)
+		return redriveDailyMetricsLedgerChunk(ctx, nil, reviewEvidence)
 	}
 	totalRepaired, totalSkipped := 0, 0
 	for start := 0; start < len(runIDs); start += dailyMetricsRedriveMaxRunIDsPerRequest {
 		end := min(start+dailyMetricsRedriveMaxRunIDsPerRequest, len(runIDs))
-		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end])
+		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end], reviewEvidence)
 		if err != nil {
 			return nil, err
 		}
@@ -883,7 +916,20 @@ func redriveDailyMetricsLedger(ctx context.Context, runIDs []string) (map[string
 	return map[string]any{"repaired": totalRepaired, "skipped_claim_active": totalSkipped}, nil
 }
 
-func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string) (map[string]any, error) {
+// ledgerRepairWasIncomplete reports whether any ambiguous/stuck-executing
+// ledger row was left unrepaired (codex review round 2's abort gate),
+// pulled out of dispatchMetrics as its own function so it can be unit
+// tested directly against redriveDailyMetricsLedger's actual return shape --
+// a prior version asserted the wrong dynamic type here (round 3: it reads
+// plain Go ints, not the float64 a raw json.Unmarshal produces) and the
+// ", _" discard pattern silently swallowed the mismatch, always reading 0
+// and defeating the whole safety gate with no test catching it.
+func ledgerRepairWasIncomplete(ledgerRepair map[string]any) bool {
+	skipped, _ := ledgerRepair["skipped_claim_active"].(int)
+	return skipped > 0
+}
+
+func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
 	if len(runIDs) == 0 {
 		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
 	}
@@ -897,7 +943,7 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string) (map[s
 	}
 	body, err := json.Marshal(map[string]any{
 		"run_ids":         runIDs,
-		"review_evidence": "dev-health-workerctl metrics daily-redrive",
+		"review_evidence": reviewEvidence,
 	})
 	if err != nil {
 		return nil, err

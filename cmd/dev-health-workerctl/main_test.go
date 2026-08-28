@@ -538,7 +538,7 @@ func TestRedriveDailyMetricsLedgerCallsBulkRepairBeforePartitionRedrive(t *testi
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
 	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
 
-	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a", "run-b"})
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a", "run-b"}, "test evidence")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger: %v", err)
 	}
@@ -558,7 +558,7 @@ func TestRedriveDailyMetricsLedgerFailsClosedWithoutConfiguredToken(t *testing.T
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", "http://unused.invalid")
 	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "")
 
-	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}); err == nil {
+	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err == nil {
 		t.Fatal("redriveDailyMetricsLedger with no WORKER_METRIC_REPAIR_TOKEN = nil error, want fail-closed")
 	}
 }
@@ -567,7 +567,7 @@ func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDsWithoutAnyHTTPCall(t *testin
 	// No env configured at all -- must not even attempt a request when there
 	// is nothing to repair (an operator redrive over a window with no
 	// 'running' runs at all).
-	result, err := redriveDailyMetricsLedger(context.Background(), nil)
+	result, err := redriveDailyMetricsLedger(context.Background(), nil, "test evidence")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger(nil): %v", err)
 	}
@@ -602,7 +602,7 @@ func TestRedriveDailyMetricsLedgerChunksAtTheRequestLimitAndSumsOutcomes(t *test
 	for index := range runIDs {
 		runIDs[index] = fmt.Sprintf("run-%d", index)
 	}
-	result, err := redriveDailyMetricsLedger(context.Background(), runIDs)
+	result, err := redriveDailyMetricsLedger(context.Background(), runIDs, "test evidence")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger: %v", err)
 	}
@@ -611,5 +611,48 @@ func TestRedriveDailyMetricsLedgerChunksAtTheRequestLimitAndSumsOutcomes(t *test
 	}
 	if result["repaired"] != 2 {
 		t.Fatalf("summed repaired = %v, want 2 (one per chunk)", result["repaired"])
+	}
+}
+
+func TestLedgerRepairWasIncompleteReadsTheRealReturnType(t *testing.T) {
+	// codex review round 3 red-first proof: this must exercise the ACTUAL
+	// map redriveDailyMetricsLedger returns (Go ints), not a hand-built map
+	// with the wrong dynamic type -- that mismatch is exactly what let the
+	// round-2 safety gate silently no-op.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":1}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence")
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if !ledgerRepairWasIncomplete(result) {
+		t.Fatalf("ledgerRepairWasIncomplete(%v) = false, want true", result)
+	}
+
+	if ledgerRepairWasIncomplete(map[string]any{"repaired": 1, "skipped_claim_active": 0}) {
+		t.Fatal("ledgerRepairWasIncomplete with skipped=0 = true, want false")
+	}
+}
+
+func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
+	// codex review round 3: the bulk ledger repair must never auto-authorize
+	// retries with a generic hardcoded justification -- an operator must
+	// state what they verified. Exercised against dispatchMetrics directly
+	// (not just the HTTP helper) so a regression that re-adds a default or
+	// drops the flag is caught here, not just in redriveDailyMetricsLedger's
+	// own unit tests.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-08-01", "--to", "2026-08-01",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"invalid_request\"}}\n" {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

@@ -108,6 +108,17 @@ def validate_provider_family_claim(
     canonical "prs" claim must never carry "cicd"'s own flag, silently
     reaching provider execution before anything catches the contamination.
 
+    A non-canonical FOLD_CONTRIBUTING claim being "malformed" per this
+    function does NOT mean its caller must fail closed the same way an
+    ATOMIC_CANONICAL violation does. The capability matrix never marks an
+    alias ``plannable`` (CHAOS-4078 folds every alias onto its canonical
+    writer), so such a claim can never reach provider execution regardless --
+    dispatch's own ``routes_to_river`` check fails it closed downstream. A
+    caller that already knows this must not treat this function's False the
+    same as data corruption (see ``sync_units.dispatch_sync_run``'s per-unit
+    handling and CHAOS-3990, which pins graceful per-unit termination over
+    aborting a whole run's dispatch for one unroutable alias unit).
+
     ``strict_atomic`` remains a parameter so a caller can validate a claim
     without asserting atomicity (the capability contract still describes both
     shapes). Every production caller passes ``True``: CHAOS-4054 removed the

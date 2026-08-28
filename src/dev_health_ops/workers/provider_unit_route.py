@@ -225,6 +225,30 @@ def is_atomic_provider_family_direct_alias(provider: str, dataset: str) -> bool:
     )
 
 
+def is_fold_family_direct_alias(provider: str, dataset: str) -> bool:
+    """Whether a persisted claim is a non-canonical FOLD_CONTRIBUTING alias.
+
+    CHAOS-4078 gave PR-social (prs) and TestOps (cicd) a fold-family policy: a
+    unit persisted directly under one of their alias identities (``tests``,
+    ``pr-reviews``, ``pr-comments``) rather than the canonical writer is
+    ``validate_provider_family_claim``-malformed, but it is NOT the atomic
+    "reaches provider execution undetected" hazard that check exists to catch
+    -- the capability matrix never marks an alias ``plannable``, so
+    ``routes_to_river`` already fails it closed. Callers use this to route
+    such a claim through per-unit termination (CHAOS-3990) instead of
+    aborting a whole run's dispatch over one unroutable, pre-fold-legacy unit.
+    """
+
+    normalized_provider = provider.strip().lower()
+    normalized_dataset = dataset.strip().lower()
+    policy = provider_family_policy(normalized_provider, normalized_dataset)
+    return (
+        policy is not None
+        and policy.mode is FamilyExecutionMode.FOLD_CONTRIBUTING
+        and normalized_dataset != policy.canonical_dataset
+    )
+
+
 def is_github_work_item_family_dataset(provider: str, dataset: str) -> bool:
     """Whether a pair belongs to GitHub's planner-collapsed work-item family."""
 

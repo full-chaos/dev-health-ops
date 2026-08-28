@@ -3344,22 +3344,27 @@ def test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer(
     db_session, monkeypatch
 ):
     """An alias identity is route-ready but never plannable, so no runtime
-    owns it as a unit of its own -- CHAOS-4078 gave the PR-social family
-    (prs/pr-reviews/pr-comments) its own fold-family claim validation,
-    mirroring the work-item family's existing
-    ``test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer``:
-    a unit persisted directly under a non-canonical dataset_key is a
-    malformed claim (going forward the planner only ever mints units under
-    the canonical "prs"/"cicd" identity, folding alias-only selections onto
-    it) and is refused loudly, before any staging, rather than gracefully
-    terminalized as ``feature_disabled``.
+    owns it as a unit of its own. CHAOS-4078 gave the PR-social family
+    (prs/pr-reviews/pr-comments) its own fold-family claim validation, and a
+    unit persisted directly under a non-canonical dataset_key IS malformed
+    per ``validate_provider_family_claim`` (going forward the planner only
+    ever mints units under the canonical "prs"/"cicd" identity, folding
+    alias-only selections onto it).
 
-    This test used to assert the pre-CHAOS-4078 ``feature_disabled`` shape,
-    which predates both the fold and this stricter validation.
+    Unlike the work-item family's ATOMIC_CANONICAL equivalent
+    (``test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer``,
+    which DOES raise), a FOLD_CONTRIBUTING direct-alias claim does not abort
+    this run's dispatch: the capability matrix never marks an alias
+    plannable, so ``routes_to_river`` fails it closed regardless, and
+    CHAOS-3990 pins graceful per-unit termination for a stale or
+    pre-fold-legacy alias unit reaching dispatch over crashing the whole run
+    (see ``tests/test_disabled_alias_dispatch_strand.py``'s DISABLED_ALIASES
+    sweep, which exercises this exact provider/dataset shape). This test
+    keeps its CHAOS-4078 name and "never stages a writer" claim -- true under
+    either raise or terminate -- while asserting the terminate shape.
     """
 
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -3370,11 +3375,19 @@ def test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer(
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
 
-    with pytest.raises(WorkerJobRouteError, match="canonical"):
-        sync_units.dispatch_sync_run(str(run.id))
+    assert sync_units.dispatch_sync_run(str(run.id)) == {
+        "status": "noop",
+        "queued_units": 0,
+    }
 
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.PLANNED.value
+    assert unit.status == SyncRunUnitStatus.FAILED.value
+    assert unit.error == "feature_disabled"
+    assert unit.result["reason"] == (
+        "no worker can execute github/pr-comments: the provider capability "
+        "matrix does not mark it route-ready and plannable, so no shipped "
+        "writer owns it"
+    )
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 

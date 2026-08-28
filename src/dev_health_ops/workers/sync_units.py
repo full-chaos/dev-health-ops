@@ -124,6 +124,7 @@ from dev_health_ops.workers.provider_family_contract import (
 )
 from dev_health_ops.workers.provider_unit_route import (
     is_atomic_provider_family_direct_alias,
+    is_fold_family_direct_alias,
     routes_to_river,
 )
 from dev_health_ops.workers.rate_limit_defer import (
@@ -1017,9 +1018,24 @@ def dispatch_sync_run(sync_run_id: str) -> dict[str, Any]:
                 unit.processor_flags,
                 strict_atomic=True,
             ):
-                raise WorkerJobRouteError(
-                    "provider-unit claim requires the complete canonical family"
-                )
+                # A non-canonical FOLD_CONTRIBUTING alias (CHAOS-4078:
+                # github/tests, pr-reviews, pr-comments and their gitlab
+                # equivalents) is "malformed" per the family contract, but it
+                # is not the atomic "a corrupted claim could reach provider
+                # execution" hazard that error guards against -- the
+                # capability matrix never marks an alias plannable, so
+                # routes_to_river below fails it closed regardless. CHAOS-3990
+                # pins graceful per-unit termination for exactly this shape
+                # (a stale or pre-fold-legacy alias unit reaching dispatch);
+                # raising here would abort THIS ENTIRE RUN's dispatch over one
+                # unroutable unit, reintroducing the stranding class CHAOS-3990
+                # exists to prevent. Fall through to the unroutable path below.
+                if not is_fold_family_direct_alias(unit_provider, unit_dataset):
+                    raise WorkerJobRouteError(
+                        "provider-unit claim requires the complete canonical family"
+                    )
+                unroutable_units.append(unit)
+                continue
             # Routability is decided per pair, not per run, and the capability
             # matrix is its only source: a pair is executable when the matrix
             # marks it route-ready AND plannable (the canonical writer identity

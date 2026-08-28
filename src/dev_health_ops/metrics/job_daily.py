@@ -625,6 +625,19 @@ def _write_compounding_risk_for_day(
     return len(compounding_rows)
 
 
+def _try_parse_uuid(value: str) -> uuid.UUID | None:
+    """Parse ``value`` as a UUID, returning ``None`` instead of raising.
+
+    ``repo_names_by_id`` is keyed by ``uuid.UUID``, but callers here may only
+    have a repo id as ``str`` (e.g. ``TeamMetricsDailyRecord.repo_id``) --
+    this lets them probe the map without a try/except at every call site.
+    """
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _write_team_cognitive_load_for_day(
     *,
     sinks: list[Any],
@@ -667,13 +680,18 @@ def _write_team_cognitive_load_for_day(
             team_id = team_repo_ownership_map.get(repo_id_str)
             if not team_id:
                 # UserMetricsDailyRecord.repo_id is a uuid.UUID;
-                # TeamMetricsDailyRecord.repo_id is already a str -- only the
-                # former is a valid repo_names_by_id key.
-                full_name = (
-                    repo_names_by_id.get(row_repo_id)
+                # TeamMetricsDailyRecord.repo_id is already a str -- coerce
+                # to uuid.UUID either way, since repo_names_by_id is keyed
+                # by uuid.UUID regardless of which record type supplied the
+                # id (CHAOS-4365 codex R1: the str case was previously
+                # skipped entirely, silently disabling pattern-fallback
+                # resolution for every team_wellbeing-only repo).
+                repo_uuid = (
+                    row_repo_id
                     if isinstance(row_repo_id, uuid.UUID)
-                    else None
+                    else _try_parse_uuid(repo_id_str)
                 )
+                full_name = repo_names_by_id.get(repo_uuid) if repo_uuid else None
                 if full_name:
                     team_id, _ = repo_team_resolver.resolve(full_name)
             if team_id:
@@ -1671,7 +1689,7 @@ async def run_daily_metrics_job(
             repo_team_resolver=repo_team_resolver,
         )
 
-        _write_team_cognitive_load_for_day(
+        team_cognitive_load_count = _write_team_cognitive_load_for_day(
             sinks=sinks,
             primary_sink=primary_sink,
             day=d,
@@ -1681,6 +1699,14 @@ async def run_daily_metrics_job(
             computed_at=computed_at,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
+        )
+        # CHAOS-4365 codex R1: a resolver failure inside
+        # _write_team_cognitive_load_for_day degrades to zero rows (never
+        # raises -- same CHAOS-4246 contract as the families above), but was
+        # otherwise invisible. range(n) is falsy/truthy exactly like a rows
+        # list, so this reuses the same zero-rows visibility path.
+        _note_family_zero_rows(
+            "team_cognitive_load", range(team_cognitive_load_count), day=d
         )
 
         # CHAOS-4329: observe distinct repo_id fan-out per team_id AFTER the

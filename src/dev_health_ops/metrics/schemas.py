@@ -325,7 +325,6 @@ class TeamCognitiveLoadDailyRecord:
     membership resolution.
     """
 
-    org_id: str
     team_id: str
     day: date
     pr_interruption_load: float
@@ -345,6 +344,7 @@ class TeamCognitiveLoadDailyRecord:
     #: into this team on this day.
     sample_author_count: int
     computed_at: datetime
+    org_id: str = ""
 
 
 @dataclass(frozen=True)

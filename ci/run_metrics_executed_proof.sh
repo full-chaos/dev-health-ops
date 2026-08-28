@@ -437,17 +437,21 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # (fixtures/runner.py run_fixtures_generation sets each team's repo_patterns
 # from its real repo<->team ownership assignment -- CHAOS-4276), or every
 # commit resolves to the less-meaningful "unassigned" bucket instead of
-# actually exercising repo-pattern resolution. complexity is the one
-# remaining exclusion: it needs persisted file CONTENTS
-# (git_files.contents), which fixtures generate does not write by default --
-# asserting it here would fail forever, for a reason unrelated to CHAOS-4263,
-# even after everything else merges.
+# actually exercising repo-pattern resolution. team_cognitive_load
+# (CHAOS-4365 item 2) is derived entirely from this same run's
+# user_metrics_daily + team_wellbeing rows plus team_repo_ownership (also
+# seeded by the same fixtures call), so it is causally satisfied by the
+# exact same seeding as team_wellbeing -- no separate fixture path needed.
+# complexity is the one remaining exclusion: it needs persisted file
+# CONTENTS (git_files.contents), which fixtures generate does not write by
+# default -- asserting it here would fail forever, for a reason unrelated to
+# CHAOS-4263, even after everything else merges.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing \
+    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 

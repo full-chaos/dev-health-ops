@@ -25,7 +25,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) != 23 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 24 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	// The port enum is closed: "pending" (still Python-only), "next_core"

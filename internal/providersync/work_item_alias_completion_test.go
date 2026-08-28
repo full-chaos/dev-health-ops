@@ -293,6 +293,23 @@ func TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases(t *testin
 			flags:   map[string]bool{"family_dataset_tests": true},
 			want:    []string{"commits"},
 		},
+		{
+			// The atomic work-items family is deliberately NOT expanded here,
+			// unlike prs/cicd: buildWorkItemFamilyUnit stamps all five family
+			// flags true unconditionally for every claim (never a subset), so
+			// expanding would record one claim as five counter increments --
+			// silently 5x-inflating the highest-volume sync path's metrics.
+			name:    "the atomic work-items family is never expanded, even with every flag true",
+			dataset: "work-items",
+			flags: map[string]bool{
+				"family_dataset_work_items":         true,
+				"family_dataset_work_item_labels":   true,
+				"family_dataset_work_item_projects": true,
+				"family_dataset_work_item_history":  true,
+				"family_dataset_work_item_comments": true,
+			},
+			want: []string{"work-items"},
+		},
 	}
 	for _, tc := range tests {
 		tc := tc

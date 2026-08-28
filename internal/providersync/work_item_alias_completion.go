@@ -31,11 +31,21 @@ var foldFamilyMembers = map[string][]string{
 
 // metricDatasetKeys returns the effective dataset key(s) a claim represents
 // for PER-DATASET telemetry (CHAOS-4078), expanding a folded canonical claim
-// ("prs"/"cicd", or the atomic "work-items" family) back to whichever
-// family_dataset_* flags are set. Without this, dev_health_provider_unit_
-// claimed_total/_failed_total would record every folded unit under its
-// canonical identity only, hiding exactly the per-alias-dataset flatline
-// (pr-comments, pr-reviews, tests) CHAOS-4125's own forensics needed to see.
+// ("prs"/"cicd") back to whichever family_dataset_* flags are set. Without
+// this, dev_health_provider_unit_claimed_total/_failed_total would record
+// every folded unit under its canonical identity only, hiding exactly the
+// per-alias-dataset flatline (pr-comments, pr-reviews, tests) CHAOS-4125's
+// own forensics needed to see.
+//
+// Deliberately scoped to the FOLD_CONTRIBUTING families only (prs/cicd),
+// NOT the atomic "work-items" family: work-items claims always carry all
+// five family flags true unconditionally (buildWorkItemFamilyUnit stamps
+// them for every provider, never a subset), so expanding there would
+// record one claim as five counter increments -- silently 5x-inflating
+// the highest-volume sync path's metrics, the exact kind of telemetry
+// blind spot this PR exists to remove. One claim must record as one
+// increment; only a genuinely one-of-several-members fold (prs/cicd)
+// warrants attributing to more than the dataset actually persisted.
 //
 // Deliberately best-effort and never errors: telemetry attribution must not
 // gate on claim validity, which Validate()/providerfamilycontract.ValidateClaim
@@ -54,18 +64,6 @@ func metricDatasetKeys(dataset string, processorFlags map[string]bool) []string 
 			return keys
 		}
 		return []string{dataset}
-	}
-	if dataset == "work-items" {
-		familyDatasets := workitemcontract.FamilyDatasets()
-		keys := make([]string, 0, len(familyDatasets))
-		for _, familyDataset := range familyDatasets {
-			if processorFlags[workItemFamilyFlagForDataset(familyDataset)] {
-				keys = append(keys, familyDataset)
-			}
-		}
-		if len(keys) > 0 {
-			return keys
-		}
 	}
 	return []string{dataset}
 }

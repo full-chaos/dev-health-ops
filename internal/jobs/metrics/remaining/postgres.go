@@ -611,6 +611,19 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 // a generation/scope_key comparison, because the two triggers' scope_key
 // FORMATS also differ (post-sync: the full serialized scope; fixed
 // schedule: the bare day string) -- day is the one field both agree on.
+//
+// CHAOS-4384 (codex round 2): the fixed schedule's own dora binding fires
+// early in its target day too (its generation carries a wall-clock
+// timestamp, e.g. "fixed-schedule:dora_daily_fanout:2026-08-24T02:15:00Z",
+// for that same calendar day) -- so this preflight can see EXACTLY the same
+// open-day 0-row shape StartRunTx's dora block guards against. Without the
+// same exception here, a 0-row post-sync partition for today would make this
+// preflight report "covered" and skip the fixed-schedule producer entirely,
+// silently defeating the self-healing this schedule exists for: if the
+// post-sync delivery that would have recomputed the day never arrives (the
+// case a fixed-schedule catch-up is FOR), the day stays frozen at 0 anyway.
+// On a closed day, any succeeded partition -- 0 rows or not -- still counts:
+// a genuinely quiet closed day is real, terminal coverage.
 func (store *PostgresStore) HasSucceededPartition(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
 ) (bool, error) {
@@ -618,6 +631,7 @@ func (store *PostgresStore) HasSucceededPartition(
 		family == "" || day == "" {
 		return false, ErrUnavailable
 	}
+	dayClosed := !dayIsOpen(day, store.now())
 	// run.status = 'succeeded', not just partition.status -- codex round 3:
 	// CompletePartition and CancelRun are separate statements, so a
 	// partition already marked succeeded whose run was (or is
@@ -632,7 +646,8 @@ SELECT EXISTS (
       AND run.status = 'succeeded'
       AND partition.status = 'succeeded'
       AND partition.scope->>'day' = $3
-)`, organizationID, family, day).Scan(&exists)
+      AND ($4 OR NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false))
+)`, organizationID, family, day, dayClosed).Scan(&exists)
 	if err != nil {
 		return false, ErrUnavailable
 	}

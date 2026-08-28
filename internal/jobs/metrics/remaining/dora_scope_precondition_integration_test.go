@@ -1065,6 +1065,95 @@ func TestLoadRunCoveringDayToleratesNullOutputEvidence(t *testing.T) {
 	}
 }
 
+// TestHasSucceededPartitionAppliesTheSameOpenDayZeroRowExceptionAsStartRunTx
+// is the codex round-2 fix. The fixed schedule's own dora binding fires
+// early in ITS target day too (its generation carries a wall-clock
+// timestamp for that same calendar day, mirroring
+// TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay's
+// fixed-schedule generation shape) -- so HasSucceededPartition, the
+// preflight the fixed-schedule producer checks BEFORE ever calling
+// StartRunTx (internal/scheduler/fixed/producers.go's SkipIfCovered path),
+// can see exactly the same 0-row-on-an-open-day shape StartRunTx's dora
+// block guards against. Without the same exception here, a 0-row post-sync
+// partition for today makes this preflight report "covered" and skip the
+// fixed-schedule producer entirely -- defeating the self-healing that
+// schedule exists for: if the post-sync delivery that would have recomputed
+// the day never arrives, the day stays frozen at 0 anyway.
+func TestHasSucceededPartitionAppliesTheSameOpenDayZeroRowExceptionAsStartRunTx(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004384"
+	today := time.Now().UTC().Format("2006-01-02")
+	scope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
+
+	// Post-sync's earliest trigger of the day: completes with 0 rows,
+	// legitimately, before any deployments exist yet.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:first-sync-of-day",
+		ScopeKey:       "post-sync-scope-1",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("StartRunTx: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(run.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+partitionID+":rows_written=0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixed-schedule producer's own preflight, exactly as
+	// internal/scheduler/fixed/producers.go's startOrganization calls it,
+	// for the same org+family+day.
+	checkTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = checkTx.Rollback(ctx) }()
+	covered, err := store.HasSucceededPartition(ctx, checkTx, orgID, "dora", today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if covered {
+		t.Fatal(
+			"HasSucceededPartition reported the open day as covered by a 0-row partition -- " +
+				"this would make the fixed-schedule producer skip recomputing it entirely, " +
+				"silently defeating the self-healing catch-up this schedule exists for",
+		)
+	}
+}
+
 type nopPartitionPublisher struct{}
 
 func (nopPartitionPublisher) PublishPartitionTx(

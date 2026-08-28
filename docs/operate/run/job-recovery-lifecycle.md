@@ -251,8 +251,11 @@ nothing re-enqueues work for that run on its own — a fresh
 `metrics.daily_dispatch` run of `Dispatcher.Work` still calls the SAME
 `PublishPartition` with the SAME `metrics.daily_partition:<id>` outbox dedupe
 key, so it silently no-ops. `dev-health-workerctl metrics daily-redrive --org
-<uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>` closes this for one org+day
-window in two ordered steps: it FIRST calls the Python compatibility-bridge's
+<uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<what you
+verified>"` closes this for one org+day window in two ordered steps (
+`--review-evidence` is required, with no default — see
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for why). It FIRST calls the Python compatibility-bridge's
 bulk ledger repair (`POST /internal/worker/daily-metrics/v1/redrive`,
 `worker_metrics._bulk_redrive_ambiguous_executions`) for every `running` run
 in scope, authorizing retry for any `ambiguous`/stuck-`executing`

@@ -20,11 +20,34 @@ const (
 
 // GitLabTeamCatalogRouteHandler owns the provider-only team/project-ownership/
 // membership/native-project catalog walk that ports
-// src/dev_health_ops/workers/team_autoimport_gitlab.py. Like
-// LinearReferenceCatalogRouteHandler it is deliberately NOT a
-// CompleteRouteHandler -- production wiring (retiring the Python bridge call)
-// is CHAOS-4198's delete-child ticket, not this one.
-type GitLabTeamCatalogRouteHandler struct{}
+// src/dev_health_ops/workers/team_autoimport_gitlab.py. It is claim-free
+// (CHAOS-4431 ruling, team-lead 2026-08-28, option (c)): team/member/project
+// reference discovery runs once per sync run per provider, never as a
+// claimed provider-unit, so this takes a TeamCatalogReference instead of a
+// Claim and carries no lease. GitLabTeamCatalogCollector below adapts this
+// walk (plus GitLabTeamCatalogClickHouseEffects, the writer) to the shared
+// TeamCatalogCollector seam every native provider implements.
+type GitLabTeamCatalogRouteHandler struct {
+	// GroupPathResolver is consulted ONLY when credential.Config carries no
+	// group_path/group/owner key (GitLab's credential Config is empty in
+	// practice today -- the group lives in sync_configurations.sync_options,
+	// keyed by this sync run's own integration, exactly like Python's
+	// _gitlab_group reads credentials first then falls back to
+	// scope.sync_options). Left nil, a credential-less lookup fails closed.
+	GroupPathResolver GitLabGroupPathResolver
+}
+
+// GitLabGroupPathResolver resolves the GitLab group full_path this sync
+// run's own integration is configured against. The concrete implementation
+// (a small sync_configurations.sync_options read keyed by
+// ref.IntegrationID, mirroring team_catalog_clients.go's existing
+// resolveTeamCatalogIntegration join) lives at the cmd/dev-health-worker
+// wiring layer alongside teamCatalogClientResolver, not in this package --
+// this collector stays free of a *pgxpool.Pool dependency the same way
+// LinearTeamCatalogCollector never needed one.
+type GitLabGroupPathResolver interface {
+	ResolveGroupPath(ctx context.Context, ref TeamCatalogReference) (string, error)
+}
 
 type GitLabTeamCatalogEvidence struct {
 	Provider  string `json:"provider"`
@@ -51,79 +74,65 @@ type GitLabTeamCatalogBatch struct {
 	Evidence GitLabTeamCatalogEvidence `json:"evidence"`
 }
 
-// GitLabTeamCatalogSelection is the CHAOS-4323 three-way selection
-// (auto_import_teams/auto_import_projects/auto_import_members), read off the
-// claim the same way native_post_sync.go reads sync_options for the dispatch
-// gate. All three default false (fail closed, matching populate()'s
-// `if not (want_teams or want_projects or want_members): return zero`).
-type GitLabTeamCatalogSelection struct {
-	Teams    bool
-	Projects bool
-	Members  bool
-}
-
-func gitlabTeamCatalogSelectionFromClaim(claim Claim) GitLabTeamCatalogSelection {
-	options := claim.DatasetOptions
-	return GitLabTeamCatalogSelection{
-		Teams:    gitlabTeamCatalogBoolOption(options, "auto_import_teams"),
-		Projects: gitlabTeamCatalogBoolOption(options, "auto_import_projects"),
-		Members:  gitlabTeamCatalogBoolOption(options, "auto_import_members"),
-	}
-}
-
-func gitlabTeamCatalogBoolOption(options map[string]any, key string) bool {
-	if options == nil {
-		return false
-	}
-	value, ok := options[key].(bool)
-	return ok && value
-}
-
-// gitlabTeamCatalogGroupPath mirrors team_autoimport_gitlab._gitlab_group:
-// credential config first (group_path/group/owner), then dataset options.
-func gitlabTeamCatalogGroupPath(credential providerfoundation.Credential, claim Claim) string {
+// gitlabTeamCatalogGroupPath mirrors team_autoimport_gitlab._gitlab_group's
+// credential-first lookup. The sync_options fallback that function also has
+// is the caller's job here (GroupPathResolver), not this package's -- see
+// its doc comment.
+func gitlabTeamCatalogGroupPath(credential providerfoundation.Credential) string {
 	for _, key := range []string{"group_path", "group", "owner"} {
 		if value := strings.TrimSpace(credential.Config[key]); value != "" {
 			return value
 		}
 	}
-	for _, key := range []string{"group_path", "group", "owner"} {
-		if value, ok := claim.DatasetOptions[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
 	return ""
+}
+
+func (handler GitLabTeamCatalogRouteHandler) resolveGroupPath(
+	ctx context.Context, ref TeamCatalogReference, credential providerfoundation.Credential,
+) (string, error) {
+	if groupPath := gitlabTeamCatalogGroupPath(credential); groupPath != "" {
+		return groupPath, nil
+	}
+	if handler.GroupPathResolver == nil {
+		return "", ErrInvalidConfiguration
+	}
+	groupPath, err := handler.GroupPathResolver.ResolveGroupPath(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	groupPath = strings.TrimSpace(groupPath)
+	if groupPath == "" {
+		return "", ErrInvalidConfiguration
+	}
+	return groupPath, nil
 }
 
 func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	ctx context.Context,
-	claim Claim,
+	ref TeamCatalogReference,
 	credential providerfoundation.Credential,
 	client *providerfoundation.HTTPClient,
+	selections TeamCatalogSelections,
 	normalizedAt time.Time,
 ) (GitLabTeamCatalogBatch, error) {
-	// claim.Validate() requires a registered (provider, dataset) capability
-	// (Capability(unit.Provider, unit.Dataset) must resolve). There is no
-	// dedicated "teams" dataset in the shared Go/Python provider-matrix
-	// contract -- team-autoimport has never been a sync_run_units dataset in
-	// Python, it is dispatched through the separate sync.team_autoimport job
-	// kind -- so, exactly like LinearReferenceCatalogRouteHandler rides the
-	// already-registered "work-items" claim instead of minting a new one,
-	// this collector is invoked under the gitlab/work-items claim.
-	if ctx == nil || claim.Validate() != nil || claim.Provider != gitlabTeamCatalogProvider ||
-		claim.Dataset != "work-items" || credential.Provider != gitlabTeamCatalogProvider ||
+	if ctx == nil || ref.validate() != nil || credential.Provider != gitlabTeamCatalogProvider ||
 		client == nil || client.Provider != gitlabTeamCatalogProvider || client.BaseURL == nil ||
 		client.Doer == nil || client.Lease == nil || normalizedAt.IsZero() {
 		return GitLabTeamCatalogBatch{}, ErrInvalidConfiguration
 	}
-	selection := gitlabTeamCatalogSelectionFromClaim(claim)
-	if !selection.Teams && !selection.Projects && !selection.Members {
+	if !selections.Any() {
 		return GitLabTeamCatalogBatch{Result: GitLabTeamCatalogResult{Complete: true}}, nil
 	}
-	groupPath := gitlabTeamCatalogGroupPath(credential, claim)
-	if groupPath == "" {
-		return GitLabTeamCatalogBatch{}, ErrInvalidConfiguration
+	groupPath, err := handler.resolveGroupPath(ctx, ref, credential)
+	if err != nil {
+		return GitLabTeamCatalogBatch{}, err
 	}
+	// orgID is used for every normalized row below; a synthetic, lease-free
+	// Claim carries it through the existing validate*Row helpers (which only
+	// ever read claim.Provider/claim.OrgID, never claim.Validate()) rather
+	// than duplicating those checks against a bare string -- the same
+	// adaptation LinearTeamCatalogCollector's sibling route uses.
+	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	evidence := GitLabTeamCatalogEvidence{Provider: gitlabTeamCatalogProvider}
 
@@ -195,11 +204,11 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			projectKeys = append(projectKeys, path)
 		}
 
-		if selection.Teams {
-			rows.Teams = append(rows.Teams, normalizeGitLabTeamRow(claim.OrgID, group, projectKeys, normalizedAt))
+		if selections.Teams {
+			rows.Teams = append(rows.Teams, normalizeGitLabTeamRow(ref.OrgID, group, projectKeys, normalizedAt))
 		}
 
-		if selection.Projects {
+		if selections.Projects {
 			teamID := gitlabTeamID(group.FullPath)
 			specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
 			for _, path := range projectKeys {
@@ -208,11 +217,11 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				seenOwnership[key] = true
-				rows.Ownership = append(rows.Ownership, normalizeGitLabOwnershipRow(claim.OrgID, teamID, path, specificity, normalizedAt))
+				rows.Ownership = append(rows.Ownership, normalizeGitLabOwnershipRow(ref.OrgID, teamID, path, specificity, normalizedAt))
 			}
 		}
 
-		if selection.Members {
+		if selections.Members {
 			teamID := gitlabTeamID(group.FullPath)
 			memberPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
@@ -230,7 +239,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				if err := json.Unmarshal(raw, &member); err != nil {
 					return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
 				}
-				row, memberID, ok := normalizeGitLabMembershipRow(claim.OrgID, teamID, member, normalizedAt)
+				row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, normalizedAt)
 				if !ok {
 					continue
 				}
@@ -244,7 +253,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	if selection.Members {
+	if selections.Members {
 		roster := gitlabRosterFromMemberships(rows.Memberships)
 		for i := range rows.Teams {
 			rows.Teams[i].Members = roster[rows.Teams[i].ID]
@@ -252,7 +261,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	if selection.Projects {
+	if selections.Projects {
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path: rootPath + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
@@ -270,7 +279,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			if err := json.Unmarshal(raw, &project); err != nil {
 				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
-			row, ok := normalizeGitLabProjectCatalogRow(claim.OrgID, project, normalizedAt)
+			row, ok := normalizeGitLabProjectCatalogRow(ref.OrgID, project, normalizedAt)
 			if !ok {
 				continue
 			}
@@ -300,7 +309,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 	}
 
-	effects, err := BuildGitLabTeamCatalogEffects(rows, selection.Teams, selection.Projects, selection.Members)
+	effects, err := BuildGitLabTeamCatalogEffects(rows, selections.Teams, selections.Projects, selections.Members)
 	if err != nil {
 		return GitLabTeamCatalogBatch{}, err
 	}
@@ -330,3 +339,75 @@ func distinctGitLabMembershipMembers(rows []gitlabTeamCatalogMembershipRow) map[
 	}
 	return seen
 }
+
+// GitLabTeamCatalogCollector adapts GitLabTeamCatalogRouteHandler (the
+// collection walk) and GitLabTeamCatalogClickHouseEffects (the write) to
+// the shared, claim-free TeamCatalogCollector seam (CHAOS-4431, team-lead
+// ruling 2026-08-28, option (c)) -- the same shape
+// LinearTeamCatalogCollector uses. Unlike Linear's GraphQL walk (one round
+// trip covers teams+members+projects together), GitLab's REST walk pays a
+// real per-surface request cost, so Handler.CollectTeamCatalog gates
+// COLLECTION itself by selections (skips the /members call entirely when
+// Members is off), not just the write below.
+type GitLabTeamCatalogCollector struct {
+	Handler GitLabTeamCatalogRouteHandler
+	Sink    GitLabTeamCatalogClickHouseEffects
+}
+
+func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
+	ctx context.Context,
+	ref TeamCatalogReference,
+	credential providerfoundation.Credential,
+	client *providerfoundation.HTTPClient,
+	selections TeamCatalogSelections,
+	normalizedAt time.Time,
+) (TeamCatalogResult, error) {
+	if ctx == nil || !selections.Any() {
+		return TeamCatalogResult{}, nil
+	}
+	if collector.Sink.Conn == nil || collector.Sink.Lease == nil {
+		return TeamCatalogResult{}, ErrInvalidConfiguration
+	}
+	batch, err := collector.Handler.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)
+	if err != nil {
+		return TeamCatalogResult{}, err
+	}
+	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
+	result := TeamCatalogResult{}
+	if selections.Teams && batch.Effects.Teams != nil {
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Teams); err != nil {
+			return result, err
+		}
+		result.TeamsWritten = batch.Result.TeamsImported
+		result.TeamKeys = make([]string, 0, len(batch.Rows.Teams))
+		for _, team := range batch.Rows.Teams {
+			if team.NativeTeamKey != nil && *team.NativeTeamKey != "" {
+				result.TeamKeys = append(result.TeamKeys, *team.NativeTeamKey)
+			}
+		}
+	}
+	if selections.Members && batch.Effects.Memberships != nil {
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Memberships); err != nil {
+			return result, err
+		}
+		result.MembershipsWritten = batch.Result.TeamMembershipsImported
+		result.MembersWritten = batch.Result.MembersImported
+	}
+	if selections.Projects {
+		if batch.Effects.Ownership != nil {
+			if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Ownership); err != nil {
+				return result, err
+			}
+			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
+		}
+		if batch.Effects.Projects != nil {
+			if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Projects); err != nil {
+				return result, err
+			}
+			result.ProjectsWritten = batch.Result.NativeProjectsImported
+		}
+	}
+	return result, nil
+}
+
+var _ TeamCatalogCollector = GitLabTeamCatalogCollector{}

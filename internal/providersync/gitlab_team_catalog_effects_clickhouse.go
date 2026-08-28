@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -145,9 +146,20 @@ func (sink GitLabTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context
 	}
 }
 
+// validateRequest deliberately does NOT call claim.Validate(): CHAOS-4431
+// (team-lead ruling, 2026-08-28, option (c)) made the caller claim-free --
+// this sink is written to from a once-per-sync-run reference-catalog walk
+// with no lease or claimed provider-unit behind it, not from inside a
+// dataset route's Collect(). claim.Validate() requires a live lease and a
+// registered (provider, dataset) capability, neither of which exists here;
+// the only properties this write path still needs are "this really is
+// gitlab" and "this really is this org" (every row below also re-checks
+// OrgID itself). Mirrors linear_reference_catalog_effects_clickhouse.go's
+// identical adaptation.
 func (sink GitLabTeamCatalogClickHouseEffects) validateRequest(ctx context.Context, claim Claim, effect EffectBatch) error {
-	if ctx == nil || sink.Lease == nil || sink.Conn == nil || claim.Validate() != nil ||
-		claim.Provider != gitlabTeamCatalogProvider || effect.Recovery != EffectReadbackRequired ||
+	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
+		claim.Provider != gitlabTeamCatalogProvider || strings.TrimSpace(claim.OrgID) == "" ||
+		effect.Recovery != EffectReadbackRequired ||
 		!validDigest(effect.ContentDigest) || effect.PayloadBytes < 0 || !gitlabTeamCatalogDestination(effect.Destination) {
 		return ErrInvalidConfiguration
 	}

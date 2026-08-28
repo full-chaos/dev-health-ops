@@ -4,6 +4,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -14,15 +15,41 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// gitlabLiveGroupPathResolver ports resolveTeamCatalogIntegration/the
+// sync_options read team_catalog_clients.go's teamCatalogSelectionsResolver
+// already does (cmd/dev-health-worker), scoped to just the one key GitLab
+// needs. Only wired up in THIS manual proof -- production wiring for
+// GroupPathResolver is the cmd/dev-health-worker layer's job once the
+// group_path threading question (asked of team-lead) is settled.
+type gitlabLiveGroupPathResolver struct{ pool *pgxpool.Pool }
+
+func (resolver gitlabLiveGroupPathResolver) ResolveGroupPath(ctx context.Context, ref TeamCatalogReference) (string, error) {
+	var groupPath string
+	err := resolver.pool.QueryRow(ctx, `
+SELECT COALESCE(sync_options->>'owner', sync_options->>'group', sync_options->>'group_path', '')
+FROM public.sync_configurations
+WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
+ORDER BY created_at, id
+LIMIT 1`, ref.OrgID, ref.IntegrationID).Scan(&groupPath)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrInvalidConfiguration
+	}
+	if err != nil {
+		return "", err
+	}
+	return groupPath, nil
+}
+
 // TestGitLabTeamCatalogAgainstRealLocalStack is a ONE-OFF, manually-invoked
-// proof (CHAOS-4432) that GitLabTeamCatalogRouteHandler + GitLabTeamCatalog
-// ClickHouseEffects produce the correct rows against the REAL local shared
-// stack: real GitLab credential (decrypted via the same Fernet path
-// production uses), real GitLab API, real ClickHouse.
+// proof (CHAOS-4432) that GitLabTeamCatalogCollector (the claim-free
+// TeamCatalogCollector adapter, CHAOS-4431 shape) produces the correct rows
+// against the REAL local shared stack: real GitLab credential (decrypted
+// via the same Fernet path production uses), real GitLab API, real
+// ClickHouse.
 //
 // Deliberately NOT part of any normal test run (build tag manuallive, never
 // passed to go test by ci/check_go.sh or CI). Never prints a secret value --
@@ -57,20 +84,24 @@ func TestGitLabTeamCatalogAgainstRealLocalStack(t *testing.T) {
 	}
 	defer pool.Close()
 
-	var integrationID, credentialID, groupPath string
+	var integrationID, credentialID, syncRunID string
 	if err := pool.QueryRow(ctx, `
-SELECT i.id::text, i.credential_id::text,
-       COALESCE(sc.sync_options->>'owner', sc.sync_options->>'group', sc.sync_options->>'group_path', '')
+SELECT i.id::text, i.credential_id::text, sr.id::text
 FROM integrations i
-JOIN sync_configurations sc ON sc.integration_id = i.id AND sc.parent_id IS NULL
+LEFT JOIN sync_runs sr ON sr.integration_id = i.id AND sr.org_id = i.org_id
 WHERE i.org_id = $1 AND i.provider = 'gitlab' AND i.is_active = TRUE
-LIMIT 1`, orgID).Scan(&integrationID, &credentialID, &groupPath); err != nil {
+ORDER BY sr.created_at DESC NULLS LAST
+LIMIT 1`, orgID).Scan(&integrationID, &credentialID, &syncRunID); err != nil {
 		t.Fatalf("resolve gitlab integration for org: %v", err)
 	}
-	if groupPath == "" {
-		t.Fatal("no group_path/owner found in sync_options for this org's gitlab integration")
+	if syncRunID == "" {
+		// No prior sync run for this integration -- SyncRunID only needs to
+		// be non-empty for ref.validate(); it is not looked up by anything
+		// downstream of this collector.
+		syncRunID = "00000000-0000-4000-8000-000000000000"
 	}
-	t.Logf("resolved integration_id=%s group_path=%s (credential id/token withheld)", integrationID, groupPath)
+	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: syncRunID, IntegrationID: integrationID}
+	t.Logf("resolved integration_id=%s (credential id/token/group_path withheld)", integrationID)
 
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(encryptionKey), "")
 	if err != nil {
@@ -107,40 +138,17 @@ LIMIT 1`, orgID).Scan(&integrationID, &credentialID, &groupPath); err != nil {
 	before := gitlabTeamCatalogLiveCounts(t, ctx, conn, orgID)
 	t.Logf("BEFORE (local, real data, org %s): %+v", orgID, before)
 
-	claim := Claim{
-		Unit: Unit{
-			ID: uuid.NewString(), SyncRunID: uuid.NewString(), OrgID: orgID,
-			IntegrationID: integrationID, SourceID: uuid.NewString(),
-			SourceExternalID: groupPath, SourceName: groupPath,
-			Provider: "gitlab", Dataset: "work-items", CostClass: CostMedium,
-			Mode: "incremental", CredentialID: credentialID, AuthSource: "integration_credential",
-			DatasetOptions: map[string]any{
-				"owner": groupPath, "auto_import_teams": true, "auto_import_projects": true, "auto_import_members": true,
-			},
-		},
-		Owner: uuid.NewString(), Attempt: 1, LeaseExpiresAt: time.Now().Add(10 * time.Minute),
+	collector := GitLabTeamCatalogCollector{
+		Handler: GitLabTeamCatalogRouteHandler{GroupPathResolver: gitlabLiveGroupPathResolver{pool: pool}},
+		Sink:    GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
 	}
-
-	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(ctx, claim, credential, client, time.Now())
+	selections := TeamCatalogSelections{Teams: true, Projects: true, Members: true}
+	result, err := collector.CollectTeamCatalog(ctx, ref, credential, client, selections, time.Now())
 	if err != nil {
 		t.Fatalf("collect team catalog: %v", err)
 	}
-	t.Logf("collected: teams=%d ownership=%d memberships=%d native_projects=%d evidence=%+v",
-		len(batch.Rows.Teams), len(batch.Rows.Ownership), len(batch.Rows.Memberships), len(batch.Rows.Projects), batch.Evidence)
-
-	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}
-	for _, effect := range batch.Effects.Batches() {
-		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-			t.Fatalf("write effect destination=%s: %v", effect.Destination, err)
-		}
-		inspection, err := sink.InspectEffect(ctx, claim, effect)
-		if err != nil {
-			t.Fatalf("inspect effect destination=%s: %v", effect.Destination, err)
-		}
-		if inspection != EffectExact {
-			t.Fatalf("readback destination=%s inspection=%s, want exact", effect.Destination, inspection)
-		}
-	}
+	t.Logf("TeamCatalogResult: teams_written=%d members_written=%d memberships_written=%d projects_written=%d ownership_written=%d team_keys=%v",
+		result.TeamsWritten, result.MembersWritten, result.MembershipsWritten, result.ProjectsWritten, result.OwnershipWritten, result.TeamKeys)
 
 	after := gitlabTeamCatalogLiveCounts(t, ctx, conn, orgID)
 	t.Logf("AFTER (local, real data, org %s): %+v", orgID, after)

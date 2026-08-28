@@ -193,15 +193,12 @@ func gitlabTeamCatalogTestClient(t *testing.T, baseURL string) *providerfoundati
 func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
-	claim := nativeTestClaim("gitlab", "work-items")
-	claim.OrgID = "org-1"
-	claim.DatasetOptions = map[string]any{
-		"auto_import_teams": true, "auto_import_projects": true, "auto_import_members": true,
-	}
-	credential := providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID, Config: map[string]string{"group_path": "org"}}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Teams: true, Projects: true, Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
-	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), claim, credential, client, now)
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err != nil {
 		t.Fatalf("collect: %v requests=%v", err, fake.requests)
 	}
@@ -295,13 +292,12 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 func TestGitLabTeamCatalogTeamsOnlySkipsMembersAndProjects(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
-	claim := nativeTestClaim("gitlab", "work-items")
-	claim.OrgID = "org-1"
-	claim.DatasetOptions = map[string]any{"auto_import_teams": true}
-	credential := providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID, Config: map[string]string{"group_path": "org"}}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
-	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), claim, credential, client, now)
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err != nil {
 		t.Fatalf("collect: %v requests=%v", err, fake.requests)
 	}
@@ -329,16 +325,15 @@ func TestGitLabTeamCatalogTeamsOnlySkipsMembersAndProjects(t *testing.T) {
 }
 
 func TestGitLabTeamCatalogNoSelectionsIsZeroSummary(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	claim.OrgID = "org-1"
-	credential := providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID, Config: map[string]string{"group_path": "org"}}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
 	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example.com", http.DefaultClient,
 		func(*http.Request) error { return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), claim, credential, client, time.Now())
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, TeamCatalogSelections{}, time.Now())
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -348,22 +343,27 @@ func TestGitLabTeamCatalogNoSelectionsIsZeroSummary(t *testing.T) {
 }
 
 func TestGitLabTeamCatalogRejectsInvalidInputs(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	claim.DatasetOptions = map[string]any{"auto_import_teams": true}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Teams: true}
 	client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example.com", http.DefaultClient,
 		func(*http.Request) error { return nil }, providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No group_path anywhere.
-	credential := providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID}
-	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), claim, credential, client, time.Now()); err == nil {
+	// No group_path anywhere (empty Config, no GroupPathResolver).
+	credential := providerfoundation.Credential{Provider: "gitlab"}
+	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, time.Now()); err == nil {
 		t.Fatal("expected error for missing group_path")
 	}
 	// Wrong credential provider.
-	credential = providerfoundation.Credential{Provider: "github", ID: claim.CredentialID, Config: map[string]string{"group_path": "org"}}
-	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), claim, credential, client, time.Now()); err == nil {
+	credential = providerfoundation.Credential{Provider: "github", Config: map[string]string{"group_path": "org"}}
+	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, time.Now()); err == nil {
 		t.Fatal("expected error for mismatched credential provider")
+	}
+	// Invalid reference (no OrgID/SyncRunID).
+	credential = providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), TeamCatalogReference{}, credential, client, selections, time.Now()); err == nil {
+		t.Fatal("expected error for invalid reference")
 	}
 }

@@ -63,10 +63,12 @@ func TestGitLabTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}
 
-	claim := nativeTestClaim("gitlab", "work-items")
-	claim.OrgID = "gitlab-org-a"
-	otherClaim := claim
-	otherClaim.OrgID = "gitlab-org-b"
+	// Synthetic, claim-free-style fencing claim (CHAOS-4431): the effects
+	// sink's validateRequest no longer calls claim.Validate() or checks
+	// claim.Dataset, only claim.Provider/claim.OrgID -- mirrors
+	// LinearReferenceCatalogClickHouseEffects's identical adaptation.
+	claim := Claim{Unit: Unit{OrgID: "gitlab-org-a", Provider: "gitlab"}}
+	otherClaim := Claim{Unit: Unit{OrgID: "gitlab-org-b", Provider: "gitlab"}}
 	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
 
 	rows := gitlabTeamCatalogIntegrationRows(claim.OrgID, now)

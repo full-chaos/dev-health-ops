@@ -297,3 +297,101 @@ def test_absent_watermark_on_either_side_skips_watermark_check() -> None:
         _snap({"count": 1}, watermark=None), _snap({"count": 1}, watermark="anything")
     )
     assert result.terminal_state == TERMINAL_STATE_MATCH
+
+
+def test_require_watermark_missing_on_one_side_is_unsupported() -> None:
+    """Parity rule 4: 'every comparable operation must expose a watermark'
+    -- an operation registered as watermark-bearing must not silently MATCH
+    when one side never captured one, even if the data happens to agree."""
+    result = compare_responses(
+        _snap({"count": 1}, watermark=None),
+        _snap({"count": 1}, watermark="2026-08-27T00:00:00Z"),
+        require_watermark=True,
+    )
+    assert result.terminal_state == TERMINAL_STATE_UNSUPPORTED
+    assert not any(f.kind == "mismatch" for f in result.findings)
+
+
+def test_require_watermark_missing_on_both_sides_is_unsupported() -> None:
+    result = compare_responses(
+        _snap({"count": 1}, watermark=None),
+        _snap({"count": 1}, watermark=None),
+        require_watermark=True,
+    )
+    assert result.terminal_state == TERMINAL_STATE_UNSUPPORTED
+
+
+def test_require_watermark_present_and_matching_compares_normally() -> None:
+    result = compare_responses(
+        _snap({"count": 1}, watermark="2026-08-27T00:00:00Z"),
+        _snap({"count": 2}, watermark="2026-08-27T00:00:00Z"),
+        require_watermark=True,
+    )
+    assert result.terminal_state == TERMINAL_STATE_MISMATCH
+
+
+# --- Top-level data presence (null vs. omission at the envelope root) -----
+
+
+def test_data_present_on_baseline_only_is_mismatch() -> None:
+    """`"data": null` (present) vs. `data` key entirely absent are NOT the
+    same thing -- parity rule 2 applies at the top level too."""
+    baseline = ResponseSnapshot(data=None, data_present=True)
+    candidate = ResponseSnapshot(data=None, data_present=False)
+    result = compare_responses(baseline, candidate)
+    assert result.terminal_state == TERMINAL_STATE_MISMATCH
+    assert any(f.path == "$.data" for f in result.findings)
+
+
+def test_data_absent_on_both_sides_is_not_itself_a_finding() -> None:
+    baseline = ResponseSnapshot(data=None, data_present=False)
+    candidate = ResponseSnapshot(data=None, data_present=False)
+    result = compare_responses(baseline, candidate)
+    assert result.terminal_state == TERMINAL_STATE_MATCH
+
+
+# --- tie_ordering mode must gate relaxed comparison, not relaxed_list_path alone
+
+
+def test_relaxed_list_path_without_relaxed_mode_stays_strict() -> None:
+    """Passing relaxed_list_path/tie_sort_key while tie_ordering stays the
+    default 'strict' must NOT relax that list -- a reorder still mismatches."""
+    baseline = {"edges": [{"id": "a", "rank": 1}, {"id": "b", "rank": 1}]}
+    candidate = {"edges": [{"id": "b", "rank": 1}, {"id": "a", "rank": 1}]}
+    result = compare_responses(
+        _snap(baseline),
+        _snap(candidate),
+        tie_ordering="strict",
+        relaxed_list_path="$.data.edges",
+        tie_sort_key=lambda item: item["rank"],
+        tie_block_id_field="id",
+    )
+    assert result.terminal_state == TERMINAL_STATE_MISMATCH
+
+
+# --- Envelope-key allowlist applies only at the top level of `data` -------
+
+
+def test_allowlisted_key_omission_inside_nested_data_still_mismatches() -> None:
+    """The allowlist exception is for TOP-LEVEL transport-envelope keys
+    only. A field happening to be named "extensions" nested inside `data`
+    is ordinary business data -- an omission there must still mismatch."""
+    baseline: dict[str, object] = {"widget": {"extensions": {"foo": 1}}}
+    candidate: dict[str, object] = {"widget": {}}
+    result = compare_responses(
+        _snap(baseline),
+        _snap(candidate),
+        allowlisted_envelope_keys=frozenset({"extensions"}),
+    )
+    assert result.terminal_state == TERMINAL_STATE_MISMATCH
+
+
+def test_allowlisted_key_omission_at_top_level_of_data_is_excused() -> None:
+    baseline = {"x": 1, "extensions": {}}
+    candidate = {"x": 1}
+    result = compare_responses(
+        _snap(baseline),
+        _snap(candidate),
+        allowlisted_envelope_keys=frozenset({"extensions"}),
+    )
+    assert result.terminal_state == TERMINAL_STATE_MATCH

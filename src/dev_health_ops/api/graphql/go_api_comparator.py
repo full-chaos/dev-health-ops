@@ -100,10 +100,19 @@ class ResponseSnapshot:
     "the complete observable response").
 
     ``data``/``errors`` follow the GraphQL response envelope shape exactly:
-    ``data`` is the (possibly partial, possibly absent-as-None) ``data``
-    object; ``errors`` is the list of error objects, each with ``message``,
-    ``path`` (list of str/int segments), and ``extensions`` (must carry
-    ``code`` for this comparator's error-set rule to apply).
+    ``data`` is the top-level ``data`` object; ``errors`` is the list of
+    error objects, each with ``message``, ``path`` (list of str/int
+    segments), and ``extensions`` (must carry ``code`` for this
+    comparator's error-set rule to apply).
+
+    ``data_present`` distinguishes ``"data": null`` (key present, value
+    null -- e.g. a nullable root field that errored, per the GraphQL spec)
+    from the ``data`` key being absent entirely (e.g. a request that never
+    reached execution, such as a validation error) -- parity rule 2's
+    null-vs-omission rule applies at the top level too, and both cases
+    otherwise collapse to the same Python ``None`` in ``data``. Default
+    ``True`` (the common case: a response that executed and has a value,
+    possibly itself ``null``, for ``data``).
 
     ``watermark`` is parity rule 4's high-water column value observed by
     this side's query; ``None`` means the operation does not expose one
@@ -112,6 +121,7 @@ class ResponseSnapshot:
     """
 
     data: Any
+    data_present: bool = True
     errors: tuple[dict[str, Any], ...] = ()
     watermark: str | None = None
 
@@ -156,6 +166,7 @@ def compare_responses(
     tie_sort_key: Any = None,
     tie_block_id_field: str = "id",
     allowlisted_envelope_keys: frozenset[str] = frozenset(),
+    require_watermark: bool = False,
 ) -> ComparisonResult:
     """Compare a baseline (Python) and candidate (Go) response.
 
@@ -165,19 +176,52 @@ def compare_responses(
 
     ``tie_ordering="relaxed"`` applies ONLY to the list at
     ``relaxed_list_path`` (a dotted path to the list itself, e.g.
-    ``"data.reviewEdges.edges"``); every other list in the response is
-    still compared strictly. ``tie_sort_key`` is a callable
-    ``(element) -> Hashable`` grouping elements into tie-blocks;
-    ``tie_block_id_field`` names the primary-id key used to compare each
-    tie-block as a set. Per parity rule 5 this is a documented,
-    per-operation exception, never a default.
+    ``"data.reviewEdges.edges"``) AND only when ``tie_ordering`` is
+    literally ``"relaxed"`` -- passing a ``relaxed_list_path`` alongside
+    ``tie_ordering="strict"`` (the default) must not silently relax that
+    list; every other list in the response is compared strictly regardless.
+    ``tie_sort_key`` is a callable ``(element) -> Hashable`` grouping
+    elements into tie-blocks; ``tie_block_id_field`` names the primary-id
+    key used to compare each tie-block as a set. Per parity rule 5 this is
+    a documented, per-operation exception, never a default.
+
+    ``allowlisted_envelope_keys`` excludes named keys from the null-vs-
+    omission check ONLY at the top level of the GraphQL response envelope
+    (parity rule 2's stated exception: "top-level transport envelope keys
+    that one framework omits when empty") -- never inside ``data``, where a
+    field that happens to be named e.g. ``extensions`` is ordinary business
+    data, not a transport-envelope key.
 
     Watermark handling (parity rule 4) runs FIRST: if both sides report a
     watermark and they differ, the whole comparison short-circuits to
     ``unsupported`` -- a watermark delta is ClickHouse eventual consistency,
     never evidence of a Go-vs-Python defect, and must not be allowed to
-    produce or hide a ``mismatch`` verdict.
+    produce or hide a ``mismatch`` verdict. If ``require_watermark`` is
+    True (the operation is registered as watermark-bearing), a MISSING
+    watermark on either side is *also* ``unsupported`` -- parity rule 4:
+    "every comparable operation must expose a watermark", so silently
+    comparing data without one is not a valid ``match``. Operations that
+    genuinely have no watermark concept (the comparator's default) simply
+    never set ``require_watermark``.
     """
+    if require_watermark and (
+        baseline.watermark is None or candidate.watermark is None
+    ):
+        return _record(
+            ComparisonResult(
+                terminal_state=TERMINAL_STATE_UNSUPPORTED,
+                findings=(
+                    Finding(
+                        kind="watermark_missing",
+                        path="$.watermark",
+                        detail=(
+                            f"required watermark missing: baseline={baseline.watermark!r} "
+                            f"candidate={candidate.watermark!r}"
+                        ),
+                    ),
+                ),
+            )
+        )
     if (
         baseline.watermark is not None
         and candidate.watermark is not None
@@ -203,18 +247,42 @@ def compare_responses(
     findings.extend(
         _compare_errors(baseline.errors, candidate.errors, path_prefix="$.errors")
     )
-    findings.extend(
-        _compare_json(
-            baseline.data,
-            candidate.data,
-            path="$.data",
-            float_tier_fields=float_tier_fields,
-            relaxed_list_path=relaxed_list_path,
-            tie_sort_key=tie_sort_key,
-            tie_block_id_field=tie_block_id_field,
-            allowlisted_envelope_keys=allowlisted_envelope_keys,
+
+    if baseline.data_present != candidate.data_present:
+        findings.append(
+            Finding(
+                kind="mismatch",
+                path="$.data",
+                detail=(
+                    "present in baseline, absent in candidate"
+                    if baseline.data_present
+                    else "present in candidate, absent in baseline"
+                ),
+            )
         )
-    )
+    elif baseline.data_present and candidate.data_present:
+        # allowlisted_envelope_keys is passed only here, at the outermost
+        # `data` dict -- _compare_dict/_compare_json/_compare_list all drop
+        # it (pass frozenset()) before recursing into any nested value, so
+        # a field named e.g. "extensions" NESTED inside `data` is never
+        # excused, only a direct top-level key of `data` itself.
+        findings.extend(
+            _compare_json(
+                baseline.data,
+                candidate.data,
+                path="$.data",
+                float_tier_fields=float_tier_fields,
+                relaxed_list_path=relaxed_list_path
+                if tie_ordering == "relaxed"
+                else None,
+                tie_sort_key=tie_sort_key,
+                tie_block_id_field=tie_block_id_field,
+                allowlisted_envelope_keys=allowlisted_envelope_keys,
+            )
+        )
+    # else: data absent on both sides -- nothing to compare, and absence on
+    # both sides is not itself a finding (e.g. two validation-error responses
+    # that both never reached execution).
 
     terminal_state = (
         TERMINAL_STATE_MISMATCH
@@ -428,6 +496,14 @@ def _compare_dict(
     tie_block_id_field: str,
     allowlisted_envelope_keys: frozenset[str],
 ) -> list[Finding]:
+    """``allowlisted_envelope_keys`` is used for THIS dict's own key-presence
+    check only, then dropped (recursive calls always pass ``frozenset()``)
+    -- parity rule 2's allowlist exception is for top-level transport-
+    envelope keys, not for a same-named field nested anywhere inside
+    ``data``. compare_responses only ever calls this with a non-empty
+    allowlist for the outermost ``data`` dict; every nested dict, at any
+    depth, compares with no exclusions.
+    """
     findings: list[Finding] = []
     all_keys = set(baseline.keys()) | set(candidate.keys())
     for key in sorted(all_keys, key=str):
@@ -458,7 +534,7 @@ def _compare_dict(
                 relaxed_list_path=relaxed_list_path,
                 tie_sort_key=tie_sort_key,
                 tie_block_id_field=tie_block_id_field,
-                allowlisted_envelope_keys=allowlisted_envelope_keys,
+                allowlisted_envelope_keys=frozenset(),
             )
         )
     return findings
@@ -511,7 +587,11 @@ def _compare_list(
                 relaxed_list_path=relaxed_list_path,
                 tie_sort_key=tie_sort_key,
                 tie_block_id_field=tie_block_id_field,
-                allowlisted_envelope_keys=allowlisted_envelope_keys,
+                # Dropped, not forwarded -- see _compare_dict's doc comment;
+                # the allowlist applies only at the exact top-level `data`
+                # dict compare_responses first calls, never any element
+                # reached by descending into a list.
+                allowlisted_envelope_keys=frozenset(),
             )
         )
     return findings
@@ -594,7 +674,7 @@ def _compare_list_relaxed(
                     relaxed_list_path=None,
                     tie_sort_key=None,
                     tie_block_id_field=tie_block_id_field,
-                    allowlisted_envelope_keys=allowlisted_envelope_keys,
+                    allowlisted_envelope_keys=frozenset(),
                 )
             )
     return findings

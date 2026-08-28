@@ -350,20 +350,27 @@ means the ClickHouse `teams` dimension is empty.
 > `sink.write_team_repo_ownership`; `workers/team_autoimport_gitlab.py:209` calls
 > `sink.write_team_project_ownership` (Jira/Linear autoimporters write the same table).
 
-> **CHAOS-4365 `project_link`: widens `team_repo_ownership.source`, not the 9-value ladder above.**
-> Ruling (chris, 2026-08-28 07:58-08:04 PT): "the repo should still have a team as well as the PR
-> through the linear connection." Build order: the primary `team_repo_ownership` producer for an
-> org with no direct GitHub team row is a derivation -- `team_project_ownership` (any tracker) joined
-> to that tracker's team-owned work item(s), joined through a cross-provider link to a repo (any SCM,
-> per the 08:07 PT provider-agnostic amendment quoted in §3) -- one `team_repo_ownership` row per
-> repo, `source = project_link`, with **lower `specificity` than a direct native row** so a
-> GitHub-team-owned repo's own row still wins the `is_primary` tie-break over a `project_link` row for
-> the same repo. This is a value inside `team_repo_ownership.source` (`Enum8('native'=1,
-> 'jira_legacy'=2, 'provider_access'=3, 'manual'=4, 'inferred'=5)`, migration `051`) -- **not** a new
-> row 2.5 in `_SOURCE_ORDER` above. Attribution rank 3 (`repo_ownership`) is unchanged: it reads
-> `team_repo_ownership` uniformly and does not branch on which sub-source produced the winning row.
-> **Status: PENDING** -- grepped clean for `project_link` across `*.go`/`*.py` as of this writing; no
-> producer exists yet. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
+> **CHAOS-4365 `inferred`: an already-declared `team_repo_ownership.source` value gets its first
+> writer -- not the 9-value ladder above, and not a schema change.** Ruling (chris, 2026-08-28
+> 07:58-08:04 PT): "the repo should still have a team as well as the PR through the linear
+> connection," amended 08:07 PT to be provider-agnostic: "the graph associated VIA ANY TOOL THAT CAN
+> MAP to github/gitlab objects. The SOURCE github/gitlab/bitbucket ARE irrelevant." Coordinated
+> producer design (CHAOS-4365 lane): edge-walk `work_items` -- either the item's **own** `project_id`,
+> or, when that has no ownership row, a **donor's** `project_id` reached by walking
+> `work_item_dependencies` (§2, tracker-to-tracker, provider-agnostic) -- into `team_project_ownership`
+> to resolve a team, then stamp that team onto the **original** item's own `repo_id` (already a
+> `work_items` column; no join to `repos` needed to get it). The provider column is iterated
+> generically -- no provider branches. Rows land with **`source = 'inferred'`, at lower
+> `specificity` than a direct native row**, so a GitHub-team-owned repo's own row still wins the
+> `is_primary` tie-break for that repo. `inferred` is already a live value in
+> `team_repo_ownership.source`'s `Enum8('native'=1, 'jira_legacy'=2, 'provider_access'=3,
+> 'manual'=4, 'inferred'=5)` (migration `051`) -- this producer is its **first writer**, not a new
+> enum value, and needs **no migration**. It is **not** a new row 2.5 in `_SOURCE_ORDER` above:
+> attribution rank 3 (`repo_ownership`) is unchanged, reading `team_repo_ownership` uniformly
+> regardless of which sub-source produced the winning row. **Status: PENDING** -- grepped clean for
+> any `inferred`-writing code across `*.go`/`*.py` as of this writing (the value appears only in the
+> migration 051 enum declaration); no producer exists yet. See the ownership-derivation diagram in
+> §1.1 and the ER callouts in §3.
 
 > **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
 > real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
@@ -876,9 +883,10 @@ flowchart TD
     SYNC -->|"GitLab / Jira / Linear -- team_autoimport_{gitlab,jira,linear}.py, source=native"| TPO["team_project_ownership"]
     LGN["Linear Go-native route (bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native"] --> TPO
 
-    TPO -->|"join: team-owned tracker work item(s)"| WI["work_items"]
-    WI -->|"join: cross-provider link<br/>(work_item_dependencies / work_graph_issue_pr, ANY tracker to ANY SCM object -- §2)"| REPO["repos"]
-    REPO -->|"derive one team per repo:<br/>source=project_link (CHAOS-4365, PENDING implementation)<br/>lower specificity than a direct native row"| TRO_derived["team_repo_ownership (source=project_link)"]
+    TPO -->|"match: work_items.project_id (item's OWN project)"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
+    TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own"| WI
+
+    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id -- no join to repos needed<br/>provider column iterated, no provider branches<br/>source=inferred (already-declared value, first writer PENDING -- CHAOS-4365)<br/>lower specificity than a direct native row"| TRO_derived["team_repo_ownership (source=inferred)"]
 
     ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/>(CHAOS-4321) -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
     ADMIN -. overrides .-> TPO
@@ -886,9 +894,10 @@ flowchart TD
     ADMIN -. overrides .-> TRO_derived
 ```
 
-`repos` is the derivation's join target, not the diagram's endpoint: attribution source 3
-(`repo_ownership`, §0.1/§0.2) reads whichever `team_repo_ownership` row wins the `is_primary`/
-`specificity` tie-break for that repo — direct (`native`) or derived (`project_link`) alike.
+`work_items.repo_id` is the derivation's output column, not a join through `repos`: attribution
+source 3 (`repo_ownership`, §0.1/§0.2) reads whichever `team_repo_ownership` row wins the
+`is_primary`/`specificity` tie-break for that repo — direct (`native`) or derived (`inferred`)
+alike.
 
 **Inheritance is gated**, so it never imports a wrong team:
 - only **inheritance-safe** relationship types transfer a team
@@ -988,7 +997,7 @@ erDiagram
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o--|| repos : "repo_id / repo_full_name"
     repos ||--o{ work_items : "repo_id"
-    team_project_ownership }o..o{ team_repo_ownership : "derived by the sync: team_repo_ownership.source = project_link (CHAOS-4365, PENDING implementation) -- a team-owned tracker work item, joined through a cross-provider link, to a repo"
+    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, PENDING): work_items' own OR (via work_item_dependencies, §2) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer"
 
     repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts -- no org_id, no work_item_id: NOT tenant-scoped, NOT an attribution input)"
     work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"
@@ -1045,7 +1054,7 @@ erDiagram
         string   team_id
         string   project_id
         string   project_key
-        string   source "native|manual|inferred (project_link does not apply here)"
+        string   source "native|jira_legacy|provider_access|manual|inferred"
         uint8    is_primary
         uint16   specificity
         datetime valid_from
@@ -1058,7 +1067,7 @@ erDiagram
         uuid     repo_id
         string   repo_full_name
         string   match_type
-        string   source "native|manual|inferred|project_link (pending CHAOS-4365)"
+        string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is PENDING, CHAOS-4365 -- §0.2)"
         uint8    is_primary
         uint16   specificity
         datetime valid_from
@@ -1135,15 +1144,17 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   git side) — it has no `work_item_id` and is not tenant-scoped, so it cannot itself be an attribution
   input; `work_graph_issue_pr.pr_number` is the only column that ties a `git_pull_requests` row back
   to a tracker work item.
-- **The `project_link` derivation (CHAOS-4365) is NOT a new attribution-ladder rank.** It widens
-  `team_repo_ownership.source` (an `Enum8` on the ownership table itself, alongside the existing
-  `native`/`manual`/`inferred` values) so a repo can get a team from Linear/Jira/GitLab project
-  ownership joined through a cross-provider link, when no direct native row (e.g. GitHub team
-  auto-import) exists for that repo. The attribution resolver's rank-3 `repo_ownership` source (§0.1)
-  reads `team_repo_ownership` uniformly regardless of which sub-source populated the winning row —
-  see the §0.2 callout below for how `specificity` keeps a `project_link` row from ever beating a
-  direct native one for the same repo. **Not yet implemented** — no producer writes `project_link`
-  as of this page's writing (grepped clean); see the ownership-derivation diagram in §1.
+- **The `inferred` `team_repo_ownership.source` derivation (CHAOS-4365) is NOT a new
+  attribution-ladder rank, and NOT a schema change.** `inferred` is already one of the five values
+  ClickHouse accepts for this column (migration `051`) — this producer is its first writer, so a
+  repo can get a team from ANY tracker's project ownership, reached by walking a work item's own or
+  a donor's `project_id` (provider-agnostic per chris's 08:07 PT amendment, quoted above), when no
+  direct native row (e.g. GitHub team auto-import) exists for that repo. The attribution resolver's
+  rank-3 `repo_ownership` source (§0.1) reads `team_repo_ownership` uniformly regardless of which
+  sub-source populated the winning row — see the §0.2 callout below for how `specificity` keeps an
+  `inferred` row from ever beating a direct native one for the same repo. **Not yet implemented** —
+  grepped clean for any code writing `inferred` as of this page's writing; see the
+  ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an
   `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the
   CHAOS-4321 admin (override) layer; `team_memberships` ∪ `teams.members` is the provider (fallback)

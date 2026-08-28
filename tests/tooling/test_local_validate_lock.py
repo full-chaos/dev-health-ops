@@ -472,6 +472,25 @@ def test_stale_lock_from_kill_9_is_reclaimed_not_wedged(tmp_path):
     assert not lock_dir.is_symlink(), "lock leaked after the reclaiming probe exited"
 
 
+# CHAOS-4397: fabricates ps_lstart()'s ANSWER for one specific PID instead of
+# relying on a real spawned reference process's real start time. Every other
+# invocation (any other PID, any other flag set) falls through to the real ps
+# binary unmodified -- same PATH-shadowing technique as _SLOW_PS_WRAPPER
+# below, applied to lstart instead of an artificial delay.
+_FAKE_LSTART_PS_WRAPPER = """#!/bin/bash
+real_ps=/bin/ps
+if [ -n "${FAKE_LSTART_TARGET_PID:-}" ] && [ -n "${FAKE_LSTART_VALUE:-}" ]; then
+  for a in "$@"; do
+    if [ "$a" = "$FAKE_LSTART_TARGET_PID" ]; then
+      printf '%s\\n' "$FAKE_LSTART_VALUE"
+      exit 0
+    fi
+  done
+fi
+exec "$real_ps" "$@"
+"""
+
+
 def test_pid_reuse_is_not_trusted_via_start_time_mismatch(tmp_path):
     """kill -0 alone would be fooled by PID reuse; the lock must not be.
 
@@ -481,58 +500,96 @@ def test_pid_reuse_is_not_trusted_via_start_time_mismatch(tmp_path):
     an unrelated process after the true lock holder was kill -9'd. The lock
     must detect the mismatch and reclaim promptly, not trust the PID number
     alone and wait out the full timeout.
+
+    CHAOS-4397: this used to spawn a real ``sleep 30`` as the "genuinely
+    alive" reference and prove promptness with a wall-clock ``elapsed < 20``
+    assertion. Both were host-load dependent and both actually flaked in
+    production (five lanes, 2026-08-28, load 11-14): a scheduling delay of
+    30s+ between spawning the reference process and this test getting to
+    check it lets `sleep 30` exit naturally first -- deterministic repro:
+    injecting a 31s delay before the correctly-recorded-owner check below
+    reliably reproduces the exact reported "PID ... not running" failure,
+    because the reference process is simply gone by the time `ps` looks for
+    it, nothing to do with the lock logic under test. A slow host can
+    separately blow the old 20s budget on subprocess-spawn scheduling alone,
+    independent of how fast the lock itself decided to reclaim.
+
+    Fixed by injecting a fake process table instead: this pytest process's
+    OWN pid (``os.getpid()``) is used as the "genuinely alive" reference --
+    guaranteed alive for the whole test, no spawned helper to race against --
+    and a PATH-shadowing `ps` stub (``_FAKE_LSTART_PS_WRAPPER``) hands back a
+    fixed, canned ``lstart`` string for that one pid instead of a real,
+    timing-derived value. Promptness is proved by a behavioral fact instead of
+    a wall-clock threshold: ``reclaim_stale_lock()`` runs before
+    ``try_acquire_once()`` inside ``acquire_lock()``, so a mismatch caught on
+    that very first call never emits the "already running ... waiting"
+    message the polling branch would print -- that message's absence proves
+    the reclaim did not fall through to (and merely survive) the wait loop,
+    regardless of how slow the host is at scheduling the probe's subprocesses.
     """
     lock_dir = tmp_path / "reuse.lock"
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # A real, currently-alive process to reference by PID.
-    live = subprocess.Popen(["sleep", "30"])
+    fake_ps_dir = tmp_path / "fake_lstart_ps_bin"
+    fake_ps_dir.mkdir()
+    fake_ps = fake_ps_dir / "ps"
+    fake_ps.write_text(_FAKE_LSTART_PS_WRAPPER)
+    fake_ps.chmod(0o755)
+    path = f"{fake_ps_dir}:{_BASE_PATH}"
+
+    # This pytest (worker) process itself: guaranteed alive for the entire
+    # test, so `kill -0` against it is never a race against anything's real
+    # lifetime. Its real lstart is irrelevant -- the fake ps wrapper above
+    # substitutes a canned value for it regardless of when it actually started.
+    live_pid = os.getpid()
+    real_lstart = "Wed Aug  5 20:46:09 2026"
+    extra_env = {
+        "FAKE_LSTART_TARGET_PID": str(live_pid),
+        "FAKE_LSTART_VALUE": real_lstart,
+    }
+
+    # Sanity check first: a CORRECT lstart must be respected (waited on,
+    # not reclaimed) -- otherwise this test would trivially "pass" no
+    # matter what the mismatch branch does, because reclaim already fires
+    # unconditionally.
+    correct = lock_dir.with_name("correct.lock")
+    os.symlink(f"{live_pid}|{real_lstart}|/some/cwd", correct)
     try:
-        real_lstart = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(live.pid)],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        assert real_lstart, "could not read the live process's start time"
+        probe = _spawn_probe(
+            correct, hold_secs=0.1, wait_secs=5, extra_env=extra_env, path=path
+        )
+        out = probe.communicate(timeout=20)[0]
+        assert probe.returncode != 0, (
+            f"expected a timeout against a genuinely live, correctly-recorded "
+            f"owner, got success instead.\n{out}"
+        )
+        assert "reclaiming" not in out, (
+            f"a correctly-recorded live owner must not be reclaimed.\n{out}"
+        )
+    finally:
+        correct.unlink(missing_ok=True)
 
-        # Sanity check first: a CORRECT lstart must be respected (waited on,
-        # not reclaimed) -- otherwise this test would trivially "pass" no
-        # matter what the mismatch branch does, because reclaim already fires
-        # unconditionally.
-        correct = lock_dir.with_name("correct.lock")
-        os.symlink(f"{live.pid}|{real_lstart}|/some/cwd", correct)
-        try:
-            probe = _spawn_probe(correct, hold_secs=0.1, wait_secs=5)
-            out = probe.communicate(timeout=20)[0]
-            assert probe.returncode != 0, (
-                f"expected a timeout against a genuinely live, correctly-recorded "
-                f"owner, got success instead.\n{out}"
-            )
-            assert "reclaiming" not in out, (
-                f"a correctly-recorded live owner must not be reclaimed.\n{out}"
-            )
-        finally:
-            correct.unlink(missing_ok=True)
-
-        # Now the actual case under test: same live PID, WRONG lstart.
-        os.symlink(f"{live.pid}|Mon Jan  1 00:00:00 1999|/some/other/cwd", lock_dir)
-        started_at = time.monotonic()
-        probe = _spawn_probe(lock_dir, hold_secs=0.1, wait_secs=30)
+    # Now the actual case under test: same live PID, WRONG lstart.
+    os.symlink(f"{live_pid}|Mon Jan  1 00:00:00 1999|/some/other/cwd", lock_dir)
+    try:
+        probe = _spawn_probe(
+            lock_dir, hold_secs=0.1, wait_secs=30, extra_env=extra_env, path=path
+        )
         out = probe.communicate(timeout=40)[0]
-        elapsed = time.monotonic() - started_at
 
         assert probe.returncode == 0, out
         assert "reclaiming" in out, (
             f"expected the start-time mismatch to be treated as stale.\n{out}"
         )
-        assert elapsed < 20, (
-            f"took {elapsed:.1f}s -- looks like kill -0 alone was trusted "
-            f"instead of cross-checking the start time"
+        # Host-speed-independent promptness proof (see docstring): a mismatch
+        # caught on the first reclaim_stale_lock() call never falls into the
+        # "already running ... waiting" polling branch at all.
+        assert "already running" not in out, (
+            f"expected the mismatch to be caught before the wait loop ever "
+            f"started, not reclaimed only after polling toward the "
+            f"timeout.\n{out}"
         )
     finally:
-        live.kill()
-        live.wait()
         lock_dir.unlink(missing_ok=True)
 
 

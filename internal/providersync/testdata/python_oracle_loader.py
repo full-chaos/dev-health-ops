@@ -116,6 +116,9 @@ _AI_DETECTION_SOURCE = _source("dev_health_ops/providers/_ai_detection.py")
 _TEAM_AUTOIMPORT_LINEAR_SOURCE = _source(
     "dev_health_ops/workers/team_autoimport_linear.py"
 )
+_TEAM_AUTOIMPORT_GITHUB_SOURCE = _source(
+    "dev_health_ops/workers/team_autoimport_github.py"
+)
 _PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
 _PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
 
@@ -1045,6 +1048,103 @@ def _target_linear_team_autoimport() -> None:
     )
 
 
+def _target_github_team_autoimport() -> None:
+    """Load the live GitHub team-catalog producer's pure row builders
+    (CHAOS-4434): ``_github_team_row`` and ``_github_membership_row``.
+
+    Mirrors ``_target_linear_team_autoimport`` above -- same reasoning, same
+    stub boundary (the application sink, discovery services, and identity
+    resolver are fixed stubs; the oracle invokes only the two row builders,
+    so none of their real implementations are ever reached). The stub list
+    differs only where team_autoimport_github.py's own top-level imports
+    differ from team_autoimport_linear.py's: no Linear GraphQL client, no
+    ``credentials.resolver`` (only imported lazily inside
+    ``_github_access_token``, which this oracle never calls).
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_identity_drift",
+        {"split_memberships_for_review": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        {
+            "project_provider_team_rows": _unsupported_dependency,
+            "project_team_rows_with_store": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_discovery",
+        {"TeamDiscoveryService": type("TeamDiscoveryService", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_membership",
+        {"TeamMembershipService": type("TeamMembershipService", (), {})},
+    )
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _install_module(
+        "dev_health_ops.metrics.sinks.clickhouse",
+        {"ClickHouseMetricsSink": type("ClickHouseMetricsSink", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.providers.identity",
+        {
+            "IdentityResolver": type("IdentityResolver", (), {}),
+            "load_identity_resolver": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.providers.team_capabilities",
+        {
+            "auto_import_capabilities": _unsupported_dependency,
+            "team_provider_capabilities": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.storage.clickhouse",
+        {"ClickHouseStore": type("ClickHouseStore", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.workers.team_autoimport_categories",
+        {"resolve_import_categories": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.metrics.prometheus",
+        {
+            "record_team_autoimport_roster_preservation_failed": (
+                _unsupported_dependency
+            )
+        },
+    )
+
+
+def _target_identity() -> None:
+    """Load the real providers.identity module for the CHAOS-4434 facets
+    oracle. identity.py's only production dependency is WorkItemProvider,
+    used purely as a `typing.cast` annotation (never evaluated at runtime),
+    but the model module itself has its own transitive chain -- loaded here
+    in the SAME order _target_linear_normalize already proved works.
+    """
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _load_source_module(
+        "dev_health_ops.models.ai_attribution", _AI_ATTRIBUTION_MODELS_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers._ai_detection", _AI_DETECTION_SOURCE)
+    _load_source_module("dev_health_ops.utils.datetime", _DATETIME_SOURCE)
+    _load_source_module(
+        "dev_health_ops.providers.normalize_helpers", _NORMALIZE_HELPERS_SOURCE
+    )
+    _load_source_module(
+        "dev_health_ops.providers.normalize_common", _NORMALIZE_COMMON_SOURCE
+    )
+    _load_source_module("dev_health_ops.providers.identity", _IDENTITY_SOURCE)
+
+
 def _target_fetch_utils() -> None:
     _install_module("dev_health_ops.utils", {"BATCH_SIZE": 1000})
 
@@ -1144,6 +1244,16 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.workers.team_autoimport_linear",
         _TEAM_AUTOIMPORT_LINEAR_SOURCE,
         _target_linear_team_autoimport,
+    ),
+    _TEAM_AUTOIMPORT_GITHUB_SOURCE: (
+        "dev_health_ops.workers.team_autoimport_github",
+        _TEAM_AUTOIMPORT_GITHUB_SOURCE,
+        _target_github_team_autoimport,
+    ),
+    _IDENTITY_SOURCE: (
+        "dev_health_ops.providers.identity",
+        _IDENTITY_SOURCE,
+        _target_identity,
     ),
     _BASE_GIT_SOURCE: (
         "dev_health_ops.processors.base_git",

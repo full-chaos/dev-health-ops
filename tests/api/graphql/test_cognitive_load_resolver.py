@@ -318,6 +318,38 @@ async def test_cognitive_load_single_team_reads_new_table_not_the_old_tainted_co
 
 
 @pytest.mark.asyncio
+async def test_cognitive_load_single_team_query_bundles_nullable_ratios_in_one_argmax_tuple() -> (
+    None
+):
+    """Codex R1 (P2): the ratio columns are Nullable(Float64) -- None means
+    unmeasured, distinct from a measured 0.0 (migration 081). A bare
+    argMax(nullable_col, computed_at) PER COLUMN independently skips NULL
+    arguments, so a day recomputed from "measured" to "unmeasured" (the
+    latest row's ratio genuinely NULL) would keep returning a STALE
+    non-null ratio from an older row instead of the latest row's true
+    NULL. The query must bundle every field into ONE
+    argMax(tuple(...), computed_at) so the whole row is picked atomically
+    from the single latest computed_at -- same fix as compounding_risk.py's
+    _fetch_latest_rows. Asserted on SQL text (the mocked client cannot
+    execute ClickHouse's real argMax NULL-skipping semantics)."""
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], [])])
+
+    await resolve_cognitive_load(ctx, _input(team_id="team-alpha"))
+
+    query: str = _squash_ws(ctx.client.query.call_args_list[0].args[0])
+    assert "argMax( tuple(" in query or "argMax(tuple(" in query
+    # Each nullable ratio field must appear INSIDE the tuple(...) argument,
+    # not as its own separate argMax(...) call -- a naive per-column bare
+    # argMax(after_hours_commit_ratio, computed_at) would also satisfy a
+    # weaker "argMax appears and after_hours_commit_ratio appears somewhere"
+    # check, so this greps specifically for a bare per-column call, which
+    # must NOT be present.
+    assert "argMax(after_hours_commit_ratio, computed_at)" not in query
+    assert "argMax(weekend_commit_ratio, computed_at)" not in query
+
+
+@pytest.mark.asyncio
 async def test_cognitive_load_team_and_repo_id_combined_uses_the_old_merge_path() -> (
     None
 ):

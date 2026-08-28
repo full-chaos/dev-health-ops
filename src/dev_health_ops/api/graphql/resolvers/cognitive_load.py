@@ -270,21 +270,46 @@ async def _fetch_team_cognitive_load(
     already team-scoped and OWNERSHIP-resolved (CHAOS-4321) at write time
     (``metrics/team_cognitive_load.py``), so this is a single dedup read,
     not a merge of two tables.
+
+    Codex R1 (P2): the ratio fields are ``Nullable(Float64)`` (migration
+    081 -- ``None`` means unmeasured, distinct from a measured ``0.0``, see
+    that migration's comment). A bare ``argMax(nullable_col, computed_at)``
+    per column independently skips NULL arguments, so a day recomputed from
+    "measured" to "unmeasured" (the latest row's ratio genuinely NULL)
+    would keep returning the STALE non-null ratio from an older row instead
+    of the latest row's true NULL. Bundling every field into one
+    ``argMax(tuple(...), computed_at)`` picks the whole row atomically from
+    the single latest ``computed_at``, so a NULL in the latest row stays
+    NULL -- same fix as ``compounding_risk.py``'s ``_fetch_latest_rows``.
     """
     query = """
         SELECT
             day,
-            argMax(pr_interruption_load,     computed_at) AS pr_interruption_load,
-            argMax(context_spread_count,     computed_at) AS context_spread_count,
-            argMax(review_request_load,      computed_at) AS review_request_load,
-            argMax(after_hours_commit_ratio, computed_at) AS after_hours_commit_ratio,
-            argMax(weekend_commit_ratio,     computed_at) AS weekend_commit_ratio
-        FROM team_cognitive_load_daily
-        WHERE org_id = {org_id:String}
-          AND team_id = {team_id:String}
-          AND day >= {since_date:Date}
-          AND day <= {until_date:Date}
-        GROUP BY day
+            tupleElement(latest_row, 1) AS pr_interruption_load,
+            tupleElement(latest_row, 2) AS context_spread_count,
+            tupleElement(latest_row, 3) AS review_request_load,
+            tupleElement(latest_row, 4) AS after_hours_commit_ratio,
+            tupleElement(latest_row, 5) AS weekend_commit_ratio
+        FROM (
+            SELECT
+                day,
+                argMax(
+                    tuple(
+                        pr_interruption_load,
+                        context_spread_count,
+                        review_request_load,
+                        after_hours_commit_ratio,
+                        weekend_commit_ratio
+                    ),
+                    computed_at
+                ) AS latest_row
+            FROM team_cognitive_load_daily
+            WHERE org_id = {org_id:String}
+              AND team_id = {team_id:String}
+              AND day >= {since_date:Date}
+              AND day <= {until_date:Date}
+            GROUP BY day
+        )
         ORDER BY day
     """
     params = {

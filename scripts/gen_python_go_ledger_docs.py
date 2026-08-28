@@ -152,7 +152,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "trigger": "follows partition completion (same run)",
         "gate": "none found",
         "writer": "Go run bookkeeping (`postgres.go:630,661,1100,1126,1160`); the actual finalize compute is Python `worker_metrics.py:1688 _run_daily_direct` (operation='finalize') -> `src/dev_health_ops/metrics/job_daily.py:1997 run_daily_metrics_finalize` -- IC cross-repo aggregation, reading already-persisted `user_metrics_daily`/`work_item_user_metrics_daily`",
-        "tables": "`public.daily_metrics_runs` (Go); ClickHouse `ic_landscape_rolling_30d` and team-level metric tables (Python finalize compute -- corrected 2026-08-28 per codex review, an earlier draft of this row omitted the Python writer and its output tables entirely)",
+        "tables": "`public.daily_metrics_runs` (Go); ClickHouse `user_metrics_daily` (`job_daily.py:2125 write_user_metrics` -> `wellbeing.py`'s sink), `ic_landscape_rolling_30d`, and team-level metric tables (Python finalize compute -- corrected 2026-08-28 per codex review across 2 rounds: an earlier draft omitted the Python writer and its output tables entirely, then a follow-up correction still missed `user_metrics_daily`)",
         "evidence": "argued — code read, not re-executed this session",
         "state": "mixed",
         "ticket": "CHAOS-3092 children (per-family)",
@@ -270,9 +270,9 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "n/a — matches migration-state.json canary state, no gap",
     },
     "sync.team_autoimport": {
-        "producer": "enqueue: `cmd/dev-health-worker/sync_dispatch.go:195 teamAutoimportPostSyncWriter.PublishTx` (stages the job in the post-sync fanout transaction, unconditionally on every sync run); dequeue/consumer: `internal/syncdispatchruntime/worker.go:95 RegisterTeamAutoimportWorker`, wired `sync_dispatch.go:565` (corrected 2026-08-28 per codex review -- an earlier draft cited only the consumer registration as the producer)",
+        "producer": "enqueue: `cmd/dev-health-worker/sync_dispatch.go:195 teamAutoimportPostSyncWriter.PublishTx`, called from `NativePostSyncService.publishTeamAutoimport` (`native_post_sync.go:337-344`) only when `plan.TeamAutoimport` is true; dequeue/consumer: `internal/syncdispatchruntime/worker.go:95 RegisterTeamAutoimportWorker`, wired `sync_dispatch.go:565` (corrected 2026-08-28 per codex review, twice -- an earlier draft cited only the consumer as the producer, then wrongly called the enqueue unconditional)",
         "trigger": "post-sync (best-effort, fire-and-forget)",
-        "gate": "per-config teams/projects/members selections (CHAOS-4323); read inside the Python populators, see CHAOS-4430 for the executed proof of whether the selections are honoured",
+        "gate": "Go-side: `plan.TeamAutoimport` (`native_post_sync.go:560-577`) = OR of the org's 3 CHAOS-4323 sync_options flags (`auto_import_teams`/`auto_import_projects`/`auto_import_members`) -- when all 3 are false, the job is never enqueued at all, not merely a no-op inside the populator. Python-side: `run_post_sync_team_autoimport` re-reads the same 3 flags independently once the job DOES run; see CHAOS-4430 for the executed proof of whether the populators honour them individually",
         "writer": "`bridge.go:113 TeamAutoImport` -> POST `/api/internal/worker-sync/team-autoimport` -> `worker_sync.py:269 team_autoimport_reference` -> `workers/team_autoimport.py:228 run_post_sync_team_autoimport` -> per-provider `populate()` (`team_autoimport_{linear,github,gitlab,jira}.py`)",
         "tables": "ClickHouse `teams`, `team_memberships`, `team_project_ownership`",
         "evidence": "local — CH `system.query_log`, org 70d529e0: 102 INSERT queries touching `default.teams` via `clickhouse-connect` (Python client) in the last 2 days as of 2026-08-28 22:03 UTC; zero Go-client inserts in the same window (re-executed this session)",
@@ -410,7 +410,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "feature_flag_sync.py": {
         "category": "a",
-        "evidence": "LIVE — corrected 2026-08-28 per codex review, an earlier draft wrongly claimed zero importers. `_sync_gitlab_feature_flags`/`_sync_launchdarkly_feature_flags` imported and called unconditionally at `processors/dataset_adapters.py:684`, inside `_run_feature_flags_dataset`, itself called from `dataset_adapters.py:758` (the live provider-sync dataset dispatcher, GitLab/LaunchDarkly feature-flag datasets)",
+        "evidence": "LIVE — corrected 2026-08-28 per codex review across 2 rounds: an earlier draft wrongly claimed zero importers, then a follow-up correction wrongly said both helpers are called unconditionally. Actual shape: `_run_feature_flags_dataset` (`dataset_adapters.py:684`, called from the live dataset dispatcher at `:758`) branches per provider (`dataset_adapters.py:694-712`) -- calls `_sync_gitlab_feature_flags` for `provider=='gitlab'`, `_sync_launchdarkly_feature_flags` for `provider=='launchdarkly'`, raises `ValueError` for any other provider",
         "ticket": "n/a — live",
     },
     "job_outbox.py": {

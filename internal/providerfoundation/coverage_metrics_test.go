@@ -192,3 +192,36 @@ func TestArtifactSkipReasonLabelIsBounded(t *testing.T) {
 		t.Fatalf("unknown reason label = %q, want other", got)
 	}
 }
+
+// TestDuplicateTestCaseCounterAggregatesByProviderDatasetOnly (CHAOS-4392)
+// pins that repo is NOT a label -- codex's CHAOS-4394 finding on the
+// sibling RecordCicdPartialSuccess counter applies identically here: a
+// synced repository is not drawn from a small, fixed vocabulary, so it
+// would grow the series unboundedly over a long-lived worker's lifetime.
+// Two calls with different repos but the same provider/dataset must
+// aggregate into ONE series, not two.
+func TestDuplicateTestCaseCounterAggregatesByProviderDatasetOnly(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordDuplicateTestCase("github", "cicd", 3)
+	metrics.RecordDuplicateTestCase("github", "cicd", 2)
+	metrics.RecordDuplicateTestCase("mystery-provider", "mystery-dataset", 1)
+	metrics.RecordDuplicateTestCase("gitlab", "tests", 0)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		`dev_health_cicd_duplicate_test_case_total{provider="github",dataset="cicd"} 5`,
+		`dev_health_cicd_duplicate_test_case_total{provider="other",dataset="other"} 1`,
+		"# TYPE dev_health_cicd_duplicate_test_case_total counter",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `provider="gitlab",dataset="tests"`) {
+		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
+	}
+}

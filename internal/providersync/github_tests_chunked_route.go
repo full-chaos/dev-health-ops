@@ -1056,6 +1056,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						for _, observation := range reportIncomplete {
 							cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
 						}
+						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
+						if rows.DuplicateCases > 0 {
+							slog.Info(
+								"within-suite duplicate test-case names disambiguated with an ordinal suffix",
+								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+								"repository", cursor.Repo, "run", pipeline.RunID, "count", rows.DuplicateCases,
+							)
+						}
 						// Bound the run's committed report rows WITHOUT splitting
 						// an artifact. Rows are checked for fit BEFORE they are
 						// appended, so the aggregate cannot creep past the cap

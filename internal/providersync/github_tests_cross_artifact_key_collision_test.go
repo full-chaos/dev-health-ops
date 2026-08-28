@@ -330,3 +330,71 @@ type githubTestsDuplicateKeyBatch struct {
 func (b *githubTestsDuplicateKeyBatch) Append(...any) error { b.appends++; return nil }
 func (b *githubTestsDuplicateKeyBatch) Send() error         { return nil }
 func (b *githubTestsDuplicateKeyBatch) Abort() error        { return nil }
+
+// CHAOS-4392. RED on the pre-fix baseline: prod run 33149651369 for
+// full-chaos/dev-health-ops carried TWO <testcase> elements sharing the
+// identical name inside ONE suite of ONE artifact -- not the cross-artifact
+// class CHAOS-4190 fixed above (that scoped SuiteID/CaseID by artifact ID;
+// this collision is inside a single artifact's single suite, which artifact
+// scoping cannot help). Both cases hashed to the same CaseID
+// (hashTestIdentifier(suite.SuiteID, name) took no third input to
+// disambiguate them), so this exact fixture reached WriteEffect's
+// recordGitHubTestsKey and was rejected with the bare ErrInvalidConfiguration
+// -- deterministically, since retrying re-parses the same archive bytes into
+// the same colliding pair every time. River burned all 5 attempts before
+// surfacing "Provider retries exhausted".
+//
+// The fix (parseJUnitRows' caseOccurrence, github_tests_reports.go): the
+// SECOND-and-later case sharing a name within a suite gets an ordinal folded
+// into its CaseID, so both rows are retained -- no test case is skipped or
+// dropped, unlike the artifact-level skip-and-continue precedent this
+// mirrors (CHAOS-4315) -- and the batch never collides at WriteEffect at
+// all.
+func TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds(t *testing.T) {
+	const duplicateNameFixture = `<testsuite name="matrix">` +
+		`<testcase name="flaky" classname="pkg.TestA"/>` +
+		`<testcase name="flaky" classname="pkg.TestB"><failure message="boom" type="AssertionError">trace</failure></testcase>` +
+		`</testsuite>`
+	claim := nativeTestClaim("github", "cicd")
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"reports/junit.xml": duplicateNameFixture}),
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "33149651369", claim.OrgID,
+		nil, nil, time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("parse of a within-suite duplicate case name failed closed: %v", err)
+	}
+	if len(rows.Cases) != 2 {
+		t.Fatalf("cases=%+v, want both duplicate-named cases retained (no skip, unlike the artifact-oversized precedent)", rows.Cases)
+	}
+	if rows.Cases[0].CaseID == "" || rows.Cases[1].CaseID == "" || rows.Cases[0].CaseID == rows.Cases[1].CaseID {
+		t.Fatalf(
+			"case IDs=[%q,%q], want both non-empty and distinct -- an identical CaseID is exactly CHAOS-4392's collision",
+			rows.Cases[0].CaseID, rows.Cases[1].CaseID,
+		)
+	}
+	if rows.Cases[0].CaseName != "flaky" || rows.Cases[1].CaseName != "flaky" {
+		t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows despite the disambiguated ID", rows.Cases)
+	}
+	if rows.DuplicateCases != 1 {
+		t.Fatalf("DuplicateCases=%d, want 1 (the telemetry input for dev_health_cicd_duplicate_test_case_total)", rows.DuplicateCases)
+	}
+
+	effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, rows.Cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchConn := &githubTestsDuplicateKeyConn{}
+	sink := TestOpsClickHouseEffects{
+		Conn:  batchConn,
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
+		t.Fatalf(
+			"CHAOS-4392: WriteEffect rejected two within-suite duplicate-named cases after disambiguation: %v", err,
+		)
+	}
+	if batchConn.batch == nil || batchConn.batch.appends != 2 {
+		t.Fatalf("committed appends=%v, want both disambiguated case rows written", batchConn.batch)
+	}
+}

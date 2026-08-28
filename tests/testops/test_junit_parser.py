@@ -10,6 +10,7 @@ from dev_health_ops.parsers.junit import (
     parse_junit_xml,
 )
 from dev_health_ops.processors.testops_tests import (
+    build_case_id,
     process_test_report,
 )
 
@@ -71,3 +72,51 @@ async def test_process_test_report_maps_rows_and_service_attribution() -> None:
     assert failed_case["org_id"] == "chaos"
     assert failed_case["case_id"]
     assert "Expected 200" in (failed_case["stack_trace"] or "")
+
+
+def test_build_case_id_disambiguates_by_occurrence() -> None:
+    """CHAOS-4392: the Go cicd/tests route hit ErrInvalidConfiguration
+    ("duplicate natural key in test_case_results batch") when a suite
+    contained two identically named test cases, because case_id hashed only
+    (suite_id, case_name). Python shares this exact hash shape
+    (_hash_identifier(suite_id, case_name)), so the same collision existed
+    here too -- silently, since nothing in the Python insert path rejects a
+    duplicate case_id (ReplacingMergeTree FINAL-dedups instead of erroring).
+    """
+    first = build_case_id("suite-1", "flaky")
+    second = build_case_id("suite-1", "flaky")
+    assert first == second, "same inputs must still hash identically with occurrence=0"
+
+    disambiguated = build_case_id("suite-1", "flaky", occurrence=1)
+    assert disambiguated != first, "a duplicate occurrence must get a distinct case_id"
+    # occurrence=0 (the default) must be byte-identical to the pre-fix hash so
+    # every non-colliding case_id already persisted keeps its exact value.
+    assert build_case_id("suite-1", "flaky", occurrence=0) == first
+
+
+@pytest.mark.asyncio
+async def test_process_test_report_disambiguates_within_suite_duplicate_case_names() -> (
+    None
+):
+    """CHAOS-4392 regression: two <testcase> elements sharing a name inside
+    one suite must both be retained with distinct case_id values, matching
+    the fix applied to the Go cicd/tests route (github_tests_reports.go's
+    caseOccurrence)."""
+    xml = (
+        '<testsuite name="matrix">'
+        '<testcase name="flaky" classname="pkg.TestA"/>'
+        '<testcase name="flaky" classname="pkg.TestB">'
+        '<failure message="boom" type="AssertionError">trace</failure>'
+        "</testcase>"
+        "</testsuite>"
+    )
+    _, case_rows = await process_test_report(
+        repo_id=uuid4(), run_id="run-4392", source=xml, org_id="chaos"
+    )
+
+    assert len(case_rows) == 2, (
+        "both duplicate-named cases must be retained, not folded or dropped"
+    )
+    case_ids = {case["case_id"] for case in case_rows}
+    assert len(case_ids) == 2, "duplicate-named cases must get distinct case_id values"
+    assert all(case["case_name"] == "flaky" for case in case_rows)

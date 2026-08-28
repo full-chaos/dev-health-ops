@@ -34,7 +34,18 @@ def build_suite_id(run_id: str, suite_name: str, environment: str | None) -> str
     return _hash_identifier(run_id, suite_name, environment)
 
 
-def build_case_id(suite_id: str, case_name: str) -> str:
+def build_case_id(suite_id: str, case_name: str, occurrence: int = 0) -> str:
+    """Deterministic case_id: hash(suite_id + case_name[ + occurrence]).
+
+    ``occurrence`` disambiguates two test cases sharing a name within the
+    same suite (CHAOS-4392 -- the Go cicd/tests route hit this in prod as
+    ``ErrInvalidConfiguration: duplicate natural key in test_case_results
+    batch``, since two identically named cases hashed to the same case_id).
+    It is folded into the hash ONLY when non-zero, so the first (and every
+    non-colliding) case keeps the exact case_id it always has.
+    """
+    if occurrence:
+        return _hash_identifier(suite_id, case_name, str(occurrence))
     return _hash_identifier(suite_id, case_name)
 
 
@@ -209,13 +220,25 @@ def _build_rows_from_parsed(
             )
         )
 
+        # case_occurrence disambiguates within-suite duplicate case names
+        # (CHAOS-4392): two cases sharing a name in the same suite otherwise
+        # hash to the identical case_id above, which the Go cicd/tests route
+        # rejects as a duplicate natural key. Python's ClickHouse insert has
+        # no equivalent hard rejection (ReplacingMergeTree(last_synced)
+        # ORDER BY (org_id,repo_id,run_id,suite_id,case_id) FINAL-dedups
+        # instead), so this was silent undercount here rather than a
+        # terminalizing error -- still worth fixing for parity and to stop
+        # losing the second case's row.
+        case_occurrence: dict[str, int] = {}
         for case in suite.cases:
+            occurrence = case_occurrence.get(case.case_name, 0)
+            case_occurrence[case.case_name] = occurrence + 1
             case_rows.append(
                 TestCaseResultRow(
                     repo_id=repo_id,
                     run_id=run_id,
                     suite_id=suite_id,
-                    case_id=build_case_id(suite_id, case.case_name),
+                    case_id=build_case_id(suite_id, case.case_name, occurrence),
                     case_name=case.case_name,
                     class_name=case.class_name,
                     status=case.status,

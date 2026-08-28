@@ -106,7 +106,13 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
-	issues   []githubTestsReportIssue
+	// DuplicateCases counts within-suite test-case natural-key collisions
+	// this parse disambiguated with an ordinal suffix (CHAOS-4392) -- see
+	// newJUnitCaseRow. Purely observational: the rows themselves are already
+	// unique by construction, this is only the telemetry input for
+	// dev_health_cicd_duplicate_test_case_total.
+	DuplicateCases int
+	issues         []githubTestsReportIssue
 }
 
 // GitHubTestsIncomplete is the bounded, provider-specific evidence retained
@@ -690,6 +696,7 @@ func parseGitHubTestsArtifact(
 			}
 			result.Suites = append(result.Suites, suites...)
 			result.Cases = append(result.Cases, cases...)
+			result.DuplicateCases += countDuplicateTestCases(cases)
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
@@ -950,8 +957,20 @@ func parseJUnitRows(
 			StartedAt: started, FinishedAt: finished, ServiceID: service,
 			OrgID: orgID, LastSynced: normalizedAt,
 		}
+		// caseOccurrence disambiguates within-suite duplicate case names
+		// (CHAOS-4392): two <testcase> elements sharing a name in the same
+		// suite otherwise hash to the identical case_id in newJUnitCaseRow,
+		// and WriteEffect's recordGitHubTestsKey rejects the whole batch with
+		// a bare ErrInvalidConfiguration -- the unit then burns all 5 River
+		// attempts on the same deterministic collision (prod run 33149651369,
+		// full-chaos/dev-health-ops). Keyed on the RAW name (pre-"unnamed"
+		// normalization) so two empty-named cases collide with each other,
+		// exactly like two cases literally named "unnamed" would.
+		caseOccurrence := map[string]int{}
 		for _, testCase := range suite.Cases {
-			caseRow := newJUnitCaseRow(testCase, row, normalizedAt)
+			occurrence := caseOccurrence[testCase.Name]
+			caseOccurrence[testCase.Name] = occurrence + 1
+			caseRow := newJUnitCaseRow(testCase, row, normalizedAt, occurrence)
 			switch caseRow.Status {
 			case "passed":
 				row.PassedCount++
@@ -971,7 +990,13 @@ func parseJUnitRows(
 	return resultSuites, resultCases, nil
 }
 
-func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time) testCaseResultRow {
+// newJUnitCaseRow builds one test_case_results row. occurrence is 0 for the
+// first case with a given name within the enclosing suite and N for the
+// (N+1)th duplicate (CHAOS-4392, see parseJUnitRows' caseOccurrence); it is
+// folded into the natural-key hash ONLY when non-zero, so the common
+// non-colliding case keeps the exact case_id it always has and no existing
+// row's identity shifts.
+func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time.Time, occurrence int) testCaseResultRow {
 	name := item.Name
 	if name == "" {
 		name = "unnamed"
@@ -1006,9 +1031,13 @@ func newJUnitCaseRow(item junitCase, suite testSuiteResultRow, normalizedAt time
 			trace = &value
 		}
 	}
+	caseID := hashTestIdentifier(suite.SuiteID, name)
+	if occurrence > 0 {
+		caseID = hashTestIdentifier(suite.SuiteID, name, strconv.Itoa(occurrence))
+	}
 	return testCaseResultRow{
 		RepoID: suite.RepoID, RunID: suite.RunID, SuiteID: suite.SuiteID,
-		CaseID: hashTestIdentifier(suite.SuiteID, name), CaseName: name,
+		CaseID: caseID, CaseName: name,
 		ClassName: testsOptionalString(item.ClassName), Status: status,
 		DurationSeconds: parseOptionalFloat(item.Time), FailureMessage: message,
 		FailureType: failureType, StackTrace: trace, IsQuarantined: status == "quarantined",
@@ -1202,6 +1231,27 @@ func testServiceID(path string) *string {
 func hashTestIdentifier(parts ...string) string {
 	digest := sha256.Sum256([]byte(strings.Join(parts, "::")))
 	return hex.EncodeToString(digest[:])
+}
+
+// countDuplicateTestCases reports how many rows in cases collided on the same
+// (SuiteID, CaseName) pair before newJUnitCaseRow/normalizeGitLabNativeTestReport
+// disambiguated their case_id with an ordinal suffix (CHAOS-4392). The rows
+// are already unique by construction by the time this runs; this exists
+// purely to feed the dev_health_cicd_duplicate_test_case_total counter so an
+// operator can see how often the collision fires, not to detect or fix
+// anything itself.
+func countDuplicateTestCases(cases []testCaseResultRow) int {
+	seen := make(map[string]struct{}, len(cases))
+	duplicates := 0
+	for _, row := range cases {
+		key := row.SuiteID + "\x00" + row.CaseName
+		if _, exists := seen[key]; exists {
+			duplicates++
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+	return duplicates
 }
 
 func parseOptionalFloat(value string) *float64 {

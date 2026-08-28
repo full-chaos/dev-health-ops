@@ -276,6 +276,7 @@ type Metrics struct {
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
 	cicdPartialSuccess             map[string]uint64
+	duplicateTestCase              map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -297,6 +298,7 @@ func NewMetrics() *Metrics {
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
+		duplicateTestCase:              map[string]uint64{},
 	}
 }
 
@@ -540,6 +542,29 @@ func (m *Metrics) RecordCicdPartialSuccess(reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cicdPartialSuccess[MetricCicdPartialSuccessReasonLabel(reason)]++
+}
+
+// RecordDuplicateTestCase counts within-suite test-case natural-key
+// collisions the cicd/tests route disambiguated with an ordinal suffix
+// instead of rejecting the whole batch (CHAOS-4392: two <testcase> elements
+// with the identical name inside one suite/artifact hashed to the same
+// case_id and WriteEffect's recordGitHubTestsKey rejected the batch with the
+// bare ErrInvalidConfiguration River burned all 5 attempts on).
+//
+// repo is deliberately NOT a label here, matching RecordCicdPartialSuccess's
+// house rule directly above (settled by a codex review on that ticket,
+// CHAOS-4394): a synced repository is not drawn from a fixed, small
+// vocabulary this process can enumerate up front, so it belongs in the
+// caller's structured log line, not a durable metric label. This counter
+// answers "how much, by provider/dataset", not "which repo" -- find the repo
+// in the slog line the caller emits alongside this call.
+func (m *Metrics) RecordDuplicateTestCase(provider, dataset string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.duplicateTestCase[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
 }
 
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
@@ -1031,6 +1056,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
 		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_cicd_duplicate_test_case_total",
+		"Within-suite test-case natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestCase's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
+		m.duplicateTestCase,
 	); err != nil {
 		return err
 	}

@@ -276,6 +276,20 @@ func recordGitHubTestsKey(seen map[string]struct{}, parts ...string) bool {
 	return true
 }
 
+// ErrDuplicateNaturalKey narrows ErrInvalidConfiguration to specifically a
+// recordGitHubTestsKey rejection (CHAOS-4392). It exists so
+// providerunit.deterministicTerminalCategory can terminalize a batch that
+// still hits this rejection on its FIRST attempt instead of burning all 5
+// River attempts re-sending the identical colliding batch: this class is
+// deterministic by construction (the natural key collides on every retry,
+// same as the artifact-oversized/pagination-cap categories beside it), so
+// retrying it wastes exactly the same 5x as those did before they got their
+// own category. This is defense-in-depth, not the primary fix -- the primary
+// fix disambiguates known-deterministic collisions (within-suite duplicate
+// test-case names) before they ever reach WriteEffect at all; this sentinel
+// only covers a collision this file's callers did not anticipate.
+var ErrDuplicateNaturalKey = fmt.Errorf("%w: duplicate natural key", ErrInvalidConfiguration)
+
 // duplicateNaturalKeyError names the destination and the colliding natural
 // key on a recordGitHubTestsKey rejection. Before CHAOS-4190 this site
 // returned the bare, context-free ErrInvalidConfiguration -- a duplicate
@@ -290,8 +304,7 @@ func duplicateNaturalKeyError(destination string, fields ...string) error {
 	for index := 0; index+1 < len(fields); index += 2 {
 		pairs = append(pairs, fields[index]+"="+fields[index+1])
 	}
-	return fmt.Errorf("%w: duplicate natural key in %s batch (%s)",
-		ErrInvalidConfiguration, destination, strings.Join(pairs, " "))
+	return fmt.Errorf("%w in %s batch (%s)", ErrDuplicateNaturalKey, destination, strings.Join(pairs, " "))
 }
 
 func gitHubTestsUint32(value int64) (uint32, error) {

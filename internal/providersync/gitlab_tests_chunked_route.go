@@ -563,6 +563,14 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					if normalizeErr != nil {
 						return normalizeErr
 					}
+					if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
+						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, duplicates)
+						slog.Info(
+							"within-suite duplicate test-case names disambiguated with an ordinal suffix",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", cursor.Repo, "run", runID, "count", duplicates,
+						)
+					}
 					suites, cases = reportSuites, reportCases
 				}
 				jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{

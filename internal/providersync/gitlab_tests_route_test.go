@@ -454,3 +454,42 @@ func TestGitLabTestsRedirectTargetFailuresPreserveProviderClassification(t *test
 		})
 	}
 }
+
+// TestGitLabNativeTestReportWithinSuiteDuplicateCaseNamesGetDistinctIDs is
+// the GitLab-native twin of the JUnit fixture pinned in
+// TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds
+// (CHAOS-4392): normalizeGitLabNativeTestReport hashed CaseID from
+// (suiteID, caseName) alone, so two test_cases sharing a name in one
+// test_suite collided exactly like the JUnit path did.
+func TestGitLabNativeTestReportWithinSuiteDuplicateCaseNamesGetDistinctIDs(t *testing.T) {
+	claim := nativeTestClaim("gitlab", "cicd")
+	report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{{
+		Name: "matrix",
+		Cases: []gitLabTestsCasePayload{
+			{Name: "flaky", ClassName: "pkg.TestA", Status: "success"},
+			{Name: "flaky", ClassName: "pkg.TestB", Status: "failed"},
+		},
+	}}}
+	_, cases, err := normalizeGitLabNativeTestReport(
+		claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
+		time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("normalize of a within-suite duplicate case name failed closed: %v", err)
+	}
+	if len(cases) != 2 {
+		t.Fatalf("cases=%+v, want both duplicate-named cases retained", cases)
+	}
+	if cases[0].CaseID == "" || cases[1].CaseID == "" || cases[0].CaseID == cases[1].CaseID {
+		t.Fatalf(
+			"case IDs=[%q,%q], want both non-empty and distinct -- an identical CaseID is CHAOS-4392's collision",
+			cases[0].CaseID, cases[1].CaseID,
+		)
+	}
+	if cases[0].CaseName != "flaky" || cases[1].CaseName != "flaky" {
+		t.Fatalf("cases=%+v, want CaseName preserved verbatim on both rows", cases)
+	}
+	if countDuplicateTestCases(cases) != 1 {
+		t.Fatalf("countDuplicateTestCases=%d, want 1", countDuplicateTestCases(cases))
+	}
+}

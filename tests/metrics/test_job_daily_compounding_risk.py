@@ -155,3 +155,35 @@ def test_daily_job_prefers_ownership_map_over_conflicting_pattern_resolver(
     assert written_count == 2
     team_row = next(row for row in sink.written if row.scope == "team")
     assert team_row.scope_id == "gh:platform"
+
+
+def test_repo_to_team_map_ignores_ownership_for_a_repo_outside_the_current_catalog() -> (
+    None
+):
+    """CHAOS-4365 codex round 2 (P1): ``team_repo_ownership`` rows never
+    expire on their own writers only ever INSERT (CHAOS-2610 tracks
+    writer-side ``valid_to`` retirement) -- so a repo removed/renamed since
+    auto-import last ran can still carry a stale ownership row. The map must
+    not attribute a team-scope row to a repo absent from
+    ``repo_names_by_id`` (this run's current ``repos`` catalog), matching
+    what the pattern-resolver-only path already required.
+    """
+    orphan_repo_id = uuid.uuid4()
+    catalog_repo_id = uuid.uuid4()
+
+    mapping = job_daily._repo_to_team_map_for_compounding_risk(
+        repo_metrics_rows=[
+            _RepoMetricsRow(repo_id=orphan_repo_id),
+            _RepoMetricsRow(repo_id=catalog_repo_id),
+        ],
+        # Only catalog_repo_id is in the current repos catalog.
+        repo_names_by_id={catalog_repo_id: "acme/still-exists"},
+        repo_team_resolver=_Resolver(),
+        team_repo_ownership_map={
+            str(orphan_repo_id): "gh:stale-owner",
+            str(catalog_repo_id): "gh:platform",
+        },
+    )
+
+    assert str(orphan_repo_id) not in mapping
+    assert mapping[str(catalog_repo_id)] == "gh:platform"

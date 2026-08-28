@@ -289,14 +289,46 @@ def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
     for a repo's PRIMARY owner and which native GitHub auto-import never
     populates at all -- ``team_autoimport_github.populate`` writes straight
     to this table instead, see ``docs/architecture/team-attribution.md``),
-    this table is keyed directly by ``repo_id`` with an explicit
-    ``is_primary``/``specificity`` ranking, so a real org whose teams carry
-    empty ``repo_patterns`` (every native GitHub/GitLab/Jira/Linear import)
-    is not silently invisible to repo-scoped team resolution.
+    this table carries an explicit ``is_primary``/``specificity`` ranking, so
+    a real org whose teams carry empty ``repo_patterns`` (every native
+    GitHub/GitLab/Jira/Linear import) is not silently invisible to
+    repo-scoped team resolution.
+
+    CHAOS-4365 codex round 1 (HIGH): the writer this table exists to serve
+    (``team_autoimport_github.py``'s ``_repo_rows``, ``source="provider_access"``)
+    constructs every ``TeamRepoOwnershipRecord`` WITHOUT ``repo_id`` --
+    ``schemas.py``'s ``repo_id: UUID | None = None`` default -- and populates
+    only ``repo_full_name``. A first version of this function filtered
+    ``WHERE repo_id IS NOT NULL``, which returned ``{}`` for every real
+    GitHub-native org: exactly the population this function exists to fix.
+    So the query resolves ``repo_id`` two ways -- the column when a writer
+    does set it (fixtures; a future native writer), else a join against
+    ``repos`` by ``repo_full_name`` (case-insensitive, matching the
+    pattern-resolver's own normalization) -- via ``coalesce``.
 
     Callers merge this map OVER a pattern-resolver map (this map wins where
     both resolve a repo): it reflects the actual, current ownership grant
-    rather than a hand-authored glob.
+    rather than a hand-authored glob. Callers are additionally responsible
+    for only trusting this map's result when the repo is present in the
+    CURRENT ``repos`` catalog for the run (this function does not itself
+    exclude an orphaned/removed repo whose ownership row simply hasn't been
+    retired yet -- CHAOS-2610 tracks writer-side ``valid_to`` expiry;
+    ``docs/contribute/architecture/team-attribution.md``'s "ownership rows
+    are bitemporal but effectively immortal" note applies here too).
+
+    CHAOS-4365 codex round 2 (P1/P2): GitHub auto-import's
+    ``team_autoimport_github.py`` writes EVERY row ``is_primary=0``
+    (``_repo_rows``, ``source="provider_access"`` -- a repo with multiple
+    GitHub teams granted access produces multiple ``is_primary=0`` siblings
+    with identical ``specificity``), and ``FINAL`` alone cannot collapse
+    re-import generations because ``valid_from`` is part of this table's
+    ORDER BY key (``051_team_attribution_dimensions.sql``) -- each auto-import
+    run is a new sort key, not a replacement. Without a full deterministic
+    tiebreak, a same-repo, same-rank tie resolves arbitrarily and can flap
+    between runs. ``ORDER BY`` now also breaks ties by most-recent
+    ``updated_at`` then ``team_id`` (absolute, stable) and the temporal
+    filter is now two-sided (``valid_from`` not just ``valid_to``), so a
+    future-dated row cannot be eligible early.
 
     Returns ``{}`` (never raises) when the sink cannot be queried -- the
     caller's pattern-resolver fallback still applies.
@@ -306,12 +338,21 @@ def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
     try:
         rows = sink.query_dicts(
             """
-            SELECT toString(repo_id) AS repo_id, team_id, is_primary, specificity
-            FROM team_repo_ownership FINAL
-            WHERE org_id = {org_id:String}
-              AND repo_id IS NOT NULL
-              AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))
-            ORDER BY is_primary DESC, specificity DESC
+            SELECT
+                toString(coalesce(o.repo_id, r.id)) AS repo_id,
+                o.team_id AS team_id,
+                o.is_primary AS is_primary,
+                o.specificity AS specificity
+            FROM team_repo_ownership AS o FINAL
+            LEFT JOIN (
+                SELECT org_id, id, repo FROM repos FINAL
+            ) AS r
+                ON r.org_id = o.org_id AND lower(r.repo) = lower(o.repo_full_name)
+            WHERE o.org_id = {org_id:String}
+              AND (o.repo_id IS NOT NULL OR r.id IS NOT NULL)
+              AND o.valid_from <= now64(3, 'UTC')
+              AND (o.valid_to IS NULL OR o.valid_to > now64(3, 'UTC'))
+            ORDER BY is_primary DESC, specificity DESC, o.updated_at DESC, o.team_id ASC
             """,
             {"org_id": org_id},
         )

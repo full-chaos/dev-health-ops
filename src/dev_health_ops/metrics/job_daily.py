@@ -492,6 +492,8 @@ def _repo_to_team_map_for_compounding_risk(
     repo_names_by_id: dict[uuid.UUID, str],
     repo_team_resolver: Any,
     team_repo_ownership_map: dict[str, str] | None = None,
+    org_id: str = "",
+    day: date | None = None,
 ) -> dict[str, str]:
     """Resolve one team per repo for compounding-risk team-scope rows.
 
@@ -501,6 +503,16 @@ def _repo_to_team_map_for_compounding_risk(
     ``teams.repo_patterns`` (glob strings the pattern resolver reads, which
     those imports never set). The pattern resolver remains the fallback for
     repos it doesn't cover (fixtures orgs, manually configured team globs).
+
+    CHAOS-4365 codex round 2 (P1): a repo is trusted from EITHER source only
+    when it also appears in ``repo_names_by_id`` -- the current ``repos``
+    catalog for this run. ``team_repo_ownership`` rows never expire on their
+    own (writers only ever INSERT; CHAOS-2610 tracks writer-side ``valid_to``
+    retirement), so a repo removed/renamed after auto-import last ran can
+    still carry a stale ownership row; without this guard that row would
+    attribute a team-scope compounding-risk row to a repo that no longer
+    exists in the org's current inventory -- something the pattern-resolver
+    path never did, since it always required ``repo_names_by_id`` first.
     """
     ownership_map = team_repo_ownership_map or {}
     repo_to_team_map: dict[str, str] = {}
@@ -516,13 +528,17 @@ def _repo_to_team_map_for_compounding_risk(
         if row_repo_id is None:
             continue
         repo_id_str = str(row_repo_id)
+        full_name = repo_names_by_id.get(row_repo_id)
+        if not full_name:
+            # Not in the current repos catalog -- neither source is trusted
+            # (matches the pattern-only path's pre-existing behavior).
+            unresolved += 1
+            continue
         team_id = ownership_map.get(repo_id_str)
         if team_id:
             resolved_via_ownership += 1
         else:
-            full_name = repo_names_by_id.get(row_repo_id)
-            if full_name:
-                team_id, _ = repo_team_resolver.resolve(full_name)
+            team_id, _ = repo_team_resolver.resolve(full_name)
             if team_id:
                 resolved_via_pattern += 1
             else:
@@ -530,8 +546,10 @@ def _repo_to_team_map_for_compounding_risk(
         if team_id:
             repo_to_team_map[repo_id_str] = team_id
     logger.info(
-        "compounding-risk: repo-to-team resolution via_ownership=%d via_pattern=%d "
-        "unresolved=%d",
+        "compounding-risk: repo-to-team resolution org_id=%s day=%s via_ownership=%d "
+        "via_pattern=%d unresolved=%d",
+        org_id,
+        day.isoformat() if day else None,
         resolved_via_ownership,
         resolved_via_pattern,
         unresolved,
@@ -563,6 +581,8 @@ def _write_compounding_risk_for_day(
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
             team_repo_ownership_map=team_repo_ownership_map,
+            org_id=org_id,
+            day=day,
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("repo_team_resolver failed for compounding risk: %s", exc)

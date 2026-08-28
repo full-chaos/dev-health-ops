@@ -206,21 +206,125 @@ def _apply_statement(schema: dict[str, set[str]], statement: str) -> None:
             schema[table].discard(col)
 
 
-def _sql_strings_from_python_migration(path: Path) -> list[str]:
-    """Every string constant in a .py migration (client.command/.query args and more).
+def _string_list_literal(node: ast.expr) -> list[str] | None:
+    """A module-level ``NAME = [...]`` / ``{...}`` of string literals, or None.
 
-    ``ast`` parses adjacent string-literal concatenation (``"a " "b"``) into a
-    single ``Constant`` already, so this needs no manual joining. Non-SQL string
-    constants are harmless: they never match the CREATE/ALTER regexes above.
+    Handles both a flat ``List``/``Tuple``/``Set`` of string constants (e.g.
+    ``TABLES_NEEDING_ORG_ID_COLUMN``) and a ``Dict`` keyed by string constants
+    (e.g. ``TABLES``) by returning its keys -- both idioms appear in this
+    migration chain as the iterable a ``for table in ...:`` loop walks.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        values = node.elts
+    elif isinstance(node, ast.Dict):
+        values = [k for k in node.keys if k is not None]
+    else:
+        return None
+    names: list[str] = []
+    for element in values:
+        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+            names.append(element.value)
+        else:
+            return None
+    return names
+
+
+class _FStringDDLVisitor(ast.NodeVisitor):
+    """Best-effort rendering of f-string DDL built from a ``for x in TABLE_LIST:``
+    loop -- the idiom this migration chain uses everywhere the RMT shadow-table
+    rebuild pattern needs a table name (e.g. migration 027's
+    ``for table in TABLES_NEEDING_ORG_ID_COLUMN: client.command(f"ALTER TABLE
+    \\`{table}\\` ADD COLUMN IF NOT EXISTS org_id ...")``).
+
+    ``ast.Constant`` alone misses this entirely -- an f-string is
+    ``ast.JoinedStr``, not ``ast.Constant`` -- so a real schema change made
+    only through this idiom (``git_pull_requests`` gaining ``org_id`` in
+    migration 027) was invisible to this parser (caught in review round 2).
+    Only a BARE loop variable substitution is rendered; anything the loop
+    variable's list can't resolve, or a non-trivial expression inside ``{...}``,
+    is left unrendered rather than guessed.
+    """
+
+    def __init__(self) -> None:
+        self.rendered_statements: list[str] = []
+        self._known_lists: dict[str, list[str]] = {}
+        self._loop_bindings: list[tuple[str, list[str]]] = []
+
+    def visit_Module(self, node: ast.Module) -> None:
+        for stmt in node.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ):
+                names = _string_list_literal(stmt.value)
+                if names:
+                    self._known_lists[stmt.targets[0].id] = names
+        self.generic_visit(node)
+
+    def _resolve(self, var_name: str) -> list[str] | None:
+        for name, names in reversed(self._loop_bindings):
+            if name == var_name:
+                return names
+        return None
+
+    def visit_For(self, node: ast.For) -> None:
+        table_names = None
+        if isinstance(node.target, ast.Name) and isinstance(node.iter, ast.Name):
+            table_names = self._known_lists.get(node.iter.id)
+        if table_names is None:
+            self.generic_visit(node)
+            return
+        assert isinstance(node.target, ast.Name)
+        self._loop_bindings.append((node.target.id, table_names))
+        self.generic_visit(node)
+        self._loop_bindings.pop()
+
+    def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+        template: list[str | None] = []
+        loop_var: str | None = None
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                template.append(value.value)
+            elif isinstance(value, ast.FormattedValue) and isinstance(
+                value.value, ast.Name
+            ):
+                bound = self._resolve(value.value.id)
+                if bound is None:
+                    return  # unresolvable substitution -- don't guess
+                loop_var = value.value.id
+                template.append(None)
+            else:
+                return  # a non-trivial expression -- don't guess
+        if loop_var is None:
+            return
+        for table_name in self._resolve(loop_var) or []:
+            self.rendered_statements.append(
+                "".join(part if part is not None else table_name for part in template)
+            )
+
+
+def _sql_strings_from_python_migration(path: Path) -> list[str]:
+    """Every string a .py migration could execute as ClickHouse DDL.
+
+    Plain string constants (``client.command/.query`` args and more; ``ast``
+    already merges adjacent literal concatenation like ``"a " "b"`` into one
+    ``Constant``, no manual joining needed) plus f-string DDL rendered by
+    ``_FStringDDLVisitor`` for the ``for table in TABLE_LIST:`` idiom. Non-SQL
+    string constants are harmless: they never match the CREATE/ALTER regexes.
     """
     try:
         tree = ast.parse(path.read_text(), filename=str(path))
     except SyntaxError:
         return []
-    strings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            strings.append(node.value)
+    strings: list[str] = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    visitor = _FStringDDLVisitor()
+    visitor.visit(tree)
+    strings.extend(visitor.rendered_statements)
     return strings
 
 

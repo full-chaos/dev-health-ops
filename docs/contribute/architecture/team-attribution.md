@@ -996,14 +996,14 @@ erDiagram
 
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
     team_project_ownership }o--|| projects : "project_id"
-    work_items }o--|| projects : "project_id (native tracker project; attribution source 1: issue_project)"
+    work_items }o--|| projects : "project_id -- Jira/GitLab/Linear only (attribution source 1: issue_project); for GitHub, project_id IS repo_full_name (no native Project entity, no projects row -- this edge does not hold for GitHub work items)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o--|| repos : "repo_id / repo_full_name"
     repos ||--o{ work_items : "repo_id"
     team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, PENDING): work_items' own OR (via work_item_dependencies, §2) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer"
 
-    repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts -- no org_id, no work_item_id: NOT tenant-scoped, NOT an attribution input)"
+    repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts; tenant-scoped by org_id since migration 027, but NO work_item_id: NOT an attribution input)"
     work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"
     git_pull_requests ||--o{ work_graph_issue_pr : "(repo_id, number = pr_number) (SCM-PR side of that same link)"
 
@@ -1087,6 +1087,7 @@ erDiagram
     git_pull_requests {
         uuid     repo_id
         uint32   number
+        string   org_id
         string   state
         string   author_email
         datetime created_at
@@ -1143,11 +1144,11 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
   (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
-- **`git_pull_requests` is not a work item and carries no `org_id`.** It is the raw git-log-sourced
-  PR fact table (`000_raw_tables.sql`) used for git-side PR metrics (review load, cycle time from the
-  git side) — it has no `work_item_id` and is not tenant-scoped, so it cannot itself be an attribution
-  input; `work_graph_issue_pr.pr_number` is the only column that ties a `git_pull_requests` row back
-  to a tracker work item.
+- **`git_pull_requests` is not a work item and carries no `work_item_id`.** It is the raw
+  git-log-sourced PR fact table (`000_raw_tables.sql`, tenant-scoped by `org_id` since migration
+  `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no
+  `work_item_id` column it cannot itself be an attribution input; `work_graph_issue_pr.pr_number`
+  is the only column that ties a `git_pull_requests` row back to a tracker work item.
 - **The `inferred` `team_repo_ownership.source` derivation (CHAOS-4365) is NOT a new
   attribution-ladder rank, and NOT a schema change.** `inferred` is already one of the five values
   ClickHouse accepts for this column (migration `051`) — this producer is its first writer, so a

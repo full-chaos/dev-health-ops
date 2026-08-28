@@ -46,6 +46,26 @@ import (
 // single document, not Wave 0 deliverable 2's actual web-operations
 // inventory. A later wave sources the registered-document set from that
 // real inventory; Wave 1 does not build that general pipeline.
+//
+// "featureFlags" (this wave's chosen operation key) vs "FeatureFlagRegistry"
+// (codex review, 2026-08-28, citing the operation inventory doc): two
+// Wave-0-era artifacts name this operation differently. The inventory doc
+// (.github/docs-legacy/plans/chaos-4366-operation-inventory.md) labels it
+// "FeatureFlagRegistry" -- the web client's named GraphQL operation
+// (`query FeatureFlagRegistry { featureFlags(...) {...} }`), useful there
+// as a human-readable traffic-frequency label. But plan §5 itself says
+// "operation name is telemetry only -- names collide and don't capture
+// aliases/fragments/changed selections", and Wave 0's OWN registry test
+// fixtures (tests/api/graphql/test_go_api_registry.py, merged before this
+// PR, e.g. line ~114) consistently use `selected_operation="featureFlags"`
+// -- the schema's root field name, not the client operation label. This
+// file follows that existing, already-merged test convention rather than
+// the inventory doc's client-side label, for internal consistency with
+// code that predates this PR. Whichever wave wires the REAL web-operations
+// inventory into the registry (the gap named two paragraphs up) must
+// reconcile this naming choice deliberately; it is not settled by this PR
+// either way, and this comment exists so that reconciliation is a decision,
+// not a rediscovery.
 const registeredFeatureFlagsDocument = `query FeatureFlags($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
   featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
     flags {
@@ -165,6 +185,18 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // ClickHouse client, without needing a real ClickHouse or a real
 // CLICKHOUSE_URI to prove the SWITCH half of the contract -- see
 // query_route_integration_test.go.
+//
+// Inherited, pre-existing gap this wave does NOT close (codex review,
+// 2026-08-28, re-raising it against this route -- it is PostgresSwitch's
+// own documented gap #2, not something introduced here): eligible_orgs
+// and rollout_percentage are not enforced. Mode=canary/primary is
+// reachable for every authenticated org once dispatched here, because
+// Switch.Enabled(operation string) takes no org argument at all -- see
+// PostgresSwitch's doc comment in internal/routeswitch/postgres_switch.go
+// for why (threading org through Enabled is a later wave's job, the same
+// wave that would also verify request document identity, gap #1). Wave 1
+// is local dual-run proof only (plan §5 stage 2); org-scoped canary
+// enforcement is a stage-5 concern this PR does not claim to satisfy.
 func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
 	documentDigest := digestHex(registeredFeatureFlagsDocument)
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, map[string]string{

@@ -162,7 +162,7 @@ func lastIndexByte(s string, b byte) int {
 func degradedResult(reason string) *model.FeatureFlagRegistryResult {
 	r := reason
 	return &model.FeatureFlagRegistryResult{
-		Flags:          nil,
+		Flags:          []model.FeatureFlagItem{},
 		TotalCount:     0,
 		DegradedReason: &r,
 	}
@@ -237,7 +237,16 @@ FROM (
 	}
 	defer rows.Close()
 
-	var flags []model.FeatureFlagItem
+	// Non-nil even with zero rows: the schema declares
+	// flags: [FeatureFlagItem!]! (non-null list). gqlgen's generated
+	// marshaler already allocates make(graphql.Array, len(v)) regardless
+	// of nil-ness -- len(nil) == 0 in Go, so a nil slice here already
+	// serializes as [] rather than null (verified: the degraded-path
+	// dual-run test asserts exactly `"flags": []`, not null, and passes).
+	// Initialized explicitly anyway (codex review, 2026-08-28) so that
+	// guarantee is visible at the call site, not only inside generated
+	// code a future reader would have to trace to confirm it.
+	flags := []model.FeatureFlagItem{}
 	for rows.Next() {
 		var provider, flagKey, projectKey, flagType string
 		var createdAt time.Time

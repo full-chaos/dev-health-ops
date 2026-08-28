@@ -1192,6 +1192,68 @@ WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
 
+#### `metrics daily-finalize` (CHAOS-4389)
+
+Repair a daily-metrics run stranded one step LATER than `daily-redrive`
+above: every partition has already succeeded, but the single
+`metrics.daily_finalize` job `CompletePartition` ever enqueues for the run
+(fixed idempotency key `metrics.daily_finalize:<run id>`, permanently
+deduped by the outbox) was discarded by River before `CompleteFinalize` ever
+ran — so the run sits `status='running'` forever despite 100% partition
+success. This is the finalize-side counterpart of the CHAOS-4358 gap
+`daily-redrive` closes for partitions/dispatch.
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics daily-finalize \
+  --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
+  --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
+```
+
+`--review-evidence` is **required**, with no default, mirroring
+`daily-redrive`'s bar: finalize writes `user_metrics_daily`/
+`ic_landscape_rolling_30d` directly, so state what you verified before
+authorizing a repeat run — e.g. confirmed no rows exist yet for this run's
+`target_day`, or that the prior job's `finalization_status` never reached
+`succeeded`.
+
+Exactly one of two scopes is required:
+
+- `--run <id>` repairs one named `daily_metrics_runs` row.
+- `--all-complete` sweeps every organization for runs `status='running'`
+  with every partition `succeeded` but finalization not settled (`--limit`
+  bounds one pass, default 500) and redrives each one found.
+
+Both re-verify eligibility (run still `running`, every partition
+`succeeded`, finalization `pending`/`failed`/`running`-with-an-expired-lease)
+under a row lock immediately before publishing, so a run that settled
+between being named and this call running is silently skipped rather than
+double-published — safe to run repeatedly, including against a run that
+already finalized (a no-op). Publishes under a fresh, nonce-scoped dedupe
+key (`metrics.daily_finalize:redrive:<run id>:<nonce>`), never the original
+permanently-deduped one:
+
+```sql
+SELECT dedupe_key, status, created_at FROM worker_job_outbox
+WHERE dedupe_key LIKE 'metrics.daily_finalize:redrive:%'
+ORDER BY created_at DESC;
+```
+
+Returns `{"candidates": [...run ids considered...], "finalize":
+{"FinalizedRunIDs": [...run ids a fresh job was actually enqueued for...]}}`.
+A `--run` id that turns out ineligible (already finalized, not all
+partitions succeeded, a live finalize lease still in flight) appears in
+`candidates` but not in `finalize.FinalizedRunIDs` — not an error.
+
+**Observability**: `dev_health_daily_metrics_stranded_finalize_runs_detected_total`
+(runs an `--all-complete` sweep found in this stranded shape) and
+`dev_health_daily_metrics_runs_finalized_by_sweep_total` (runs a fresh job
+was actually enqueued for) are wired but not live for THIS caller, for the
+same reason `daily-redrive`'s own counter above is not: `workerctl` is a
+one-shot CLI with no Prometheus scrape endpoint. Both become real the
+moment a future long-lived caller (e.g. an automatic reconciler sweep)
+invokes the same Go functions.
+
 #### `metrics remaining start` (CHAOS-4254)
 
 Dispatch a **new** remaining-metrics run for a historical `(organization,

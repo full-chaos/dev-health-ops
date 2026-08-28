@@ -301,6 +301,15 @@ type remainingMetricsManualBackfillLabels struct {
 // calls happened".
 var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_redriven"}
 
+// dailyMetricsFinalizeSweepOutcomes is the closed set of bounded outcomes a
+// CHAOS-4389 stranded-finalize sweep can report. "detected" counts runs
+// found status='running' with every partition succeeded but finalization
+// never reaching a terminal state; "finalized" counts runs a fresh
+// metrics.daily_finalize job was actually enqueued for (a subset of
+// detected -- a run whose finalize lease is still live is left alone this
+// pass and only becomes eligible on a later one).
+var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -464,6 +473,10 @@ type MetricsCollector struct {
 	// partition redrive activity by bounded reason. See
 	// dailyMetricsRedriveReasons for the vocabulary.
 	dailyMetricsRedrive map[string]uint64
+	// dailyMetricsFinalizeSweep (CHAOS-4389) counts stranded-finalize sweep
+	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
+	// the vocabulary.
+	dailyMetricsFinalizeSweep map[string]uint64
 	// Native family compute (CHAOS-4276, the daily bridge's per-partition
 	// counterpart to the DORA/capacity counters above). Duration is tracked
 	// per family since native families are cut over independently and one
@@ -599,6 +612,7 @@ var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -644,6 +658,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingOpenDayZeroRow:              make(map[string]uint64, len(remainingMetricsOpenDayZeroRowFamilies)),
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
+		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
@@ -731,6 +746,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, reason := range dailyMetricsRedriveReasons {
 		collector.dailyMetricsRedrive[reason] = 0
+	}
+	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
+		collector.dailyMetricsFinalizeSweep[outcome] = 0
 	}
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		collector.dailyMetricsCompatRetry[decision] = 0
@@ -1076,6 +1094,23 @@ func (collector *MetricsCollector) ObserveDailyMetricsRedrive(reason string, cou
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsRedrive[reason] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsFinalizeSweep records count runs for one bounded
+// outcome during a CHAOS-4389 stranded-finalize sweep. count must be >= 0,
+// matching ObserveDailyMetricsRedrive's discipline: a sweep pass that found
+// nothing still calls this with 0 so the series stays present, not absent.
+func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome string, count int) error {
+	if !slices.Contains(dailyMetricsFinalizeSweepOutcomes, outcome) {
+		return errors.New("daily metrics finalize sweep outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics finalize sweep count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsFinalizeSweep[outcome] += uint64(count)
 	return nil
 }
 
@@ -1808,6 +1843,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsRedrive(&output)
+	collector.writeDailyMetricsFinalizeSweep(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
@@ -2106,6 +2142,17 @@ func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Buil
 		writeUintSample(output, "dev_health_daily_metrics_redrive_partitions_total",
 			[]metricLabel{{"reason", reason}}, collector.dailyMetricsRedrive[reason])
 	}
+}
+
+// writeDailyMetricsFinalizeSweep exposes the CHAOS-4389 stranded-finalize
+// sweep counters as two distinct series (rather than one metric split by
+// label) so "how many runs are stuck" and "how many did we actually move"
+// each have their own unambiguous name for an alert to key off.
+func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", "Daily-metrics runs found status='running' with every partition succeeded but finalization never reaching a terminal state, detected by a CHAOS-4389 stranded-finalize sweep.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])
+	writeMetadata(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", "Daily-metrics runs whose metrics.daily_finalize job was freshly (re-)enqueued by a CHAOS-4389 stranded-finalize sweep, outside the outbox's normal per-run dedupe.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", nil, collector.dailyMetricsFinalizeSweep["finalized"])
 }
 
 // writeDailyMetricsNativeFamily exposes the daily bridge's per-family native

@@ -659,6 +659,51 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 
 const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
 
+// TestDispatchMetricsDailyFinalizeRequiresReviewEvidence mirrors
+// TestDispatchMetricsDailyRedriveRequiresReviewEvidence for the CHAOS-4389
+// `metrics daily-finalize` command: no default, no generic hardcoded
+// justification for authorizing a repeat finalize.
+func TestDispatchMetricsDailyFinalizeRequiresReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-finalize", "--run", "00000000-0000-4000-8000-000000000001",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsDailyFinalizeRequiresExactlyOneScope proves --run and
+// --all-complete are mutually exclusive and that at least one is required:
+// this command cannot tell which scope governs otherwise.
+func TestDispatchMetricsDailyFinalizeRequiresExactlyOneScope(t *testing.T) {
+	for name, args := range map[string][]string{
+		"neither": {"daily-finalize", "--review-evidence", "testing"},
+		"both": {
+			"daily-finalize", "--run", "00000000-0000-4000-8000-000000000001",
+			"--all-complete", "--review-evidence", "testing",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("case %s not rejected: code=%d stdout=%q stderr=%q", name, code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestDispatchMetricsDailyFinalizeRejectsInvalidRunID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-finalize", "--run", "not-a-uuid", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid run id not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestDispatchMetricsRemainingStartRequiresReviewEvidence(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{

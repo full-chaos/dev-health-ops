@@ -603,3 +603,73 @@ func TestObserveZeroUnitFinalizationOverflowBucketIsGlobalNotPerProvider(t *test
 			seriesCount, want)
 	}
 }
+
+// TestObserveDailyMetricsFinalizeSweepRecordsDetectedAndFinalizedSeparately
+// (CHAOS-4389) pins the two counters an operator/reconciler stranded-finalize
+// sweep reports: "detected" (a run found stuck) and "finalized" (a fresh
+// metrics.daily_finalize job actually enqueued for it) are DISTINCT metric
+// names, not one metric split by a label -- so an alert on "how many did we
+// actually move" cannot be silently satisfied by a pass that only detected.
+func TestObserveDailyMetricsFinalizeSweepRecordsDetectedAndFinalizedSeparately(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeSweep("detected", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeSweep("finalized", 2); err != nil {
+		t.Fatal(err)
+	}
+	// A second pass accumulates rather than replacing.
+	if err := collector.ObserveDailyMetricsFinalizeSweep("detected", 1); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		"# HELP dev_health_daily_metrics_stranded_finalize_runs_detected_total ",
+		"# HELP dev_health_daily_metrics_runs_finalized_by_sweep_total ",
+		"dev_health_daily_metrics_stranded_finalize_runs_detected_total 4",
+		"dev_health_daily_metrics_runs_finalized_by_sweep_total 2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing exposition content %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestObserveDailyMetricsFinalizeSweepIsPreSeededAtZero ensures both series
+// are present (not merely absent-until-observed) before anything ever
+// strands, matching every other bounded-vocabulary observer in this package
+// -- an alert must have something to bind to before the first incident.
+func TestObserveDailyMetricsFinalizeSweepIsPreSeededAtZero(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		"dev_health_daily_metrics_stranded_finalize_runs_detected_total 0",
+		"dev_health_daily_metrics_runs_finalized_by_sweep_total 0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing pre-seeded zero %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestObserveDailyMetricsFinalizeSweepRejectsUnregisteredOutcomeAndNegativeCount(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeSweep("skipped", 1); err == nil {
+		t.Fatal("unbounded finalize sweep outcome was accepted into a metric")
+	}
+	if err := collector.ObserveDailyMetricsFinalizeSweep("detected", -1); err == nil {
+		t.Fatal("negative finalize sweep count was accepted")
+	}
+}

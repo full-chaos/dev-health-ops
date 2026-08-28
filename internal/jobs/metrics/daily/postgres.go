@@ -79,12 +79,13 @@ const postSyncGenerationPrefix = "post-sync:"
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool              *pgxpool.Pool
-	lease             time.Duration
-	now               func() time.Time
-	leaseObserver     jobruntime.DailyMetricsLeaseObserver
-	discoveryObserver jobruntime.DailyMetricsDiscoveryObserver
-	redriveObserver   jobruntime.DailyMetricsRedriveObserver
+	pool                  *pgxpool.Pool
+	lease                 time.Duration
+	now                   func() time.Time
+	leaseObserver         jobruntime.DailyMetricsLeaseObserver
+	discoveryObserver     jobruntime.DailyMetricsDiscoveryObserver
+	redriveObserver       jobruntime.DailyMetricsRedriveObserver
+	finalizeSweepObserver jobruntime.DailyMetricsFinalizeSweepObserver
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -101,6 +102,23 @@ func (store *PostgresStore) SetRedriveObserver(observer jobruntime.DailyMetricsR
 func (store *PostgresStore) observeRedrive(reason string, count int) {
 	if store.redriveObserver != nil && count > 0 {
 		_ = store.redriveObserver.ObserveDailyMetricsRedrive(reason, count)
+	}
+}
+
+// SetFinalizeSweepObserver wires the optional stranded-finalize sweep
+// telemetry observer (CHAOS-4389). Telemetry must never gate durable state:
+// a nil or never-set observer makes observeFinalizeSweep a silent no-op,
+// matching redriveObserver's discipline.
+func (store *PostgresStore) SetFinalizeSweepObserver(observer jobruntime.DailyMetricsFinalizeSweepObserver) {
+	if store == nil {
+		return
+	}
+	store.finalizeSweepObserver = observer
+}
+
+func (store *PostgresStore) observeFinalizeSweep(outcome string, count int) {
+	if store.finalizeSweepObserver != nil && count > 0 {
+		_ = store.finalizeSweepObserver.ObserveDailyMetricsFinalizeSweep(outcome, count)
 	}
 }
 

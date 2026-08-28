@@ -240,5 +240,57 @@ func (publisher *PostgresPublisher) PublishFinalizeTx(
 	return nil
 }
 
+// PublishRedriveFinalizeTx enqueues a NEW metrics.daily_finalize job for a
+// run an operator/sweep explicitly named for redrive (CHAOS-4389). Mirrors
+// PublishRedriveDispatchTx/PublishRedrivePartitionTx (CHAOS-4358): the
+// ordinary PublishFinalizeTx (called exactly once, from CompletePartition,
+// the instant a run's last partition transitions to 'succeeded') always uses
+// the fixed idempotency key "metrics.daily_finalize:"+run.ID, and the
+// outbox's dedupe table remembers that key FOREVER ("ON CONFLICT
+// (dedupe_key) DO NOTHING") -- so once River discards that one job (the
+// compatibility bridge's Finalize call failing repeatedly, e.g. the
+// CHAOS-4361 memory-bound class, or any other retryable error exhausting
+// River's attempt budget before CompleteFinalize ever runs), nothing else
+// ever re-enqueues it and the run is stranded status='running' forever with
+// 100% of its partitions succeeded -- the CHAOS-4389 gap. nonce must be
+// unique per invocation (a fresh UUID is the expected caller pattern),
+// matching the sibling redrive publishers' contract.
+func (publisher *PostgresPublisher) PublishRedriveFinalizeTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	run Run,
+	nonce string,
+) error {
+	if publisher == nil || publisher.producer == nil || tx == nil || nonce == "" {
+		return ErrUnavailable
+	}
+	descriptor, ok := publisher.registry.Descriptor(jobcontract.KindDailyMetricsFinalize)
+	if !ok {
+		return ErrUnavailable
+	}
+	organizationID := run.OrganizationID
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "daily:" + run.ID,
+		IdempotencyKey:  "metrics.daily_finalize:redrive:" + run.ID + ":" + nonce,
+		Domain: jobcontract.DomainLink{
+			Type: "daily_metrics_run",
+			ID:   run.ID,
+		},
+		Payload: jobcontract.DailyMetricsFinalizePayload{RunID: run.ID},
+	}
+	if !descriptor.Executable() {
+		return fmt.Errorf("%w: daily finalize route is not executable", ErrInvalidState)
+	}
+	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsFinalize, envelope); err != nil {
+		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
+		}
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
+}
+
 var _ Publisher = (*PostgresPublisher)(nil)
 var _ RunPublisher = (*PostgresPublisher)(nil)

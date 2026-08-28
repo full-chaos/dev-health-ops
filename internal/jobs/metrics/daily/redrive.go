@@ -2,8 +2,11 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const dailyTargetDayLayout = "2006-01-02"
@@ -233,4 +236,175 @@ ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	store.observeRedrive("failed_permanent_reset", outcome.PermanentReset)
 	store.observeRedrive("dispatch_redriven", outcome.RedrivenPartitions)
 	return outcome, nil
+}
+
+// defaultFinalizeSweepLimit bounds how many stranded-finalize candidates one
+// FindStrandedFinalizeRuns pass returns, so an operator/reconciler sweep
+// never locks an unbounded number of rows in one pass.
+const defaultFinalizeSweepLimit = 500
+
+// FindStrandedFinalizeRuns lists daily_metrics_runs ids in the CHAOS-4389
+// stranding class: status='running', every partition succeeded, but
+// finalization never reached a terminal state and nothing is currently
+// working it (finalization_status is 'pending'/'failed', or 'running' with
+// an expired lease). This mirrors CHAOS-4358's DispatchablePartitions gap
+// one layer later: CompletePartition enqueues metrics.daily_finalize exactly
+// once per run, under the fixed idempotency key "metrics.daily_finalize:"+
+// run.ID, permanently deduped by the outbox -- so if that one job is ever
+// discarded by River before CompleteFinalize runs, nothing else ever
+// re-enqueues it. Scoped across every organization (unlike
+// RedriveStrandedPartitions's org+day-range scope) because an operator
+// naming this stranding shape does not know in advance which orgs/days it
+// hit -- that is exactly what this scan answers. limit <= 0 uses
+// defaultFinalizeSweepLimit.
+func (store *PostgresStore) FindStrandedFinalizeRuns(ctx context.Context, limit int) ([]string, error) {
+	if !store.valid() {
+		return nil, ErrUnavailable
+	}
+	if limit <= 0 {
+		limit = defaultFinalizeSweepLimit
+	}
+	now := store.now().UTC()
+	rows, err := store.pool.Query(ctx, `
+SELECT run.id::text
+FROM public.daily_metrics_runs AS run
+WHERE run.status = 'running'
+  AND (
+    run.finalization_status IN ('pending', 'failed')
+    OR (run.finalization_status = 'running' AND run.finalization_lease_expires_at < $1)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+ORDER BY run.updated_at
+LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	var runIDs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, ErrUnavailable
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if rows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	store.observeFinalizeSweep("detected", len(runIDs))
+	return runIDs, nil
+}
+
+// FinalizeRedriveOutcome summarizes one CHAOS-4389 stranded-finalize redrive
+// pass.
+type FinalizeRedriveOutcome struct {
+	// FinalizedRunIDs lists every run a fresh metrics.daily_finalize job was
+	// freshly enqueued for.
+	FinalizedRunIDs []string
+}
+
+// RedriveStrandedFinalize enqueues a fresh metrics.daily_finalize job
+// (CHAOS-4389) for each run in runIDs, re-verifying eligibility under a row
+// lock immediately before publishing -- the same defense-in-depth
+// RedriveStrandedPartitions uses -- so a run that settled (its original
+// finalize completed, or another caller already redrove it) between the
+// caller naming it and this call runs is silently skipped rather than
+// double-published or erroring the whole batch. Safe to call repeatedly:
+// each pass only ever touches runs still eligible at the instant of its own
+// row lock. nonce must be unique per invocation (a fresh UUID is the
+// expected caller pattern), matching the sibling redrive publishers'
+// contract -- reused across every runID in this call, since each run's
+// dedupe key already embeds its own run.ID and this call is one coherent
+// operator/sweep action.
+func (store *PostgresStore) RedriveStrandedFinalize(
+	ctx context.Context,
+	publisher *PostgresPublisher,
+	runIDs []string,
+	nonce string,
+) (FinalizeRedriveOutcome, error) {
+	var outcome FinalizeRedriveOutcome
+	if !store.valid() || publisher == nil || nonce == "" {
+		return outcome, ErrUnavailable
+	}
+	now := store.now().UTC()
+	for _, runID := range runIDs {
+		if !validUUID(runID) {
+			return outcome, ErrInvalidState
+		}
+		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now)
+		if err != nil {
+			return outcome, err
+		}
+		if finalized {
+			outcome.FinalizedRunIDs = append(outcome.FinalizedRunIDs, runID)
+		}
+	}
+	sort.Strings(outcome.FinalizedRunIDs)
+	store.observeFinalizeSweep("finalized", len(outcome.FinalizedRunIDs))
+	return outcome, nil
+}
+
+// redriveOneStrandedFinalize re-verifies and, if still eligible, redrives
+// exactly one run's finalize inside its own transaction, so one run's
+// dedupe/policy rejection cannot roll back an otherwise-successful batch.
+func (store *PostgresStore) redriveOneStrandedFinalize(
+	ctx context.Context,
+	publisher *PostgresPublisher,
+	runID, nonce string,
+	now time.Time,
+) (bool, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+
+	var run Run
+	var targetDay, finalizationStatus string
+	var leaseExpiresAt *time.Time
+	var partitionsReady bool
+	err = tx.QueryRow(ctx, `
+SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
+  run.finalization_status, run.finalization_lease_expires_at,
+  NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+FROM public.daily_metrics_runs AS run
+WHERE run.id = $1::uuid
+FOR UPDATE OF run`, runID).Scan(
+		&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay,
+		&finalizationStatus, &leaseExpiresAt, &partitionsReady,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	if run.Status != "running" || !partitionsReady {
+		return false, nil
+	}
+	eligible := finalizationStatus == "pending" || finalizationStatus == "failed" ||
+		(finalizationStatus == "running" && (leaseExpiresAt == nil || leaseExpiresAt.Before(now)))
+	if !eligible {
+		return false, nil
+	}
+	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {
+		return false, ErrInvalidState
+	}
+	if err := publisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, ErrUnavailable
+	}
+	return true, nil
 }

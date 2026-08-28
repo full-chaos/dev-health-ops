@@ -209,6 +209,23 @@ type DailyMetricsRedriveObserver interface {
 	ObserveDailyMetricsRedrive(reason string, count int) error
 }
 
+// DailyMetricsFinalizeSweepObserver is the narrow capability
+// PostgresStore.FindStrandedFinalizeRuns/RedriveStrandedFinalize depend on
+// (CHAOS-4389): a daily_metrics_run whose partitions are all succeeded but
+// whose metrics.daily_finalize job was discarded by River (permanently
+// deduped by the outbox's fixed per-run idempotency key, so nothing else
+// ever re-enqueues it) stays status='running' forever unless an operator or
+// reconciler sweep redrives it. "detected" counts runs a sweep pass found in
+// this stranded shape; "finalized" counts runs a fresh
+// metrics.daily_finalize job was actually (re-)enqueued for -- a subset of
+// detected, since a run whose finalize lease is still live is detected but
+// deliberately left alone. A nil observer makes this a silent no-op,
+// matching every other observer in this package: telemetry must never gate
+// durable state.
+type DailyMetricsFinalizeSweepObserver interface {
+	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
+}
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

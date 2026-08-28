@@ -151,8 +151,8 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "River worker `cmd/dev-health-worker/daily.go:236` (`daily.NewFinalizeHandler(store, compatibility)`)",
         "trigger": "follows partition completion (same run)",
         "gate": "none found",
-        "writer": "Go run bookkeeping (`postgres.go:630,661,1100,1126,1160`); finalize-side per-family compute still holds a `compatibility` (bridge) executor dependency",
-        "tables": "`public.daily_metrics_runs`",
+        "writer": "Go run bookkeeping (`postgres.go:630,661,1100,1126,1160`); the actual finalize compute is Python `worker_metrics.py:1688 _run_daily_direct` (operation='finalize') -> `src/dev_health_ops/metrics/job_daily.py:1997 run_daily_metrics_finalize` -- IC cross-repo aggregation, reading already-persisted `user_metrics_daily`/`work_item_user_metrics_daily`",
+        "tables": "`public.daily_metrics_runs` (Go); ClickHouse `ic_landscape_rolling_30d` and team-level metric tables (Python finalize compute -- corrected 2026-08-28 per codex review, an earlier draft of this row omitted the Python writer and its output tables entirely)",
         "evidence": "argued — code read, not re-executed this session",
         "state": "mixed",
         "ticket": "CHAOS-3092 children (per-family)",
@@ -270,7 +270,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "n/a — matches migration-state.json canary state, no gap",
     },
     "sync.team_autoimport": {
-        "producer": "`internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`), wired `cmd/dev-health-worker/sync_dispatch.go:565`",
+        "producer": "enqueue: `cmd/dev-health-worker/sync_dispatch.go:195 teamAutoimportPostSyncWriter.PublishTx` (stages the job in the post-sync fanout transaction, unconditionally on every sync run); dequeue/consumer: `internal/syncdispatchruntime/worker.go:95 RegisterTeamAutoimportWorker`, wired `sync_dispatch.go:565` (corrected 2026-08-28 per codex review -- an earlier draft cited only the consumer registration as the producer)",
         "trigger": "post-sync (best-effort, fire-and-forget)",
         "gate": "per-config teams/projects/members selections (CHAOS-4323); read inside the Python populators, see CHAOS-4430 for the executed proof of whether the selections are honoured",
         "writer": "`bridge.go:113 TeamAutoImport` -> POST `/api/internal/worker-sync/team-autoimport` -> `worker_sync.py:269 team_autoimport_reference` -> `workers/team_autoimport.py:228 run_post_sync_team_autoimport` -> per-provider `populate()` (`team_autoimport_{linear,github,gitlab,jira}.py`)",
@@ -409,9 +409,9 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4439 (dead worker modules)",
     },
     "feature_flag_sync.py": {
-        "category": "b",
-        "evidence": "no decorator, ZERO importers anywhere (workers/, api/, tests/) — more orphaned than a celery-task file",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "category": "a",
+        "evidence": "LIVE — corrected 2026-08-28 per codex review, an earlier draft wrongly claimed zero importers. `_sync_gitlab_feature_flags`/`_sync_launchdarkly_feature_flags` imported and called unconditionally at `processors/dataset_adapters.py:684`, inside `_run_feature_flags_dataset`, itself called from `dataset_adapters.py:758` (the live provider-sync dataset dispatcher, GitLab/LaunchDarkly feature-flag datasets)",
+        "ticket": "n/a — live",
     },
     "job_outbox.py": {
         "category": "a",
@@ -435,8 +435,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "org_guard.py": {
         "category": "c",
-        "evidence": "imported only by metrics_daily.py/sync_scheduler.py (both dead) — no surviving live consumer",
-        "ticket": "CHAOS-4439 (dead worker modules, flagged alongside)",
+        "evidence": "corrected 2026-08-28 per codex review (a 3rd caller exists, but is itself dead): `organization_exists_sync` is also called at `sync/execution_trigger.py:325`, inside `_require_locked_scheduled_eligibility` — but that function's ONLY caller is `create_scheduled_sync_execution_trigger` (`execution_trigger.py:74`), whose ONLY caller is `sync_scheduler.py:318` (dead, category b below). `create_sync_execution_trigger` (the function the LIVE admin router `api/admin/routers/sync.py` calls) does NOT reach this eligibility check. Do not delete without re-verifying this chain at delete time — a future refactor could make `create_scheduled_sync_execution_trigger` live again",
+        "ticket": "CHAOS-4439 (re-verify chain before deleting)",
     },
     "post_sync_dispatch.py": {
         "category": "a",
@@ -480,8 +480,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "report_task.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L113 execute_saved_report); sole importer tasks.py:12",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "corrected 2026-08-28 per codex review: `execute_saved_report` also has a live caller — `api/graphql/resolvers/reports.py:617`, inside the on-demand report GraphQL mutation, calls `execute_saved_report.apply_async(...)` wrapped in `try/except (ImportError, AttributeError): pass`. That call is a Celery dispatch with no consumer (Celery retired, CHAOS-4026) so it is a live call site with a dead effect — deleting this file changes that call from 'silently enqueues into a void' to 'silently ImportErrors, same net no-op' (the except clause already handles absence), but the reports.py:617 call site must be removed/updated in the SAME change, not left importing a deleted module",
+        "ticket": "CHAOS-4439 (coordinate with reports.py:617 removal, not a pure file deletion)",
     },
     "runner.py": {
         "category": "c",
@@ -515,8 +515,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "system_tasks.py": {
         "category": "c",
-        "evidence": "pure re-export shim of system_ops/system_webhooks; sole importer tasks.py:23-27 — dead aggregator, real functions separately live via direct imports",
-        "ticket": "CHAOS-4439 (dead worker modules, flagged alongside)",
+        "evidence": "corrected 2026-08-28 per codex review: NOT a dead shim — `api/webhooks/router.py:34` and `api/billing/router.py:45` import `process_webhook_event`/`send_billing_notification` from this module and call `.delay(...)`/`.apply_async(...)` on them, gated behind `if route_requires_celery(route):`. Since `operational.webhook_delivery`/`billing_notification` are `route=river` in migration-state.json, that gate evaluates false in production today, so the call is live-but-inert (same 'live call site, dead effect' shape as report_task.py above) — the module itself cannot be deleted without removing these two router imports first",
+        "ticket": "CHAOS-4439 (coordinate with api/webhooks/router.py + api/billing/router.py, not a pure file deletion)",
     },
     "system_webhooks.py": {
         "category": "a",

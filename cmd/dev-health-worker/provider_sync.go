@@ -813,6 +813,16 @@ func constructProviderSyncWorkerWithDependencies(
 		providersync.PostgresIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
 		collector, logger, workItemsRuntime,
 	)
+	// CHAOS-4078: repository was constructed before providerMetrics existed
+	// (buildProviderSyncHandlerWithRuntimeDependencies owns the one
+	// NewMetrics() call -- see its doc comment and
+	// TestBuildProviderSyncHandlerSharesOneMetricsInstance, which this must
+	// not duplicate). Wire the SAME instance in after the fact: repository is
+	// a pointer, and handler.Ledger already holds this identical pointer, so
+	// this mutation is visible through both references. Without it,
+	// dev_health_provider_unit_claimed_total/_failed_total stay permanently
+	// zero in production despite the counters being fully wired in Claim/Fail.
+	repository.Metrics = providerMetrics
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{
 			Logger: logger, Observer: observer,

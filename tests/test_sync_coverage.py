@@ -12,6 +12,7 @@ from dev_health_ops.api.services.sync_coverage import (
     SyncCoverageComplexityError,
     UnitWindow,
     _effective_dataset_keys_for_unit,
+    _family_window_weight,
     _not_enabled_dataset_keys,
     _query_dataset_keys_for_scope,
     build_coverage_summary_payload,
@@ -692,6 +693,36 @@ def test_query_dataset_keys_for_scope_includes_canonical_cicd_for_tests_child():
 
     assert "cicd" in keys
     assert "tests" in keys
+
+
+def test_family_window_weight_isolates_each_family_when_scope_spans_several():
+    """CHAOS-4078 regression: a scope naming BOTH a work-items child and a
+    PR-social child must weight a ``work-items`` row only by the work-items
+    members in scope, and a ``prs`` row only by the PR-social members --
+    never summed across families (which would overcount one family's rows
+    and, via the opposite bug, undercount a folded prs/cicd row's real
+    window expansion and let the lookback selector accept more history than
+    the row budget can hold)."""
+    scope = EffectiveScope(
+        integration_id=uuid.uuid4(),
+        sources=(),
+        dataset_keys=("work-item-comments", "work-item-labels", "pr-comments"),
+    )
+
+    assert _family_window_weight(scope, "work-items") == 2
+    assert _family_window_weight(scope, "prs") == 1
+    # cicd has no members in this scope at all -- floors at 1, never 0.
+    assert _family_window_weight(scope, "cicd") == 1
+
+
+def test_family_window_weight_floors_at_one_with_no_members_in_scope():
+    scope = EffectiveScope(
+        integration_id=uuid.uuid4(), sources=(), dataset_keys=("commits",)
+    )
+
+    assert _family_window_weight(scope, "work-items") == 1
+    assert _family_window_weight(scope, "prs") == 1
+    assert _family_window_weight(scope, "cicd") == 1
 
 
 @pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)

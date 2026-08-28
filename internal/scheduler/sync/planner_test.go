@@ -219,16 +219,20 @@ func TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter(t *te
 	// under the canonical writer, carrying the alias's own completion flag.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name      string
-		provider  string
-		alias     string
-		canonical string
+		name          string
+		provider      string
+		alias         string
+		canonical     string
+		wantCostClass string
 	}{
-		{"github pr-comments", "github", "pr-comments", "prs"},
-		{"github pr-reviews", "github", "pr-reviews", "prs"},
-		{"github tests", "github", "tests", "cicd"},
-		{"gitlab pr-comments", "gitlab", "pr-comments", "prs"},
-		{"gitlab tests", "gitlab", "tests", "cicd"},
+		{"github pr-comments", "github", "pr-comments", "prs", "medium"},
+		{"github pr-reviews", "github", "pr-reviews", "prs", "medium"},
+		// tests is HEAVY while cicd (its canonical) is MEDIUM: the fold must
+		// stamp the heavier class so a tests-only unit still enters
+		// dispatch/provider-budget buckets as heavy (CHAOS-4078 review finding).
+		{"github tests", "github", "tests", "cicd", "heavy"},
+		{"gitlab pr-comments", "gitlab", "pr-comments", "prs", "medium"},
+		{"gitlab tests", "gitlab", "tests", "cicd", "heavy"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			units, err := BuildScheduledPlan(PlannerInput{
@@ -251,7 +255,28 @@ func TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter(t *te
 			if !units[0].ProcessorFlags[flag] {
 				t.Errorf("completion flag %q missing from %+v", flag, units[0].ProcessorFlags)
 			}
+			if units[0].CostClass != test.wantCostClass {
+				t.Errorf("cost_class=%q, want %q for %+v", units[0].CostClass, test.wantCostClass, units[0])
+			}
 		})
+	}
+}
+
+func TestBuildScheduledPlanTestOpsFoldStaysMediumWhenOnlyCicdIsEnabled(t *testing.T) {
+	// Inverse of the heavy-cost-class regression: a plain cicd-only selection
+	// (no tests alias) must NOT be inflated to heavy -- the weighted max only
+	// raises the class, never lowers a genuinely lighter one.
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	units, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "cicd"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Dataset != "cicd" || units[0].CostClass != "medium" {
+		t.Fatalf("units=%+v, want exactly one medium cicd unit", units)
 	}
 }
 

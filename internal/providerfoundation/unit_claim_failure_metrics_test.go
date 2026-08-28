@@ -46,7 +46,7 @@ func TestUnitFailedCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 	metrics.RecordUnitFailed("GitHub", "pr-comments", "feature_disabled")
 	metrics.RecordUnitFailed("github", "pr-comments", "feature_disabled")
 	metrics.RecordUnitFailed("github", "tests", "pagination_incomplete")
-	metrics.RecordUnitFailed("gitlab", "cicd", "provider_error")
+	metrics.RecordUnitFailed("gitlab", "cicd", "provider_unit_exhausted")
 	metrics.RecordUnitFailed("github", "prs", "a-reason-nobody-registered")
 	var nilMetrics *Metrics
 	nilMetrics.RecordUnitFailed("github", "prs", "feature_disabled")
@@ -60,7 +60,7 @@ func TestUnitFailedCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 		"# TYPE dev_health_provider_unit_failed_total counter",
 		`dev_health_provider_unit_failed_total{provider="github",dataset="pr-comments",reason="feature_disabled"} 2`,
 		`dev_health_provider_unit_failed_total{provider="github",dataset="tests",reason="pagination_incomplete"} 1`,
-		`dev_health_provider_unit_failed_total{provider="gitlab",dataset="cicd",reason="provider_error"} 1`,
+		`dev_health_provider_unit_failed_total{provider="gitlab",dataset="cicd",reason="provider_unit_exhausted"} 1`,
 		`dev_health_provider_unit_failed_total{provider="github",dataset="prs",reason="other"} 1`,
 	} {
 		if !strings.Contains(rendered, want) {

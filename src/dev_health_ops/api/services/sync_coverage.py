@@ -815,11 +815,22 @@ def _terminal_unit_base_filters(
     ]
 
 
-def _work_item_window_weight(scope: EffectiveScope) -> int:
-    return max(
-        sum(1 for key in scope.dataset_keys if _is_family_child_dataset_key(key)),
-        1,
-    )
+def _family_window_weight(scope: EffectiveScope, canonical_key: str) -> int:
+    """Weight of ONE persisted unit row keyed under ``canonical_key``: the
+    number of effective coverage windows ``_effective_dataset_keys_for_unit``
+    will expand it into, bounded by how many of THAT family's own members
+    this scope actually asks about (never less than 1).
+
+    CHAOS-4078: this must be computed per canonical family, not as a single
+    flat scalar applied to every composite row. A scope spanning both a
+    work-items child (e.g. ``work-item-comments``) and a PR-social child
+    (e.g. ``pr-comments``) must weight a ``work-items`` row only by the
+    work-items members in scope, and a ``prs`` row only by the PR-social
+    members in scope -- summing across families would overcount one and
+    undercount the other.
+    """
+    members = _CANONICAL_FAMILY_DATASETS.get(canonical_key, ())
+    return max(sum(1 for key in scope.dataset_keys if key in members), 1)
 
 
 async def _weighted_unit_window_count(
@@ -830,18 +841,21 @@ async def _weighted_unit_window_count(
     limit: int,
 ) -> int:
     bounded_units = unit_rows.limit(limit + 1).subquery()
+    # One WHEN branch per canonical family (work-items, prs, cicd) -- a
+    # composite row expands into as many coverage windows as that family has
+    # members in scope. A non-family dataset_key (or a family with none of
+    # its members in scope) falls through to the ELSE weight of 1, matching
+    # _effective_dataset_keys' own raw-key fallback.
+    weight_cases = tuple(
+        (
+            bounded_units.c.dataset_key == canonical_key,
+            _family_window_weight(scope, canonical_key),
+        )
+        for canonical_key in _CANONICAL_FAMILY_DATASETS
+    )
     stmt = select(
         func.coalesce(
-            func.sum(
-                case(
-                    (
-                        bounded_units.c.dataset_key
-                        == _WORK_ITEMS_CANONICAL_DATASET_KEY,
-                        _work_item_window_weight(scope),
-                    ),
-                    else_=1,
-                )
-            ),
+            func.sum(case(*weight_cases, else_=1)),
             0,
         )
     ).select_from(bounded_units)

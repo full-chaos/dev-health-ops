@@ -582,6 +582,36 @@ def test_requested_tests_dataset_folds_onto_the_canonical_cicd_writer(
     assert flags.get("family_dataset_cicd") is not True
     assert flags.get("sync_cicd") is True
     assert flags.get("sync_tests") is True
+    # CHAOS-4078 review finding: "tests" is HEAVY while "cicd" is MEDIUM.
+    # A tests-only fold must still enter dispatch/provider-budget buckets as
+    # heavy, even though it plans under the canonical "cicd" dataset_key.
+    assert unit.cost_class == "heavy"
+
+
+@pytest.mark.parametrize("provider", ["github", "gitlab"])
+def test_testops_fold_stays_medium_when_only_cicd_is_enabled(db_session, provider: str):
+    """The inverse of the heavy-cost-class regression: a plain cicd-only
+    selection (no tests alias) must NOT be inflated to heavy -- the weighted
+    max only raises the class, never lowers a genuinely lighter one."""
+    integration = _create_integration(db_session, provider)
+    _create_source(db_session, integration, external_id="full-chaos/dev-health")
+    _create_dataset(db_session, integration, "cicd")
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            dataset_keys=("cicd",),
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    assert units[0].dataset_key == "cicd"
+    assert units[0].cost_class == "medium"
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])

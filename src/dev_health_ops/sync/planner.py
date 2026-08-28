@@ -1115,6 +1115,15 @@ _PR_SOCIAL_CANONICAL_DATASET_KEY = PR_SOCIAL_CANONICAL_DATASET_KEY
 _TESTOPS_DATASETS: frozenset[str] = frozenset(TESTOPS_DATASETS)
 _TESTOPS_CANONICAL_DATASET_KEY = TESTOPS_CANONICAL_DATASET_KEY
 
+# Ordinal so a fold can pick the most restrictive (heaviest) cost class among
+# its contributing members -- see _build_fold_family_units. Mirrors Go's
+# costClassWeight in internal/scheduler/sync/planner.go.
+_COST_CLASS_WEIGHT: dict[CostClass, int] = {
+    CostClass.LIGHT: 0,
+    CostClass.MEDIUM: 1,
+    CostClass.HEAVY: 2,
+}
+
 
 def _build_fold_family_units(
     *,
@@ -1188,9 +1197,23 @@ def _build_fold_family_units(
     # flags -- back only to the datasets this org actually enabled. This is
     # the opposite of the work-item family's unconditional all-members stamp:
     # a fold family never claims a sibling nobody asked to sync.
+    #
+    # The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
+    # class among contributing members, not just the canonical identity's
+    # own. "tests" is heavy while "cicd" is medium; a tests-only fold must
+    # still enter dispatch/provider-budget buckets as heavy, even though it
+    # plans and executes under the canonical "cicd" dataset_key. Per-member
+    # window sizing already used each member's own spec via _resolve_windows
+    # above -- this only affects the unit's stamped classification.
+    unit_cost_class = canonical_spec.default_cost_class
     for dataset, spec in family_specs:
         processor_flags[family_dataset_flag(dataset.dataset_key)] = True
         processor_flags.update(spec.processor_flags)
+        if (
+            _COST_CLASS_WEIGHT[spec.default_cost_class]
+            > _COST_CLASS_WEIGHT[unit_cost_class]
+        ):
+            unit_cost_class = spec.default_cost_class
 
     return [
         PlannedUnit(
@@ -1199,7 +1222,7 @@ def _build_fold_family_units(
             source_id=str(source.id),
             provider=provider,
             dataset_key=canonical_dataset_key,
-            cost_class=canonical_spec.default_cost_class.value,
+            cost_class=unit_cost_class.value,
             mode=mode,
             window_start=window_start,
             window_end=window_end,

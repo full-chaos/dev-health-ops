@@ -498,6 +498,15 @@ func foldContributingFamilyUnit(
 	// flags -- back only to the datasets this org actually enabled. This is
 	// the opposite of the work-item family's unconditional all-members
 	// stamp: a fold family never claims a sibling nobody asked to sync.
+	//
+	// The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
+	// class among contributing members, not just the canonical identity's
+	// own. "tests" is heavy while "cicd" is medium; a tests-only fold must
+	// still enter dispatch/provider-budget buckets as heavy, even though it
+	// plans and executes under the canonical "cicd" dataset_key. Per-member
+	// window sizing already used each member's own spec via resolveWindow
+	// above -- this only affects the unit's stamped classification.
+	unitCostClass := canonicalSpec.CostClass
 	for _, dataset := range members {
 		flags[familyDatasetFlag(dataset.Key)] = true
 		memberSpec, ok := datasetSpecification(provider, dataset.Key)
@@ -507,10 +516,31 @@ func foldContributingFamilyUnit(
 		for flagName, flagValue := range memberSpec.ProcessorFlags {
 			flags[flagName] = flagValue
 		}
+		if costClassWeight(memberSpec.CostClass) > costClassWeight(unitCostClass) {
+			unitCostClass = memberSpec.CostClass
+		}
 	}
-	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
+	stampedSpec := canonicalSpec
+	stampedSpec.CostClass = unitCostClass
+	unit := newPlannedUnit(input, source, canonicalDataset, stampedSpec, earliest, latest)
 	unit.ProcessorFlags = flags
 	return unit, true
+}
+
+// costClassWeight orders the three cost classes so a fold can pick the most
+// restrictive (heaviest) one among its contributing members. An unrecognized
+// value sorts as the lightest, never silently upgrading the budget bucket.
+func costClassWeight(costClass string) int {
+	switch costClass {
+	case "heavy":
+		return 2
+	case "medium":
+		return 1
+	case "light":
+		return 0
+	default:
+		return 0
+	}
 }
 
 // resolveWindow is the single window pipeline every planned unit goes through:

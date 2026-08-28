@@ -623,25 +623,37 @@ func (m *Metrics) RecordUnitClaimed(provider, dataset string) {
 }
 
 // metricUnitFailureReasonVocabulary is the closed set of durable
-// sync_run_units failure categories (CHAOS-4078). Sourced from every reason
-// currently written into a claim's terminal `error_category` across
-// internal/syncreconciler, internal/syncdispatchruntime, and
-// internal/providersync. An unrecognized category collapses to "other"
+// sync_run_units failure categories (CHAOS-4078). This is exactly the set of
+// literal category strings internal/jobs/providerunit/providerunit.go's four
+// handler.Repository.Fail(...) call sites can pass -- the only production
+// caller of PostgresRepository.Fail for provider-sync units --
+// cross-referenced against every exported *Category constant in that
+// package: deterministicTerminalCategory's five ErrIs branches plus its
+// ErrorAuthentication/ErrorNotFound switch, exhaustedFailureCategory's two
+// return values, and the route-reconciliation and rate-limit-episode-
+// exhaustion call sites. An unrecognized category collapses to "other"
 // rather than opening the label dimension to a hostile or buggy producer.
+//
+// Two callers still bypass PostgresRepository.Fail with direct SQL
+// (internal/syncdispatchruntime/dispatch_denial.go's "dispatch_denied",
+// internal/syncreconciler/unreclaimable_sweep.go's "feature_disabled" /
+// "terminal_river_delivery" reconciliation sweep) and so never reach this
+// counter regardless of vocabulary -- tracked as a follow-up, not silently
+// included here as if they were covered.
 var metricUnitFailureReasonVocabulary = map[string]struct{}{
-	"feature_disabled":              {},
-	"terminal_river_delivery":       {},
-	"provider_dataset_unavailable":  {},
-	"rate_limit_cooldown_deferred":  {},
-	"rate_limit_cooldown_exhausted": {},
-	"budget_deferred":               {},
-	"budget_deferral_exhausted":     {},
-	"deferral_exhausted":            {},
-	"rate_limit":                    {},
-	"dispatch_denied":               {},
-	"pagination_incomplete":         {},
-	"lease_lost":                    {},
-	"provider_error":                {},
+	"provider_dataset_unavailable":    {},
+	"pagination_incomplete":           {},
+	"github_tests_artifact_oversized": {},
+	"all_artifacts_unreadable":        {},
+	"feature_disabled":                {},
+	"auth":                            {},
+	"not_found":                       {},
+	"repository_identity_ambiguous":   {},
+	"effect_recovery_ambiguous":       {},
+	"route_reconciliation_required":   {},
+	"rate_limit":                      {},
+	"provider_unit_exhausted":         {},
+	"github_files_inventory_failed":   {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.

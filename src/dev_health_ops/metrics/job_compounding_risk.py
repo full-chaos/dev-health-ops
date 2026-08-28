@@ -24,7 +24,10 @@ from dev_health_ops.metrics.compounding_risk import (
     summarize_compounding_risk_diagnostics,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.providers.teams import build_repo_pattern_resolver
+from dev_health_ops.providers.teams import (
+    build_repo_pattern_resolver,
+    load_team_repo_ownership_map,
+)
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -85,30 +88,120 @@ def _fetch_repo_metrics_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
     return [_Row(r) for r in raw]
 
 
-async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
-    """Build a ``{repo_id_str: team_id}`` map via the existing teams resolver."""
+async def _load_repo_catalog_and_pattern_resolver(
+    sink: Any, org_id: str
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Load the pattern resolver + repos catalog -- ONCE per run.
+
+    CHAOS-4365 codex round 3 (P2): unlike ``team_repo_ownership`` validity
+    (genuinely day-dependent -- see ``load_team_repo_ownership_map``),
+    neither ``teams.repo_patterns`` nor the ``repos`` catalog is loaded
+    as-of a day, so re-fetching them inside every backfilled day's iteration
+    was pure waste (a large backfill repeated two full ClickHouse queries per
+    day for no correctness benefit). Callers fetch this ONCE and reuse it
+    across the whole backfill range; only the ownership map is per-day.
+
+    CHAOS-4365 confirmation-pass finding (P2, reproduced): a first version
+    of this split moved the ``repos`` query to run UNCONDITIONALLY before
+    the day loop, with no exception handling. Previously it only ran inside
+    the loop, after the "no repo_metrics_daily rows for this day" guard --
+    so a backfill range where every day was empty never touched it, and a
+    transient failure only aborted a day that had actual work. Now it always
+    runs first, so the same transient failure aborted the WHOLE job (even an
+    all-empty-days range that used to complete as a clean no-op). Both
+    queries fail closed to an empty result instead, matching
+    ``load_team_repo_ownership_map``'s own graceful-degradation contract --
+    the pattern resolver and repo_to_team map just resolve nothing rather
+    than crashing the run.
+    """
     try:
         teams = await sink.get_all_teams()
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Could not load teams for compounding risk: %s", exc)
-        return {}
+        teams = []
     resolver = build_repo_pattern_resolver(teams or [])
+    try:
+        repos = sink.query_dicts(
+            """
+            SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
+            FROM repos
+            WHERE org_id = {org_id:String}
+            GROUP BY org_id, id
+            """,
+            {"org_id": org_id},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Could not load repos catalog for compounding risk: org_id=%s %s",
+            org_id,
+            exc,
+        )
+        repos = []
+    return resolver, repos
 
-    repos = sink.query_dicts(
-        """
-        SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
-        FROM repos
-        WHERE org_id = {org_id:String}
-        GROUP BY org_id, id
-        """,
-        {"org_id": org_id},
-    )
+
+def _merge_repo_to_team(
+    *,
+    org_id: str,
+    repos: list[dict[str, Any]],
+    resolver: Any,
+    ownership_map: dict[str, str],
+) -> dict[str, str]:
+    """Merge the per-day ownership map over the (run-scoped) pattern
+    resolver for every repo in the (run-scoped) catalog.
+
+    CHAOS-4365: merges two ownership sources so a real org whose teams carry
+    empty ``repo_patterns`` (every native GitHub/GitLab/Jira/Linear
+    auto-import -- CHAOS-4321 forbids inferring ownership from membership
+    instead) still resolves. ``team_repo_ownership`` (explicit, repo_id-keyed
+    ownership rows) wins where both resolve a repo; the glob-pattern resolver
+    over ``teams.repo_patterns`` fills in the rest (fixtures orgs, teams
+    configured with manual repo globs).
+    """
     mapping: dict[str, str] = {}
+    resolved_via_ownership = 0
+    resolved_via_pattern = 0
     for row in repos:
-        team_id, _ = resolver.resolve(row.get("full_name"))
+        repo_id = row["repo_id"]
+        team_id = ownership_map.get(repo_id)
         if team_id:
-            mapping[row["repo_id"]] = team_id
+            resolved_via_ownership += 1
+        else:
+            team_id, _ = resolver.resolve(row.get("full_name"))
+            if team_id:
+                resolved_via_pattern += 1
+        if team_id:
+            mapping[repo_id] = team_id
+    # CHAOS-4365 telemetry: same shape as job_daily's inline resolver, so an
+    # operator sees which ownership source actually populated team-scope rows
+    # for this org, on a run's own log line.
+    logger.info(
+        "compounding-risk: repo-to-team resolution org_id=%s via_ownership=%d "
+        "via_pattern=%d unresolved=%d",
+        org_id,
+        resolved_via_ownership,
+        resolved_via_pattern,
+        len(repos) - resolved_via_ownership - resolved_via_pattern,
+    )
     return mapping
+
+
+async def _load_repo_to_team(
+    sink: Any, org_id: str, *, as_of: datetime
+) -> dict[str, str]:
+    """Single-call convenience wrapper: catalog load + per-day ownership
+    load + merge, for callers that don't need the parts split across a
+    backfill loop (e.g. tests, or a single-day compute).
+
+    ``as_of`` (codex round 3 P1): the caller's target day's own instant, not
+    "now" -- a backfilled day's ownership must reflect validity on that day,
+    not at compute time (see ``load_team_repo_ownership_map``).
+    """
+    resolver, repos = await _load_repo_catalog_and_pattern_resolver(sink, org_id)
+    ownership_map = load_team_repo_ownership_map(sink, org_id, as_of=as_of)
+    return _merge_repo_to_team(
+        org_id=org_id, repos=repos, resolver=resolver, ownership_map=ownership_map
+    )
 
 
 async def run_compounding_risk_job(
@@ -134,8 +227,11 @@ async def run_compounding_risk_job(
     if hasattr(sink, "ensure_tables"):
         sink.ensure_tables()
 
-    repo_to_team = await _load_repo_to_team(sink, org_id)
     computed_at = datetime.now(timezone.utc)
+    # CHAOS-4365 codex round 3 (P2): the pattern resolver + repos catalog are
+    # NOT day-dependent (unlike team_repo_ownership validity), so they load
+    # once for the whole backfill range, not per day.
+    resolver, repos = await _load_repo_catalog_and_pattern_resolver(sink, org_id)
 
     total_rows = 0
     aggregate_non_null = 0
@@ -154,6 +250,18 @@ async def run_compounding_risk_job(
                 org_id,
             )
             continue
+        # CHAOS-4365 codex round 3 (P1): the ownership map alone is loaded
+        # fresh PER DAY, as-of that day's own instant -- not once for the
+        # whole backfill range. Midnight (day start), not end-of-day: codex
+        # round 3 also found the installed clickhouse-connect DateTime64(3)
+        # binder truncates (not rounds) sub-second precision, so
+        # `datetime.max.time()` (23:59:59.999999) was silently bound as
+        # 23:59:59.000; midnight has no sub-second component to lose.
+        as_of = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+        ownership_map = load_team_repo_ownership_map(sink, org_id, as_of=as_of)
+        repo_to_team = _merge_repo_to_team(
+            org_id=org_id, repos=repos, resolver=resolver, ownership_map=ownership_map
+        )
         rows = build_compounding_risk_rows_for_day(
             sink=sink,
             day=d,

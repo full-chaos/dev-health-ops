@@ -87,6 +87,7 @@ from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     build_repo_pattern_resolver,
+    load_team_repo_ownership_map,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -490,18 +491,69 @@ def _repo_to_team_map_for_compounding_risk(
     repo_metrics_rows: list[Any],
     repo_names_by_id: dict[uuid.UUID, str],
     repo_team_resolver: Any,
+    team_repo_ownership_map: dict[str, str] | None = None,
+    org_id: str = "",
+    day: date | None = None,
 ) -> dict[str, str]:
+    """Resolve one team per repo for compounding-risk team-scope rows.
+
+    CHAOS-4365: ``team_repo_ownership_map`` (explicit ``team_repo_ownership``
+    rows, repo_id-keyed) wins where it resolves a repo -- it is populated for
+    every native GitHub/GitLab/Jira/Linear auto-import, unlike
+    ``teams.repo_patterns`` (glob strings the pattern resolver reads, which
+    those imports never set). The pattern resolver remains the fallback for
+    repos it doesn't cover (fixtures orgs, manually configured team globs).
+
+    CHAOS-4365 codex round 2 (P1): a repo is trusted from EITHER source only
+    when it also appears in ``repo_names_by_id`` -- the current ``repos``
+    catalog for this run. ``team_repo_ownership`` rows never expire on their
+    own (writers only ever INSERT; CHAOS-2610 tracks writer-side ``valid_to``
+    retirement), so a repo removed/renamed after auto-import last ran can
+    still carry a stale ownership row; without this guard that row would
+    attribute a team-scope compounding-risk row to a repo that no longer
+    exists in the org's current inventory -- something the pattern-resolver
+    path never did, since it always required ``repo_names_by_id`` first.
+    """
+    ownership_map = team_repo_ownership_map or {}
     repo_to_team_map: dict[str, str] = {}
+    # CHAOS-4365 telemetry: which source actually resolved each repo, so a
+    # future "team rows still zero" report is diagnosable from the run's own
+    # log line (ownership vs pattern vs neither) instead of a fresh
+    # investigation into whether the wiring itself regressed.
+    resolved_via_ownership = 0
+    resolved_via_pattern = 0
+    unresolved = 0
     for row in repo_metrics_rows:
         row_repo_id = getattr(row, "repo_id", None)
         if row_repo_id is None:
             continue
+        repo_id_str = str(row_repo_id)
         full_name = repo_names_by_id.get(row_repo_id)
         if not full_name:
+            # Not in the current repos catalog -- neither source is trusted
+            # (matches the pattern-only path's pre-existing behavior).
+            unresolved += 1
             continue
-        team_id, _ = repo_team_resolver.resolve(full_name)
+        team_id = ownership_map.get(repo_id_str)
         if team_id:
-            repo_to_team_map[str(row_repo_id)] = team_id
+            resolved_via_ownership += 1
+        else:
+            team_id, _ = repo_team_resolver.resolve(full_name)
+            if team_id:
+                resolved_via_pattern += 1
+            else:
+                unresolved += 1
+        if team_id:
+            repo_to_team_map[repo_id_str] = team_id
+    logger.info(
+        "compounding-risk: repo-to-team resolution org_id=%s day=%s via_ownership=%d "
+        "via_pattern=%d unresolved=%d",
+        org_id,
+        day.isoformat() if day else None,
+        resolved_via_ownership,
+        resolved_via_pattern,
+        unresolved,
+    )
     return repo_to_team_map
 
 
@@ -523,13 +575,36 @@ def _write_compounding_risk_for_day(
         return 0
 
     try:
+        # CHAOS-4365 codex round 3 (P1): loaded fresh PER DAY, as-of that
+        # day's own instant -- round 2 loaded this map once per run and
+        # reused it across every backfilled day, so a mapping created after
+        # a target day was wrongly attributed retroactively, and one valid
+        # on the target day but since expired was wrongly omitted.
+        # Midnight (day start), not end-of-day: codex round 3 found the
+        # installed clickhouse-connect DateTime64(3) binder truncates
+        # (not rounds) sub-second precision, so `datetime.max.time()`
+        # (23:59:59.999999) was silently bound as 23:59:59.000 -- a row
+        # expiring in that final second would have been wrongly excluded.
+        # Midnight has zero sub-second component, so it round-trips exactly.
+        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        team_repo_ownership_map = load_team_repo_ownership_map(
+            primary_sink, org_id, as_of=as_of
+        )
         repo_to_team_map = _repo_to_team_map_for_compounding_risk(
             repo_metrics_rows=rows_for_compounding,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
+            team_repo_ownership_map=team_repo_ownership_map,
+            org_id=org_id,
+            day=day,
         )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
+        logger.warning(
+            "repo_team_resolver failed for compounding risk: org_id=%s day=%s %s",
+            org_id,
+            day.isoformat(),
+            exc,
+        )
         repo_to_team_map = {}
 
     compounding_rows = build_compounding_risk_rows_for_day(
@@ -805,6 +880,11 @@ async def run_daily_metrics_job(
     team_resolver = get_team_resolver()
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
+    # CHAOS-4365 codex round 3: the team_repo_ownership map for compounding
+    # risk is now loaded PER DAY, as-of that day, inside
+    # _write_compounding_risk_for_day -- not once per run here -- so a
+    # backfilled day's team-scope attribution reflects ownership validity on
+    # that day, not "now".
     # CHAOS-2377: project-key team attribution for the work-item state-duration
     # rollup. Mirrors job_work_items: team-owned-by-project-key items that are
     # unassigned (or assigned to unmapped users) must still land under their

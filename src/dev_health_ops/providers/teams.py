@@ -5,6 +5,7 @@ import importlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -275,6 +276,146 @@ def build_repo_pattern_resolver(teams_data: list) -> RepoPatternTeamResolver:
                 exact[p] = (team_id, team_name)
     prefixes.sort(key=lambda x: -len(x[0]))
     return RepoPatternTeamResolver(_exact=exact, _prefixes=tuple(prefixes))
+
+
+def load_team_repo_ownership_map(
+    sink: Any, org_id: str, *, as_of: datetime
+) -> dict[str, str]:
+    """Build ``{repo_id_str: team_id}`` straight from ``team_repo_ownership``.
+
+    CHAOS-4321 hard rule: team attribution is project/repo OWNERSHIP only,
+    never person->membership inference. ``team_repo_ownership`` is written
+    from real ownership mappings (native GitHub team-repo grants, fixtures'
+    identical repo<->team assignment used for ``teams.repo_patterns`` --
+    CHAOS-4338) and is the more authoritative of the two ownership sources:
+    unlike ``teams.repo_patterns`` (glob strings, which CHAOS-4276 seeds only
+    for a repo's PRIMARY owner and which native GitHub auto-import never
+    populates at all -- ``team_autoimport_github.populate`` writes straight
+    to this table instead, see ``docs/architecture/team-attribution.md``),
+    this table carries an explicit ``is_primary``/``specificity`` ranking, so
+    a real org whose teams carry empty ``repo_patterns`` (every native
+    GitHub/GitLab/Jira/Linear import) is not silently invisible to
+    repo-scoped team resolution.
+
+    CHAOS-4365 codex round 1 (HIGH): the writer this table exists to serve
+    (``team_autoimport_github.py``'s ``_repo_rows``, ``source="provider_access"``)
+    constructs every ``TeamRepoOwnershipRecord`` WITHOUT ``repo_id`` --
+    ``schemas.py``'s ``repo_id: UUID | None = None`` default -- and populates
+    only ``repo_full_name``. A first version of this function filtered
+    ``WHERE repo_id IS NOT NULL``, which returned ``{}`` for every real
+    GitHub-native org: exactly the population this function exists to fix.
+    So the query resolves ``repo_id`` two ways -- the column when a writer
+    does set it (fixtures; a future native writer), else a join against
+    ``repos`` by ``repo_full_name`` (case-insensitive, matching the
+    pattern-resolver's own normalization) -- via ``coalesce``.
+
+    Callers merge this map OVER a pattern-resolver map (this map wins where
+    both resolve a repo): it reflects the actual, current ownership grant
+    rather than a hand-authored glob. Callers are additionally responsible
+    for only trusting this map's result when the repo is present in the
+    CURRENT ``repos`` catalog for the run (this function does not itself
+    exclude an orphaned/removed repo whose ownership row simply hasn't been
+    retired yet -- CHAOS-2610 tracks writer-side ``valid_to`` expiry;
+    ``docs/contribute/architecture/team-attribution.md``'s "ownership rows
+    are bitemporal but effectively immortal" note applies here too).
+
+    CHAOS-4365 codex round 2 (P1/P2): GitHub auto-import's
+    ``team_autoimport_github.py`` writes EVERY row ``is_primary=0``
+    (``_repo_rows``, ``source="provider_access"`` -- a repo with multiple
+    GitHub teams granted access produces multiple ``is_primary=0`` siblings
+    with identical ``specificity``), and ``FINAL`` alone cannot collapse
+    re-import generations because ``valid_from`` is part of this table's
+    ORDER BY key (``051_team_attribution_dimensions.sql``) -- each auto-import
+    run is a new sort key, not a replacement. Without a full deterministic
+    tiebreak, a same-repo, same-rank tie resolves arbitrarily and can flap
+    between runs. ``ORDER BY`` now also breaks ties by most-recent
+    ``updated_at`` then ``team_id`` (absolute, stable).
+
+    CHAOS-4365 codex round 3 (P1/P2, round 2's fixes had 3 new defects):
+
+    1. ``as_of`` is now a REQUIRED caller-supplied instant, not ``now64()``.
+       Round 2 loaded this map once per run and reused it across every
+       backfilled day; a mapping created after a target day was attributed
+       retroactively, and one valid on the target day but since expired was
+       wrongly omitted. Callers pass the target day's own instant (see
+       ``job_daily.py``/``job_compounding_risk.py``).
+
+       CAVEAT (codex round 3 follow-up, confirmed live): the installed
+       clickhouse-connect version's ``{param:DateTime64(3)}`` query-parameter
+       binder TRUNCATES (not rounds) any sub-second component to ``.000``,
+       regardless of value -- ``23:59:59.999999`` is bound as
+       ``23:59:59.000``. Pass ``as_of`` values with no sub-second component
+       you rely on (both current callers use day-start midnight, which loses
+       nothing). A sub-second-precise ``as_of`` will silently lose that
+       precision here.
+    2. The ``repos`` join now also matches ``provider`` (both tables carry
+       it -- ``051_team_attribution_dimensions.sql``, ``028_repos_provider.sql``).
+       Matching only ``org_id`` + case-insensitive name let a mixed-provider
+       org with two repos of the same full name join to an arbitrary one.
+    3. The join no longer tests ``r.id IS NOT NULL`` to detect a match. This
+       sink does not enable ``join_use_nulls`` (``core.py``'s ClickHouse
+       client settings), and ClickHouse's documented default for an
+       UNMATCHED LEFT JOIN column is the type's zero value, not NULL --
+       confirmed live: `SELECT r.id IS NOT NULL FROM ... LEFT JOIN (SELECT
+       toUUID(...) AS id) AS r ON <false>` returns ``r.id =
+       00000000-0000-0000-0000-000000000000`` and ``IS NOT NULL = true``.
+       So the old predicate treated every UNMATCHED ownership row as matched
+       and resolved it to the zero UUID -- a bogus repo_id would have
+       silently entered the map for any ownership row whose repo_full_name
+       doesn't (yet, or ever) exist in ``repos``. The join subquery now
+       carries an explicit ``1 AS matched`` sentinel column (0 vs 1 is
+       unambiguous under the zero-value default, unlike a UUID's "zero" and
+       "absent" being the same bit pattern) and the WHERE clause tests that
+       instead.
+
+    Returns ``{}`` (never raises) when the sink cannot be queried -- the
+    caller's pattern-resolver fallback still applies.
+    """
+    if not hasattr(sink, "query_dicts"):
+        return {}
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT
+                toString(coalesce(o.repo_id, r.id)) AS repo_id,
+                o.team_id AS team_id,
+                o.is_primary AS is_primary,
+                o.specificity AS specificity
+            FROM team_repo_ownership AS o FINAL
+            LEFT JOIN (
+                SELECT org_id, provider, id, repo, 1 AS matched FROM repos FINAL
+            ) AS r
+                ON r.org_id = o.org_id
+                   AND r.provider = o.provider
+                   AND lower(r.repo) = lower(o.repo_full_name)
+            WHERE o.org_id = {org_id:String}
+              AND (o.repo_id IS NOT NULL OR r.matched = 1)
+              AND o.valid_from <= {as_of:DateTime64(3)}
+              AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3)})
+            ORDER BY is_primary DESC, specificity DESC, o.updated_at DESC, o.team_id ASC
+            """,
+            {"org_id": org_id, "as_of": as_of},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Could not load team_repo_ownership for org_id=%s: %s", org_id, exc
+        )
+        return {}
+
+    mapping: dict[str, str] = {}
+    for row in rows:
+        repo_id = row.get("repo_id")
+        team_id = row.get("team_id")
+        if not repo_id or not team_id:
+            continue
+        # ORDER BY already put the best (is_primary, specificity) row for a
+        # given repo first; a repo with co-owners keeps only its primary (or
+        # highest-specificity) owner here, matching the single-team-per-repo
+        # contract build_compounding_risk_rows_for_day's repo_to_team expects.
+        mapping.setdefault(str(repo_id), str(team_id))
+    return mapping
 
 
 def sync_teams(ns: argparse.Namespace) -> int:

@@ -9,6 +9,7 @@ from alembic.operations import Operations
 from sqlalchemy.orm import Session
 
 from dev_health_ops.workers.job_contracts import load_registry
+from dev_health_ops.workers.job_contracts.registry import load_migration_jobs
 from dev_health_ops.workers.job_routes import resolve_worker_job_route
 
 
@@ -56,11 +57,13 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             )
             # CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics
             # (registered handlers with zero producer anywhere) -- 25 minus
-            # those two, plus the post-0064 system.sync_coverage_refresh
-            # addition asserted below.
-            assert len(registry_kinds) == 23
+            # those two, plus the post-0064 system.sync_coverage_refresh and
+            # CHAOS-4365 sync.team_repo_ownership_derivation additions
+            # asserted below.
+            assert len(registry_kinds) == 24
             assert set(registry_kinds) - set(migration._KINDS) == {
-                "system.sync_coverage_refresh"
+                "system.sync_coverage_refresh",
+                "sync.team_repo_ownership_derivation",
             }
             rows = connection.execute(
                 sa.text(
@@ -175,6 +178,118 @@ def test_0094_preserves_native_operator_state_and_rejects_wrong_transport() -> N
             )
     finally:
         engine.dispose()
+
+
+def test_0115_seeds_only_the_native_team_repo_ownership_derivation_route_and_is_idempotent() -> (
+    None
+):
+    """CHAOS-4365 item 1b, GW requirement #1's Postgres half: the migration
+    seeds the worker_job_routes row this kind's River worker depends on.
+    Mirrors test_0094_seeds_only_the_native_coverage_route_and_is_idempotent
+    exactly -- same Go-only, no-Celery-rollback shape.
+    """
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0115_seed_team_repo_ownership_derivation_route"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            _create_pre_0064_schema(connection)
+            _upgrade(migration, connection)
+            _upgrade(migration, connection)
+
+            row = connection.execute(
+                sa.text(
+                    "SELECT transport, paused, generation FROM worker_job_routes "
+                    "WHERE job_kind = 'sync.team_repo_ownership_derivation'"
+                )
+            ).one()
+            assert row == ("river", 0, 1)
+
+            _downgrade(migration, connection)
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT count(*) FROM worker_job_routes "
+                        "WHERE job_kind = 'sync.team_repo_ownership_derivation'"
+                    )
+                ).scalar_one()
+                == 0
+            )
+    finally:
+        engine.dispose()
+
+
+def test_0115_preserves_native_operator_state_and_rejects_wrong_transport() -> None:
+    migration = importlib.import_module(
+        "dev_health_ops.alembic.versions.0115_seed_team_repo_ownership_derivation_route"
+    )
+    engine = sa.create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            _create_pre_0064_schema(connection)
+            connection.execute(
+                sa.text(
+                    "INSERT INTO worker_job_routes "
+                    "(job_kind, transport, paused, generation, updated_at) VALUES "
+                    "('sync.team_repo_ownership_derivation', 'river', TRUE, 3, "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+            _upgrade(migration, connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT transport, paused, generation FROM worker_job_routes "
+                    "WHERE job_kind = 'sync.team_repo_ownership_derivation'"
+                )
+            ).one() == ("river", 1, 3)
+
+            connection.execute(
+                sa.text(
+                    "UPDATE worker_job_routes SET transport='celery' "
+                    "WHERE job_kind='sync.team_repo_ownership_derivation'"
+                )
+            )
+            with pytest.raises(
+                RuntimeError, match="conflicts with the native River route"
+            ):
+                _upgrade(migration, connection)
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT transport FROM worker_job_routes "
+                        "WHERE job_kind = 'sync.team_repo_ownership_derivation'"
+                    )
+                ).scalar_one()
+                == "celery"
+            )
+    finally:
+        engine.dispose()
+
+
+def test_team_repo_ownership_derivation_route_agrees_with_the_contract_registry() -> (
+    None
+):
+    """GW requirement #1: BOTH route tables must agree, asserted together --
+    the migration's seeded Postgres row (asserted by the two tests above:
+    transport='river', no wrong-transport tolerated) and the checked-in
+    migration policy (migration-state.json, read via load_migration_jobs())
+    that the Go/Python contract-registry mirror is itself cross-checked
+    against (job_contracts/registry.py's load_registry(), and
+    test_river_route_activation_migration.py's pinned-kinds identity check).
+    A kind whose migration seeds one transport while the checked-in policy
+    declares another is exactly the fresh-DB trap this test exists to catch.
+    """
+    contracts = {contract.kind: contract for contract in load_registry().contracts}
+    assert "sync.team_repo_ownership_derivation" in contracts
+
+    policies = [
+        job
+        for job in load_migration_jobs()
+        if job.kind == "sync.team_repo_ownership_derivation"
+    ]
+    assert len(policies) == 1
+    assert policies[0].route == "river"
 
 
 def test_0064_preserves_a_generation_bumped_sync_provider_canary() -> None:

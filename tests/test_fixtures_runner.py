@@ -1029,8 +1029,14 @@ class TestTeamOwnershipEdges:
     def test_team_project_ownership_mirrors_team_repo_ownership(self):
         """Project ids are repo full names (generators/projects.py's
         project_id_for_repo: repo-backed projects are 1:1 with repos in this
-        fixture world), so team_project_ownership must assign the exact same
-        (team_id, repo/project) pairs as team_repo_ownership."""
+        fixture world), so team_project_ownership must assign the same
+        (team_id, repo/project) pairs as team_repo_ownership -- EXCEPT the
+        one repo CHAOS-4365 item 1b withholds from team_repo_ownership on
+        purpose (see generate_team_ownership_edges's docstring): that repo
+        gets a team_project_ownership row but deliberately no direct
+        team_repo_ownership row, so the real sync -> Fanout -> River
+        derivation pipeline has a genuine, provider-shaped repo to derive
+        team_repo_ownership for."""
         _, _, _, edges = self._build()
         repo_pairs = {
             (row["team_id"], row["repo_full_name"])
@@ -1040,7 +1046,13 @@ class TestTeamOwnershipEdges:
             (row["team_id"], row["project_id"])
             for row in edges["team_project_ownership"]
         }
-        assert repo_pairs == project_pairs
+        assert repo_pairs <= project_pairs
+        withheld = project_pairs - repo_pairs
+        withheld_repos = {repo_full_name for _team_id, repo_full_name in withheld}
+        assert len(withheld_repos) == 1, (
+            f"expected exactly one withheld repo (CHAOS-4365 item 1b), regardless "
+            f"of how many teams co-own it, got {withheld_repos}"
+        )
         assert repo_pairs, "fixture setup drifted: expected at least one owned repo"
 
     def test_every_owned_repo_has_exactly_one_primary_owner(self):

@@ -3,7 +3,9 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/riverqueue/river"
@@ -100,6 +102,46 @@ func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBrid
 	return nil
 }
 
+// TeamRepoOwnershipDerivationRunner is the narrow capability
+// sync.team_repo_ownership_derivation's worker depends on: derive and write
+// team_repo_ownership for one org against already-synced ClickHouse data,
+// returning the row count written, the row count retracted (team-lead
+// ruling, 2026-08-28, codex R3 finding: a prior inferred claim absent from
+// this run's derivation is retracted rather than left active forever), and
+// whether this org's inputs (team_project_ownership + linkage rows) were
+// present at all yet (team-lead ruling, codex finding #4, 2026-08-28 -- see
+// providersync.TeamRepoOwnershipDerivationService.Derive's doc comment for
+// the full rationale). Satisfied directly by providersync.
+// TeamRepoOwnershipDerivationService (its Derive method already has this
+// exact signature) -- named here as an interface only so the worker stays
+// testable without a real ClickHouse connection.
+type TeamRepoOwnershipDerivationRunner interface {
+	Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error)
+}
+
+// RegisterTeamRepoOwnershipDerivationWorker registers the CHAOS-4365 item 1b
+// kind. Unlike RegisterTeamAutoimportWorker, no caller-side Executable()
+// proof gate is needed: this kind's route is river unconditionally
+// (state=celery_removed, migration-state.json) -- it never had a Celery
+// implementation to fall back to. observer is optional (nil records nothing,
+// same convention as NativePostSyncService.SetFanoutObserver) since the
+// underlying providersync.TeamRepoOwnershipDerivationService is a plain
+// struct with no telemetry hook of its own -- the counter/histogram lives at
+// this layer instead, which already depends on jobruntime.
+func RegisterTeamRepoOwnershipDerivationWorker(
+	workers *river.Workers,
+	service TeamRepoOwnershipDerivationRunner,
+	observer jobruntime.TeamRepoOwnershipDerivationObserver,
+) error {
+	if workers == nil || service == nil {
+		return ErrWorkerRegistration
+	}
+	if river.AddWorkerSafely(workers, &teamRepoOwnershipDerivationWorker{service: service, observer: observer}) != nil {
+		return ErrWorkerRegistration
+	}
+	return nil
+}
+
 // RouteCapabilities is the exact River surface registered by this runtime.
 func RouteCapabilities() []syncroute.Capability {
 	return []syncroute.Capability{
@@ -185,6 +227,58 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 		OrganizationID: job.Args.OrgID,
 		SyncRunID:      job.Args.Payload.SyncRunID,
 	})
+	return err
+}
+
+type teamRepoOwnershipDerivationWorker struct {
+	river.WorkerDefaults[TeamRepoOwnershipDerivationJobArgs]
+	service  TeamRepoOwnershipDerivationRunner
+	observer jobruntime.TeamRepoOwnershipDerivationObserver
+}
+
+func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *river.Job[TeamRepoOwnershipDerivationJobArgs]) (err error) {
+	if worker == nil || worker.service == nil || job == nil {
+		return ErrWorkerRegistration
+	}
+	if err := job.Args.valid(); err != nil {
+		return err
+	}
+	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
+	defer func() { finishCoordinatorSpan(span, err) }()
+	written, retracted, inputsReady, err := worker.service.Derive(ctx, job.Args.OrgID)
+	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
+	switch {
+	case err != nil:
+		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeError
+	case written == 0 && !inputsReady:
+		// The first-sync gap (team-lead ruling, codex finding #4): this org's
+		// team_project_ownership and/or linkage rows have not synced yet.
+		// Converges on the next qualifying sync -- not a failure, and
+		// distinct from a genuine no-signal evaluation.
+		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeInputsNotReady
+	case written == 0:
+		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal
+	}
+	if worker.observer != nil {
+		// Retraction is observed separately from the primary written/
+		// no_signal/inputs_not_ready/error outcome above -- team-lead
+		// ruling, 2026-08-28: a run that both retracts stale claims and
+		// writes fresh ones (or errors after retracting) must not lose
+		// either fact to the other.
+		if retracted > 0 {
+			_ = worker.observer.ObserveTeamRepoOwnershipDerivation(
+				jobruntime.TeamRepoOwnershipDerivationOutcomeRowsRetracted, retracted,
+			)
+		}
+		_ = worker.observer.ObserveTeamRepoOwnershipDerivation(outcome, written)
+	}
+	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation",
+		"outcome", string(outcome),
+		"org_id", job.Args.OrgID,
+		"sync_run_id", job.Args.Payload.SyncRunID,
+		"rows_written", written,
+		"rows_retracted", retracted,
+	)
 	return err
 }
 

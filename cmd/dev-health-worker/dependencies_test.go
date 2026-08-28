@@ -297,6 +297,14 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if !ok {
 		t.Fatal("sync.team_autoimport descriptor missing")
 	}
+	// sync.team_repo_ownership_derivation (CHAOS-4365 item 1b) also lives on
+	// queue "sync" and is river-unconditionally, so the real sync-coordinator
+	// builder always reports it too -- this fake must match, or queue
+	// coverage validation (correctly) sees the queue as incompletely served.
+	teamRepoOwnershipSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindTeamRepoOwnershipDerivation)
+	if !ok {
+		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -309,7 +317,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		jobruntime.Observer, *slog.Logger, *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{autoimportSpec},
+			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec},
 			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
 		}, nil
 	}
@@ -1814,6 +1822,10 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.team_autoimport descriptor missing")
 	}
+	teamRepoOwnershipSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindTeamRepoOwnershipDerivation)
+	if !ok {
+		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
+	}
 
 	syncConfig := config.Config{
 		Queues:                 []string{"sync", "sync_provider"},
@@ -1864,7 +1876,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			) (workerFamily, error) {
 				family := workerFamily{}
 				if test.reported {
-					family.handlers = []jobruntime.HandlerSpec{autoimportSpec}
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec}
 					family.queues = []jobruntime.QueueBudget{
 						{Queue: "sync", MaxWorkers: 4},
 					}

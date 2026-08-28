@@ -84,4 +84,7 @@ func TestCoordinatorWorkersFailClosedWithoutBridgeOrJob(t *testing.T) {
 	if err := (&teamAutoimportWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
 		t.Fatalf("team autoimport worker error=%v", err)
 	}
+	if err := (&teamRepoOwnershipDerivationWorker{}).Work(context.Background(), nil); err != ErrWorkerRegistration {
+		t.Fatalf("team repo ownership derivation worker error=%v", err)
+	}
 }

@@ -23,6 +23,7 @@ KIND_DAILY_METRICS_DISPATCH = "metrics.daily_dispatch"
 KIND_DAILY_METRICS_PARTITION = "metrics.daily_partition"
 KIND_DAILY_METRICS_FINALIZE = "metrics.daily_finalize"
 KIND_TEAM_AUTOIMPORT = "sync.team_autoimport"
+KIND_TEAM_REPO_OWNERSHIP_DERIVATION = "sync.team_repo_ownership_derivation"
 KIND_WORK_GRAPH_BUILD = "workgraph.build"
 KIND_INVESTMENT_MATERIALIZE = "investment.materialize"
 KIND_INVESTMENT_DISPATCH = "investment.dispatch"
@@ -184,6 +185,19 @@ class TeamAutoimportPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class TeamRepoOwnershipDerivationPayload:
+    """Reference to the successful SyncRun the CHAOS-4365 item 1b derivation
+    re-derives team_repo_ownership against. No provider fetch, so no
+    credentials or provider configuration ever cross this envelope."""
+
+    KIND: ClassVar[str] = KIND_TEAM_REPO_OWNERSHIP_DERIVATION
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "sync_run"
+
+    sync_run_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkGraphBuildPayload:
     """Reference to a server-owned work-graph request, never source evidence."""
 
@@ -302,6 +316,7 @@ JobPayload: TypeAlias = (
     | DailyMetricsPartitionPayload
     | DailyMetricsFinalizePayload
     | TeamAutoimportPayload
+    | TeamRepoOwnershipDerivationPayload
     | WorkGraphBuildPayload
     | InvestmentMaterializePayload
     | InvestmentDispatchPayload

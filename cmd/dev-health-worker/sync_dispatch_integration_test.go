@@ -64,13 +64,18 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 		wantKinds []string
 	}{
 		{
+			// sync.team_repo_ownership_derivation (CHAOS-4365 item 1b) is
+			// river-unconditionally (state=celery_removed) -- unlike
+			// team_autoimport, it has no Celery-routed state to demote to,
+			// so buildSyncCoordinatorWorker always reports it regardless of
+			// team_autoimport's own promotion state.
 			name:      "celery routed kind is not consumed at all",
-			wantKinds: nil,
+			wantKinds: []string{jobcontract.KindTeamRepoOwnershipDerivation},
 		},
 		{
 			name:      "promoted kind is registered and reported",
 			promote:   []string{jobcontract.KindTeamAutoimport},
-			wantKinds: []string{jobcontract.KindTeamAutoimport},
+			wantKinds: []string{jobcontract.KindTeamAutoimport, jobcontract.KindTeamRepoOwnershipDerivation},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

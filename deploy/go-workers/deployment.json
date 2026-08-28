@@ -305,7 +305,8 @@
         }
       ],
       "job_kinds": [
-        "sync.team_autoimport"
+        "sync.team_autoimport",
+        "sync.team_repo_ownership_derivation"
       ],
       "queue_control_max_connections": 2,
       "domain_max_connections": 4,

@@ -88,6 +88,39 @@ func (args TeamAutoimportJobArgs) valid() error {
 	return nil
 }
 
+// TeamRepoOwnershipDerivationJobArgs is the generic worker-outbox envelope
+// for the sync.team_repo_ownership_derivation child job (CHAOS-4365 item
+// 1b). Same shape as TeamAutoimportJobArgs -- it too has no route-generation
+// claim because worker_job_outbox owns its dedupe and delivery lifecycle --
+// but its worker never calls out to Python: it reads already-synced
+// ClickHouse rows and derives team_repo_ownership directly in Go.
+type TeamRepoOwnershipDerivationJobArgs struct {
+	Version       int                                            `json:"contract_version"`
+	OrgID         string                                         `json:"organization_id"`
+	CorrelationID string                                         `json:"correlation_id"`
+	Idempotency   string                                         `json:"idempotency_key"`
+	Domain        jobcontract.DomainLink                         `json:"domain"`
+	Payload       jobcontract.TeamRepoOwnershipDerivationPayload `json:"payload"`
+}
+
+func (TeamRepoOwnershipDerivationJobArgs) Kind() string {
+	return jobcontract.KindTeamRepoOwnershipDerivation
+}
+
+func (args TeamRepoOwnershipDerivationJobArgs) valid() error {
+	if args.Version != jobcontract.ContractVersionV1 ||
+		!uuidPattern.MatchString(args.OrgID) ||
+		!uuidPattern.MatchString(args.Domain.ID) ||
+		!uuidPattern.MatchString(args.Payload.SyncRunID) ||
+		args.Domain.Type != "sync_run" ||
+		args.Domain.ID != args.Payload.SyncRunID ||
+		args.CorrelationID == "" ||
+		args.Idempotency == "" {
+		return ErrInvalidReference
+	}
+	return nil
+}
+
 // Args is the exact versioned River argument shape shared by all four frozen
 // dispatch kinds. Concrete kind types prevent an accidental kind/argument
 // mismatch at the publisher boundary.

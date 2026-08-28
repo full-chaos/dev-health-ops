@@ -378,6 +378,24 @@
       ]
     },
     {
+      "kind": "sync.team_repo_ownership_derivation",
+      "state": "celery_removed",
+      "producer_version": 1,
+      "consumer_versions": [
+        1
+      ],
+      "required_queues": [
+        "sync"
+      ],
+      "route": "river",
+      "rollback_route": "none",
+      "evidence": [
+        "contract_schema",
+        "duplicate_delivery",
+        "handler_wiring"
+      ]
+    },
+    {
       "kind": "system.heartbeat",
       "state": "go_default",
       "producer_version": 1,

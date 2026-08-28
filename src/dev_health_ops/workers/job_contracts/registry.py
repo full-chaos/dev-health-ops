@@ -34,6 +34,7 @@ from .models import (
     KIND_SYNC_COVERAGE_REFRESH,
     KIND_SYNC_PROVIDER_UNIT,
     KIND_TEAM_AUTOIMPORT,
+    KIND_TEAM_REPO_OWNERSHIP_DERIVATION,
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
 )
@@ -271,6 +272,7 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_REMAINING_RELEASE_IMPACT: (CONTRACT_VERSION_V1,),
         KIND_SYNC_PROVIDER_UNIT: (CONTRACT_VERSION_V1,),
         KIND_TEAM_AUTOIMPORT: (CONTRACT_VERSION_V1,),
+        KIND_TEAM_REPO_OWNERSHIP_DERIVATION: (CONTRACT_VERSION_V1,),
     }
     if {
         contract.kind: contract.supported_versions for contract in contracts

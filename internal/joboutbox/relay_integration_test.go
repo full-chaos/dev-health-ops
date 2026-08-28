@@ -100,6 +100,15 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			}
 			continue
 		}
+		if descriptor.Kind == jobcontract.KindTeamRepoOwnershipDerivation {
+			// CHAOS-4365 item 1b: a brand-new Go-native post-sync Fanout
+			// writer with no Celery predecessor -- same native-only shape
+			// as sync.provider_unit's sync-coverage-refresh sibling above.
+			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
+				t.Fatalf("team-repo-ownership-derivation native-only policy drifted: %#v", descriptor)
+			}
+			continue
+		}
 		if descriptor.Route != "river" || descriptor.MigrationState != "go_default" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
 			t.Fatalf("checked-in production route drifted from post-cutover go_default/river policy: %#v", descriptor)
 		}

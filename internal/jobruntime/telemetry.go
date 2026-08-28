@@ -158,6 +158,66 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 	}
 }
 
+// TeamRepoOwnershipDerivationOutcome is the bounded result of one
+// sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
+// "no_signal" names an org whose team_project_ownership/linkage rows exist
+// but genuinely produced nothing (every candidate conflicted, or matched no
+// repo-bearing item) -- the designed-empty case, not a failure.
+// "inputs_not_ready" (team-lead ruling, codex finding #4, 2026-08-28) is a
+// DIFFERENT zero-row case: this org has zero team_project_ownership rows,
+// or zero linkage rows of any kind (work_items, work_item_dependencies,
+// work_graph_issue_pr) -- the first-sync gap this producer's deliberately
+// unsequenced Fanout publish (no prerequisite completion key, same as
+// team-autoimport, see native_post_sync.go's publishTeamRepoOwnershipDerivation)
+// can hit when its sibling producers (team-autoimport's async Python
+// bridge, the workgraph builder) have not landed their own writes for this
+// org yet. It converges on the next qualifying sync (idempotent,
+// re-triggered by every sync with git||hasWorkItems) -- observable here so
+// a persistently high inputs_not_ready rate for one org is diagnosable,
+// rather than sequenced against those other producers' own completion.
+// "error" is a genuine ClickHouse read/write failure the worker's own
+// retry/backoff will re-attempt.
+// "route_missing" (team-lead ruling, 2026-08-28: "non-fatal != silent") is a
+// DISTINCT failure surfaced from the PUBLISH side, not the worker side: the
+// Fanout's sibling writer (native_post_sync.go's
+// publishTeamRepoOwnershipDerivation) swallows a deterministic outbox
+// rejection (worker_job_routes has no row for this kind, or the row is
+// paused -- exactly the CHAOS-4365 item 1b deploy-ordering gap: migration
+// 0115 must land before/with the worker image, or every publish attempt
+// hits this) so the rest of the fanout's handoffs are never taken down with
+// it (CHAOS-3946) -- but a swallowed rejection must never also be a SILENT
+// one. This outcome, plus an ERROR-level slog line
+// (PostSyncTeamRepoOwnershipDerivationFailedMessage), makes a persistently
+// missing/paused route visible instead of indistinguishable from a
+// healthy no-op.
+// "rows_retracted" (team-lead ruling, 2026-08-28, codex R3 finding: "removed
+// ownership remains authorized indefinitely") is observed SEPARATELY from
+// the primary outcome above whenever a run closes out one or more prior
+// inferred (team, repo) claims absent from its new derivation -- a run can
+// both retract stale claims and write fresh ones (or error afterward), and
+// neither fact should shadow the other in telemetry.
+type TeamRepoOwnershipDerivationOutcome string
+
+const (
+	TeamRepoOwnershipDerivationOutcomeRowsWritten    TeamRepoOwnershipDerivationOutcome = "rows_written"
+	TeamRepoOwnershipDerivationOutcomeNoSignal       TeamRepoOwnershipDerivationOutcome = "no_signal"
+	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
+	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
+	TeamRepoOwnershipDerivationOutcomeRouteMissing   TeamRepoOwnershipDerivationOutcome = "route_missing"
+	TeamRepoOwnershipDerivationOutcomeRowsRetracted  TeamRepoOwnershipDerivationOutcome = "rows_retracted"
+)
+
+func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
+	return []TeamRepoOwnershipDerivationOutcome{
+		TeamRepoOwnershipDerivationOutcomeRowsWritten,
+		TeamRepoOwnershipDerivationOutcomeNoSignal,
+		TeamRepoOwnershipDerivationOutcomeInputsNotReady,
+		TeamRepoOwnershipDerivationOutcomeError,
+		TeamRepoOwnershipDerivationOutcomeRouteMissing,
+		TeamRepoOwnershipDerivationOutcomeRowsRetracted,
+	}
+}
+
 // DailyMetricsNativeFamilyOutcome is the bounded durable outcome of one
 // native family compute attempt inside a metrics.daily partition (CHAOS-4276).
 // Computed means the executor wrote rows (possibly zero, a legitimate quiet
@@ -518,8 +578,15 @@ type MetricsCollector struct {
 	// other per-tenant-identity signal in this file.
 	teamMetricsDailyRepoCount *histogram
 	postSyncFanout            map[PostSyncFanoutOutcome]uint64
-	workGraphReleaseLost      uint64
-	remainingReleaseLost      uint64
+	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
+	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
+	// is the paired rows-written histogram, observed only on the
+	// rows_written outcome -- same pairing convention as
+	// teamMetricsDailyRepoCount above.
+	teamRepoOwnershipDerivation         map[TeamRepoOwnershipDerivationOutcome]uint64
+	teamRepoOwnershipDerivationRowCount *histogram
+	workGraphReleaseLost                uint64
+	remainingReleaseLost                uint64
 	// remainingOpenDayZeroRow (CHAOS-4384), keyed by family (only "dora"
 	// today -- remainingMetricsOpenDayZeroRowFamilies). Counts a dora
 	// cross-trigger coverage check finding a 0-row succeeded partition for a
@@ -628,6 +695,7 @@ var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
+var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
@@ -686,6 +754,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
+		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
+		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
 		coverageCacheInvalidationsConsumed:   make(map[string]uint64),
@@ -1243,6 +1313,23 @@ func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutO
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.postSyncFanout[outcome]++
+	return nil
+}
+
+// ObserveTeamRepoOwnershipDerivation records the outcome of one
+// sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
+// rowCount is only observed into the paired histogram on the rows_written
+// outcome -- a no_signal or error run has no meaningful row count to bucket.
+func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivation(outcome TeamRepoOwnershipDerivationOutcome, rowCount int) error {
+	if !slices.Contains(teamRepoOwnershipDerivationOutcomes(), outcome) {
+		return errors.New("team-repo-ownership-derivation outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamRepoOwnershipDerivation[outcome]++
+	if outcome == TeamRepoOwnershipDerivationOutcomeRowsWritten {
+		collector.teamRepoOwnershipDerivationRowCount.observe(float64(rowCount))
+	}
 	return nil
 }
 
@@ -1908,6 +1995,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writePostSyncFanout(&output)
+	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeReportDedupGuard(&output)
@@ -2291,6 +2379,25 @@ func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) 
 		writeUintSample(output, "dev_health_post_sync_fanout_total",
 			[]metricLabel{{"outcome", string(outcome)}}, collector.postSyncFanout[outcome])
 	}
+}
+
+// writeTeamRepoOwnershipDerivation renders CHAOS-4365 item 1b's per-outcome
+// counter and paired rows-written histogram. This call site was missing
+// entirely until now: ObserveTeamRepoOwnershipDerivation incremented
+// collector.teamRepoOwnershipDerivation and observed
+// collector.teamRepoOwnershipDerivationRowCount, but PrometheusText() never
+// rendered either -- the data was recorded in memory and never actually
+// exported, silently defeating requirement #4 (codex adversarial review,
+// 2026-08-28, found during the per-file fork audit rather than by codex
+// itself).
+func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *strings.Builder) {
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, no_signal (designed-empty, not a failure), or error (CHAOS-4365 item 1b).", "counter")
+	for _, outcome := range teamRepoOwnershipDerivationOutcomes() {
+		writeUintSample(output, "dev_health_team_repo_ownership_derivation_total",
+			[]metricLabel{{"outcome", string(outcome)}}, collector.teamRepoOwnershipDerivation[outcome])
+	}
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_row_count", "Rows written by one sync.team_repo_ownership_derivation worker run, observed only on the rows_written outcome.", "histogram")
+	writeHistogram(output, "dev_health_team_repo_ownership_derivation_row_count", nil, collector.teamRepoOwnershipDerivationRowCount)
 }
 
 func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) {

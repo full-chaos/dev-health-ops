@@ -145,6 +145,16 @@ func TestFoldContributingPRSocialAndTestOpsPoliciesValidateSubsetsAndRejectCross
 				if err := ValidateClaim(provider, family.canonical, unknown, true); !errors.Is(err, ErrInvalidClaim) {
 					t.Fatalf("%s unknown flag error=%v", family.canonical, err)
 				}
+				// A known family flag explicitly present but set to false fails
+				// closed too -- a bare `map[string]bool` can store that value,
+				// and completion must never silently treat it as "absent"
+				// (codex round 3 finding #2).
+				for _, alias := range family.aliases {
+					explicitFalse := map[string]bool{familyDatasetFlag(alias): false}
+					if err := ValidateClaim(provider, family.canonical, explicitFalse, true); !errors.Is(err, ErrInvalidClaim) {
+						t.Fatalf("%s explicit-false flag=%q error=%v", family.canonical, alias, err)
+					}
+				}
 			}
 			// A canonical "prs" claim carrying "cicd"'s own flag (or vice
 			// versa) is cross-family contamination and must fail closed --

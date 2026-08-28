@@ -498,20 +498,23 @@ func foldContributingFamilyUnit(
 	// flags -- back only to the datasets that actually CONTRIBUTED a window
 	// this tick, never every configured member. A caught-up sibling (e.g.
 	// "tests" already past `before` while "cicd" still has work) must not be
-	// stamped as processed: it did not run, its watermark must not be
-	// touched, and it must not inflate the unit's cost class or budget
-	// bucket on a tick where it contributed nothing. This is the opposite of
-	// the work-item family's unconditional all-members stamp, which is a
-	// deliberate exception for that one atomic family, not the default here.
+	// stamped as processed: it did not run and its watermark must not be
+	// touched. This is the opposite of the work-item family's unconditional
+	// all-members stamp, which is a deliberate exception for that one atomic
+	// family, not the default here.
 	//
-	// The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
-	// class among contributing members, not just the canonical identity's
-	// own. "tests" is heavy while "cicd" is medium; a tests-only fold must
-	// still enter dispatch/provider-budget buckets as heavy, even though it
-	// plans and executes under the canonical "cicd" dataset_key. Per-member
-	// window sizing already used each member's own spec via resolveWindow
-	// above -- this only affects the unit's stamped classification.
-	unitCostClass := canonicalSpec.CostClass
+	// The stamped unit keeps the CANONICAL identity's own cost class
+	// unconditionally, never a member's -- CHAOS-4078 review round 3: an
+	// earlier version of this fold tried to upgrade to the heaviest
+	// contributing member's class (e.g. stamping "heavy" under the canonical
+	// "cicd" dataset_key when "tests" contributed), but
+	// providersync.Unit.Validate() requires cost_class to exactly match the
+	// checked-in capability registry's value for (provider, dataset_key) --
+	// "cicd" is registered MEDIUM, full stop, so a "heavy"-stamped cicd unit
+	// fails claim validation after being marked running and strands the run.
+	// The heavy incremental-window ratchet already caps "tests"'s own window
+	// correctly via its OWN spec in resolveWindow above; that per-member
+	// window sizing is untouched by this.
 	for _, dataset := range contributing {
 		flags[familyDatasetFlag(dataset.Key)] = true
 		memberSpec, ok := datasetSpecification(provider, dataset.Key)
@@ -521,31 +524,10 @@ func foldContributingFamilyUnit(
 		for flagName, flagValue := range memberSpec.ProcessorFlags {
 			flags[flagName] = flagValue
 		}
-		if costClassWeight(memberSpec.CostClass) > costClassWeight(unitCostClass) {
-			unitCostClass = memberSpec.CostClass
-		}
 	}
-	stampedSpec := canonicalSpec
-	stampedSpec.CostClass = unitCostClass
-	unit := newPlannedUnit(input, source, canonicalDataset, stampedSpec, earliest, latest)
+	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
 	unit.ProcessorFlags = flags
 	return unit, true
-}
-
-// costClassWeight orders the three cost classes so a fold can pick the most
-// restrictive (heaviest) one among its contributing members. An unrecognized
-// value sorts as the lightest, never silently upgrading the budget bucket.
-func costClassWeight(costClass string) int {
-	switch costClass {
-	case "heavy":
-		return 2
-	case "medium":
-		return 1
-	case "light":
-		return 0
-	default:
-		return 0
-	}
 }
 
 // resolveWindow is the single window pipeline every planned unit goes through:

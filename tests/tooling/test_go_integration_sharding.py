@@ -754,7 +754,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # telemetry through the real PostgresRepository.Claim/Fail SQL paths
     # against a real containers.StartPostgres instance. Both counts move:
     # 1081 -> 1083, 117 -> 119.
-    assert len(expected_provider_tests) == 1083
+    #
+    # A codex round-3 finding (CHAOS-4078: folded telemetry not attributing
+    # to the enabled alias) added one more ordinary, non-integration-tagged
+    # top-level test in internal/providersync
+    # (work_item_alias_completion_test.go):
+    # TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases.
+    # Only the provider count moves: 1083 -> 1084; 119 stays.
+    assert len(expected_provider_tests) == 1084
     assert len(expected_integration_tests) == 119
     assert expected_integration_tests < expected_provider_tests
 
@@ -771,7 +778,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1083
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1084
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -832,7 +839,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1083
+    assert len(selected_tests) == len(set(selected_tests)) == 1084
     assert set(selected_tests) == expected_tests
 
 

@@ -103,7 +103,12 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	if err := claim.Validate(); err != nil {
 		return Claim{}, err
 	}
-	repository.Metrics.RecordUnitClaimed(claim.Provider, claim.Dataset)
+	// CHAOS-4078: attribute the claim to whichever alias dataset(s) it
+	// actually represents, not just the persisted canonical identity -- see
+	// metricDatasetKeys.
+	for _, datasetKey := range metricDatasetKeys(claim.Dataset, claim.ProcessorFlags) {
+		repository.Metrics.RecordUnitClaimed(claim.Provider, datasetKey)
+	}
 	return claim, nil
 }
 
@@ -504,7 +509,12 @@ func (repository *PostgresRepository) Fail(
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
-	repository.Metrics.RecordUnitFailed(claim.Provider, claim.Dataset, category)
+	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
+	// claim actually represents, not just the persisted canonical identity
+	// -- see metricDatasetKeys.
+	for _, datasetKey := range metricDatasetKeys(claim.Dataset, claim.ProcessorFlags) {
+		repository.Metrics.RecordUnitFailed(claim.Provider, datasetKey, category)
+	}
 	return nil
 }
 

@@ -582,10 +582,16 @@ def test_requested_tests_dataset_folds_onto_the_canonical_cicd_writer(
     assert flags.get("family_dataset_cicd") is not True
     assert flags.get("sync_cicd") is True
     assert flags.get("sync_tests") is True
-    # CHAOS-4078 review finding: "tests" is HEAVY while "cicd" is MEDIUM.
-    # A tests-only fold must still enter dispatch/provider-budget buckets as
-    # heavy, even though it plans under the canonical "cicd" dataset_key.
-    assert unit.cost_class == "heavy"
+    # CHAOS-4078 review round 3: the stamped unit ALWAYS carries the
+    # canonical "cicd" identity's own cost class (medium), never "tests"'
+    # heavier one, even though tests is the only enabled member -- the Go
+    # worker's providersync.Unit.Validate() requires cost_class to exactly
+    # match the checked-in capability registry's value for the persisted
+    # dataset_key, so a "heavy"-stamped cicd unit would fail claim
+    # validation and strand the run. See test_testops_fold_stays_medium_...
+    # and test_testops_fold_never_stamps_a_caught_up_sibling for the two
+    # other cost-class shapes this contract covers.
+    assert unit.cost_class == "medium"
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])

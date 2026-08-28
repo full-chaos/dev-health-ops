@@ -239,6 +239,72 @@ func TestWorkItemAliasProcessorFlagsRejectNonBooleanEncoding(t *testing.T) {
 	}
 }
 
+// TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases covers
+// codex round 3 finding #4: for an alias-only fold, claim.Dataset is the
+// canonical key ("prs"/"cicd") and the enabled alias lives only in
+// ProcessorFlags. Without this expansion, PostgresRepository's
+// RecordUnitClaimed/RecordUnitFailed calls would record every folded unit
+// under its canonical identity only, hiding the exact per-alias-dataset
+// flatline (pr-comments, pr-reviews, tests) CHAOS-4125's forensics needed.
+func TestMetricDatasetKeysAttributesFoldedTelemetryToTheEnabledAliases(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		dataset string
+		flags   map[string]bool
+		want    []string
+	}{
+		{
+			name:    "pr-social fold expands to only the enabled alias",
+			dataset: "prs",
+			flags:   map[string]bool{"family_dataset_pr_comments": true},
+			want:    []string{"pr-comments"},
+		},
+		{
+			name:    "pr-social fold expands to every enabled alias",
+			dataset: "prs",
+			flags: map[string]bool{
+				"family_dataset_pr_reviews":  true,
+				"family_dataset_pr_comments": true,
+			},
+			want: []string{"pr-reviews", "pr-comments"},
+		},
+		{
+			name:    "testops fold expands to the enabled alias",
+			dataset: "cicd",
+			flags:   map[string]bool{"family_dataset_tests": true},
+			want:    []string{"tests"},
+		},
+		{
+			name:    "canonical-only fold with no aliases falls back to its own identity",
+			dataset: "cicd",
+			flags:   map[string]bool{},
+			want:    []string{"cicd"},
+		},
+		{
+			name:    "an explicit-false alias flag never attributes to that alias",
+			dataset: "cicd",
+			flags:   map[string]bool{"family_dataset_tests": false},
+			want:    []string{"cicd"},
+		},
+		{
+			name:    "a non-fold dataset always fans back to its own identity",
+			dataset: "commits",
+			flags:   map[string]bool{"family_dataset_tests": true},
+			want:    []string{"commits"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := metricDatasetKeys(tc.dataset, tc.flags); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("metricDatasetKeys(%q, %v)=%v want=%v", tc.dataset, tc.flags, got, tc.want)
+			}
+		})
+	}
+}
+
 func cloneStringAnyMap(input map[string]any) map[string]any {
 	cloned := make(map[string]any, len(input))
 	for key, value := range input {

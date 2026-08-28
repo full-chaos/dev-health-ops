@@ -1115,15 +1115,6 @@ _PR_SOCIAL_CANONICAL_DATASET_KEY = PR_SOCIAL_CANONICAL_DATASET_KEY
 _TESTOPS_DATASETS: frozenset[str] = frozenset(TESTOPS_DATASETS)
 _TESTOPS_CANONICAL_DATASET_KEY = TESTOPS_CANONICAL_DATASET_KEY
 
-# Ordinal so a fold can pick the most restrictive (heaviest) cost class among
-# its contributing members -- see _build_fold_family_units. Mirrors Go's
-# costClassWeight in internal/scheduler/sync/planner.go.
-_COST_CLASS_WEIGHT: dict[CostClass, int] = {
-    CostClass.LIGHT: 0,
-    CostClass.MEDIUM: 1,
-    CostClass.HEAVY: 2,
-}
-
 
 def _build_fold_family_units(
     *,
@@ -1197,31 +1188,29 @@ def _build_fold_family_units(
     # flags -- back only to the datasets that actually CONTRIBUTED a window
     # this tick, never every configured member. A caught-up sibling (e.g.
     # "tests" already past the requested end while "cicd" still has work)
-    # must not be stamped as processed: it did not run, its watermark must
-    # not be touched, and it must not inflate the unit's cost class or budget
-    # bucket on a tick where it contributed nothing. This is the opposite of
-    # the work-item family's unconditional all-members stamp, which is a
-    # deliberate exception for that one atomic family, not the default here.
+    # must not be stamped as processed: it did not run and its watermark
+    # must not be touched. This is the opposite of the work-item family's
+    # unconditional all-members stamp, which is a deliberate exception for
+    # that one atomic family, not the default here.
     #
-    # The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
-    # class among contributing members, not just the canonical identity's
-    # own. "tests" is heavy while "cicd" is medium; a tests-only fold must
-    # still enter dispatch/provider-budget buckets as heavy, even though it
-    # plans and executes under the canonical "cicd" dataset_key. Per-member
-    # window sizing already used each member's own spec via _resolve_windows
-    # above -- this only affects the unit's stamped classification.
+    # The stamped unit keeps the CANONICAL identity's own cost class
+    # unconditionally, never a member's -- CHAOS-4078 review round 3: an
+    # earlier version of this fold tried to upgrade to the heaviest
+    # contributing member's class (e.g. stamping "heavy" under the canonical
+    # "cicd" dataset_key when "tests" contributed), but the Go worker's
+    # providersync.Unit.Validate() requires cost_class to exactly match the
+    # checked-in capability registry's value for (provider, dataset_key) --
+    # "cicd" is registered MEDIUM, full stop, so a "heavy"-stamped cicd unit
+    # fails claim validation after being marked running and strands the run.
+    # The heavy incremental-window ratchet already caps "tests"'s own window
+    # correctly via its own spec in _resolve_windows above; that per-member
+    # window sizing is untouched by this.
     contributing_keys = {dataset.dataset_key for dataset, _ in contributing}
-    unit_cost_class = canonical_spec.default_cost_class
     for dataset, spec in family_specs:
         if dataset.dataset_key not in contributing_keys:
             continue
         processor_flags[family_dataset_flag(dataset.dataset_key)] = True
         processor_flags.update(spec.processor_flags)
-        if (
-            _COST_CLASS_WEIGHT[spec.default_cost_class]
-            > _COST_CLASS_WEIGHT[unit_cost_class]
-        ):
-            unit_cost_class = spec.default_cost_class
 
     return [
         PlannedUnit(
@@ -1230,7 +1219,7 @@ def _build_fold_family_units(
             source_id=str(source.id),
             provider=provider,
             dataset_key=canonical_dataset_key,
-            cost_class=unit_cost_class.value,
+            cost_class=canonical_spec.default_cost_class.value,
             mode=mode,
             window_start=window_start,
             window_end=window_end,

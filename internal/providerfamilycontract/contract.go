@@ -131,8 +131,15 @@ func ValidateClaim(
 		// Non-atomic by design (CHAOS-4078): any subset of this family's own
 		// flags is valid, including none (a canonical-only selection with no
 		// enabled aliases). The cross-family check above already ran; each
-		// PRESENT flag just needs to be literal true, which processorFlags'
-		// bool type already guarantees for anything stored at all.
+		// PRESENT flag must still be literal true -- a Go map[string]bool can
+		// store an explicit false, and a malformed claim carrying
+		// "family_dataset_tests": false must fail closed here rather than
+		// having completion silently treat it as absent.
+		for flag := range expected {
+			if value, present := processorFlags[flag]; present && !value {
+				return ErrInvalidClaim
+			}
+		}
 		return nil
 	}
 	for flag := range expected {

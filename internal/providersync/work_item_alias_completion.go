@@ -29,6 +29,47 @@ var foldFamilyMembers = map[string][]string{
 	"cicd": {"cicd", "tests"},
 }
 
+// metricDatasetKeys returns the effective dataset key(s) a claim represents
+// for PER-DATASET telemetry (CHAOS-4078), expanding a folded canonical claim
+// ("prs"/"cicd", or the atomic "work-items" family) back to whichever
+// family_dataset_* flags are set. Without this, dev_health_provider_unit_
+// claimed_total/_failed_total would record every folded unit under its
+// canonical identity only, hiding exactly the per-alias-dataset flatline
+// (pr-comments, pr-reviews, tests) CHAOS-4125's own forensics needed to see.
+//
+// Deliberately best-effort and never errors: telemetry attribution must not
+// gate on claim validity, which Validate()/providerfamilycontract.ValidateClaim
+// already enforce on the paths that matter. Falls back to the raw dataset
+// key whenever there is nothing to expand.
+func metricDatasetKeys(dataset string, processorFlags map[string]bool) []string {
+	dataset = strings.ToLower(strings.TrimSpace(dataset))
+	if members, isFold := foldFamilyMembers[dataset]; isFold {
+		keys := make([]string, 0, len(members))
+		for _, member := range members {
+			if processorFlags[workItemFamilyFlagForDataset(member)] {
+				keys = append(keys, member)
+			}
+		}
+		if len(keys) > 0 {
+			return keys
+		}
+		return []string{dataset}
+	}
+	if dataset == "work-items" {
+		familyDatasets := workitemcontract.FamilyDatasets()
+		keys := make([]string, 0, len(familyDatasets))
+		for _, familyDataset := range familyDatasets {
+			if processorFlags[workItemFamilyFlagForDataset(familyDataset)] {
+				keys = append(keys, familyDataset)
+			}
+		}
+		if len(keys) > 0 {
+			return keys
+		}
+	}
+	return []string{dataset}
+}
+
 // workItemAliasCompletionMetadata resolves the authoritative watermark and
 // audit identities before PostgresRepository.Complete opens its transaction.
 // A malformed family encoding therefore cannot terminalize the canonical unit

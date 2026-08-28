@@ -55,12 +55,24 @@ def dataset_keys_from_flags(
     processor_flags: Mapping[str, object] | None,
 ) -> list[str]:
     """Return the members of ``datasets`` whose ``family_dataset_*`` flag is
-    true, in the given order. Generalizes ``family_dataset_keys_from_flags``
-    to any collapsible family (CHAOS-4078)."""
+    the LITERAL boolean ``True``, in the given order. Generalizes
+    ``family_dataset_keys_from_flags`` to any collapsible family (CHAOS-4078).
+
+    ``is True``, not ``bool(...)``: the execution-side contract (Go's
+    ``map[string]bool``, Python's ``validate_provider_family_claim``) treats
+    this column as a strict boolean, and this helper now feeds PR-social/
+    TestOps coverage expansion in ``api/services/sync_coverage.py`` in
+    addition to the work-item family. A truthy-but-not-``True`` value (e.g. a
+    malformed ``"family_dataset_tests": "false"`` string, itself truthy in
+    Python) must never be read as "this dataset ran" -- that would report
+    requested or covered work for a unit that never touched it.
+    """
 
     flags = processor_flags or {}
     return [
-        dataset for dataset in datasets if bool(flags.get(family_dataset_flag(dataset)))
+        dataset
+        for dataset in datasets
+        if flags.get(family_dataset_flag(dataset)) is True
     ]
 
 

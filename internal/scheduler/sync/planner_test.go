@@ -227,12 +227,17 @@ func TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter(t *te
 	}{
 		{"github pr-comments", "github", "pr-comments", "prs", "medium"},
 		{"github pr-reviews", "github", "pr-reviews", "prs", "medium"},
-		// tests is HEAVY while cicd (its canonical) is MEDIUM: the fold must
-		// stamp the heavier class so a tests-only unit still enters
-		// dispatch/provider-budget buckets as heavy (CHAOS-4078 review finding).
-		{"github tests", "github", "tests", "cicd", "heavy"},
+		// tests is HEAVY while cicd (its canonical) is MEDIUM, but the
+		// stamped unit ALWAYS carries the canonical identity's own class
+		// (CHAOS-4078 review round 3): providersync.Unit.Validate() requires
+		// cost_class to exactly match the checked-in capability registry's
+		// value for the persisted dataset_key, so a "heavy"-stamped cicd
+		// unit fails claim validation and strands the run. The heavy
+		// incremental-window ratchet still caps tests' own window correctly
+		// via its own spec -- only the stamped classification stays cicd's.
+		{"github tests", "github", "tests", "cicd", "medium"},
 		{"gitlab pr-comments", "gitlab", "pr-comments", "prs", "medium"},
-		{"gitlab tests", "gitlab", "tests", "cicd", "heavy"},
+		{"gitlab tests", "gitlab", "tests", "cicd", "medium"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			units, err := BuildScheduledPlan(PlannerInput{

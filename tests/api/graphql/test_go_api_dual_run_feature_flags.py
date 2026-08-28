@@ -47,6 +47,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.engine import Engine, make_url
 
 from dev_health_ops.api.graphql import go_api_comparator, principal_envelope
 from dev_health_ops.api.graphql.context import GraphQLContext
@@ -132,35 +134,44 @@ def query_api_binary(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(out)
 
 
-def _create_scratch_postgres_db(admin_uri: str) -> tuple[str, str]:
-    import psycopg2  # local import: only this fixture needs the sync driver
+def _sync_engine(uri: str) -> Engine:
+    """Builds a sync SQLAlchemy engine for admin DDL (CREATE/DROP DATABASE,
+    which cannot run inside asyncpg's usual transaction context) --
+    same postgresql+psycopg2 driver, same AUTOCOMMIT-engine convention
+    test_go_api_registry.py's migrated_scratch_db fixture already uses.
+    SQLAlchemy ships its own type stubs, so this sidesteps psycopg2's
+    missing types-psycopg2 stub package (mypy import-untyped) without
+    adding a new dev dependency for a one-off admin connection.
+    """
+    return sa.create_engine(
+        make_url(uri).set(drivername="postgresql+psycopg2"),
+        isolation_level="AUTOCOMMIT",
+    )
 
+
+def _create_scratch_postgres_db(admin_uri: str) -> tuple[str, str]:
     db_name = f"chaos_4367_dual_run_{uuid.uuid4().hex}"
-    admin_conn = psycopg2.connect(admin_uri)
-    admin_conn.autocommit = True
+    engine = _sync_engine(admin_uri)
     try:
-        with admin_conn.cursor() as cur:
-            cur.execute(f'CREATE DATABASE "{db_name}"')
+        with engine.connect() as connection:
+            connection.exec_driver_sql(f'CREATE DATABASE "{db_name}"')
     finally:
-        admin_conn.close()
+        engine.dispose()
     return db_name, admin_uri.rsplit("/", 1)[0] + f"/{db_name}"
 
 
 def _drop_scratch_postgres_db(admin_uri: str, db_name: str) -> None:
-    import psycopg2
-
-    admin_conn = psycopg2.connect(admin_uri)
-    admin_conn.autocommit = True
+    engine = _sync_engine(admin_uri)
     try:
-        with admin_conn.cursor() as cur:
-            cur.execute(
+        with engine.connect() as connection:
+            connection.exec_driver_sql(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND pid <> pg_backend_pid()",
-                (db_name,),
+                "WHERE datname = %(db_name)s AND pid <> pg_backend_pid()",
+                {"db_name": db_name},
             )
-            cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{db_name}"')
     finally:
-        admin_conn.close()
+        engine.dispose()
 
 
 @pytest.fixture
@@ -172,13 +183,18 @@ def registry_postgres() -> Iterator[str]:
     """
     assert POSTGRES_TEST_URI is not None
     db_name, dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    import psycopg2
-
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = True
+    _create_routing_state_table(dsn)
     try:
-        with conn.cursor() as cur:
-            cur.execute(
+        yield dsn
+    finally:
+        _drop_scratch_postgres_db(POSTGRES_TEST_URI, db_name)
+
+
+def _create_routing_state_table(dsn: str) -> None:
+    engine = _sync_engine(dsn)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql(
                 """
                 CREATE TABLE go_api_routing_state (
                     schema_digest TEXT NOT NULL,
@@ -190,11 +206,7 @@ def registry_postgres() -> Iterator[str]:
                 """
             )
     finally:
-        conn.close()
-    try:
-        yield dsn
-    finally:
-        _drop_scratch_postgres_db(POSTGRES_TEST_URI, db_name)
+        engine.dispose()
 
 
 def _document_digest(document: str) -> str:
@@ -204,13 +216,10 @@ def _document_digest(document: str) -> str:
 
 
 def _set_routing_mode(dsn: str, mode: str) -> None:
-    import psycopg2
-
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = True
+    engine = _sync_engine(dsn)
     try:
-        with conn.cursor() as cur:
-            cur.execute(
+        with engine.connect() as connection:
+            connection.exec_driver_sql(
                 """
                 INSERT INTO go_api_routing_state
                     (schema_digest, document_digest, selected_operation, mode)
@@ -221,7 +230,7 @@ def _set_routing_mode(dsn: str, mode: str) -> None:
                 (SCHEMA_DIGEST, _document_digest(FEATURE_FLAGS_DOCUMENT), mode),
             )
     finally:
-        conn.close()
+        engine.dispose()
 
 
 def _mint_envelope(org_id: str) -> tuple[str, dict, str, str]:
@@ -550,25 +559,7 @@ async def test_dual_run_missing_table_degrades_on_both_sides(
     admin_client.command(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
 
     registry_db_name, registry_dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    import psycopg2
-
-    conn = psycopg2.connect(registry_dsn)
-    conn.autocommit = True
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE go_api_routing_state (
-                    schema_digest TEXT NOT NULL,
-                    document_digest TEXT NOT NULL,
-                    selected_operation TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    PRIMARY KEY (schema_digest, document_digest, selected_operation)
-                )
-                """
-            )
-    finally:
-        conn.close()
+    _create_routing_state_table(registry_dsn)
     _set_routing_mode(registry_dsn, "canary")
 
     token, jwks, issuer, audience = _mint_envelope(org_id)

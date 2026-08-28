@@ -833,7 +833,7 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> N
             assert before.value.detail["reason"] == "ambiguous_refused"  # type: ignore[index]
 
             outcome = await worker_metrics._bulk_redrive_ambiguous_executions(
-                session, [run_id], "chaos-4409 operator redrive test"
+                session, [run_id], "chaos-4409 operator redrive test", ["finalize"]
             )
             await session.commit()
             assert outcome == {"repaired": 1, "skipped_claim_active": 0}
@@ -849,5 +849,102 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> N
             assert await worker_metrics._reserve_execution(
                 session, reclaimed_again
             ) == ("execute")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_redrive_operation_scope_never_touches_the_other_operations_row() -> (
+    None
+):
+    """CHAOS-4409 (codex review, round 1, P1): daily-redrive and
+    daily-finalize share this ONE bulk-repair endpoint, but their
+    review_evidence means different things (partition output vs. finalize
+    output). A daily-redrive call (operations=["partition"], its default)
+    must NEVER move a run's finalize ledger row to retry_authorized under
+    partition-scoped evidence -- that would authorize a later, unrelated
+    finalize attempt to redrive it without anyone having reviewed finalize
+    output specifically. Seeds a run with a stuck (dead-claim) 'ambiguous'
+    FINALIZE row only, calls the bulk repair scoped to operations=
+    ["partition"] (daily-redrive's exact shape), and asserts nothing moves:
+    zero repaired, and the finalize row's own state is untouched."""
+    assert _TEST_URI is not None
+    engine = create_async_engine(_TEST_URI)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO daily_metrics_runs (
+                        id, org_id, target_day, generation, status,
+                        finalization_status, finalization_claim_token,
+                        finalization_lease_expires_at, created_at, updated_at
+                    ) VALUES (
+                        CAST(:run_id AS uuid), CAST(:org_id AS uuid),
+                        '2026-08-20', :generation, 'running', 'running',
+                        CAST(:claim_token AS uuid),
+                        statement_timestamp() + interval '10 minutes',
+                        now(), now()
+                    )
+                    """
+                ),
+                {
+                    "run_id": str(run_id),
+                    "org_id": str(org_id),
+                    "generation": f"daily-v1:{run_id}",
+                    "claim_token": str(uuid.uuid4()),
+                },
+            )
+            await session.commit()
+
+            finalize_request = worker_metrics.DailyMetricsExecutionRequest(
+                operation="finalize", run_id=run_id
+            )
+            execution = await worker_metrics._load_daily_execution(
+                session, finalize_request
+            )
+            assert await worker_metrics._reserve_execution(session, execution) == (
+                "execute"
+            )
+            await worker_metrics._mark_ambiguous(
+                session, execution, "simulated dead claim"
+            )
+
+            # Dead claim: a fresh finalization_claim_token, exactly as
+            # ClaimFinalize does on a retry.
+            await session.execute(
+                text(
+                    """
+                    UPDATE daily_metrics_runs
+                    SET finalization_claim_token = CAST(:claim_token AS uuid),
+                        finalization_lease_expires_at = statement_timestamp() + interval '10 minutes'
+                    WHERE id = CAST(:run_id AS uuid)
+                    """
+                ),
+                {"claim_token": str(uuid.uuid4()), "run_id": str(run_id)},
+            )
+            await session.commit()
+
+            # daily-redrive's exact call shape: operations defaults to
+            # ["partition"] when omitted -- pass it explicitly here to pin
+            # the behavior even if that default ever changes.
+            outcome = await worker_metrics._bulk_redrive_ambiguous_executions(
+                session, [run_id], "chaos-4358 partition-only evidence", ["partition"]
+            )
+            await session.commit()
+            assert outcome == {"repaired": 0, "skipped_claim_active": 0}
+
+            untouched_state = (
+                await session.execute(
+                    text(
+                        "SELECT state FROM metric_compatibility_executions WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {"id": str(execution.id)},
+                )
+            ).scalar_one()
+            assert untouched_state == "ambiguous"
     finally:
         await engine.dispose()

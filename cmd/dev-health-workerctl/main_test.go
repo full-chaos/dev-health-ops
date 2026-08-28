@@ -674,11 +674,50 @@ func TestFinalizeLedgerRepairGateCallsBulkRepairForCandidates(t *testing.T) {
 	if evidence, _ := capturedBody["review_evidence"].(string); evidence != "chaos-4409 test evidence" {
 		t.Fatalf("request review_evidence = %v, want the caller's text", capturedBody["review_evidence"])
 	}
+	// codex review (round 1, P1): this call's review_evidence is about
+	// finalize output, never partition output -- it must scope the bridge
+	// repair to operation='finalize' explicitly, never fall through to the
+	// bridge's own operation='partition' default (which would silently
+	// authorize an unrelated partition ledger row under finalize-scoped
+	// evidence, or worse, leave the actual stuck finalize row untouched).
+	operations, _ := capturedBody["operations"].([]any)
+	if len(operations) != 1 || operations[0] != "finalize" {
+		t.Fatalf("request operations = %v, want [\"finalize\"]", capturedBody["operations"])
+	}
 	if abort {
 		t.Fatal("fully repaired ledger reported abort=true")
 	}
 	if repaired, _ := ledgerRepair["repaired"].(int); repaired != 1 {
 		t.Fatalf("ledgerRepair[repaired] = %v, want 1", ledgerRepair["repaired"])
+	}
+}
+
+// TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive is
+// the daily-redrive-side half of the same codex finding: the shared bulk-
+// redrive endpoint must never repair a finalize ledger row under
+// daily-redrive's own partition-scoped review_evidence. redriveDailyMetricsLedger
+// (the function daily-redrive calls directly, with no operations argument)
+// must omit the field entirely so the bridge's own
+// DailyMetricsRedriveRequest.operations default (["partition"]) governs --
+// not send an explicit ["partition"] that could drift from that default.
+func TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":0,"skipped_claim_active":0}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if _, present := capturedBody["operations"]; present {
+		t.Fatalf("daily-redrive's request sent an explicit operations field (%v); want it omitted so the bridge default governs", capturedBody["operations"])
 	}
 }
 

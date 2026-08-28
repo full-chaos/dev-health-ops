@@ -1205,10 +1205,21 @@ success. This is the finalize-side counterpart of the CHAOS-4358 gap
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
+WORKER_OPERATIONAL_BRIDGE_URL=<bridge-base-url> \
+WORKER_METRIC_REPAIR_TOKEN=<metric-repair-token> \
 dev-health-workerctl metrics daily-finalize \
   --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
   --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
 ```
+
+`--run` (CHAOS-4409) additionally requires `WORKER_OPERATIONAL_BRIDGE_URL`/
+`WORKER_METRIC_REPAIR_TOKEN` — the same two variables `daily-redrive` above
+already needs — because it repairs the named run's finalize ledger row
+through the compatibility bridge before publishing (see "Finalize-ledger
+repair" below). Missing either fails closed with
+`{"error": {"code": "ledger_repair_unavailable"}}` before any write.
+`--all-complete` does NOT need them: it never touches a run whose finalize
+ledger row could be stuck (see that flag's own note below for why).
 
 `--review-evidence` is **required**, with no default, mirroring
 `daily-redrive`'s bar: finalize writes `user_metrics_daily`/
@@ -1267,13 +1278,15 @@ claim) — the extra row costs River queue capacity, not correctness. Avoid
 re-running `--all-complete` in a tight loop; check the query above for
 still-`pending`/`delivered` redrive rows first if in doubt.
 
-**Finalize-ledger repair (CHAOS-4409).** Before any candidate republishes,
-this command repairs the Python compatibility bridge's own finalize ledger
-row (`metric_compatibility_executions`, `worker_kind='daily'
-operation='finalize'`) for every candidate — the same
-`/internal/worker/daily-metrics/v1/redrive` bulk-repair endpoint
-`daily-redrive` above already calls for partition rows, extended to cover
-finalize rows too. Without this, a run whose finalize ledger row was stuck
+**Finalize-ledger repair (CHAOS-4409), `--run` only.** Before publishing,
+`--run` repairs the Python compatibility bridge's own finalize ledger row
+for the named run (`metric_compatibility_executions`, `worker_kind='daily'
+operation='finalize'`) — the same `/internal/worker/daily-metrics/v1/redrive`
+bulk-repair endpoint `daily-redrive` above already calls for partition rows,
+now scoped to `operations: ["finalize"]` (the request's `operations` field
+defaults to `["partition"]`, so `daily-redrive`'s own call is byte-for-byte
+unchanged and never touches a finalize row under its partition-scoped
+review evidence). Without this, a run whose finalize ledger row was stuck
 `ambiguous`/stuck-`executing` from the original stranding answers
 `JobCancelError ambiguous_refused` on every redrive attempt, forever: the
 ledger's own `_reserve_execution` check refuses the identical execution
@@ -1287,6 +1300,19 @@ aborts the whole invocation with
 `{"status": "ledger_repair_incomplete_retry_after_claims_settle"}` rather
 than publishing into a race — re-run once that claim has settled (its owning
 job finishes or its lease expires).
+
+**`--all-complete` never runs the ledger repair** (codex review, round 1,
+P1): its own candidates come from `FindStrandedFinalizeRuns`, which reports
+`'failed'`/expired-lease runs alongside genuinely never-attempted `'pending'`
+ones for VISIBILITY — `RedriveStrandedFinalize` already refuses to publish
+for anything but `'pending'` here. Running the ledger repair over the FULL
+candidate list would silently move an unreviewed `'failed'` run's finalize
+ledger row to `retry_authorized` even though this sweep will never redrive
+it — authorizing a later, unrelated call to do so without any operator
+having reviewed that specific run. A genuinely never-attempted `'pending'`
+run cannot have a stuck ledger row in the first place (`ClaimFinalize` never
+claimed this generation to attempt `Finalize()` at all), so nothing is lost
+by skipping the repair step entirely for this flag.
 
 Returns `{"candidates": [...run ids considered...], "ledger_repair":
 {"repaired": N, "skipped_claim_active": N}, "finalize":

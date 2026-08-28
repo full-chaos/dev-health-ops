@@ -382,6 +382,14 @@ func buildSyncCoordinatorWorker(
 	dailyStore, dailyStoreErr := daily.NewPostgresStore(postgresDatabase.pools.Domain)
 	dailyPublisher, dailyPublisherErr := daily.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 	remainingStore, remainingStoreErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain)
+	// CHAOS-4384 (codex round 3): this is the store post-sync's own
+	// StartRunTx call actually runs through -- the daily.go store built for
+	// remainingSpecs' PartitionHandler never reaches StartRunTx at all, so
+	// wiring the observer there instead would leave the open-day zero-row
+	// counter permanently at zero for the exact trigger this ticket is about.
+	if openDayZeroRowObserver, ok := observer.(remaining.OpenDayZeroRowObserver); ok {
+		remainingStore.SetOpenDayZeroRowObserver(openDayZeroRowObserver)
+	}
 	remainingPublisher, remainingPublisherErr := remaining.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 	producer, producerErr := joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)
 	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)

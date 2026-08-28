@@ -655,7 +655,13 @@ func TestStartRunTxRecomputesAZeroRowDoraCoverageOnAnOpenDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	const orgID = "00000000-0000-4000-8000-000000004384"
-	today := time.Now().UTC().Format("2006-01-02")
+	// Fix the clock rather than leaving store.now on a real, unpinned
+	// clock: dayIsOpen compares against store.now() at call time, so a real
+	// clock could cross UTC midnight between this setup and a later
+	// StartRunTx call and flip "today" closed mid-test (codex round 3).
+	fixedNow := time.Now().UTC()
+	store.now = func() time.Time { return fixedNow }
+	today := fixedNow.Format("2006-01-02")
 	scope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
 
 	// First trigger: the day's earliest post-sync, ~00:00Z. Computes and
@@ -869,7 +875,13 @@ func TestStartRunTxPrefersNonZeroDoraCoverageOverALaterZeroRowRun(t *testing.T) 
 		t.Fatal(err)
 	}
 	const orgID = "00000000-0000-4000-8000-000000004384"
-	today := time.Now().UTC().Format("2006-01-02")
+	// Fix the clock rather than leaving store.now on a real, unpinned
+	// clock: dayIsOpen compares against store.now() at call time, so a real
+	// clock could cross UTC midnight between this setup and a later
+	// StartRunTx call and flip "today" closed mid-test (codex round 3).
+	fixedNow := time.Now().UTC()
+	store.now = func() time.Time { return fixedNow }
+	today := fixedNow.Format("2006-01-02")
 	narrowScope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
 	wideScope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":30}`)
 
@@ -1099,7 +1111,13 @@ func TestHasSucceededPartitionAppliesTheSameOpenDayZeroRowExceptionAsStartRunTx(
 		t.Fatal(err)
 	}
 	const orgID = "00000000-0000-4000-8000-000000004384"
-	today := time.Now().UTC().Format("2006-01-02")
+	// Fix the clock rather than leaving store.now on a real, unpinned
+	// clock: dayIsOpen compares against store.now() at call time, so a real
+	// clock could cross UTC midnight between this setup and a later
+	// StartRunTx call and flip "today" closed mid-test (codex round 3).
+	fixedNow := time.Now().UTC()
+	store.now = func() time.Time { return fixedNow }
+	today := fixedNow.Format("2006-01-02")
 	scope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
 
 	// Post-sync's earliest trigger of the day: completes with 0 rows,

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -102,25 +104,25 @@ func (teamCatalogLease) Assert(ctx context.Context) error { return ctx.Err() }
 
 func (resolver teamCatalogClientResolver) ResolveClient(
 	ctx context.Context, orgID, runID, provider string,
-) (providerfoundation.Credential, *providerfoundation.HTTPClient, error) {
+) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	_, credentialID, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
+	integrationID, credentialID, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
 	if err != nil {
-		return providerfoundation.Credential{}, nil, err
+		return providerfoundation.Credential{}, nil, "", err
 	}
 	lease := teamCatalogLease{}
 	credential, err := resolver.credentials.Resolve(ctx, lease, providerfoundation.TenantScope{
 		OrgID: orgID, Provider: provider, CredentialID: credentialID,
 	})
 	if err != nil {
-		return providerfoundation.Credential{}, nil, err
+		return providerfoundation.Credential{}, nil, "", err
 	}
 	switch provider {
 	case "linear":
 		client, err := providerfoundation.NewLinearClient(credential, resolver.doer, resolver.retry, lease)
-		return credential, client, err
+		return credential, client, integrationID, err
 	default:
-		return providerfoundation.Credential{}, nil, errTeamCatalogUnsupportedProvider
+		return providerfoundation.Credential{}, nil, "", errTeamCatalogUnsupportedProvider
 	}
 }
 
@@ -136,32 +138,52 @@ type teamCatalogSelectionsResolver struct {
 
 func (resolver teamCatalogSelectionsResolver) ResolveSelections(
 	ctx context.Context, orgID, runID, provider string,
-) (providersync.TeamCatalogSelections, error) {
+) (providersync.TeamCatalogSelections, map[string]any, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	integrationID, _, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
 	if err != nil {
-		return providersync.TeamCatalogSelections{}, err
+		return providersync.TeamCatalogSelections{}, nil, err
 	}
-	var teams, projects, members bool
+	// One round trip for both the CHAOS-4323 selections and the raw
+	// sync_options a collector may need beyond the resolved credential
+	// (team-lead ruling, 2026-08-28) -- same canonical root row
+	// native_post_sync.go:567-577 already reads (there, only the OR of the
+	// three flags; here, each flag individually plus the full map).
+	var syncOptionsJSON []byte
 	queryErr := resolver.pool.QueryRow(ctx, `
-SELECT
-	COALESCE(sync_options->>'auto_import_teams' = 'true', false),
-	COALESCE(sync_options->>'auto_import_projects' = 'true', false),
-	COALESCE(sync_options->>'auto_import_members' = 'true', false)
+SELECT COALESCE(sync_options, '{}'::jsonb)
 FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
-LIMIT 1`, orgID, integrationID).Scan(&teams, &projects, &members)
+LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 	if errors.Is(queryErr, pgx.ErrNoRows) {
 		// No root sync_configurations row at all means every flag is
 		// unconfigured -- the OR-gate at native_post_sync.go:577 treats the
 		// identical case as "false" via COALESCE; this mirrors that exactly.
-		return providersync.TeamCatalogSelections{}, nil
+		return providersync.TeamCatalogSelections{}, nil, nil
 	}
 	if queryErr != nil {
-		return providersync.TeamCatalogSelections{}, queryErr
+		return providersync.TeamCatalogSelections{}, nil, queryErr
 	}
-	return providersync.TeamCatalogSelections{Teams: teams, Projects: projects, Members: members}, nil
+	var syncOptions map[string]any
+	if err := json.Unmarshal(syncOptionsJSON, &syncOptions); err != nil {
+		return providersync.TeamCatalogSelections{}, nil, fmt.Errorf("decode sync_options: %w", err)
+	}
+	selections := providersync.TeamCatalogSelections{
+		Teams:    syncOptionBool(syncOptions, "auto_import_teams"),
+		Projects: syncOptionBool(syncOptions, "auto_import_projects"),
+		Members:  syncOptionBool(syncOptions, "auto_import_members"),
+	}
+	return selections, syncOptions, nil
+}
+
+// syncOptionBool reads a boolean flag out of a decoded sync_options map,
+// matching the SQL COALESCE(sync_options->>'key' = 'true', false) semantics
+// this resolver used before moving to a single round trip: an absent key,
+// a non-bool value, or a false value are all simply "false".
+func syncOptionBool(syncOptions map[string]any, key string) bool {
+	value, ok := syncOptions[key].(bool)
+	return ok && value
 }
 
 // teamCatalogAutoimportBridge decorates a syncdispatchruntime.CoordinatorBridge:
@@ -212,7 +234,7 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 	provider, err := bridge.resolveProvider(ctx, orgID, runID)
 	if err == nil {
 		if collector, ok := bridge.native[provider]; ok {
-			selections, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider)
+			selections, syncOptions, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider)
 			if selectionsErr != nil {
 				return selectionsErr
 			}
@@ -220,15 +242,25 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
 				return nil
 			}
-			credential, client, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
+			credential, client, integrationID, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
 			if clientErr != nil {
 				return clientErr
 			}
 			result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
-				OrgID: orgID, SyncRunID: runID,
+				OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
+				SyncOptions: syncOptions, Strict: false,
 			}, credential, client, selections, bridge.nowUTC())
 			if collectErr != nil {
-				return collectErr
+				// Non-strict (team-lead ruling, 2026-08-28): mirrors Python's
+				// run_team_autoimport, which catches every populator
+				// exception and returns a zero summary rather than failing
+				// the job -- the strict reference-discovery seam
+				// (TeamCatalogDiscoveryExecutor) is the one that still
+				// propagates. Degrading here avoids a retry storm on a
+				// transient provider failure; the failure is still visible
+				// via the dedicated nonfatal outcome, not silently dropped.
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+				return nil
 			}
 			bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
 			if bridge.observer != nil {

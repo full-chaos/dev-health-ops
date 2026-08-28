@@ -79,22 +79,24 @@ func (executor *fakeTeamCatalogFallbackExecutor) Discover(_ context.Context, org
 }
 
 type fakeProviderClientResolver struct {
-	credential providerfoundation.Credential
-	client     *providerfoundation.HTTPClient
-	err        error
+	credential    providerfoundation.Credential
+	client        *providerfoundation.HTTPClient
+	integrationID string
+	err           error
 }
 
-func (resolver *fakeProviderClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error) {
-	return resolver.credential, resolver.client, resolver.err
+func (resolver *fakeProviderClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
+	return resolver.credential, resolver.client, resolver.integrationID, resolver.err
 }
 
 type fakeTeamCatalogSelectionsResolver struct {
-	selections providersync.TeamCatalogSelections
-	err        error
+	selections  providersync.TeamCatalogSelections
+	syncOptions map[string]any
+	err         error
 }
 
-func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, error) {
-	return resolver.selections, resolver.err
+func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, map[string]any, error) {
+	return resolver.selections, resolver.syncOptions, resolver.err
 }
 
 // TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector pins
@@ -111,16 +113,29 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	fallback := &fakeTeamCatalogFallbackExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
 	observer := &fakeTeamCatalogObserver{}
+	syncOptions := map[string]any{"auto_import_teams": true}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:     map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback:   fallback,
-		Clients:    &fakeProviderClientResolver{credential: credential},
-		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}},
-		Observer:   observer,
+		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Fallback: fallback,
+		Clients:  &fakeProviderClientResolver{credential: credential, integrationID: "integration-1"},
+		Selections: &fakeTeamCatalogSelectionsResolver{
+			selections:  providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true},
+			syncOptions: syncOptions,
+		},
+		Observer: observer,
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
+	}
+	if collector.gotRef.IntegrationID != "integration-1" {
+		t.Fatalf("collector ref.IntegrationID=%q want=%q", collector.gotRef.IntegrationID, "integration-1")
+	}
+	if collector.gotRef.SyncOptions["auto_import_teams"] != true {
+		t.Fatalf("collector ref.SyncOptions=%+v want the resolved map threaded through", collector.gotRef.SyncOptions)
+	}
+	if !collector.gotRef.Strict {
+		t.Fatalf("collector ref.Strict=%t want=true (reference-discovery mirrors run_team_autoimport_strict)", collector.gotRef.Strict)
 	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeNative,

@@ -35,6 +35,25 @@ type TeamCatalogReference struct {
 	SyncRunID     string
 	IntegrationID string
 	SourceID      string
+	// SyncOptions is the run's own canonical sync_configurations.sync_options
+	// (team-lead ruling, 2026-08-28): provider-specific config a collector
+	// needs beyond the resolved credential -- e.g. GitLab's group_path
+	// (credential.Config carries only auth material, never scope). Collectors
+	// that need nothing beyond the credential (Linear today) simply ignore
+	// it. Never nil when populated by a real resolver; may be nil in tests.
+	SyncOptions map[string]any
+	// Strict mirrors which Python call shape this collection run is
+	// standing in for: true from the reference-discovery seam
+	// (run_team_autoimport_strict -- propagates failures, no per-surface
+	// selection gate upstream of the collector) and false from the
+	// post-sync seam (run_team_autoimport -- the caller, not the collector,
+	// degrades a failure to a non-fatal zero result; see
+	// cmd/dev-health-worker/team_catalog_clients.go's teamCatalogAutoimportBridge).
+	// A collector MAY use it to decide per-item soft-fail vs hard-fail
+	// internally; none do yet (CHAOS-4431's Linear collector always
+	// propagates, which already matches strict semantics, and the
+	// non-strict safety net lives at the bridge boundary instead).
+	Strict bool
 }
 
 func (ref TeamCatalogReference) validate() error {

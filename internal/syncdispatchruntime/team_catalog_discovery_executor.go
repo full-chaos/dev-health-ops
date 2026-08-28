@@ -20,8 +20,13 @@ import (
 // 70d529e0), so which credential governs is resolved from THIS sync run's
 // own integration_id -- the same join resolveAuthoritativeProvider already
 // uses (native_reference_discovery.go) -- never "the" active one for the pair.
+// ResolveClient also returns the sync run's own integration_id (team-lead
+// ruling, 2026-08-28) -- the same value resolveTeamCatalogIntegration
+// already computes internally to pin the credential, returned here so the
+// caller can populate TeamCatalogReference.IntegrationID without a second
+// resolution.
 type ProviderClientResolver interface {
-	ResolveClient(ctx context.Context, orgID, runID, provider string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error)
+	ResolveClient(ctx context.Context, orgID, runID, provider string) (credential providerfoundation.Credential, client *providerfoundation.HTTPClient, integrationID string, err error)
 }
 
 // TeamCatalogSelectionsResolver reads CHAOS-4323's three independent
@@ -41,8 +46,15 @@ type ProviderClientResolver interface {
 // written, full stop. Parity with a known defect is not the spec. Both
 // native paths gate on this resolver; CHAOS-4437 (a separate lane) is fixing
 // the Python side to match.
+// ResolveSelections also returns the run's raw sync_options map (team-lead
+// ruling, 2026-08-28): a collector may need a provider-specific config value
+// beyond the resolved credential (GitLab's group_path, GitHub's org
+// fallback -- credential.Config carries only auth material, never scope).
+// Both values come from the SAME canonical sync_configurations row, read in
+// one round trip, never two separate queries for one Discover/TeamAutoImport
+// call.
 type TeamCatalogSelectionsResolver interface {
-	ResolveSelections(ctx context.Context, orgID, runID, provider string) (providersync.TeamCatalogSelections, error)
+	ResolveSelections(ctx context.Context, orgID, runID, provider string) (selections providersync.TeamCatalogSelections, syncOptions map[string]any, err error)
 }
 
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
@@ -105,7 +117,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}
-	selections, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
+	selections, syncOptions, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +130,13 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeSkipped)
 		return map[string]any{"provider": normalizedProvider, "outcome": "skipped"}, nil
 	}
-	credential, client, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
+	credential, client, integrationID, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
 		return nil, err
 	}
 	result, err := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
-		OrgID: orgID, SyncRunID: runID,
+		OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
+		SyncOptions: syncOptions, Strict: true,
 	}, credential, client, selections, executor.now())
 	if err != nil {
 		return nil, err

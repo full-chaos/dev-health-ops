@@ -241,17 +241,26 @@ func teamCatalogEntryPoints() []TeamCatalogEntryPoint {
 // path unchanged (provider has no native collector, or provider resolution
 // failed); "skipped" is the post_sync-only case of a native provider whose
 // org has every CHAOS-4323 selection off -- nothing to import either way, so
-// neither the collector nor the bridge ran.
+// neither the collector nor the bridge ran; "native_failed_nonfatal" is the
+// post_sync-only case of a native collector call that returned an error --
+// mirroring Python's non-strict run_team_autoimport, which catches every
+// populator exception and returns a zero summary rather than failing the
+// job (the strict reference-discovery seam never uses this value; it
+// propagates the error instead, same as run_team_autoimport_strict).
 type TeamCatalogOutcome string
 
 const (
-	TeamCatalogOutcomeNative  TeamCatalogOutcome = "native"
-	TeamCatalogOutcomeBridge  TeamCatalogOutcome = "bridge"
-	TeamCatalogOutcomeSkipped TeamCatalogOutcome = "skipped"
+	TeamCatalogOutcomeNative               TeamCatalogOutcome = "native"
+	TeamCatalogOutcomeBridge               TeamCatalogOutcome = "bridge"
+	TeamCatalogOutcomeSkipped              TeamCatalogOutcome = "skipped"
+	TeamCatalogOutcomeNativeFailedNonfatal TeamCatalogOutcome = "native_failed_nonfatal"
 )
 
 func teamCatalogOutcomes() []TeamCatalogOutcome {
-	return []TeamCatalogOutcome{TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped}
+	return []TeamCatalogOutcome{
+		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
+		TeamCatalogOutcomeNativeFailedNonfatal,
+	}
 }
 
 // TeamCatalogTable is the bounded destination-table set a native team-catalog

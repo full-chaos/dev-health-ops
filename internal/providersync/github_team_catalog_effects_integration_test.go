@@ -5,6 +5,8 @@ package providersync
 import (
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
@@ -123,6 +125,51 @@ func TestGitHubTeamCatalogWriteTeamsPreservesManualMembers(t *testing.T) {
 	}
 	if len(manualMembers) != 1 || manualMembers[0] != "admin:alice" {
 		t.Fatalf("manual_members was NOT preserved across a native GitHub sync write: got=%v want=[admin:alice]", manualMembers)
+	}
+}
+
+// TestGitHubTeamCatalogWriteTeamRepoOwnershipAgainstMigratedSchema is the
+// CHAOS-4434 scope-correction proof: GitHub's team_repo_ownership rows have
+// no other Go-native writer (see githubTeamRow's doc comment) -- this is the
+// row a real GitHub sync needs to keep repo-scoped team attribution alive.
+func TestGitHubTeamCatalogWriteTeamRepoOwnershipAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
+	orgID := "github-team-catalog-org-repo-ownership"
+	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
+
+	row, err := normalizeGitHubTeamRepoOwnership(orgID, "platform", "acme/api", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteTeamRepoOwnership(ctx, orgID, []githubTeamRepoOwnershipRow{row}); err != nil {
+		t.Fatalf("write team repo ownership: %v", err)
+	}
+
+	result, err := conn.Query(ctx,
+		`SELECT team_id, repo_full_name, match_type, source, specificity, priority, repo_id `+
+			`FROM team_repo_ownership FINAL WHERE org_id = ? AND provider = 'github' AND team_id = ?`,
+		orgID, "gh:platform",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if !result.Next() {
+		t.Fatal("team_repo_ownership row missing after write")
+	}
+	var teamID, repoFullName, matchType, source string
+	var specificity uint16
+	var priority int32
+	var repoID *uuid.UUID
+	if err := result.Scan(&teamID, &repoFullName, &matchType, &source, &specificity, &priority, &repoID); err != nil {
+		t.Fatal(err)
+	}
+	if teamID != "gh:platform" || repoFullName != "acme/api" || matchType != "exact" ||
+		source != "provider_access" || specificity != githubTeamCatalogBaseSpecificity ||
+		priority != githubTeamCatalogProviderAccessPriority || repoID != nil {
+		t.Fatalf("team_id=%q repo=%q match=%q source=%q specificity=%d priority=%d repo_id=%v",
+			teamID, repoFullName, matchType, source, specificity, priority, repoID)
 	}
 }
 

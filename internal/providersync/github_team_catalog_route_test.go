@@ -101,6 +101,18 @@ func TestGitHubTeamCatalogCollectWritesTeamsAndMemberships(t *testing.T) {
 	if rows.Memberships[0].MemberID != "gh:octocat" || rows.Memberships[1].MemberID != "gh:monalisa" {
 		t.Fatalf("memberships=%+v", rows.Memberships)
 	}
+	if len(rows.RepoOwnership) != 2 {
+		t.Fatalf("repo ownership=%+v", rows.RepoOwnership)
+	}
+	for _, ownership := range rows.RepoOwnership {
+		if ownership.TeamID != "gh:platform" || ownership.OrgID != "org-1" || ownership.Provider != "github" ||
+			ownership.Source != "provider_access" || ownership.MatchType != "exact" || ownership.RepoID != nil {
+			t.Fatalf("ownership=%+v", ownership)
+		}
+	}
+	if rows.RepoOwnership[0].RepoFullName != "acme/api" || rows.RepoOwnership[1].RepoFullName != "acme/web" {
+		t.Fatalf("repo ownership=%+v", rows.RepoOwnership)
+	}
 }
 
 func TestGitHubTeamCatalogCollectMembersOnlySkipsRepoFetch(t *testing.T) {

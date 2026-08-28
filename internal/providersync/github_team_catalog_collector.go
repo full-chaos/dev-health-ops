@@ -15,8 +15,18 @@ import (
 // LinearTeamCatalogCollector already uses. GitHub has no "Projects" import
 // concept at all (auto_import_capabilities("github").projects is always
 // False in Python): selections.Projects is read but never produces a
-// ProjectsWritten/OwnershipWritten row, matching that permanent capability
-// clamp rather than a temporary gap.
+// ProjectsWritten row.
+//
+// TeamCatalogResult.OwnershipWritten is REUSED here for team_repo_ownership
+// rows (Linear uses the same field for team_project_ownership -- a
+// different table entirely). This is the best fit the current shared result
+// shape offers; TeamCatalogDiscoveryExecutor's rows-written telemetry loop
+// hardcodes the label "team_project_ownership" for this field, so until
+// 4431 adds a provider-aware label (or a separate RepoOwnershipWritten
+// field), GitHub's team_repo_ownership row count is correctly WRITTEN but
+// exported under the wrong table name in Prometheus -- flagged, not silently
+// left broken.
+//
 // Telemetry is generic, not per-provider: the caller (syncdispatchruntime.
 // TeamCatalogDiscoveryExecutor / teamCatalogAutoimportBridge) observes
 // dispatch outcome and rows-written-per-table from this method's own return
@@ -127,6 +137,16 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 				result.TeamKeys = append(result.TeamKeys, *team.NativeTeamKey)
 			}
 		}
+	}
+	// CHAOS-4434 correction: team_repo_ownership is gated ONLY on
+	// selections.Teams, matching _populate_async exactly -- Python writes it
+	// even on a roster_write_safe=false run (the roster gate protects only
+	// the `teams` row's members field, never this table).
+	if selections.Teams && len(rows.RepoOwnership) > 0 {
+		if err := adapter.Sink.WriteTeamRepoOwnership(ctx, ref.OrgID, rows.RepoOwnership); err != nil {
+			return result, err
+		}
+		result.OwnershipWritten = len(rows.RepoOwnership)
 	}
 	if selections.Members && len(rows.Memberships) > 0 {
 		if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, rows.Memberships); err != nil {

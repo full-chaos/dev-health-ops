@@ -54,13 +54,39 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 	}
 	if result.TeamsWritten != 1 || result.MembershipsWritten != 1 || result.MembersWritten != 1 ||
 		len(result.TeamKeys) != 1 || result.TeamKeys[0] != "platform" ||
-		result.ProjectsWritten != 0 || result.OwnershipWritten != 0 {
+		result.ProjectsWritten != 0 || result.OwnershipWritten != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
 	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
 	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
 		t.Fatalf("roster=%+v ok=%v", roster, ok)
+	}
+
+	// CHAOS-4434 scope correction: a native GitHub run MUST refresh
+	// team_repo_ownership -- there is no other Go-native writer for it
+	// (githubTeamRow's doc comment). This is the red-then-green proof: on
+	// origin/main (no native GitHub route at all) this table is never
+	// touched by anything but the Python bridge; here, a single
+	// CollectTeamCatalog call leaves a real row behind.
+	ownershipResult, err := conn.Query(ctx,
+		`SELECT repo_full_name, source, match_type FROM team_repo_ownership FINAL `+
+			`WHERE org_id = ? AND provider = 'github' AND team_id = ?`,
+		orgID, "gh:platform",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownershipResult.Close()
+	if !ownershipResult.Next() {
+		t.Fatal("team_repo_ownership row missing after a native GitHub CollectTeamCatalog call")
+	}
+	var repoFullName, source, matchType string
+	if err := ownershipResult.Scan(&repoFullName, &source, &matchType); err != nil {
+		t.Fatal(err)
+	}
+	if repoFullName != "acme/api" || source != "provider_access" || matchType != "exact" {
+		t.Fatalf("repo=%q source=%q match=%q", repoFullName, source, matchType)
 	}
 }
 

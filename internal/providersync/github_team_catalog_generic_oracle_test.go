@@ -164,3 +164,58 @@ func TestGitHubTeamCatalogFacetsMatchLivePythonResolver(t *testing.T) {
 		nil,
 	)
 }
+
+// githubTeamCatalogRepoOwnershipProducerRow mirrors dataclasses.asdict(
+// TeamRepoOwnershipRecord(...)) field-for-field (schemas.py). repo_id is
+// always nil: _repo_ownership_rows never sets it.
+type githubTeamCatalogRepoOwnershipProducerRow struct {
+	OrgID        string     `json:"org_id"`
+	Provider     string     `json:"provider"`
+	TeamID       string     `json:"team_id"`
+	RepoFullName string     `json:"repo_full_name"`
+	MatchType    string     `json:"match_type"`
+	Source       string     `json:"source"`
+	IsPrimary    int        `json:"is_primary"`
+	Specificity  int        `json:"specificity"`
+	Priority     int        `json:"priority"`
+	ValidFrom    time.Time  `json:"valid_from"`
+	ValidTo      *time.Time `json:"valid_to"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	RepoID       *string    `json:"repo_id"`
+}
+
+func TestGitHubTeamCatalogRepoOwnershipRowMatchesLivePythonProducer(t *testing.T) {
+	compareRowsAgainstPythonOracle(
+		t, "github/team-catalog/repo-ownership",
+		[]oracleCase{
+			{ID: "single_repo_grant", Input: map[string]any{
+				"org_id": "org-acme", "team_slug": "platform", "repo_full_name": "acme/api",
+				"normalized_at": "2026-08-10T12:34:56.789Z",
+			}},
+			{ID: "different_team_and_repo", Input: map[string]any{
+				"org_id": "org-acme", "team_slug": "ops", "repo_full_name": "acme/infra",
+				"normalized_at": "2026-08-10T12:34:56.789Z",
+			}},
+		},
+		func(t *testing.T, input map[string]any) githubTeamCatalogRepoOwnershipProducerRow {
+			t.Helper()
+			normalizedAt, err := time.Parse(time.RFC3339Nano, input["normalized_at"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			row, err := normalizeGitHubTeamRepoOwnership(
+				input["org_id"].(string), input["team_slug"].(string), input["repo_full_name"].(string), normalizedAt,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return githubTeamCatalogRepoOwnershipProducerRow{
+				OrgID: row.OrgID, Provider: row.Provider, TeamID: row.TeamID, RepoFullName: row.RepoFullName,
+				MatchType: row.MatchType, Source: row.Source, IsPrimary: int(row.IsPrimary),
+				Specificity: int(row.Specificity), Priority: int(row.Priority), ValidFrom: row.ValidFrom,
+				ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt, RepoID: row.RepoID,
+			}
+		},
+		nil,
+	)
+}

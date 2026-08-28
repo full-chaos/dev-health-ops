@@ -182,6 +182,17 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				return githubTeamCatalogRows{}, evidence, err
 			}
 			rows.Teams = append(rows.Teams, team)
+			// team_repo_ownership (CHAOS-4434 correction): the only source
+			// for GitHub's team<->repo grants -- see githubTeamRow's doc
+			// comment. Same repoPatterns already fetched for the team row,
+			// no extra request.
+			for _, repoFullName := range repoPatterns {
+				ownership, err := normalizeGitHubTeamRepoOwnership(orgID, slug, repoFullName, normalizedAt)
+				if err != nil {
+					return githubTeamCatalogRows{}, evidence, err
+				}
+				rows.RepoOwnership = append(rows.RepoOwnership, ownership)
+			}
 		}
 
 		if wantMembers {
@@ -209,6 +220,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 
 	rows.Teams = dedupeGitHubTeams(rows.Teams)
 	rows.Memberships = dedupeGitHubMemberships(rows.Memberships)
+	rows.RepoOwnership = dedupeGitHubTeamRepoOwnership(rows.RepoOwnership)
 	if wantMembers {
 		roster := githubTeamRosterFromMemberships(rows.Memberships)
 		for index := range rows.Teams {

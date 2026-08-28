@@ -8,13 +8,24 @@ import (
 )
 
 // github_team_catalog.go ports src/dev_health_ops/workers/team_autoimport_github.py
-// (CHAOS-4434) to Go: GitHub org teams -> teams (source=provider_access) and
-// team members -> team_memberships. GitHub has no "Projects" auto-import
+// (CHAOS-4434) to Go: GitHub org teams -> teams (source=provider_access),
+// team members -> team_memberships, and team<->repo grants -> team_repo_
+// ownership (source=provider_access). GitHub has no "Projects" auto-import
 // concept (auto_import_capabilities("github").projects is always False in
-// Python), so this producer never writes team_project_ownership, and repo
-// ownership is intentionally out of scope here -- it is derived independently
-// by the Go-native team_repo_ownership_derivation (CHAOS-4365 item 1b) from
-// already-synced data, not by this collector.
+// Python), so this producer never writes team_project_ownership.
+//
+// CORRECTION (team-lead ruling, 2026-08-28, after codex round 1 flagged it):
+// the ticket's original premise -- "repo ownership goes through the
+// Go-native team_repo_ownership_derivation, leave it alone" -- was WRONG.
+// team_repo_ownership_derivation (CHAOS-4365 item 1b) derives solely from
+// team_project_ownership (internal/providersync/team_repo_ownership_
+// derivation_clickhouse.go:185's FROM clause), which GitHub NEVER writes at
+// all (want_projects is permanently False). So that derivation has zero
+// GitHub input and cannot reproduce GitHub's direct team<->repo grants --
+// this producer's own write (githubTeamRepoOwnershipRow / WriteTeamRepoOwnership)
+// is the only source for them, ported here rather than left a follow-up: a
+// native provider that stops refreshing a live table on cutover is a
+// blocker, not a nice-to-have.
 //
 // Scope boundary (documented, not silently dropped): the Python module also
 // layers two review/conflict subsystems on top of the raw writes --
@@ -119,11 +130,35 @@ type githubMembershipRow struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+// githubTeamRepoOwnershipRow mirrors TeamRepoOwnershipRecord exactly as
+// team_autoimport_github.py's _repo_ownership_rows constructs it (CHAOS-4434
+// correction: this table has NO Go-native replacement elsewhere --
+// team_repo_ownership_derivation (CHAOS-4365) derives solely from
+// team_project_ownership, which GitHub never writes at all, so this
+// producer's direct write is the only source for GitHub's team<->repo
+// grants and must ship in this same PR, not a follow-up).
+type githubTeamRepoOwnershipRow struct {
+	OrgID        string     `json:"org_id"`
+	Provider     string     `json:"provider"`
+	TeamID       string     `json:"team_id"`
+	RepoID       *string    `json:"repo_id"`
+	RepoFullName string     `json:"repo_full_name"`
+	MatchType    string     `json:"match_type"`
+	Source       string     `json:"source"`
+	IsPrimary    uint8      `json:"is_primary"`
+	Specificity  uint16     `json:"specificity"`
+	Priority     int32      `json:"priority"`
+	ValidFrom    time.Time  `json:"valid_from"`
+	ValidTo      *time.Time `json:"valid_to"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
 // githubTeamCatalogRows is the complete, deduplicated output of one
 // collection pass, ready for ClickHouse write.
 type githubTeamCatalogRows struct {
-	Teams       []githubTeamRow
-	Memberships []githubMembershipRow
+	Teams         []githubTeamRow
+	Memberships   []githubMembershipRow
+	RepoOwnership []githubTeamRepoOwnershipRow
 }
 
 // githubTeamID mirrors team_autoimport_github.py's _team_id: "gh:" + the
@@ -246,6 +281,50 @@ func dedupeGitHubTeams(rows []githubTeamRow) []githubTeamRow {
 		found := false
 		for index := range result {
 			if result[index].OrgID == row.OrgID && result[index].ID == row.ID {
+				result[index] = row
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+// normalizeGitHubTeamRepoOwnership mirrors team_autoimport_github.py's
+// _repo_ownership_rows per (team, repo) pair. specificity always collapses
+// to githubTeamCatalogBaseSpecificity: Python's BASE_SPECIFICITY +
+// depth*CHILD_SPECIFICITY_STEP, where depth is the team's position in
+// parent_by_team -- always 0 for GitHub today, since ParentTeamID is always
+// nil (see githubTeamRow.ParentTeamID's doc comment). repo_id is always nil,
+// matching TeamRepoOwnershipRecord's own default (_repo_ownership_rows never
+// passes it).
+func normalizeGitHubTeamRepoOwnership(
+	orgID, teamSlug, repoFullName string, normalizedAt time.Time,
+) (githubTeamRepoOwnershipRow, error) {
+	teamSlug = strings.TrimSpace(teamSlug)
+	repoFullName = strings.TrimSpace(repoFullName)
+	if strings.TrimSpace(orgID) == "" || teamSlug == "" || repoFullName == "" || normalizedAt.IsZero() {
+		return githubTeamRepoOwnershipRow{}, ErrInvalidConfiguration
+	}
+	normalizedAt = normalizedAt.UTC().Truncate(time.Microsecond)
+	return githubTeamRepoOwnershipRow{
+		OrgID: orgID, Provider: githubTeamCatalogProvider, TeamID: githubTeamID(teamSlug),
+		RepoID: nil, RepoFullName: repoFullName, MatchType: "exact", Source: githubTeamCatalogSource,
+		IsPrimary: 0, Specificity: githubTeamCatalogBaseSpecificity, Priority: githubTeamCatalogProviderAccessPriority,
+		ValidFrom: normalizedAt, ValidTo: nil, UpdatedAt: normalizedAt,
+	}, nil
+}
+
+func dedupeGitHubTeamRepoOwnership(rows []githubTeamRepoOwnershipRow) []githubTeamRepoOwnershipRow {
+	result := make([]githubTeamRepoOwnershipRow, 0, len(rows))
+	for _, row := range rows {
+		found := false
+		for index := range result {
+			if result[index].OrgID == row.OrgID && result[index].TeamID == row.TeamID &&
+				result[index].RepoFullName == row.RepoFullName {
 				result[index] = row
 				found = true
 				break

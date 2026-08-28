@@ -348,6 +348,37 @@ def _team_rows(
     return rows
 
 
+def _github_repo_ownership_row(
+    *,
+    org_id: str,
+    team_id: str,
+    repo_full_name: str,
+    specificity: int,
+    now: datetime,
+) -> TeamRepoOwnershipRecord:
+    """The exact `team_repo_ownership` row for one (team, repo) grant.
+
+    Extracted from `_repo_ownership_rows`'s loop body (CHAOS-4434) so the Go
+    port's live-python-oracle (internal/providersync/testdata/oracle_pairs/
+    github_team-catalog_repo-ownership.py) can call this SAME function
+    directly -- no behavior change, `_repo_ownership_rows` below calls this
+    unmodified.
+    """
+    return TeamRepoOwnershipRecord(
+        org_id=org_id,
+        provider=PROVIDER,
+        team_id=team_id,
+        repo_full_name=repo_full_name,
+        match_type="exact",
+        source="provider_access",
+        is_primary=0,
+        specificity=specificity,
+        priority=PROVIDER_ACCESS_PRIORITY,
+        valid_from=now,
+        updated_at=now,
+    )
+
+
 def _repo_ownership_rows(
     *, org_id: str, teams: Iterable[Any], now: datetime
 ) -> list[TeamRepoOwnershipRecord]:
@@ -366,18 +397,12 @@ def _repo_ownership_rows(
                 continue
             seen.add(key)
             rows.append(
-                TeamRepoOwnershipRecord(
+                _github_repo_ownership_row(
                     org_id=org_id,
-                    provider=PROVIDER,
                     team_id=team_id,
                     repo_full_name=repo_full_name,
-                    match_type="exact",
-                    source="provider_access",
-                    is_primary=0,
                     specificity=specificity,
-                    priority=PROVIDER_ACCESS_PRIORITY,
-                    valid_from=now,
-                    updated_at=now,
+                    now=now,
                 )
             )
     return rows

@@ -896,6 +896,27 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 // (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
 // --review-evidence required, quiet flags, JSON result) and, like it,
 // deliberately bypasses joboperator.Service's Action/audit pipeline.
+//
+// CHAOS-4409: a run's finalize ledger row (metric_compatibility_executions,
+// worker_kind='daily', operation='finalize') can be stuck 'ambiguous' or
+// stuck-'executing' the exact same way a partition row can -- the api
+// process that owned the original finalize claim died before any exception
+// handler ran, or a progress-having finalize failure never got a human
+// /repair call. Before CHAOS-4409, this command republished a fresh
+// metrics.daily_finalize job straight into that wall: ClaimFinalize->
+// Finalize reaches the Python bridge fine, but _reserve_execution refuses
+// the IDENTICAL execution identity 409 ambiguous_refused forever, because
+// nothing had ever repaired the finalize row specifically (the bridge's own
+// bulk-redrive endpoint only ever selected operation='partition' rows).
+// Prod evidence: 13 daily_metrics_runs stuck in exactly the CHAOS-4389
+// stranded shape whose finalize ledger row was the thing actually blocking
+// them -- `daily-finalize --run` answered JobCancelError ambiguous_refused
+// on every one, forever. This now calls the SAME bulk-redrive endpoint
+// `daily-redrive` already calls for partitions (CHAOS-4304's ordering
+// requirement applies identically here: the ledger repair MUST land before
+// any finalize job publishes, not after) and aborts on the same
+// skipped_claim_active>0 signal daily-redrive already treats as unsafe to
+// proceed past.
 func dispatchMetricsDailyFinalize(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
@@ -974,6 +995,24 @@ func dispatchMetricsDailyFinalize(
 			return writeServiceError(stderr, err)
 		}
 	}
+	// CHAOS-4409: repair each candidate's finalize ledger row BEFORE
+	// publishing anything -- see this function's own doc comment for why
+	// the ordering matters (a stuck row answers ambiguous_refused the
+	// instant the redriven job reaches it, permanently, undoing this same
+	// pass). ledgerRepair/abort are reported/checked the identical way
+	// daily-redrive already does for its partition-ledger repair.
+	ledgerRepair, abort, err := finalizeLedgerRepairGate(ctx, candidates, *reviewEvidence)
+	if err != nil {
+		return writeError(stderr, "ledger_repair_unavailable")
+	}
+	if abort {
+		return writeResult(stdout, stderr, map[string]any{
+			"candidates":    candidates,
+			"ledger_repair": ledgerRepair,
+			"finalize":      nil,
+			"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+		})
+	}
 	// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
 	// single-target operator action that MAY authorize redriving a run whose
 	// finalize already ran at least once; --all-complete's bulk sweep never
@@ -984,9 +1023,26 @@ func dispatchMetricsDailyFinalize(
 		return writeServiceError(stderr, err)
 	}
 	return writeResult(stdout, stderr, map[string]any{
-		"candidates": candidates,
-		"finalize":   outcome,
+		"candidates":    candidates,
+		"ledger_repair": ledgerRepair,
+		"finalize":      outcome,
 	})
+}
+
+// finalizeLedgerRepairGate repairs the compatibility-bridge finalize ledger
+// for candidates and reports whether the caller must abort rather than
+// proceed to republish (CHAOS-4409) -- pulled out of
+// dispatchMetricsDailyFinalize as its own function, mirroring
+// ledgerRepairWasIncomplete's own reasoning, so the gating decision is unit
+// testable against a mock bridge without needing a real Postgres store.
+func finalizeLedgerRepairGate(
+	ctx context.Context, candidates []string, reviewEvidence string,
+) (ledgerRepair map[string]any, abort bool, err error) {
+	ledgerRepair, err = redriveDailyMetricsLedger(ctx, candidates, reviewEvidence)
+	if err != nil {
+		return nil, false, err
+	}
+	return ledgerRepair, ledgerRepairWasIncomplete(ledgerRepair), nil
 }
 
 // manualBackfillGeneration derives a deterministic generation for one

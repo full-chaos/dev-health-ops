@@ -286,10 +286,28 @@ daily-finalize --run <uuid>|--all-complete --review-evidence "<what you
 verified>"` closes this the same way: a fresh, nonce-scoped
 `metrics.daily_finalize:redrive:<run id>:<nonce>` job, published only after
 re-verifying under a row lock that the run is still `running`, every
-partition is still `succeeded`, and finalization has not already settled. See
+partition is still `succeeded`, and finalization has not already settled.
+
+**A stuck finalize LEDGER row defeats a bare republish the same way it
+defeats a partition redrive (CHAOS-4409).** The Python compatibility
+bridge's own finalize ledger row (`metric_compatibility_executions`,
+`operation='finalize'`) can be left `ambiguous`/stuck-`executing` from the
+original stranding — the owning api process died mid-`Finalize`, or a
+progress-having finalize failure never got a human `/repair` call.
+Publishing a fresh `metrics.daily_finalize` job into that state is a
+guaranteed `JobCancelError ambiguous_refused`, forever, no matter how many
+times it's retried: `_reserve_execution` refuses the identical execution
+identity regardless of the Go-side run state. `daily-finalize` now repairs
+this ledger row for every candidate BEFORE publishing anything, calling the
+same bulk-repair endpoint `daily-redrive` already calls for partition rows
+(extended to also select `operation='finalize'`) — and aborts the whole
+invocation, publishing nothing, if any row's original claim still reads as
+live (retry once that claim settles). This is what actually unblocked 13
+prod runs found stuck in the CHAOS-4389 stranded shape whose finalize ledger
+row, not the Go-side run state, was the thing blocking them. See
 [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
-for the exact command shape, `--all-complete`'s cross-organization sweep, and
-its two telemetry counters.
+for the exact command shape, `--all-complete`'s cross-organization sweep,
+the ledger-repair ordering, and its telemetry counters.
 
 **Neither of the above covers a day that was never dispatched at all.**
 `jobs retry` and `metrics daily-redrive` both recover a run/partition that
@@ -326,6 +344,9 @@ for the full command shape and coverage rule.
 - CHAOS-4389 — targeted redrive for daily-metrics runs stranded one step
   later, by a discarded `daily_finalize` job after every partition already
   succeeded
+- CHAOS-4409 — extends the CHAOS-4304 ledger-repair pattern to the finalize
+  ledger row: a stuck `ambiguous`/`executing` finalize execution refuses a
+  redriven finalize job forever, independent of the Go-side run state
 - CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
   was never dispatched at all, and its use as the recovery path for a dora
   day frozen at 0 rows by the pre-fix same-day coverage bug

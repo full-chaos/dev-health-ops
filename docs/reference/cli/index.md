@@ -1267,20 +1267,47 @@ claim) — the extra row costs River queue capacity, not correctness. Avoid
 re-running `--all-complete` in a tight loop; check the query above for
 still-`pending`/`delivered` redrive rows first if in doubt.
 
-Returns `{"candidates": [...run ids considered...], "finalize":
+**Finalize-ledger repair (CHAOS-4409).** Before any candidate republishes,
+this command repairs the Python compatibility bridge's own finalize ledger
+row (`metric_compatibility_executions`, `worker_kind='daily'
+operation='finalize'`) for every candidate — the same
+`/internal/worker/daily-metrics/v1/redrive` bulk-repair endpoint
+`daily-redrive` above already calls for partition rows, extended to cover
+finalize rows too. Without this, a run whose finalize ledger row was stuck
+`ambiguous`/stuck-`executing` from the original stranding answers
+`JobCancelError ambiguous_refused` on every redrive attempt, forever: the
+ledger's own `_reserve_execution` check refuses the identical execution
+identity regardless of how many times `ClaimFinalize`/`Finalize` retries at
+the Go layer — republishing alone can never fix it. Mirrors `daily-redrive`'s
+CHAOS-4304 ordering requirement exactly: the repair MUST land before any
+finalize job publishes (a stuck row answers `ambiguous_refused` the instant
+a redriven job reaches it, undoing this same pass), and a nonzero
+`skipped_claim_active` (a row whose original claim still reads as live)
+aborts the whole invocation with
+`{"status": "ledger_repair_incomplete_retry_after_claims_settle"}` rather
+than publishing into a race — re-run once that claim has settled (its owning
+job finishes or its lease expires).
+
+Returns `{"candidates": [...run ids considered...], "ledger_repair":
+{"repaired": N, "skipped_claim_active": N}, "finalize":
 {"FinalizedRunIDs": [...run ids a fresh job was actually enqueued for...]}}`.
 A `--run` id that turns out ineligible (already finalized, not all
 partitions succeeded, a live finalize lease still in flight) appears in
 `candidates` but not in `finalize.FinalizedRunIDs` — not an error.
 
 **Observability**: `dev_health_daily_metrics_stranded_finalize_runs_detected_total`
-(runs an `--all-complete` sweep found in this stranded shape) and
+(runs an `--all-complete` sweep found in this stranded shape),
 `dev_health_daily_metrics_runs_finalized_by_sweep_total` (runs a fresh job
-was actually enqueued for) are wired but not live for THIS caller, for the
-same reason `daily-redrive`'s own counter above is not: `workerctl` is a
-one-shot CLI with no Prometheus scrape endpoint. Both become real the
-moment a future long-lived caller (e.g. an automatic reconciler sweep)
-invokes the same Go functions.
+was actually enqueued for), and
+`dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome}`
+(finalize-ledger rows the CHAOS-4409 repair above moved to
+`retry_authorized` vs. left alone for a still-live claim) are wired but not
+live for THIS caller, for the same reason `daily-redrive`'s own counter
+above is not: `workerctl` is a one-shot CLI with no Prometheus scrape
+endpoint. All three become real the moment a future long-lived caller (e.g.
+an automatic reconciler sweep) invokes the same Go functions. The
+`ledger_repair` field in this command's own JSON result (above) is the
+actual audit trail for a manual invocation today.
 
 #### `metrics remaining start` (CHAOS-4254)
 

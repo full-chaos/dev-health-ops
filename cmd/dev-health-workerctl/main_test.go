@@ -656,3 +656,186 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
+
+const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
+
+func TestDispatchMetricsRemainingStartRequiresReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsNonDayScopedFamily(t *testing.T) {
+	// capacity is a real remaining-metrics family but has no day-keyed
+	// scope (it needs a GenerationSeed the CLI has no flag for) -- CHAOS-4254
+	// only supports the day-scoped families.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "capacity", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("capacity family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26",
+		"--org", "not-a-uuid", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsMalformedDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "not-a-date",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("malformed --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsToBeforeDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-08-26", "--to", "2026-08-20",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("--to before --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsSpanOverTheDayLimit(t *testing.T) {
+	// manualBackfillMaxDays bounds a single command's day span so an
+	// operator cannot accidentally turn this recovery tool into a bulk
+	// backfill mechanism.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", "2026-01-01", "--to", "2026-12-31",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("day span over manualBackfillMaxDays not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsUnknownFamilyFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "not-a-real-family", "--day", "2026-08-26",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("unknown family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsFutureDay(t *testing.T) {
+	// codex review, P2: this is a HISTORICAL recovery tool -- a mistyped
+	// future year must not silently create a durable run.
+	var stdout, stderr bytes.Buffer
+	future := time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", future,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("future --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingStartRejectsToday(t *testing.T) {
+	// codex review round 3, P1: today itself is excluded, not just the
+	// future -- this is a HISTORICAL recovery tool, and dora's automatic
+	// triggers only ever target the current UTC day, so allowing "today"
+	// would open a race between a manual and an automatic dispatch for the
+	// exact same day.
+	var stdout, stderr bytes.Buffer
+	today := time.Now().UTC().Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", today,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("today's --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestManualBackfillGenerationIsDeterministicAndInputSensitive(t *testing.T) {
+	// codex review, P1: the generation MUST be a pure function of the
+	// request (never wall-clock time) so a retried CLI invocation reuses
+	// the same generation and is caught by the store's ON CONFLICT DO
+	// NOTHING idempotency, rather than dispatching a second run.
+	first := manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27")
+	second := manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27")
+	if first != second {
+		t.Fatalf("same inputs produced different generations: %q vs %q", first, second)
+	}
+	if len(first) > 128 {
+		t.Fatalf("generation exceeds remaining.maxGenerationLength (128 runes): %d runes: %q", len(first), first)
+	}
+	variants := []string{
+		manualBackfillGeneration("complexity", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000002", "2026-08-25", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-24", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-28"),
+	}
+	for _, variant := range variants {
+		if variant == first {
+			t.Fatalf("a different request produced the SAME generation as the baseline: %q", variant)
+		}
+	}
+}
+
+func TestAnyManualBackfillDayErroredDetectsAnErrorAmongOtherStatuses(t *testing.T) {
+	// codex review, P2: an "error" status buried among other days' clean
+	// results must still be detected so the process exits nonzero.
+	results := []manualBackfillDayResult{
+		{Day: "2026-08-25", Status: "started", RunID: "r1", PartitionID: "p1"},
+		{Day: "2026-08-26", Status: "already_covered", RunID: "r2"},
+		{Day: "2026-08-27", Status: "error", Error: "operator_backend_unavailable"},
+	}
+	if !anyManualBackfillDayErrored(results) {
+		t.Fatal("expected an error to be detected among mixed-status results")
+	}
+	clean := results[:2]
+	if anyManualBackfillDayErrored(clean) {
+		t.Fatal("false positive: no day in this slice has status \"error\"")
+	}
+	if anyManualBackfillDayErrored(nil) {
+		t.Fatal("false positive on an empty/nil result slice")
+	}
+}
+
+func TestAnyManualBackfillDayErroredDetectsExhaustion(t *testing.T) {
+	// codex review round 3, P2: "exhausted" means no new work was
+	// dispatched for that day -- it must fail the process the same way
+	// "error" does, not read as a clean result.
+	results := []manualBackfillDayResult{
+		{Day: "2026-08-25", Status: "started", RunID: "r1", PartitionID: "p1"},
+		{Day: "2026-08-26", Status: "exhausted", RunID: "r2", Generation: "manual-backfill:...:retry-5"},
+	}
+	if !anyManualBackfillDayErrored(results) {
+		t.Fatal("expected an \"exhausted\" status to be detected as a failure")
+	}
+}
+
+func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("unknown remaining subcommand not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}

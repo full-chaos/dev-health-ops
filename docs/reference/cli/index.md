@@ -1192,6 +1192,134 @@ WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
 
+#### `metrics remaining start` (CHAOS-4254)
+
+Dispatch a **new** remaining-metrics run for a historical `(organization,
+family, day)` that no automatic trigger ever dispatched at all (CHAOS-4254) —
+sync never ran that day, or the row aged out of River's retention. This is
+narrower than it sounds: `jobs retry` recovers a `remaining_metric_runs` row
+that was dispatched and then discarded, and `metrics daily-redrive` above is
+DAILY-family-only (`daily_metrics_runs`/`daily_metrics_partitions`) and never
+touches the remaining family's native Go executors (dora, capacity, …) at
+all. Neither helps when the day was never computed in the first place — this
+command is also the prod recovery path for CHAOS-4384's dora-frozen-at-0
+incident, since a day the pre-fix same-day coverage bug froze at 0 rows
+already has a "succeeded" partition and needs exactly this bypass.
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics remaining start \
+  --family dora \
+  --day 2026-08-25 --to 2026-08-27 \
+  --org c6a38355-dad6-42e4-8cc9-4c712450827d \
+  --review-evidence "CHAOS-4384: dora frozen at 0 rows for 08-25..08-27 by the pre-fix same-day coverage bug (5ddab4c65); deployments/incidents have since landed for these closed days"
+```
+
+Supported `--family` values are the day-scoped remaining-metrics families
+only: `complexity`, `dora`, `release_impact`. `capacity`, `recommendations`,
+and `membership_backfill` are real families (`families.json`) but do not
+scope by calendar day — `capacity` needs a `GenerationSeed` the CLI has no
+flag for, and the other two scope by window/repo set — so `--family capacity`
+etc. is `invalid_request`. `--to` defaults to `--day` (a single day); the
+`[--day, --to]` span is capped at 31 days — this is a manual, human-invoked
+recovery tool for a handful of days, not a bulk backfill mechanism. Both
+`--day` and `--to` must be **strictly before today (UTC)** — this is a
+historical recovery tool, and dora's automatic triggers (post-sync's first-
+sync-of-day, the fixed-schedule `dora_daily_fanout` occurrence) only ever
+target the CURRENT day, so allowing "today" would open a race between a
+manual and an automatic dispatch for the same day (see the coverage rule
+below).
+
+**Coverage rule — deliberately not the same one the automatic dora trigger
+applies.** `StartRunTx`'s own `family=="dora"` cross-trigger dedup
+(CHAOS-4384) treats ANY succeeded partition for a day that has already
+CLOSED as terminal coverage, 0 rows or not, because for the automatic
+triggers a genuinely quiet closed day and a day nobody ever computed are
+indistinguishable. This command is more precise, because a human is
+authorizing each recompute individually, and checks every succeeded
+partition whose scope window `[anchor - backfill_days + 1, anchor]`
+contains the requested day (`generation` is not part of the check — a
+prior run under ANY generation counts):
+
+- An **exact single-day partition** (`backfill_days == 1`, the shape every
+  automatic post-sync/fixed-schedule dispatch normally uses) is
+  unambiguous: its `rows_written` evidence IS that day's own total. A
+  **0-row** exact match is exactly the CHAOS-4384 shape this command
+  exists to recompute and is NOT refused; a **non-zero-row** exact match
+  is refused (`"already_covered"`).
+- A **wide multi-day partition** (`backfill_days > 1`, e.g. a post-sync
+  catch-up run) is ambiguous for any day inside its window that is not
+  provably isolated: `DORAExecutor.ComputePartition` accumulates ONE
+  `rows_written` total across the WHOLE window, so neither a zero nor a
+  non-zero aggregate proves what any single interior day got. This command
+  refuses (`"already_covered"`) rather than guess in either direction —
+  verify via the `readback_hint` query and, if the day is genuinely
+  uncovered, request it with a narrower `--day`/`--to` that does not land
+  inside the ambiguous run's window.
+- A run for the same day still **`pending`/`running`** under a different
+  generation (an automatic trigger currently executing) is refused as
+  `"in_progress"` — its eventual completion is invisible to the checks
+  above, so inserting a manual run alongside it risks a genuine duplicate
+  once both finish. Re-run once it settles.
+
+Retrying the **identical** command (same `--family`/`--org`/`--day`/`--to`,
+which derives the same base `generation` — see below) is always safe: it
+reuses the same run rather than inserting a duplicate, even across an
+in-flight retry (`"already_ran"`) or after the run itself legitimately
+completed with 0 rows. In the 0-row case, the store mints a numbered
+`:retry-N` generation (bounded to 5 bumps) so the identical retry actually
+recomputes instead of reloading the exhausted run forever; a later call
+while that bumped generation is itself still pending correctly recognizes it
+as the same in-flight request (`"already_ran"`), not a foreign collision. If
+every generation up to the bound is exhausted (all terminal, none usefully
+covering), the day fails as `"exhausted"` rather than silently reporting
+success with nothing dispatched.
+
+Returns, per day in the requested span:
+
+```json
+{
+  "family": "dora", "org": "c6a3...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27",
+  "days": [
+    {"day": "2026-08-25", "status": "started", "run_id": "...", "partition_id": "...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27"},
+    {"day": "2026-08-26", "status": "already_ran", "run_id": "...", "partition_id": "...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27:retry-1"},
+    {"day": "2026-08-27", "status": "already_covered", "run_id": "..."}
+  ],
+  "readback_hint": "ClickHouse: SELECT day, count() FROM dora_metrics_daily WHERE org_id = '...' AND day BETWEEN '2026-08-25' AND '2026-08-27' GROUP BY day ORDER BY day"
+}
+```
+
+`status` is one of `started` (a new run/partition was inserted), `already_ran`
+(idempotent retry, not an error), `already_covered` or `in_progress` (refused,
+see above), `exhausted` (the retry-generation budget ran out with nothing
+dispatched), or `error` (an unexpected store/publisher failure for that one
+day). The command's own exit code is nonzero if ANY day is `error` or
+`exhausted`, even though the full per-day JSON is still printed to stdout for
+diagnosis. The top-level `generation` is derived deterministically from the
+request's own flags (family/org/day-range), never wall-clock time, so a
+retried invocation is recognizable as the same logical request -- but each
+day's OWN `generation` field is the one that actually matters for a durable
+lookup, since a bumped `:retry-N` run's generation differs from the
+top-level one. Run the `readback_hint` query (or the daily-redrive query
+below, substituted with the printed `run_id`s) to confirm rows actually
+landed once the dispatched partition jobs execute — a `"started"` status is
+dispatch confirmation, not completion.
+
+**Observability**: `dev_health_remaining_metrics_manual_backfill_total{family,outcome}`
+is wired but not live for THIS caller, for the identical reason
+`dev_health_daily_metrics_redrive_partitions_total` above is not: `workerctl`
+is a one-shot CLI with no Prometheus scrape endpoint. The durable record of a
+manual backfill is the `remaining_metric_runs`/`remaining_metric_partitions`
+rows themselves, findable by each day's OWN printed `generation` (not the
+top-level one — see above):
+
+```sql
+SELECT run.id, run.generation, run.status, partition.id, partition.status, partition.output_evidence
+FROM remaining_metric_runs run
+JOIN remaining_metric_partitions partition ON partition.run_id = run.id
+WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<that day's printed generation>';
+```
+
 ### `dev-health-workerctl routes`
 
 Inspect or control one fixed sync-dispatch transport route through the

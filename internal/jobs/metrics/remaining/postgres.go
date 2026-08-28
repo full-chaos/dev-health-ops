@@ -93,6 +93,7 @@ type PostgresStore struct {
 	now                    func() time.Time
 	leaseObserver          jobruntime.RemainingMetricsLeaseObserver
 	openDayZeroRowObserver OpenDayZeroRowObserver
+	manualBackfillObserver ManualBackfillObserver
 }
 
 type PartitionPublisher interface {
@@ -121,6 +122,28 @@ func (store *PostgresStore) SetOpenDayZeroRowObserver(observer OpenDayZeroRowObs
 func (store *PostgresStore) observeOpenDayZeroRow(family string) {
 	if store.openDayZeroRowObserver != nil {
 		_ = store.openDayZeroRowObserver.ObserveRemainingMetricsOpenDayZeroRow(family)
+	}
+}
+
+// ManualBackfillObserver reports one CHAOS-4254 operator-triggered manual
+// backfill outcome (started / already_ran / already_covered). See
+// jobruntime.RemainingMetricsManualBackfillObserver's doc comment for why
+// this is a package-local mirror rather than a direct dependency on that
+// type -- the same decoupling OpenDayZeroRowObserver uses.
+type ManualBackfillObserver interface {
+	ObserveRemainingMetricsManualBackfill(family, outcome string) error
+}
+
+// SetManualBackfillObserver wires the optional CHAOS-4254 signal. A nil
+// observer (the default) means telemetry never gates StartManualBackfillRun
+// -- observeManualBackfill is always a safe no-op.
+func (store *PostgresStore) SetManualBackfillObserver(observer ManualBackfillObserver) {
+	store.manualBackfillObserver = observer
+}
+
+func (store *PostgresStore) observeManualBackfill(family, outcome string) {
+	if store.manualBackfillObserver != nil {
+		_ = store.manualBackfillObserver.ObserveRemainingMetricsManualBackfill(family, outcome)
 	}
 }
 
@@ -189,20 +212,9 @@ func (store *PostgresStore) StartRunTx(
 	if !store.valid() || tx == nil {
 		return Run{}, ErrUnavailable
 	}
-	request.Scopes = cloneScopes(request.Scopes)
-	if err := validateStartRunRequest(request); err != nil {
-		return Run{}, ErrInvalidState
-	}
-	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
-	for ordinal := range request.Scopes {
-		canonical, err := validateFamilyScope(request.Family, request.Scopes[ordinal])
-		if err != nil {
-			return Run{}, ErrInvalidState
-		}
-		request.Scopes[ordinal], err = canonicalJSON(canonical)
-		if err != nil {
-			return Run{}, ErrInvalidState
-		}
+	request, err := normalizeStartRunRequest(request)
+	if err != nil {
+		return Run{}, err
 	}
 
 	// CHAOS-4242 round 2 (codex): dora is started by two independent
@@ -271,6 +283,53 @@ func (store *PostgresStore) StartRunTx(
 		}
 	}
 
+	run, _, err := store.insertRun(ctx, tx, request, publisher)
+	return run, err
+}
+
+// normalizeStartRunRequest clones, validates, and canonicalizes a
+// StartRunRequest -- shared by StartRunTx (the automatic-trigger path) and
+// StartManualBackfillRun (CHAOS-4254's operator path), so both go through
+// exactly the same request-shape and per-family scope validation before
+// either one decides what coverage rule applies.
+func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, error) {
+	request.Scopes = cloneScopes(request.Scopes)
+	if err := validateStartRunRequest(request); err != nil {
+		return StartRunRequest{}, ErrInvalidState
+	}
+	request.OrganizationID = uuid.MustParse(request.OrganizationID).String()
+	for ordinal := range request.Scopes {
+		canonical, err := validateFamilyScope(request.Family, request.Scopes[ordinal])
+		if err != nil {
+			return StartRunRequest{}, ErrInvalidState
+		}
+		request.Scopes[ordinal], err = canonicalJSON(canonical)
+		if err != nil {
+			return StartRunRequest{}, ErrInvalidState
+		}
+	}
+	return request, nil
+}
+
+// insertRun persists a normalized, already-coverage-checked StartRunRequest:
+// the deterministic (org, family, generation, scope_key)-derived run row and
+// its ordered partitions, publishing each one through publisher when
+// non-nil. This is the common tail both StartRunTx (after its family=="dora"
+// same-day coverage block) and StartManualBackfillRun (after its own
+// non-zero-row coverage check) share -- neither reaching this point has any
+// remaining reason to skip the insert.
+//
+// The returned bool is true only when THIS call performed the INSERT (a
+// genuinely new run); false means the deterministic id already existed --
+// an idempotent retry of the exact same (org, family, generation, scope_key)
+// request -- which StartManualBackfillRun's caller distinguishes as its
+// "already_ran" telemetry outcome.
+func (store *PostgresStore) insertRun(
+	ctx context.Context,
+	tx pgx.Tx,
+	request StartRunRequest,
+	publisher PartitionPublisher,
+) (Run, bool, error) {
 	runID := deterministicRunID(request)
 	now := store.now().UTC()
 	command, err := tx.Exec(ctx, `
@@ -280,34 +339,34 @@ VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'pending', $7, $7)
 ON CONFLICT DO NOTHING`,
 		runID, request.OrganizationID, request.Family, request.Generation, request.ScopeKey, request.GenerationSeed, now)
 	if err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, false, ErrUnavailable
 	}
 	if command.RowsAffected() == 0 {
 		run, err := loadStartedRun(ctx, tx, runID)
 		if err != nil {
-			return Run{}, err
+			return Run{}, false, err
 		}
 		if !sameRunSeed(run, request) || !sameRunIdentity(run, request) {
-			return Run{}, ErrInvalidState
+			return Run{}, false, ErrInvalidState
 		}
 		if run.Status == "succeeded" {
 			completionKey, keyErr := joboutbox.CompletionKey("remaining_metric_run", run.ID)
 			if keyErr != nil {
-				return Run{}, ErrInvalidState
+				return Run{}, false, ErrInvalidState
 			}
 			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-				return Run{}, ErrUnavailable
+				return Run{}, false, ErrUnavailable
 			}
 		}
 		if err := verifyStartedPartitions(ctx, tx, runID, request.Scopes); err != nil {
-			return Run{}, err
+			return Run{}, false, err
 		}
 		if err := publishStartedPartitions(
 			ctx, tx, publisher, run, request.Scopes, request.PrerequisiteCompletionKey,
 		); err != nil {
-			return Run{}, err
+			return Run{}, false, err
 		}
-		return run, nil
+		return run, false, nil
 	}
 
 	run := Run{
@@ -331,17 +390,17 @@ INSERT INTO public.remaining_metric_partitions
 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 			partition.ID, runID, ordinal, scope, now)
 		if err != nil {
-			return Run{}, ErrUnavailable
+			return Run{}, false, ErrUnavailable
 		}
 		if publisher != nil {
 			if err := publisher.PublishPartitionTx(
 				ctx, tx, run, partition, request.PrerequisiteCompletionKey,
 			); err != nil {
-				return Run{}, err
+				return Run{}, false, err
 			}
 		}
 	}
-	return run, nil
+	return run, true, nil
 }
 
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {

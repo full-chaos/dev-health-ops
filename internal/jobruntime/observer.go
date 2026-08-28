@@ -129,6 +129,17 @@ type RemainingMetricsOpenDayZeroRowObserver interface {
 	ObserveRemainingMetricsOpenDayZeroRow(family string) error
 }
 
+// RemainingMetricsManualBackfillObserver is the narrow capability the
+// remaining-metrics store depends on (CHAOS-4254) when an operator manually
+// starts a backfill run for a historical (organization, family, day) that no
+// automatic trigger ever dispatched -- the prod recovery path for CHAOS-4384.
+// Generic runtime middleware cannot infer this: only the store that just
+// decided to insert a new run, reuse an idempotent retry, or refuse an
+// already-covered day knows which of the three happened.
+type RemainingMetricsManualBackfillObserver interface {
+	ObserveRemainingMetricsManualBackfill(family, outcome string) error
+}
+
 // ReportDedupGuardObserver is the narrow capability the weekly-report query
 // adapter depends on after running a chart read over an append-only daily
 // rollup through its dedup guard (CHAOS-4140). Generic runtime middleware

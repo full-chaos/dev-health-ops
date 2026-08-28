@@ -1,10 +1,20 @@
 """GraphQL types for the Cognitive Load surface (CHAOS-2077).
 
-Exposes two signals merged from existing ClickHouse tables:
-- ``user_metrics_daily``   — per-developer daily load metrics
-- ``team_metrics_daily``   — per-team daily commit-timing ratios
+Two source paths, chosen by which input filters are set
+(``resolvers/cognitive_load.py::resolve_cognitive_load``):
 
-No new tables or ETL are introduced; this is a pure schema addition.
+- Org-wide (no ``teamId``) or team+repo COMBINED (``teamId`` AND ``repoId``
+  both set): merged from ``user_metrics_daily`` (per-developer load) and
+  ``team_metrics_daily`` (per-team commit-timing ratios), each deduplicated
+  via ``argMax(<col>, computed_at)``.
+- Single-team (``teamId`` set, ``repoId`` NOT set): read directly from
+  ``team_cognitive_load_daily`` (CHAOS-4365 item 2) instead -- that table is
+  already team-scoped and OWNERSHIP-resolved (CHAOS-4321) at write time,
+  unlike ``user_metrics_daily``/``team_metrics_daily``'s own ``team_id``
+  column, which CHAOS-4396 found can fall back to author-membership
+  resolution. The team+repo combined case still uses the merge path above,
+  since ``team_cognitive_load_daily`` carries no ``repo_id`` dimension to
+  filter by.
 """
 
 from __future__ import annotations
@@ -32,14 +42,20 @@ class CognitiveLoadInput:
 
 @strawberry.type
 class CognitiveLoadSignal:
-    """One day's cognitive-load signals, merged from user + team tables.
+    """One day's cognitive-load signals.
+
+    Source depends on the query path (see the module docstring): either
+    merged from ``user_metrics_daily``/``team_metrics_daily``, or read
+    directly from ``team_cognitive_load_daily`` for a single-team query.
+    Field semantics are the same either way.
 
     ``prInterruptionLoad``, ``contextSpreadCount``, and ``reviewRequestLoad``
     are summed across all developers in the org (or team when ``teamId`` is
     supplied).
 
-    ``afterHoursCommitRatio`` and ``weekendCommitRatio`` are team-level averages;
-    they are ``null`` when ``team_metrics_daily`` has no row for the day.
+    ``afterHoursCommitRatio`` and ``weekendCommitRatio`` are team-level
+    ratios; they are ``null`` when no source row has after-hours/weekend
+    commit data for the day.
     """
 
     day: date

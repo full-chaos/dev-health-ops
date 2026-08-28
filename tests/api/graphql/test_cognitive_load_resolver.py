@@ -254,29 +254,124 @@ async def test_cognitive_load_null_team_ratios_propagate_as_none() -> None:
 
 @pytest.mark.asyncio
 async def test_cognitive_load_team_id_reflected_in_result() -> None:
-    """team_id from input is echoed in the result and passed to both queries."""
+    """team_id from input is echoed in the result and passed to the query.
+
+    CHAOS-4365: a single-team query (team_id set, repo_id NOT set) now reads
+    team_cognitive_load_daily directly -- ONE query, not the old two-query
+    merge (see test_cognitive_load_single_team_reads_new_table_not_the_old_
+    tainted_columns below for why: the old merge filtered on user_metrics_
+    daily/team_metrics_daily's own team_id column, which CHAOS-4396 found
+    can be empty/impure for a real org).
+    """
     ctx = _ctx()
-    user_cols = [
+    team_load_cols = [
         "day",
         "pr_interruption_load",
         "context_spread_count",
         "review_request_load",
+        "after_hours_commit_ratio",
+        "weekend_commit_ratio",
     ]
     _setup_client(
         ctx.client,
-        [
-            _qresult(user_cols, [[DAY_1, 3, 7, 1]]),
-            _qresult([], []),
-        ],
+        [_qresult(team_load_cols, [[DAY_1, 3, 7, 1, 0.2, 0.1]])],
     )
 
     result = await resolve_cognitive_load(ctx, _input(team_id="team-alpha"))
 
     assert result.team_id == "team-alpha"
-    # Both queries must embed the team_id filter — check via call args.
+    assert ctx.client.query.call_count == 1
+    query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "team_cognitive_load_daily" in query
+    assert "team_id" in query
+    assert len(result.signals) == 1
+    assert result.signals[0].pr_interruption_load == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_single_team_reads_new_table_not_the_old_tainted_columns() -> (
+    None
+):
+    """RED before the fix: a single-team query returned EMPTY on a real org
+    even though the org-wide query worked, because the old path filtered
+    user_metrics_daily/team_metrics_daily on their OWN team_id column --
+    CHAOS-4396 found that column can fall back to author-membership
+    resolution or stay unset for a native org whose teams have empty
+    repo_patterns. team_cognitive_load_daily (CHAOS-4365 item 2) is already
+    team-scoped and OWNERSHIP-resolved (CHAOS-4321) at write time, so this
+    asserts the single-team path queries THAT table, never the tainted
+    user_metrics_daily/team_metrics_daily columns -- pinning the fix by
+    checking which table the resolver actually reads, not just the output
+    shape (a mock returning data either way can't distinguish "read the
+    right table" from "read the wrong table that happened to have rows").
+    """
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], [])])
+
+    await resolve_cognitive_load(ctx, _input(team_id="team-alpha"))
+
+    assert ctx.client.query.call_count == 1
+    query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "team_cognitive_load_daily" in query
+    assert "user_metrics_daily" not in query
+    assert "team_metrics_daily" not in query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_single_team_query_bundles_nullable_ratios_in_one_argmax_tuple() -> (
+    None
+):
+    """Codex R1 (P2): the ratio columns are Nullable(Float64) -- None means
+    unmeasured, distinct from a measured 0.0 (migration 081). A bare
+    argMax(nullable_col, computed_at) PER COLUMN independently skips NULL
+    arguments, so a day recomputed from "measured" to "unmeasured" (the
+    latest row's ratio genuinely NULL) would keep returning a STALE
+    non-null ratio from an older row instead of the latest row's true
+    NULL. The query must bundle every field into ONE
+    argMax(tuple(...), computed_at) so the whole row is picked atomically
+    from the single latest computed_at -- same fix as compounding_risk.py's
+    _fetch_latest_rows. Asserted on SQL text (the mocked client cannot
+    execute ClickHouse's real argMax NULL-skipping semantics)."""
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], [])])
+
+    await resolve_cognitive_load(ctx, _input(team_id="team-alpha"))
+
+    query: str = _squash_ws(ctx.client.query.call_args_list[0].args[0])
+    assert "argMax( tuple(" in query or "argMax(tuple(" in query
+    # Each nullable ratio field must appear INSIDE the tuple(...) argument,
+    # not as its own separate argMax(...) call -- a naive per-column bare
+    # argMax(after_hours_commit_ratio, computed_at) would also satisfy a
+    # weaker "argMax appears and after_hours_commit_ratio appears somewhere"
+    # check, so this greps specifically for a bare per-column call, which
+    # must NOT be present.
+    assert "argMax(after_hours_commit_ratio, computed_at)" not in query
+    assert "argMax(weekend_commit_ratio, computed_at)" not in query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_uses_the_old_merge_path() -> (
+    None
+):
+    """team_id AND repo_id both set: team_cognitive_load_daily has no
+    repo_id dimension to filter by, so this falls through to the original
+    two-query merge over user_metrics_daily/team_metrics_daily (repo_id
+    narrows the user-metrics query only, per CHAOS-2386) -- unchanged by
+    the CHAOS-4365 single-team fix.
+    """
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.team_id == "team-alpha"
     assert ctx.client.query.call_count == 2
     first_query: str = ctx.client.query.call_args_list[0].args[0]
     second_query: str = ctx.client.query.call_args_list[1].args[0]
+    assert "team_cognitive_load_daily" not in first_query
+    assert "team_cognitive_load_daily" not in second_query
     assert "team_id" in first_query
     assert "team_id" in second_query
 

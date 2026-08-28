@@ -1042,31 +1042,65 @@ VALUES ($4::uuid, $2, 'victim', $1::uuid, TRUE, $3, $3)`,
 		t.Fatal(err)
 	}
 
+	// Pin the mechanism, not just the outcome (AGENTS.md "four verification
+	// rules" #1) -- and NOT wall-clock duration. codex review round 1 (P2,
+	// correct): a wall-clock bound around Produce() is itself an
+	// environment-sensitive timing assertion, exactly the failure class
+	// this fix removes -- container scheduling or transaction overhead can
+	// legitimately push a CORRECTLY-planned query over a fixed bound on a
+	// contended host, reintroducing a flake instead of removing one.
+	// EXPLAIN the exact query refuseAmbiguousReportSchedules runs
+	// (ambiguousReportSchedulesSQL, reports.go) and assert the PLAN CHOICE
+	// directly, not a substring like "Hash Join" -- BOTH the good and the
+	// pathological plan contain a Hash Join (for job <-> first_report) AND
+	// a Nested Loop (the outer join to the pre-materialized inner result),
+	// confirmed by hand: a bare "Hash Join present" or "no Nested Loop"
+	// check would pass on the bad plan / fail on the good one respectively.
+	// The one structural difference that survives from PLANNED cost alone
+	// (bare EXPLAIN, no ANALYZE keyword, so no actual loop counts) is HOW
+	// second_report is read: the pathological pre-statistics plan probes
+	// it via "Index Scan using saved_reports_pkey on saved_reports
+	// second_report" once per outer row (20,002 index descents); the
+	// healthy plan reads it via a plain Seq Scan feeding a Hash Join,
+	// computed once. Which strategy the planner picks is a function of
+	// table statistics, not of how busy the host happens to be right now,
+	// so this assertion is immune to the very contention this test guards
+	// against.
+	explainRows, err := pool.Query(ctx, "EXPLAIN "+ambiguousReportSchedulesSQL, activeScheduledJobStatus)
+	if err != nil {
+		t.Fatalf("EXPLAIN ambiguousReportSchedulesSQL: %v", err)
+	}
+	var planLines []string
+	for explainRows.Next() {
+		var line string
+		if err := explainRows.Scan(&line); err != nil {
+			explainRows.Close()
+			t.Fatalf("scan EXPLAIN line: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	explainRows.Close()
+	if err := explainRows.Err(); err != nil {
+		t.Fatalf("EXPLAIN ambiguousReportSchedulesSQL: %v", err)
+	}
+	plan := strings.Join(planLines, "\n")
+	const pathologicalPerRowProbe = "Index Scan using saved_reports_pkey on saved_reports second_report"
+	if strings.Contains(plan, pathologicalPerRowProbe) {
+		t.Fatalf(
+			"ambiguousReportSchedulesSQL planned a per-outer-row index probe "+
+				"against second_report (%q) instead of a Hash Join, against the "+
+				"20,002-row test population -- a stale-statistics regression "+
+				"(the flake this test guards against). EXPLAIN output:\n%s",
+			pathologicalPerRowProbe, plan,
+		)
+	}
+
 	schedule, occurrence := reportOccurrence(
 		t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
 	)
-	// Pin the mechanism, not just the outcome (AGENTS.md "four verification
-	// rules" #1): without the ANALYZE above, this reliably measures ~27s on
-	// an idle machine (confirmed by hand, see the comment above) -- comfortably
-	// over this bound even with zero host contention -- while the statistics
-	// fix keeps it in the low hundreds of milliseconds. A regression that
-	// reintroduces the stale-statistics plan fails this assertion
-	// deterministically, without needing a loaded host to catch it.
-	const maxAmbiguityCheckDuration = 10 * time.Second
-	produceStartedAt := time.Now()
 	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
-	produceElapsed := time.Since(produceStartedAt)
 	if err != nil {
 		t.Fatalf("Produce(): %v", err)
-	}
-	if produceElapsed > maxAmbiguityCheckDuration {
-		t.Fatalf(
-			"Produce() took %s (> %s) against a freshly bulk-loaded, unANALYZEd "+
-				"table population -- the ambiguous-report-schedule self-join "+
-				"(reports.go: ambiguousReportSchedulesSQL) likely regressed to a "+
-				"stale-statistics Nested Loop plan instead of a Hash Join",
-			produceElapsed, maxAmbiguityCheckDuration,
-		)
 	}
 	assertNoDuplicateHandoffs(t, outcome)
 

@@ -350,6 +350,21 @@ means the ClickHouse `teams` dimension is empty.
 > `sink.write_team_repo_ownership`; `workers/team_autoimport_gitlab.py:209` calls
 > `sink.write_team_project_ownership` (Jira/Linear autoimporters write the same table).
 
+> **CHAOS-4365 `project_link`: widens `team_repo_ownership.source`, not the 9-value ladder above.**
+> Ruling (chris, 2026-08-28 07:58-08:04 PT): "the repo should still have a team as well as the PR
+> through the linear connection." Build order: the primary `team_repo_ownership` producer for an
+> org with no direct GitHub team row is a derivation -- `team_project_ownership` (any tracker) joined
+> to that tracker's team-owned work item(s), joined through a cross-provider link to a repo (any SCM,
+> per the 08:07 PT provider-agnostic amendment quoted in §3) -- one `team_repo_ownership` row per
+> repo, `source = project_link`, with **lower `specificity` than a direct native row** so a
+> GitHub-team-owned repo's own row still wins the `is_primary` tie-break over a `project_link` row for
+> the same repo. This is a value inside `team_repo_ownership.source` (`Enum8('native'=1,
+> 'jira_legacy'=2, 'provider_access'=3, 'manual'=4, 'inferred'=5)`, migration `051`) -- **not** a new
+> row 2.5 in `_SOURCE_ORDER` above. Attribution rank 3 (`repo_ownership`) is unchanged: it reads
+> `team_repo_ownership` uniformly and does not branch on which sub-source produced the winning row.
+> **Status: PENDING** -- grepped clean for `project_link` across `*.go`/`*.py` as of this writing; no
+> producer exists yet. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
+
 > **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
 > real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
 > `metrics/job_compounding_risk.py` CLI job) resolves one team per repo for
@@ -481,7 +496,20 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
 
-One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.) **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
+
+> **Two producers reach this dimension, and CHAOS-4323 made the trigger per-config, not per-flag.**
+>
+> | Producer | Chain | Providers |
+> |---|---|---|
+> | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | github, gitlab, jira, linear |
+> | Linear Go-native route (bypasses the Python `populate()` path entirely) | `internal/providersync/linear_reference_catalog_effects_clickhouse.go:26` (`linearReferenceOwnershipInsert` / `writeOwnership`) writes `team_project_ownership` directly from the typed Linear reference-catalog rows, `source='native'` | linear only |
+>
+> **CHAOS-4323 (`alembic/versions/0112_split_auto_import_teams_into_three_categories.py`)** replaced
+> the single "Auto-import teams, projects & members" checkbox with three independently-selectable
+> `sync_options` keys (`auto_import_teams`/`auto_import_projects`/`auto_import_members`, each off by
+> default) — both producers above are dispatched only for the categories a given sync config selects,
+> not unconditionally on every sync. See the Manual QA walkthrough in §4 for the sync-config UI path. **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 > **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
@@ -832,6 +860,34 @@ flowchart TD
     N --> R[("stamp team_id on the row")]
 ```
 
+### 1.1 Ownership derivation (current, §0 — added for CHAOS-4365)
+
+The 4-tier cascade above predates ownership derivation entirely. `team_project_ownership` and
+`team_repo_ownership` are not admin-authored — they are written by the sync, and the admin
+override layer (`identities`/`teams.manual_members`, CHAOS-4321) sits **on top of**, not inside,
+that derivation:
+
+```mermaid
+flowchart TD
+    SYNC["Sync: Go post-sync River job<br/>internal/syncdispatchruntime/worker.go:93 (RegisterTeamAutoimportWorker)<br/>-- bridge.go:113 --&gt; POST /api/internal/worker-sync/team-autoimport<br/>-- api/internal/worker_sync.py:269-278 --&gt; run_post_sync_team_autoimport<br/>-- workers/team_autoimport.py:228 --&gt; team_autoimport_&lt;provider&gt;.populate()<br/>(per-config teams/projects/members selections, CHAOS-4323)"]
+    SYNC -->|"GitHub only -- team_autoimport_github.py:142, source=native"| TRO_direct["team_repo_ownership (direct)"]
+    SYNC -->|"GitLab / Jira / Linear -- team_autoimport_{gitlab,jira,linear}.py, source=native"| TPO["team_project_ownership"]
+    LGN["Linear Go-native route (bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native"] --> TPO
+
+    TPO -->|"join: team-owned tracker work item(s)"| WI["work_items"]
+    WI -->|"join: cross-provider link<br/>(work_item_dependencies / work_graph_issue_pr, ANY tracker to ANY SCM object -- §2)"| REPO["repos"]
+    REPO -->|"derive one team per repo:<br/>source=project_link (CHAOS-4365, PENDING implementation)<br/>lower specificity than a direct native row"| TRO_derived["team_repo_ownership (source=project_link)"]
+
+    ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/>(CHAOS-4321) -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
+    ADMIN -. overrides .-> TPO
+    ADMIN -. overrides .-> TRO_direct
+    ADMIN -. overrides .-> TRO_derived
+```
+
+`repos` is the derivation's join target, not the diagram's endpoint: attribution source 3
+(`repo_ownership`, §0.1/§0.2) reads whichever `team_repo_ownership` row wins the `is_primary`/
+`specificity` tie-break for that repo — direct (`native`) or derived (`project_link`) alike.
+
 **Inheritance is gated**, so it never imports a wrong team:
 - only **inheritance-safe** relationship types transfer a team
   (`relates_to`, `relates`, `duplicates`, `external_issue_key`); blocking links
@@ -904,16 +960,40 @@ boundary).
 
 ## 3. Data flow & relationships (ER)
 
+> **Provider-agnostic, by ruling (chris, 2026-08-28 08:07 PT, CHAOS-4365 amendment):** *"It's not
+> just linear to be clear, the graph associated VIA ANY TOOL THAT CAN MAP to github/gitlab objects.
+> The SOURCE github/gitlab/bitbucket ARE irrelevant."* Every edge below that crosses from a tracker
+> (Linear/Jira/GitLab issues/…) to an SCM object (GitHub/GitLab/Bitbucket repo or PR) is drawn
+> generically — no provider-named node or edge — even where today's only *implemented* producer
+> happens to be Linear→GitHub. Do not read a generic label as a claim that every provider pair is
+> wired; §0.4/§0.4a track what is actually implemented per provider.
+
 ```mermaid
 erDiagram
     work_items ||--o{ work_item_dependencies : "source of edges"
+    work_item_dependencies }o--|| work_items : "target or extkey to donor issue (cross-provider link, §2)"
     work_items ||--o{ work_item_cycle_times : "completed to cycle row"
     work_items ||--o{ work_item_team_attributions : "primary attribution candidates"
-    work_item_dependencies }o--|| work_items : "target or extkey to donor issue"
     teams ||--o{ work_item_team_attributions : "team_id"
     work_item_team_attributions ||--o{ investment_coverage : "team/repo coverage %"
     work_item_team_attributions ||--o{ team_exchange_chord : "team identity"
     work_item_cycle_times ||--o{ team_exchange_chord : "activity/day/scope bridge"
+
+    teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
+    team_project_ownership }o--|| projects : "project_id"
+    work_items }o--|| projects : "project_id (native tracker project; attribution source 1: issue_project)"
+
+    teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
+    team_repo_ownership }o--|| repos : "repo_id / repo_full_name"
+    repos ||--o{ work_items : "repo_id"
+    team_project_ownership }o..o{ team_repo_ownership : "derived by the sync: team_repo_ownership.source = project_link (CHAOS-4365, PENDING implementation) -- a team-owned tracker work item, joined through a cross-provider link, to a repo"
+
+    repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts -- no org_id, no work_item_id: NOT tenant-scoped, NOT an attribution input)"
+    work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"
+    git_pull_requests ||--o{ work_graph_issue_pr : "(repo_id, number = pr_number) (SCM-PR side of that same link)"
+
+    teams }o--o{ identities : "team_ids (ADMIN override membership set, CHAOS-4321 -- override layer, NOT an attribution source itself)"
+    teams ||--o{ team_memberships : "team_id (PROVIDER fallback membership layer -- NOT an attribution source itself; consulted only inside attribution sources 4/6)"
 
     work_items {
         string work_item_id PK
@@ -949,11 +1029,125 @@ erDiagram
         string org_id
         string project_keys
     }
+    projects {
+        string id PK
+        string org_id
+        string provider
+        string project_key
+        string name
+        uint8  is_active
+    }
+    team_project_ownership {
+        string   org_id
+        string   provider
+        string   team_id
+        string   project_id
+        string   project_key
+        string   source "native|manual|inferred (project_link does not apply here)"
+        uint8    is_primary
+        uint16   specificity
+        datetime valid_from
+        datetime valid_to
+    }
+    team_repo_ownership {
+        string   org_id
+        string   provider
+        string   team_id
+        uuid     repo_id
+        string   repo_full_name
+        string   match_type
+        string   source "native|manual|inferred|project_link (pending CHAOS-4365)"
+        uint8    is_primary
+        uint16   specificity
+        datetime valid_from
+        datetime valid_to
+    }
+    repos {
+        uuid     id PK
+        string   repo
+        string   provider
+        string   org_id
+        datetime last_synced
+    }
+    git_pull_requests {
+        uuid     repo_id
+        uint32   number
+        string   state
+        string   author_email
+        datetime created_at
+        datetime merged_at
+    }
+    work_graph_issue_pr {
+        uuid     repo_id
+        string   work_item_id
+        uint32   pr_number
+        float    confidence
+        string   provenance
+        datetime last_synced
+        string   org_id
+    }
+    team_memberships {
+        string   org_id
+        string   provider
+        string   team_id
+        string   member_id
+        string   source
+        uint8    is_primary
+        uint16   specificity
+        datetime valid_from
+        datetime valid_to
+        array    identity_facets
+    }
+    identities {
+        string org_id
+        string canonical_id PK
+        uuid   identity_uuid
+        string display_name
+        string email
+        array  team_ids
+        uint8  is_active
+    }
 ```
 
 Coverage and team-identity hydration read latest primary rows from
 `work_item_team_attributions`. Cycle-time rows can still provide activity dates,
 durations, and co-occurrence bridges, but they are not the owning team source.
+
+**Reading the new edges:**
+
+- **Ownership dimensions are themselves derived, not hand-authored.** `team_project_ownership` /
+  `team_repo_ownership` are written by the sync (§0.4a), not by an admin — `teams` ⇄ `identities` /
+  `team_memberships` is the separate override/fallback membership layer (below), never an ownership
+  source.
+- **Two different "cross-provider link" tables exist for two different consumers — do not conflate
+  them.** (1) `work_item_dependencies` (already in this diagram) is what the **attribution ladder's**
+  `linked_issue` source (rank 5, §0.1/§0.2) reads — a GitHub/GitLab PR is itself normalized as a
+  `work_items` row (`provider='github'`, id `ghpr:{owner}/{repo}#{n}`), so that "link" is a
+  `work_items`⇄`work_items` self-edge, captured per §2. (2) `work_graph_issue_pr` is a **separate**
+  real table the work-graph build writes (`work_graph_edges`' fast-path sibling, migration
+  `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
+  (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
+  "which table carries the cross-provider link," for different readers.
+- **`git_pull_requests` is not a work item and carries no `org_id`.** It is the raw git-log-sourced
+  PR fact table (`000_raw_tables.sql`) used for git-side PR metrics (review load, cycle time from the
+  git side) — it has no `work_item_id` and is not tenant-scoped, so it cannot itself be an attribution
+  input; `work_graph_issue_pr.pr_number` is the only column that ties a `git_pull_requests` row back
+  to a tracker work item.
+- **The `project_link` derivation (CHAOS-4365) is NOT a new attribution-ladder rank.** It widens
+  `team_repo_ownership.source` (an `Enum8` on the ownership table itself, alongside the existing
+  `native`/`manual`/`inferred` values) so a repo can get a team from Linear/Jira/GitLab project
+  ownership joined through a cross-provider link, when no direct native row (e.g. GitHub team
+  auto-import) exists for that repo. The attribution resolver's rank-3 `repo_ownership` source (§0.1)
+  reads `team_repo_ownership` uniformly regardless of which sub-source populated the winning row —
+  see the §0.2 callout below for how `specificity` keeps a `project_link` row from ever beating a
+  direct native one for the same repo. **Not yet implemented** — no producer writes `project_link`
+  as of this page's writing (grepped clean); see the ownership-derivation diagram in §1.
+- **Admin override vs. provider fallback are two different roster layers, neither is an
+  `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the
+  CHAOS-4321 admin (override) layer; `team_memberships` ∪ `teams.members` is the provider (fallback)
+  layer. Both are consulted only *inside* the `assignee_membership` (rank 4) / `author_membership`
+  (rank 6) resolution step (§0 "Why this exists") — they never appear as their own row in
+  `work_item_team_attributions.source`.
 
 ---
 

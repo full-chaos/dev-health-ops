@@ -1,0 +1,181 @@
+//go:build integration
+
+package providersync
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+)
+
+func gitlabTeamCatalogIntegrationRows(orgID string, now time.Time) GitLabTeamCatalogRows {
+	description := "Root group"
+	rootProjectKey := "org/root-svc"
+	teamAProjectKey := "org/team-a/svc"
+	return GitLabTeamCatalogRows{
+		Teams: []gitlabTeamCatalogTeamRow{
+			normalizeGitLabTeamRow(orgID, gitlabTeamCatalogGroupPayload{FullPath: "org", Name: "Org", Description: &description}, []string{rootProjectKey}, now),
+			normalizeGitLabTeamRow(orgID, gitlabTeamCatalogGroupPayload{FullPath: "org/team-a", Name: "Team A"}, []string{teamAProjectKey}, now),
+		},
+		Ownership: []gitlabTeamCatalogOwnershipRow{
+			normalizeGitLabOwnershipRow(orgID, "gl:org", rootProjectKey, gitlabTeamCatalogBaseSpecificity, now),
+			normalizeGitLabOwnershipRow(orgID, "gl:org/team-a", teamAProjectKey, gitlabTeamCatalogBaseSpecificity+gitlabTeamCatalogChildSpecificityStep, now),
+		},
+		Memberships: mustGitLabMembershipRows(orgID, now),
+		Projects: []gitlabTeamCatalogProjectRow{
+			mustGitLabProjectRow(orgID, "100", "org/root-svc", now),
+			mustGitLabProjectRow(orgID, "101", "org/team-a/svc", now),
+		},
+	}
+}
+
+func mustGitLabMembershipRows(orgID string, now time.Time) []gitlabTeamCatalogMembershipRow {
+	row, _, ok := normalizeGitLabMembershipRow(orgID, "gl:org", gitlabTeamCatalogMemberPayload{Username: "root-owner"}, now)
+	if !ok {
+		panic("normalizeGitLabMembershipRow failed")
+	}
+	return []gitlabTeamCatalogMembershipRow{row}
+}
+
+func mustGitLabProjectRow(orgID, nativeID, path string, now time.Time) gitlabTeamCatalogProjectRow {
+	row, ok := normalizeGitLabProjectCatalogRow(orgID, gitlabTeamCatalogProjectPayload{
+		ID: json.Number(nativeID), PathWithNamespace: path, Name: path, WebURL: "https://gitlab.example.com/" + path,
+	}, now)
+	if !ok {
+		panic("normalizeGitLabProjectCatalogRow failed")
+	}
+	return row
+}
+
+// TestGitLabTeamCatalogEffectsAgainstMigratedSchema proves the four writes
+// this route produces (teams, team_project_ownership, team_memberships,
+// projects) round-trip correctly against the REAL migrated ClickHouse
+// schema, are tenant-fenced, and are readback-exact -- the same discipline
+// TestLinearReferenceCatalogEffectsAgainstMigratedSchema applies to the
+// Linear port. This is schema/write-path proof, not a live-GitLab
+// differential oracle (that requires real credentials against org
+// 70d529e0 and is covered separately).
+func TestGitLabTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}
+
+	claim := nativeTestClaim("gitlab", "work-items")
+	claim.OrgID = "gitlab-org-a"
+	otherClaim := claim
+	otherClaim.OrgID = "gitlab-org-b"
+	now := time.Date(2026, 8, 10, 12, 34, 56, 789000000, time.UTC)
+
+	rows := gitlabTeamCatalogIntegrationRows(claim.OrgID, now)
+	for i := range rows.Teams {
+		rows.Teams[i].MembersAuthoritative = true
+		rows.Teams[i].Members = []string{}
+	}
+	rows.Teams[0].Members = []string{"gitlab:root-owner"}
+
+	otherRows := gitlabTeamCatalogIntegrationRows(otherClaim.OrgID, now)
+	for i := range otherRows.Teams {
+		otherRows.Teams[i].MembersAuthoritative = true
+	}
+
+	effects, err := BuildGitLabTeamCatalogEffects(rows, true, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherEffects, err := BuildGitLabTeamCatalogEffects(otherRows, true, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, effect := range effects.Batches() {
+		inspection, inspectErr := sink.InspectEffect(ctx, claim, effect)
+		if inspectErr != nil || inspection != EffectAbsent {
+			t.Fatalf("before write destination=%s inspection=%s error=%v", effect.Destination, inspection, inspectErr)
+		}
+	}
+	for _, effect := range otherEffects.Batches() {
+		if err := sink.WriteEffect(ctx, otherClaim, effect); err != nil {
+			t.Fatalf("foreign write destination=%s: %v", effect.Destination, err)
+		}
+	}
+	for _, effect := range effects.Batches() {
+		inspection, inspectErr := sink.InspectEffect(ctx, claim, effect)
+		if inspectErr != nil || inspection != EffectAbsent {
+			t.Fatalf("foreign tenant leaked into destination=%s inspection=%s error=%v", effect.Destination, inspection, inspectErr)
+		}
+	}
+	for _, effect := range effects.Batches() {
+		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+			t.Fatalf("write destination=%s: %v", effect.Destination, err)
+		}
+		inspection, inspectErr := sink.InspectEffect(ctx, claim, effect)
+		if inspectErr != nil || inspection != EffectExact {
+			t.Fatalf("readback destination=%s inspection=%s error=%v", effect.Destination, inspection, inspectErr)
+		}
+	}
+
+	// CHAOS-4321: manual_members set by an admin (simulated directly against
+	// the table, since only the admin API writes it) must survive a second
+	// provider-access sync that only re-observes teams (no fresh roster
+	// signal for the SAME rows) -- the write must carry it forward, not
+	// silently reset it to [] on the ReplacingMergeTree's next version.
+	if err := conn.Exec(ctx, `ALTER TABLE teams UPDATE manual_members = ['manual:owner'] WHERE org_id = ? AND id = ? SETTINGS mutations_sync = 1`, claim.OrgID, "gl:org"); err != nil {
+		t.Fatalf("seed manual_members: %v", err)
+	}
+	rewrite := rows.Teams[0]
+	rewrite.UpdatedAt = now.Add(time.Second)
+	rewriteEffect, err := effectBatchFromValues(gitlabTeamCatalogTeamsDestination, EffectReadbackRequired, []gitlabTeamCatalogTeamRow{rewrite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteEffect(ctx, claim, rewriteEffect); err != nil {
+		t.Fatalf("carry-forward write: %v", err)
+	}
+	var manualMembers []string
+	result, err := conn.Query(ctx, `SELECT manual_members FROM teams FINAL WHERE org_id = ? AND id = ?`, claim.OrgID, "gl:org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Close()
+	if !result.Next() {
+		t.Fatal("expected a row")
+	}
+	if err := result.Scan(&manualMembers); err != nil {
+		t.Fatal(err)
+	}
+	if len(manualMembers) != 1 || manualMembers[0] != "manual:owner" {
+		t.Fatalf("manual_members not carried forward: %v", manualMembers)
+	}
+
+	// Teams-only run (MembersAuthoritative=false) must preserve the CURRENT
+	// roster rather than overwrite it with an empty one.
+	preserve := rows.Teams[0]
+	preserve.UpdatedAt = now.Add(2 * time.Second)
+	preserve.MembersAuthoritative = false
+	preserve.Members = nil
+	preserveEffect, err := effectBatchFromValues(gitlabTeamCatalogTeamsDestination, EffectReadbackRequired, []gitlabTeamCatalogTeamRow{preserve})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteEffect(ctx, claim, preserveEffect); err != nil {
+		t.Fatalf("roster-preserving write: %v", err)
+	}
+	var members []string
+	result2, err := conn.Query(ctx, `SELECT members FROM teams FINAL WHERE org_id = ? AND id = ?`, claim.OrgID, "gl:org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result2.Close()
+	if !result2.Next() {
+		t.Fatal("expected a row")
+	}
+	if err := result2.Scan(&members); err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0] != "gitlab:root-owner" {
+		t.Fatalf("roster not preserved on members-off write: %v", members)
+	}
+}

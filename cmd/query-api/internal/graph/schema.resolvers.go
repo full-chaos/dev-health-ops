@@ -165,16 +165,19 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 		includeArchivedValue = *includeArchived
 	}
 
-	recordFeatureFlagsCall(ctx)
-	result, err := featureflags.Resolve(ctx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
+	spanCtx, finish := startFeatureFlagsSpan(ctx)
+	result, err := featureflags.Resolve(spanCtx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
 	if err != nil {
-		recordFeatureFlagsOutcome("error")
+		finish("error")
 		return nil, fmt.Errorf("featureFlags: %w", err)
 	}
 	if result.DegradedReason != nil {
-		recordFeatureFlagsOutcome("degraded")
+		finish("degraded")
 	} else {
-		recordFeatureFlagsOutcome("ok")
+		finish("ok")
 	}
 	return result, nil
 }

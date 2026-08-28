@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -34,14 +35,31 @@ func mustCounter(name, description string) metric.Int64Counter {
 	return counter
 }
 
-// recordFeatureFlagsCall starts a span for one featureFlags resolver
-// invocation and counts it -- called unconditionally at resolver entry,
-// before the ClickHouse query, so "did we get any traffic" is answerable
-// even if the query itself never returns.
-func recordFeatureFlagsCall(ctx context.Context) {
+// startFeatureFlagsSpan starts a span for one featureFlags resolver
+// invocation and counts it -- called at resolver entry, before the
+// ClickHouse query, so "did we get any traffic" is answerable even if
+// the query itself never returns. The returned context carries the span;
+// callers MUST use it for the resolver work they want measured and MUST
+// call the returned finish func exactly once (typically via defer) once
+// that work completes, passing the outcome that closes it out.
+//
+// Starting and ending the span back-to-back here, before doing any real
+// work, produced a zero-duration span with no resolver latency or
+// failure information for every request (codex review, 2026-08-28) --
+// telemetry that looks like coverage but measures nothing, the same
+// "invisible fallback" class of defect this file's own package doc
+// warns about.
+func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome string)) {
 	featureFlagsCallCounter.Add(ctx, 1)
-	_, span := tracer.Start(ctx, "query-api.featureFlags")
-	span.End()
+	spanCtx, span := tracer.Start(ctx, "query-api.featureFlags")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "featureFlags resolver error")
+		}
+		span.End()
+		recordFeatureFlagsOutcome(outcome)
+	}
 }
 
 // recordFeatureFlagsOutcome increments the outcome counter. outcome is

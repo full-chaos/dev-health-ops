@@ -11,10 +11,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -116,6 +119,25 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// Eager readiness check, matching cmd/dev-health-worker's own
+	// documented contract for this exact env var (deploy/go-workers/
+	// README.md, "ClickHouse: the Go worker needs the native port, not
+	// the HTTP port"): CLICKHOUSE_URI resolves to a DIFFERENT port for a
+	// Go process (native wire protocol, :9000 locally) than for a Python
+	// process (HTTP, :8123 locally) despite sharing the same env var
+	// name across this repo's deployments -- operator-configured per
+	// process, not auto-translated here (codex review, 2026-08-28: this
+	// route previously mounted successfully even when CLICKHOUSE_URI was
+	// the repo-standard HTTP endpoint, then failed every request with a
+	// handshake error instead of failing loudly at startup). Ping now so
+	// a misconfigured endpoint refuses to start, the same "measurement
+	// that did not happen must FAIL, loudly" discipline dev-health-worker
+	// already applies to this identical class of mistake.
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := chClient.Ping(pingCtx); err != nil {
+		return nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
+	}
 
 	pgPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
@@ -158,13 +180,24 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Bounded read: this is a request body, not an internal reader --
-		// an unbounded io.ReadAll on caller input is the same class of
-		// risk WithRowLimit exists to prevent on the query side.
-		bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		// Same body-size contract the Python edge's
+		// GraphQLQuerySizeLimitMiddleware enforces for /graphql
+		// (security.py's GRAPHQL_MAX_QUERY_BYTES, default 16 KiB) --
+		// codex review, 2026-08-28: reading up to 1 MiB unconditionally
+		// let a body between the configured limit and 1 MiB through
+		// silently, bypassing that existing request-size contract for
+		// this canaried operation. LimitReader+1 lets a body of EXACTLY
+		// the limit succeed while still detecting one byte over it,
+		// without buffering the oversized remainder.
+		limit := graphQLMaxQueryBytes()
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
 		_ = r.Body.Close()
 		if readErr != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(bodyBytes) > limit {
+			http.Error(w, "GraphQL request body exceeds size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
 
@@ -215,13 +248,42 @@ func operationForDocument(query, featureFlagsDigest string) (string, bool) {
 	return "", false
 }
 
+// defaultGraphQLMaxQueryBytes mirrors security.py's
+// DEFAULT_GRAPHQL_MAX_QUERY_BYTES (16 KiB) exactly.
+const defaultGraphQLMaxQueryBytes = 16 * 1024
+
+// graphQLMaxQueryBytes mirrors security.py's get_graphql_max_query_bytes:
+// same env var name, same fall-back-to-default behavior for an unset or
+// unparseable value, same floor of 1 (never zero or negative).
+func graphQLMaxQueryBytes() int {
+	raw := os.Getenv("GRAPHQL_MAX_QUERY_BYTES")
+	if raw == "" {
+		return defaultGraphQLMaxQueryBytes
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultGraphQLMaxQueryBytes
+	}
+	if value < 1 {
+		return 1
+	}
+	return value
+}
+
+// bearerToken mirrors services/auth.py's extract_token_from_header
+// exactly: split on ANY whitespace (not just a literal "Bearer " prefix),
+// require exactly two fields, and compare the scheme case-INSENSITIVELY
+// -- codex review, 2026-08-28: the previous case-sensitive prefix check
+// rejected the standards-valid `bearer <token>` scheme Python's edge
+// already accepts, a real authentication-behavior divergence for the
+// same canaried operation.
 func bearerToken(header string) (string, bool) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 {
 		return "", false
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
-	if token == "" {
+	scheme, token := parts[0], parts[1]
+	if !strings.EqualFold(scheme, "Bearer") {
 		return "", false
 	}
 	return token, true

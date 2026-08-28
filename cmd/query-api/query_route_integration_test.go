@@ -285,3 +285,39 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 	})
 }
+
+// TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol is the regression
+// proof for a real bug codex review found (2026-08-28): CLICKHOUSE_URI
+// resolves to a DIFFERENT port for a Go process (native wire protocol)
+// than for a Python process (HTTP) despite sharing the same env var name
+// across this repo's deployments (deploy/go-workers/README.md, "ClickHouse:
+// the Go worker needs the native port, not the HTTP port") -- pointing
+// query-api's CLICKHOUSE_URI at the HTTP-shaped endpoint previously
+// mounted /query successfully and only failed per-request, with a bare
+// "ClickHouse query failed" that named no root cause. buildQueryRoute must
+// now refuse to start at all: an HTTP server standing in for the wrong
+// protocol proves this without depending on a real ClickHouse container
+// being reachable in CI.
+func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
+	notClickHouse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer notClickHouse.Close()
+
+	cfg := queryRouteConfig{
+		ClickHouseURI:       "clickhouse://" + notClickHouse.Listener.Addr().String() + "/default",
+		RegistryPostgresURI: "postgres://unused:unused@127.0.0.1:1/unused",
+		EnvelopeJWKSPath:    "/dev/null",
+		EnvelopeIssuer:      "issuer",
+		EnvelopeAudience:    "audience",
+		SchemaDigest:        "sha256:unused",
+	}
+
+	_, _, err := buildQueryRoute(cfg)
+	if err == nil {
+		t.Fatal("buildQueryRoute succeeded against a non-ClickHouse endpoint, want a readiness-check error")
+	}
+	if !strings.Contains(err.Error(), "ClickHouse readiness check failed") {
+		t.Fatalf("error = %v, want it to name the ClickHouse readiness check", err)
+	}
+}

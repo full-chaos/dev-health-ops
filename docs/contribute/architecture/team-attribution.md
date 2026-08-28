@@ -368,10 +368,15 @@ means the ClickHouse `teams` dimension is empty.
 > 'manual'=4, 'inferred'=5)` (migration `051`) -- this producer is its **first writer**, not a new
 > enum value, and needs **no migration**. It is **not** a new row 2.5 in `_SOURCE_ORDER` above:
 > attribution rank 3 (`repo_ownership`) is unchanged, reading `team_repo_ownership` uniformly
-> regardless of which sub-source produced the winning row. **Status: PENDING** -- grepped clean for
-> any `inferred`-writing code across `*.go`/`*.py` as of this writing (the value appears only in the
-> migration 051 enum declaration); no producer exists yet. See the ownership-derivation diagram in
-> §1.1 and the ER callouts in §3.
+> regardless of which sub-source produced the winning row. **Status: IMPLEMENTED**
+> (`internal/providersync/team_repo_ownership_derivation.go`'s `deriveTeamRepoOwnership` -- the pure
+> resolution logic -- plus `internal/providersync/team_repo_ownership_derivation_clickhouse.go`'s
+> `TeamRepoOwnershipDerivationService.Derive`, the ClickHouse read/write glue). The donor walk reuses
+> the EXISTING linked-issue resolver's gating verbatim (`compute_work_items.py`'s
+> `_INHERITABLE_RELATIONSHIP_TYPES`/latest-edge-per-pair/extkey-ambiguity rules, see the "Inheritance
+> is gated" bullets in §1.1) rather than a looser first-donor walk, and additionally resolves PRs
+> through `work_graph_issue_pr` (§1.1's new PR-inheritance branch) that the original summary above
+> did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
 
 > **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
 > real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
@@ -553,6 +558,22 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > default) — but as the table shows, that per-category gating is a property of the best-effort
 > post-sync path only, not of every path that ends up calling `populate()`. See the Manual QA
 > walkthrough in §4 for the sync-config UI path.
+>
+> **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
+> implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`
+> at all.** Triggered as a sibling writer in `NativePostSyncService.Fanout`
+> (`internal/syncdispatchruntime/native_post_sync.go`'s `publishTeamRepoOwnershipDerivation`,
+> pattern = `publishTeamAutoimport` just above), publishing a new bounded-registry River kind
+> (`sync.team_repo_ownership_derivation`, `internal/jobcontract/types.go`) consumed by a Go worker
+> (`internal/syncdispatchruntime/worker.go`) that calls
+> `internal/providersync/team_repo_ownership_derivation_clickhouse.go`'s
+> `TeamRepoOwnershipDerivationService.Derive` -- pure ClickHouse read + derive + write, no provider
+> fetch, fires on every sync (see §1.1's diagram for the resolution logic). Unlike every row in the
+> table above, this producer never calls `populate()` and is not gated by the three `sync_options`
+> flags: it derives from already-synced `team_project_ownership` (however THAT got populated -- any
+> row of the table above, or the dormant Linear-native route) joined against `work_items`/
+> `work_item_dependencies`/`work_graph_issue_pr`, so it runs for every provider combination, not just
+> GitHub.
 
 **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
@@ -921,9 +942,12 @@ flowchart TD
     LGN["Linear Go-native route (would bypass the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native<br/>NOT WIRED to any production caller today -- §0.4a"] -. designed, dormant .-> TPO
 
     TPO -->|"match: work_items.project_id (item's OWN project)"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
-    TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own"| WI
+    TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
-    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id -- no join to repos needed<br/>provider column iterated, no provider branches<br/>source=inferred (already-declared value, first writer PENDING -- CHAOS-4365)<br/>lower specificity than a direct producer row (native or provider_access)"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)"| TRO_derived["team_repo_ownership (source=inferred)"]
+
+    WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2, CHAOS-2416 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
+    WI -. "work_item_id lookup" .-> WGIP
 
     ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/>(CHAOS-4321) -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
     ADMIN -. overrides .-> TPO
@@ -931,12 +955,18 @@ flowchart TD
     ADMIN -. overrides .-> TRO_derived
 ```
 
-`work_items.repo_id` is the derivation's output column, not a join through `repos`: attribution
-source 3 (`repo_ownership`, §0.1/§0.2) reads whichever `team_repo_ownership` row wins the
-`is_primary`/`specificity` tie-break for that repo — direct (`native`) or derived (`inferred`)
-alike.
+`work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
+derivation's output column, not resolved by a join through `repos` — though the WRITE side does
+join `repos` once, by `repo_id`, to stamp `repo_full_name`/`provider` onto the row it writes, since
+`team_repo_ownership.repo_full_name` is part of that table's `ORDER BY` key
+(`team_repo_ownership_derivation_clickhouse.go`). Attribution source 3 (`repo_ownership`,
+§0.1/§0.2) reads whichever `team_repo_ownership` row wins the `is_primary`/`specificity` tie-break
+for that repo — direct (`native`)/(`provider_access`) or derived (`inferred`) alike.
 
-**Inheritance is gated**, so it never imports a wrong team:
+**Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
+`LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
+donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s
+`buildDonorProjectIDResolver`) reuses these exact rules rather than a looser first-donor walk:
 - only **inheritance-safe** relationship types transfer a team
   (`relates_to`, `relates`, `duplicates`, `external_issue_key`); blocking links
   (`blocks` / `blocked_by`) routinely span teams and are ignored;
@@ -1035,7 +1065,7 @@ erDiagram
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
     repos ||--o{ work_items : "repo_id"
-    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, PENDING): work_items' own OR (via work_item_dependencies, §2) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer"
+    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
 
     repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts; tenant-scoped by org_id since migration 027, but NO work_item_id: NOT an attribution input)"
     work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"
@@ -1105,7 +1135,7 @@ erDiagram
         uuid     repo_id "Nullable -- often NULL, resolved by name at read time"
         string   repo_full_name
         string   match_type
-        string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is PENDING, CHAOS-4365 -- §0.2)"
+        string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is implemented, CHAOS-4365 -- §0.2)"
         uint8    is_primary
         uint16   specificity
         datetime valid_from

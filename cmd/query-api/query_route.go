@@ -3,6 +3,12 @@
 // PostgresSwitch, gated by a verified effective-principal envelope. See
 // main.go's package doc for what Wave 0 left empty; this file is what
 // Wave 1 adds on top of it.
+//
+// CHAOS-4368 Wave 2 adds a SECOND operation, reviewEdges, on the same
+// /query route and the same routeswitch.Mux + PostgresSwitch pipeline --
+// each operation gets its own registered document + digest + Mux
+// registration, gated independently (the go_api_routing_state row for one
+// operation has no effect on the other's reachability).
 package main
 
 import (
@@ -79,6 +85,31 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
     }
     totalCount
     degradedReason
+  }
+}`
+
+// registeredReviewEdgesDocument is CHAOS-4368 Wave 2's registered document
+// for the reviewEdges operation -- same "registered documents only"
+// contract registeredFeatureFlagsDocument's doc comment explains, applied
+// to a second operation. Copied byte-for-byte from the REAL production
+// query web actually sends (web/src/lib/graphql/queries.ts's
+// REVIEW_EDGES_QUERY, operation name "ReviewEdges", input variable named
+// `$input` of type `ReviewEdgesInput!` -- NOT individual scalar args, a
+// different shape than featureFlags's query above) -- learning Wave 1's
+// codex-round-3 lesson forward: this text is sourced from the client file
+// itself, not reconstructed from the SDL or an operation-inventory doc,
+// so the digest this route checks is the digest a real web request
+// actually produces.
+const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInput!) {
+  reviewEdges(input: $input) {
+    edges {
+      reviewer
+      author
+      reviewsCount
+      day
+      repoId
+    }
+    totalCount
   }
 }`
 
@@ -179,12 +210,18 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // PostgresSwitch + gqlgen handler pipeline over ALREADY-CONSTRUCTED
 // dependencies -- the plan §6 "deploy an empty Go query-api and prove a
 // route becomes reachable when, and only when, its individual switch is
-// enabled" contract, now with a real resolver behind it (CHAOS-4367 Wave
-// 1). Split out from buildQueryRoute so a reachability test can wire this
-// exact pipeline against a real Postgres testcontainer and a fake
-// ClickHouse client, without needing a real ClickHouse or a real
-// CLICKHOUSE_URI to prove the SWITCH half of the contract -- see
-// query_route_integration_test.go.
+// enabled" contract, now with real resolvers behind it (CHAOS-4367 Wave 1
+// featureFlags; CHAOS-4368 Wave 2 reviewEdges). Split out from
+// buildQueryRoute so a reachability test can wire this exact pipeline
+// against a real Postgres testcontainer and a fake ClickHouse client,
+// without needing a real ClickHouse or a real CLICKHOUSE_URI to prove the
+// SWITCH half of the contract -- see query_route_integration_test.go.
+//
+// Both operations share the SAME gqlgen handler instance (one schema, one
+// executable server -- gqlgen's handler is safe for concurrent reuse
+// across requests) but are registered under DISTINCT Mux operation keys,
+// each gated by its own go_api_routing_state row: enabling featureFlags
+// does not enable reviewEdges and vice versa.
 //
 // Inherited, pre-existing gap this wave does NOT close (codex review,
 // 2026-08-28, re-raising it against this route -- it is PostgresSwitch's
@@ -194,18 +231,23 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // Switch.Enabled(operation string) takes no org argument at all -- see
 // PostgresSwitch's doc comment in internal/routeswitch/postgres_switch.go
 // for why (threading org through Enabled is a later wave's job, the same
-// wave that would also verify request document identity, gap #1). Wave 1
-// is local dual-run proof only (plan §5 stage 2); org-scoped canary
-// enforcement is a stage-5 concern this PR does not claim to satisfy.
+// wave that would also verify request document identity, gap #1). Both
+// waves are local dual-run proof only (plan §5 stage 2); org-scoped
+// canary enforcement is a stage-5 concern this PR does not claim to
+// satisfy.
 func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
-	documentDigest := digestHex(registeredFeatureFlagsDocument)
+	featureFlagsDigest := digestHex(registeredFeatureFlagsDocument)
+	reviewEdgesDigest := digestHex(registeredReviewEdgesDocument)
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, map[string]string{
-		"featureFlags": documentDigest,
+		"featureFlags": featureFlagsDigest,
+		"reviewEdges":  reviewEdgesDigest,
 	})
 	routeMux := routeswitch.NewMux(sw)
 
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient}})
-	routeMux.Register("featureFlags", gqlhandler.NewDefaultServer(schema))
+	gqlHandler := gqlhandler.NewDefaultServer(schema)
+	routeMux.Register("featureFlags", gqlHandler)
+	routeMux.Register("reviewEdges", gqlHandler)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -241,7 +283,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			return
 		}
 
-		operation, ok := operationForDocument(parsed.Query, documentDigest)
+		operation, ok := operationForDocument(parsed.Query, featureFlagsDigest, reviewEdgesDigest)
 		if !ok {
 			// Unregistered document: plan §5's safe default ("unregistered
 			// documents ... stay on Python") applied at this router --
@@ -271,13 +313,20 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 
 // operationForDocument resolves a request's raw query text to a
 // registered operation name -- "registered documents only" (plan §7 open
-// decision 2), never an AST-shape match. Only featureFlags is registered
-// this wave.
-func operationForDocument(query, featureFlagsDigest string) (string, bool) {
-	if digestHex(query) == featureFlagsDigest {
+// decision 2), never an AST-shape match. Digests the query text exactly
+// ONCE and compares against both registered digests, rather than calling
+// digestHex per candidate -- purely a minor efficiency choice, not a
+// correctness one (either shape gives the same answer).
+func operationForDocument(query, featureFlagsDigest, reviewEdgesDigest string) (string, bool) {
+	digest := digestHex(query)
+	switch digest {
+	case featureFlagsDigest:
 		return "featureFlags", true
+	case reviewEdgesDigest:
+		return "reviewEdges", true
+	default:
+		return "", false
 	}
-	return "", false
 }
 
 // defaultGraphQLMaxQueryBytes mirrors security.py's

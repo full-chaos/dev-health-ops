@@ -7,6 +7,8 @@ import (
 	"io"
 	"strconv"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
 )
 
 type AIAttributionEvidenceRow struct {
@@ -31,8 +33,8 @@ type AIAttributionMixRow struct {
 
 type AIAttributionOverviewResult struct {
 	OrgID           string                     `json:"orgId"`
-	StartDate       time.Time                  `json:"startDate"`
-	EndDate         time.Time                  `json:"endDate"`
+	StartDate       graphqldate.Date           `json:"startDate"`
+	EndDate         graphqldate.Date           `json:"endDate"`
 	Mix             []AIAttributionMixRow      `json:"mix"`
 	TotalAttributed int                        `json:"totalAttributed"`
 	Rows            []AIAttributionEvidenceRow `json:"rows"`
@@ -48,8 +50,8 @@ type AIAttributionScopeInput struct {
 
 type AIComparison struct {
 	OrgID         string             `json:"orgId"`
-	StartDate     time.Time          `json:"startDate"`
-	EndDate       time.Time          `json:"endDate"`
+	StartDate     graphqldate.Date   `json:"startDate"`
+	EndDate       graphqldate.Date   `json:"endDate"`
 	AiSide        *AIComparisonSide  `json:"aiSide"`
 	BaselineSide  *AIComparisonSide  `json:"baselineSide"`
 	Delta         *AIComparisonDelta `json:"delta"`
@@ -85,29 +87,29 @@ type AIComplexityOverlapRow struct {
 }
 
 type AIDateRangeInput struct {
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
+	StartDate graphqldate.Date `json:"startDate"`
+	EndDate   graphqldate.Date `json:"endDate"`
 }
 
 type AIGovernanceCoverageRow struct {
-	Day                  time.Time `json:"day"`
-	TeamID               *string   `json:"teamId,omitempty"`
-	RepoID               *string   `json:"repoId,omitempty"`
-	AiArtifacts          int       `json:"aiArtifacts"`
-	DeclaredArtifacts    int       `json:"declaredArtifacts"`
-	HumanReviewedPrs     int       `json:"humanReviewedPrs"`
-	SecurityScannedPrs   int       `json:"securityScannedPrs"`
-	InPolicyArtifacts    int       `json:"inPolicyArtifacts"`
-	DeclarationCoverage  float64   `json:"declarationCoverage"`
-	HumanReviewCoverage  float64   `json:"humanReviewCoverage"`
-	SecurityScanCoverage float64   `json:"securityScanCoverage"`
-	InPolicyCoverage     float64   `json:"inPolicyCoverage"`
+	Day                  graphqldate.Date `json:"day"`
+	TeamID               *string          `json:"teamId,omitempty"`
+	RepoID               *string          `json:"repoId,omitempty"`
+	AiArtifacts          int              `json:"aiArtifacts"`
+	DeclaredArtifacts    int              `json:"declaredArtifacts"`
+	HumanReviewedPrs     int              `json:"humanReviewedPrs"`
+	SecurityScannedPrs   int              `json:"securityScannedPrs"`
+	InPolicyArtifacts    int              `json:"inPolicyArtifacts"`
+	DeclarationCoverage  float64          `json:"declarationCoverage"`
+	HumanReviewCoverage  float64          `json:"humanReviewCoverage"`
+	SecurityScanCoverage float64          `json:"securityScanCoverage"`
+	InPolicyCoverage     float64          `json:"inPolicyCoverage"`
 }
 
 type AIGovernanceSummary struct {
 	OrgID            string                     `json:"orgId"`
-	StartDate        time.Time                  `json:"startDate"`
-	EndDate          time.Time                  `json:"endDate"`
+	StartDate        graphqldate.Date           `json:"startDate"`
+	EndDate          graphqldate.Date           `json:"endDate"`
 	Coverage         []AIGovernanceCoverageRow  `json:"coverage"`
 	RecentViolations []AIGovernanceViolationRow `json:"recentViolations"`
 	DataAvailable    bool                       `json:"dataAvailable"`
@@ -175,8 +177,8 @@ type AIImpactScopeRollupRow struct {
 
 type AIImpactSummary struct {
 	OrgID             string                   `json:"orgId"`
-	StartDate         time.Time                `json:"startDate"`
-	EndDate           time.Time                `json:"endDate"`
+	StartDate         graphqldate.Date         `json:"startDate"`
+	EndDate           graphqldate.Date         `json:"endDate"`
 	TotalPrs          int                      `json:"totalPrs"`
 	AiAssistedPrs     int                      `json:"aiAssistedPrs"`
 	AgentCreatedPrs   int                      `json:"agentCreatedPrs"`
@@ -227,8 +229,8 @@ type AIOpportunity struct {
 
 type AIReviewLoadResult struct {
 	OrgID                 string                          `json:"orgId"`
-	StartDate             time.Time                       `json:"startDate"`
-	EndDate               time.Time                       `json:"endDate"`
+	StartDate             graphqldate.Date                `json:"startDate"`
+	EndDate               graphqldate.Date                `json:"endDate"`
 	ByBucket              []AIReviewLoadRow               `json:"byBucket"`
 	Daily                 []AIReviewLoadRow               `json:"daily"`
 	ReviewerConcentration *AIReviewerConcentrationSummary `json:"reviewerConcentration"`
@@ -257,8 +259,8 @@ type AIReviewerConcentrationSummary struct {
 
 type AIRiskBreakdownResult struct {
 	OrgID             string                   `json:"orgId"`
-	StartDate         time.Time                `json:"startDate"`
-	EndDate           time.Time                `json:"endDate"`
+	StartDate         graphqldate.Date         `json:"startDate"`
+	EndDate           graphqldate.Date         `json:"endDate"`
 	ByBucket          []AIRiskBreakdownRow     `json:"byBucket"`
 	HotspotOverlap    []AIHotspotOverlapRow    `json:"hotspotOverlap"`
 	ComplexityOverlap []AIComplexityOverlapRow `json:"complexityOverlap"`
@@ -333,8 +335,8 @@ type AiAttributedPr struct {
 
 type AiAttributedPrsResult struct {
 	OrgID         string           `json:"orgId"`
-	StartDate     time.Time        `json:"startDate"`
-	EndDate       time.Time        `json:"endDate"`
+	StartDate     graphqldate.Date `json:"startDate"`
+	EndDate       graphqldate.Date `json:"endDate"`
 	Rows          []AiAttributedPr `json:"rows"`
 	Total         int              `json:"total"`
 	HasMore       bool             `json:"hasMore"`
@@ -404,27 +406,27 @@ type BusFactorScopeInput struct {
 }
 
 type CapacityForecast struct {
-	ForecastID          string     `json:"forecastId"`
-	ComputedAt          string     `json:"computedAt"`
-	TeamID              *string    `json:"teamId,omitempty"`
-	WorkScopeID         *string    `json:"workScopeId,omitempty"`
-	BacklogSize         int        `json:"backlogSize"`
-	TargetItems         *int       `json:"targetItems,omitempty"`
-	TargetDate          *time.Time `json:"targetDate,omitempty"`
-	P50Date             *time.Time `json:"p50Date,omitempty"`
-	P85Date             *time.Time `json:"p85Date,omitempty"`
-	P95Date             *time.Time `json:"p95Date,omitempty"`
-	P50Days             *int       `json:"p50Days,omitempty"`
-	P85Days             *int       `json:"p85Days,omitempty"`
-	P95Days             *int       `json:"p95Days,omitempty"`
-	P50Items            *int       `json:"p50Items,omitempty"`
-	P85Items            *int       `json:"p85Items,omitempty"`
-	P95Items            *int       `json:"p95Items,omitempty"`
-	ThroughputMean      float64    `json:"throughputMean"`
-	ThroughputStddev    float64    `json:"throughputStddev"`
-	HistoryDays         int        `json:"historyDays"`
-	InsufficientHistory bool       `json:"insufficientHistory"`
-	HighVariance        bool       `json:"highVariance"`
+	ForecastID          string            `json:"forecastId"`
+	ComputedAt          string            `json:"computedAt"`
+	TeamID              *string           `json:"teamId,omitempty"`
+	WorkScopeID         *string           `json:"workScopeId,omitempty"`
+	BacklogSize         int               `json:"backlogSize"`
+	TargetItems         *int              `json:"targetItems,omitempty"`
+	TargetDate          *graphqldate.Date `json:"targetDate,omitempty"`
+	P50Date             *graphqldate.Date `json:"p50Date,omitempty"`
+	P85Date             *graphqldate.Date `json:"p85Date,omitempty"`
+	P95Date             *graphqldate.Date `json:"p95Date,omitempty"`
+	P50Days             *int              `json:"p50Days,omitempty"`
+	P85Days             *int              `json:"p85Days,omitempty"`
+	P95Days             *int              `json:"p95Days,omitempty"`
+	P50Items            *int              `json:"p50Items,omitempty"`
+	P85Items            *int              `json:"p85Items,omitempty"`
+	P95Items            *int              `json:"p95Items,omitempty"`
+	ThroughputMean      float64           `json:"throughputMean"`
+	ThroughputStddev    float64           `json:"throughputStddev"`
+	HistoryDays         int               `json:"historyDays"`
+	InsufficientHistory bool              `json:"insufficientHistory"`
+	HighVariance        bool              `json:"highVariance"`
 }
 
 type CapacityForecastConnection struct {
@@ -439,20 +441,20 @@ type CapacityForecastEdge struct {
 }
 
 type CapacityForecastFilterInput struct {
-	TeamID      *string    `json:"teamId,omitempty"`
-	WorkScopeID *string    `json:"workScopeId,omitempty"`
-	FromDate    *time.Time `json:"fromDate,omitempty"`
-	ToDate      *time.Time `json:"toDate,omitempty"`
-	Limit       int        `json:"limit"`
+	TeamID      *string           `json:"teamId,omitempty"`
+	WorkScopeID *string           `json:"workScopeId,omitempty"`
+	FromDate    *graphqldate.Date `json:"fromDate,omitempty"`
+	ToDate      *graphqldate.Date `json:"toDate,omitempty"`
+	Limit       int               `json:"limit"`
 }
 
 type CapacityForecastInput struct {
-	TeamID      *string    `json:"teamId,omitempty"`
-	WorkScopeID *string    `json:"workScopeId,omitempty"`
-	TargetItems *int       `json:"targetItems,omitempty"`
-	TargetDate  *time.Time `json:"targetDate,omitempty"`
-	HistoryDays int        `json:"historyDays"`
-	Simulations int        `json:"simulations"`
+	TeamID      *string           `json:"teamId,omitempty"`
+	WorkScopeID *string           `json:"workScopeId,omitempty"`
+	TargetItems *int              `json:"targetItems,omitempty"`
+	TargetDate  *graphqldate.Date `json:"targetDate,omitempty"`
+	HistoryDays int               `json:"historyDays"`
+	Simulations int               `json:"simulations"`
 }
 
 type CatalogDimension struct {
@@ -493,11 +495,11 @@ type CloneSavedReportInput struct {
 }
 
 type CognitiveLoadInput struct {
-	OrgID     string    `json:"orgId"`
-	SinceDate time.Time `json:"sinceDate"`
-	UntilDate time.Time `json:"untilDate"`
-	TeamID    *string   `json:"teamId,omitempty"`
-	RepoID    *string   `json:"repoId,omitempty"`
+	OrgID     string           `json:"orgId"`
+	SinceDate graphqldate.Date `json:"sinceDate"`
+	UntilDate graphqldate.Date `json:"untilDate"`
+	TeamID    *string          `json:"teamId,omitempty"`
+	RepoID    *string          `json:"repoId,omitempty"`
 }
 
 type CognitiveLoadResult struct {
@@ -508,24 +510,24 @@ type CognitiveLoadResult struct {
 }
 
 type CognitiveLoadSignal struct {
-	Day                   time.Time `json:"day"`
-	PrInterruptionLoad    float64   `json:"prInterruptionLoad"`
-	ContextSpreadCount    float64   `json:"contextSpreadCount"`
-	ReviewRequestLoad     float64   `json:"reviewRequestLoad"`
-	AfterHoursCommitRatio *float64  `json:"afterHoursCommitRatio,omitempty"`
-	WeekendCommitRatio    *float64  `json:"weekendCommitRatio,omitempty"`
+	Day                   graphqldate.Date `json:"day"`
+	PrInterruptionLoad    float64          `json:"prInterruptionLoad"`
+	ContextSpreadCount    float64          `json:"contextSpreadCount"`
+	ReviewRequestLoad     float64          `json:"reviewRequestLoad"`
+	AfterHoursCommitRatio *float64         `json:"afterHoursCommitRatio,omitempty"`
+	WeekendCommitRatio    *float64         `json:"weekendCommitRatio,omitempty"`
 }
 
 type ComplexityPoint struct {
-	Date                        time.Time `json:"date"`
-	ScopeID                     string    `json:"scopeId"`
-	ScopeName                   string    `json:"scopeName"`
-	LocTotal                    *int      `json:"locTotal,omitempty"`
-	CyclomaticPerKloc           *float64  `json:"cyclomaticPerKloc,omitempty"`
-	CyclomaticTotal             *int      `json:"cyclomaticTotal,omitempty"`
-	CyclomaticAvg               *float64  `json:"cyclomaticAvg,omitempty"`
-	HighComplexityFunctions     *int      `json:"highComplexityFunctions,omitempty"`
-	VeryHighComplexityFunctions *int      `json:"veryHighComplexityFunctions,omitempty"`
+	Date                        graphqldate.Date `json:"date"`
+	ScopeID                     string           `json:"scopeId"`
+	ScopeName                   string           `json:"scopeName"`
+	LocTotal                    *int             `json:"locTotal,omitempty"`
+	CyclomaticPerKloc           *float64         `json:"cyclomaticPerKloc,omitempty"`
+	CyclomaticTotal             *int             `json:"cyclomaticTotal,omitempty"`
+	CyclomaticAvg               *float64         `json:"cyclomaticAvg,omitempty"`
+	HighComplexityFunctions     *int             `json:"highComplexityFunctions,omitempty"`
+	VeryHighComplexityFunctions *int             `json:"veryHighComplexityFunctions,omitempty"`
 }
 
 type ComplexityTimeseriesInput struct {
@@ -558,7 +560,7 @@ type CompoundingRiskComponents struct {
 }
 
 type CompoundingRiskFilterInput struct {
-	Day       *time.Time           `json:"day,omitempty"`
+	Day       *graphqldate.Date    `json:"day,omitempty"`
 	Breakout  CompoundingRiskScope `json:"breakout"`
 	RepoIds   []string             `json:"repoIds,omitempty"`
 	TeamIds   []string             `json:"teamIds,omitempty"`
@@ -566,7 +568,7 @@ type CompoundingRiskFilterInput struct {
 }
 
 type CompoundingRiskPoint struct {
-	Day         time.Time                   `json:"day"`
+	Day         graphqldate.Date            `json:"day"`
 	Scope       CompoundingRiskScope        `json:"scope"`
 	ScopeID     string                      `json:"scopeId"`
 	ScopeLabel  string                      `json:"scopeLabel"`
@@ -598,7 +600,7 @@ type CompoundingRiskThresholds struct {
 }
 
 type CompoundingRiskTrendPoint struct {
-	Day      time.Time               `json:"day"`
+	Day      graphqldate.Date        `json:"day"`
 	Score    *float64                `json:"score,omitempty"`
 	Severity CompoundingRiskSeverity `json:"severity"`
 }
@@ -655,8 +657,8 @@ type DataHealth struct {
 }
 
 type DateRangeInput struct {
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
+	StartDate graphqldate.Date `json:"startDate"`
+	EndDate   graphqldate.Date `json:"endDate"`
 }
 
 type DevActualCompletion struct {
@@ -780,8 +782,8 @@ type DevEvidenceScopeInput struct {
 	Refs        []DevEvidenceScopeRefInput `json:"refs"`
 	TeamIds     []string                   `json:"teamIds"`
 	PresetDays  *int                       `json:"presetDays,omitempty"`
-	StartDate   *time.Time                 `json:"startDate,omitempty"`
-	EndDate     *time.Time                 `json:"endDate,omitempty"`
+	StartDate   *graphqldate.Date          `json:"startDate,omitempty"`
+	EndDate     *graphqldate.Date          `json:"endDate,omitempty"`
 	Timezone    string                     `json:"timezone"`
 }
 
@@ -898,8 +900,8 @@ type DevMetricResult struct {
 
 type DevMetricScopeInput struct {
 	DirectScope DevMetricDirectScope `json:"directScope"`
-	StartDate   time.Time            `json:"startDate"`
-	EndDate     time.Time            `json:"endDate"`
+	StartDate   graphqldate.Date     `json:"startDate"`
+	EndDate     graphqldate.Date     `json:"endDate"`
 	Refs        []string             `json:"refs"`
 	TeamIds     []string             `json:"teamIds"`
 	Timezone    string               `json:"timezone"`
@@ -1117,25 +1119,25 @@ type EvidenceQualityStats struct {
 }
 
 type EvidenceRef struct {
-	TeamID      string    `json:"teamId"`
-	MetricTable string    `json:"metricTable"`
-	WindowStart time.Time `json:"windowStart"`
-	WindowEnd   time.Time `json:"windowEnd"`
-	Field       string    `json:"field"`
-	Value       float64   `json:"value"`
+	TeamID      string           `json:"teamId"`
+	MetricTable string           `json:"metricTable"`
+	WindowStart graphqldate.Date `json:"windowStart"`
+	WindowEnd   graphqldate.Date `json:"windowEnd"`
+	Field       string           `json:"field"`
+	Value       float64          `json:"value"`
 }
 
 type Experiment struct {
-	ID            string           `json:"id"`
-	OpportunityID string           `json:"opportunityId"`
-	Hypothesis    string           `json:"hypothesis"`
-	Metric        string           `json:"metric"`
-	Owner         string           `json:"owner"`
-	StopCondition string           `json:"stopCondition"`
-	Status        ExperimentStatus `json:"status"`
-	StartDate     *time.Time       `json:"startDate,omitempty"`
-	StopDate      *time.Time       `json:"stopDate,omitempty"`
-	Outcome       *string          `json:"outcome,omitempty"`
+	ID            string            `json:"id"`
+	OpportunityID string            `json:"opportunityId"`
+	Hypothesis    string            `json:"hypothesis"`
+	Metric        string            `json:"metric"`
+	Owner         string            `json:"owner"`
+	StopCondition string            `json:"stopCondition"`
+	Status        ExperimentStatus  `json:"status"`
+	StartDate     *graphqldate.Date `json:"startDate,omitempty"`
+	StopDate      *graphqldate.Date `json:"stopDate,omitempty"`
+	Outcome       *string           `json:"outcome,omitempty"`
 }
 
 type ExperimentsResult struct {
@@ -1309,8 +1311,8 @@ type Mutation struct {
 type OperatingReview struct {
 	OrgID                     string                   `json:"orgId"`
 	TeamID                    *string                  `json:"teamId,omitempty"`
-	WeekStart                 time.Time                `json:"weekStart"`
-	PriorWeekStart            time.Time                `json:"priorWeekStart"`
+	WeekStart                 graphqldate.Date         `json:"weekStart"`
+	PriorWeekStart            graphqldate.Date         `json:"priorWeekStart"`
 	Sections                  []OperatingReviewSection `json:"sections"`
 	Recommendations           []string                 `json:"recommendations"`
 	RecommendationsEmptyState string                   `json:"recommendationsEmptyState"`
@@ -1325,8 +1327,8 @@ type OperatingReviewDelta struct {
 }
 
 type OperatingReviewInput struct {
-	TeamID    *string   `json:"teamId,omitempty"`
-	WeekStart time.Time `json:"weekStart"`
+	TeamID    *string          `json:"teamId,omitempty"`
+	WeekStart graphqldate.Date `json:"weekStart"`
 }
 
 type OperatingReviewMetric struct {
@@ -1370,13 +1372,13 @@ type ProductTelemetryClientErrorType struct {
 }
 
 type ProductTelemetryDailyActiveUsersType struct {
-	Day                  time.Time `json:"day"`
-	ActiveAnonymousUsers int       `json:"activeAnonymousUsers"`
+	Day                  graphqldate.Date `json:"day"`
+	ActiveAnonymousUsers int              `json:"activeAnonymousUsers"`
 }
 
 type ProductTelemetryDashboardInput struct {
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
+	StartDate graphqldate.Date `json:"startDate"`
+	EndDate   graphqldate.Date `json:"endDate"`
 }
 
 type ProductTelemetryDashboardType struct {
@@ -1506,17 +1508,17 @@ type Query struct {
 }
 
 type Recommendation struct {
-	RuleID           string        `json:"ruleId"`
-	TeamID           string        `json:"teamId"`
-	OrgID            string        `json:"orgId"`
-	ComputedAt       time.Time     `json:"computedAt"`
-	WindowStart      time.Time     `json:"windowStart"`
-	WindowEnd        time.Time     `json:"windowEnd"`
-	Severity         Severity      `json:"severity"`
-	Title            string        `json:"title"`
-	Rationale        string        `json:"rationale"`
-	SuccessCriterion string        `json:"successCriterion"`
-	Evidence         []EvidenceRef `json:"evidence"`
+	RuleID           string           `json:"ruleId"`
+	TeamID           string           `json:"teamId"`
+	OrgID            string           `json:"orgId"`
+	ComputedAt       time.Time        `json:"computedAt"`
+	WindowStart      graphqldate.Date `json:"windowStart"`
+	WindowEnd        graphqldate.Date `json:"windowEnd"`
+	Severity         Severity         `json:"severity"`
+	Title            string           `json:"title"`
+	Rationale        string           `json:"rationale"`
+	SuccessCriterion string           `json:"successCriterion"`
+	Evidence         []EvidenceRef    `json:"evidence"`
 }
 
 type RepoAlertCount struct {
@@ -1555,19 +1557,19 @@ type ReportRunType struct {
 }
 
 type ReviewEdgeRow struct {
-	Reviewer     string    `json:"reviewer"`
-	Author       string    `json:"author"`
-	ReviewsCount int       `json:"reviewsCount"`
-	Day          time.Time `json:"day"`
-	RepoID       *string   `json:"repoId,omitempty"`
+	Reviewer     string           `json:"reviewer"`
+	Author       string           `json:"author"`
+	ReviewsCount int              `json:"reviewsCount"`
+	Day          graphqldate.Date `json:"day"`
+	RepoID       *string          `json:"repoId,omitempty"`
 }
 
 type ReviewEdgesInput struct {
-	OrgID     string    `json:"orgId"`
-	SinceDate time.Time `json:"sinceDate"`
-	UntilDate time.Time `json:"untilDate"`
-	RepoIds   []string  `json:"repoIds,omitempty"`
-	Limit     int       `json:"limit"`
+	OrgID     string           `json:"orgId"`
+	SinceDate graphqldate.Date `json:"sinceDate"`
+	UntilDate graphqldate.Date `json:"untilDate"`
+	RepoIds   []string         `json:"repoIds,omitempty"`
+	Limit     int              `json:"limit"`
 }
 
 type ReviewEdgesResult struct {
@@ -1662,8 +1664,8 @@ type SecurityAlertFilterInput struct {
 	Severities []SecuritySeverityInput `json:"severities,omitempty"`
 	Sources    []SecuritySourceInput   `json:"sources,omitempty"`
 	States     []SecurityStateInput    `json:"states,omitempty"`
-	Since      *time.Time              `json:"since,omitempty"`
-	Until      *time.Time              `json:"until,omitempty"`
+	Since      *graphqldate.Date       `json:"since,omitempty"`
+	Until      *graphqldate.Date       `json:"until,omitempty"`
 	OpenOnly   bool                    `json:"openOnly"`
 	Search     *string                 `json:"search,omitempty"`
 }
@@ -1744,8 +1746,8 @@ type TestOpsRiskBreakdownItem struct {
 }
 
 type TestOpsRiskInput struct {
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
+	StartDate graphqldate.Date `json:"startDate"`
+	EndDate   graphqldate.Date `json:"endDate"`
 }
 
 type TestOpsRiskQuadrantPoint struct {
@@ -1771,13 +1773,13 @@ type TestOpsRiskResult struct {
 }
 
 type TestOpsRiskSparkPoint struct {
-	Ts    time.Time `json:"ts"`
-	Value float64   `json:"value"`
+	Ts    graphqldate.Date `json:"ts"`
+	Value float64          `json:"value"`
 }
 
 type TestOpsRiskTrendPoint struct {
-	Date      time.Time `json:"date"`
-	RiskScore float64   `json:"riskScore"`
+	Date      graphqldate.Date `json:"date"`
+	RiskScore float64          `json:"riskScore"`
 }
 
 type ThroughputEstimateCoverage struct {
@@ -1836,8 +1838,8 @@ type ThroughputStaleWip struct {
 }
 
 type TimeseriesBucket struct {
-	Date  time.Time `json:"date"`
-	Value float64   `json:"value"`
+	Date  graphqldate.Date `json:"date"`
+	Value float64          `json:"value"`
 }
 
 type TimeseriesRequestInput struct {
@@ -1855,9 +1857,9 @@ type TimeseriesResult struct {
 }
 
 type TrendPoint struct {
-	Day    time.Time `json:"day"`
-	Opened int       `json:"opened"`
-	Fixed  int       `json:"fixed"`
+	Day    graphqldate.Date `json:"day"`
+	Opened int              `json:"opened"`
+	Fixed  int              `json:"fixed"`
 }
 
 type UnmappedIdentity struct {

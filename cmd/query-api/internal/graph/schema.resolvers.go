@@ -9,11 +9,11 @@ import (
 	"fmt"
 
 	"github.com/99designs/gqlgen/graphql"
-	"github.com/vektah/gqlparser/v2/gqlerror"
-
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // CreateSavedReport is the resolver for the createSavedReport field.
@@ -277,9 +277,48 @@ func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.Cognitive
 	panic(fmt.Errorf("not implemented: CognitiveLoad - cognitiveLoad"))
 }
 
-// ReviewEdges is the resolver for the reviewEdges field.
+// ReviewEdges is the resolver for the reviewEdges field (CHAOS-4368 Wave
+// 2). Ports
+// dev_health_ops.api.graphql.resolvers.review_edges.resolve_review_edges
+// via reviewedges.Resolve -- see that package's doc comment for the exact
+// parity contract (dedup, deterministic ORDER BY tie-break, repo_ids
+// filter, limit clamp, and the deliberate absence of a degraded-result
+// path unlike FeatureFlags).
+//
+// Authorization mirrors resolve_review_edges's ACTUAL behavior exactly,
+// not FeatureFlags's stricter Go-side equality check above: Python's
+// resolver calls require_org_id(context) (raises when the envelope has no
+// org) and then, if input.org_id differs from the authorized org, does
+// NOT error -- it logs a debug line and silently uses the authorized org
+// for the query regardless of what the client sent
+// (review_edges.py's resolve_review_edges, "Ignoring GraphQL orgId ... in
+// favor of authorized org"). This resolver reproduces that
+// "authorized org always wins, client-supplied orgId in the input is
+// never trusted for scoping" behavior by construction: it passes
+// claims.OrgID, never input.OrgID, to reviewedges.Resolve.
 func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdgesInput) (*model.ReviewEdgesResult, error) {
-	panic(fmt.Errorf("not implemented: ReviewEdges - reviewEdges"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startReviewEdgesSpan(ctx)
+	result, err := reviewedges.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("reviewEdges: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // Recommendations is the resolver for the recommendations field.

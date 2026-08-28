@@ -2,34 +2,83 @@
 
 Go, read-only GraphQL analytics service. Part of the Go API epic
 (CHAOS-4352). Wave 0 (CHAOS-4366) built the proof infrastructure below;
-Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`, on top
-of it — see
+Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`;
+Wave 2 (CHAOS-4368) ports the second, `reviewEdges` — see
 [`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
 [`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
 
-## Wave 1: featureFlags is live behind the switch
+## Wave 1 & 2: featureFlags and reviewEdges are live behind the switch
 
 `internal/featureflags` ports
 `dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flags`
 verbatim (same WHERE clauses, argMax latest-row selection, ORDER BY,
-LIMIT clamp, and missing-table degraded path). `main.go` mounts `/query`
-when `CLICKHOUSE_URI`, `GO_API_REGISTRY_POSTGRES_URI`,
-`GO_API_ENVELOPE_JWKS_PATH`, `GO_API_ENVELOPE_ISSUER`,
-`GO_API_ENVELOPE_AUDIENCE`, and `GO_API_SCHEMA_DIGEST` are all set —
-otherwise it stays Wave-0-empty (only `/healthz`/`/readyz`). `/query`
-requests are gated by `routeswitch.Mux` + `PostgresSwitch` (reachable only
-when `go_api_routing_state.mode` is `canary`/`primary` for the
-featureFlags operation) and authenticated by `principal.Verifier`
+LIMIT clamp, and missing-table degraded path).
+
+`internal/reviewedges` ports
+`dev_health_ops.api.graphql.resolvers.review_edges.resolve_review_edges`
+verbatim (same argMax-per-key dedup over the append-only
+`review_edges_daily` table, same `ORDER BY reviews_count DESC, repo_id,
+reviewer, author, day` deterministic tie-break added by CHAOS-4368 Part A
+(#1980) as a stage-2 prerequisite, same optional `repo_ids` filter
+resolved through the org-scoped `repos` catalog, same 1..2000 limit
+clamp) — with one deliberate divergence from `featureflags`: Python's
+`resolve_review_edges` has **no** missing-table degraded path (there is no
+`degradedReason` field on `ReviewEdgesResult` at all), so this port does
+not invent one; a ClickHouse error propagates as a real GraphQL error on
+both sides. Authorization also differs from `featureFlags`: Python's
+resolver does not error on an `orgId` argument mismatch — it silently
+prefers the envelope's authorized org over whatever the client sent. This
+port reproduces that "authorized org always wins" behavior exactly (see
+`schema.resolvers.go`'s `ReviewEdges` doc comment) rather than reusing
+`featureFlags`'s stricter equality check.
+
+`main.go` mounts `/query` when `CLICKHOUSE_URI`,
+`GO_API_REGISTRY_POSTGRES_URI`, `GO_API_ENVELOPE_JWKS_PATH`,
+`GO_API_ENVELOPE_ISSUER`, `GO_API_ENVELOPE_AUDIENCE`, and
+`GO_API_SCHEMA_DIGEST` are all set — otherwise it stays Wave-0-empty (only
+`/healthz`/`/readyz`). `/query` requests are gated by `routeswitch.Mux` +
+`PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
+`canary`/`primary` for the SPECIFIC operation being dispatched —
+featureFlags and reviewEdges each have their own row and are gated fully
+independently) and authenticated by `principal.Verifier`
 (effective-principal envelope, Bearer token). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
-`registeredFeatureFlagsDocument`) — see that file's doc comment for the
-known gap (a hand-registered single document, not yet sourced from Wave
-0's real web-operations inventory).
+`registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument`) — see
+those constants' doc comments for the known gap (hand-registered single
+documents, not yet sourced from Wave 0's real web-operations inventory)
+and for the Wave-1 codex-round-3 lesson both documents are sourced from
+the real web client file to avoid repeating (a wrong operation name on
+both the test and route sides would still "match" locally while 404-ing
+every real client request).
 
 Stage-2 local dual-run proof (real Python + real Go server, same
 producer-seeded scratch state, compared via the CHAOS-4381 comparator):
-`tests/api/graphql/test_go_api_dual_run_feature_flags.py`.
+`tests/api/graphql/test_go_api_dual_run_feature_flags.py` and
+`tests/api/graphql/test_go_api_dual_run_review_edges.py`.
+
+## The `Date` GraphQL scalar (fixed in Wave 2)
+
+`internal/graphqldate` is a real custom marshaler for the SDL's `scalar
+Date`, replacing the Wave-0 placeholder mapping to `graphql.Time` — that
+mapping was documented KNOWN INCORRECT from Wave 0 onward (`graphql.Time`'s
+RFC3339Nano parser rejects a bare `"2026-08-27"` and its marshaler emits a
+full timestamp, not a date) and had to be fixed before `reviewEdges`
+(whose `sinceDate`/`untilDate`/`day` fields are all `Date`-typed) could be
+ported correctly. `graphqldate.Date` serializes/parses exactly
+`"YYYY-MM-DD"`, matching Strawberry's built-in `Date` scalar
+(`date.isoformat()`/`date.fromisoformat()`) — see that package's doc
+comment for how this was confirmed against the real Python scalar
+registry, not assumed.
+
+Regenerating gqlgen after this scalar-mapping change mechanically touched
+every OTHER `Date`-typed field across the whole schema (`generated.go`'s
+marshal calls, `models_gen.go`'s struct field types) — expected, not
+hand-edited; those fields belong to still-unimplemented resolver stubs
+this PR does not otherwise touch. `DateTime` and `JSON` are UNCHANGED and
+remain the same KNOWN INCORRECT Wave-0 placeholders described below;
+`reviewEdges` uses neither, so fixing them is left to whichever later wave
+ports a resolver that does.
 
 ## Wave 0 scope: intentionally empty
 
@@ -103,12 +152,17 @@ earlier "CI cannot build this" caveat.)
 
 ## What's NOT here yet (later waves / other lanes)
 
-- Any resolver besides `featureFlags` — every other field still panics
-  with `"not implemented"`.
+- Any resolver besides `featureFlags` and `reviewEdges` — every other
+  field still panics with `"not implemented"`.
 - The registered-document registry sourced from Wave 0's real
-  web-operations inventory (deliverable 2) — Wave 1 hand-registers its own
-  single canary document instead (`query_route.go`).
-- Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — this
-  wave delivers only local dual-run proof (stage 2); a deploy is routed
+  web-operations inventory (deliverable 2) — Waves 1 and 2 each
+  hand-register their own single canary document instead
+  (`query_route.go`).
+- Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — both
+  waves deliver only local dual-run proof (stage 2); a deploy is routed
   through the epic orchestrator, not this lane.
-- `featureFlagEvents` — explicitly out of scope for this canary (plan §6).
+- `featureFlagEvents` — explicitly out of scope for the Wave 1 canary
+  (plan §6).
+- The `DateTime` and `JSON` GraphQL scalars are still the same Wave-0
+  placeholder mappings, still KNOWN INCORRECT for the reasons `gqlgen.yml`
+  documents — Wave 2 fixed only `Date` (`reviewEdges`'s own scalar need).

@@ -100,6 +100,19 @@ async def _load_repo_catalog_and_pattern_resolver(
     was pure waste (a large backfill repeated two full ClickHouse queries per
     day for no correctness benefit). Callers fetch this ONCE and reuse it
     across the whole backfill range; only the ownership map is per-day.
+
+    CHAOS-4365 confirmation-pass finding (P2, reproduced): a first version
+    of this split moved the ``repos`` query to run UNCONDITIONALLY before
+    the day loop, with no exception handling. Previously it only ran inside
+    the loop, after the "no repo_metrics_daily rows for this day" guard --
+    so a backfill range where every day was empty never touched it, and a
+    transient failure only aborted a day that had actual work. Now it always
+    runs first, so the same transient failure aborted the WHOLE job (even an
+    all-empty-days range that used to complete as a clean no-op). Both
+    queries fail closed to an empty result instead, matching
+    ``load_team_repo_ownership_map``'s own graceful-degradation contract --
+    the pattern resolver and repo_to_team map just resolve nothing rather
+    than crashing the run.
     """
     try:
         teams = await sink.get_all_teams()
@@ -107,15 +120,23 @@ async def _load_repo_catalog_and_pattern_resolver(
         logger.warning("Could not load teams for compounding risk: %s", exc)
         teams = []
     resolver = build_repo_pattern_resolver(teams or [])
-    repos = sink.query_dicts(
-        """
-        SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
-        FROM repos
-        WHERE org_id = {org_id:String}
-        GROUP BY org_id, id
-        """,
-        {"org_id": org_id},
-    )
+    try:
+        repos = sink.query_dicts(
+            """
+            SELECT toString(id) AS repo_id, argMax(repo, last_synced) AS full_name
+            FROM repos
+            WHERE org_id = {org_id:String}
+            GROUP BY org_id, id
+            """,
+            {"org_id": org_id},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Could not load repos catalog for compounding risk: org_id=%s %s",
+            org_id,
+            exc,
+        )
+        repos = []
     return resolver, repos
 
 

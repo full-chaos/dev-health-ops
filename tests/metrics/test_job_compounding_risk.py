@@ -300,3 +300,45 @@ def test_load_repo_to_team_prefers_ownership_row_over_conflicting_pattern() -> N
     )
 
     assert mapping == {str(repo_id): "gh:platform"}
+
+
+def test_repos_catalog_failure_does_not_abort_an_all_empty_days_backfill(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4365 confirmation-pass finding (P2, reproduced by codex):
+    moving the repos-catalog load to run ONCE, unconditionally, before the
+    day loop (round 3's per-day-catalog-waste fix) meant a transient repos
+    query failure now aborted the WHOLE job -- even for a backfill range
+    where every day is empty and, before that change, would never have
+    touched the repos query at all (it only ran inside the loop, after the
+    per-day "no repo_metrics_daily rows" guard). The catalog load must fail
+    closed to an empty catalog instead, matching
+    load_team_repo_ownership_map's own graceful-degradation contract.
+    """
+
+    class _RepoQueryFailsSink(_FakeSink):
+        def query_dicts(
+            self, query: str, parameters: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            if "FROM repos" in query:
+                raise RuntimeError("simulated transient ClickHouse failure")
+            return super().query_dicts(query, parameters)
+
+    sink = _RepoQueryFailsSink(repo_metrics_by_day={})  # every backfilled day is empty
+    monkeypatch.setattr(
+        job_compounding_risk, "ClickHouseMetricsSink", lambda db_url: sink
+    )
+
+    rows_written = asyncio.run(
+        run_compounding_risk_job(
+            db_url="clickhouse://localhost:8123/default",
+            day=DAY,
+            backfill_days=3,
+            org_id="acme",
+        )
+    )
+
+    # Must complete as a clean no-op (matching the pre-round-3 behavior for
+    # an all-empty-days range), not raise.
+    assert rows_written == 0
+    assert sink.written == []

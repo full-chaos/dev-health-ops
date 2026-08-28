@@ -12,7 +12,17 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "go-worker" "context" $) | nindent 4 }}
     dev-health.io/worker-group: {{ $group.name }}
     {{- with $group.queues }}
-    dev-health.io/queue-set: {{ join "," . | quote }}
+    {{- /*
+    CHAOS-4428: joined with "_" and NOT "," -- a comma is not a legal
+    character in a Kubernetes label VALUE (regex
+    (([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?), so every group with more
+    than one queue was rejected outright by the API server with
+    `metadata.labels: Invalid value: "investment,metrics,reports,workgraph"`.
+    That is the chart's OWN default `heavy` and `ops` groups, i.e. this
+    chart could not install its own defaults. Reproduced on a k3s 1.36
+    cluster via `helm upgrade --install` at ops 7ea3cad23.
+    */}}
+    dev-health.io/queue-set: {{ join "_" . | quote }}
     {{- end }}
 spec:
   replicas: {{ $group.replicas }}
@@ -29,7 +39,7 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 8 }}
         dev-health.io/worker-group: {{ $group.name }}
         {{- with $group.queues }}
-        dev-health.io/queue-set: {{ join "," . | quote }}
+        dev-health.io/queue-set: {{ join "_" . | quote }}
         {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ $group.terminationGracePeriodSeconds }}

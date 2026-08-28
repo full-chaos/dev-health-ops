@@ -113,6 +113,31 @@ git push -u origin HEAD:<branch>
 - **Always set `UV_CACHE_DIR` per worktree (CHAOS-4411).** uv's default cache is `~/.cache/uv`, shared machine-wide; concurrent `uv sync` runs from different worktrees serialize on `~/.cache/uv/.lock` (and the editable sdist build lock under it), which has cost lanes 30+ minute waits. Each worktree already gets its own `.venv` — give it its own cache dir too. `.uv-cache/` is gitignored. Cost: no cross-worktree cache sharing, more disk per worktree.
 - **`--no-install-project` is required too (CHAOS-4181 / CHAOS-4407).** setuptools_scm's git file finder shells out to `git check-attr -z --stdin export-ignore` while building the editable install of `dev-health-ops` itself; the pipe deadlocks forever (0% CPU, not slow) once this repo's file list fills the 64KB buffer — every linked worktree hits it, `SETUPTOOLS_SCM_PRETEND_VERSION` does NOT avoid it (the file-listing call runs regardless of the version env var). `--no-install-project` skips that build entirely — the 158 third-party deps still install, and `pytest.ini`'s `pythonpath = src` resolves test imports without the local package being installed. Cost: no `.venv/bin/dev-hops` console script, so `ci/local_validate.sh`'s ClickHouse-dependent stages can't run in this venv locally — run those via CI, or `SKIP_CLICKHOUSE=1 bash ci/local_validate.sh` for the pure-Python stages only.
 
+### Cluster-isolated lanes (CHAOS-4428)
+
+Several standing rules in this file exist only because every lane shares ONE
+Docker Compose stack. If your lane runs in its own namespace on the local kiac
+cluster, they do not apply to you:
+
+- **Unmerged-migration downgrade.** You do not have to downgrade an unmerged
+  Alembic revision to unblock a sibling lane. `alembic_version` is per database
+  and each namespace has its own Postgres — two namespaces have been held at
+  0115 and 0109 simultaneously with both stacks healthy.
+- **Compose heads-up before a rebuild.** `helm upgrade` touches one namespace,
+  so no cross-domain heads-up is needed.
+- **The host-wide `local_validate` lock.** Not required for a gate pointed at
+  your own namespace's DSNs. It is still required for anything run against the
+  Compose stack.
+- **"Never write to the shared Postgres/ClickHouse."** Write freely inside your
+  namespace; the blast radius stops at its boundary.
+
+What does NOT change: never touch another lane's namespace, never
+`kiac down`/`delete`/prune a cluster you did not create, and never run
+host-wide `container system` verbs — they stop every kiac VM on the machine.
+
+Recipe, cost, and the testcontainers-per-suite policy:
+[docs/contribute/development/lane-isolation-kiac.md](docs/contribute/development/lane-isolation-kiac.md).
+
 ## Landing the plane
 
 - **Push early and incrementally.** “Work is not done until `git push` succeeds” is not only end-of-run cleanup. One CHAOS-3033 lane ran 57 minutes, compacted with “commit, push, PR” still in its plan, and delivered code that was never pushed. Push after the first commit; an unpushed worktree is one crash from nothing.

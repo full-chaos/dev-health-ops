@@ -184,3 +184,13 @@ Review generated files, migration output, fixtures, and local configuration deli
 | API starts but queries fail | Migrations were not applied or connection values point to a different store | Run both migration commands and print the active URIs without credentials |
 | Worker or queue tasks do not run | Valkey is unavailable or the expected worker service is not running | Check `valkey` and worker logs in Compose |
 | Editable import points outside the checkout | Another environment or installed package is active | Inspect `which python`, `which dev-hops`, and `dev_health_ops.__file__` |
+
+## Working in parallel with other agents
+
+The Compose stack described above is shared by every agent on the machine, so
+migrations, rebuilds and database writes contend. To get a private full stack
+instead — your own Postgres, ClickHouse, FalkorDB, workers and API in a
+dedicated Kubernetes namespace, seeded from `backups/` — see
+[Lane isolation on a kiac cluster](../development/lane-isolation-kiac.md). That
+page also lists which standing Compose-stack rules stop applying once your lane
+is cluster-isolated.

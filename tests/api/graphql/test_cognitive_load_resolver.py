@@ -14,9 +14,13 @@ Tests exercise the resolver against a mocked ClickHouse client and verify:
   since the mocked client cannot execute argMax).
 * The org-id gate raises ``AuthorizationError`` when ``context.org_id`` is
   missing.
-* The ``team_id`` filter passes through to both SQL queries.
+* The ``team_id`` filter passes through to both SQL queries (org-wide path).
 * The ``repo_id`` filter passes through to the user-metrics query only
-  (``team_metrics_daily`` has no ``repo_id`` column).
+  (``team_metrics_daily`` has no ``repo_id`` column) on the org-wide path.
+* CHAOS-4406: the team+repo COMBINED path checks ``team_repo_ownership``
+  first, then filters both data queries by the resolved ``repo_id`` alone
+  (never the tainted ``team_id`` column); an unowned repo returns an
+  explicit empty result without firing either data query.
 
 All tests are read-only; no ClickHouse tables are modified.
 """
@@ -350,30 +354,82 @@ async def test_cognitive_load_single_team_query_bundles_nullable_ratios_in_one_a
 
 
 @pytest.mark.asyncio
-async def test_cognitive_load_team_and_repo_id_combined_uses_the_old_merge_path() -> (
+async def test_cognitive_load_team_and_repo_id_combined_checks_ownership_first() -> (
     None
 ):
-    """team_id AND repo_id both set: team_cognitive_load_daily has no
-    repo_id dimension to filter by, so this falls through to the original
-    two-query merge over user_metrics_daily/team_metrics_daily (repo_id
-    narrows the user-metrics query only, per CHAOS-2386) -- unchanged by
-    the CHAOS-4365 single-team fix.
+    """CHAOS-4406 RED before the fix: team_id AND repo_id both set used to
+    fall straight into the tainted two-query merge, filtering
+    user_metrics_daily/team_metrics_daily on their OWN team_id column --
+    the same taint CHAOS-4365 fixed for the single-team path. The combined
+    path must instead confirm ownership via team_repo_ownership FIRST (one
+    query), then -- once owned -- filter both data queries by repo_id
+    ALONE, never by the tainted team_id column.
     """
     ctx = _ctx()
-    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["repo_id"], [["3fa85f64-5717-4562-b3fc-2c963f66afa6"]]),
+            _qresult([], []),
+            _qresult([], []),
+        ],
+    )
 
     result = await resolve_cognitive_load(
         ctx, _input(team_id="team-alpha", repo_id="acme/repo")
     )
 
     assert result.team_id == "team-alpha"
-    assert ctx.client.query.call_count == 2
-    first_query: str = ctx.client.query.call_args_list[0].args[0]
-    second_query: str = ctx.client.query.call_args_list[1].args[0]
-    assert "team_cognitive_load_daily" not in first_query
-    assert "team_cognitive_load_daily" not in second_query
-    assert "team_id" in first_query
-    assert "team_id" in second_query
+    assert ctx.client.query.call_count == 3
+    ownership_query: str = ctx.client.query.call_args_list[0].args[0]
+    user_query: str = ctx.client.query.call_args_list[1].args[0]
+    team_query: str = ctx.client.query.call_args_list[2].args[0]
+    assert "team_repo_ownership" in ownership_query
+    assert "team_id" in ownership_query
+    # Once ownership is confirmed, neither data query FILTERS by the
+    # tainted team_id column -- only by the now-resolved repo_id.
+    # team_query still legitimately GROUPs BY team_id internally (to
+    # collapse/sum across every team_id label team_metrics_daily attached
+    # to this repo's rows before recomputing the ratio -- see
+    # _fetch_repo_scoped_team_metrics), so this checks for the absence of
+    # a team_id equality PREDICATE, not the bare substring.
+    assert "team_id = {team_id:String}" not in user_query
+    assert "team_id = {team_id:String}" not in team_query
+    assert "team_id" not in user_query
+    assert "user_metrics_daily" in user_query
+    assert "team_metrics_daily" in team_query
+    assert "repo_id" in user_query
+    assert "repo_id" in team_query
+    # The resolved canonical UUID from the ownership check, not the
+    # caller's original slug, is what scopes the data queries.
+    assert (
+        ctx.client.query.call_args_list[1].kwargs["parameters"]["repo_id"]
+        == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    )
+    assert (
+        ctx.client.query.call_args_list[2].kwargs["parameters"]["repo_id"]
+        == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_empty_when_not_owned() -> None:
+    """The requested team does not own the requested repo (per
+    team_repo_ownership): return an explicit empty result rather than
+    either the wrong team's data or a confusing error. Only ONE query
+    fires -- the ownership check -- never the two data queries.
+    """
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], [])])
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/other-repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert result.signals == []
+    assert result.total_days == 0
+    assert ctx.client.query.call_count == 1
 
 
 # ---------------------------------------------------------------------------

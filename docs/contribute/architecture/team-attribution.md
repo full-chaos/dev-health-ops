@@ -442,6 +442,23 @@ means the ClickHouse `teams` dimension is empty.
 > embedded copy in `dev-health-go` and reruns its test — editing only this migration does not, by
 > itself, break `dev-health-go` CI.
 
+> **CHAOS-4406 (fixed): the team+repo COMBINED `resolveCognitiveLoad` path also stopped trusting the
+> tainted `team_id` column.** `team_cognitive_load_daily` carries no `repo_id` dimension, so it
+> cannot serve a query where BOTH `teamId` and `repoId` are set — that combined path used to fall
+> through to the pre-CHAOS-4365 two-query merge over `user_metrics_daily`/`team_metrics_daily`,
+> filtered on those tables' own `team_id` column (the same CHAOS-4396 taint). The fix,
+> `_resolve_owned_repo_id` (`resolvers/cognitive_load.py`): confirm via `team_repo_ownership` —
+> the SAME ownership-only source `api/dev/native_status_change.py`'s canonical
+> `team_repository_ids` re-derives from — that the requested team currently owns the requested
+> repo (an unowned/nonexistent repo returns an explicit empty result, never the wrong team's
+> data). Once confirmed, both data queries filter by the resolved `repo_id` ALONE:
+> `user_metrics_daily` via its existing repo predicate, and a new
+> `_fetch_repo_scoped_team_metrics` for `team_metrics_daily` that sums the additive counts across
+> **every** `team_id` label attached to that repo's rows before recomputing the ratio (mirroring
+> `_fetch_team_metrics`'s SUM-then-recompute discipline for a team's several repos, transposed:
+> here several `team_id` labels collapse onto one repo, since one repo's commits can be split
+> across per-commit membership-fallback team_id fragments — CHAOS-4396).
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |

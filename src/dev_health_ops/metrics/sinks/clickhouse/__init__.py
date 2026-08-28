@@ -18,6 +18,7 @@ each responsible for one table family:
   AIImpactMixin             — AI workflow impact daily rollups
   RecommendationsMixin      — recommendations_daily (CHAOS-1622)
   CompoundingRiskMixin      — compounding_risk_daily (CHAOS-1641)
+  TeamCognitiveLoadMixin    — team_cognitive_load_daily (CHAOS-4365 item 2 / 4347-C)
 
 Public API (stable — do not remove):
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -51,6 +52,9 @@ from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
 from dev_health_ops.metrics.sinks.clickhouse.investment import InvestmentMixin
 from dev_health_ops.metrics.sinks.clickhouse.llm_tokens import LLMTokenUsageMixin
 from dev_health_ops.metrics.sinks.clickhouse.recommendations import RecommendationsMixin
+from dev_health_ops.metrics.sinks.clickhouse.team_cognitive_load import (
+    TeamCognitiveLoadMixin,
+)
 from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
 
@@ -65,6 +69,7 @@ class ClickHouseMetricsSink(
     CIMixin,
     RecommendationsMixin,
     CompoundingRiskMixin,
+    TeamCognitiveLoadMixin,
     DoraMixin,
     WellbeingMixin,
     InvestmentMixin,

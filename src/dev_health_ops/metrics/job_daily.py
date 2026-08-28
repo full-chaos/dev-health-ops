@@ -82,6 +82,9 @@ from dev_health_ops.metrics.quality import (
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.team_cognitive_load import (
+    build_team_cognitive_load_rows_for_day,
+)
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
@@ -620,6 +623,84 @@ def _write_compounding_risk_for_day(
     for s in sinks:
         s.write_compounding_risk_daily(compounding_rows)
     return len(compounding_rows)
+
+
+def _write_team_cognitive_load_for_day(
+    *,
+    sinks: list[Any],
+    primary_sink: Any,
+    day: date,
+    org_id: str,
+    user_metrics_rows: list[Any],
+    team_wellbeing_rows: list[Any],
+    computed_at: datetime,
+    repo_names_by_id: dict[uuid.UUID, str],
+    repo_team_resolver: Any,
+) -> int:
+    """CHAOS-4365 item 2 (4347-C): team-keyed cognitive load, OWNERSHIP-scoped.
+
+    Aggregates THIS run's already-computed ``user_metrics_rows`` /
+    ``team_wellbeing_rows`` (never re-queries ClickHouse for them) by
+    ``repo_id``, resolves each repo's team the SAME way item 1's
+    compounding-risk producer does -- ``team_repo_ownership`` (loaded fresh,
+    as-of this day's own instant) merged over the ``teams.repo_patterns``
+    pattern resolver -- and deliberately ignores both input row types' own
+    ``team_id`` field (CHAOS-4396: it can fall back to author-membership
+    resolution, which CHAOS-4321 forbids as a team-attribution source).
+    """
+    if not user_metrics_rows and not team_wellbeing_rows:
+        return 0
+
+    try:
+        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+        team_repo_ownership_map = load_team_repo_ownership_map(
+            primary_sink, org_id, as_of=as_of
+        )
+        repo_to_team: dict[str, str] = {}
+        for row in (*user_metrics_rows, *team_wellbeing_rows):
+            row_repo_id = getattr(row, "repo_id", None)
+            if not row_repo_id:
+                continue
+            repo_id_str = str(row_repo_id)
+            if repo_id_str in repo_to_team:
+                continue
+            team_id = team_repo_ownership_map.get(repo_id_str)
+            if not team_id:
+                # UserMetricsDailyRecord.repo_id is a uuid.UUID;
+                # TeamMetricsDailyRecord.repo_id is already a str -- only the
+                # former is a valid repo_names_by_id key.
+                full_name = (
+                    repo_names_by_id.get(row_repo_id)
+                    if isinstance(row_repo_id, uuid.UUID)
+                    else None
+                )
+                if full_name:
+                    team_id, _ = repo_team_resolver.resolve(full_name)
+            if team_id:
+                repo_to_team[repo_id_str] = team_id
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "repo_team_resolver failed for team cognitive load: org_id=%s day=%s %s",
+            org_id,
+            day.isoformat(),
+            exc,
+        )
+        repo_to_team = {}
+
+    cognitive_load_rows = build_team_cognitive_load_rows_for_day(
+        day=day,
+        org_id=org_id,
+        user_metrics_rows=user_metrics_rows,
+        team_wellbeing_rows=team_wellbeing_rows,
+        repo_to_team=repo_to_team,
+        computed_at=computed_at,
+    )
+    if not cognitive_load_rows:
+        return 0
+    for s in sinks:
+        if hasattr(s, "write_team_cognitive_load_daily"):
+            s.write_team_cognitive_load_daily(cognitive_load_rows)
+    return len(cognitive_load_rows)
 
 
 def _secondary_uri_from_env() -> str:
@@ -1585,6 +1666,18 @@ async def run_daily_metrics_job(
             day=d,
             org_id=org_id,
             repo_metrics_rows=result.repo_metrics,
+            computed_at=computed_at,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
+        )
+
+        _write_team_cognitive_load_for_day(
+            sinks=sinks,
+            primary_sink=primary_sink,
+            day=d,
+            org_id=org_id,
+            user_metrics_rows=result.user_metrics,
+            team_wellbeing_rows=team_metrics,
             computed_at=computed_at,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,

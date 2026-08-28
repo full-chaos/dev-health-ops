@@ -313,6 +313,41 @@ class TeamMetricsDailyRecord:
 
 
 @dataclass(frozen=True)
+class TeamCognitiveLoadDailyRecord:
+    """CHAOS-4365 item 2: team-keyed cognitive load, OWNERSHIP-scoped.
+
+    CHAOS-4321 hard rule: team = project/repo ownership only, never
+    person->membership. Built by aggregating ``user_metrics_daily`` /
+    ``team_metrics_daily`` rows BY repo_id, then mapping repo_id -> team via
+    ``team_repo_ownership`` merged over ``teams.repo_patterns`` (the same
+    ownership sources CHAOS-4365 item 1 wired up) -- never via either source
+    table's own ``team_id`` column, which CHAOS-4396 found can fall back to
+    membership resolution.
+    """
+
+    org_id: str
+    team_id: str
+    day: date
+    pr_interruption_load: float
+    context_spread_count: float
+    review_request_load: float
+    #: None when no team_metrics_daily row exists for any repo this team
+    #: owns on this day -- distinct from a measured 0.0 (see append-only
+    #: daily-table reader-dedup contract; a ratio is never averaged
+    #: directly across repos, only recomputed from summed counts).
+    after_hours_commit_ratio: float | None
+    weekend_commit_ratio: float | None
+    #: How many distinct repos this team owns contributed at least one
+    #: signal on this day (diagnosability: distinguishes "team owns 1 repo,
+    #: quiet day" from "team owns 5 repos, only 1 had any activity").
+    contributing_repo_count: int
+    #: Distinct authors across every user_metrics_daily row that rolled up
+    #: into this team on this day.
+    sample_author_count: int
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class ProjectRecord:
     id: str
     provider: str

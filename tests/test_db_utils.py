@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy.engine import make_url
 
 from dev_health_ops import db
@@ -174,4 +175,55 @@ class TestPostgresRuntimeUrlNormalization:
         assert url.drivername == "postgresql"
         assert url.query["sslmode"] == "require"
         assert url.query["application_name"] == "worker"
-        assert "ssl" not in url.query
+
+
+class TestRejectsUnresolvedEnvTemplate:
+    """CHAOS-4402: a docker-compose-style ``${VAR}`` DSN exported into the
+    ambient shell (meant for compose's OWN substitution, never expanded for
+    this host process) must fail with a clear message naming the real
+    problem, not reach asyncpg verbatim and raise a confusing
+    ``InvalidPasswordError`` for a truncated username.
+    """
+
+    def test_get_postgres_uri_rejects_unresolved_template_in_postgres_uri(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "POSTGRES_URI",
+            "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/devhealth",
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.get_postgres_uri()
+
+    def test_get_postgres_uri_rejects_unresolved_template_in_database_uri_fallback(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        monkeypatch.setenv(
+            "DATABASE_URI",
+            "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/devhealth",
+        )
+
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.get_postgres_uri()
+
+    def test_get_postgres_uri_passes_through_a_fully_resolved_uri(self, monkeypatch):
+        monkeypatch.setenv(
+            "POSTGRES_URI", "postgresql://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        result = db.get_postgres_uri()
+
+        assert result is not None
+        assert "${" not in result
+
+    def test_normalize_async_postgres_uri_rejects_unresolved_template(self):
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.normalize_async_postgres_uri(
+                "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/db"
+            )

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
@@ -133,15 +134,48 @@ def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
     )
 
 
+_UNRESOLVED_ENV_TEMPLATE_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def _reject_unresolved_template(uri: str, *, source: str) -> str:
+    """Raise a clear error if ``uri`` still holds an unexpanded ``${VAR}``.
+
+    CHAOS-4402: a docker-compose-style DSN
+    (``postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/db``)
+    exported into the ambient shell for compose's OWN substitution is not
+    expanded by the host Python process. ``cli.py``'s ``_load_dotenv``
+    interpolates ``${VAR}`` refs it loads from a fresh ``.env`` line, but
+    skips any key already present in ``os.environ`` -- so a pre-exported
+    template reaches here byte-for-byte. Passed through verbatim, asyncpg
+    raises a confusing ``InvalidPasswordError`` for user
+    ``"${POSTGRES_USER"`` (the DSN parser splits on the literal ``:``
+    inside the template) instead of naming the real problem.
+    """
+    match = _UNRESOLVED_ENV_TEMPLATE_RE.search(uri)
+    if match:
+        raise ValueError(
+            f"{source} contains an unresolved template placeholder "
+            f"{match.group(0)!r} -- this looks like a docker-compose-style "
+            "variable reference that was never substituted for this host "
+            "process. Export the fully-resolved connection string (or pass "
+            "--db explicitly) instead of relying on ambient env."
+        )
+    return uri
+
+
 def get_postgres_uri() -> str | None:
     """Get PostgreSQL connection URI with fallback chain."""
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        return normalize_async_postgres_uri(uri)
+        return normalize_async_postgres_uri(
+            _reject_unresolved_template(uri, source="POSTGRES_URI")
+        )
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        return normalize_async_postgres_uri(fallback)
+        return normalize_async_postgres_uri(
+            _reject_unresolved_template(fallback, source="DATABASE_URI/DATABASE_URL")
+        )
 
     return None
 
@@ -158,6 +192,7 @@ def get_clickhouse_uri() -> str | None:
 
 
 def normalize_async_postgres_uri(uri: str) -> str:
+    uri = _reject_unresolved_template(uri, source="PostgreSQL URI")
     if uri.startswith("postgresql://"):
         url = make_url(uri)
         uri = url.set(drivername="postgresql+asyncpg").render_as_string(

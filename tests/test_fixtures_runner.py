@@ -1186,3 +1186,59 @@ class TestGenerateIssuePrLinksCoverage:
             f"14 candidates * 0.7 = 9.8 must round UP to 10 (71.4%), not "
             f"truncate to 9 (64.3%) -- got {coverage:.1%}"
         )
+
+
+class TestResolveAuthSeedPostgresUri:
+    """CHAOS-4402: ``fixtures generate`` (no ``ns.postgres_uri``) must seed
+    auth data through the operator-named ``--db``/``ns.db``, not fall
+    straight through to whatever POSTGRES_URI/DATABASE_URI happens to be
+    exported in the ambient shell.
+    """
+
+    def test_uses_explicit_db_flag_over_broken_ambient_env(self, monkeypatch):
+        """Reproduces the live CHAOS-4402 failure: --db was passed
+        explicitly and correctly, but the OLD resolver ignored it and read
+        an unrelated, broken DATABASE_URI straight from the environment."""
+        monkeypatch.setenv(
+            "DATABASE_URI",
+            "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/devhealth",
+        )
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        ns = argparse.Namespace(
+            db="postgresql://devhealth:devhealth@localhost:5432/devhealth"
+        )
+
+        resolved = runner.resolve_auth_seed_postgres_uri(ns)
+
+        assert resolved is not None
+        assert "${POSTGRES_USER}" not in resolved
+        assert "localhost:5432/devhealth" in resolved
+
+    def test_explicit_postgres_uri_still_wins_over_db_flag(self, monkeypatch):
+        """``fixtures world``'s own ``--postgres-uri`` override (validated by
+        its scratch-database guard) must keep outranking the bare ``--db``
+        flag -- unchanged precedence from before CHAOS-4402."""
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        ns = argparse.Namespace(
+            postgres_uri="postgresql://scratch:scratch@localhost:5432/world_scratch",
+            db="postgresql://devhealth:devhealth@localhost:5432/devhealth",
+        )
+
+        resolved = runner.resolve_auth_seed_postgres_uri(ns)
+
+        assert resolved == "postgresql://scratch:scratch@localhost:5432/world_scratch"
+
+    def test_falls_back_to_environment_when_db_flag_unset(self, monkeypatch):
+        """No ``--db`` passed at all: the pre-existing env fallback chain
+        (``get_postgres_uri``) still applies, unchanged."""
+        monkeypatch.setenv(
+            "POSTGRES_URI", "postgresql://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        ns = argparse.Namespace()
+
+        resolved = runner.resolve_auth_seed_postgres_uri(ns)
+
+        assert resolved is not None
+        assert "localhost:5432/devhealth" in resolved

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from dev_health_ops.db import get_postgres_uri
+from dev_health_ops.db import get_postgres_uri, normalize_async_postgres_uri
 from dev_health_ops.fixtures.coherence import FixtureBundle, validate_all
 from dev_health_ops.fixtures.demo_identity import (
     DEFAULT_DEMO_REPO_NAME,
@@ -495,13 +495,26 @@ def resolve_auth_seed_postgres_uri(ns: Any) -> str | None:
     lives in.
 
     An explicit ``ns.postgres_uri`` therefore WINS over the environment.
-    ``fixtures generate`` never sets that attribute, so its resolution is
-    unchanged.
+
+    CHAOS-4402 (found live): ``fixtures generate`` never sets
+    ``ns.postgres_uri`` -- only ``fixtures world`` does -- so it fell
+    straight through to the ambient environment even when the operator
+    passed ``--db`` explicitly on the command line. ``--db`` is the SAME
+    flag ``_ensure_org_unpolluted``'s ClickHouse-sink check and every other
+    ``dev-hops`` command already honor (``ns.db``, resolved elsewhere via
+    ``db.resolve_db_uri``); this resolver silently ignored it and read
+    whatever ``POSTGRES_URI``/``DATABASE_URI`` happened to be exported --
+    in the wild, an unresolved docker-compose ``${POSTGRES_USER}`` template
+    meant for compose's own substitution, not this host process. ``ns.db``
+    now wins over the environment, same precedence ``resolve_db_uri`` uses.
     """
 
     explicit = getattr(ns, "postgres_uri", None)
     if explicit:
         return explicit
+    db_flag = getattr(ns, "db", None)
+    if db_flag:
+        return normalize_async_postgres_uri(db_flag)
     return get_postgres_uri()
 
 

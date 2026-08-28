@@ -8,6 +8,47 @@ import (
 
 const dailyTargetDayLayout = "2006-01-02"
 
+// RunningRunIDs lists daily_metrics_runs still status='running' for orgID
+// with target_day in [fromDay, toDay] (inclusive, UTC calendar days). This is
+// the scope an operator names when requesting a redrive, resolved BEFORE
+// RedriveStrandedPartitions runs -- callers that must repair the Python
+// compatibility-bridge ledger first (CHAOS-4304's ambiguous/stuck-executing
+// rows; see redrive.go's package doc) need these run ids to do that
+// ordering safely: publishing a fresh metrics.daily_partition job for a
+// partition whose ledger row is still ambiguous only reproduces
+// ambiguous_refused and re-terminalizes it failed_permanent, undoing this
+// pass's own reset.
+func (store *PostgresStore) RunningRunIDs(
+	ctx context.Context, orgID string, fromDay, toDay time.Time,
+) ([]string, error) {
+	if !store.valid() || !validUUID(orgID) {
+		return nil, ErrUnavailable
+	}
+	if toDay.Before(fromDay) {
+		return nil, ErrInvalidState
+	}
+	rows, err := store.pool.Query(ctx, `
+SELECT id::text FROM public.daily_metrics_runs
+WHERE org_id = $1::uuid AND target_day BETWEEN $2 AND $3 AND status = 'running'
+ORDER BY id`, orgID, fromDay.UTC().Truncate(24*time.Hour), toDay.UTC().Truncate(24*time.Hour))
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	var runIDs []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, ErrUnavailable
+		}
+		runIDs = append(runIDs, runID)
+	}
+	if rows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return runIDs, nil
+}
+
 // RedriveOutcome summarizes one operator-invoked strand-repair pass
 // (CHAOS-4358).
 type RedriveOutcome struct {
@@ -169,6 +210,15 @@ ORDER BY partition.run_id, partition.ordinal`, orgID, from, to)
 	if err := tx.Commit(ctx); err != nil {
 		return outcome, ErrUnavailable
 	}
+	// codex review (round 1): today's only caller (dev-health-workerctl) is a
+	// one-shot CLI process with no Prometheus scrape endpoint and no
+	// observer wired, so these calls are a no-op in practice -- this is
+	// forward-wiring for a future long-lived caller (e.g. an automatic
+	// strand-repair reconciler sweep), not a claim that a manual redrive is
+	// visible on this counter today. The durable, queryable record of a
+	// manual redrive is the worker_job_outbox rows this pass just committed
+	// under the "metrics.daily_partition:redrive:<nonce>" dedupe-key prefix
+	// (see docs/reference/cli/index.md's `metrics daily-redrive` entry).
 	store.observeRedrive("failed_permanent_reset", outcome.PermanentReset)
 	store.observeRedrive("dispatch_redriven", outcome.RedrivenPartitions)
 	return outcome, nil

@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -512,5 +515,62 @@ func TestSessionSafeModeRejectsTransactionAndUnknownModes(t *testing.T) {
 		if got := sessionSafeMode(databaseMode(func(key string) (string, bool) { return test.mode, true }, "ignored")); got != test.want {
 			t.Fatalf("mode %q allowed=%t, want %t", test.mode, got, test.want)
 		}
+	}
+}
+
+func TestRedriveDailyMetricsLedgerCallsBulkRepairBeforePartitionRedrive(t *testing.T) {
+	var capturedAuth string
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/internal/worker/daily-metrics/v1/redrive" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":2,"skipped_claim_active":1}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a", "run-b"})
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if capturedAuth != "Bearer test-repair-token" {
+		t.Fatalf("Authorization header = %q, want Bearer test-repair-token", capturedAuth)
+	}
+	runIDs, _ := capturedBody["run_ids"].([]any)
+	if len(runIDs) != 2 {
+		t.Fatalf("request run_ids = %v, want 2 entries", capturedBody["run_ids"])
+	}
+	if repaired, _ := result["repaired"].(float64); repaired != 2 {
+		t.Fatalf("result[repaired] = %v, want 2", result["repaired"])
+	}
+}
+
+func TestRedriveDailyMetricsLedgerFailsClosedWithoutConfiguredToken(t *testing.T) {
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", "http://unused.invalid")
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "")
+
+	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}); err == nil {
+		t.Fatal("redriveDailyMetricsLedger with no WORKER_METRIC_REPAIR_TOKEN = nil error, want fail-closed")
+	}
+}
+
+func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDsWithoutAnyHTTPCall(t *testing.T) {
+	// No env configured at all -- must not even attempt a request when there
+	// is nothing to repair (an operator redrive over a window with no
+	// 'running' runs at all).
+	result, err := redriveDailyMetricsLedger(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger(nil): %v", err)
+	}
+	if result["repaired"] != 0 || result["skipped_claim_active"] != 0 {
+		t.Fatalf("result = %v, want zero-valued", result)
 	}
 }

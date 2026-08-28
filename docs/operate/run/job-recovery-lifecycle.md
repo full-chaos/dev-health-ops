@@ -252,18 +252,21 @@ nothing re-enqueues work for that run on its own — a fresh
 `PublishPartition` with the SAME `metrics.daily_partition:<id>` outbox dedupe
 key, so it silently no-ops. `dev-health-workerctl metrics daily-redrive --org
 <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>` closes this for one org+day
-window: it resets any `failed_permanent` partition back to `failed`, then
-publishes a fresh `metrics.daily_partition` job for every `pending`/`failed`
-partition in scope under a redrive-scoped dedupe key
-(`metrics.daily_partition:redrive:<partition_id>:<nonce>`), so the outbox
+window in two ordered steps: it FIRST calls the Python compatibility-bridge's
+bulk ledger repair (`POST /internal/worker/daily-metrics/v1/redrive`,
+`worker_metrics._bulk_redrive_ambiguous_executions`) for every `running` run
+in scope, authorizing retry for any `ambiguous`/stuck-`executing`
+`metric_compatibility_executions` row; only THEN does it reset any
+`failed_permanent` partition back to `failed` and publish a fresh
+`metrics.daily_partition` job for every `pending`/`failed` partition in
+scope, under a redrive-scoped dedupe key
+(`metrics.daily_partition:redrive:<partition_id>:<nonce>`) so the outbox
 treats it as new work instead of replaying the original's permanent record.
-It does not repair the Python compatibility-bridge ledger
-(`metric_compatibility_executions`) — a partition whose ledger row is stuck
-`ambiguous` (or a dead-claim `executing`) still 409s `ambiguous_refused` on
-the redriven attempt until an operator calls
-`worker_metrics._bulk_redrive_ambiguous_executions` (or the
-`POST /internal/worker/daily-metrics/v1/redrive` endpoint) for the same run
-ids first.
+The order matters: publishing a partition job before the ledger repair lands
+just reproduces `ambiguous_refused` on the redriven attempt and re-
+terminalizes the partition `failed_permanent`, undoing the reset (see
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for the exact env vars and required-order rationale).
 
 ## Sources
 

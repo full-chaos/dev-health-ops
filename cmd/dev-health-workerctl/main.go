@@ -4,12 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"slices"
 	"sort"
@@ -794,14 +796,90 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		if err != nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
+		// CHAOS-4304 ordering requirement (codex review, round 1): a
+		// partition whose Python compatibility-bridge ledger row is still
+		// 'ambiguous'/stuck-'executing' answers ambiguous_refused the
+		// instant a redriven job reaches it, which Go classifies Permanent
+		// and re-terminalizes failed_permanent -- undoing this same pass's
+		// own reset. The ledger repair MUST land before any partition job
+		// publishes, not after, so this calls the Python bulk-redrive
+		// endpoint first, over every run this org+day window's runs (not
+		// just the ones with a currently-dispatchable partition -- a run
+		// can carry an ambiguous ledger row on a partition already
+		// terminalized failed_permanent, which step 2 below is about to
+		// reset back into the redrive set).
+		runIDs, err := store.RunningRunIDs(ctx, *org, fromDay, toDay)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		ledgerRepair, err := redriveDailyMetricsLedger(ctx, runIDs)
+		if err != nil {
+			return writeError(stderr, "ledger_repair_unavailable")
+		}
 		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
-		return writeResult(stdout, stderr, outcome)
+		return writeResult(stdout, stderr, map[string]any{
+			"ledger_repair": ledgerRepair,
+			"partitions":    outcome,
+		})
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// redriveDailyMetricsLedger calls the Python compatibility bridge's bulk
+// ledger repair (CHAOS-4304, POST /internal/worker/daily-metrics/v1/redrive)
+// for the given run ids, BEFORE any Go-side partition job publishes for the
+// same redrive -- see the ordering comment at this function's one call site.
+// An empty runIDs list is a no-op (nothing to repair): it still returns a
+// zero-valued result rather than skipping the call, so a redrive over a
+// window with no 'running' runs at all is reported honestly, not silently.
+func redriveDailyMetricsLedger(ctx context.Context, runIDs []string) (map[string]any, error) {
+	if len(runIDs) == 0 {
+		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
+	}
+	baseURL, ok := resolveRequired("WORKER_OPERATIONAL_BRIDGE_URL", os.LookupEnv)
+	if !ok {
+		return nil, errors.New("WORKER_OPERATIONAL_BRIDGE_URL is not configured")
+	}
+	token, ok := resolveRequired("WORKER_METRIC_REPAIR_TOKEN", os.LookupEnv)
+	if !ok {
+		return nil, errors.New("WORKER_METRIC_REPAIR_TOKEN is not configured")
+	}
+	body, err := json.Marshal(map[string]any{
+		"run_ids":         runIDs,
+		"review_evidence": "dev-health-workerctl metrics daily-redrive",
+	})
+	if err != nil {
+		return nil, err
+	}
+	requestURL := strings.TrimRight(baseURL.Reveal(), "/") + "/internal/worker/daily-metrics/v1/redrive"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token.Reveal())
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ledger redrive returned status %d", response.StatusCode)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func dispatchQueues(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

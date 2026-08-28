@@ -1113,28 +1113,48 @@ original dispatch used, so a bare re-dispatch alone is not enough — see
 [job-recovery-lifecycle.md](../../operate/run/job-recovery-lifecycle.md)).
 
 ```bash
+WORKER_OPERATIONAL_BRIDGE_URL=http://metrics-api:8000 \
+WORKER_METRIC_REPAIR_TOKEN=<repair-token> \
 dev-health-workerctl metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
   --to 2026-08-27
 ```
 
-Scoped to one organization and an inclusive UTC calendar-day range. It resets
-any `failed_permanent` partition back to `failed` (clearing `failure_reason`),
-then publishes a fresh `metrics.daily_partition` job for every
-`pending`/`failed` partition in scope, under a redrive-scoped dedupe key
-distinct from the partition's original dispatch. Returns
-`{"PermanentReset", "RedispatchedRunIDs", "RedrivenPartitions"}`.
+Scoped to one organization and an inclusive UTC calendar-day range, in two
+steps that MUST run in this order (codex review, round 1: publishing a
+partition job before the ledger repair only reproduces `ambiguous_refused`
+and re-terminalizes the partition `failed_permanent`, undoing the reset):
 
-This does not repair the Python compatibility-bridge ledger
-(`metric_compatibility_executions`) — CHAOS-4304. A partition whose ledger row
-is stuck `ambiguous` (or a dead-claim `executing`) still answers
-`ambiguous_refused` on the redriven attempt until an operator separately
-authorizes retry for the same run ids via
-`POST /internal/worker/daily-metrics/v1/redrive` (`WORKER_METRIC_REPAIR_TOKEN`
-bearer auth), which applies the SAME `retry_safe` CAS the single-execution
-`/metric-executions/v1/{id}/repair` endpoint already uses, across every
-ambiguous/stuck-executing row under the named runs in one call.
+1. **Ledger repair first.** Calls
+   `POST /internal/worker/daily-metrics/v1/redrive` (`WORKER_METRIC_REPAIR_TOKEN`
+   bearer auth, base URL from `WORKER_OPERATIONAL_BRIDGE_URL` — both
+   required) for every `running` run in scope, applying the SAME
+   `retry_safe` CAS the single-execution `/metric-executions/v1/{id}/repair`
+   endpoint uses (CHAOS-4304) to every `ambiguous`/stuck-`executing`
+   compatibility-bridge ledger row underneath them.
+2. **Partition redrive second.** Resets any `failed_permanent` partition
+   back to `failed` (clearing `failure_reason`), then publishes a fresh
+   `metrics.daily_partition` job for every `pending`/`failed` partition in
+   scope, under a redrive-scoped dedupe key distinct from the partition's
+   original dispatch (CHAOS-4358).
+
+Returns `{"ledger_repair": {"repaired", "skipped_claim_active"}, "partitions":
+{"PermanentReset", "RedispatchedRunIDs", "RedrivenPartitions"}}`.
+
+**Observability**: `dev_health_daily_metrics_redrive_partitions_total{reason}`
+is wired but not live for THIS caller — `workerctl` is a one-shot CLI with no
+Prometheus scrape endpoint, so the counter only becomes real if a future
+long-lived caller (e.g. an automatic strand-repair reconciler) invokes the
+same Go function. The durable, queryable record of a manual redrive today is
+the `worker_job_outbox` rows this command commits, under the
+`metrics.daily_partition:redrive:<nonce>` dedupe-key prefix:
+
+```sql
+SELECT dedupe_key, status, created_at FROM worker_job_outbox
+WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
+ORDER BY created_at DESC;
+```
 
 ### `dev-health-workerctl routes`
 

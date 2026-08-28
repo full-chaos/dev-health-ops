@@ -1424,6 +1424,7 @@ async def _backfill_job_run_pair_windows(
     org_id: str,
     run_id: uuid.UUID,
     budget: _CoverageQueryBudget,
+    scope_dataset_keys: Sequence[str],
 ) -> dict[tuple[str, str], list[CoverageInterval]]:
     """Return each (source_id, dataset_key) pair's merged unit-window union for a SyncRun.
 
@@ -1437,6 +1438,13 @@ async def _backfill_job_run_pair_windows(
     ``dataset_key``, so a collapsed composite unit's window is attributed to
     each of its actually-enabled child datasets rather than the invisible
     canonical "work-items" key.
+
+    ``scope_dataset_keys`` drops an effective key ``_backfill_requested_ranges``
+    would filter out anyway once it dataset-scopes the pair -- filtering here
+    instead is what lets folded-key telemetry count only a resolution that
+    actually reaches a projected window, not one a now-disabled or
+    out-of-scope alias flag would otherwise inflate the counter with
+    (Codex review, CHAOS-4393 round 3).
     """
     stmt = select(
         SyncRunUnit.source_id,
@@ -1470,6 +1478,8 @@ async def _backfill_job_run_pair_windows(
         )
         effective_keys = _effective_dataset_keys(dataset_key, processor_flags)
         for effective_key in effective_keys:
+            if effective_key not in scope_dataset_keys:
+                continue
             _record_folded_key_resolution(dataset_key, effective_key)
             pair = (str(source_id), effective_key)
             raw_windows[pair].append(interval)
@@ -1481,6 +1491,7 @@ async def _resolve_backfill_job_pair_windows(
     org_id: str,
     job: _BackfillJobLike,
     budget: _CoverageQueryBudget,
+    scope_dataset_keys: Sequence[str],
 ) -> dict[tuple[str, str], list[CoverageInterval]] | None:
     """Resolve a backfill job's linked-run pair windows, or ``None`` if unresolvable.
 
@@ -1496,7 +1507,9 @@ async def _resolve_backfill_job_pair_windows(
         run_uuid = uuid.UUID(run_id_str)
     except ValueError:
         return None
-    return await _backfill_job_run_pair_windows(session, org_id, run_uuid, budget)
+    return await _backfill_job_run_pair_windows(
+        session, org_id, run_uuid, budget, scope_dataset_keys
+    )
 
 
 def _clip_intervals(
@@ -1575,6 +1588,7 @@ async def _backfill_requested_ranges(
             org_id,
             job,
             budget,
+            scope.dataset_keys,
         )
         if pair_windows is None:
             ranges.append(

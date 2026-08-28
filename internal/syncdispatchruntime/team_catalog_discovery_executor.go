@@ -13,16 +13,23 @@ import (
 // team-catalog collector needs, the same way
 // cmd/dev-health-worker/provider_sync.go already builds them for a claimed
 // provider-unit -- minus the claim and lease, which this seam never has
-// (CHAOS-4431 ruling, team-lead 2026-08-28, option (c)).
+// (CHAOS-4431 ruling, team-lead 2026-08-28, option (c)). runID is required
+// (not just orgID+provider): an org can have more than one active
+// integration for the same provider (observed locally for linear, org
+// 70d529e0), so which credential governs is resolved from THIS sync run's
+// own integration_id -- the same join resolveAuthoritativeProvider already
+// uses (native_reference_discovery.go) -- never "the" active one for the pair.
 type ProviderClientResolver interface {
-	ResolveClient(ctx context.Context, orgID, provider string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error)
+	ResolveClient(ctx context.Context, orgID, runID, provider string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error)
 }
 
 // TeamCatalogSelectionsResolver reads CHAOS-4323's three independent
 // sync_configurations flags (auto_import_teams/auto_import_projects/
-// auto_import_members) for one org+provider.
+// auto_import_members) for this sync run's own integration, for the same
+// multiple-active-integrations reason ProviderClientResolver's doc comment
+// explains.
 type TeamCatalogSelectionsResolver interface {
-	ResolveSelections(ctx context.Context, orgID, provider string) (providersync.TeamCatalogSelections, error)
+	ResolveSelections(ctx context.Context, orgID, runID, provider string) (providersync.TeamCatalogSelections, error)
 }
 
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
@@ -64,7 +71,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}
-	selections, err := executor.Selections.ResolveSelections(ctx, orgID, normalizedProvider)
+	selections, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +82,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		// the same work, it just would not have known to skip it this cheaply).
 		return map[string]any{"provider": normalizedProvider, "outcome": "skipped_selection"}, nil
 	}
-	credential, client, err := executor.Clients.ResolveClient(ctx, orgID, normalizedProvider)
+	credential, client, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
 		return nil, err
 	}

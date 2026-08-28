@@ -51,7 +51,7 @@ type fakeProviderClientResolver struct {
 	err        error
 }
 
-func (resolver *fakeProviderClientResolver) ResolveClient(context.Context, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error) {
+func (resolver *fakeProviderClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, error) {
 	return resolver.credential, resolver.client, resolver.err
 }
 
@@ -60,7 +60,7 @@ type fakeTeamCatalogSelectionsResolver struct {
 	err        error
 }
 
-func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string) (providersync.TeamCatalogSelections, error) {
+func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, error) {
 	return resolver.selections, resolver.err
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -505,7 +507,44 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(bridgeDiscoveryExecutor, readbackVerifier)
+	// CHAOS-4431: a registered native provider runs its own collector and
+	// skips the Python populate bridge entirely; every other provider keeps
+	// going through bridgeDiscoveryExecutor exactly as before. ClickHouse
+	// readback verification (readbackVerifier, just above) still wraps the
+	// combined result either way.
+	catalogDecryptor, err := newWorkerCredentialCipher(cfg)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	teamCatalogExecutor := &syncdispatchruntime.TeamCatalogDiscoveryExecutor{
+		Native: map[string]providersync.TeamCatalogCollector{
+			"linear": providersync.LinearTeamCatalogCollector{
+				Sink: providersync.LinearReferenceCatalogClickHouseEffects{
+					Conn: clickhouseConnection, Lease: teamCatalogLease{},
+				},
+			},
+		},
+		Fallback: bridgeDiscoveryExecutor,
+		Clients: teamCatalogClientResolver{
+			pool: postgresDatabase.pools.Domain,
+			credentials: providerfoundation.CredentialResolver{
+				Repository: providerfoundation.PostgresCredentialRepository{
+					Pool: postgresDatabase.pools.Domain,
+				},
+				Decryptor: catalogDecryptor,
+			},
+			doer: &http.Client{
+				Timeout: 45 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			},
+			retry: providerfoundation.DefaultRetryPolicy(),
+		},
+		Selections: teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain},
+	}
+	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(teamCatalogExecutor, readbackVerifier)
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable

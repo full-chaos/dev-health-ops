@@ -1264,3 +1264,23 @@ class TestResolveAuthSeedPostgresUri:
         assert resolved is not None
         assert "localhost:5432/devhealth" in resolved
         assert "clickhouse" not in resolved
+
+    def test_accepts_already_async_postgres_db_flag(self, monkeypatch):
+        """Codex review round 4 (P1, correct): the scheme check only
+        recognized postgresql:// and postgres://, rejecting the standard
+        already-async postgresql+asyncpg:// form -- a valid Postgres URI a
+        caller might legitimately pass, silently falling back to the
+        environment instead of using it."""
+        monkeypatch.setenv(
+            "POSTGRES_URI", "postgresql://wrong:wrong@localhost:5432/wrong"
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        ns = argparse.Namespace(
+            db="postgresql+asyncpg://devhealth:devhealth@localhost:5432/devhealth"
+        )
+
+        resolved = runner.resolve_auth_seed_postgres_uri(ns)
+
+        assert resolved is not None
+        assert "localhost:5432/devhealth" in resolved
+        assert "wrong" not in resolved

@@ -522,13 +522,23 @@ def resolve_auth_seed_postgres_uri(ns: Any) -> str | None:
     error. Only trust ``ns.db`` here when it actually looks like a
     Postgres URI; anything else falls through to the environment exactly
     as before this fix.
+
+    Codex review round 4 (P1, correct): the scheme check only accepted
+    ``postgresql://``/``postgres://``, rejecting the standard already-
+    async ``postgresql+asyncpg://`` form -- a valid, already-normalized
+    Postgres URI a caller might legitimately pass, silently falling back
+    to the environment instead of using it (the exact CHAOS-4402 bug this
+    PR fixes, for that one scheme). Recognize every Postgres scheme
+    ``normalize_async_postgres_uri`` itself understands.
     """
 
     explicit = getattr(ns, "postgres_uri", None)
     if explicit:
         return explicit
     db_flag = getattr(ns, "db", None)
-    if db_flag and db_flag.startswith(("postgresql://", "postgres://")):
+    if db_flag and db_flag.startswith(
+        ("postgresql://", "postgres://", "postgresql+asyncpg://")
+    ):
         return normalize_async_postgres_uri(db_flag)
     return get_postgres_uri()
 

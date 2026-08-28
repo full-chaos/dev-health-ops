@@ -246,13 +246,20 @@ class TestRejectsUnresolvedEnvTemplate:
         with pytest.raises(ValueError, match=r"unresolved template placeholder"):
             db.normalize_async_postgres_uri(uri)
 
-    def test_rejects_unbraced_compose_variable_shorthand(self):
-        """Codex review round 3 (P2): Compose also accepts the unbraced
-        $NAME shorthand (no braces), which the brace-only pattern missed."""
-        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
-            db.normalize_async_postgres_uri(
-                "postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/db"
-            )
+    def test_does_not_flag_a_literal_dollar_sign_in_credentials(self):
+        """Codex review round 4 (P1, correct): an earlier version of this
+        guard also matched the unbraced $NAME shorthand -- but a literal
+        password containing a dollar sign (pa$ssword, valid DSN userinfo)
+        matches $ssword and would wrongly raise on an already-resolved,
+        perfectly valid connection string. Detection stays scoped to the
+        unambiguous ${...} form only."""
+        # No ValueError raised is the actual assertion; make_url's own
+        # percent-encoding of the literal $ (-> %24) on render is normal,
+        # unrelated URL-safety behavior, not a sign the guard mishandled it.
+        result = db.normalize_async_postgres_uri(
+            "postgresql://devhealth:pa$ssword@localhost:5432/devhealth"
+        )
+        assert "pa%24ssword" in result
 
 
 class TestNormalizeAsyncPostgresUriAcceptsPostgresAlias:

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
@@ -181,7 +182,10 @@ type teamCatalogAutoimportBridge struct {
 	native          map[string]providersync.TeamCatalogCollector
 	clients         syncdispatchruntime.ProviderClientResolver
 	selections      syncdispatchruntime.TeamCatalogSelectionsResolver
-	now             func() time.Time
+	// observer is optional: a nil observer records nothing, the same
+	// convention every other telemetry hook in this codebase uses.
+	observer jobruntime.TeamCatalogObserver
+	now      func() time.Time
 }
 
 func (bridge *teamCatalogAutoimportBridge) nowUTC() time.Time {
@@ -189,6 +193,13 @@ func (bridge *teamCatalogAutoimportBridge) nowUTC() time.Time {
 		return bridge.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (bridge *teamCatalogAutoimportBridge) observeDispatch(provider string, outcome jobruntime.TeamCatalogOutcome) {
+	if bridge.observer == nil {
+		return
+	}
+	_ = bridge.observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointPostSync, outcome)
 }
 
 func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
@@ -206,20 +217,38 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 				return selectionsErr
 			}
 			if !selections.Any() {
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
 				return nil
 			}
 			credential, client, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
 			if clientErr != nil {
 				return clientErr
 			}
-			_, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
+			result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
 				OrgID: orgID, SyncRunID: runID,
 			}, credential, client, selections, bridge.nowUTC())
-			return collectErr
+			if collectErr != nil {
+				return collectErr
+			}
+			bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
+			if bridge.observer != nil {
+				for _, row := range []struct {
+					table string
+					count int
+				}{
+					{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
+					{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
+					{"team_project_ownership", result.OwnershipWritten},
+				} {
+					_ = bridge.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
+				}
+			}
+			return nil
 		}
 	}
 	// Provider resolution failed, or the provider is not native: fall back
 	// to the Python path exactly as before CHAOS-4431.
+	bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeBridge)
 	return bridge.CoordinatorBridge.TeamAutoImport(ctx, reference)
 }
 

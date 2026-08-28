@@ -6,9 +6,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
+
+// fakeTeamCatalogObserver records every call it receives, so dispatch tests
+// can pin that the composite executor actually invokes telemetry (not just
+// that it WOULD, if wired -- CHAOS-4431's standing order is telemetry ships
+// wired in the same PR, and this is the test that proves the wiring, not
+// just the Observe method's own existence).
+type fakeTeamCatalogObserver struct {
+	dispatches []teamCatalogDispatchCall
+	rows       []teamCatalogRowsCall
+}
+
+type teamCatalogDispatchCall struct {
+	provider   string
+	entryPoint jobruntime.TeamCatalogEntryPoint
+	outcome    jobruntime.TeamCatalogOutcome
+}
+
+type teamCatalogRowsCall struct {
+	provider string
+	table    jobruntime.TeamCatalogTable
+	count    int
+}
+
+func (observer *fakeTeamCatalogObserver) ObserveTeamCatalogDispatch(provider string, entryPoint jobruntime.TeamCatalogEntryPoint, outcome jobruntime.TeamCatalogOutcome) error {
+	observer.dispatches = append(observer.dispatches, teamCatalogDispatchCall{provider, entryPoint, outcome})
+	return nil
+}
+
+func (observer *fakeTeamCatalogObserver) ObserveTeamCatalogRowsWritten(provider string, table jobruntime.TeamCatalogTable, count int) error {
+	observer.rows = append(observer.rows, teamCatalogRowsCall{provider, table, count})
+	return nil
+}
 
 // fakeTeamCatalogCollector records every call it receives and returns a
 // canned result/error, so dispatch tests can pin exactly what the composite
@@ -69,14 +102,36 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	}}
 	fallback := &fakeDiscoveryExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
+	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
 		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
 		Fallback: fallback,
 		Clients:  &fakeProviderClientResolver{credential: credential},
+		Observer: observer,
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeNative,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
+	}
+	if len(observer.rows) != 5 {
+		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
+	}
+	foundTeamsRow := false
+	for _, row := range observer.rows {
+		if row.table == jobruntime.TeamCatalogTableTeams {
+			foundTeamsRow = true
+			if row.count != 3 {
+				t.Fatalf("teams row count=%d want=3", row.count)
+			}
+		}
+	}
+	if !foundTeamsRow {
+		t.Fatalf("no teams row observed: %+v", observer.rows)
 	}
 	if fallback.gotProvider != "" {
 		t.Fatalf("native provider reached the bridge fallback: %+v", fallback)
@@ -104,9 +159,11 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 // exactly as it does today, untouched.
 func TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders(t *testing.T) {
 	fallback := &fakeDiscoveryExecutor{summary: map[string]any{"provider": "github", "outcome": "bridge"}}
+	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
 		Native:   map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},
 		Fallback: fallback,
+		Observer: observer,
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "github")
 	if err != nil {
@@ -117,6 +174,11 @@ func TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders(t *testin
 	}
 	if summary["outcome"] != "bridge" {
 		t.Fatalf("summary=%#v", summary)
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "github", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeBridge,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
 }
 

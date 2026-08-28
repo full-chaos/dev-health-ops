@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
@@ -55,7 +56,17 @@ type TeamCatalogDiscoveryExecutor struct {
 	Native   map[string]providersync.TeamCatalogCollector
 	Fallback DiscoveryExecutor
 	Clients  ProviderClientResolver
+	// Observer is optional: a nil Observer records nothing, the same
+	// convention every other telemetry hook in this codebase uses.
+	Observer jobruntime.TeamCatalogObserver
 	Now      func() time.Time
+}
+
+func (executor *TeamCatalogDiscoveryExecutor) observeDispatch(provider string, outcome jobruntime.TeamCatalogOutcome) {
+	if executor.Observer == nil {
+		return
+	}
+	_ = executor.Observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome)
 }
 
 func (executor *TeamCatalogDiscoveryExecutor) now() time.Time {
@@ -77,6 +88,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		if executor.Fallback == nil {
 			return nil, ErrReferenceDiscoveryUnavailable
 		}
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeBridge)
 		return executor.Fallback.Discover(ctx, orgID, runID, provider)
 	}
 	if executor.Clients == nil {
@@ -91,6 +103,19 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	}, credential, client, teamCatalogStrictSelections, executor.now())
 	if err != nil {
 		return nil, err
+	}
+	executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNative)
+	if executor.Observer != nil {
+		for _, row := range []struct {
+			table string
+			count int
+		}{
+			{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
+			{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
+			{"team_project_ownership", result.OwnershipWritten},
+		} {
+			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
+		}
 	}
 	return map[string]any{
 		"provider":            normalizedProvider,

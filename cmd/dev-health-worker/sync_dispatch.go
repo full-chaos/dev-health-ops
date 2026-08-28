@@ -542,10 +542,15 @@ func buildSyncCoordinatorWorker(
 		},
 		retry: providerfoundation.DefaultRetryPolicy(),
 	}
+	var teamCatalogObserver jobruntime.TeamCatalogObserver
+	if typed, ok := observer.(jobruntime.TeamCatalogObserver); ok {
+		teamCatalogObserver = typed
+	}
 	teamCatalogExecutor := &syncdispatchruntime.TeamCatalogDiscoveryExecutor{
 		Native:   nativeTeamCatalogCollectors,
 		Fallback: bridgeDiscoveryExecutor,
 		Clients:  teamCatalogClients,
+		Observer: teamCatalogObserver,
 	}
 	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(teamCatalogExecutor, readbackVerifier)
 	if err != nil {
@@ -618,6 +623,7 @@ func buildSyncCoordinatorWorker(
 			native:     nativeTeamCatalogCollectors,
 			clients:    teamCatalogClients,
 			selections: teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain},
+			observer:   teamCatalogObserver,
 		}
 		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportBridge); err != nil {
 			closeClickHouse()

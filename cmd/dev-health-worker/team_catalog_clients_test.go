@@ -6,10 +6,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
+
+// fakeTeamCatalogObserver records every call it receives, so dispatch tests
+// can pin that the autoimport bridge actually invokes telemetry (CHAOS-4431
+// standing order: telemetry ships wired in the same PR, not just defined).
+type fakeTeamCatalogObserver struct {
+	dispatches []teamCatalogDispatchCall
+	rows       []teamCatalogRowsCall
+}
+
+type teamCatalogDispatchCall struct {
+	provider   string
+	entryPoint jobruntime.TeamCatalogEntryPoint
+	outcome    jobruntime.TeamCatalogOutcome
+}
+
+type teamCatalogRowsCall struct {
+	provider string
+	table    jobruntime.TeamCatalogTable
+	count    int
+}
+
+func (observer *fakeTeamCatalogObserver) ObserveTeamCatalogDispatch(provider string, entryPoint jobruntime.TeamCatalogEntryPoint, outcome jobruntime.TeamCatalogOutcome) error {
+	observer.dispatches = append(observer.dispatches, teamCatalogDispatchCall{provider, entryPoint, outcome})
+	return nil
+}
+
+func (observer *fakeTeamCatalogObserver) ObserveTeamCatalogRowsWritten(provider string, table jobruntime.TeamCatalogTable, count int) error {
+	observer.rows = append(observer.rows, teamCatalogRowsCall{provider, table, count})
+	return nil
+}
 
 // linearCollectorSpy records whether/how it was called, standing in for a
 // real TeamCatalogCollector so dispatch tests need no credential resolver,
@@ -18,6 +49,7 @@ type linearCollectorSpy struct {
 	gotRef        providersync.TeamCatalogReference
 	gotSelections providersync.TeamCatalogSelections
 	called        bool
+	result        providersync.TeamCatalogResult
 	err           error
 }
 
@@ -31,7 +63,7 @@ func (collector *linearCollectorSpy) CollectTeamCatalog(
 ) (providersync.TeamCatalogResult, error) {
 	collector.called = true
 	collector.gotRef, collector.gotSelections = ref, selections
-	return providersync.TeamCatalogResult{}, collector.err
+	return collector.result, collector.err
 }
 
 type fakeCoordinatorBridge struct {
@@ -74,13 +106,15 @@ func (resolver fakeAutoimportSelectionsResolver) ResolveSelections(context.Conte
 }
 
 func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
-	native := &linearCollectorSpy{}
+	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 2}}
+	observer := &fakeTeamCatalogObserver{}
 	bridge := &teamCatalogAutoimportBridge{
 		CoordinatorBridge: &fakeCoordinatorBridge{},
 		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
 		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
 		clients:           fakeAutoimportClientResolver{},
 		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true, Members: true}},
+		observer:          observer,
 	}
 	err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
@@ -97,17 +131,27 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	if !native.gotSelections.Teams || native.gotSelections.Projects || !native.gotSelections.Members {
 		t.Fatalf("selections not threaded through: %+v", native.gotSelections)
 	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNative,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
+	}
+	if len(observer.rows) != 5 {
+		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
+	}
 }
 
 func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testing.T) {
 	native := &linearCollectorSpy{}
 	fallback := &fakeCoordinatorBridge{}
+	observer := &fakeTeamCatalogObserver{}
 	bridge := &teamCatalogAutoimportBridge{
 		CoordinatorBridge: fallback,
 		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
 		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
 		clients:           fakeAutoimportClientResolver{},
 		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
+		observer:          observer,
 	}
 	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
@@ -120,14 +164,21 @@ func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testin
 	if fallback.teamAutoImportCalled {
 		t.Fatal("wrapped bridge was called despite no selection -- nothing to import either way")
 	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeSkipped,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
+	}
 }
 
 func TestTeamCatalogAutoimportBridgeFallsBackForNonNativeProviders(t *testing.T) {
 	fallback := &fakeCoordinatorBridge{}
+	observer := &fakeTeamCatalogObserver{}
 	bridge := &teamCatalogAutoimportBridge{
 		CoordinatorBridge: fallback,
 		resolveProvider:   func(context.Context, string, string) (string, error) { return "github", nil },
 		native:            map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+		observer:          observer,
 	}
 	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
@@ -136,6 +187,11 @@ func TestTeamCatalogAutoimportBridgeFallsBackForNonNativeProviders(t *testing.T)
 	}
 	if !fallback.teamAutoImportCalled {
 		t.Fatal("non-native provider did not fall through to the wrapped bridge")
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "github", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeBridge,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
 }
 

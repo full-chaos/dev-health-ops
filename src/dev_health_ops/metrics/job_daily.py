@@ -87,6 +87,7 @@ from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     build_repo_pattern_resolver,
+    load_team_repo_ownership_map,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -490,18 +491,51 @@ def _repo_to_team_map_for_compounding_risk(
     repo_metrics_rows: list[Any],
     repo_names_by_id: dict[uuid.UUID, str],
     repo_team_resolver: Any,
+    team_repo_ownership_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    """Resolve one team per repo for compounding-risk team-scope rows.
+
+    CHAOS-4365: ``team_repo_ownership_map`` (explicit ``team_repo_ownership``
+    rows, repo_id-keyed) wins where it resolves a repo -- it is populated for
+    every native GitHub/GitLab/Jira/Linear auto-import, unlike
+    ``teams.repo_patterns`` (glob strings the pattern resolver reads, which
+    those imports never set). The pattern resolver remains the fallback for
+    repos it doesn't cover (fixtures orgs, manually configured team globs).
+    """
+    ownership_map = team_repo_ownership_map or {}
     repo_to_team_map: dict[str, str] = {}
+    # CHAOS-4365 telemetry: which source actually resolved each repo, so a
+    # future "team rows still zero" report is diagnosable from the run's own
+    # log line (ownership vs pattern vs neither) instead of a fresh
+    # investigation into whether the wiring itself regressed.
+    resolved_via_ownership = 0
+    resolved_via_pattern = 0
+    unresolved = 0
     for row in repo_metrics_rows:
         row_repo_id = getattr(row, "repo_id", None)
         if row_repo_id is None:
             continue
-        full_name = repo_names_by_id.get(row_repo_id)
-        if not full_name:
-            continue
-        team_id, _ = repo_team_resolver.resolve(full_name)
+        repo_id_str = str(row_repo_id)
+        team_id = ownership_map.get(repo_id_str)
         if team_id:
-            repo_to_team_map[str(row_repo_id)] = team_id
+            resolved_via_ownership += 1
+        else:
+            full_name = repo_names_by_id.get(row_repo_id)
+            if full_name:
+                team_id, _ = repo_team_resolver.resolve(full_name)
+            if team_id:
+                resolved_via_pattern += 1
+            else:
+                unresolved += 1
+        if team_id:
+            repo_to_team_map[repo_id_str] = team_id
+    logger.info(
+        "compounding-risk: repo-to-team resolution via_ownership=%d via_pattern=%d "
+        "unresolved=%d",
+        resolved_via_ownership,
+        resolved_via_pattern,
+        unresolved,
+    )
     return repo_to_team_map
 
 
@@ -515,6 +549,7 @@ def _write_compounding_risk_for_day(
     computed_at: datetime,
     repo_names_by_id: dict[uuid.UUID, str],
     repo_team_resolver: Any,
+    team_repo_ownership_map: dict[str, str] | None = None,
 ) -> int:
     rows_for_compounding = list(repo_metrics_rows)
     if not rows_for_compounding:
@@ -527,6 +562,7 @@ def _write_compounding_risk_for_day(
             repo_metrics_rows=rows_for_compounding,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
+            team_repo_ownership_map=team_repo_ownership_map,
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
@@ -805,6 +841,10 @@ async def run_daily_metrics_job(
     team_resolver = get_team_resolver()
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
+    # CHAOS-4365: compounding-risk-only ownership source (see
+    # _repo_to_team_map_for_compounding_risk); loaded once per run, not per
+    # backfilled day -- org_id doesn't change across the day loop below.
+    team_repo_ownership_map = load_team_repo_ownership_map(primary_sink, org_id)
     # CHAOS-2377: project-key team attribution for the work-item state-duration
     # rollup. Mirrors job_work_items: team-owned-by-project-key items that are
     # unassigned (or assigned to unmapped users) must still land under their
@@ -1508,6 +1548,7 @@ async def run_daily_metrics_job(
             computed_at=computed_at,
             repo_names_by_id=repo_names_by_id,
             repo_team_resolver=repo_team_resolver,
+            team_repo_ownership_map=team_repo_ownership_map,
         )
 
         # CHAOS-4329: observe distinct repo_id fan-out per team_id AFTER the

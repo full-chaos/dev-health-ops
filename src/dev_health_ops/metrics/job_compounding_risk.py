@@ -24,7 +24,10 @@ from dev_health_ops.metrics.compounding_risk import (
     summarize_compounding_risk_diagnostics,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.providers.teams import build_repo_pattern_resolver
+from dev_health_ops.providers.teams import (
+    build_repo_pattern_resolver,
+    load_team_repo_ownership_map,
+)
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
     add_date_range_args,
@@ -86,13 +89,23 @@ def _fetch_repo_metrics_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
 
 
 async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
-    """Build a ``{repo_id_str: team_id}`` map via the existing teams resolver."""
+    """Build a ``{repo_id_str: team_id}`` map for compounding-risk team rows.
+
+    CHAOS-4365: merges two ownership sources so a real org whose teams carry
+    empty ``repo_patterns`` (every native GitHub/GitLab/Jira/Linear
+    auto-import -- CHAOS-4321 forbids inferring ownership from membership
+    instead) still resolves. ``team_repo_ownership`` (explicit, repo_id-keyed
+    ownership rows) wins where both resolve a repo; the glob-pattern resolver
+    over ``teams.repo_patterns`` fills in the rest (fixtures orgs, teams
+    configured with manual repo globs).
+    """
     try:
         teams = await sink.get_all_teams()
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Could not load teams for compounding risk: %s", exc)
-        return {}
+        teams = []
     resolver = build_repo_pattern_resolver(teams or [])
+    ownership_map = load_team_repo_ownership_map(sink, org_id)
 
     repos = sink.query_dicts(
         """
@@ -104,10 +117,30 @@ async def _load_repo_to_team(sink: Any, org_id: str) -> dict[str, str]:
         {"org_id": org_id},
     )
     mapping: dict[str, str] = {}
+    resolved_via_ownership = 0
+    resolved_via_pattern = 0
     for row in repos:
-        team_id, _ = resolver.resolve(row.get("full_name"))
+        repo_id = row["repo_id"]
+        team_id = ownership_map.get(repo_id)
         if team_id:
-            mapping[row["repo_id"]] = team_id
+            resolved_via_ownership += 1
+        else:
+            team_id, _ = resolver.resolve(row.get("full_name"))
+            if team_id:
+                resolved_via_pattern += 1
+        if team_id:
+            mapping[repo_id] = team_id
+    # CHAOS-4365 telemetry: same shape as job_daily's inline resolver, so an
+    # operator sees which ownership source actually populated team-scope rows
+    # for this org, on a run's own log line.
+    logger.info(
+        "compounding-risk: repo-to-team resolution org_id=%s via_ownership=%d "
+        "via_pattern=%d unresolved=%d",
+        org_id,
+        resolved_via_ownership,
+        resolved_via_pattern,
+        len(repos) - resolved_via_ownership - resolved_via_pattern,
+    )
     return mapping
 
 

@@ -350,6 +350,23 @@ means the ClickHouse `teams` dimension is empty.
 > `sink.write_team_repo_ownership`; `workers/team_autoimport_gitlab.py:209` calls
 > `sink.write_team_project_ownership` (Jira/Linear autoimporters write the same table).
 
+> **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
+> real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
+> `metrics/job_compounding_risk.py` CLI job) resolves one team per repo for
+> `compounding_risk_daily`'s `scope='team'` rows. Before CHAOS-4365 that resolution read ONLY
+> `teams.repo_patterns` (glob strings, `providers/teams.py::build_repo_pattern_resolver`) — CHAOS-4276
+> seeds patterns for a repo's primary owner in **fixtures** data, but no native auto-importer (GitHub,
+> GitLab, Jira, Linear) ever writes `repo_patterns`, so a real org's compounding-risk team rows were
+> silently empty even when GitHub auto-import HAD populated `team_repo_ownership` correctly. The fix
+> (`providers/teams.py::load_team_repo_ownership_map`) reads `team_repo_ownership` directly
+> (repo_id-keyed, `is_primary`/`specificity`-ranked) and merges it OVER the pattern resolver, so a
+> GitHub-owned repo resolves to its team even with `repo_patterns=[]`. **Operator path for a real
+> org with zero `team_repo_ownership` rows:** trigger `run_team_autoimport` for that org with GitHub
+> selected as a source (sync-config / the team auto-import job — see
+> `docs/operate/run/workers-and-jobs.md`) — `team_autoimport_github.populate()` is the only writer.
+> GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
+> repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |

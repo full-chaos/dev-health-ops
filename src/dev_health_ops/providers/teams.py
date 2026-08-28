@@ -277,6 +277,66 @@ def build_repo_pattern_resolver(teams_data: list) -> RepoPatternTeamResolver:
     return RepoPatternTeamResolver(_exact=exact, _prefixes=tuple(prefixes))
 
 
+def load_team_repo_ownership_map(sink: Any, org_id: str) -> dict[str, str]:
+    """Build ``{repo_id_str: team_id}`` straight from ``team_repo_ownership``.
+
+    CHAOS-4321 hard rule: team attribution is project/repo OWNERSHIP only,
+    never person->membership inference. ``team_repo_ownership`` is written
+    from real ownership mappings (native GitHub team-repo grants, fixtures'
+    identical repo<->team assignment used for ``teams.repo_patterns`` --
+    CHAOS-4338) and is the more authoritative of the two ownership sources:
+    unlike ``teams.repo_patterns`` (glob strings, which CHAOS-4276 seeds only
+    for a repo's PRIMARY owner and which native GitHub auto-import never
+    populates at all -- ``team_autoimport_github.populate`` writes straight
+    to this table instead, see ``docs/architecture/team-attribution.md``),
+    this table is keyed directly by ``repo_id`` with an explicit
+    ``is_primary``/``specificity`` ranking, so a real org whose teams carry
+    empty ``repo_patterns`` (every native GitHub/GitLab/Jira/Linear import)
+    is not silently invisible to repo-scoped team resolution.
+
+    Callers merge this map OVER a pattern-resolver map (this map wins where
+    both resolve a repo): it reflects the actual, current ownership grant
+    rather than a hand-authored glob.
+
+    Returns ``{}`` (never raises) when the sink cannot be queried -- the
+    caller's pattern-resolver fallback still applies.
+    """
+    if not hasattr(sink, "query_dicts"):
+        return {}
+    try:
+        rows = sink.query_dicts(
+            """
+            SELECT toString(repo_id) AS repo_id, team_id, is_primary, specificity
+            FROM team_repo_ownership FINAL
+            WHERE org_id = {org_id:String}
+              AND repo_id IS NOT NULL
+              AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))
+            ORDER BY is_primary DESC, specificity DESC
+            """,
+            {"org_id": org_id},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Could not load team_repo_ownership for org_id=%s: %s", org_id, exc
+        )
+        return {}
+
+    mapping: dict[str, str] = {}
+    for row in rows:
+        repo_id = row.get("repo_id")
+        team_id = row.get("team_id")
+        if not repo_id or not team_id:
+            continue
+        # ORDER BY already put the best (is_primary, specificity) row for a
+        # given repo first; a repo with co-owners keeps only its primary (or
+        # highest-specificity) owner here, matching the single-team-per-repo
+        # contract build_compounding_risk_rows_for_day's repo_to_team expects.
+        mapping.setdefault(str(repo_id), str(team_id))
+    return mapping
+
+
 def sync_teams(ns: argparse.Namespace) -> int:
     """
     Sync teams from various providers (config, Jira, synthetic) to the database.

@@ -37,22 +37,30 @@ class _FakeSink:
         *,
         repo_metrics_by_day: dict[date, list[dict[str, Any]]],
         complexity_by_repo: dict[str, dict[str, float | None] | None] | None = None,
+        repo_rows: list[dict[str, Any]] | None = None,
+        team_repo_ownership_rows: list[dict[str, Any]] | None = None,
+        teams: list[Any] | None = None,
     ) -> None:
         self._repo_metrics_by_day = repo_metrics_by_day
         self._complexity_by_repo = complexity_by_repo or {}
+        self._repo_rows = repo_rows or []
+        self._team_repo_ownership_rows = team_repo_ownership_rows or []
+        self._teams = teams or []
         self.written: list[Any] = []
 
     def ensure_tables(self) -> None:
         return None
 
     async def get_all_teams(self) -> list[Any]:
-        return []
+        return self._teams
 
     def query_dicts(
         self, query: str, parameters: dict[str, Any]
     ) -> list[dict[str, Any]]:
+        if "FROM team_repo_ownership" in query:
+            return list(self._team_repo_ownership_rows)
         if "FROM repos" in query:
-            return []
+            return list(self._repo_rows)
         if "FROM repo_metrics_daily" in query:
             return list(self._repo_metrics_by_day.get(parameters["day"], []))
         if "FROM repo_complexity_daily" in query:
@@ -227,3 +235,60 @@ def test_backfill_day_with_no_repo_metrics_rows_is_named_in_final_summary(
     # only one of the two backfilled days actually produced diagnostics.
     for reason in MISSING_INPUT_REASONS:
         assert f"'{reason}': 0" in done_message
+
+
+def test_load_repo_to_team_resolves_via_team_repo_ownership_when_patterns_are_empty() -> (
+    None
+):
+    """CHAOS-4365: a real org's native-imported teams (GitHub/GitLab/Jira/
+    Linear auto-import) always carry ``repo_patterns=[]`` -- CHAOS-4321 bars
+    inferring ownership from membership instead, so the glob-pattern
+    resolver alone can never resolve such an org's repos to a team. Ownership
+    for these teams instead lands in ``team_repo_ownership``
+    (``team_autoimport_github.populate`` et al.), so ``_load_repo_to_team``
+    must fall through to it.
+    """
+    repo_id = uuid.uuid4()
+    sink = _FakeSink(
+        repo_metrics_by_day={},
+        teams=[{"id": "gh:platform", "name": "Platform", "repo_patterns": []}],
+        repo_rows=[{"repo_id": str(repo_id), "full_name": "acme/backend"}],
+        team_repo_ownership_rows=[
+            {
+                "repo_id": str(repo_id),
+                "team_id": "gh:platform",
+                "is_primary": 1,
+                "specificity": 100,
+            }
+        ],
+    )
+
+    mapping = asyncio.run(job_compounding_risk._load_repo_to_team(sink, "acme"))
+
+    assert mapping == {str(repo_id): "gh:platform"}
+
+
+def test_load_repo_to_team_prefers_ownership_row_over_conflicting_pattern() -> None:
+    """When both sources resolve the same repo, ``team_repo_ownership`` (the
+    explicit, repo_id-keyed grant) wins over the glob-pattern resolver.
+    """
+    repo_id = uuid.uuid4()
+    sink = _FakeSink(
+        repo_metrics_by_day={},
+        teams=[
+            {"id": "team-legacy", "name": "Legacy", "repo_patterns": ["acme/backend"]}
+        ],
+        repo_rows=[{"repo_id": str(repo_id), "full_name": "acme/backend"}],
+        team_repo_ownership_rows=[
+            {
+                "repo_id": str(repo_id),
+                "team_id": "gh:platform",
+                "is_primary": 1,
+                "specificity": 100,
+            }
+        ],
+    )
+
+    mapping = asyncio.run(job_compounding_risk._load_repo_to_team(sink, "acme"))
+
+    assert mapping == {str(repo_id): "gh:platform"}

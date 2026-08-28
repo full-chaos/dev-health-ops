@@ -505,18 +505,21 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 
-> **Two producers reach this dimension, and CHAOS-4323 made the trigger per-config, not per-flag.**
+> **Three chains reach `team_autoimport_<provider>.populate()` (or bypass it) — only one honours the
+> CHAOS-4323 per-category flags.**
 >
-> | Producer | Chain | Providers |
-> |---|---|---|
-> | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | github, gitlab, jira, linear |
-> | Linear Go-native route (bypasses the Python `populate()` path entirely) | `internal/providersync/linear_reference_catalog_effects_clickhouse.go:26` (`linearReferenceOwnershipInsert` / `writeOwnership`) writes `team_project_ownership` directly from the typed Linear reference-catalog rows, `source='native'` | linear only |
+> | Producer | Chain | Honours the 3 flags? | Providers |
+> |---|---|---|---|
+> | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | github, gitlab, jira, linear |
+> | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **No, by design** (`workers/team_autoimport_categories.py:10-19`) — reference discovery exists to guarantee dispatch-blocking reference keys resolve, not to reflect a user's attribution preference, so it always imports every category regardless of `sync_options`. Also used by backfill. | github, gitlab, jira, linear |
+> | Linear Go-native route (would bypass the Python `populate()` path entirely) | `internal/providersync/linear_reference_catalog_effects_clickhouse.go:26` (`linearReferenceOwnershipInsert` / `writeOwnership`) writes `team_project_ownership` directly from typed Linear reference-catalog rows, `source='native'` | n/a | **Not wired to any production caller in this checkout** — `LinearReferenceCatalogClickHouseEffects` and `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` are fully implemented and covered by `linear_reference_catalog_effects_integration_test.go`, but nothing outside that test file constructs or calls either one (grepped clean); a cited constructor is not proof of capability (see AGENTS.md) — this row is a designed-but-dormant path, not a live producer, until something wires it in |
 >
 > **CHAOS-4323 (`alembic/versions/0112_split_auto_import_teams_into_three_categories.py`)** replaced
 > the single "Auto-import teams, projects & members" checkbox with three independently-selectable
 > `sync_options` keys (`auto_import_teams`/`auto_import_projects`/`auto_import_members`, each off by
-> default) — both producers above are dispatched only for the categories a given sync config selects,
-> not unconditionally on every sync. See the Manual QA walkthrough in §4 for the sync-config UI path.
+> default) — but as the table shows, that per-category gating is a property of the best-effort
+> post-sync path only, not of every path that ends up calling `populate()`. See the Manual QA
+> walkthrough in §4 for the sync-config UI path.
 
 **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
@@ -879,9 +882,10 @@ that derivation:
 ```mermaid
 flowchart TD
     SYNC["Sync: Go post-sync River job<br/>internal/syncdispatchruntime/worker.go:93 (RegisterTeamAutoimportWorker)<br/>-- bridge.go:113 --&gt; POST /api/internal/worker-sync/team-autoimport<br/>-- api/internal/worker_sync.py:269-278 --&gt; run_post_sync_team_autoimport<br/>-- workers/team_autoimport.py:228 --&gt; team_autoimport_&lt;provider&gt;.populate()<br/>(per-config teams/projects/members selections, CHAOS-4323)"]
-    SYNC -->|"GitHub only -- team_autoimport_github.py:142, source=native"| TRO_direct["team_repo_ownership (direct)"]
-    SYNC -->|"GitLab / Jira / Linear -- team_autoimport_{gitlab,jira,linear}.py, source=native"| TPO["team_project_ownership"]
-    LGN["Linear Go-native route (bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native"] --> TPO
+    SYNC -->|"GitHub only -- team_autoimport_github.py:139 (_repo_ownership_rows), source=provider_access"| TRO_direct["team_repo_ownership (direct)"]
+    SYNC -->|"GitLab -- team_autoimport_gitlab.py:137 (_project_ownership_rows), source=provider_access"| TPO["team_project_ownership"]
+    SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
+    LGN["Linear Go-native route (would bypass the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native<br/>NOT WIRED to any production caller today -- §0.4a"] -. designed, dormant .-> TPO
 
     TPO -->|"match: work_items.project_id (item's OWN project)"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
     TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own"| WI

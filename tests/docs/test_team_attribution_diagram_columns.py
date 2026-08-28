@@ -68,6 +68,22 @@ _DROP_COLUMN_RE = re.compile(
     r"DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?",
     re.IGNORECASE,
 )
+# The RMT-rebuild pattern this codebase uses everywhere a sorting key changes
+# (migration 044's comment names it explicitly: CREATE `<t>_new` -> INSERT ...
+# SELECT -> EXCHANGE TABLES <t> AND `<t>_new` -> DROP TABLE `<t>_new`) leaves a
+# shadow `<t>_new`/`<t>_shadow` table CREATEd and then swapped away. Without
+# handling DROP/EXCHANGE, that shadow table stays in the parsed schema forever
+# as a phantom "real" table (caught in review: a stale ER block naming the
+# dropped shadow table would otherwise pass both checks below).
+_DROP_TABLE_RE = re.compile(
+    r"^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:default\.)?`?(\w+)`?",
+    re.IGNORECASE,
+)
+_RENAME_TABLE_PAIR_RE = re.compile(r"`?(\w+)`?\s+TO\s+`?(\w+)`?", re.IGNORECASE)
+_EXCHANGE_TABLES_RE = re.compile(
+    r"^EXCHANGE\s+TABLES\s+(?:default\.)?`?(\w+)`?\s+AND\s+(?:default\.)?`?(\w+)`?",
+    re.IGNORECASE,
+)
 
 # Entities in the diagram that are query-time concepts, never a real ClickHouse
 # table -- exempt because they never declare a `{ ... }` column block (asserted
@@ -128,7 +144,33 @@ def _split_top_level_commas(body: str) -> list[str]:
 
 
 def _apply_statement(schema: dict[str, set[str]], statement: str) -> None:
-    """Fold one SQL statement's effect (CREATE / ADD COLUMN / DROP COLUMN) into schema."""
+    """Fold one SQL statement's effect into schema (mutated in place).
+
+    Handles CREATE / ALTER ADD|DROP COLUMN, and the three table-identity
+    operations the RMT-rebuild pattern uses (DROP TABLE, RENAME TABLE,
+    EXCHANGE TABLES) so a shadow/`_new` table created mid-migration and later
+    dropped or swapped away doesn't linger in the parsed schema as a phantom
+    "real" table once the migration chain finishes.
+    """
+    drop_table_match = _DROP_TABLE_RE.match(statement)
+    if drop_table_match:
+        schema.pop(drop_table_match.group(1), None)
+        return
+
+    if re.match(r"^RENAME\s+TABLE\b", statement, re.IGNORECASE):
+        for old_name, new_name in _RENAME_TABLE_PAIR_RE.findall(statement):
+            schema[new_name] = schema.pop(old_name, set())
+        return
+
+    exchange_match = _EXCHANGE_TABLES_RE.match(statement)
+    if exchange_match:
+        left, right = exchange_match.group(1), exchange_match.group(2)
+        left_cols = schema.get(left, set())
+        right_cols = schema.get(right, set())
+        schema[left] = right_cols
+        schema[right] = left_cols
+        return
+
     create_match = _CREATE_TABLE_RE.search(statement)
     if create_match:
         table = create_match.group(1)
@@ -242,6 +284,29 @@ def test_doc_has_at_least_one_er_diagram_with_entity_blocks():
         assert expected in entities, (
             f"expected entity {expected!r} missing from parsed erDiagram"
         )
+
+
+def test_no_column_block_entities_are_actually_columnless():
+    """The `_NO_COLUMN_BLOCK_ENTITIES` exemption is valid only while it's true.
+
+    The two tests below skip these entities *by name* rather than by property,
+    for a clear failure message. That's only safe as long as this test also
+    holds: if a future edit ever gives `investment_coverage` or
+    `team_exchange_chord` a real `{ ... }` column block (making a "this is a
+    table with these columns" claim after all), this test must fail loudly
+    instead of the two column checks silently skipping it forever.
+    """
+    entities = _entity_blocks_from_doc()
+    violations = {
+        name: entities[name] for name in _NO_COLUMN_BLOCK_ENTITIES if entities.get(name)
+    }
+    assert not violations, (
+        "these entities are exempt from the real-table/real-column checks on the "
+        "assumption they are relationship-only (query-time concepts, not ClickHouse "
+        f"tables), but the doc now declares columns for them: {violations}\n"
+        "Either point them at a real ClickHouse table (and drop the exemption), or "
+        "remove the erroneous column block."
+    )
 
 
 def test_every_diagram_entity_with_columns_is_a_real_clickhouse_table():

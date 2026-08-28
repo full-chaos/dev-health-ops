@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,11 +24,12 @@ import (
 func TestNewClaimLivenessSeedsGraceWindowNotZero(t *testing.T) {
 	t.Parallel()
 	before := time.Now()
-	claim := newClaimLiveness(before)
+	claim := newClaimLiveness(before, []string{"sync_provider"})
 	// Immediately after construction -- exactly the moment preclaim-readiness
 	// evaluates it, before the River client has had any chance to run -- the
-	// claim must already read as "just now", not "never".
-	if since := claim.since(time.Now()); since > time.Second {
+	// claim must already read as "just now", not "never", for every seeded
+	// queue.
+	if since := claim.since("sync_provider", time.Now()); since > time.Second {
 		t.Fatalf("newClaimLiveness seed since() = %v, want ~0 (seeded to construction time)", since)
 	}
 	dependencies := &workerDependencies{
@@ -35,7 +37,9 @@ func TestNewClaimLivenessSeedsGraceWindowNotZero(t *testing.T) {
 		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
 			// Genuine pre-existing backlog, exactly the live scenario: a
 			// worker restarting into a queue that already has real work
-			// waiting, before it has claimed anything in THIS process.
+			// waiting, before it has claimed anything in THIS process. No
+			// capacity info supplied, so the saturation fallback does not
+			// mask this on its own -- the seed must be what saves it.
 			Jobs: []riverstore.QueueJobTelemetry{{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 6}},
 		}},
 	}
@@ -44,90 +48,165 @@ func TestNewClaimLivenessSeedsGraceWindowNotZero(t *testing.T) {
 	}
 }
 
-// TestClaimLivenessRecordsOnlyForwardMotion proves claimLiveness.since keeps
-// the latest claim even if a stale JobStarted call races in after a newer
-// one -- clocks and goroutine scheduling can reorder concurrent calls, and a
-// naive "always overwrite" would let a late-arriving old timestamp make a
-// perfectly live process look stale.
-func TestClaimLivenessRecordsOnlyForwardMotion(t *testing.T) {
+// TestNewClaimLivenessOnlySeedsSelectedQueues proves the seed is scoped to
+// the queues actually passed in, not a wildcard -- a queue this process
+// never selected has no seed and therefore reports maximally stale, which
+// is correct: claimLivenessReady only ever consults queues queue telemetry
+// reports, and telemetry is scoped to selected queues by construction, so
+// this is defense in depth rather than a live path.
+func TestNewClaimLivenessOnlySeedsSelectedQueues(t *testing.T) {
+	t.Parallel()
+	claim := newClaimLiveness(time.Now(), []string{"heartbeat"})
+	if since := claim.since("heartbeat", time.Now()); since > time.Second {
+		t.Fatalf("seeded queue since() = %v, want ~0", since)
+	}
+	if since := claim.since("sync_provider", time.Now()); since < 365*24*time.Hour {
+		t.Fatalf("unseeded queue since() = %v, want effectively unbounded", since)
+	}
+}
+
+// TestClaimLivenessRecordsOnlyForwardMotionPerQueue proves claimLiveness.since
+// keeps the latest claim per queue even if a stale JobFinished call races in
+// after a newer one -- clocks and goroutine scheduling can reorder concurrent
+// calls, and a naive "always overwrite" would let a late-arriving old
+// timestamp make a perfectly live queue look stale. It also proves queues
+// are tracked independently: recording on one queue must not move another's
+// clock at all.
+func TestClaimLivenessRecordsOnlyForwardMotionPerQueue(t *testing.T) {
 	t.Parallel()
 	claim := &claimLiveness{}
 	now := time.Unix(1_700_000_000, 0)
-	claim.recordClaim(now)
-	claim.recordClaim(now.Add(-time.Minute)) // stale, must not regress
-	if since := claim.since(now); since != 0 {
-		t.Fatalf("since() = %v, want 0 (the later claim must win)", since)
+	claim.recordClaim("sync", now)
+	claim.recordClaim("sync", now.Add(-time.Minute)) // stale, must not regress
+	if since := claim.since("sync", now); since != 0 {
+		t.Fatalf("since(\"sync\") = %v, want 0 (the later claim must win)", since)
+	}
+	if since := claim.since("sync_provider", now); since < 365*24*time.Hour {
+		t.Fatalf("since(\"sync_provider\") = %v, want effectively unbounded -- a claim on a different queue must not affect it", since)
 	}
 }
 
 // TestClaimLivenessNeverClaimedReportsEffectivelyForever proves the
 // pre-seeded fail-closed contract: before any real claim has ever been
-// recorded, since() must report a duration so large that no bounded
-// staleness window will ever read it as "recent" by accident.
+// recorded on a queue, since() must report a duration so large that no
+// bounded staleness window will ever read it as "recent" by accident.
 func TestClaimLivenessNeverClaimedReportsEffectivelyForever(t *testing.T) {
 	t.Parallel()
 	claim := &claimLiveness{}
-	if since := claim.since(time.Now()); since < 365*24*time.Hour {
+	if since := claim.since("sync", time.Now()); since < 365*24*time.Hour {
 		t.Fatalf("since() with no recorded claim = %v, want an effectively unbounded duration", since)
 	}
 }
 
-// TestClaimLivenessObserverTapsJobStartedOnly proves the decorator records a
-// claim on JobStarted and still delegates every call (including JobStarted
-// itself) to the wrapped Observer, so metrics behavior is byte-for-byte
-// identical to using the wrapped Observer directly.
-func TestClaimLivenessObserverTapsJobStartedOnly(t *testing.T) {
+// TestClaimLivenessObserverPreservesExtendedCollectorCapabilities is the
+// direct reproduction of the round-2 codex finding: wrapping
+// dependencies.metrics in a brand-new concrete type broke every optional
+// type assertion the worker package's own family builders perform against
+// their Observer parameter (daily.go, operational.go, provider_sync.go,
+// sync_dispatch.go, workgraph.go each assert against *MetricsCollector or
+// one of a dozen narrower marker interfaces to reach specialized telemetry).
+// claimLivenessObserver embeds the CONCRETE collector so those assertions
+// keep matching via Go's method promotion; this proves it for one
+// representative narrower interface (IdempotencyRenewalObserver) and for
+// the one exact-concrete-type assertion (via Unwrap).
+func TestClaimLivenessObserverPreservesExtendedCollectorCapabilities(t *testing.T) {
 	t.Parallel()
-	recorder := &recordingJobruntimeObserver{}
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := claimLivenessObserver{MetricsCollector: collector, liveness: &claimLiveness{}}
+
+	var asObserver jobruntime.Observer = observer
+	if _, ok := asObserver.(jobruntime.IdempotencyRenewalObserver); !ok {
+		t.Fatal("claimLivenessObserver lost the embedded collector's IdempotencyRenewalObserver capability")
+	}
+	unwrapper, ok := asObserver.(interface {
+		Unwrap() *jobruntime.MetricsCollector
+	})
+	if !ok {
+		t.Fatal("claimLivenessObserver does not expose Unwrap")
+	}
+	if unwrapper.Unwrap() != collector {
+		t.Fatal("Unwrap() did not return the exact embedded collector")
+	}
+	// The one assertion Unwrap exists for: exact concrete type, which no
+	// amount of embedding satisfies directly.
+	if _, ok := asObserver.(*jobruntime.MetricsCollector); ok {
+		t.Fatal("claimLivenessObserver unexpectedly satisfied *jobruntime.MetricsCollector directly -- Unwrap should be the only route")
+	}
+}
+
+// TestClaimLivenessObserverJobFinishedDelegatesAndTaps proves JobFinished
+// still reaches the wrapped collector (metrics behavior unaffected) AND
+// records the claim, using a nil-liveness/nil-collector-safe smoke path (the
+// full recording contract is proven by TestExecutionReached* below, which
+// does not need a real collector).
+func TestClaimLivenessObserverJobFinishedDelegatesAndTaps(t *testing.T) {
+	t.Parallel()
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
+		Jobs: []jobruntime.JobLabels{{Queue: "heartbeat", Kind: "system.heartbeat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	claim := &claimLiveness{}
-	observer := claimLivenessObserver{Observer: recorder, liveness: claim}
-
+	observer := claimLivenessObserver{MetricsCollector: collector, liveness: claim}
 	labels := jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
-	observer.JobStarted(context.Background(), labels)
-	if claim.since(time.Now()) > time.Second {
-		t.Fatal("expected JobStarted to record a claim")
-	}
-	if len(recorder.started) != 1 || recorder.started[0] != labels {
-		t.Fatalf("expected JobStarted to delegate to the wrapped observer, got %#v", recorder.started)
-	}
 
-	observer.JobFinished(context.Background(), labels, jobruntime.Result("success"), jobruntime.ErrorCategory(""), time.Second)
-	if recorder.finishedCalls != 1 {
-		t.Fatalf("expected JobFinished to delegate unchanged, got %d calls", recorder.finishedCalls)
+	observer.JobFinished(context.Background(), labels, jobruntime.ResultSuccess, jobruntime.CategoryNone, time.Second)
+	if since := claim.since("heartbeat", time.Now()); since > time.Second {
+		t.Fatal("expected a successful JobFinished to record a claim")
 	}
 }
 
-// recordingJobruntimeObserver is a minimal jobruntime.Observer double that
-// records what it was called with, so claimLivenessObserver's delegation can
-// be proven directly rather than inferred from MetricsCollector's much
-// larger surface.
-type recordingJobruntimeObserver struct {
-	started       []jobruntime.JobLabels
-	finishedCalls int
-}
-
-func (o *recordingJobruntimeObserver) RuntimeRegistered(context.Context, jobruntime.RuntimeInfo) {}
-func (o *recordingJobruntimeObserver) JobStarted(_ context.Context, labels jobruntime.JobLabels) {
-	o.started = append(o.started, labels)
-}
-func (o *recordingJobruntimeObserver) JobFinished(context.Context, jobruntime.JobLabels, jobruntime.Result, jobruntime.ErrorCategory, time.Duration) {
-	o.finishedCalls++
-}
-func (o *recordingJobruntimeObserver) JobPanicked(context.Context, jobruntime.JobLabels) {}
-func (o *recordingJobruntimeObserver) JobCancelled(context.Context, jobruntime.JobLabels, jobruntime.ErrorCategory) {
-}
-func (o *recordingJobruntimeObserver) DomainMismatch(context.Context, string) {}
-func (o *recordingJobruntimeObserver) BudgetWait(context.Context, jobruntime.JobLabels, time.Duration, string) {
-}
-func (o *recordingJobruntimeObserver) JobWait(context.Context, jobruntime.JobLabels, time.Duration) {}
-func (o *recordingJobruntimeObserver) ObserveDeterministicFailure(context.Context, jobruntime.JobLabels, jobruntime.Reason) {
+// TestExecutionReachedClassification is the direct reproduction of the
+// round-2 codex finding that JobStarted fires before validateRow, tenant
+// resolution, budget acquisition, and the idempotency claim
+// (internal/jobruntime/adapter.go), so recording liveness there lets a job
+// stuck failing any of those gates refresh the clock forever without ever
+// reaching real handler code. executionReached uses JobFinished's (Result,
+// ErrorCategory) pair instead; this pins every category classify()/
+// classifyBudgetWait() can produce BEFORE the handler runs as "not
+// executed", and every category that can only come from a returned or nil
+// handler error as "executed".
+func TestExecutionReachedClassification(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		result   jobruntime.Result
+		category jobruntime.ErrorCategory
+		want     bool
+	}{
+		{"success", jobruntime.ResultSuccess, jobruntime.CategoryNone, true},
+		{"duplicate claim short-circuit (ClaimAlreadyComplete)", jobruntime.ResultDuplicate, jobruntime.CategoryNone, false},
+		{"row/decode validation failure", jobruntime.ResultCancel, jobruntime.CategoryValidation, false},
+		{"tenant scope resolution failure", jobruntime.ResultRetry, jobruntime.CategoryTenant, false},
+		{"budget acquisition failure", jobruntime.ResultDiscard, jobruntime.CategoryBudget, false},
+		{"idempotency claim failure", jobruntime.ResultRetry, jobruntime.CategoryIdempotency, false},
+		{"idempotency ClaimTerminal (pre-handler)", jobruntime.ResultCancel, jobruntime.CategoryTerminalDomain, false},
+		{"handler returned a permanent error", jobruntime.ResultCancel, jobruntime.CategoryPermanent, true},
+		{"handler returned a retryable error", jobruntime.ResultRetry, jobruntime.CategoryRetryable, true},
+		{"handler hit a rate limit (real provider call)", jobruntime.ResultRetry, jobruntime.CategoryRateLimited, true},
+		{"handler context deadline exceeded", jobruntime.ResultRetry, jobruntime.CategoryTimeout, true},
+		{"handler context cancelled (drain)", jobruntime.ResultCancel, jobruntime.CategoryCancelled, true},
+		{"handler panicked", jobruntime.ResultRetry, jobruntime.CategoryPanic, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := executionReached(test.result, test.category); got != test.want {
+				t.Fatalf("executionReached(%s, %s) = %v, want %v", test.result, test.category, got, test.want)
+			}
+		})
+	}
 }
 
 // TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError is the direct
 // reproduction of the codex-review finding on CHAOS-4029 round 1: a queue
-// with available work and no recent claim must fail readiness even though
-// nothing about the database or an independent probe is wrong -- the
-// scenario an independent self-probe goroutine cannot detect.
+// with available work, idle capacity to claim it, and no recent claim must
+// fail readiness even though nothing about the database or an independent
+// probe is wrong -- the scenario an independent self-probe goroutine cannot
+// detect.
 func TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError(t *testing.T) {
 	t.Parallel()
 	claim := &claimLiveness{}
@@ -135,22 +214,80 @@ func TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError(t *testing.T) {
 		queueTelemetryRequired: true,
 		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
 			Jobs: []riverstore.QueueJobTelemetry{{Queue: "sync", Kind: "sync.provider_unit", Available: 3}},
+			// Idle capacity: 1 of 4 slots running, so this queue is NOT
+			// saturated -- the backlog is genuinely unclaimed, not just
+			// waiting for existing work to finish.
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync", Capacity: 4, Running: 1}},
 		}},
 	}
 	ready := dependencies.claimLivenessReady(claim)
 
-	// No claim has ever been recorded, and the queue has backlog: this is
-	// exactly "jobs are all terminal-without-execution" (or worse, nothing
-	// is even being attempted). Must fail.
+	// No claim has ever been recorded, and the queue has backlog with idle
+	// capacity: this is exactly "jobs are all terminal-without-execution"
+	// (or worse, nothing is even being attempted). Must fail.
 	if err := ready(context.Background()); !errors.Is(err, errClaimLivenessStalledWithBacklog) {
 		t.Fatalf("ready() = %v, want errClaimLivenessStalledWithBacklog", err)
 	}
 
 	// A real claim arrives. Readiness must clear immediately, without
 	// waiting out the staleness window -- the receipt is the claim itself.
-	claim.recordClaim(time.Now())
+	claim.recordClaim("sync", time.Now())
 	if err := ready(context.Background()); err != nil {
 		t.Fatalf("ready() after a real claim = %v, want nil", err)
+	}
+}
+
+// TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy is the direct
+// reproduction of the round-2 codex finding: a queue running every claimed
+// job it has capacity for (Running >= Capacity) has no room to claim MORE
+// work, so unclaimed backlog there is expected, healthy saturation, not a
+// wedge -- registered job timeouts run up to two hours, far longer than the
+// claim staleness window, so a busy-but-healthy worker must not be flagged
+// just because nothing NEW claimed in the last 60s.
+func TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{} // never claimed anything, ever
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 12}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync_provider", Capacity: 2, Running: 2}},
+		}},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("ready() on a fully saturated queue = %v, want nil (busy is not the same as wedged)", err)
+	}
+}
+
+// TestClaimLivenessReadyIsPerQueue is the direct reproduction of the
+// round-2 codex finding: a worker consuming multiple queues must not let
+// continuous claims on one healthy queue mask a wedged sibling -- each
+// queue is evaluated independently.
+func TestClaimLivenessReadyIsPerQueue(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.recordClaim("sync", time.Now()) // "sync" is healthy and claiming
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs: []riverstore.QueueJobTelemetry{
+				{Queue: "sync", Kind: "sync.dispatch", Available: 2},
+				{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 5},
+			},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{
+				{Queue: "sync", Capacity: 4, Running: 3},
+				{Queue: "sync_provider", Capacity: 4, Running: 1}, // idle capacity, never claimed
+			},
+		}},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+	err := ready(context.Background())
+	if !errors.Is(err, errClaimLivenessStalledWithBacklog) {
+		t.Fatalf("ready() = %v, want errClaimLivenessStalledWithBacklog for the wedged sync_provider queue, even though sync is healthy", err)
+	}
+	if !strings.Contains(err.Error(), "sync_provider") {
+		t.Fatalf("expected the error to name the specific wedged queue, got %v", err)
 	}
 }
 
@@ -175,9 +312,9 @@ func TestClaimLivenessReadyPassesWhenGenuinelyIdle(t *testing.T) {
 }
 
 // TestClaimLivenessReadyFailsClosedWhenIdleCannotBeProven proves that a
-// telemetry failure -- the only way this check can confirm "genuinely
-// idle" -- fails closed rather than defaulting to healthy. Absence of proof
-// is never read as absence of a problem.
+// telemetry failure -- the only way this check can confirm "genuinely idle
+// or saturated" -- fails closed rather than defaulting to healthy. Absence
+// of proof is never read as absence of a problem.
 func TestClaimLivenessReadyFailsClosedWhenIdleCannotBeProven(t *testing.T) {
 	t.Parallel()
 	claim := &claimLiveness{}

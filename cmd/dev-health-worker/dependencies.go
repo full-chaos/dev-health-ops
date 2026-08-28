@@ -287,11 +287,12 @@ type workerDependencySources struct {
 	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
 	// newClaimLiveness constructs the CHAOS-4029 claim-liveness tracker (see
-	// claim_liveness.go). Injectable so a test can capture the returned
-	// *claimLiveness and call SetStaleWindow on it to prove staleness
-	// detection in real wall-clock time, the same reason every other
-	// constructor in this struct is a field rather than a direct call.
-	newClaimLiveness func(time.Time) *claimLiveness
+	// claim_liveness.go), pre-seeded per selected queue. Injectable so a test
+	// can capture the returned *claimLiveness and call SetStaleWindow on it
+	// to prove staleness detection in real wall-clock time, the same reason
+	// every other constructor in this struct is a field rather than a direct
+	// call.
+	newClaimLiveness func(time.Time, []string) *claimLiveness
 }
 
 var productionWorkerDependencySources = workerDependencySources{
@@ -551,7 +552,7 @@ func configureWorkerDependenciesWithSources(
 	if newClaim == nil {
 		newClaim = newClaimLiveness
 	}
-	claim := newClaim(time.Now())
+	claim := newClaim(time.Now(), cfg.Queues)
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -656,13 +657,16 @@ func configureWorkerDependenciesWithSources(
 		}
 	}
 	workers := river.NewWorkers()
-	// claimLivenessObserver taps JobStarted so execution_liveness's claim
+	// claimLivenessObserver taps JobFinished so execution_liveness's claim
 	// half (claim_liveness.go) sees every REAL job this process's handlers
 	// execute, across every constructed family -- the same shared observer
-	// every family builder below receives. It delegates every other Observer
-	// method unchanged, so metrics behavior is identical to passing
-	// dependencies.metrics directly.
-	observer := claimLivenessObserver{Observer: dependencies.metrics, liveness: claim}
+	// every family builder below receives. It embeds the CONCRETE
+	// *jobruntime.MetricsCollector (not the Observer interface) specifically
+	// so every existing optional type assertion against the observer
+	// (daily.go, operational.go, provider_sync.go, sync_dispatch.go,
+	// workgraph.go) keeps matching -- see claimLivenessObserver's doc
+	// comment for the round-2 codex finding this fixes.
+	observer := claimLivenessObserver{MetricsCollector: dependencies.metrics, liveness: claim}
 	active, composeErr := composeSelectedWorkerFamilies(
 		ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
 		observer, logger, workers, sources,

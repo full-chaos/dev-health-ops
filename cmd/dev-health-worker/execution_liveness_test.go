@@ -248,8 +248,8 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 	// applies: the window is shrunk immediately after construction, well
 	// before the seed's grace period would matter for this test's timing.
 	var claim *claimLiveness
-	sources.newClaimLiveness = func(now time.Time) *claimLiveness {
-		claim = newClaimLiveness(now)
+	sources.newClaimLiveness = func(now time.Time, queues []string) *claimLiveness {
+		claim = newClaimLiveness(now, queues)
 		claim.SetStaleWindow(80 * time.Millisecond)
 		return claim
 	}
@@ -330,10 +330,10 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 		t.Fatal("expected readiness to be false once execution_liveness failed")
 	}
 
-	// Recovery via a REAL claim: the same JobStarted call River's execution
-	// wrapper makes for every real job, clearing readiness immediately
-	// without waiting for the queue to drain.
-	claim.recordClaim(time.Now())
+	// Recovery via a REAL claim: the same JobFinished signal River's
+	// execution wrapper reports for every real, actually-executed job,
+	// clearing readiness immediately without waiting for the queue to drain.
+	claim.recordClaim("heartbeat", time.Now())
 	status = registry.Readiness(context.Background())
 	if !status.Ready {
 		t.Fatalf("expected readiness to recover immediately after a real claim, got %#v", status)

@@ -55,6 +55,17 @@ func NewProductionRuntimeAdapters(
 	if err != nil {
 		return nil, err
 	}
+	// CHAOS-4140: wire the dedup-guard observer the same way leaseObservers
+	// above is wired -- a type-assertion against the general Observer, kept
+	// optional (SetDedupObserver, not a NewClickHouseQueryAdapter parameter)
+	// so this stays a no-op wherever runtimeDependencies.Observer does not
+	// implement it (every existing test construction of
+	// ClickHouseQueryAdapter, none of which need to change).
+	if queryAdapter, ok := dependencies.Query.(*ClickHouseQueryAdapter); ok {
+		if observer, ok := runtimeDependencies.Observer.(jobruntime.ReportDedupGuardObserver); ok {
+			queryAdapter.SetDedupObserver(observer)
+		}
+	}
 	return NewRuntimeAdapters(registry, dependencies, runtimeDependencies)
 }
 

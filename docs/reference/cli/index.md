@@ -1222,7 +1222,13 @@ scope by calendar day — `capacity` needs a `GenerationSeed` the CLI has no
 flag for, and the other two scope by window/repo set — so `--family capacity`
 etc. is `invalid_request`. `--to` defaults to `--day` (a single day); the
 `[--day, --to]` span is capped at 31 days — this is a manual, human-invoked
-recovery tool for a handful of days, not a bulk backfill mechanism.
+recovery tool for a handful of days, not a bulk backfill mechanism. Both
+`--day` and `--to` must be **strictly before today (UTC)** — this is a
+historical recovery tool, and dora's automatic triggers (post-sync's first-
+sync-of-day, the fixed-schedule `dora_daily_fanout` occurrence) only ever
+target the CURRENT day, so allowing "today" would open a race between a
+manual and an automatic dispatch for the same day (see the coverage rule
+below).
 
 **Coverage rule — deliberately not the same one the automatic dora trigger
 applies.** `StartRunTx`'s own `family=="dora"` cross-trigger dedup
@@ -1257,11 +1263,17 @@ prior run under ANY generation counts):
   once both finish. Re-run once it settles.
 
 Retrying the **identical** command (same `--family`/`--org`/`--day`/`--to`,
-which derives the same `generation` — see below) is always safe: it reuses
-the same run rather than inserting a duplicate, even across an in-flight
-retry (`"already_ran"`) or after the run itself legitimately completed with
-0 rows (a fresh generation is minted automatically so the retry actually
-recomputes, rather than reloading the exhausted 0-row run forever).
+which derives the same base `generation` — see below) is always safe: it
+reuses the same run rather than inserting a duplicate, even across an
+in-flight retry (`"already_ran"`) or after the run itself legitimately
+completed with 0 rows. In the 0-row case, the store mints a numbered
+`:retry-N` generation (bounded to 5 bumps) so the identical retry actually
+recomputes instead of reloading the exhausted run forever; a later call
+while that bumped generation is itself still pending correctly recognizes it
+as the same in-flight request (`"already_ran"`), not a foreign collision. If
+every generation up to the bound is exhausted (all terminal, none usefully
+covering), the day fails as `"exhausted"` rather than silently reporting
+success with nothing dispatched.
 
 Returns, per day in the requested span:
 
@@ -1269,8 +1281,8 @@ Returns, per day in the requested span:
 {
   "family": "dora", "org": "c6a3...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27",
   "days": [
-    {"day": "2026-08-25", "status": "started", "run_id": "...", "partition_id": "..."},
-    {"day": "2026-08-26", "status": "already_ran", "run_id": "...", "partition_id": "..."},
+    {"day": "2026-08-25", "status": "started", "run_id": "...", "partition_id": "...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27"},
+    {"day": "2026-08-26", "status": "already_ran", "run_id": "...", "partition_id": "...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27:retry-1"},
     {"day": "2026-08-27", "status": "already_covered", "run_id": "..."}
   ],
   "readback_hint": "ClickHouse: SELECT day, count() FROM dora_metrics_daily WHERE org_id = '...' AND day BETWEEN '2026-08-25' AND '2026-08-27' GROUP BY day ORDER BY day"
@@ -1279,28 +1291,33 @@ Returns, per day in the requested span:
 
 `status` is one of `started` (a new run/partition was inserted), `already_ran`
 (idempotent retry, not an error), `already_covered` or `in_progress` (refused,
-see above), or `error` (an unexpected store/publisher failure for that one
-day — the command's own exit code is nonzero if ANY day is `error`, even
-though the full per-day JSON is still printed to stdout for diagnosis).
-`generation` is derived deterministically from the request's own flags
-(family/org/day-range), never wall-clock time, so a retried invocation is
-recognizable as the same logical request. Run the `readback_hint` query (or
-the daily-redrive query below, substituted with the printed `run_id`s) to
-confirm rows actually landed once the dispatched partition jobs execute — a
-`"started"` status is dispatch confirmation, not completion.
+see above), `exhausted` (the retry-generation budget ran out with nothing
+dispatched), or `error` (an unexpected store/publisher failure for that one
+day). The command's own exit code is nonzero if ANY day is `error` or
+`exhausted`, even though the full per-day JSON is still printed to stdout for
+diagnosis. The top-level `generation` is derived deterministically from the
+request's own flags (family/org/day-range), never wall-clock time, so a
+retried invocation is recognizable as the same logical request -- but each
+day's OWN `generation` field is the one that actually matters for a durable
+lookup, since a bumped `:retry-N` run's generation differs from the
+top-level one. Run the `readback_hint` query (or the daily-redrive query
+below, substituted with the printed `run_id`s) to confirm rows actually
+landed once the dispatched partition jobs execute — a `"started"` status is
+dispatch confirmation, not completion.
 
 **Observability**: `dev_health_remaining_metrics_manual_backfill_total{family,outcome}`
 is wired but not live for THIS caller, for the identical reason
 `dev_health_daily_metrics_redrive_partitions_total` above is not: `workerctl`
 is a one-shot CLI with no Prometheus scrape endpoint. The durable record of a
 manual backfill is the `remaining_metric_runs`/`remaining_metric_partitions`
-rows themselves, findable by the printed `generation`:
+rows themselves, findable by each day's OWN printed `generation` (not the
+top-level one — see above):
 
 ```sql
-SELECT run.id, run.status, partition.id, partition.status, partition.output_evidence
+SELECT run.id, run.generation, run.status, partition.id, partition.status, partition.output_evidence
 FROM remaining_metric_runs run
 JOIN remaining_metric_partitions partition ON partition.run_id = run.id
-WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<printed generation>';
+WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<that day's printed generation>';
 ```
 
 ### `dev-health-workerctl routes`

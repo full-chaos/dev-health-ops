@@ -264,8 +264,13 @@ const (
 	// RemainingMetricsManualBackfillOutcomeInProgress means the command
 	// refused: an automatic run for this day is still pending/running under
 	// a different generation, and its eventual completion is invisible to
-	// the succeeded-only coverage check (codex review, P1).
+	// the succeeded-only coverage check (codex review round 2, P1).
 	RemainingMetricsManualBackfillOutcomeInProgress RemainingMetricsManualBackfillOutcome = "in_progress"
+	// RemainingMetricsManualBackfillOutcomeExhausted means every generation
+	// the command tried (the base one plus its bounded numbered retries)
+	// already existed in a terminal, not-usefully-covering state -- no new
+	// work was dispatched (codex review round 3, P2).
+	RemainingMetricsManualBackfillOutcomeExhausted RemainingMetricsManualBackfillOutcome = "exhausted"
 )
 
 func remainingMetricsManualBackfillOutcomes() []RemainingMetricsManualBackfillOutcome {
@@ -274,6 +279,7 @@ func remainingMetricsManualBackfillOutcomes() []RemainingMetricsManualBackfillOu
 		RemainingMetricsManualBackfillOutcomeAlreadyRan,
 		RemainingMetricsManualBackfillOutcomeAlreadyCovered,
 		RemainingMetricsManualBackfillOutcomeInProgress,
+		RemainingMetricsManualBackfillOutcomeExhausted,
 	}
 }
 

@@ -903,17 +903,26 @@ type manualBackfillDayResult struct {
 	Status      string `json:"status"`
 	RunID       string `json:"run_id,omitempty"`
 	PartitionID string `json:"partition_id,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Generation is the ACTUAL generation this day's run was inserted (or
+	// found) under -- codex review round 3, P2: it can differ from the
+	// top-level request generation printed once for the whole command, if
+	// StartManualBackfillRun had to bump past an exhausted 0-row/failed
+	// generation. Use THIS value, not the top-level one, when building a
+	// durable lookup query for this specific day's run.
+	Generation string `json:"generation,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // anyManualBackfillDayErrored reports whether any day's result is an
-// unexpected error (codex review, P2) -- pulled out of dispatchMetricsRemaining
-// as its own function so it can be unit tested directly against realistic
+// unexpected error or a generation-exhaustion failure (codex review, P2:
+// both mean no new work was dispatched for that day) -- pulled out of
+// dispatchMetricsRemaining as its own function so it can be unit tested
+// directly against realistic
 // result shapes, the same testability reasoning
 // redriveDailyMetricsLedger's ledgerRepairWasIncomplete documents.
 func anyManualBackfillDayErrored(results []manualBackfillDayResult) bool {
 	for _, result := range results {
-		if result.Status == "error" {
+		if result.Status == "error" || result.Status == "exhausted" {
 			return true
 		}
 	}
@@ -1001,12 +1010,28 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 		if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
 			return writeError(stderr, "invalid_request")
 		}
-		// codex review, P2: this is a HISTORICAL recovery tool -- a future
-		// --day/--to (a mistyped year, most likely) would still create a
-		// durable run and, for release_impact/dora's backfill_days window,
-		// silently compute PAST days as a side effect of an operator error
-		// that should have been an invalid_request instead.
-		if toDay.After(time.Now().UTC().Truncate(24 * time.Hour)) {
+		// codex review round 2, P2: this is a HISTORICAL recovery tool -- a
+		// future --day/--to (a mistyped year, most likely) would still
+		// create a durable run and, for release_impact/dora's
+		// backfill_days window, silently compute PAST days as a side
+		// effect of an operator error that should have been an
+		// invalid_request instead.
+		//
+		// codex review round 3, P1: today itself is ALSO excluded, not just
+		// the future. dora's automatic triggers (post-sync's first-sync-of-
+		// day, the fixed-schedule dora_daily_fanout occurrence) both only
+		// ever target the current UTC day -- never a closed one. A manual
+		// backfill for today could therefore commit its own pending run,
+		// release the advisory lock, and then race an automatic trigger
+		// that starts a SEPARATE generation for the same day (StartRunTx's
+		// dora coverage check only recognizes SUCCEEDED runs, so a manual
+		// run still pending is invisible to it): both eventually execute
+		// and append duplicate dora_metrics_daily rows. Restricting this
+		// command to strictly closed days removes the race entirely --
+		// automatic triggers never revisit a day once it has closed -- and
+		// matches the command's whole purpose (a day that was never
+		// dispatched at all is, by construction, already in the past).
+		if !toDay.Before(time.Now().UTC().Truncate(24 * time.Hour)) {
 			return writeError(stderr, "invalid_request")
 		}
 		if runtime.pools == nil || runtime.registry == nil {
@@ -1043,15 +1068,19 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 				results = append(results, manualBackfillDayResult{
 					Day: dayString, Status: "in_progress", RunID: outcome.RunID,
 				})
+			case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "exhausted", RunID: outcome.RunID, Generation: outcome.Generation,
+				})
 			case startErr != nil:
 				results = append(results, manualBackfillDayResult{Day: dayString, Status: "error", Error: startErr.Error()})
 			case outcome.AlreadyRan:
 				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
+					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
 				})
 			default:
 				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
+					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
 				})
 			}
 		}

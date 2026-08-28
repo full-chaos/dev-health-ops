@@ -602,3 +602,133 @@ func TestStartManualBackfillRunMintsAFreshGenerationAfterItsOwnZeroRowRun(t *tes
 		t.Fatalf("expected 2 runs (the exhausted 0-row one plus the fresh recompute), found %d", runCount)
 	}
 }
+
+// TestStartManualBackfillRunRecognizesItsOwnRetryChainAsAlreadyRan is
+// red-on-baseline for codex review round 3's P2 finding: a THIRD identical
+// invocation, arriving while the retry chain's own bumped generation
+// (":retry-1") is still pending, must recognize that pending run as the
+// SAME logical request (already_ran), not a foreign in-progress collision.
+func TestStartManualBackfillRunRecognizesItsOwnRetryChainAsAlreadyRan(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004263"
+	day := "2026-08-25"
+	const generation = "manual-backfill:test-9"
+
+	// Call 1: dispatch, then complete with 0 rows (source data not there
+	// yet).
+	first, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, generation, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("call 1: %v", err)
+	}
+	claim, err := store.ClaimPartition(ctx, first.PartitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("call 1's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+first.PartitionID+":rows_written=0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Call 2: the base generation is now exhausted (terminal 0-row) --
+	// StartManualBackfillRun bumps to ":retry-1" and leaves it pending
+	// (never claimed).
+	second, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, generation, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("call 2: %v", err)
+	}
+	if second.AlreadyRan || second.RunID == first.RunID {
+		t.Fatalf("call 2 should have bumped to a fresh retry-1 run, got %+v", second)
+	}
+	if second.Generation != generation+":retry-1" {
+		t.Fatalf("expected call 2's generation to be %q, got %q", generation+":retry-1", second.Generation)
+	}
+
+	// Call 3: retry-1 is still pending. Must be recognized as the SAME
+	// request (already_ran against retry-1's run), not blockReasonInProgress.
+	third, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, generation, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("call 3 (should recognize its own pending retry chain): %v", err)
+	}
+	if !third.AlreadyRan {
+		t.Fatalf("expected call 3 to report already_ran against the pending retry-1 run, got %+v", third)
+	}
+	if third.RunID != second.RunID {
+		t.Fatalf("expected call 3 to point at retry-1's run %s, got %q", second.RunID, third.RunID)
+	}
+}
+
+// TestStartManualBackfillRunFailsWhenGenerationBudgetIsExhausted is
+// red-on-baseline for codex review round 3's P2 finding: once the base
+// generation and every numbered retry are all terminal 0-row completions,
+// the function must return ErrManualBackfillGenerationExhausted rather than
+// silently reporting "already_ran" (a successful-looking outcome) while
+// dispatching nothing.
+func TestStartManualBackfillRunFailsWhenGenerationBudgetIsExhausted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004264"
+	day := "2026-08-25"
+	const generation = "manual-backfill:test-10"
+
+	// Exhaust the base generation plus every numbered retry (1..5): each
+	// call dispatches a fresh (bumped) run, which is immediately completed
+	// with 0 rows, so the NEXT call has nothing usable to resume either.
+	var lastPartitionID string
+	for i := 0; i < maxManualBackfillGenerationBumps+1; i++ {
+		outcome, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, generation, nopPartitionPublisher{})
+		if err != nil {
+			t.Fatalf("priming call %d: %v", i, err)
+		}
+		lastPartitionID = outcome.PartitionID
+		claim, err := store.ClaimPartition(ctx, lastPartitionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claim == nil {
+			t.Fatalf("priming call %d's partition was not claimable", i)
+		}
+		if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+lastPartitionID+":rows_written=0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outcome, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, generation, nopPartitionPublisher{})
+	if !errors.Is(err, ErrManualBackfillGenerationExhausted) {
+		t.Fatalf("expected ErrManualBackfillGenerationExhausted once every generation is a terminal 0-row completion, got err=%v outcome=%+v", err, outcome)
+	}
+}

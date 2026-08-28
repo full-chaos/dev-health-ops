@@ -756,6 +756,23 @@ func TestDispatchMetricsRemainingStartRejectsFutureDay(t *testing.T) {
 	}
 }
 
+func TestDispatchMetricsRemainingStartRejectsToday(t *testing.T) {
+	// codex review round 3, P1: today itself is excluded, not just the
+	// future -- this is a HISTORICAL recovery tool, and dora's automatic
+	// triggers only ever target the current UTC day, so allowing "today"
+	// would open a race between a manual and an automatic dispatch for the
+	// exact same day.
+	var stdout, stderr bytes.Buffer
+	today := time.Now().UTC().Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", today,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("today's --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestManualBackfillGenerationIsDeterministicAndInputSensitive(t *testing.T) {
 	// codex review, P1: the generation MUST be a pure function of the
 	// request (never wall-clock time) so a retried CLI invocation reuses
@@ -799,6 +816,19 @@ func TestAnyManualBackfillDayErroredDetectsAnErrorAmongOtherStatuses(t *testing.
 	}
 	if anyManualBackfillDayErrored(nil) {
 		t.Fatal("false positive on an empty/nil result slice")
+	}
+}
+
+func TestAnyManualBackfillDayErroredDetectsExhaustion(t *testing.T) {
+	// codex review round 3, P2: "exhausted" means no new work was
+	// dispatched for that day -- it must fail the process the same way
+	// "error" does, not read as a clean result.
+	results := []manualBackfillDayResult{
+		{Day: "2026-08-25", Status: "started", RunID: "r1", PartitionID: "p1"},
+		{Day: "2026-08-26", Status: "exhausted", RunID: "r2", Generation: "manual-backfill:...:retry-5"},
+	}
+	if !anyManualBackfillDayErrored(results) {
+		t.Fatal("expected an \"exhausted\" status to be detected as a failure")
 	}
 }
 

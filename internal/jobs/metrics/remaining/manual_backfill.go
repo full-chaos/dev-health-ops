@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -34,6 +35,18 @@ var ErrDayAlreadyCovered = errors.New("remaining metrics day is already covered 
 // inserting a manual run alongside it risks both writing the same day
 // (codex review, P1) -- this refuses rather than race it.
 var ErrDayInProgress = errors.New("remaining metrics day already has an in-progress automatic run")
+
+// ErrManualBackfillGenerationExhausted is returned by StartManualBackfillRun
+// when every generation it tried (the base one plus
+// maxManualBackfillGenerationBumps numbered retries) already exists in a
+// terminal, not-usefully-covering state (failed/canceled, or succeeded with
+// an unambiguous 0-row completion). Committing anyway and reporting
+// "already_ran" would claim success while dispatching nothing (codex
+// review, P2) -- a run stuck failing/canceling on every attempt is a real
+// problem to surface, not paper over.
+var ErrManualBackfillGenerationExhausted = errors.New(
+	"remaining metrics manual backfill exhausted its retry-generation budget without dispatching new work",
+)
 
 // ErrUnsupportedManualBackfillFamily is returned for a family this command
 // has no day-scoped default partition scope for.
@@ -83,6 +96,14 @@ type ManualBackfillOutcome struct {
 	Day         string
 	RunID       string
 	PartitionID string
+	// Generation is the ACTUAL generation the run was inserted (or found)
+	// under -- the base generation the caller passed in, or one of its
+	// numbered ":retry-N" bumps if the base was exhausted by a prior
+	// terminal, not-usefully-covering run (codex review, P2). Callers
+	// building a durable lookup query (e.g. `WHERE run.generation = ...`)
+	// must use THIS value, not the generation they originally passed in --
+	// they can differ.
+	Generation string
 	// AlreadyRan is true when this exact (org, family, generation, day)
 	// request had already been started by a prior call (e.g. a retried CLI
 	// invocation reusing the same generation) -- StartRunTx's own ON
@@ -212,13 +233,23 @@ func (store *PostgresStore) StartManualBackfillRun(
 	// or ambiguous coverage existed.
 	attemptRequest := request
 	var run Run
-	var created bool
+	var created, exhausted bool
 	for attempt := 0; ; attempt++ {
 		run, created, err = store.insertRun(ctx, tx, attemptRequest, publisher)
 		if err != nil {
 			return ManualBackfillOutcome{}, err
 		}
-		if created || run.Status == "pending" || run.Status == "running" || attempt >= maxManualBackfillGenerationBumps {
+		if created || run.Status == "pending" || run.Status == "running" {
+			break
+		}
+		if attempt >= maxManualBackfillGenerationBumps {
+			// codex review round 3, P2: every generation tried is terminal
+			// and not usefully covering (findManualBackfillBlocker above
+			// already ruled out real/ambiguous coverage, so this can only
+			// be failed/canceled or an exhausted unambiguous 0-row chain).
+			// Committing anyway and reporting "already_ran" would claim
+			// success while dispatching nothing.
+			exhausted = true
 			break
 		}
 		attemptRequest.Generation = fmt.Sprintf("%s:retry-%d", generation, attempt+1)
@@ -228,6 +259,10 @@ func (store *PostgresStore) StartManualBackfillRun(
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 	committed = true
+	if exhausted {
+		store.observeManualBackfill(family, "exhausted")
+		return ManualBackfillOutcome{Day: day, RunID: run.ID, Generation: run.Generation}, ErrManualBackfillGenerationExhausted
+	}
 	// created is false when insertRun's own ON CONFLICT DO NOTHING branch
 	// loaded an existing (still pending/running) run rather than inserting a
 	// fresh one -- this exact (org, family, generation, day) request was
@@ -241,6 +276,7 @@ func (store *PostgresStore) StartManualBackfillRun(
 		Day:         day,
 		RunID:       run.ID,
 		PartitionID: deterministicPartitionID(run.ID, 1),
+		Generation:  attemptRequest.Generation,
 		AlreadyRan:  outcome == "already_ran",
 	}, nil
 }
@@ -250,6 +286,18 @@ func (store *PostgresStore) StartManualBackfillRun(
 // failing/canceling on every attempt is a real problem worth surfacing as an
 // error, not retrying indefinitely inside one call.
 const maxManualBackfillGenerationBumps = 5
+
+// isSameManualBackfillRequest reports whether runGeneration belongs to the
+// SAME logical manual-backfill request as generation -- either the exact
+// base generation, or one of its bounded ":retry-N" bumps StartManualBackfillRun
+// mints when a prior attempt under this same request exhausted a terminal,
+// not-usefully-covering generation (codex review round 3, P2). Without this,
+// findManualBackfillBlocker would treat an operator's own still-pending
+// retry-1 run as a FOREIGN in-progress collision on a subsequent identical
+// invocation, refusing a request that should instead report "already_ran".
+func isSameManualBackfillRequest(runGeneration, generation string) bool {
+	return runGeneration == generation || strings.HasPrefix(runGeneration, generation+":retry-")
+}
 
 // blockReason names why findManualBackfillBlocker refused a day.
 type blockReason int
@@ -336,7 +384,7 @@ WHERE run.org_id = $1::uuid AND run.family = $2
 		if requested.Before(windowStart) || requested.After(anchor) {
 			continue // this partition's window does not contain the requested day
 		}
-		if (runStatus == "pending" || runStatus == "running") && runGeneration != generation {
+		if (runStatus == "pending" || runStatus == "running") && !isSameManualBackfillRequest(runGeneration, generation) {
 			// The most actionable signal -- return immediately rather than
 			// keep scanning for a "covered" reason that matters less.
 			return id, blockReasonInProgress, nil

@@ -782,16 +782,20 @@ ensure_docs_deps() {
 preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
-  [ -x "${PYBIN}" ] || die "missing venv interpreter ${PYBIN}. Create it from the worktree:
+  [ -x "${PYBIN}" ] || die "missing venv interpreter ${PYBIN}. Create it from the worktree.
+   SAFE recipe (recommended first — cannot hang; pytest.ini's pythonpath=src covers imports,
+   ruff/mypy don't need the project installed):
+      UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \\
+        uv sync --all-extras --dev --no-install-project
+      SKIP_CLICKHOUSE=1 bash ci/local_validate.sh   # this venv has no dev-hops CLI, so ch_probe
+                                                     # below cannot pass without this flag
+   FULL recipe (only if you need dev-hops / the ClickHouse-dependent stages locally instead of
+   via CI — CAN hang forever at 0% CPU on a wedged 'git check-attr' child, the known
+   setuptools_scm worktree deadlock, CHAOS-4181/4407, unrelated to this gate):
       UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" uv sync --all-extras --dev
-      # or: python -m venv .venv && .venv/bin/pip install -r requirements.txt
    (requirements.txt is '-e .[dev]'; pytest-asyncio tests mislead-fail without a fresh sync.
-   UV_CACHE_DIR keeps this sync off the shared ~/.cache/uv/.lock other worktrees hold — CHAOS-4411.
-   If this hangs at 0% CPU on a wedged 'git check-attr' child, that is the known setuptools_scm
-   worktree deadlock (CHAOS-4181/4407, not this gate): kill it, then run this gate's ClickHouse
-   stages via CI instead, or locally with SKIP_CLICKHOUSE=1 after
-   'uv sync --all-extras --dev --no-install-project' (no dev-hops CLI in that venv, so ch_probe
-   below cannot pass — SKIP_CLICKHOUSE=1 is required in that case).)"
+   UV_CACHE_DIR keeps either recipe off the shared ~/.cache/uv/.lock other worktrees hold —
+   CHAOS-4411.)"
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
   [ -x "${MYPY}" ] || die "missing ${MYPY}; install the [dev] extra into .venv."
   ensure_docs_deps

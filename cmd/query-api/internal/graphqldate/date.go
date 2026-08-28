@@ -67,18 +67,31 @@ func New(t time.Time) Date {
 // Python 3.11 alongside the canonical extended form.
 const basicLayout = "20060102"
 
-// isoWeekDateRE matches every ISO 8601 week-date form Python's
-// `datetime.date.fromisoformat` accepts (verified empirically, codex
-// review round 2, 2026-08-28 -- round 1's fix only handled the single
-// extended-with-day form "YYYY-Www-D"): extended with day ("2026-W34-4"),
-// extended reduced/no day ("2026-W34", defaults to Monday), basic with
-// day ("2026W344"), and basic reduced ("2026W34"). Both the "-" before
-// "W" and the "-" before the day digit are independently optional, which
-// is exactly what lets one regex cover all four forms. NOTE: an ISO
-// week-date's calendar date does not follow from its digits by simple
-// substitution (e.g. "2026-W34-4" is 2026-08-20, not "26 Aug"-shaped) --
-// see parseISOWeekDate.
-var isoWeekDateRE = regexp.MustCompile(`^(\d{4})-?W(\d{2})(?:-?([1-7]))?$`)
+// isoWeekDateExtendedRE / isoWeekDateBasicRE together match every ISO
+// 8601 week-date form Python's `datetime.date.fromisoformat` accepts
+// (verified empirically, codex rounds 2-3, 2026-08-28 -- round 1's fix
+// only handled the single extended-with-day form "YYYY-Www-D"): extended
+// with day ("2026-W34-4"), extended reduced/no day ("2026-W34", defaults
+// to Monday), basic with day ("2026W344"), and basic reduced ("2026W34").
+//
+// TWO separate patterns, not one with each "-" independently optional:
+// round 2's single-regex version (each separator optional on its own)
+// also accepted MIXED forms like "2026W34-4" and "2026-W344" that Python
+// actually REJECTS (confirmed empirically, codex round 3) -- Python
+// requires the day separator to match whichever style (extended/basic)
+// the week separator used, not "any dash is optional independently". Go's
+// RE2 regexp engine has no backreference to express "same separator as
+// group 2" in one pattern (backreferences are deliberately unsupported
+// for RE2's linear-time guarantee), so this is two disjoint, internally-
+// consistent patterns instead of one lenient one.
+//
+// NOTE: an ISO week-date's calendar date does not follow from its digits
+// by simple substitution (e.g. "2026-W34-4" is 2026-08-20, not "26
+// Aug"-shaped) -- see parseISOWeekDate.
+var (
+	isoWeekDateExtendedRE = regexp.MustCompile(`^(\d{4})-W(\d{2})(?:-([1-7]))?$`)
+	isoWeekDateBasicRE    = regexp.MustCompile(`^(\d{4})W(\d{2})([1-7])?$`)
+)
 
 // validYear reports whether t's year is in Python's `datetime.date`
 // range, 1..9999 -- Go's time.Time has no such restriction (year 0 or
@@ -137,7 +150,10 @@ func Parse(s string) (Date, error) {
 // year), which this comparison catches without a second, hand-written
 // copy of the leap/weekday rule to keep in sync with the stdlib's.
 func parseISOWeekDate(s string) (time.Time, bool) {
-	m := isoWeekDateRE.FindStringSubmatch(s)
+	m := isoWeekDateExtendedRE.FindStringSubmatch(s)
+	if m == nil {
+		m = isoWeekDateBasicRE.FindStringSubmatch(s)
+	}
 	if m == nil {
 		return time.Time{}, false
 	}

@@ -232,6 +232,39 @@ func TestParse_RejectsYearOutsidePythonDateRange(t *testing.T) {
 	}
 }
 
+// TestParse_RejectsMixedWeekDateSeparators is the codex-review round-3
+// regression proof: round 2's single-regex version treated the "-"
+// before "W" and the "-" before the day digit as independently optional,
+// which also accepted MIXED forms like "2026W34-4" and "2026-W344" --
+// Python's fromisoformat rejects both (confirmed against the real
+// interpreter), requiring the day separator to match whichever style
+// (extended/basic) the week separator used.
+func TestParse_RejectsMixedWeekDateSeparators(t *testing.T) {
+	cases := []string{"2026W34-4", "2026-W344"}
+	for _, s := range cases {
+		if _, err := Parse(s); err == nil {
+			t.Errorf("Parse(%q) accepted, want an error (Python rejects mixed extended/basic week-date separators)", s)
+		}
+	}
+	// The four internally-consistent forms must still all work.
+	consistent := map[string]string{
+		"2026-W34-4": "2026-08-20",
+		"2026W344":   "2026-08-20",
+		"2026-W34":   "2026-08-17",
+		"2026W34":    "2026-08-17",
+	}
+	for in, want := range consistent {
+		got, err := Parse(in)
+		if err != nil {
+			t.Errorf("Parse(%q): %v, want success", in, err)
+			continue
+		}
+		if got.String() != want {
+			t.Errorf("Parse(%q).String() = %q, want %q", in, got.String(), want)
+		}
+	}
+}
+
 func TestParse_MatchesNewForSameCalendarDate(t *testing.T) {
 	parsed, err := Parse("2026-08-27")
 	if err != nil {

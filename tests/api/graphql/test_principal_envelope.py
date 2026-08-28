@@ -4,6 +4,10 @@ plan §3/§7 D1 -- signed short-lived envelope, chris's ruling on CHAOS-4379).
 Verifies the envelope end-to-end the way a Go verifier eventually will:
 mint with the private key, fetch the JWKS, reconstruct the public key from
 it, and check the signature -- not just "encode didn't raise".
+
+Ed25519/EdDSA, not RS256 (reconciled 2026-08-27 per CHAOS-4377 -- see
+principal_envelope's module docstring): matches dev-health-go's
+authverify.Ed25519JWKSVerifier, which is Ed25519-only.
 """
 
 from __future__ import annotations
@@ -12,14 +16,16 @@ import time
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
     NoEncryption,
     PrivateFormat,
 )
-from jwt.algorithms import RSAAlgorithm
+from jwt.algorithms import OKPAlgorithm
 
 from dev_health_ops.api.graphql import principal_envelope
 from dev_health_ops.api.services.auth import (
@@ -30,7 +36,7 @@ from dev_health_ops.licensing.types import LicenseTier
 
 
 def _generate_test_key_pem() -> str:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key = Ed25519PrivateKey.generate()
     return key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.PKCS8,
@@ -59,12 +65,12 @@ def _sample_user(**overrides: object) -> AuthenticatedUser:
     return AuthenticatedUser(**defaults)  # type: ignore[arg-type]
 
 
-def _public_key_from_jwks(token: str, jwks: dict) -> RSAPublicKey:
+def _public_key_from_jwks(token: str, jwks: dict) -> Ed25519PublicKey:
     header = jwt.get_unverified_header(token)
     matching = [k for k in jwks["keys"] if k["kid"] == header["kid"]]
     assert matching, f"no JWKS key matches kid={header['kid']!r}"
-    key = RSAAlgorithm.from_jwk(matching[0])
-    assert isinstance(key, RSAPublicKey)
+    key = OKPAlgorithm.from_jwk(matching[0])
+    assert isinstance(key, Ed25519PublicKey)
     return key
 
 
@@ -203,10 +209,10 @@ def test_jwks_never_contains_private_key_material(signing_key: str) -> None:
     serialized = str(jwks)
     assert "PRIVATE KEY" not in serialized
     assert "-----BEGIN" not in serialized
-    # RSA JWK private-key-only fields must not be present.
+    # OKP JWK private-key-only field must not be present.
     assert "d" not in jwks["keys"][0]
-    assert "p" not in jwks["keys"][0]
-    assert "q" not in jwks["keys"][0]
+    assert jwks["keys"][0]["kty"] == "OKP"
+    assert jwks["keys"][0]["crv"] == "Ed25519"
 
 
 def test_ttl_must_be_positive(signing_key: str) -> None:

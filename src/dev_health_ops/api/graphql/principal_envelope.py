@@ -36,6 +36,14 @@ boundary (Python edge -> Go query-api) via a JWKS-style public key, matching
 the pattern ``acr/internal/auth`` already uses for its own JWKS/web-assertion
 verification (plan §3) -- an asymmetric key lets query-api verify without
 ever holding a Python-edge secret capable of forging a USER session token.
+
+Signed with Ed25519/EdDSA, not RS256 (reconciled 2026-08-27 per CHAOS-4377):
+the dev-health-go ``authverify`` package's JWKS verifier
+(``Ed25519JWKSVerifier``) is Ed25519-only by design, and PyJWT's
+``OKPAlgorithm`` (backed by ``cryptography``, already a dependency here)
+signs/exports Ed25519 JWKs natively -- switching the issuer is simpler and
+lower-risk than adding a second, RS256-specific verifier path to
+``authverify`` for a key type this envelope does not otherwise need.
 """
 
 from __future__ import annotations
@@ -49,8 +57,11 @@ from typing import TYPE_CHECKING, Any
 
 import jwt
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
-from jwt.algorithms import RSAAlgorithm
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from jwt.algorithms import OKPAlgorithm
 
 from dev_health_ops.api.services.auth import get_impersonation_context
 from dev_health_ops.api.services.permissions import get_user_permissions
@@ -81,7 +92,7 @@ __all__ = [
 #: -- see the module docstring.
 ENVELOPE_CLAIM_SCHEMA_VERSION = 1
 
-ENVELOPE_ALGORITHM = "RS256"
+ENVELOPE_ALGORITHM = "EdDSA"
 ENVELOPE_DEFAULT_TTL_SECONDS = 60
 ENVELOPE_ISSUER = os.getenv("GO_API_ENVELOPE_ISSUER", "dev-health-ops-edge")
 ENVELOPE_AUDIENCE = os.getenv("GO_API_ENVELOPE_AUDIENCE", "query-api")
@@ -110,22 +121,22 @@ def _get_envelope_signing_private_key_pem() -> str:
     if not pem:
         raise EnvelopeSigningKeyError(
             "GO_API_ENVELOPE_PRIVATE_KEY is required and must be set in the "
-            "environment (PEM-encoded RSA private key)."
+            "environment (PEM-encoded Ed25519 private key)."
         )
     return pem
 
 
-def _load_private_key(pem: str) -> RSAPrivateKey:
+def _load_private_key(pem: str) -> Ed25519PrivateKey:
     try:
         key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
     except ValueError as exc:
         raise EnvelopeSigningKeyError(
             f"GO_API_ENVELOPE_PRIVATE_KEY is not a valid PEM private key: {exc}"
         ) from exc
-    if not isinstance(key, RSAPrivateKey):
+    if not isinstance(key, Ed25519PrivateKey):
         raise EnvelopeSigningKeyError(
-            "GO_API_ENVELOPE_PRIVATE_KEY must be an RSA private key "
-            f"(RS256), got {type(key).__name__}"
+            "GO_API_ENVELOPE_PRIVATE_KEY must be an Ed25519 private key "
+            f"(EdDSA), got {type(key).__name__}"
         )
     return key
 
@@ -244,6 +255,10 @@ def issue_effective_principal_envelope(
 def build_envelope_jwks() -> dict[str, Any]:
     """Return the JWKS document a Go verifier fetches to check the envelope
     signature. Contains only the PUBLIC key -- never the private key.
+
+    Shape matches dev-health-go's ``authverify.Ed25519JWKSVerifier`` exactly:
+    ``kty=OKP``, ``crv=Ed25519``, ``alg=EdDSA``, a non-empty ``kid``, an empty
+    or ``"sig"`` ``use``, and ``x`` the base64url-encoded raw public key.
     """
     try:
         private_key = _load_private_key(_get_envelope_signing_private_key_pem())
@@ -251,11 +266,8 @@ def build_envelope_jwks() -> dict[str, Any]:
         _ENVELOPE_ISSUED_TOTAL.labels(outcome="key_error").inc()
         raise
 
-    public_key: RSAPublicKey = private_key.public_key()
-    jwk_json = RSAAlgorithm.to_jwk(public_key)
-    import json
-
-    jwk = json.loads(jwk_json)
+    public_key: Ed25519PublicKey = private_key.public_key()
+    jwk = OKPAlgorithm.to_jwk(public_key, as_dict=True)
     jwk["kid"] = ENVELOPE_KEY_ID
     jwk["use"] = "sig"
     jwk["alg"] = ENVELOPE_ALGORITHM

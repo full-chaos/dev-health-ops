@@ -46,7 +46,7 @@ sequenceDiagram
     Edge->>Auth: authenticate_access_token(token)
     Auth-->>Edge: AuthenticatedUser (or None: reject)
     Edge->>Envelope: issue_effective_principal_envelope(user, tier, licensed_features)
-    Envelope-->>Edge: signed envelope (RS256, TTL default 60s, aud=query-api)
+    Envelope-->>Edge: signed envelope (EdDSA/Ed25519, TTL default 60s, aud=query-api)
     Edge->>QueryAPI: proxied/compared request + envelope
     QueryAPI->>QueryAPI: verify signature via JWKS (dev-health-go authverify)
     QueryAPI->>QueryAPI: check aud, exp, v (claim schema version)
@@ -88,15 +88,17 @@ signal — the same shape the existing Python-only contract already uses.
 
 ### Key management
 
-RS256, asymmetric, and **separate from** the user-facing access-token
-HS256 secret (`JWT_SECRET_KEY`). The envelope crosses a process and
-language boundary (Python edge → Go `query-api`), so it uses the same
-JWKS-based verification shape `acr/internal/auth` already uses for its own
-web-assertion verification — `query-api` never holds a secret capable of
-forging a user session token, only the public key needed to verify an
-envelope. `build_envelope_jwks()` returns the public JWKS document; the
-private key is `GO_API_ENVELOPE_PRIVATE_KEY` (PEM, RSA), required at
-issuance time.
+EdDSA/Ed25519, asymmetric, and **separate from** the user-facing
+access-token HS256 secret (`JWT_SECRET_KEY`). The envelope crosses a
+process and language boundary (Python edge → Go `query-api`), so it uses
+the same JWKS-based verification shape `acr/internal/auth` already uses for
+its own web-assertion verification — `query-api` never holds a secret
+capable of forging a user session token, only the public key needed to
+verify an envelope. `build_envelope_jwks()` returns the public JWKS
+document; the private key is `GO_API_ENVELOPE_PRIVATE_KEY` (PEM, Ed25519),
+required at issuance time. Ed25519, not RS256 (reconciled 2026-08-27 per
+CHAOS-4377): the dev-health-go `authverify` package's JWKS verifier
+(`Ed25519JWKSVerifier`) is Ed25519-only by design.
 
 ## Operation rollout registry + proof ledger
 

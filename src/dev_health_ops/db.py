@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
@@ -133,15 +134,72 @@ def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
     )
 
 
+_UNRESOLVED_ENV_TEMPLATE_RE = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:(?::?[-=?+])[^}]*)?\}"
+)
+
+
+def _reject_unresolved_template(uri: str, *, source: str) -> str:
+    """Raise a clear error if ``uri`` still holds an unexpanded ``${VAR}``.
+
+    CHAOS-4402: a docker-compose-style DSN
+    (``postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/db``)
+    exported into the ambient shell for compose's OWN substitution is not
+    expanded by the host Python process. ``cli.py``'s ``_load_dotenv``
+    interpolates ``${VAR}`` refs it loads from a fresh ``.env`` line, but
+    skips any key already present in ``os.environ`` -- so a pre-exported
+    template reaches here byte-for-byte. Passed through verbatim, asyncpg
+    raises a confusing ``InvalidPasswordError`` for user
+    ``"${POSTGRES_USER"`` (the DSN parser splits on the literal ``:``
+    inside the template) instead of naming the real problem.
+
+    Codex review round 1 (P2, correct): the bare-``${VAR}`` pattern missed
+    Compose's parameter-expansion forms (``${VAR:-default}``,
+    ``${VAR-default}``, ``${VAR:=default}``, ``${VAR:?message}``,
+    ``${VAR:+alt}``) -- a DSN using any of those still reached asyncpg
+    verbatim. The pattern now matches an optional ``:-``/``-``/``:=``/``=``/
+    ``:?``/``?``/``:+``/``+`` operator and everything up to the closing
+    ``}``, covering every POSIX/Compose parameter-expansion form, not just
+    the bare-name one.
+
+    Codex review round 3 (P2): Compose also accepts the unbraced
+    ``$NAME`` shorthand. Round 4 (P1, correct) then caught the fix for
+    that: matching a bare ``$`` + identifier is NOT safe -- a literal
+    password containing a dollar sign (``pa$ssword``, a valid DSN
+    userinfo character) matches ``$ssword`` and raises on a perfectly
+    valid, already-resolved connection string. The braced ``${...}``
+    form doesn't have this problem -- literal ``{``/``}`` are not
+    realistic DSN userinfo/host/path characters and are exactly what
+    Compose actually emits by default -- so detection stays scoped to
+    that unambiguous, near-zero-false-positive syntax. The unbraced
+    shorthand is comparatively rare in practice and not worth the
+    false-positive risk of guessing at it with a regex.
+    """
+    match = _UNRESOLVED_ENV_TEMPLATE_RE.search(uri)
+    if match:
+        raise ValueError(
+            f"{source} contains an unresolved template placeholder "
+            f"{match.group(0)!r} -- this looks like a docker-compose-style "
+            "variable reference that was never substituted for this host "
+            "process. Export the fully-resolved connection string (or pass "
+            "--db explicitly) instead of relying on ambient env."
+        )
+    return uri
+
+
 def get_postgres_uri() -> str | None:
     """Get PostgreSQL connection URI with fallback chain."""
     uri = os.getenv("POSTGRES_URI")
     if uri:
-        return normalize_async_postgres_uri(uri)
+        return normalize_async_postgres_uri(
+            _reject_unresolved_template(uri, source="POSTGRES_URI")
+        )
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if fallback:
-        return normalize_async_postgres_uri(fallback)
+        return normalize_async_postgres_uri(
+            _reject_unresolved_template(fallback, source="DATABASE_URI/DATABASE_URL")
+        )
 
     return None
 
@@ -158,6 +216,26 @@ def get_clickhouse_uri() -> str | None:
 
 
 def normalize_async_postgres_uri(uri: str) -> str:
+    """Normalize a Postgres/sqlite URI to its async (``+asyncpg``) form.
+
+    Codex review round 2 (P2, CHAOS-4402): the bare ``postgres://`` alias
+    -- explicitly supported elsewhere in this codebase
+    (``storage/__init__.py``'s ``create_store``/``get_db_type``,
+    ``storage/utils.py``) -- reached this function unchanged before this
+    fix, since only ``postgresql://`` was recognized. A caller passing
+    ``--db postgres://...`` (or any ``POSTGRES_URI``/``DATABASE_URI`` using
+    that alias) got the URI back byte-for-byte, and
+    ``create_async_engine("postgres://...")`` then fails with
+    ``NoSuchModuleError`` -- "postgres" is not a registered SQLAlchemy
+    dialect, only "postgresql" is. Normalize the alias to
+    ``postgresql://`` first so every downstream call site (this function's
+    own ``postgresql://`` branch, every existing caller of
+    ``get_postgres_uri()``/``resolve_db_uri()``, and this PR's new
+    ``resolve_auth_seed_postgres_uri`` ``ns.db`` path alike) accepts it.
+    """
+    uri = _reject_unresolved_template(uri, source="PostgreSQL URI")
+    if uri.startswith("postgres://"):
+        uri = "postgresql://" + uri[len("postgres://") :]
     if uri.startswith("postgresql://"):
         url = make_url(uri)
         uri = url.set(drivername="postgresql+asyncpg").render_as_string(

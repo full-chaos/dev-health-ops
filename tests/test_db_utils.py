@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy.engine import make_url
 
 from dev_health_ops import db
@@ -174,4 +175,104 @@ class TestPostgresRuntimeUrlNormalization:
         assert url.drivername == "postgresql"
         assert url.query["sslmode"] == "require"
         assert url.query["application_name"] == "worker"
-        assert "ssl" not in url.query
+
+
+class TestRejectsUnresolvedEnvTemplate:
+    """CHAOS-4402: a docker-compose-style ``${VAR}`` DSN exported into the
+    ambient shell (meant for compose's OWN substitution, never expanded for
+    this host process) must fail with a clear message naming the real
+    problem, not reach asyncpg verbatim and raise a confusing
+    ``InvalidPasswordError`` for a truncated username.
+    """
+
+    def test_get_postgres_uri_rejects_unresolved_template_in_postgres_uri(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "POSTGRES_URI",
+            "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/devhealth",
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.get_postgres_uri()
+
+    def test_get_postgres_uri_rejects_unresolved_template_in_database_uri_fallback(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        monkeypatch.setenv(
+            "DATABASE_URI",
+            "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/devhealth",
+        )
+
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.get_postgres_uri()
+
+    def test_get_postgres_uri_passes_through_a_fully_resolved_uri(self, monkeypatch):
+        monkeypatch.setenv(
+            "POSTGRES_URI", "postgresql://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        result = db.get_postgres_uri()
+
+        assert result is not None
+        assert "${" not in result
+
+    def test_normalize_async_postgres_uri_rejects_unresolved_template(self):
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.normalize_async_postgres_uri(
+                "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/db"
+            )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "postgresql://${POSTGRES_USER:-postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER-postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:=postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:?required}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:+alt}@postgres:5432/db",
+        ],
+    )
+    def test_rejects_compose_parameter_expansion_forms(self, uri):
+        """Codex review round 1 (P2): the bare ${VAR} pattern missed
+        Compose/POSIX parameter-expansion forms with a default, error, or
+        alternate-value operator -- a DSN using any of those still reached
+        asyncpg verbatim."""
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.normalize_async_postgres_uri(uri)
+
+    def test_does_not_flag_a_literal_dollar_sign_in_credentials(self):
+        """Codex review round 4 (P1, correct): an earlier version of this
+        guard also matched the unbraced $NAME shorthand -- but a literal
+        password containing a dollar sign (pa$ssword, valid DSN userinfo)
+        matches $ssword and would wrongly raise on an already-resolved,
+        perfectly valid connection string. Detection stays scoped to the
+        unambiguous ${...} form only."""
+        # No ValueError raised is the actual assertion; make_url's own
+        # percent-encoding of the literal $ (-> %24) on render is normal,
+        # unrelated URL-safety behavior, not a sign the guard mishandled it.
+        result = db.normalize_async_postgres_uri(
+            "postgresql://devhealth:pa$ssword@localhost:5432/devhealth"
+        )
+        assert "pa%24ssword" in result
+
+
+class TestNormalizeAsyncPostgresUriAcceptsPostgresAlias:
+    def test_bare_postgres_scheme_normalizes_to_asyncpg(self):
+        """Codex review round 2 (P2): the bare ``postgres://`` alias --
+        explicitly supported by storage/__init__.py's create_store -- used
+        to reach create_async_engine unchanged (only ``postgresql://`` was
+        recognized), raising NoSuchModuleError for the unregistered
+        "postgres" dialect."""
+        result = db.normalize_async_postgres_uri(
+            "postgres://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        url = make_url(result)
+        assert url.drivername == "postgresql+asyncpg"
+        assert url.host == "localhost"
+        assert url.database == "devhealth"

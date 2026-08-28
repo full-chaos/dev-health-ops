@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from dev_health_ops.db import get_postgres_uri
+from dev_health_ops.db import get_postgres_uri, normalize_async_postgres_uri
 from dev_health_ops.fixtures.coherence import FixtureBundle, validate_all
 from dev_health_ops.fixtures.demo_identity import (
     DEFAULT_DEMO_REPO_NAME,
@@ -495,13 +495,51 @@ def resolve_auth_seed_postgres_uri(ns: Any) -> str | None:
     lives in.
 
     An explicit ``ns.postgres_uri`` therefore WINS over the environment.
-    ``fixtures generate`` never sets that attribute, so its resolution is
-    unchanged.
+
+    CHAOS-4402 (found live): ``fixtures generate`` never sets
+    ``ns.postgres_uri`` -- only ``fixtures world`` does -- so it fell
+    straight through to the ambient environment even when the operator
+    passed ``--db`` explicitly on the command line. ``--db`` is the SAME
+    flag ``_ensure_org_unpolluted``'s ClickHouse-sink check and every other
+    ``dev-hops`` command already honor (``ns.db``, resolved elsewhere via
+    ``db.resolve_db_uri``); this resolver silently ignored it and read
+    whatever ``POSTGRES_URI``/``DATABASE_URI`` happened to be exported --
+    in the wild, an unresolved docker-compose ``${POSTGRES_USER}`` template
+    meant for compose's own substitution, not this host process. ``ns.db``
+    now wins over the environment, same precedence ``resolve_db_uri`` uses.
+
+    Codex review round 3 (P2, correct): ``docs/contribute/development/
+    commands.md`` documents ``fixtures generate --db "$CLICKHOUSE_URI"``
+    -- ``--db`` misused there for what is actually the ClickHouse sink
+    (the AGENTS.md quickref correctly uses ``--sink`` instead, but this
+    doc example predates it and still works today only because the OLD
+    code never looked at ``ns.db`` for auth-seeding at all). Trusting
+    ``ns.db`` unconditionally would make that documented, previously
+    silently-tolerated invocation crash instead: a ``clickhouse://`` URI
+    is not touched by ``normalize_async_postgres_uri`` (it only rewrites
+    ``postgresql://``/``postgres://``/``sqlite://``), so it would reach
+    ``create_async_engine`` unchanged and fail with an unsupported-dialect
+    error. Only trust ``ns.db`` here when it actually looks like a
+    Postgres URI; anything else falls through to the environment exactly
+    as before this fix.
+
+    Codex review round 4 (P1, correct): the scheme check only accepted
+    ``postgresql://``/``postgres://``, rejecting the standard already-
+    async ``postgresql+asyncpg://`` form -- a valid, already-normalized
+    Postgres URI a caller might legitimately pass, silently falling back
+    to the environment instead of using it (the exact CHAOS-4402 bug this
+    PR fixes, for that one scheme). Recognize every Postgres scheme
+    ``normalize_async_postgres_uri`` itself understands.
     """
 
     explicit = getattr(ns, "postgres_uri", None)
     if explicit:
         return explicit
+    db_flag = getattr(ns, "db", None)
+    if db_flag and db_flag.startswith(
+        ("postgresql://", "postgres://", "postgresql+asyncpg://")
+    ):
+        return normalize_async_postgres_uri(db_flag)
     return get_postgres_uri()
 
 

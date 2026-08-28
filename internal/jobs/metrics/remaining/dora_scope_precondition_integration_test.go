@@ -829,6 +829,242 @@ func TestStartRunTxTreatsAZeroRowDoraCoverageAsTerminalOnceTheDayCloses(t *testi
 	}
 }
 
+// TestStartRunTxPrefersNonZeroDoraCoverageOverALaterZeroRowRun is the codex
+// round-1 P1 fix. Dora's two independent triggers (post-sync, fixed-
+// schedule) can both start a run for the same org+day while neither had yet
+// succeeded -- the advisory lock in StartRunTx only serializes the START of
+// the call, not completion -- so an earlier run that legitimately writes
+// real rows and a later run that legitimately writes 0 can both exist for
+// the same day. loadRunCoveringDay must not let CHAOS-4384's open-day
+// exception fire against the 0-row run when the earlier non-zero run is
+// right there: dora_metrics_daily is append-only with no dedup on replay
+// (CHAOS-4242), so treating the 0-row run as "nothing to compute yet" and
+// launching a THIRD run would insert a genuine duplicate of the first run's
+// already-correct rows, not a real recompute.
+//
+// Getting two independent SUCCEEDED runs for the same org+day without
+// actually racing two goroutines against the advisory lock reuses
+// TestStartRunTxDoesNotLetANarrowRunSatisfyAWiderBackfillRequest's own
+// technique: request run B with a WIDER backfill_days than run A's, so run
+// A (already succeeded) does not satisfy run B's minBackfillDays and
+// StartRunTx creates run B as a genuinely separate run rather than
+// returning run A.
+func TestStartRunTxPrefersNonZeroDoraCoverageOverALaterZeroRowRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004384"
+	today := time.Now().UTC().Format("2006-01-02")
+	narrowScope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
+	wideScope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":30}`)
+
+	// Run A: narrow (backfill_days=1), completes with REAL rows first.
+	txA, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runA, err := store.StartRunTx(ctx, txA, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:sync-run-a",
+		ScopeKey:       "post-sync-scope-a",
+		Scopes:         []json.RawMessage{narrowScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("run A StartRunTx: %v", err)
+	}
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	claimA, err := store.ClaimPartition(ctx, deterministicPartitionID(runA.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimA == nil {
+		t.Fatal("run A's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claimA, "compatibility_execution:"+claimA.Partition.ID+":rows_written=3"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run B: wide (backfill_days=30) -- run A's backfill_days=1 does not
+	// satisfy it, so this is a genuinely independent second run for the same
+	// anchor day, not a reuse of run A. Completes with 0 rows AFTER run A.
+	txB, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runB, err := store.StartRunTx(ctx, txB, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "fixed-schedule:dora_daily_fanout:catch-up",
+		ScopeKey:       "wide-scope-b",
+		Scopes:         []json.RawMessage{wideScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("run B StartRunTx: %v", err)
+	}
+	if err := txB.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runB.ID == runA.ID {
+		t.Fatal("run B unexpectedly reused run A -- test setup assumes two independent runs for the same day")
+	}
+	claimB, err := store.ClaimPartition(ctx, deterministicPartitionID(runB.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimB == nil {
+		t.Fatal("run B's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claimB, "compatibility_execution:"+claimB.Partition.ID+":rows_written=0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Third trigger: requests backfill_days=1, which BOTH run A and run B
+	// satisfy. Must return run A (the real coverage), never launch a fourth
+	// run just because run B -- the more recently completed one -- happened
+	// to write 0 rows.
+	txC, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runC, err := store.StartRunTx(ctx, txC, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:sync-run-c",
+		ScopeKey:       "post-sync-scope-c",
+		Scopes:         []json.RawMessage{narrowScope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("run C StartRunTx: %v", err)
+	}
+	if err := txC.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runC.ID != runA.ID {
+		t.Fatalf(
+			"a third trigger did not reuse run A's real coverage (%s), got %s instead -- "+
+				"this duplicates real dora_metrics_daily rows on an append-only table",
+			runA.ID, runC.ID,
+		)
+	}
+}
+
+// TestLoadRunCoveringDayToleratesNullOutputEvidence is the codex round-1 P2
+// fix. output_evidence is nullable at the schema level (migration 0058:
+// "output_evidence IS NULL OR length(...) BETWEEN 1 AND 4096") -- a
+// succeeded partition from before this evidence format existed (CHAOS-4242's
+// diagnosis found 144 such rows) can carry a NULL value. Scanning that into
+// a non-nullable Go string previously failed the query outright
+// (ErrUnavailable), which would have made StartRunTx error on -- rather than
+// correctly treat as terminal coverage -- every dora day whose only
+// completed partition predates rows_written tracking.
+func TestLoadRunCoveringDayToleratesNullOutputEvidence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004384"
+	closedDay := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	scope := json.RawMessage(`{"version":1,"day":"` + closedDay + `","sink":"auto","interval":"daily","backfill_days":1}`)
+
+	firstTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := store.StartRunTx(ctx, firstTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:legacy-sync-run",
+		ScopeKey:       "post-sync-scope-legacy",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(firstRun.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("first run's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "legacy-completion-marker"); err != nil {
+		t.Fatal(err)
+	}
+	// Force the exact pre-CHAOS-4242 evidence shape directly: a succeeded
+	// partition whose output_evidence is NULL, not merely non-conforming.
+	if _, err := pool.Exec(ctx,
+		"UPDATE remaining_metric_partitions SET output_evidence = NULL WHERE id = $1::uuid",
+		partitionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	secondTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartRunTx(ctx, secondTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "fixed-schedule:dora_daily_fanout:catch-up",
+		ScopeKey:       closedDay,
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		// Roll back before Fatalf: an open, never-resolved transaction holds
+		// its connection checked out of the pool forever, and the deferred
+		// pool.Close() above then hangs waiting for it instead of failing
+		// this test cleanly.
+		_ = secondTx.Rollback(ctx)
+		t.Fatalf("second StartRunTx errored instead of tolerating NULL output_evidence: %v", err)
+	}
+	if err := secondTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if secondRun.ID != firstRun.ID {
+		t.Fatalf(
+			"a NULL-evidence closed-day completion (%s) was not treated as terminal coverage, got %s instead",
+			firstRun.ID, secondRun.ID,
+		)
+	}
+}
+
 type nopPartitionPublisher struct{}
 
 func (nopPartitionPublisher) PublishPartitionTx(

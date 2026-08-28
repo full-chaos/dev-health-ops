@@ -662,12 +662,30 @@ SELECT EXISTS (
 // loadRunCoveringDay also returns the covering partition's output_evidence
 // (CHAOS-4384) so the caller can tell a genuine day-closed 0-row completion
 // apart from an open-day one that must not be terminal -- see StartRunTx's
-// dora block and isZeroRowEvidence/dayIsOpen.
+// dora block and isZeroRowEvidence/dayIsOpen. output_evidence is nullable at
+// the schema level (migration 0058: `output_evidence IS NULL OR length(...)
+// BETWEEN 1 AND 4096`) -- every partition CompletePartition itself writes
+// carries a non-empty value, but a succeeded row from before this evidence
+// format existed (CHAOS-4242's diagnosis found 144 such rows) can still be
+// NULL, so this scans a nullable pointer rather than failing the whole call
+// with ErrUnavailable on a perfectly valid legacy row (codex round 1, P2).
+//
+// The ORDER BY prefers a partition that is NOT a 0-row completion over one
+// that is, before preferring recency: dora's two independent triggers
+// (post-sync, fixed-schedule) can both complete a run for the same org+day
+// while neither had yet succeeded when the other started (the advisory lock
+// only serializes the START of StartRunTx, not completion), so an earlier
+// run with real rows and a later run that legitimately wrote 0 can both
+// exist. Picking "most recently completed" alone would let CHAOS-4384's
+// open-day exception fire against the 0-row run even though the earlier
+// non-zero run is right there -- and since dora_metrics_daily is append-only
+// with no dedup on replay (CHAOS-4242), that would insert a genuine
+// duplicate rather than a real recompute (codex round 1, P1).
 func (store *PostgresStore) loadRunCoveringDay(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day string, minBackfillDays int,
-) (Run, string, bool, error) {
+) (Run, *string, bool, error) {
 	var run Run
-	var outputEvidence string
+	var outputEvidence *string
 	err := tx.QueryRow(ctx, `
 SELECT run.id::text, run.org_id::text, run.family, run.generation, run.scope_key, run.status, run.generation_seed,
        partition.output_evidence
@@ -678,16 +696,16 @@ WHERE run.org_id = $1::uuid AND run.family = $2
   AND partition.status = 'succeeded'
   AND partition.scope->>'day' = $3
   AND coalesce((partition.scope->>'backfill_days')::int, 1) >= $4
-ORDER BY partition.completed_at DESC
+ORDER BY coalesce(partition.output_evidence LIKE '%:rows_written=0', false) ASC, partition.completed_at DESC
 LIMIT 1`, organizationID, family, day, minBackfillDays).Scan(
 		&run.ID, &run.OrganizationID, &run.Family, &run.Generation, &run.ScopeKey, &run.Status, &run.Seed,
 		&outputEvidence,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Run{}, "", false, nil
+		return Run{}, nil, false, nil
 	}
 	if err != nil {
-		return Run{}, "", false, ErrUnavailable
+		return Run{}, nil, false, ErrUnavailable
 	}
 	return run, outputEvidence, true, nil
 }
@@ -696,9 +714,11 @@ LIMIT 1`, organizationID, family, day, minBackfillDays).Scan(
 // rows_written=0 completion, in exactly the format
 // compatibilityCompletionResult (handler.go) writes it. CHAOS-4243 is what
 // guarantees a zero write is never indistinguishable from a plain,
-// unqualified success string here.
-func isZeroRowEvidence(outputEvidence string) bool {
-	return strings.HasSuffix(outputEvidence, ":rows_written=0")
+// unqualified success string here. A nil evidence (a legacy row predating
+// this format, or any other family that never reports rows_written) is
+// never treated as a zero-row completion (codex round 1, P2).
+func isZeroRowEvidence(outputEvidence *string) bool {
+	return outputEvidence != nil && strings.HasSuffix(*outputEvidence, ":rows_written=0")
 }
 
 // dayIsOpen reports whether day (a canonical "2006-01-02" UTC date) has not

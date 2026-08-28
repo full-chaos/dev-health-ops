@@ -1015,12 +1015,58 @@ VALUES ($4::uuid, $2, 'victim', $1::uuid, TRUE, $3, $3)`,
 		t.Fatal(err)
 	}
 
+	// CHAOS-4408 (flake root-caused, not from reading): a fresh container's
+	// scheduled_jobs/saved_reports have never been ANALYZEd, so the planner
+	// starts from Postgres's default "brand-new table" estimate of ONE row
+	// on each side. rejectAmbiguousReportSchedules's self-join (reports.go,
+	// ambiguousReportSchedulesSQL) covers every active report schedule by
+	// design (see that function's comment) -- with a rows=1 estimate the
+	// planner picks a Nested Loop that probes saved_reports_pkey once PER
+	// outer row instead of a Hash Join, which turns the 20,002-row join
+	// this test deliberately creates into a genuinely slow query, not a
+	// host-load illusion: EXPLAIN (ANALYZE, BUFFERS) on an otherwise-idle
+	// local Postgres showed 200,227,928 buffer hits and ~27s for this exact
+	// query pre-ANALYZE, vs. 20,669 buffer hits and ~13ms once ANALYZE runs
+	// -- a ~2000x difference from statistics alone, comfortably explaining
+	// why a fixed 60s produceInTransaction budget (reports_integration_test.go)
+	// occasionally trips under any additional host CPU/IO contention on this
+	// shared multi-agent dev box (observed live: "Produce(): check for
+	// ambiguous report schedules: timeout: context deadline exceeded",
+	// https://github.com/full-chaos/dev-health-ops/actions/runs/33190609134/job/98915005326).
+	// A live autovacuum-analyzed production database would never hit this --
+	// only this test's own single-use, freshly-created container can. Fix
+	// the actual capacity problem (stale statistics on a fresh bulk load)
+	// rather than the timeout: ANALYZE before exercising the codepath whose
+	// cost depends on knowing these tables are NOT still empty.
+	if _, err := pool.Exec(ctx, `ANALYZE public.scheduled_jobs, public.saved_reports`); err != nil {
+		t.Fatal(err)
+	}
+
 	schedule, occurrence := reportOccurrence(
 		t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
 	)
+	// Pin the mechanism, not just the outcome (AGENTS.md "four verification
+	// rules" #1): without the ANALYZE above, this reliably measures ~27s on
+	// an idle machine (confirmed by hand, see the comment above) -- comfortably
+	// over this bound even with zero host contention -- while the statistics
+	// fix keeps it in the low hundreds of milliseconds. A regression that
+	// reintroduces the stale-statistics plan fails this assertion
+	// deterministically, without needing a loaded host to catch it.
+	const maxAmbiguityCheckDuration = 10 * time.Second
+	produceStartedAt := time.Now()
 	outcome, err := produceInTransaction(t, pool, schedule, occurrence)
+	produceElapsed := time.Since(produceStartedAt)
 	if err != nil {
 		t.Fatalf("Produce(): %v", err)
+	}
+	if produceElapsed > maxAmbiguityCheckDuration {
+		t.Fatalf(
+			"Produce() took %s (> %s) against a freshly bulk-loaded, unANALYZEd "+
+				"table population -- the ambiguous-report-schedule self-join "+
+				"(reports.go: ambiguousReportSchedulesSQL) likely regressed to a "+
+				"stale-statistics Nested Loop plan instead of a Hash Join",
+			produceElapsed, maxAmbiguityCheckDuration,
+		)
 	}
 	assertNoDuplicateHandoffs(t, outcome)
 

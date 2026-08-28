@@ -14,22 +14,23 @@ CHAOS-4352 was a placeholder epic ("almost want even the Python API off Python",
 |---|---|---|
 | `graphql_app` (Strawberry, `/graphql`) | ClickHouse (queries) + Postgres (mutations) | Analytics, investment, work graph, team attribution, DORA-class metrics; admin-ish mutations |
 | `webhooks_router` | Postgres | Inbound provider webhooks |
-| `admin_router` (19 sub-routers: ask_dev, audit_logs, credentials, customer_push, features, github_app, governance, identities, integrations, ip_allowlist, orgs, pagerduty(+bindings/services), platform, platform_ask_dev, retention, settings, setup, sync, teams, users) | Postgres | Org/user/team/identity CRUD, credentials, integrations, sync config, retention, feature flags, governance |
+| `admin_router` (19 sub-routers: ask_dev, audit_logs, credentials, customer_push, features, github_app, governance, identities, integrations, ip_allowlist, orgs, pagerduty(+bindings/services), platform, platform_ask_dev, retention, settings, setup, sync, teams, users) | Postgres, **except** `teams.py`/`identities.py` which are ClickHouse-only (`ClickHouseTeamAdminService`/`ClickHouseIdentityStore` — CHAOS-2600; no Postgres team/identity tables exist) | Org/user/team/identity CRUD, credentials, integrations, sync config, retention, feature flags, governance |
 | `impersonation_router` | Postgres + Valkey | Support impersonation |
 | `auth_router` | Postgres + Valkey (session) | Auth/session |
 | `billing_router` | Postgres | Billing/licensing/subscriptions |
 | `dev_router` (Ask Dev, ~45 files under `api/dev/`) | Mixed | Python Ask Dev prototype — **not a porting target**: chris's standing rule is that this prototype is not a reference; the real Ask Dev runtime is native Go in `acr/` against ClickHouse tables + contracts. Only the admin-facing slice (feature flags, settings surfaced via `admin/routers/ask_dev.py`) is durable. |
-| `licensing_router`, `telemetry_router`, `product_telemetry_router` | Postgres | Licensing, telemetry |
+| `licensing_router`, `telemetry_router` | Postgres | Licensing, telemetry |
+| `product_telemetry_router` | Valkey (queue, `get_redis_client`/`streams.py`) | Product telemetry event ingest |
 | `ingest_router`, `external_ingest_router`(+status) | Postgres/ClickHouse | Ingest endpoints |
-| `internal_acr_router` | — | Internal, consumed by `acr/` |
-| `worker_operational_router`, `worker_sync_router`, `worker_metrics_router`, `worker_workgraph_router` | Postgres/ClickHouse | **Internal bridge routes for Go workers.** `worker_metrics_router` is `/api/internal/daily-metrics/v1/execute` — the daily-metrics compatibility bridge Go's heavy worker calls into a Python child process for families not yet natively ported (CHAOS-3092). This was just hardened 2026-08-27 (PR 3f1223b9e: RSS-based memory enforcement, replacing a self-imposed RLIMIT_AS bound that false-fired in prod). A dedicated `metrics-api` service (CHAOS-4351) now runs this Python image standalone in prod so the bridge's runner-child memory profile doesn't compete with the main API replicas. |
+| `internal_acr_router` | Postgres (`get_postgres_session`, internal-service-credential model) | Internal, consumed by `acr/` |
+| `worker_operational_router`, `worker_sync_router`, `worker_metrics_router`, `worker_workgraph_router` | Postgres/ClickHouse | **Internal bridge routes for Go workers.** `worker_metrics_router` is `/internal/worker/daily-metrics/v1/execute` — the daily-metrics compatibility bridge Go's heavy worker calls into a Python child process for families not yet natively ported (CHAOS-3092). This was just hardened 2026-08-27 (PR 3f1223b9e: RSS-based memory enforcement, replacing a self-imposed RLIMIT_AS bound that false-fired in prod). A dedicated `metrics-api` service (CHAOS-4351) now runs this Python image standalone in prod so the bridge's runner-child memory profile doesn't compete with the main API replicas. |
 | `orgs_router` | Postgres | Org management |
 
 **Not covered by the router table above: 35 handlers declared directly on `app` (`@app.get/post/…`) in `main.py`, not on a mounted `APIRouter`.** These include `/health`, `/ready`, `/health/workers`, and ~32 `/api/v1/*` REST analytics endpoints (`/api/v1/meta`, `/home`, `/explain`, `/heatmap`, `/work-units`, `/flame`(+aggregated), `/quadrant`, and siblings) — a legacy REST surface parallel to the GraphQL analytics queries, gated in the web client by `useGraphQLAnalytics` (CHAOS-4248 tracks dead-code cleanup here). **Before Wave 6 (admin/control REST) or any Python-retirement step, each of these 35 handlers must be classified as ported / retained / retired** — the router-level inventory above is not sufficient on its own to retire the Python composition root, since these health and `/api/v1/*` routes have no owning `APIRouter` and were missed by a `@router.*`-scoped inventory pass.
 
 Endpoint density (`@router.get/post/put/delete/patch` count) — heaviest Postgres-CRUD surfaces: `admin/routers/sync.py` (16), `customer_push.py` (15), `settings.py` (13), `integrations.py` (13), `teams.py` (11), `orgs.py` (11); `dev/router.py` (10), `billing/router.py` (8).
 
-GraphQL: `api/graphql/schema.py` defines `Query` and `Mutation` root types; 33 resolver files under `api/graphql/resolvers/`. Consumer: `web/` (Next.js, urql client, TypeScript types generated from a schema export consumed by web CI for drift detection — `api/graphql/export_schema.py`). `acr/` (Go) does **not** consume this API; it reads Postgres/ClickHouse directly for its own runtime.
+GraphQL: `api/graphql/schema.py` defines `Query` and `Mutation` root types; 33 resolver files under `api/graphql/resolvers/`. **8 of `Query`'s fields are `dev_*` (`dev_scope_search`, `dev_metric_catalog`, `dev_metric`, `dev_evidence_search`, `dev_data_health`, `dev_status_snapshot`, `dev_change_summary`, `dev_work_graph_neighbors`, `schema.py:183-286`) and a 3-field `Subscription` root exists (`api/graphql/subscriptions.py:57-170`) — neither is covered by waves 1-6 below.** Both are Ask Dev prototype surface: out of scope for query-api/control-api porting per section 5's Ask Dev exclusion, but must be explicitly retired or retained (not silently left on the Python edge) before Python retirement is claimed complete. Consumer: `web/` (Next.js, urql client, TypeScript types generated from a schema export consumed by web CI for drift detection — `api/graphql/export_schema.py`). `acr/` (Go) does **not** consume this API; it reads Postgres/ClickHouse directly for its own runtime.
 
 Auth/session: Valkey-backed sessions, per-request web session sync, tier resolution via `resolve_org_tier` (never `OrgLicense`-only), impersonation state kept in sync between Valkey and per-request web state.
 
@@ -92,7 +93,7 @@ Non-negotiables carried over from the worker cutover's post-mortem:
 
 **Wave 1 — `featureFlags` only.** Strongest first canary: read-only, ClickHouse-only, bounded, stable explicit ordering, already has a live ClickHouse test, and exercises a real non-happy-path (missing-table degraded result). Port only `featureFlags` in the first switch, not `featureFlagEvents`. If production inventory shows `featureFlags` gets no real traffic, use it for local/staging proof only and pick `reviewEdges` as the first production canary — a route with no traffic cannot furnish production executed-proof (stage 3 above).
 
-**Recommended continuation, all read-only:** (2) `reviewEdges` — after making tie-ordering deterministic; (3) `hotspots`, `complexityTimeseries`, `cognitiveLoad`; (4) higher-fan-out analytics, Work Graph, DORA, batch `analytics`; (5) Postgres-backed GraphQL reads (`savedReports` and equivalents); (6) admin/control REST reads (the 19 admin routers' `GET` surface). **Mutation admission gate** — every read operation across both GraphQL and REST (Waves 1-6, the complete read surface) must be stable in production before this gate opens; opening it earlier (e.g. after Wave 5 alone, before Wave 6's REST reads exist) does not satisfy open decision 4. (7) **Mutations** — GraphQL report mutations and admin/control REST writes together, per-mutation-family DB/audit/outbox readback proof, single-primary canary, no shadow-dual-write (see the mutation rules in section 5). (8) public auth/impersonation edge **last**. The Python Ask Dev `dev_*` runtime is never in this sequence — it is out of scope for the Go API entirely.
+**Recommended continuation, all read-only:** (2) `reviewEdges` — after making tie-ordering deterministic; (3) `hotspots`, `complexityTimeseries`, `cognitiveLoad`; (4) higher-fan-out analytics, Work Graph, DORA, batch `analytics`; (5) Postgres-backed GraphQL reads (`savedReports` and equivalents); (6) admin/control REST reads — the 19 admin routers' `GET` surface **plus every other `GET` handler not yet named**: the 35 direct-`@app.*` handlers (section 2), billing/licensing router reads, external-ingest status, telemetry, `internal_acr_router`, `orgs_router`. Each must reach an explicit ported/retained/retired disposition in this wave — an enumerated closed list, not "the 19 admin routers" as shorthand — or the mutation gate below has no attainable completion condition. **Mutation admission gate** — every read operation across both GraphQL and REST (Waves 1-6, the complete read surface) must be stable in production before this gate opens; opening it earlier (e.g. after Wave 5 alone, before Wave 6's REST reads exist) does not satisfy open decision 4. (7) **Mutations** — GraphQL report mutations and admin/control REST writes together, per-mutation-family DB/audit/outbox readback proof, single-primary canary, no shadow-dual-write (see the mutation rules in section 5). (8) public auth/impersonation edge **last**. The Python Ask Dev `dev_*` runtime is never in this sequence — it is out of scope for the Go API entirely.
 
 ## 7. Open decisions for chris
 
@@ -112,7 +113,7 @@ flowchart LR
   api -->|reads| ch[(ClickHouse)]
   api -->|CRUD + sessions| pg[(Postgres)]
   api -->|session state| valkey[(Valkey)]
-  goworker[Go workers: cmd/dev-health-worker] -->|POST /api/internal/daily-metrics/v1/execute| metricsapi[metrics-api: Python FastAPI, CHAOS-4351]
+  goworker[Go workers: cmd/dev-health-worker] -->|POST /internal/worker/daily-metrics/v1/execute| metricsapi[metrics-api: Python FastAPI, CHAOS-4351]
   metricsapi -->|runner child, RSS-bounded| ch
   goworker -->|pgx, RolePosture grants| pg
   goworker -->|native readers/writers| ch
@@ -143,16 +144,27 @@ flowchart LR
 
 Proof identity must be bound to the exact candidate, not just the document: a `PROOF_RUN` keyed only by `document_digest` stays valid across a `candidate_build` change, and cannot distinguish two operations selected from the same multi-operation document. `schema_digest`, `document_digest`, `selected_operation`, and `candidate_build` together are the proof's immutable key — a proof run is evidence for exactly one tuple, never carried forward across any of the four changing.
 
-`ROLLOUT_ENTRY` is append-only, one row per `candidate_build`, never updated in place — a new candidate build is a new row, not a mutation of the old one, so its primary key can include `candidate_build` and `PROOF_RUN`'s foreign key resolves against a real unique parent. `is_current` marks the row a given `(schema_digest, document_digest, selected_operation)` triple currently routes to; every prior row (and its proof runs) stays exactly as it was proven, immutably.
+One table cannot be both the append-only proof target and the mutable routing decision: `mode`, `rollout_percentage`, and "which build is current" all change as a rollout progresses, but a proof must stay pinned to the exact build it proved. Two entities, not one:
+
+- **`CANDIDATE_BUILD`** — immutable, append-only. One row is created the first time a `candidate_build` registers against an operation; it is never updated. `PROOF_RUN` references this row, so a proof can never be silently reattributed to a later build.
+- **`ROUTING_STATE`** — exactly one mutable row per `(schema_digest, document_digest, selected_operation)`. Holds the *current* `candidate_build` pointer, `mode`, `rollout_percentage`, `eligible_orgs`. This is what the request router reads on every call, and what a rollback mutates in place — moving the pointer back to an earlier (already-immutable) `CANDIDATE_BUILD` row is exactly the "registry change, not an image rollback" from section 5.
+
+`PROOF_RUN` also records which *request* produced its verdict, not only which candidate: a registered document invoked with different variables, auth context, or org can diverge even when the document digest matches, and stage 2/4's "complete observable response" and "same watermark" claims need durable evidence to check, not just a pass/fail row.
 
 ```mermaid
 erDiagram
-  ROLLOUT_ENTRY {
+  CANDIDATE_BUILD {
     string schema_digest PK
     string document_digest PK
     string selected_operation PK
     string candidate_build PK
-    bool is_current "exactly one true row per (schema_digest, document_digest, selected_operation)"
+    timestamp registered_at
+  }
+  ROUTING_STATE {
+    string schema_digest PK
+    string document_digest PK
+    string selected_operation PK
+    string current_candidate_build FK
     string owner "python|go"
     string mode "python|shadow|canary|primary|disabled"
     string eligible_orgs
@@ -165,10 +177,16 @@ erDiagram
     string document_digest FK
     string selected_operation FK
     string candidate_build FK
+    string request_identity "digest of variables + auth-context shape + org_id"
     string stage "dual_run|deployed_executed|shadow|canary"
     string terminal_state "match|mismatch|auth_rejected|validation_rejected|dependency_failed|timeout|cancelled|resource_exhausted|fallback|unsupported|proof_failed"
+    string baseline_response_ref "durable artifact reference, not inlined"
+    string candidate_response_ref "durable artifact reference, not inlined"
+    string side_effect_digest "nullable; required when the operation has side effects per stage 2"
+    string data_watermark "required for stage-4 same-watermark comparison"
     string org_id
     timestamp observed_at
   }
-  ROLLOUT_ENTRY ||--o{ PROOF_RUN : "proven by (schema_digest+document_digest+selected_operation+candidate_build, exact match, full 4-column FK)"
+  CANDIDATE_BUILD ||--o{ ROUTING_STATE : "one becomes current"
+  CANDIDATE_BUILD ||--o{ PROOF_RUN : "proven by (exact schema_digest+document_digest+selected_operation+candidate_build, full 4-column FK)"
 ```

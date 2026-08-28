@@ -224,6 +224,19 @@ var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit"}
 // families.json are out of this ticket.
 var dailyMetricsZeroRowsWithSourceFamilies = []string{"cicd", "deploy", "incident", "testops_risk"}
 
+// dailyMetricsRedriveReasons is the closed set of bounded reasons an
+// operator-invoked stranded-partition redrive (CHAOS-4358) can report.
+// "failed_permanent_reset" counts partitions whose terminal failed_permanent
+// state (CHAOS-4319) the operator explicitly overrode back to the ordinary
+// re-dispatchable 'failed'; "dispatch_redriven" counts partitions that became
+// reachable because a fresh metrics.daily_dispatch job was enqueued for their
+// run outside the outbox's normal per-run dedupe (the CHAOS-4358 gap: once
+// River discards every daily_partition job for a run, nothing else ever
+// re-publishes that dispatch). Both are counted in partitions, not runs, so
+// the series answers "how much stranded work moved", not "how many API
+// calls happened".
+var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_redriven"}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -383,6 +396,10 @@ type MetricsCollector struct {
 	dailyMetricsLease                    map[dailyMetricsLeaseLabels]uint64
 	dailyMetricsDiscovery                map[dailyMetricsDiscoveryLabels]uint64
 	dailyMetricsFamilyZeroRowsWithSource map[string]uint64
+	// dailyMetricsRedrive (CHAOS-4358) counts operator-invoked stranded-
+	// partition redrive activity by bounded reason. See
+	// dailyMetricsRedriveReasons for the vocabulary.
+	dailyMetricsRedrive map[string]uint64
 	// Native family compute (CHAOS-4276, the daily bridge's per-partition
 	// counterpart to the DORA/capacity counters above). Duration is tracked
 	// per family since native families are cut over independently and one
@@ -493,6 +510,7 @@ var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -535,6 +553,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsLease:                    make(map[dailyMetricsLeaseLabels]uint64, len(dailyMetricsLeaseSeries())),
 		dailyMetricsDiscovery:                make(map[dailyMetricsDiscoveryLabels]uint64, len(dailyMetricsDiscoverySeries())),
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
+		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
@@ -611,6 +630,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		collector.dailyMetricsFamilyZeroRowsWithSource[family] = 0
+	}
+	for _, reason := range dailyMetricsRedriveReasons {
+		collector.dailyMetricsRedrive[reason] = 0
 	}
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		collector.dailyMetricsCompatRetry[decision] = 0
@@ -938,6 +960,24 @@ func (collector *MetricsCollector) ObserveDailyMetricsFamilyZeroRowsWithSource(f
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFamilyZeroRowsWithSource[family]++
+	return nil
+}
+
+// ObserveDailyMetricsRedrive records count partitions moved by one bounded
+// reason during an operator-invoked stranded-partition redrive (CHAOS-4358).
+// count must be >= 0: a redrive pass that touched nothing still calls this
+// with 0 rather than skipping the call, so "no stranding today" and "the
+// redrive path never ran" both read as a present, zero-valued series.
+func (collector *MetricsCollector) ObserveDailyMetricsRedrive(reason string, count int) error {
+	if !slices.Contains(dailyMetricsRedriveReasons, reason) {
+		return errors.New("daily metrics redrive reason is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics redrive count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsRedrive[reason] += uint64(count)
 	return nil
 }
 
@@ -1585,6 +1625,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsLeases(&output)
 	collector.writeDailyMetricsDiscovery(&output)
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
+	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
@@ -1873,6 +1914,14 @@ func (collector *MetricsCollector) writeDailyMetricsFamilyZeroRowsWithSource(out
 	for _, family := range dailyMetricsZeroRowsWithSourceFamilies {
 		writeUintSample(output, "dev_health_daily_metrics_families_zero_rows_with_source_total",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsFamilyZeroRowsWithSource[family])
+	}
+}
+
+func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_redrive_partitions_total", "Daily-metrics partitions moved by an operator-invoked stranded-run redrive, by bounded reason (CHAOS-4358).", "counter")
+	for _, reason := range dailyMetricsRedriveReasons {
+		writeUintSample(output, "dev_health_daily_metrics_redrive_partitions_total",
+			[]metricLabel{{"reason", reason}}, collector.dailyMetricsRedrive[reason])
 	}
 }
 

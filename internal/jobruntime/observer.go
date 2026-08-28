@@ -135,6 +135,18 @@ type DailyMetricsZeroRowsObserver interface {
 	ObserveDailyMetricsFamilyZeroRowsWithSource(family string) error
 }
 
+// DailyMetricsRedriveObserver is the narrow capability
+// PostgresStore.RedriveStrandedPartitions depends on (CHAOS-4358). Generic
+// runtime middleware cannot infer this: only the redrive itself knows how
+// many partitions it moved, and by which bounded reason -- an operator
+// override of a failed_permanent terminal state versus a fresh
+// metrics.daily_dispatch enqueue outside the outbox's normal per-run dedupe.
+// A nil observer makes this a silent no-op, matching every other observer in
+// this package: telemetry must never gate durable state.
+type DailyMetricsRedriveObserver interface {
+	ObserveDailyMetricsRedrive(reason string, count int) error
+}
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

@@ -69,3 +69,4 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 .mypy_cache/
 .ruff_cache/
 worktrees/
+dev-health-workerctl

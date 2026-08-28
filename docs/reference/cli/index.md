@@ -1099,7 +1099,98 @@ with no hint that a different container would work.
     configuration makes either verb work. The refusal is deliberate: the frozen
     contracts name domain links that have no authoritative semantic table yet.
     Treat them as unavailable until CHAOS-4030 lands. There is currently no
-    supported path to re-drive a stranded job by hand.
+    generic supported path to re-drive a stranded job by hand — `metrics
+    daily-redrive` below is a narrow, daily-metrics-specific exception, not a
+    counterexample to this warning.
+
+### `dev-health-workerctl metrics`
+
+Repair a daily-metrics run stranded by CHAOS-4358: every `daily_partition`
+River job for it already failed and was discarded, and nothing else ever
+re-enqueues work for that run on its own (a fresh `metrics.daily_dispatch`
+run still hits the SAME permanent per-partition outbox dedupe key its
+original dispatch used, so a bare re-dispatch alone is not enough — see
+[job-recovery-lifecycle.md](../../operate/run/job-recovery-lifecycle.md)).
+
+```bash
+WORKER_OPERATIONAL_BRIDGE_URL=http://metrics-api:8000 \
+WORKER_METRIC_REPAIR_TOKEN=<repair-token> \
+dev-health-workerctl metrics daily-redrive \
+  --org 70d529e0-3c06-4597-8480-794fd02328b6 \
+  --from 2026-08-08 \
+  --to 2026-08-27 \
+  --review-evidence "confirmed via ClickHouse readback that testops_test/dora/cicd have zero rows for these repo+day scopes; safe to re-run"
+```
+
+`--review-evidence` is **required**, with no default (codex review round 3):
+"ambiguous" means a progress-having failure MAY have already written real
+output, and claim expiration alone is not evidence retry is safe —
+`worker_metrics.py`'s single-execution `/repair` endpoint already requires a
+human to pick `retry_safe` vs `confirm_succeeded` per execution based on
+actual review, and this bulk path must not quietly bypass that by
+auto-authorizing every ambiguous row with a generic hardcoded string. State
+what you actually checked — e.g. the redriven families' zero-row counters,
+or a fresh ClickHouse readback confirming no output landed yet. This matters
+most for families whose readers do not `argMax`/dedup by `computed_at` (e.g.
+`file_hotspots`/`file_metrics_daily`, which `SUM`s raw rows) — a needless
+retry there silently inflates scores rather than landing a harmless
+duplicate.
+
+Scoped to one organization and an inclusive UTC calendar-day range, in two
+steps that MUST run in this order (codex review, round 1: publishing a
+partition job before the ledger repair only reproduces `ambiguous_refused`
+and re-terminalizes the partition `failed_permanent`, undoing the reset):
+
+1. **Ledger repair first.** Calls
+   `POST /internal/worker/daily-metrics/v1/redrive` (`WORKER_METRIC_REPAIR_TOKEN`
+   bearer auth, base URL from `WORKER_OPERATIONAL_BRIDGE_URL` — both
+   required) for every `running` run in scope, applying the SAME
+   `retry_safe` CAS the single-execution `/metric-executions/v1/{id}/repair`
+   endpoint uses (CHAOS-4304) to every `ambiguous`/stuck-`executing`
+   compatibility-bridge ledger row underneath them, carrying your
+   `--review-evidence` text. This path only ever authorizes `retry_safe` —
+   never `confirm_succeeded`, which needs per-row `output_evidence` a bulk
+   call cannot supply; an operator who has confirmed a SPECIFIC execution's
+   output already landed correctly should use the single-execution
+   `/repair` endpoint with `confirm_succeeded` instead.
+2. **Partition redrive second.** Resets any `failed_permanent` partition
+   back to `failed` (clearing `failure_reason`), then publishes a fresh
+   `metrics.daily_partition` job for every `pending`/`failed` partition in
+   scope — plus any `running` partition whose lease has already expired
+   (the final River attempt died after claiming it but before releasing
+   it; `ClaimPartition` already treats this as reclaimable) — under a
+   redrive-scoped dedupe key distinct from the partition's original
+   dispatch (CHAOS-4358). A live (unexpired) lease is never touched.
+
+If step 1 reports `skipped_claim_active > 0` (an execution's original claim
+still read as active at repair time), step 2 does **not** run at all: the
+command returns `{"status":
+"ledger_repair_incomplete_retry_after_claims_settle", "partitions": null}`
+instead (codex review round 2: publishing a partition job for a run with an
+unrepaired ambiguous row is a race — that ledger row can 409
+`ambiguous_refused` the instant the job reaches it, re-terminalizing the
+partition `failed_permanent`). Re-run the same command once those claims
+have settled (their owning job finishes or its lease expires).
+
+Otherwise, returns `{"ledger_repair": {"repaired", "skipped_claim_active"},
+"partitions": {"PermanentReset", "RedispatchedRunIDs",
+"RedrivenPartitions"}}`. Ledger repairs are chunked to ≤200 run ids per
+request (the bridge's own request limit); a window spanning many post_sync
+fanouts is handled automatically.
+
+**Observability**: `dev_health_daily_metrics_redrive_partitions_total{reason}`
+is wired but not live for THIS caller — `workerctl` is a one-shot CLI with no
+Prometheus scrape endpoint, so the counter only becomes real if a future
+long-lived caller (e.g. an automatic strand-repair reconciler) invokes the
+same Go function. The durable, queryable record of a manual redrive today is
+the `worker_job_outbox` rows this command commits, under the
+`metrics.daily_partition:redrive:<nonce>` dedupe-key prefix:
+
+```sql
+SELECT dedupe_key, status, created_at FROM worker_job_outbox
+WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
+ORDER BY created_at DESC;
+```
 
 ### `dev-health-workerctl routes`
 

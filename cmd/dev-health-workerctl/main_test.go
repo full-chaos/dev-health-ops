@@ -3,7 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -512,5 +516,143 @@ func TestSessionSafeModeRejectsTransactionAndUnknownModes(t *testing.T) {
 		if got := sessionSafeMode(databaseMode(func(key string) (string, bool) { return test.mode, true }, "ignored")); got != test.want {
 			t.Fatalf("mode %q allowed=%t, want %t", test.mode, got, test.want)
 		}
+	}
+}
+
+func TestRedriveDailyMetricsLedgerCallsBulkRepairBeforePartitionRedrive(t *testing.T) {
+	var capturedAuth string
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/internal/worker/daily-metrics/v1/redrive" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":2,"skipped_claim_active":1}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a", "run-b"}, "test evidence")
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if capturedAuth != "Bearer test-repair-token" {
+		t.Fatalf("Authorization header = %q, want Bearer test-repair-token", capturedAuth)
+	}
+	runIDs, _ := capturedBody["run_ids"].([]any)
+	if len(runIDs) != 2 {
+		t.Fatalf("request run_ids = %v, want 2 entries", capturedBody["run_ids"])
+	}
+	if repaired, _ := result["repaired"].(int); repaired != 2 {
+		t.Fatalf("result[repaired] = %v, want 2", result["repaired"])
+	}
+}
+
+func TestRedriveDailyMetricsLedgerFailsClosedWithoutConfiguredToken(t *testing.T) {
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", "http://unused.invalid")
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "")
+
+	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err == nil {
+		t.Fatal("redriveDailyMetricsLedger with no WORKER_METRIC_REPAIR_TOKEN = nil error, want fail-closed")
+	}
+}
+
+func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDsWithoutAnyHTTPCall(t *testing.T) {
+	// No env configured at all -- must not even attempt a request when there
+	// is nothing to repair (an operator redrive over a window with no
+	// 'running' runs at all).
+	result, err := redriveDailyMetricsLedger(context.Background(), nil, "test evidence")
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger(nil): %v", err)
+	}
+	if result["repaired"] != 0 || result["skipped_claim_active"] != 0 {
+		t.Fatalf("result = %v, want zero-valued", result)
+	}
+}
+
+func TestRedriveDailyMetricsLedgerChunksAtTheRequestLimitAndSumsOutcomes(t *testing.T) {
+	// codex review round 2: DailyMetricsRedriveRequest.run_ids caps at
+	// max_length=200; a window spanning enough post_sync fanouts can exceed
+	// that, so the caller must chunk rather than send one oversized request
+	// the bridge would reject with 422.
+	var requestSizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RunIDs []string `json:"run_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requestSizes = append(requestSizes, len(body.RunIDs))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":0}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	runIDs := make([]string, 250)
+	for index := range runIDs {
+		runIDs[index] = fmt.Sprintf("run-%d", index)
+	}
+	result, err := redriveDailyMetricsLedger(context.Background(), runIDs, "test evidence")
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if len(requestSizes) != 2 || requestSizes[0] != 200 || requestSizes[1] != 50 {
+		t.Fatalf("chunk sizes = %v, want [200 50]", requestSizes)
+	}
+	if result["repaired"] != 2 {
+		t.Fatalf("summed repaired = %v, want 2 (one per chunk)", result["repaired"])
+	}
+}
+
+func TestLedgerRepairWasIncompleteReadsTheRealReturnType(t *testing.T) {
+	// codex review round 3 red-first proof: this must exercise the ACTUAL
+	// map redriveDailyMetricsLedger returns (Go ints), not a hand-built map
+	// with the wrong dynamic type -- that mismatch is exactly what let the
+	// round-2 safety gate silently no-op.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":1}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence")
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if !ledgerRepairWasIncomplete(result) {
+		t.Fatalf("ledgerRepairWasIncomplete(%v) = false, want true", result)
+	}
+
+	if ledgerRepairWasIncomplete(map[string]any{"repaired": 1, "skipped_claim_active": 0}) {
+		t.Fatal("ledgerRepairWasIncomplete with skipped=0 = true, want false")
+	}
+}
+
+func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
+	// codex review round 3: the bulk ledger repair must never auto-authorize
+	// retries with a generic hardcoded justification -- an operator must
+	// state what they verified. Exercised against dispatchMetrics directly
+	// (not just the HTTP helper) so a regression that re-adds a default or
+	// drops the flag is caught here, not just in redriveDailyMetricsLedger's
+	// own unit tests.
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--from", "2026-08-01", "--to", "2026-08-01",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"invalid_request\"}}\n" {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

@@ -245,9 +245,38 @@ by run id, and run ids are derived from the organization, day, and generation.
 A new run writes a fence that nothing is waiting on, so replaying work does not
 release a chain blocked on an older run.
 
+**Daily metrics has a targeted reclaim sweep as of CHAOS-4358/CHAOS-4304**: once
+every `daily_partition` River job for a run has failed and been discarded,
+nothing re-enqueues work for that run on its own — a fresh
+`metrics.daily_dispatch` run of `Dispatcher.Work` still calls the SAME
+`PublishPartition` with the SAME `metrics.daily_partition:<id>` outbox dedupe
+key, so it silently no-ops. `dev-health-workerctl metrics daily-redrive --org
+<uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<what you
+verified>"` closes this for one org+day window in two ordered steps (
+`--review-evidence` is required, with no default — see
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for why). It FIRST calls the Python compatibility-bridge's
+bulk ledger repair (`POST /internal/worker/daily-metrics/v1/redrive`,
+`worker_metrics._bulk_redrive_ambiguous_executions`) for every `running` run
+in scope, authorizing retry for any `ambiguous`/stuck-`executing`
+`metric_compatibility_executions` row; only THEN does it reset any
+`failed_permanent` partition back to `failed` and publish a fresh
+`metrics.daily_partition` job for every `pending`/`failed` partition in
+scope, under a redrive-scoped dedupe key
+(`metrics.daily_partition:redrive:<partition_id>:<nonce>`) so the outbox
+treats it as new work instead of replaying the original's permanent record.
+The order matters: publishing a partition job before the ledger repair lands
+just reproduces `ambiguous_refused` on the redriven attempt and re-
+terminalizes the partition `failed_permanent`, undoing the reset (see
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for the exact env vars and required-order rationale).
+
 ## Sources
 
 - CHAOS-3991 — a claim conflict reported as success deleted the job that would
   have reclaimed the lease
 - CHAOS-3997 — reclaim sweep for runs stranded with no live job
 - CHAOS-4025 — expired leases on running rows are not surfaced as a signal
+- CHAOS-4358 / CHAOS-4304 — targeted redrive for daily-metrics runs stranded by
+  discarded `daily_partition` jobs, and the ledger-side ambiguous/executing
+  repair that must run alongside it

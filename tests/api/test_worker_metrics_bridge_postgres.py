@@ -423,3 +423,174 @@ async def test_orphaned_executing_row_reports_ambiguous_once_original_claim_is_d
             assert ledger_state == "executing"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_partitions() -> None:
+    """CHAOS-4304: a daily/partition ledger row stuck 'ambiguous' (a
+    progress-having failure) must not be permanently unrecomputable once an
+    operator has scoped its run for redrive. Before
+    _bulk_redrive_ambiguous_executions existed, the ONLY way to move this row
+    was a per-execution-id /repair call an operator would have to discover
+    the execution id for by hand; every _reserve_execution against the
+    identical (run, partition, family, generation, scope_digest) identity
+    hit the same 409 ambiguous_refused forever -- "a failed partition can
+    never be recomputed" for that generation.
+
+    Two ledger rows are seeded: one whose original claim is provably dead
+    (the redrive must repair it), one whose original claim is STILL live
+    (the redrive must refuse it exactly as a single /repair call would,
+    leaving it ambiguous)."""
+    assert _TEST_URI is not None
+    engine = create_async_engine(_TEST_URI)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    org_id = uuid.uuid4()
+    stale_run_id, live_run_id = uuid.uuid4(), uuid.uuid4()
+    stale_partition_id, live_partition_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        async with session_factory() as session:
+            for run_id, partition_id in (
+                (stale_run_id, stale_partition_id),
+                (live_run_id, live_partition_id),
+            ):
+                claim = uuid.uuid4()
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO daily_metrics_runs (
+                            id, org_id, target_day, generation, status,
+                            finalization_status, created_at, updated_at
+                        ) VALUES (
+                            CAST(:run_id AS uuid), CAST(:org_id AS uuid),
+                            '2026-08-20', :generation, 'running', 'pending',
+                            now(), now()
+                        )
+                        """
+                    ),
+                    {
+                        "run_id": str(run_id),
+                        "org_id": str(org_id),
+                        "generation": f"daily-v1:{run_id}",
+                    },
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO daily_metrics_partitions (
+                            id, run_id, ordinal, repo_ids, status, claim_token,
+                            lease_expires_at, attempt_count, created_at, updated_at
+                        ) VALUES (
+                            CAST(:partition_id AS uuid), CAST(:run_id AS uuid), 0,
+                            '[]'::jsonb, 'running', CAST(:claim_token AS uuid),
+                            statement_timestamp() + interval '10 minutes',
+                            1, now(), now()
+                        )
+                        """
+                    ),
+                    {
+                        "partition_id": str(partition_id),
+                        "run_id": str(run_id),
+                        "claim_token": str(claim),
+                    },
+                )
+            await session.commit()
+
+            stale_request = worker_metrics.DailyMetricsExecutionRequest(
+                operation="partition",
+                run_id=stale_run_id,
+                partition_id=stale_partition_id,
+            )
+            live_request = worker_metrics.DailyMetricsExecutionRequest(
+                operation="partition",
+                run_id=live_run_id,
+                partition_id=live_partition_id,
+            )
+            stale_execution = await worker_metrics._load_daily_execution(
+                session, stale_request
+            )
+            live_execution = await worker_metrics._load_daily_execution(
+                session, live_request
+            )
+            assert await worker_metrics._reserve_execution(
+                session, stale_execution
+            ) == ("execute")
+            assert await worker_metrics._reserve_execution(session, live_execution) == (
+                "execute"
+            )
+            # Both fail with real progress written -- a genuine ambiguous
+            # outcome, not the zero-progress retry_authorized fast path.
+            await worker_metrics._mark_ambiguous(
+                session,
+                stale_execution,
+                "resource_exhausted: simulated OOM after partial write",
+            )
+            await worker_metrics._mark_ambiguous(
+                session,
+                live_execution,
+                "resource_exhausted: simulated OOM after partial write",
+            )
+
+            # Only the stale run's claim moves on (Go reclaims with a fresh
+            # token, proving the original claim is dead). The live run's
+            # claim is left exactly as _reserve_execution set it --
+            # indistinguishable from a claim still legitimately in flight.
+            await session.execute(
+                text(
+                    """
+                    UPDATE daily_metrics_partitions
+                    SET claim_token = CAST(:claim_token AS uuid),
+                        lease_expires_at = statement_timestamp() + interval '10 minutes',
+                        attempt_count = attempt_count + 1
+                    WHERE id = CAST(:partition_id AS uuid)
+                    """
+                ),
+                {
+                    "claim_token": str(uuid.uuid4()),
+                    "partition_id": str(stale_partition_id),
+                },
+            )
+            await session.commit()
+
+            # RED baseline (true today, unchanged by this fix): the identical
+            # identity is refused forever, never "skipped".
+            reclaimed_stale = await worker_metrics._load_daily_execution(
+                session, stale_request
+            )
+            with pytest.raises(HTTPException) as before:
+                await worker_metrics._reserve_execution(session, reclaimed_stale)
+            assert before.value.status_code == 409
+            assert before.value.detail["reason"] == "ambiguous_refused"  # type: ignore[index]
+
+            outcome = await worker_metrics._bulk_redrive_ambiguous_executions(
+                session, [stale_run_id, live_run_id], "chaos-4358 operator redrive test"
+            )
+            await session.commit()
+            assert outcome == {"repaired": 1, "skipped_claim_active": 1}
+
+            # GREEN: the stale row is now retry_authorized, so the identical
+            # identity actually executes instead of hitting the wall again.
+            reclaimed_stale_again = await worker_metrics._load_daily_execution(
+                session, stale_request
+            )
+            assert await worker_metrics._reserve_execution(
+                session, reclaimed_stale_again
+            ) == ("execute")
+
+            # The live-claim row is untouched: still ambiguous, still refused.
+            reclaimed_live = await worker_metrics._load_daily_execution(
+                session, live_request
+            )
+            with pytest.raises(HTTPException) as still_refused:
+                await worker_metrics._reserve_execution(session, reclaimed_live)
+            assert still_refused.value.status_code == 409
+            live_state = (
+                await session.execute(
+                    text(
+                        "SELECT state FROM metric_compatibility_executions WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {"id": str(live_execution.id)},
+                )
+            ).scalar_one()
+            assert live_state == "ambiguous"
+    finally:
+        await engine.dispose()

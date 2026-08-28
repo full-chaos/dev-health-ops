@@ -84,6 +84,24 @@ type PostgresStore struct {
 	now               func() time.Time
 	leaseObserver     jobruntime.DailyMetricsLeaseObserver
 	discoveryObserver jobruntime.DailyMetricsDiscoveryObserver
+	redriveObserver   jobruntime.DailyMetricsRedriveObserver
+}
+
+// SetRedriveObserver wires the optional operator-redrive telemetry observer
+// (CHAOS-4358). Telemetry must never gate durable state: a nil or never-set
+// observer makes observeRedrive a silent no-op, matching discoveryObserver's
+// discipline.
+func (store *PostgresStore) SetRedriveObserver(observer jobruntime.DailyMetricsRedriveObserver) {
+	if store == nil {
+		return
+	}
+	store.redriveObserver = observer
+}
+
+func (store *PostgresStore) observeRedrive(reason string, count int) {
+	if store.redriveObserver != nil && count > 0 {
+		_ = store.redriveObserver.ObserveDailyMetricsRedrive(reason, count)
+	}
 }
 
 // SetDiscoveryObserver wires the optional repository-discovery outcome

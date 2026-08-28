@@ -4,12 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"slices"
 	"sort"
@@ -22,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -30,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -55,6 +59,11 @@ type operatorRuntime struct {
 	streams               []streamProfileStatus
 	queueStatusSource     workerQueueStatusSource
 	queueControlMode      platformconfig.QueueControlMode
+	// registry is the same job-descriptor registry configureRuntime already
+	// loads for jobRouteController -- `metrics daily-redrive` (CHAOS-4358)
+	// reuses it to construct a daily.PostgresPublisher without a second
+	// contracts/jobs/v1 load.
+	registry *jobruntime.Registry
 }
 
 type streamProfileStatus struct {
@@ -465,6 +474,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
+		registry: registry,
 	}
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
@@ -548,6 +558,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		})
 	case "jobs":
 		return dispatchJobs(ctx, runtime, args[1:], stdout, stderr)
+	case "metrics":
+		return dispatchMetrics(ctx, runtime, args[1:], stdout, stderr)
 	case "queues":
 		return dispatchQueues(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":
@@ -737,6 +749,230 @@ func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, 
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// dispatchMetrics handles `metrics daily-redrive` (CHAOS-4358): the operator
+// entry point that repairs a daily-metrics run stranded because River
+// discarded every daily_partition job it ever dispatched for it, and nothing
+// else ever re-enqueues metrics.daily_dispatch for that run on its own.
+//
+// This deliberately bypasses joboperator.Service's Action/audit pipeline
+// (Cancel/Retry's path) -- it is gated only by the same WORKER_OPERATOR_TOKEN
+// authentication configureRuntime already requires for every workerctl
+// command. See the PR's RISK-NOTES for why that scope limit was accepted
+// here rather than adding a new Action end-to-end under time pressure.
+func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "daily-redrive":
+		flags := quietFlags("metrics daily-redrive")
+		org := flags.String("org", "", "organization id (uuid)")
+		from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+		to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+		reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing retry for ambiguous/stuck-executing ledger rows in this window (e.g. \"confirmed zero output rows for the affected families via ClickHouse readback\") -- see CHAOS-4304 note below")
+		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
+			return writeError(stderr, "invalid_request")
+		}
+		if _, err := uuid.Parse(*org); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		// codex review round 3: "ambiguous" means a progress-having failure
+		// MAY have partially written real output -- claim expiration alone
+		// is explicitly not evidence retry is safe (worker_metrics.py's own
+		// _repair_execution requires a human to pick retry_safe vs
+		// confirm_succeeded per execution, based on actual review). A bulk
+		// path cannot inspect per-row evidence, so it stays restricted to
+		// retry_safe only (never confirm_succeeded, which needs per-row
+		// output_evidence) and REQUIRES the operator to state in their own
+		// words what they verified -- no default, no generic hardcoded
+		// string. This is friction by design: an operator who has not
+		// actually checked (e.g. the redriven families' zero-row counters,
+		// or a fresh ClickHouse readback showing no output yet for these
+		// partitions) should not be able to bulk-authorize retries for
+		// non-argMax-deduped families (file_hotspots is the known example
+		// where a retry-caused duplicate silently inflates scores).
+		if strings.TrimSpace(*reviewEvidence) == "" {
+			return writeError(stderr, "invalid_request")
+		}
+		fromDay, err := time.Parse("2006-01-02", *from)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		toDay, err := time.Parse("2006-01-02", *to)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		// CHAOS-4304 ordering requirement (codex review, round 1): a
+		// partition whose Python compatibility-bridge ledger row is still
+		// 'ambiguous'/stuck-'executing' answers ambiguous_refused the
+		// instant a redriven job reaches it, which Go classifies Permanent
+		// and re-terminalizes failed_permanent -- undoing this same pass's
+		// own reset. The ledger repair MUST land before any partition job
+		// publishes, not after, so this calls the Python bulk-redrive
+		// endpoint first, over every run this org+day window's runs (not
+		// just the ones with a currently-dispatchable partition -- a run
+		// can carry an ambiguous ledger row on a partition already
+		// terminalized failed_permanent, which step 2 below is about to
+		// reset back into the redrive set).
+		runIDs, err := store.RunningRunIDs(ctx, *org, fromDay, toDay)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		ledgerRepair, err := redriveDailyMetricsLedger(ctx, runIDs, *reviewEvidence)
+		if err != nil {
+			return writeError(stderr, "ledger_repair_unavailable")
+		}
+		// codex review round 2: a nonzero skipped_claim_active means at
+		// least one ambiguous/stuck-executing ledger row was left
+		// unrepaired because its original claim still read as active at
+		// that moment. Publishing partition jobs anyway is unsafe -- if
+		// that claim is released between this call and the redriven job
+		// reaching the bridge (a real, observed race, not hypothetical),
+		// the unrepaired row answers ambiguous_refused immediately and the
+		// partition is re-terminalized failed_permanent, undoing this same
+		// pass. Stop here and report it; the operator re-runs once those
+		// claims have settled (their own owning job will finish or expire).
+		if ledgerRepairWasIncomplete(ledgerRepair) {
+			return writeResult(stdout, stderr, map[string]any{
+				"ledger_repair": ledgerRepair,
+				"partitions":    nil,
+				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+			})
+		}
+		// codex review round 3 (residual, accepted risk): the ledger repair
+		// above takes a SNAPSHOT of run ids and repairs whatever is
+		// ambiguous/stuck-executing at that instant; a partition that
+		// starts a NEW execution and reaches ambiguous in the window
+		// between that call and this one is not covered by it, and this
+		// query will still pick it up (still 'failed'/'pending'/expired-
+		// lease at the moment it runs). Closing that window fully would
+		// need a single fenced transaction spanning both the Python ledger
+		// and the Go partition tables across a network call, which does
+		// not exist today. This is self-healing, not silent: a fresh
+		// ambiguous row here still surfaces as a 409/failed_permanent, and
+		// the NEXT invocation of this same command repairs it (the ledger
+		// repair step is idempotent by construction -- a row already
+		// 'retry_authorized' or 'succeeded' is simply not selected again).
+		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"ledger_repair": ledgerRepair,
+			"partitions":    outcome,
+		})
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+}
+
+// redriveDailyMetricsLedger calls the Python compatibility bridge's bulk
+// ledger repair (CHAOS-4304, POST /internal/worker/daily-metrics/v1/redrive)
+// for the given run ids, BEFORE any Go-side partition job publishes for the
+// same redrive -- see the ordering comment at this function's one call site.
+// An empty runIDs list is a no-op (nothing to repair): it still returns a
+// zero-valued result rather than skipping the call, so a redrive over a
+// window with no 'running' runs at all is reported honestly, not silently.
+// dailyMetricsRedriveMaxRunIDsPerRequest mirrors
+// DailyMetricsRedriveRequest.run_ids's max_length=200 bound in
+// worker_metrics.py -- a window bigger than one post_sync fanout's
+// generous ceiling (up to 15 daily runs per completed sync) can still
+// exceed 200 running runs, so this chunks rather than trusting the caller
+// to stay under the bridge's own limit (codex review round 2).
+const dailyMetricsRedriveMaxRunIDsPerRequest = 200
+
+// redriveDailyMetricsLedger repairs the compatibility-bridge ledger for
+// every run id, chunking into requests no larger than the bridge's own
+// max_length bound and summing the aggregate outcome across chunks.
+func redriveDailyMetricsLedger(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
+	if len(runIDs) == 0 {
+		return redriveDailyMetricsLedgerChunk(ctx, nil, reviewEvidence)
+	}
+	totalRepaired, totalSkipped := 0, 0
+	for start := 0; start < len(runIDs); start += dailyMetricsRedriveMaxRunIDsPerRequest {
+		end := min(start+dailyMetricsRedriveMaxRunIDsPerRequest, len(runIDs))
+		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end], reviewEvidence)
+		if err != nil {
+			return nil, err
+		}
+		repaired, _ := chunkResult["repaired"].(float64)
+		skipped, _ := chunkResult["skipped_claim_active"].(float64)
+		totalRepaired += int(repaired)
+		totalSkipped += int(skipped)
+	}
+	return map[string]any{"repaired": totalRepaired, "skipped_claim_active": totalSkipped}, nil
+}
+
+// ledgerRepairWasIncomplete reports whether any ambiguous/stuck-executing
+// ledger row was left unrepaired (codex review round 2's abort gate),
+// pulled out of dispatchMetrics as its own function so it can be unit
+// tested directly against redriveDailyMetricsLedger's actual return shape --
+// a prior version asserted the wrong dynamic type here (round 3: it reads
+// plain Go ints, not the float64 a raw json.Unmarshal produces) and the
+// ", _" discard pattern silently swallowed the mismatch, always reading 0
+// and defeating the whole safety gate with no test catching it.
+func ledgerRepairWasIncomplete(ledgerRepair map[string]any) bool {
+	skipped, _ := ledgerRepair["skipped_claim_active"].(int)
+	return skipped > 0
+}
+
+func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
+	if len(runIDs) == 0 {
+		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
+	}
+	baseURL, ok := resolveRequired("WORKER_OPERATIONAL_BRIDGE_URL", os.LookupEnv)
+	if !ok {
+		return nil, errors.New("WORKER_OPERATIONAL_BRIDGE_URL is not configured")
+	}
+	token, ok := resolveRequired("WORKER_METRIC_REPAIR_TOKEN", os.LookupEnv)
+	if !ok {
+		return nil, errors.New("WORKER_METRIC_REPAIR_TOKEN is not configured")
+	}
+	body, err := json.Marshal(map[string]any{
+		"run_ids":         runIDs,
+		"review_evidence": reviewEvidence,
+	})
+	if err != nil {
+		return nil, err
+	}
+	requestURL := strings.TrimRight(baseURL.Reveal(), "/") + "/internal/worker/daily-metrics/v1/redrive"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token.Reveal())
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ledger redrive returned status %d", response.StatusCode)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func dispatchQueues(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

@@ -376,12 +376,20 @@ async def _resolve_owned_repo_id(
     (matches ``_fetch_user_metrics``'s own pre-existing slug-resolution
     shape, which already carries this ambiguity for the org-wide path)
     and is left as a follow-up rather than widening this fix's scope.
+
+    Codex R4 (P2, correct): the candidate-repo lookup reads ``repos``
+    without ``FINAL``, unlike the ownership join a few lines below --
+    ``repos`` is ``ReplacingMergeTree``, so a just-renamed repo can
+    briefly have both its old and new ``repos`` row present until the
+    background merge collapses them, and an unqualified read could treat
+    the stale row as a live candidate. Reads ``repos FINAL`` here too,
+    matching the ownership join.
     """
     candidate_rows = await query_dicts(
         client,
         """
         SELECT toString(id) AS id, repo AS repo
-        FROM repos
+        FROM repos FINAL
         WHERE org_id = {org_id:String}
           AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
         """,

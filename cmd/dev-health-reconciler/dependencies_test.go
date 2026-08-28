@@ -115,7 +115,7 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"coordinator_postgres", "domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
@@ -127,7 +127,21 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 
 func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	database := &fakeReconcilerDatabase{}
+	// A real (lazily-dialed, never-connecting) domain pool wires the
+	// CHAOS-4029 execution_liveness self-probe into the composed component
+	// list -- otherwise (a nil pool, every other reconciler test's fixture
+	// shape) the check is never constructed at all, which would let this
+	// test's readiness assertion pass for the wrong reason: not because the
+	// signal works, but because it was never wired. 127.0.0.1:1 has nothing
+	// listening, so the probe genuinely fails, exactly like a real reconciler
+	// whose domain pool cannot open a transaction; that failure is asserted
+	// below, not hidden.
+	domainPool, err := pgxpool.New(context.Background(), "postgresql://reconciler@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(domainPool.Close)
+	database := &fakeReconcilerDatabase{domainPool: domainPool}
 	calls := 0
 	syncCalls := 0
 	mutationBuilds := 0
@@ -166,7 +180,10 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureReconcilerDependenciesWithSourcesAndLogger() error = %v", err)
 	}
-	if got := componentNames(components); !slices.Equal(got, []string{"postgres-runtime-pools", "outbox-reconciler-loop", "sync-dispatch-observation-recorder", "sync-dispatch-observer-loop"}) {
+	if got := componentNames(components); !slices.Equal(got, []string{
+		"postgres-runtime-pools", "outbox-reconciler-loop", "sync-dispatch-observation-recorder",
+		"sync-dispatch-observer-loop", "self-probe-reconciler_execution_liveness",
+	}) {
 		t.Fatalf("component order = %v", got)
 	}
 	for _, component := range components {
@@ -186,8 +203,14 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	if status := registry.Readiness(context.Background()); !status.Ready {
-		t.Fatalf("readiness = %#v, want ready", status)
+	// execution_liveness genuinely fails here: domainPool above dials
+	// 127.0.0.1:1, where nothing listens, so this asserts the real behavior
+	// of a reconciler whose domain pool cannot open a transaction, not a
+	// fixture artifact -- every OTHER check (including reconciler_loop and
+	// sync_dispatch_observer, which this test's fake builders drive) is
+	// still fully ready.
+	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, []string{"execution_liveness"}) {
+		t.Fatalf("readiness = %#v, want only execution_liveness failed", status)
 	}
 	for index := len(components) - 1; index >= 0; index-- {
 		if err := components[index].Shutdown(context.Background()); err != nil {
@@ -585,7 +608,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -616,7 +639,7 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -650,7 +673,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -711,7 +734,17 @@ func TestReconcilerPoolReadinessErrorsAreCollapsed(t *testing.T) {
 
 func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	database := &fakeReconcilerDatabase{}
+	// See TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder's identical
+	// comment: a real (never-connecting) domain pool is required to wire the
+	// CHAOS-4029 execution_liveness check at all, and it genuinely fails
+	// here since nothing listens on 127.0.0.1:1 -- asserted below alongside
+	// the route-fence failure this test exists to isolate.
+	domainPool, err := pgxpool.New(context.Background(), "postgresql://reconciler@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(domainPool.Close)
+	database := &fakeReconcilerDatabase{domainPool: domainPool}
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
 		return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
@@ -754,8 +787,8 @@ func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := registry.Readiness(context.Background())
-	if status.Ready || !slices.Equal(status.Failed, []string{"sync_dispatch_route_fence"}) {
-		t.Fatalf("readiness = %#v, want only route fence failed", status)
+	if status.Ready || !slices.Equal(status.Failed, []string{"execution_liveness", "sync_dispatch_route_fence"}) {
+		t.Fatalf("readiness = %#v, want only execution_liveness and route fence failed", status)
 	}
 }
 
@@ -789,7 +822,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}

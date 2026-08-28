@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -67,6 +68,13 @@ type workerDatabase interface {
 	// dependencies.metrics exists, which is after the database itself opens
 	// (see NewRuntimePools's tracer freeze-at-construction constraint).
 	AttachPoolAcquireObserver(postgres.PoolAcquireObserver)
+	// DomainTxOpener exposes the domain pool's Begin capability for the
+	// CHAOS-4029 execution-liveness signal (idempotency_backend /
+	// execution_liveness). It is the SAME pool internal/jobruntime's
+	// PostgresIdempotency.Begin uses for every real job's claim -- see
+	// executionLivenessPool's doc comment for why this proves a materially
+	// different thing than domain_postgres's role-posture SELECT.
+	DomainTxOpener() selfprobe.TxOpener
 	Close()
 }
 
@@ -200,6 +208,24 @@ func (database *postgresWorkerDatabase) AttachPoolAcquireObserver(observer postg
 	database.pools.AttachPoolAcquireObserver(observer)
 }
 
+// DomainTxOpener implements workerDatabase.DomainTxOpener -- see that
+// interface method's doc comment.
+//
+// executionLivenessPool doc (CHAOS-4029): domain_postgres proves the runtime
+// role HOLDS the right grants (a role-posture introspection SELECT); it does
+// not prove a transaction can actually be opened right now against this
+// pool. On 2026-08-20 the domain pool moved (pgbouncer-1 recreated) 17
+// seconds after startup admission, and every job failed at
+// PostgresIdempotency.Begin's own pool.Begin(ctx) call -- a failure mode a
+// SELECT-shaped check does not reproduce. Wiring selfprobe against this same
+// pool exercises the identical primitive real jobs depend on.
+func (database *postgresWorkerDatabase) DomainTxOpener() selfprobe.TxOpener {
+	if database == nil || database.pools == nil {
+		return nil
+	}
+	return selfprobe.NewPool(database.pools.Domain)
+}
+
 func (database *postgresWorkerDatabase) Close() {
 	if database != nil && database.pools != nil {
 		database.pools.Close()
@@ -261,6 +287,13 @@ type workerDependencySources struct {
 	buildRiverProcess    workerProcessBuilder
 	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
+	// newClaimLiveness constructs the CHAOS-4029 claim-liveness tracker (see
+	// claim_liveness.go), pre-seeded per selected queue. Injectable so a test
+	// can capture the returned *claimLiveness and call SetStaleWindow on it
+	// to prove staleness detection in real wall-clock time, the same reason
+	// every other constructor in this struct is a field rather than a direct
+	// call.
+	newClaimLiveness func(time.Time, []string) *claimLiveness
 }
 
 var productionWorkerDependencySources = workerDependencySources{
@@ -275,6 +308,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	buildRiverProcess:    newRiverWorkerProcess,
 	buildWorkgraph:       buildWorkgraphWorker,
 	contractRoot:         defaultContractRoot,
+	newClaimLiveness:     newClaimLiveness,
 }
 
 func defaultRiverClientID() string {
@@ -510,6 +544,31 @@ func configureWorkerDependenciesWithSources(
 		dependencies.database.AttachPoolAcquireObserver(dependencies.metrics)
 	}
 	providerRuntimeConstructed := false
+	// livenessMonitor is constructed below, only once dependencies.database is
+	// confirmed non-nil (it needs a real domain pool). The execution_liveness
+	// check is registered NOW, capturing this variable by reference, so the
+	// readiness name exists unconditionally like every other check here --
+	// including the "database never opened" path, where it correctly reports
+	// unavailable via the nil-guard in executionLivenessReady, exactly as
+	// dependencies.domainReady already does for that same path.
+	var livenessMonitor *selfprobe.Monitor
+	// claim (CHAOS-4029, codex round 1) is the real-claim-path half of
+	// execution_liveness -- see claim_liveness.go's package doc. Declared
+	// here, before the checks slice, so it is available whether or not
+	// database construction later succeeds. sources.newClaimLiveness seeds
+	// the clock to now rather than the zero value: claimLivenessReady is
+	// evaluated by preclaim-readiness BEFORE the River client ever starts,
+	// so a zero seed would fail closed forever on any restart with
+	// pre-existing queue backlog -- exactly the deadlock a live rebuild
+	// against the shared stack surfaced during this ticket's own
+	// development. See newClaimLiveness's doc comment for the full
+	// reasoning. Injectable (rather than a direct call) so a test can
+	// capture the returned pointer and shrink its staleness window.
+	newClaim := sources.newClaimLiveness
+	if newClaim == nil {
+		newClaim = newClaimLiveness
+	}
+	claim := newClaim(time.Now(), cfg.Queues)
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -523,6 +582,47 @@ func configureWorkerDependenciesWithSources(
 		{name: "queue_control_config", check: dependencies.queueControlConfigReady},
 		{name: "queue_postgres", check: dependencies.queueReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
+		// idempotency_backend (CHAOS-4029): a synchronous, per-poll Begin+
+		// Rollback against the SAME pool internal/jobruntime.PostgresIdempotency
+		// uses for every real job's claim. domain_postgres proves the runtime
+		// role HOLDS the right grants (a role-posture SELECT); this proves a
+		// transaction can be opened right now -- the exact primitive that
+		// silently failed for two hours on 2026-08-20 while domain_postgres
+		// would have kept passing (the pool was reachable; grants were intact;
+		// only the pooled connection's transaction path had gone stale).
+		{name: "idempotency_backend", check: dependencies.idempotencyBackendReady},
+		// execution_liveness (CHAOS-4029): TWO required facts, not one.
+		//
+		// (1) livenessMonitor.Ready: the domain pool is reachable and can open
+		//     a transaction right now (internal/platform/selfprobe's ticking
+		//     self-probe), immune to an idle queue.
+		// (2) claimLivenessReady: a real job was actually claimed and started
+		//     recently, OR every selected queue is confirmed empty right now.
+		//
+		// (1) alone was a codex-review finding on this ticket's first round: an
+		// independent probe goroutine proves the database is reachable but
+		// keeps succeeding even if the real River consumer is deadlocked while
+		// the database stays healthy -- exactly the "jobs are all terminal-
+		// without-execution" failure mode the ticket's Wanted section names.
+		// (2) closes that gap by tying liveness to River's OWN JobStarted
+		// callback (claim_liveness.go), the same signal every real job
+		// execution already produces, with a queue-telemetry idle fallback so
+		// a quiet queue still passes. Both are required: neither fact alone is
+		// sufficient proof this process can execute work. Registered here,
+		// resolved below once livenessMonitor exists (claim's checkfunc reads
+		// dependencies/claim directly and needs no such deferral).
+		{name: "execution_liveness", check: func() health.CheckFunc {
+			claimReady := dependencies.claimLivenessReady(claim)
+			return func(ctx context.Context) error {
+				if livenessMonitor == nil {
+					return errWorkerDependencyUnavailable
+				}
+				if err := livenessMonitor.Ready(ctx); err != nil {
+					return err
+				}
+				return claimReady(ctx)
+			}
+		}()},
 	}
 	for _, check := range checks {
 		if err := registry.RegisterRequired(check.name, check.check); err != nil {
@@ -551,10 +651,41 @@ func configureWorkerDependenciesWithSources(
 	if monitor := newQueueHealthMonitor(dependencies.queueTelemetry, logger); monitor != nil {
 		components = append(components, monitor)
 	}
+	// CHAOS-4029: the execution-liveness self-probe. Constructed only now that
+	// dependencies.database is confirmed non-nil, so it has a real domain pool
+	// to probe. Assigning the already-captured livenessMonitor variable makes
+	// the execution_liveness check registered above start resolving to it.
+	livenessMonitor = selfprobe.New("worker_execution_liveness", dependencies.database.DomainTxOpener(), logger)
+	if livenessMonitor != nil {
+		// Probe synchronously now, not only when the lifecycle runtime later
+		// calls Start on the returned component. Every other required check
+		// this function registers is meaningful the instant registration
+		// returns; execution_liveness must hold the same property so a caller
+		// that constructs dependencies and reads readiness immediately (as
+		// several tests do, and as an operator debugging a startup failure
+		// might) sees a real result, not an artifact of whether something else
+		// happened to call Start yet.
+		livenessMonitor.Probe(ctx)
+		components = append(components, livenessMonitor)
+		if err := registry.RegisterMetrics("worker_execution_liveness", livenessMonitor); err != nil {
+			dependencies.close()
+			return nil, err
+		}
+	}
 	workers := river.NewWorkers()
+	// claimLivenessObserver taps JobFinished so execution_liveness's claim
+	// half (claim_liveness.go) sees every REAL job this process's handlers
+	// execute, across every constructed family -- the same shared observer
+	// every family builder below receives. It embeds the CONCRETE
+	// *jobruntime.MetricsCollector (not the Observer interface) specifically
+	// so every existing optional type assertion against the observer
+	// (daily.go, operational.go, provider_sync.go, sync_dispatch.go,
+	// workgraph.go) keeps matching -- see claimLivenessObserver's doc
+	// comment for the round-2 codex finding this fixes.
+	observer := claimLivenessObserver{MetricsCollector: dependencies.metrics, liveness: claim}
 	active, composeErr := composeSelectedWorkerFamilies(
 		ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
-		dependencies.metrics, logger, workers, sources,
+		observer, logger, workers, sources,
 	)
 	if composeErr != nil {
 		dependencies.close()
@@ -584,6 +715,11 @@ func configureWorkerDependenciesWithSources(
 			return nil, dependencyUnavailable("queue_coverage_validation_failed")
 		}
 	}
+	// CHAOS-4029 (codex round 3, P2): re-seed the claim clock now that
+	// worker-family composition (ClickHouse/Valkey connections, provider
+	// runtime config) has actually finished, not back when claim was first
+	// allocated -- see claimLiveness.reseed's doc comment.
+	claim.reseed(time.Now())
 	components = append(components, preclaimReadinessComponent{registry: registry, logger: logger})
 	if len(active.queues) == 0 {
 		return components, nil
@@ -1264,6 +1400,21 @@ func (dependencies *workerDependencies) queueReady(ctx context.Context) error {
 		return errWorkerDependencyUnavailable
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
+		return errWorkerDependencyUnavailable
+	}
+	return nil
+}
+
+// idempotencyBackendReady is the idempotency_backend check's CheckFunc (see
+// its registration comment in configureWorkerDependenciesWithSources for the
+// full rationale). It resolves dependencies.database at call time, exactly
+// like domainReady/queueReady above, so it correctly reports unavailable
+// during the "database never opened" live-and-unready path.
+func (dependencies *workerDependencies) idempotencyBackendReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil {
+		return errWorkerDependencyUnavailable
+	}
+	if err := selfprobe.Once(ctx, dependencies.database.DomainTxOpener()); err != nil {
 		return errWorkerDependencyUnavailable
 	}
 	return nil

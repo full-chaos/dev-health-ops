@@ -44,7 +44,7 @@ func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"coordinator_postgres", "domain_postgres", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)

@@ -455,6 +455,13 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 			"domain_id", envelope.Domain.ID,
 		),
 	}
+	// Optional capability (HandlerInvocationObserver's doc comment explains
+	// why this is a type assertion rather than a required Observer method):
+	// fires exactly once, here, after every pre-handler gate above has
+	// already passed and immediately before the handler runs.
+	if invocationObserver, ok := adapter.observer.(HandlerInvocationObserver); ok {
+		observe(func() { invocationObserver.HandlerInvoked(ctx, labels) })
+	}
 	handlerErr := adapter.handler.Work(ctx, execution)
 	// A handler that returned success completed its work; a drain or lease
 	// loss that lands between that return and this line must not rewrite the

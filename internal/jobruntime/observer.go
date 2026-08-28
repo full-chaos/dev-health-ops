@@ -55,6 +55,36 @@ type Observer interface {
 	ObserveDeterministicFailure(context.Context, JobLabels, Reason)
 }
 
+// HandlerInvocationObserver is the narrow capability CHAOS-4029's worker
+// execution-liveness check depends on: proof that a job reached real handler
+// code, unambiguous in a way JobStarted and JobFinished are not.
+//
+// JobStarted fires before row validation, tenant scope resolution, budget
+// acquisition, and the idempotency claim (Adapter.execute) -- a job stuck
+// failing any of those gates refreshes it on every attempt without ever
+// running a handler. JobFinished's (Result, ErrorCategory) pair looked like
+// it could substitute, but several categories genuinely straddle both sides
+// of the boundary: a job's outer context (its registered Timeout) covers
+// every gate AND the handler in one deadline, so a timeout or a drain
+// cancellation can originate from tenant resolution or a budget wait just as
+// easily as from the handler, and the recover() in Adapter.execute wraps the
+// whole function, not just the handler call, so even CategoryPanic is not
+// guaranteed handler-only. No combination of Result and ErrorCategory can
+// resolve that ambiguity from outside this package.
+//
+// This interface exists instead of widening the required Observer interface
+// (which every existing implementation -- production and test -- would have
+// to grow a method to keep satisfying) precisely so it costs nothing to every
+// Observer that does not need it: Adapter.execute checks for it with a plain
+// type assertion, exactly like every other narrow capability in this file.
+type HandlerInvocationObserver interface {
+	// HandlerInvoked is called once, immediately before the job's handler
+	// runs, after every pre-handler gate has already passed. It carries no
+	// information about the handler's eventual outcome -- reaching this
+	// call is itself the entire signal.
+	HandlerInvoked(context.Context, JobLabels)
+}
+
 // SyncLeaseObserver is the narrower capability concrete expired-lease
 // recovery implementations depend on directly, the same way concrete budget
 // implementations call ObserveProviderBudgetWait directly rather than through

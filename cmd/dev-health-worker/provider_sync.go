@@ -788,11 +788,24 @@ func constructProviderSyncWorkerWithDependencies(
 		valkeyClient.Close()
 		_ = clickhouseConnection.Close()
 	}
-	// The observer passed in is always the process's one *jobruntime.MetricsCollector
-	// in production; the assertion fails closed to a nil collector (both bridge
-	// types below are then safe no-ops) for any other Observer implementation,
-	// such as a test double.
-	collector, _ := observer.(*jobruntime.MetricsCollector)
+	// The observer passed in is the process's one *jobruntime.MetricsCollector
+	// in production, but as of CHAOS-4029 it arrives wrapped in
+	// claimLivenessObserver (dependencies.go), which is a DIFFERENT concrete
+	// type -- an exact-type assertion alone would silently fail closed here
+	// even in production. claimLivenessObserver embeds the real collector and
+	// exposes it via Unwrap specifically for call sites like this one that
+	// need the exact concrete type rather than an interface; fall back to it
+	// before giving up. The assertion still fails closed to a nil collector
+	// (both bridge types below are then safe no-ops) for any other Observer
+	// implementation, such as a test double.
+	collector, ok := observer.(*jobruntime.MetricsCollector)
+	if !ok {
+		if unwrapper, hasUnwrap := observer.(interface {
+			Unwrap() *jobruntime.MetricsCollector
+		}); hasUnwrap {
+			collector = unwrapper.Unwrap()
+		}
+	}
 	handler, providerMetrics := buildProviderSyncHandlerWithRuntimeDependencies(
 		repository, decryptor,
 		providerfoundation.PagerDutyOAuthHydrator{

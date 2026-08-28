@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -32,6 +33,15 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 		wantPanic       bool
 		wantDomain      bool
 	}{
+		// wantHandlerInvoked is not a field on each case: it is derived
+		// below as (test.claimState == ClaimProceed), which is exactly
+		// correct for every case in this table -- only ClaimTerminal and
+		// ClaimAlreadyComplete skip the handler, and both already assert
+		// t.Fatal from inside their own handler closures if reached. This
+		// table reuses that existing per-case coverage (CHAOS-4029) to prove
+		// HandlerInvocationObserver fires on every claim-proceed outcome
+		// (success, retry, panic, timeout, cancel, permanent failure) and
+		// never on a claim that never reached the handler at all.
 		{
 			name: "success", attempt: 1, claimState: ClaimProceed,
 			handler: func(ctx context.Context, execution *Execution[RetentionCleanupArgs]) error {
@@ -195,6 +205,17 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 			if observer.panicked != test.wantPanic || observer.domainMismatch != test.wantDomain {
 				t.Fatalf("panic/domain observations = %v/%v", observer.panicked, observer.domainMismatch)
 			}
+			// CHAOS-4029: HandlerInvoked fires exactly once for every
+			// ClaimProceed outcome (the handler ran, whatever it returned)
+			// and never for ClaimTerminal/ClaimAlreadyComplete (the handler
+			// never ran at all) -- see the table's own doc comment above.
+			wantHandlerInvocations := 0
+			if test.claimState == ClaimProceed {
+				wantHandlerInvocations = 1
+			}
+			if observer.handlerInvocations != wantHandlerInvocations {
+				t.Fatalf("handler invocations = %d, want %d", observer.handlerInvocations, wantHandlerInvocations)
+			}
 			if test.claimState == ClaimProceed {
 				if len(claim.completions) != 1 || claim.completions[0].Result != test.wantResult {
 					t.Fatalf("claim completions: %+v", claim.completions)
@@ -220,6 +241,89 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 				if strings.Contains(combined, secret) {
 					t.Fatalf("secret leaked in logs/error: %s", combined)
 				}
+			}
+		})
+	}
+}
+
+// TestHandlerInvokedNeverFiresBeforeTenantBudgetOrIdempotencyGatesPass is the
+// direct reproduction of the CHAOS-4029 round-3 codex finding:
+// TestAdapterMiddlewareOutcomesAreSafeAndDeterministic's shared harness
+// (newRetentionAdapter) hard-codes TenantScope/Budget/Idempotency to always
+// succeed, so it cannot exercise a FAILURE at any of those three gates --
+// exactly the class of failure that made JobStarted (and, initially,
+// JobFinished's Result/Category pair) an unreliable execution-liveness
+// signal for cmd/dev-health-worker/claim_liveness.go. This test constructs
+// its own Adapter per case with a failing gate and proves HandlerInvoked
+// never fires when the handler itself would panic if reached.
+func TestHandlerInvokedNeverFiresBeforeTenantBudgetOrIdempotencyGatesPass(t *testing.T) {
+	t.Parallel()
+	neverReached := HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		t.Fatal("a job refused at a pre-handler gate reached the handler")
+		return nil
+	})
+	succeedingTenant := tenantScopeFunc(func(ctx context.Context, _ ScopeRequest) (context.Context, error) {
+		return ctx, nil
+	})
+	succeedingBudget := budgetFunc(func(context.Context, BudgetRequest) (BudgetLease, error) {
+		return &recordingLease{}, nil
+	})
+	succeedingIdempotency := idempotencyFunc(func(context.Context, ClaimRequest) (IdempotencyClaim, error) {
+		return &recordingClaim{state: ClaimProceed}, nil
+	})
+
+	for _, test := range []struct {
+		name        string
+		tenantScope TenantScope
+		budget      Budget
+		idempotency Idempotency
+	}{
+		{
+			name: "tenant scope resolution fails",
+			tenantScope: tenantScopeFunc(func(context.Context, ScopeRequest) (context.Context, error) {
+				return nil, errors.New("tenant-secret")
+			}),
+			budget: succeedingBudget, idempotency: succeedingIdempotency,
+		},
+		{
+			name:        "budget acquisition fails",
+			tenantScope: succeedingTenant,
+			budget: budgetFunc(func(context.Context, BudgetRequest) (BudgetLease, error) {
+				return nil, errors.New("budget-secret")
+			}),
+			idempotency: succeedingIdempotency,
+		},
+		{
+			name: "idempotency claim fails", tenantScope: succeedingTenant, budget: succeedingBudget,
+			idempotency: idempotencyFunc(func(context.Context, ClaimRequest) (IdempotencyClaim, error) {
+				return nil, errors.New("idempotency-secret")
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			registry, err := newRegistry(testContractRegistry(), testMigrationState())
+			if err != nil {
+				t.Fatalf("newRegistry: %v", err)
+			}
+			spec, _ := registry.Descriptor(jobcontract.KindRetentionCleanup)
+			observer := &recordingObserver{}
+			adapter, err := NewAdapter(registry, spec, neverReached, Dependencies{
+				Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Observer:    observer,
+				TenantScope: test.tenantScope,
+				Budget:      test.budget,
+				Idempotency: test.idempotency,
+			})
+			if err != nil {
+				t.Fatalf("NewAdapter: %v", err)
+			}
+			job := retentionJob(t, 1)
+			// Work's own error (if any) is not the point of this test --
+			// only that the handler was never invoked, whatever the outcome.
+			_ = adapter.Work(context.Background(), job)
+			if observer.handlerInvocations != 0 {
+				t.Fatalf("handler invocations = %d, want 0 (gate %q must have refused before the handler)", observer.handlerInvocations, test.name)
 			}
 		})
 	}
@@ -606,10 +710,18 @@ type recordingObserver struct {
 	cancelled            bool
 	jobWaits             []time.Duration
 	deterministicReasons []Reason
+	// handlerInvocations counts HandlerInvocationObserver calls (CHAOS-4029).
+	// recordingObserver implements the optional interface unconditionally
+	// so every existing table-driven case in this file also exercises it,
+	// not only the new cases added for it.
+	handlerInvocations int
 }
 
 func (*recordingObserver) RuntimeRegistered(context.Context, RuntimeInfo) {}
 func (*recordingObserver) JobStarted(context.Context, JobLabels)          {}
+func (observer *recordingObserver) HandlerInvoked(context.Context, JobLabels) {
+	observer.handlerInvocations++
+}
 func (observer *recordingObserver) JobFinished(_ context.Context, _ JobLabels, result Result, category ErrorCategory, _ time.Duration) {
 	observer.result, observer.category = result, category
 }

@@ -1957,6 +1957,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writePostSyncFanout(&output)
+	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeReportDedupGuard(&output)
@@ -2340,6 +2341,25 @@ func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) 
 		writeUintSample(output, "dev_health_post_sync_fanout_total",
 			[]metricLabel{{"outcome", string(outcome)}}, collector.postSyncFanout[outcome])
 	}
+}
+
+// writeTeamRepoOwnershipDerivation renders CHAOS-4365 item 1b's per-outcome
+// counter and paired rows-written histogram. This call site was missing
+// entirely until now: ObserveTeamRepoOwnershipDerivation incremented
+// collector.teamRepoOwnershipDerivation and observed
+// collector.teamRepoOwnershipDerivationRowCount, but PrometheusText() never
+// rendered either -- the data was recorded in memory and never actually
+// exported, silently defeating requirement #4 (codex adversarial review,
+// 2026-08-28, found during the per-file fork audit rather than by codex
+// itself).
+func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *strings.Builder) {
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, no_signal (designed-empty, not a failure), or error (CHAOS-4365 item 1b).", "counter")
+	for _, outcome := range teamRepoOwnershipDerivationOutcomes() {
+		writeUintSample(output, "dev_health_team_repo_ownership_derivation_total",
+			[]metricLabel{{"outcome", string(outcome)}}, collector.teamRepoOwnershipDerivation[outcome])
+	}
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_row_count", "Rows written by one sync.team_repo_ownership_derivation worker run, observed only on the rows_written outcome.", "histogram")
+	writeHistogram(output, "dev_health_team_repo_ownership_derivation_row_count", nil, collector.teamRepoOwnershipDerivationRowCount)
 }
 
 func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) {

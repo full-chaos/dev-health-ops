@@ -10,7 +10,7 @@
 -- author-membership resolution when repo-ownership resolution misses.
 --
 -- Append-only MergeTree (root AGENTS.md contract): re-computations insert
--- new rows with a newer computed_at; readers dedup per (org_id, team_id,
+-- new rows with a newer computed_at -- readers dedup per (org_id, team_id,
 -- day) via argMax(<col>, computed_at), matching compounding_risk_daily
 -- (040_compounding_risk_daily.sql) and every other daily rollup in this
 -- schema. Never ReplacingMergeTree.
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS team_cognitive_load_daily
 
     -- Recomputed from SUMMED after_hours/weekend commit counts across every
     -- repo this team owns (never averaged directly across repos -- a ratio
-    -- is not additive; see append-only-daily-tables reader-dedup contract).
+    -- is not additive -- see append-only-daily-tables reader-dedup contract).
     -- NULL when no team_metrics_daily row exists for any owned repo this
     -- day -- distinct from a measured 0.0.
     after_hours_commit_ratio  Nullable(Float64),

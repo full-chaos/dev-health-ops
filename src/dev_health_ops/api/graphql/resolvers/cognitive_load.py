@@ -418,18 +418,28 @@ async def _resolve_owned_repo_id(
         """,
         {"org_id": org_id, "candidate_ids": candidate_ids},
     )
-    if ownership_rows:
-        canonical_owner: dict[str, str] = {}
-        for row in ownership_rows:
-            canonical_owner.setdefault(
-                str(row["resolved_repo_id"]), str(row["team_id"])
-            )
-        for candidate_id, owning_team_id in canonical_owner.items():
-            if owning_team_id == team_id:
-                return candidate_id
+    canonical_owner: dict[str, str] = {}
+    for row in ownership_rows:
+        canonical_owner.setdefault(str(row["resolved_repo_id"]), str(row["team_id"]))
+    for candidate_id, owning_team_id in canonical_owner.items():
+        if owning_team_id == team_id:
+            return candidate_id
+
+    # Codex R3 (P2, correct): a candidate resolved by NATIVE ownership to a
+    # DIFFERENT team is claimed -- never re-checked against patterns, which
+    # could otherwise override a real ownership grant with a stale/broader
+    # glob. But when the slug matches MULTIPLE providers' repos (rare) and
+    # only SOME of those candidates have a native ownership row at all, a
+    # candidate with NO native row must still get its own pattern-fallback
+    # chance -- the first version gave up entirely as soon as ANY candidate
+    # resolved natively, incorrectly denying a second, pattern-owned
+    # candidate the SAME team legitimately owns via repo_patterns.
+    unresolved_by_ownership = [
+        row for row in candidate_rows if str(row["id"]) not in canonical_owner
+    ]
+    if not unresolved_by_ownership:
         return None
 
-    # No native ownership row resolves ANY candidate repo -- fall back to
     # teams.repo_patterns via the SAME canonical cross-team resolver every
     # other pattern-fallback reader uses, built from EVERY team's patterns
     # (not just the requesting team's), so a more specific pattern another
@@ -442,7 +452,7 @@ async def _resolve_owned_repo_id(
     if not all_team_rows:
         return None
     pattern_resolver = build_repo_pattern_resolver(all_team_rows)
-    for row in candidate_rows:
+    for row in unresolved_by_ownership:
         resolved_team_id, _team_name = pattern_resolver.resolve(
             str(row.get("repo") or "")
         )
@@ -502,7 +512,16 @@ async def _fetch_repo_scoped_team_metrics(
     instead of double-counted.
 
     Repo resolution mirrors ``_fetch_user_metrics``'s org-scoped ``repos``
-    subquery (accepts either a UUID or a ``repos.repo`` slug).
+    subquery (accepts either a UUID or a ``repos.repo`` slug) -- but,
+    codex R3 (P1, correct): unlike ``user_metrics_daily.repo_id``
+    (``UUID``, migration ``001_metrics_v2.sql``), ``team_metrics_daily
+    .repo_id`` is a plain ``String`` (added via ``ALTER ... DEFAULT ''``,
+    migration ``080_team_metrics_daily_repo_id.sql``) -- copying
+    ``_fetch_user_metrics``'s bare ``repo_id IN (SELECT id FROM repos
+    ...)`` verbatim compares that ``String`` column against ``repos.id``
+    (``UUID``), a type ClickHouse cannot reliably build an ``IN`` set
+    across. The subquery here selects ``toString(id)`` instead, so both
+    sides of the ``IN`` are ``String``.
     """
     query = """
         SELECT
@@ -527,7 +546,7 @@ async def _fetch_repo_scoped_team_metrics(
                   AND day >= {since_date:Date}
                   AND day <= {until_date:Date}
                   AND repo_id IN (
-                      SELECT id FROM repos
+                      SELECT toString(id) FROM repos
                       WHERE org_id = {org_id:String}
                         AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
                   )
@@ -539,7 +558,7 @@ async def _fetch_repo_scoped_team_metrics(
               AND t.day >= {since_date:Date}
               AND t.day <= {until_date:Date}
               AND t.repo_id IN (
-                  SELECT id FROM repos
+                  SELECT toString(id) FROM repos
                   WHERE org_id = {org_id:String}
                     AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
               )

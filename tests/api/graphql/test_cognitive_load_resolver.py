@@ -633,6 +633,77 @@ async def test_cognitive_load_combined_team_metrics_dedups_by_latest_generation(
     assert "INNER JOIN" in team_query
     assert "t.computed_at = latest_gen.latest_computed_at" in team_query
     assert "sum(t.commits_count)" in team_query
+    # Codex R3 (P1, correct): team_metrics_daily.repo_id is String
+    # (migration 080_team_metrics_daily_repo_id.sql), NOT UUID like
+    # repos.id (migration 000_raw_tables.sql) -- the IN-subquery must
+    # cast repos.id to String on both occurrences, or ClickHouse cannot
+    # reliably build the IN set across the two types.
+    assert team_query.count("SELECT toString(id) FROM repos") == 2
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_pattern_fallback_only_for_unowned_candidates() -> (
+    None
+):
+    """CHAOS-4406 codex R3 (P2, correct): when the slug matches MULTIPLE
+    providers' repos and only SOME have a native ownership row, a
+    candidate with NO native row must still get its own pattern-fallback
+    chance -- the previous version gave up entirely as soon as ANY
+    candidate resolved natively (even to a DIFFERENT team), incorrectly
+    denying a second, pattern-owned candidate the requested team
+    legitimately owns."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(  # two candidates share the slug across providers
+                ["id", "repo"],
+                [
+                    ["11111111-1111-1111-1111-111111111111", "acme/repo"],
+                    ["22222222-2222-2222-2222-222222222222", "acme/repo"],
+                ],
+            ),
+            _qresult(  # only the FIRST candidate has a native ownership row,
+                # and it's owned by a DIFFERENT team
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "11111111-1111-1111-1111-111111111111",
+                        "team-beta",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult(  # the SECOND candidate (no native row) resolves via
+                # pattern to the requesting team
+                ["id", "name", "repo_patterns"],
+                [["team-alpha", "Team Alpha", ["acme/repo"]]],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert ctx.client.query.call_count == 5
+    # The SECOND candidate (pattern-resolved, no native owner) is the one
+    # that ends up scoping the data queries.
+    assert (
+        ctx.client.query.call_args_list[3].kwargs["parameters"]["repo_id"]
+        == "22222222-2222-2222-2222-222222222222"
+    )
 
 
 # ---------------------------------------------------------------------------

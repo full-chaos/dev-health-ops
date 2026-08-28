@@ -2186,6 +2186,13 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             sink=ns.sink,
             provider=ns.provider,
             org_id=org_id,
+            # CHAOS-4365 codex R3 (P2): the standalone finalizer below
+            # already recomputes IC metrics/landscape for the whole org --
+            # skip_finalize=True here avoids running that same inline logic
+            # TWICE per day (matches _cmd_metrics_rebuild's existing
+            # skip_finalize=True + explicit run_daily_metrics_finalize
+            # pattern, which this bare-CLI path now also follows).
+            skip_finalize=True,
         )
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily and
         # ALL of team_cognitive_load_daily are written from

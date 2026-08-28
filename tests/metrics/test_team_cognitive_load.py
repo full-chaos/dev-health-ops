@@ -71,7 +71,13 @@ def test_aggregates_by_ownership_never_reading_the_rows_own_team_id() -> None:
     assert row.org_id == "acme"
     assert row.day == DAY
     assert row.pr_interruption_load == 3.0
-    assert row.context_spread_count == 2.0
+    # context_spread_count is NOT the row's own raw value (2, the author's
+    # TOTAL distinct-repo count across the whole org) -- it is the count of
+    # distinct (author, repo) pairs contributing to THIS team, which here
+    # is 1 (one author, one owned repo). See
+    # test_context_spread_count_is_distinct_author_repo_pairs_not_a_sum_of_the_raw_value
+    # for the case that actually distinguishes the two.
+    assert row.context_spread_count == 1.0
     assert row.review_request_load == 1.0
     assert row.sample_author_count == 1
     assert row.contributing_repo_count == 1
@@ -237,3 +243,36 @@ def test_legacy_empty_repo_id_sentinel_on_team_wellbeing_rows_is_skipped() -> No
     )
 
     assert records == []
+
+
+def test_context_spread_count_is_distinct_author_repo_pairs_not_a_sum_of_the_raw_value() -> (
+    None
+):
+    """CHAOS-4365 codex R3 (P2): UserMetricsDailyRecord.context_spread_count
+    is already the AUTHOR's total distinct-repo count for the day, copied
+    identically onto every one of that author's per-repo rows -- it is not
+    a per-repo-additive value. One author touching 2 repos owned by the
+    same team, each row carrying context_spread_count=2 (their org-wide
+    total), must report the team's true count as 2 (the number of distinct
+    (author, repo) pairs), never 2+2=4.
+    """
+    repo_a = uuid.uuid4()
+    repo_b = uuid.uuid4()
+    user_rows = [
+        _UserRow(repo_id=repo_a, author_email="a@example.com", context_spread_count=2),
+        _UserRow(repo_id=repo_b, author_email="a@example.com", context_spread_count=2),
+    ]
+
+    records = build_team_cognitive_load_rows_for_day(
+        day=DAY,
+        org_id="acme",
+        user_metrics_rows=user_rows,
+        team_wellbeing_rows=[],
+        repo_to_team={str(repo_a): "gh:platform", str(repo_b): "gh:platform"},
+        computed_at=NOW,
+    )
+
+    assert len(records) == 1
+    row = records[0]
+    assert row.context_spread_count == 2.0
+    assert row.context_spread_count != 4.0

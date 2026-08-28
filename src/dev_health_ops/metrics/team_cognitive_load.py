@@ -31,7 +31,6 @@ from dev_health_ops.metrics.schemas import TeamCognitiveLoadDailyRecord
 @dataclass
 class _TeamBucket:
     pr_interruption_load: float = 0.0
-    context_spread_count: float = 0.0
     review_request_load: float = 0.0
     after_hours_commits_count: int = 0
     weekend_commits_count: int = 0
@@ -39,12 +38,24 @@ class _TeamBucket:
     has_team_metrics_row: bool = False
     repo_ids: set[str] | None = None
     authors: set[str] | None = None
+    # (author_email, repo_id) pairs contributing to this team -- NOT a sum
+    # of UserMetricsDailyRecord.context_spread_count (codex R3 P2:
+    # context_spread_count is already the author's TOTAL distinct-repo
+    # count for the day, copied identically onto every one of that
+    # author's per-repo rows -- summing it across a team's N owned repos
+    # an author touched would report N * that count, not the count
+    # itself). One row IS one (author, repo) pair, so the team's true
+    # context-spread count is the number of distinct pairs across its
+    # owned repos.
+    context_spread_pairs: set[tuple[str, str]] | None = None
 
     def __post_init__(self) -> None:
         if self.repo_ids is None:
             self.repo_ids = set()
         if self.authors is None:
             self.authors = set()
+        if self.context_spread_pairs is None:
+            self.context_spread_pairs = set()
 
 
 def build_team_cognitive_load_rows_for_day(
@@ -102,14 +113,13 @@ def build_team_cognitive_load_rows_for_day(
         bucket.pr_interruption_load += float(
             getattr(row, "pr_interruption_load", 0) or 0
         )
-        bucket.context_spread_count += float(
-            getattr(row, "context_spread_count", 0) or 0
-        )
         bucket.review_request_load += float(getattr(row, "review_request_load", 0) or 0)
         bucket.repo_ids.add(repo_id)  # type: ignore[union-attr]
         author_email = getattr(row, "author_email", None)
         if author_email:
-            bucket.authors.add(str(author_email))  # type: ignore[union-attr]
+            author_email = str(author_email)
+            bucket.authors.add(author_email)  # type: ignore[union-attr]
+            bucket.context_spread_pairs.add((author_email, repo_id))  # type: ignore[union-attr]
 
     for row in team_wellbeing_rows:
         repo_id = str(getattr(row, "repo_id", "") or "")
@@ -158,7 +168,7 @@ def build_team_cognitive_load_rows_for_day(
                 team_id=team_id,
                 day=day,
                 pr_interruption_load=bucket.pr_interruption_load,
-                context_spread_count=bucket.context_spread_count,
+                context_spread_count=float(len(bucket.context_spread_pairs or ())),
                 review_request_load=bucket.review_request_load,
                 after_hours_commit_ratio=after_hours_ratio,
                 weekend_commit_ratio=weekend_ratio,

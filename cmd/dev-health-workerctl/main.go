@@ -896,6 +896,27 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 // (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
 // --review-evidence required, quiet flags, JSON result) and, like it,
 // deliberately bypasses joboperator.Service's Action/audit pipeline.
+//
+// CHAOS-4409: a run's finalize ledger row (metric_compatibility_executions,
+// worker_kind='daily', operation='finalize') can be stuck 'ambiguous' or
+// stuck-'executing' the exact same way a partition row can -- the api
+// process that owned the original finalize claim died before any exception
+// handler ran, or a progress-having finalize failure never got a human
+// /repair call. Before CHAOS-4409, this command republished a fresh
+// metrics.daily_finalize job straight into that wall: ClaimFinalize->
+// Finalize reaches the Python bridge fine, but _reserve_execution refuses
+// the IDENTICAL execution identity 409 ambiguous_refused forever, because
+// nothing had ever repaired the finalize row specifically (the bridge's own
+// bulk-redrive endpoint only ever selected operation='partition' rows).
+// Prod evidence: 13 daily_metrics_runs stuck in exactly the CHAOS-4389
+// stranded shape whose finalize ledger row was the thing actually blocking
+// them -- `daily-finalize --run` answered JobCancelError ambiguous_refused
+// on every one, forever. This now calls the SAME bulk-redrive endpoint
+// `daily-redrive` already calls for partitions (CHAOS-4304's ordering
+// requirement applies identically here: the ledger repair MUST land before
+// any finalize job publishes, not after) and aborts on the same
+// skipped_claim_active>0 signal daily-redrive already treats as unsafe to
+// proceed past.
 func dispatchMetricsDailyFinalize(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
@@ -974,6 +995,44 @@ func dispatchMetricsDailyFinalize(
 			return writeServiceError(stderr, err)
 		}
 	}
+	// CHAOS-4409: repair the named candidate's finalize ledger row BEFORE
+	// publishing anything -- see this function's own doc comment for why
+	// the ordering matters (a stuck row answers ambiguous_refused the
+	// instant the redriven job reaches it, permanently, undoing this same
+	// pass). ledgerRepair/abort are reported/checked the identical way
+	// daily-redrive already does for its partition-ledger repair.
+	//
+	// codex review (round 1, P1): this ONLY ever runs for --run, mirroring
+	// RedriveStrandedFinalize's own allowPriorAttempt=hasRun boundary
+	// exactly. FindStrandedFinalizeRuns' candidates (--all-complete's own
+	// input) deliberately include 'failed'/expired-running runs for
+	// VISIBILITY, not redrive -- RedriveStrandedFinalize below already
+	// refuses to publish for any of them. Repairing their ledger rows
+	// anyway (the pre-fix behavior) would authorize retry_authorized for a
+	// run --all-complete itself never touches, letting some LATER
+	// unrelated call redrive it without an operator ever having reviewed
+	// that specific run's output -- exactly the shape --all-complete's own
+	// 'pending'-only safety split exists to prevent. A truly
+	// never-attempted 'pending' run cannot have a stuck ledger row in the
+	// first place (ClaimFinalize never claimed this generation to attempt
+	// Finalize() at all), so --all-complete loses no real repair capacity
+	// here -- only the unauthorized side effect.
+	ledgerRepair := map[string]any{"repaired": 0, "skipped_claim_active": 0}
+	if hasRun {
+		var abort bool
+		ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, candidates, *reviewEvidence)
+		if err != nil {
+			return writeError(stderr, "ledger_repair_unavailable")
+		}
+		if abort {
+			return writeResult(stdout, stderr, map[string]any{
+				"candidates":    candidates,
+				"ledger_repair": ledgerRepair,
+				"finalize":      nil,
+				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+			})
+		}
+	}
 	// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
 	// single-target operator action that MAY authorize redriving a run whose
 	// finalize already ran at least once; --all-complete's bulk sweep never
@@ -984,9 +1043,30 @@ func dispatchMetricsDailyFinalize(
 		return writeServiceError(stderr, err)
 	}
 	return writeResult(stdout, stderr, map[string]any{
-		"candidates": candidates,
-		"finalize":   outcome,
+		"candidates":    candidates,
+		"ledger_repair": ledgerRepair,
+		"finalize":      outcome,
 	})
+}
+
+// finalizeLedgerRepairGate repairs the compatibility-bridge finalize ledger
+// for candidates and reports whether the caller must abort rather than
+// proceed to republish (CHAOS-4409) -- pulled out of
+// dispatchMetricsDailyFinalize as its own function, mirroring
+// ledgerRepairWasIncomplete's own reasoning, so the gating decision is unit
+// testable against a mock bridge without needing a real Postgres store.
+func finalizeLedgerRepairGate(
+	ctx context.Context, candidates []string, reviewEvidence string,
+) (ledgerRepair map[string]any, abort bool, err error) {
+	// "finalize" (codex review, round 1, P1): this call's review_evidence is
+	// about finalize output, never partition output -- it must never repair
+	// an unrelated partition ledger row under the DailyMetricsRedriveRequest
+	// default. See that field's own doc comment.
+	ledgerRepair, err = redriveDailyMetricsLedger(ctx, candidates, reviewEvidence, "finalize")
+	if err != nil {
+		return nil, false, err
+	}
+	return ledgerRepair, ledgerRepairWasIncomplete(ledgerRepair), nil
 }
 
 // manualBackfillGeneration derives a deterministic generation for one
@@ -1237,14 +1317,25 @@ const dailyMetricsRedriveMaxRunIDsPerRequest = 200
 // redriveDailyMetricsLedger repairs the compatibility-bridge ledger for
 // every run id, chunking into requests no larger than the bridge's own
 // max_length bound and summing the aggregate outcome across chunks.
-func redriveDailyMetricsLedger(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
+//
+// operations (codex review, round 1, P1) scopes which
+// metric_compatibility_executions.operation this call is authorized to
+// repair -- omit it (the daily-redrive call site does) to keep the
+// pre-CHAOS-4409 default `["partition"]` on the bridge side byte-for-byte;
+// pass `"finalize"` (the daily-finalize call site does, via
+// finalizeLedgerRepairGate) to repair finalize rows instead. A caller's
+// review_evidence means something different for each operation, so this is
+// never a caller-set default -- see DailyMetricsRedriveRequest.operations'
+// own doc comment for why daily-redrive must never repair finalize rows
+// under its own partition-scoped review_evidence.
+func redriveDailyMetricsLedger(ctx context.Context, runIDs []string, reviewEvidence string, operations ...string) (map[string]any, error) {
 	if len(runIDs) == 0 {
-		return redriveDailyMetricsLedgerChunk(ctx, nil, reviewEvidence)
+		return redriveDailyMetricsLedgerChunk(ctx, nil, reviewEvidence, operations...)
 	}
 	totalRepaired, totalSkipped := 0, 0
 	for start := 0; start < len(runIDs); start += dailyMetricsRedriveMaxRunIDsPerRequest {
 		end := min(start+dailyMetricsRedriveMaxRunIDsPerRequest, len(runIDs))
-		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end], reviewEvidence)
+		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end], reviewEvidence, operations...)
 		if err != nil {
 			return nil, err
 		}
@@ -1269,7 +1360,7 @@ func ledgerRepairWasIncomplete(ledgerRepair map[string]any) bool {
 	return skipped > 0
 }
 
-func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, reviewEvidence string) (map[string]any, error) {
+func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, reviewEvidence string, operations ...string) (map[string]any, error) {
 	if len(runIDs) == 0 {
 		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
 	}
@@ -1281,10 +1372,14 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, review
 	if !ok {
 		return nil, errors.New("WORKER_METRIC_REPAIR_TOKEN is not configured")
 	}
-	body, err := json.Marshal(map[string]any{
+	requestPayload := map[string]any{
 		"run_ids":         runIDs,
 		"review_evidence": reviewEvidence,
-	})
+	}
+	if len(operations) > 0 {
+		requestPayload["operations"] = operations
+	}
+	body, err := json.Marshal(requestPayload)
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ import os
 import signal
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -667,6 +667,11 @@ class MetricExecutionRepairRequest(_StrictRequest):
         return self
 
 
+_DAILY_REDRIVE_DEFAULT_OPERATIONS: tuple[Literal["partition", "finalize"], ...] = (
+    "partition",
+)
+
+
 class DailyMetricsRedriveRequest(_StrictRequest):
     """CHAOS-4304: bulk-unblock ledger rows for a set of runs an operator has
     already scoped for redrive (typically via the Go-side
@@ -679,11 +684,30 @@ class DailyMetricsRedriveRequest(_StrictRequest):
 
     run_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
     review_evidence: str = Field(min_length=1, max_length=2048)
+    # CHAOS-4409 (codex review, round 1, P1): this endpoint is shared by two
+    # callers whose review_evidence means DIFFERENT things -- daily-redrive's
+    # evidence is about partition output, daily-finalize's is about finalize
+    # output. Before this field existed, both callers implicitly repaired
+    # BOTH operations for their run_ids: a daily-redrive call (which only
+    # ever republishes partition jobs) could silently move an UNRELATED
+    # finalize ledger row to retry_authorized without anyone reviewing
+    # finalize output specifically, letting some later, unrelated finalize
+    # attempt redrive it without the ledger's protection and duplicate
+    # already-written finalization output. Defaults to `["partition"]` --
+    # daily-redrive's pre-CHAOS-4409 behavior, byte-for-byte -- so every
+    # caller must opt in explicitly to repairing finalize rows.
+    operations: list[Literal["partition", "finalize"]] = Field(
+        default_factory=lambda: list(_DAILY_REDRIVE_DEFAULT_OPERATIONS),
+        min_length=1,
+        max_length=2,
+    )
 
     @model_validator(mode="after")
     def validate_review_evidence(self) -> DailyMetricsRedriveRequest:
         if len(self.review_evidence.encode()) > 2048:
             raise ValueError("review_evidence must not exceed 2048 UTF-8 bytes")
+        if len(set(self.operations)) != len(self.operations):
+            raise ValueError("operations must not contain duplicates")
         return self
 
 
@@ -1368,7 +1392,10 @@ async def _repair_execution(
 
 
 async def _bulk_redrive_ambiguous_executions(
-    session: AsyncSession, run_ids: list[uuid.UUID], review_evidence: str
+    session: AsyncSession,
+    run_ids: list[uuid.UUID],
+    review_evidence: str,
+    operations: Sequence[Literal["partition", "finalize"]] = ("partition",),
 ) -> dict[str, int]:
     """CHAOS-4304: the ledger-side half of a stranded daily-metrics redrive.
 
@@ -1385,9 +1412,9 @@ async def _bulk_redrive_ambiguous_executions(
 
     This does not invent a new ledger rule: it applies _repair_execution's
     existing "retry_safe" resolution (gated on the original claim being
-    provably dead) to every daily/partition row under the named runs whose
-    state is either 'ambiguous' (a progress-having failure) or stuck
-    'executing' (CHAOS-4361: the owning api process died before any
+    provably dead) to every daily/partition OR daily/finalize row under the
+    named runs whose state is either 'ambiguous' (a progress-having failure)
+    or stuck 'executing' (CHAOS-4361: the owning api process died before any
     exception handler ran), in one pass, so an operator who has already
     identified stranded RUNS (from daily_metrics_partitions/
     daily_metrics_runs evidence, or the Go-side redrive's
@@ -1398,6 +1425,36 @@ async def _bulk_redrive_ambiguous_executions(
     changes nothing about that safety rule (a live 'executing' claim is
     real, still-in-flight work, never something to repair out from under),
     only how many rows one operator action can advance.
+
+    CHAOS-4409: originally this only ever selected operation='partition'
+    rows -- a run's *finalize* execution row (worker_kind='daily',
+    operation='finalize', partition_id NULL) can get stuck ambiguous/
+    executing exactly the same way (the api process died mid-Finalize, or a
+    progress-having finalize failure), and was invisible to this function
+    even though _repair_execution/_original_claim_is_active ALREADY handle
+    operation='finalize' generically (see _original_claim_is_active's own
+    branch reading daily_metrics_runs.finalization_status/
+    finalization_claim_token/finalization_lease_expires_at). Prod evidence:
+    13 daily_metrics_runs stuck 'running' with 100% partitions succeeded
+    (CHAOS-4389's stranded-finalize shape) whose finalize ledger row was
+    stuck ambiguous/executing from the ORIGINAL stranding -- daily-finalize
+    --run answered JobCancelError ambiguous_refused on every one of them,
+    forever, because nothing ever repaired that row.
+
+    `operations` (codex review, round 1, P1) scopes which operation this
+    call is authorized to touch -- defaults to `("partition",)`,
+    daily-redrive's original behavior byte-for-byte. A caller's
+    review_evidence means something DIFFERENT for each operation
+    (daily-redrive's is about partition output; daily-finalize's is about
+    finalize output), so a caller must opt in to `"finalize"` explicitly:
+    without this, daily-redrive's own call (which only ever republishes
+    partition jobs) could silently move an UNRELATED finalize ledger row to
+    retry_authorized without anyone having reviewed finalize output
+    specifically, and some later, unrelated finalize attempt could then
+    redrive it without the ledger's protection and duplicate already-
+    written finalization output. No new resolution, no new safety rule --
+    just an explicit scope on which of the two operations this ledger
+    tracks for a daily run a given call may advance.
 
     codex review (round 3): "ambiguous" means a progress-having failure MAY
     have already written real output -- claim expiration alone is not
@@ -1420,11 +1477,14 @@ async def _bulk_redrive_ambiguous_executions(
             SELECT id, state, attempt_count
             FROM metric_compatibility_executions
             WHERE run_id = ANY(CAST(:run_ids AS uuid[]))
-              AND worker_kind = 'daily' AND operation = 'partition'
+              AND worker_kind = 'daily' AND operation = ANY(CAST(:operations AS text[]))
               AND state IN ('ambiguous', 'executing')
             """
         ),
-        {"run_ids": [str(run_id) for run_id in run_ids]},
+        {
+            "run_ids": [str(run_id) for run_id in run_ids],
+            "operations": list(operations),
+        },
     )
     rows = candidates.mappings().all()
     repaired = 0
@@ -2674,7 +2734,7 @@ async def redrive_daily_metrics(
 ) -> dict[str, int]:
     authorize_metric_repair(authorization)
     result = await _bulk_redrive_ambiguous_executions(
-        session, request.run_ids, request.review_evidence
+        session, request.run_ids, request.review_evidence, request.operations
     )
     await session.commit()
     return result

@@ -226,6 +226,18 @@ type DailyMetricsFinalizeSweepObserver interface {
 	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
 }
 
+// DailyMetricsFinalizeLedgerRepairObserver is the narrow capability a
+// CHAOS-4409 finalize-ledger bulk repair depends on: only the repair itself
+// knows how many daily/finalize metric_compatibility_executions rows it
+// moved to retry_authorized versus left alone because the original claim
+// still read as live. A nil observer makes this a silent no-op, matching
+// every other observer in this package: telemetry must never gate durable
+// state. See ObserveDailyMetricsFinalizeLedgerRepair's own doc comment for
+// why no production caller wires this from `dev-health-workerctl` today.
+type DailyMetricsFinalizeLedgerRepairObserver interface {
+	ObserveDailyMetricsFinalizeLedgerRepair(outcome string, count int) error
+}
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

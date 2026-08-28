@@ -640,6 +640,111 @@ func TestLedgerRepairWasIncompleteReadsTheRealReturnType(t *testing.T) {
 	}
 }
 
+// TestFinalizeLedgerRepairGateCallsBulkRepairForCandidates is CHAOS-4409's
+// red-first orchestration proof: before this fix, dispatchMetricsDailyFinalize
+// never called the bulk-redrive endpoint at all, so a stuck daily/finalize
+// ledger row was never repaired no matter how many times an operator ran
+// `daily-finalize --run`. This proves finalizeLedgerRepairGate reaches the
+// SAME bridge endpoint daily-redrive already calls, with the candidates and
+// review evidence the caller passed.
+func TestFinalizeLedgerRepairGateCallsBulkRepairForCandidates(t *testing.T) {
+	var capturedPath string
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":0}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	ledgerRepair, abort, err := finalizeLedgerRepairGate(
+		context.Background(), []string{"run-a"}, "chaos-4409 test evidence",
+	)
+	if err != nil {
+		t.Fatalf("finalizeLedgerRepairGate: %v", err)
+	}
+	if capturedPath != "/internal/worker/daily-metrics/v1/redrive" {
+		t.Fatalf("request path = %q, want the shared bulk-redrive endpoint", capturedPath)
+	}
+	if evidence, _ := capturedBody["review_evidence"].(string); evidence != "chaos-4409 test evidence" {
+		t.Fatalf("request review_evidence = %v, want the caller's text", capturedBody["review_evidence"])
+	}
+	// codex review (round 1, P1): this call's review_evidence is about
+	// finalize output, never partition output -- it must scope the bridge
+	// repair to operation='finalize' explicitly, never fall through to the
+	// bridge's own operation='partition' default (which would silently
+	// authorize an unrelated partition ledger row under finalize-scoped
+	// evidence, or worse, leave the actual stuck finalize row untouched).
+	operations, _ := capturedBody["operations"].([]any)
+	if len(operations) != 1 || operations[0] != "finalize" {
+		t.Fatalf("request operations = %v, want [\"finalize\"]", capturedBody["operations"])
+	}
+	if abort {
+		t.Fatal("fully repaired ledger reported abort=true")
+	}
+	if repaired, _ := ledgerRepair["repaired"].(int); repaired != 1 {
+		t.Fatalf("ledgerRepair[repaired] = %v, want 1", ledgerRepair["repaired"])
+	}
+}
+
+// TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive is
+// the daily-redrive-side half of the same codex finding: the shared bulk-
+// redrive endpoint must never repair a finalize ledger row under
+// daily-redrive's own partition-scoped review_evidence. redriveDailyMetricsLedger
+// (the function daily-redrive calls directly, with no operations argument)
+// must omit the field entirely so the bridge's own
+// DailyMetricsRedriveRequest.operations default (["partition"]) governs --
+// not send an explicit ["partition"] that could drift from that default.
+func TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":0,"skipped_claim_active":0}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if _, present := capturedBody["operations"]; present {
+		t.Fatalf("daily-redrive's request sent an explicit operations field (%v); want it omitted so the bridge default governs", capturedBody["operations"])
+	}
+}
+
+// TestFinalizeLedgerRepairGateAbortsWhenClaimsAreStillActive mirrors
+// daily-redrive's own CHAOS-4304 round-2 safety gate: a nonzero
+// skipped_claim_active means at least one row's original claim still read as
+// live at repair time, and publishing a fresh finalize job anyway risks the
+// identical ambiguous_refused wall the moment that claim resolves. The
+// caller must abort, not proceed to RedriveStrandedFinalize.
+func TestFinalizeLedgerRepairGateAbortsWhenClaimsAreStillActive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":0,"skipped_claim_active":1}`))
+	}))
+	defer server.Close()
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	_, abort, err := finalizeLedgerRepairGate(context.Background(), []string{"run-a"}, "test evidence")
+	if err != nil {
+		t.Fatalf("finalizeLedgerRepairGate: %v", err)
+	}
+	if !abort {
+		t.Fatal("skipped_claim_active>0 reported abort=false, want true")
+	}
+}
+
 func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 	// codex review round 3: the bulk ledger repair must never auto-authorize
 	// retries with a generic hardcoded justification -- an operator must

@@ -673,3 +673,68 @@ func TestObserveDailyMetricsFinalizeSweepRejectsUnregisteredOutcomeAndNegativeCo
 		t.Fatal("negative finalize sweep count was accepted")
 	}
 }
+
+// TestObserveDailyMetricsFinalizeLedgerRepairRecordsByOutcome is CHAOS-4409's
+// telemetry condition: a finalize-ledger bulk repair's "repaired" and
+// "skipped_claim_active" outcomes must be distinct, accumulating series.
+func TestObserveDailyMetricsFinalizeLedgerRepairRecordsByOutcome(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeLedgerRepair("repaired", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeLedgerRepair("skipped_claim_active", 1); err != nil {
+		t.Fatal(err)
+	}
+	// A second pass accumulates rather than replacing.
+	if err := collector.ObserveDailyMetricsFinalizeLedgerRepair("repaired", 2); err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		"# HELP dev_health_daily_metrics_finalize_ledger_repair_rows_total ",
+		`dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome="repaired"} 5`,
+		`dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome="skipped_claim_active"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing exposition content %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestObserveDailyMetricsFinalizeLedgerRepairIsPreSeededAtZero matches every
+// other bounded-vocabulary observer in this package -- an alert must have
+// something to bind to before the first repair ever runs.
+func TestObserveDailyMetricsFinalizeLedgerRepairIsPreSeededAtZero(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		`dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome="repaired"} 0`,
+		`dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome="skipped_claim_active"} 0`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing pre-seeded zero %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestObserveDailyMetricsFinalizeLedgerRepairRejectsUnregisteredOutcomeAndNegativeCount(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveDailyMetricsFinalizeLedgerRepair("succeeded", 1); err == nil {
+		t.Fatal("unbounded finalize ledger repair outcome was accepted into a metric")
+	}
+	if err := collector.ObserveDailyMetricsFinalizeLedgerRepair("repaired", -1); err == nil {
+		t.Fatal("negative finalize ledger repair count was accepted")
+	}
+}

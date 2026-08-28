@@ -310,6 +310,20 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 
+// dailyMetricsFinalizeLedgerRepairOutcomes is the closed set of bounded
+// outcomes CHAOS-4409's finalize-ledger bulk repair can report per execution
+// row it considered. "repaired" counts a daily/finalize
+// metric_compatibility_executions row (stuck 'ambiguous' or stuck-
+// 'executing') this pass moved to 'retry_authorized', unblocking
+// `daily-finalize --run`/`--all-complete` for the run it belongs to;
+// "skipped_claim_active" counts a row left untouched because its original
+// claim still read as live at repair time -- exactly what a single /repair
+// call against it would refuse with 409 today. See
+// worker_metrics.py's _bulk_redrive_ambiguous_executions, whose
+// operation='partition'-only filter (closed before CHAOS-4409) is what let a
+// stuck finalize row answer ambiguous_refused forever.
+var dailyMetricsFinalizeLedgerRepairOutcomes = []string{"repaired", "skipped_claim_active"}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -477,6 +491,16 @@ type MetricsCollector struct {
 	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
 	// the vocabulary.
 	dailyMetricsFinalizeSweep map[string]uint64
+	// dailyMetricsFinalizeLedgerRepair (CHAOS-4409) counts finalize-ledger
+	// bulk-repair activity by bounded outcome. See
+	// dailyMetricsFinalizeLedgerRepairOutcomes for the vocabulary. No
+	// production caller wires this today -- see
+	// ObserveDailyMetricsFinalizeLedgerRepair's own doc comment -- it exists
+	// so a future long-running caller (or a test asserting the contract) has
+	// a real series to observe, matching
+	// ObserveRemainingMetricsManualBackfill's precedent for the identical
+	// one-shot-CLI-cannot-be-scraped constraint.
+	dailyMetricsFinalizeLedgerRepair map[string]uint64
 	// Native family compute (CHAOS-4276, the daily bridge's per-partition
 	// counterpart to the DORA/capacity counters above). Duration is tracked
 	// per family since native families are cut over independently and one
@@ -613,6 +637,7 @@ var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -659,6 +684,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
@@ -749,6 +775,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
 		collector.dailyMetricsFinalizeSweep[outcome] = 0
+	}
+	for _, outcome := range dailyMetricsFinalizeLedgerRepairOutcomes {
+		collector.dailyMetricsFinalizeLedgerRepair[outcome] = 0
 	}
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		collector.dailyMetricsCompatRetry[decision] = 0
@@ -1111,6 +1140,36 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome stri
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFinalizeSweep[outcome] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsFinalizeLedgerRepair records count finalize-ledger
+// execution rows moved (or left alone) by one bounded outcome during a
+// CHAOS-4409 finalize-ledger bulk repair. count must be >= 0, matching
+// ObserveDailyMetricsFinalizeSweep's discipline: a repair pass that touched
+// nothing still calls this with 0 so the series stays present, not absent.
+//
+// No production caller wires this today: the only place that invokes the
+// bulk-repair endpoint for finalize rows is `dev-health-workerctl metrics
+// daily-finalize`, a one-shot CLI process with no /metrics endpoint to
+// scrape -- a counter incremented here before that process exits is never
+// observed by anything. This mirrors dispatchMetricsRemaining's own
+// documented reasoning for never wiring
+// RemainingMetricsManualBackfillObserver from workerctl (see that function's
+// doc comment): the method/series exists so a future long-running caller
+// (or a test asserting the contract) has a real observer to call, not so
+// the CLI can call it today. The CLI's own JSON result (`ledger_repair`)
+// is the actual audit trail for a manual invocation.
+func (collector *MetricsCollector) ObserveDailyMetricsFinalizeLedgerRepair(outcome string, count int) error {
+	if !slices.Contains(dailyMetricsFinalizeLedgerRepairOutcomes, outcome) {
+		return errors.New("daily metrics finalize ledger repair outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics finalize ledger repair count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsFinalizeLedgerRepair[outcome] += uint64(count)
 	return nil
 }
 
@@ -1844,6 +1903,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsFinalizeSweep(&output)
+	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
@@ -2153,6 +2213,18 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *string
 	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", "Daily-metrics runs whose metrics.daily_finalize job was freshly (re-)enqueued by a CHAOS-4389 stranded-finalize sweep, outside the outbox's normal per-run dedupe.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", nil, collector.dailyMetricsFinalizeSweep["finalized"])
+}
+
+// writeDailyMetricsFinalizeLedgerRepair exposes the CHAOS-4409 finalize-
+// ledger bulk-repair counters, by bounded outcome. See
+// ObserveDailyMetricsFinalizeLedgerRepair's own doc comment for why no
+// production caller increments this today.
+func (collector *MetricsCollector) writeDailyMetricsFinalizeLedgerRepair(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_finalize_ledger_repair_rows_total", "Daily/finalize metric_compatibility_executions rows a CHAOS-4409 finalize-ledger bulk repair moved to retry_authorized (\"repaired\") or left alone because the original claim still read as live (\"skipped_claim_active\"), by bounded outcome.", "counter")
+	for _, outcome := range dailyMetricsFinalizeLedgerRepairOutcomes {
+		writeUintSample(output, "dev_health_daily_metrics_finalize_ledger_repair_rows_total",
+			[]metricLabel{{"outcome", outcome}}, collector.dailyMetricsFinalizeLedgerRepair[outcome])
+	}
 }
 
 // writeDailyMetricsNativeFamily exposes the daily bridge's per-family native

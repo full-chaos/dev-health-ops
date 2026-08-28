@@ -390,11 +390,13 @@ means the ClickHouse `teams` dimension is empty.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
 
-> **CHAOS-4365 item 2 (pending merge, `dev-health-ops#1963`): `team_cognitive_load_daily` — a new
-> append-only, ownership-scoped table.** Not yet on `main` as of this writing — this section
-> describes the design on branch `chaos-4365-cognitive-load`; the migration, sink, record type,
-> and finalize producer below do not exist on `main` until that PR merges, and the `dev-health-go`
-> schema pin (below) has already merged and is tagged ahead of it. Team-keyed cognitive load
+> **CHAOS-4365 item 2 (merged, `dev-health-ops#1963`, squash `017f964b2`): `team_cognitive_load_daily` — an
+> append-only, ownership-scoped table.** The `resolveCognitiveLoad` GraphQL resolver's single-team
+> path (`teamId` set, `repoId` NOT set) reads this table directly instead of the org-wide
+> user_metrics_daily`/`team_metrics_daily` merge (`dev-health-ops#1970`) — that merge filtered on
+> those tables' own `team_id` column, which is exactly the membership-fallback-tainted column this
+> table exists to avoid; a single-team query on a real org returned zero rows via that path even
+> though the org-wide query worked. Team-keyed cognitive load
 > (interruption load, context spread, review-request load, after-hours/weekend commit ratios) does
 > not exist today — `user_metrics_daily` (migration `016`) carries these signals per person/repo
 > only, and its own `team_id` column falls back to membership resolution (CHAOS-4396), which

@@ -1233,9 +1233,15 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   direct producer row (`native` for Jira/Linear, `provider_access` for GitHub/GitLab team
   auto-import — §0.4a) exists for that repo. The attribution resolver's rank-3 `repo_ownership`
   source (§0.1) reads `team_repo_ownership` uniformly regardless of which sub-source populated the
-  winning row — see the §0.2 callout below for how `specificity` keeps an `inferred` row from ever
-  beating a direct one for the same repo. **Not yet implemented** —
-  grepped clean for any code writing `inferred` as of this page's writing; see the
+  winning row — see the §0.2 callout below for how `is_primary` (checked FIRST) then `specificity`
+  keep an `inferred` row from ever beating a direct one for the same repo: this producer writes
+  every row `is_primary=0`, same as GitHub's own `provider_access` writer, so a real GitHub-team
+  grant for that repo ties on `is_primary` and wins on `specificity` alone; a Jira/Linear/GitLab
+  `native`/`provider_access` row that happens to carry `is_primary=1` wins outright regardless of
+  specificity. **Status: implemented** —
+  `internal/providersync/team_repo_ownership_derivation.go`'s `deriveTeamRepoOwnership` (pure
+  resolution) and `team_repo_ownership_derivation_clickhouse.go`'s
+  `TeamRepoOwnershipDerivationService.Derive` (ClickHouse read/write glue); see the
   ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an
   `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the

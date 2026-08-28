@@ -246,6 +246,14 @@ class TestRejectsUnresolvedEnvTemplate:
         with pytest.raises(ValueError, match=r"unresolved template placeholder"):
             db.normalize_async_postgres_uri(uri)
 
+    def test_rejects_unbraced_compose_variable_shorthand(self):
+        """Codex review round 3 (P2): Compose also accepts the unbraced
+        $NAME shorthand (no braces), which the brace-only pattern missed."""
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.normalize_async_postgres_uri(
+                "postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/db"
+            )
+
 
 class TestNormalizeAsyncPostgresUriAcceptsPostgresAlias:
     def test_bare_postgres_scheme_normalizes_to_asyncpg(self):

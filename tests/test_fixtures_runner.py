@@ -1242,3 +1242,25 @@ class TestResolveAuthSeedPostgresUri:
 
         assert resolved is not None
         assert "localhost:5432/devhealth" in resolved
+
+    def test_ignores_non_postgres_db_flag_and_falls_back_to_environment(
+        self, monkeypatch
+    ):
+        """Codex review round 3 (P2): docs/contribute/development/commands.md
+        documents ``fixtures generate --db "$CLICKHOUSE_URI"`` -- --db
+        misused there for the analytics sink. Trusting ns.db unconditionally
+        would make that documented invocation crash (a clickhouse:// URI
+        reaching create_async_engine unchanged). A --db that doesn't look
+        like a Postgres URI must fall through to the environment exactly as
+        it did before this fix, not be used for auth-seeding."""
+        monkeypatch.setenv(
+            "POSTGRES_URI", "postgresql://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        monkeypatch.delenv("DATABASE_URI", raising=False)
+        ns = argparse.Namespace(db="clickhouse://ch:ch@localhost:8123/default")
+
+        resolved = runner.resolve_auth_seed_postgres_uri(ns)
+
+        assert resolved is not None
+        assert "localhost:5432/devhealth" in resolved
+        assert "clickhouse" not in resolved

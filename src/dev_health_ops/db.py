@@ -136,6 +136,7 @@ def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
 
 _UNRESOLVED_ENV_TEMPLATE_RE = re.compile(
     r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:(?::?[-=?+])[^}]*)?\}"
+    r"|\$[A-Za-z_][A-Za-z0-9_]*"
 )
 
 
@@ -161,6 +162,13 @@ def _reject_unresolved_template(uri: str, *, source: str) -> str:
     ``:?``/``?``/``:+``/``+`` operator and everything up to the closing
     ``}``, covering every POSIX/Compose parameter-expansion form, not just
     the bare-name one.
+
+    Codex review round 3 (P2, correct): Compose also accepts the
+    unbraced ``$NAME`` shorthand (no parameter-expansion operators
+    possible in that form), which the brace-only pattern didn't match
+    either. A plain connection URI never legitimately contains a literal
+    ``$`` character, so matching the bare form too carries no realistic
+    false-positive risk.
     """
     match = _UNRESOLVED_ENV_TEMPLATE_RE.search(uri)
     if match:

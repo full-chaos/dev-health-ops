@@ -507,13 +507,28 @@ def resolve_auth_seed_postgres_uri(ns: Any) -> str | None:
     in the wild, an unresolved docker-compose ``${POSTGRES_USER}`` template
     meant for compose's own substitution, not this host process. ``ns.db``
     now wins over the environment, same precedence ``resolve_db_uri`` uses.
+
+    Codex review round 3 (P2, correct): ``docs/contribute/development/
+    commands.md`` documents ``fixtures generate --db "$CLICKHOUSE_URI"``
+    -- ``--db`` misused there for what is actually the ClickHouse sink
+    (the AGENTS.md quickref correctly uses ``--sink`` instead, but this
+    doc example predates it and still works today only because the OLD
+    code never looked at ``ns.db`` for auth-seeding at all). Trusting
+    ``ns.db`` unconditionally would make that documented, previously
+    silently-tolerated invocation crash instead: a ``clickhouse://`` URI
+    is not touched by ``normalize_async_postgres_uri`` (it only rewrites
+    ``postgresql://``/``postgres://``/``sqlite://``), so it would reach
+    ``create_async_engine`` unchanged and fail with an unsupported-dialect
+    error. Only trust ``ns.db`` here when it actually looks like a
+    Postgres URI; anything else falls through to the environment exactly
+    as before this fix.
     """
 
     explicit = getattr(ns, "postgres_uri", None)
     if explicit:
         return explicit
     db_flag = getattr(ns, "db", None)
-    if db_flag:
+    if db_flag and db_flag.startswith(("postgresql://", "postgres://")):
         return normalize_async_postgres_uri(db_flag)
     return get_postgres_uri()
 

@@ -1015,6 +1015,86 @@ VALUES ($4::uuid, $2, 'victim', $1::uuid, TRUE, $3, $3)`,
 		t.Fatal(err)
 	}
 
+	// CHAOS-4408 (flake root-caused, not from reading): a fresh container's
+	// scheduled_jobs/saved_reports have never been ANALYZEd, so the planner
+	// starts from Postgres's default "brand-new table" estimate of ONE row
+	// on each side. rejectAmbiguousReportSchedules's self-join (reports.go,
+	// ambiguousReportSchedulesSQL) covers every active report schedule by
+	// design (see that function's comment) -- with a rows=1 estimate the
+	// planner picks a Nested Loop that probes saved_reports_pkey once PER
+	// outer row instead of a Hash Join, which turns the 20,002-row join
+	// this test deliberately creates into a genuinely slow query, not a
+	// host-load illusion: EXPLAIN (ANALYZE, BUFFERS) on an otherwise-idle
+	// local Postgres showed 200,227,928 buffer hits and ~27s for this exact
+	// query pre-ANALYZE, vs. 20,669 buffer hits and ~13ms once ANALYZE runs
+	// -- a ~2000x difference from statistics alone, comfortably explaining
+	// why a fixed 60s produceInTransaction budget (reports_integration_test.go)
+	// occasionally trips under any additional host CPU/IO contention on this
+	// shared multi-agent dev box (observed live: "Produce(): check for
+	// ambiguous report schedules: timeout: context deadline exceeded",
+	// https://github.com/full-chaos/dev-health-ops/actions/runs/33190609134/job/98915005326).
+	// A live autovacuum-analyzed production database would never hit this --
+	// only this test's own single-use, freshly-created container can. Fix
+	// the actual capacity problem (stale statistics on a fresh bulk load)
+	// rather than the timeout: ANALYZE before exercising the codepath whose
+	// cost depends on knowing these tables are NOT still empty.
+	if _, err := pool.Exec(ctx, `ANALYZE public.scheduled_jobs, public.saved_reports`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pin the mechanism, not just the outcome (AGENTS.md "four verification
+	// rules" #1) -- and NOT wall-clock duration. codex review round 1 (P2,
+	// correct): a wall-clock bound around Produce() is itself an
+	// environment-sensitive timing assertion, exactly the failure class
+	// this fix removes -- container scheduling or transaction overhead can
+	// legitimately push a CORRECTLY-planned query over a fixed bound on a
+	// contended host, reintroducing a flake instead of removing one.
+	// EXPLAIN the exact query refuseAmbiguousReportSchedules runs
+	// (ambiguousReportSchedulesSQL, reports.go) and assert the PLAN CHOICE
+	// directly, not a substring like "Hash Join" -- BOTH the good and the
+	// pathological plan contain a Hash Join (for job <-> first_report) AND
+	// a Nested Loop (the outer join to the pre-materialized inner result),
+	// confirmed by hand: a bare "Hash Join present" or "no Nested Loop"
+	// check would pass on the bad plan / fail on the good one respectively.
+	// The one structural difference that survives from PLANNED cost alone
+	// (bare EXPLAIN, no ANALYZE keyword, so no actual loop counts) is HOW
+	// second_report is read: the pathological pre-statistics plan probes
+	// it via "Index Scan using saved_reports_pkey on saved_reports
+	// second_report" once per outer row (20,002 index descents); the
+	// healthy plan reads it via a plain Seq Scan feeding a Hash Join,
+	// computed once. Which strategy the planner picks is a function of
+	// table statistics, not of how busy the host happens to be right now,
+	// so this assertion is immune to the very contention this test guards
+	// against.
+	explainRows, err := pool.Query(ctx, "EXPLAIN "+ambiguousReportSchedulesSQL, activeScheduledJobStatus)
+	if err != nil {
+		t.Fatalf("EXPLAIN ambiguousReportSchedulesSQL: %v", err)
+	}
+	var planLines []string
+	for explainRows.Next() {
+		var line string
+		if err := explainRows.Scan(&line); err != nil {
+			explainRows.Close()
+			t.Fatalf("scan EXPLAIN line: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	explainRows.Close()
+	if err := explainRows.Err(); err != nil {
+		t.Fatalf("EXPLAIN ambiguousReportSchedulesSQL: %v", err)
+	}
+	plan := strings.Join(planLines, "\n")
+	const pathologicalPerRowProbe = "Index Scan using saved_reports_pkey on saved_reports second_report"
+	if strings.Contains(plan, pathologicalPerRowProbe) {
+		t.Fatalf(
+			"ambiguousReportSchedulesSQL planned a per-outer-row index probe "+
+				"against second_report (%q) instead of a Hash Join, against the "+
+				"20,002-row test population -- a stale-statistics regression "+
+				"(the flake this test guards against). EXPLAIN output:\n%s",
+			pathologicalPerRowProbe, plan,
+		)
+	}
+
 	schedule, occurrence := reportOccurrence(
 		t, time.Date(2026, time.July, 25, 6, 5, 0, 0, time.UTC),
 	)

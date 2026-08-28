@@ -548,6 +548,12 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	// CHAOS-4393: same process-wide-singleton-needs-registration shape as
+	// CHAOS-4308 above -- register here so the family name is always present.
+	if err := registry.RegisterMetrics("sync_coverage_folded_key_resolution", synccoverage.FoldedKeyResolutionMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	// worker_database_pool_acquire_seconds needs the collector, which is why
 	// this happens here rather than at pool construction: NewRuntimePools
 	// freezes its pgxpool tracer before dependencies.metrics exists.

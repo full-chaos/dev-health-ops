@@ -105,6 +105,13 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL = _prometheus_client_module.Counter(
+        "sync_coverage_folded_key_resolutions_total",
+        "Coverage windows attributed to a folded child dataset key via a "
+        "canonical composite unit's family_dataset_* flags (CHAOS-4393)",
+        ["canonical_dataset_key"],
+    )
+
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _prometheus_client_module.Counter(
         "sync_target_dataset_drift_repaired_total",
         "IntegrationDataset rows disabled because the config's sync_targets "
@@ -690,6 +697,7 @@ else:
     CELERY_TASK_DURATION_SECONDS = _noop_histogram()
     REPORT_RUN_LEASE_EXPIRED_TOTAL = _noop_counter()
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _noop_counter()
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()

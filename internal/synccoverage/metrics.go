@@ -90,3 +90,82 @@ func metricProviderLabel(provider string) string {
 	}
 	return "other"
 }
+
+// FoldedKeyResolutionMetrics counts coverage windows attributed to a folded
+// child dataset key (e.g. "tests") via a canonical composite unit's
+// family_dataset_* flags (e.g. a "cicd" unit carrying
+// family_dataset_tests=true). CHAOS-4393: without a counter here, a fold
+// silently never firing (a policy/flag mismatch reintroducing the
+// unclosable-gap bug) looks identical to a fold correctly firing zero times
+// because no org enabled a folded alias -- only a labeled per-canonical-key
+// counter tells the two apart.
+type FoldedKeyResolutionMetrics struct {
+	mu         sync.Mutex
+	resolution map[string]uint64
+}
+
+var foldedKeyResolutionMetrics = NewFoldedKeyResolutionMetrics()
+
+func NewFoldedKeyResolutionMetrics() *FoldedKeyResolutionMetrics {
+	return &FoldedKeyResolutionMetrics{resolution: make(map[string]uint64)}
+}
+
+// FoldedKeyResolutionMetricsSource returns the process-wide folded-key
+// resolution counters as a health.MetricsSource-shaped value.
+func FoldedKeyResolutionMetricsSource() *FoldedKeyResolutionMetrics {
+	return foldedKeyResolutionMetrics
+}
+
+// observe records that `count` coverage windows were attributed to family
+// child keys decoded from a canonical unit keyed `canonicalDataset`.
+func (m *FoldedKeyResolutionMetrics) observe(canonicalDataset string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resolution[canonicalDataset] += uint64(count)
+}
+
+// resolutionCount reports the counter value for one canonical dataset key.
+// Test-facing.
+func (m *FoldedKeyResolutionMetrics) resolutionCount(canonicalDataset string) uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resolution[canonicalDataset]
+}
+
+func (m *FoldedKeyResolutionMetrics) WritePrometheus(writer io.Writer) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	snapshot := make(map[string]uint64, len(m.resolution))
+	for label, value := range m.resolution {
+		snapshot[label] = value
+	}
+	m.mu.Unlock()
+
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_sync_coverage_folded_key_resolutions_total "+
+			"Coverage windows attributed to a folded child dataset key via a canonical composite unit's family_dataset_* flags.\n"+
+			"# TYPE dev_health_sync_coverage_folded_key_resolutions_total counter\n"); err != nil {
+		return err
+	}
+	labels := make([]string, 0, len(snapshot))
+	for label := range snapshot {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		if _, err := fmt.Fprintf(writer,
+			"dev_health_sync_coverage_folded_key_resolutions_total{canonical_dataset_key=%q} %d\n",
+			label, snapshot[label]); err != nil {
+			return err
+		}
+	}
+	return nil
+}

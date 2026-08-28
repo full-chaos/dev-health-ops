@@ -20,6 +20,7 @@ from sqlalchemy.sql.dml import Update
 
 from dev_health_ops.metrics.prometheus import (
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL,
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL,
 )
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.integrations import (
@@ -575,7 +576,12 @@ def _effective_dataset_keys(
     if members is None:
         return [str(dataset_key)]
     family_keys = dataset_keys_from_flags(members, processor_flags)
-    return family_keys or [str(dataset_key)]
+    if not family_keys:
+        return [str(dataset_key)]
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL.labels(
+        canonical_dataset_key=str(dataset_key)
+    ).inc(len(family_keys))
+    return family_keys
 
 
 def _effective_dataset_keys_for_unit(unit: _DatasetKeyUnit) -> list[str]:

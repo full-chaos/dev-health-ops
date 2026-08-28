@@ -2,6 +2,7 @@ package synccoverage
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,41 @@ func mergeIntervals(input []coverageInterval) []coverageInterval {
 		merged = append(merged, interval)
 	}
 	return merged
+}
+
+// mergeIntervalsBySourceScope merges intervals only when their source scopes
+// match exactly.
+//
+// Dataset coverage is displayed as a union across sources, which remains
+// useful for reporting, but a row-level backfill action must keep the source
+// scope that produced the gap. Merging with plain mergeIntervals -- which
+// unions SourceIDs across any time-adjacent interval regardless of which
+// source(s) produced it -- turns a real, source-scoped gap (e.g. one repo
+// with a unit still RUNNING) into a broad, wrongly-actionable range that also
+// claims a fully-covered sibling source (CHAOS-4393). Mirrors
+// “merge_intervals_by_source_scope“ in “api/services/sync_coverage.py“;
+// use it for gap intervals ONLY -- Requested/Covered/FailedRanges rollups
+// stay on plain mergeIntervals, matching the Python original.
+func mergeIntervalsBySourceScope(input []coverageInterval) []coverageInterval {
+	bySourceScope := make(map[string][]coverageInterval)
+	for _, interval := range input {
+		key := strings.Join(uniqueSorted(interval.SourceIDs), "\x00")
+		bySourceScope[key] = append(bySourceScope[key], interval)
+	}
+	result := make([]coverageInterval, 0, len(input))
+	for _, scoped := range bySourceScope {
+		result = append(result, mergeIntervals(scoped)...)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if !result[i].Since.Equal(result[j].Since) {
+			return result[i].Since.Before(result[j].Since)
+		}
+		if !result[i].Before.Equal(result[j].Before) {
+			return result[i].Before.Before(result[j].Before)
+		}
+		return strings.Join(result[i].SourceIDs, ",") < strings.Join(result[j].SourceIDs, ",")
+	})
+	return result
 }
 
 func subtractIntervals(requested, covered []coverageInterval) []coverageInterval {

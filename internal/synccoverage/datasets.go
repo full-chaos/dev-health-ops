@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
+	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 )
 
 var providerDatasets = map[string][]string{
@@ -56,8 +56,29 @@ func datasetsForTargets(provider string, targets []string) []string {
 	return result
 }
 
+// effectiveDatasetKeys expands a raw dataset_key/processor_flags pair into
+// effective coverage dataset keys.
+//
+// Only a canonical composite key ("work-items", "prs", "cicd") is ever
+// expanded -- a raw, non-composite dataset_key is returned as-is even if
+// stray family_dataset_* flags are present, since a plain unit never carries
+// a real family collapse. For a canonical key, returns the enabled family
+// child keys decoded from processorFlags when any are true; otherwise falls
+// back to the raw dataset_key (missing/false/unknown flags never advance
+// coverage for a dataset that was not actually run).
+//
+// CHAOS-4393: this used to hand-roll a work-items-only (CHAOS-2721) fold and
+// never learned the CHAOS-4078/PR #1945 PR-social (prs/pr-reviews/
+// pr-comments) and TestOps (cicd/tests) folds, so a folded key's requested
+// windows could never be satisfied by SUCCESS units of its canonical key --
+// producing permanently unclosable gaps in the admin coverage view. It now
+// reads providerfamilycontract's policy table -- the SAME fold policy the
+// planner (internal/scheduler/sync/planner.go) admits claims against --
+// instead of hand-maintaining a second list. Mirrors
+// “_effective_dataset_keys“ in “api/services/sync_coverage.py“.
 func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []string {
-	if dataset != "work-items" {
+	members, ok := providerfamilycontract.FamilyMembers(dataset)
+	if !ok {
 		return []string{dataset}
 	}
 	var flags map[string]bool
@@ -65,7 +86,7 @@ func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []stri
 		return []string{dataset}
 	}
 	keys := make([]string, 0)
-	for _, key := range workitemcontract.FamilyDatasets() {
+	for _, key := range members {
 		flag := "family_dataset_" + strings.ReplaceAll(key, "-", "_")
 		if flags[flag] {
 			keys = append(keys, key)
@@ -74,18 +95,25 @@ func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []stri
 	if len(keys) == 0 {
 		return []string{dataset}
 	}
+	foldedKeyResolutionMetrics.observe(dataset, len(keys))
 	return keys
 }
 
+// queryDatasetKeys expands scope dataset keys with each requested key's
+// canonical family key. Persisted SyncRunUnit rows carry the collapsed
+// composite key ("work-items", "prs", or "cicd") for every enabled member of
+// that family. A scope covering any family child key (e.g.
+// "work-item-comments" or "pr-comments") must therefore also query for rows
+// keyed under its canonical identity, or the composite row is invisible to
+// per-dataset coverage queries entirely. Non-family scopes are returned
+// unchanged. Mirrors “_query_dataset_keys_for_scope“ in
+// “api/services/sync_coverage.py“.
 func queryDatasetKeys(scopeKeys []string) []string {
 	set := make(map[string]struct{}, len(scopeKeys)+1)
-	family := workitemcontract.FamilyDatasets()
 	for _, key := range scopeKeys {
 		set[key] = struct{}{}
-		for _, familyKey := range family {
-			if key == familyKey {
-				set["work-items"] = struct{}{}
-			}
+		if canonical, ok := providerfamilycontract.FamilyCanonical(key); ok {
+			set[canonical] = struct{}{}
 		}
 	}
 	result := make([]string, 0, len(set))

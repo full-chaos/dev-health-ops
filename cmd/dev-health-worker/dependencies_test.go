@@ -1566,13 +1566,29 @@ func (database *fakeWorkerDatabase) Close() {
 }
 
 type fakeQueueTelemetry struct {
+	// mu guards snapshot for tests that mutate it while a background
+	// component (queueHealthMonitor) may concurrently call Snapshot -- see
+	// setSnapshot. Tests that only set the field once at construction and
+	// never mutate it afterward do not need it; the zero-value mutex is
+	// always safe to use uncontended.
+	mu          sync.Mutex
 	snapshot    riverstore.QueueTelemetrySnapshot
 	snapshotErr error
 	checkErr    error
 }
 
 func (telemetry *fakeQueueTelemetry) Snapshot(context.Context) (riverstore.QueueTelemetrySnapshot, error) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
 	return telemetry.snapshot, telemetry.snapshotErr
+}
+
+// setSnapshot updates the snapshot after construction, safe to call while a
+// background component is concurrently sampling via Snapshot.
+func (telemetry *fakeQueueTelemetry) setSnapshot(snapshot riverstore.QueueTelemetrySnapshot) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.snapshot = snapshot
 }
 
 func (telemetry *fakeQueueTelemetry) CheckAvailableContractVersions(context.Context) error {

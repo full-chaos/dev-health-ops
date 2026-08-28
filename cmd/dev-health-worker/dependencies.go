@@ -286,6 +286,12 @@ type workerDependencySources struct {
 	buildRiverProcess    workerProcessBuilder
 	buildWorkgraph       workerFamilyBuilder
 	contractRoot         string
+	// newClaimLiveness constructs the CHAOS-4029 claim-liveness tracker (see
+	// claim_liveness.go). Injectable so a test can capture the returned
+	// *claimLiveness and call SetStaleWindow on it to prove staleness
+	// detection in real wall-clock time, the same reason every other
+	// constructor in this struct is a field rather than a direct call.
+	newClaimLiveness func(time.Time) *claimLiveness
 }
 
 var productionWorkerDependencySources = workerDependencySources{
@@ -300,6 +306,7 @@ var productionWorkerDependencySources = workerDependencySources{
 	buildRiverProcess:    newRiverWorkerProcess,
 	buildWorkgraph:       buildWorkgraphWorker,
 	contractRoot:         defaultContractRoot,
+	newClaimLiveness:     newClaimLiveness,
 }
 
 func defaultRiverClientID() string {
@@ -528,6 +535,23 @@ func configureWorkerDependenciesWithSources(
 	// unavailable via the nil-guard in executionLivenessReady, exactly as
 	// dependencies.domainReady already does for that same path.
 	var livenessMonitor *selfprobe.Monitor
+	// claim (CHAOS-4029, codex round 1) is the real-claim-path half of
+	// execution_liveness -- see claim_liveness.go's package doc. Declared
+	// here, before the checks slice, so it is available whether or not
+	// database construction later succeeds. sources.newClaimLiveness seeds
+	// the clock to now rather than the zero value: claimLivenessReady is
+	// evaluated by preclaim-readiness BEFORE the River client ever starts,
+	// so a zero seed would fail closed forever on any restart with
+	// pre-existing queue backlog -- exactly the deadlock a live rebuild
+	// against the shared stack surfaced during this ticket's own
+	// development. See newClaimLiveness's doc comment for the full
+	// reasoning. Injectable (rather than a direct call) so a test can
+	// capture the returned pointer and shrink its staleness window.
+	newClaim := sources.newClaimLiveness
+	if newClaim == nil {
+		newClaim = newClaimLiveness
+	}
+	claim := newClaim(time.Now())
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -550,16 +574,38 @@ func configureWorkerDependenciesWithSources(
 		// would have kept passing (the pool was reachable; grants were intact;
 		// only the pooled connection's transaction path had gone stale).
 		{name: "idempotency_backend", check: dependencies.idempotencyBackendReady},
-		// execution_liveness (CHAOS-4029): the worker's own execution loop
-		// proving itself on an independent clock, immune to an idle queue (see
-		// internal/platform/selfprobe's package doc). Registered here, resolved
-		// below once livenessMonitor exists.
-		{name: "execution_liveness", check: func(ctx context.Context) error {
-			if livenessMonitor == nil {
-				return errWorkerDependencyUnavailable
+		// execution_liveness (CHAOS-4029): TWO required facts, not one.
+		//
+		// (1) livenessMonitor.Ready: the domain pool is reachable and can open
+		//     a transaction right now (internal/platform/selfprobe's ticking
+		//     self-probe), immune to an idle queue.
+		// (2) claimLivenessReady: a real job was actually claimed and started
+		//     recently, OR every selected queue is confirmed empty right now.
+		//
+		// (1) alone was a codex-review finding on this ticket's first round: an
+		// independent probe goroutine proves the database is reachable but
+		// keeps succeeding even if the real River consumer is deadlocked while
+		// the database stays healthy -- exactly the "jobs are all terminal-
+		// without-execution" failure mode the ticket's Wanted section names.
+		// (2) closes that gap by tying liveness to River's OWN JobStarted
+		// callback (claim_liveness.go), the same signal every real job
+		// execution already produces, with a queue-telemetry idle fallback so
+		// a quiet queue still passes. Both are required: neither fact alone is
+		// sufficient proof this process can execute work. Registered here,
+		// resolved below once livenessMonitor exists (claim's checkfunc reads
+		// dependencies/claim directly and needs no such deferral).
+		{name: "execution_liveness", check: func() health.CheckFunc {
+			claimReady := dependencies.claimLivenessReady(claim)
+			return func(ctx context.Context) error {
+				if livenessMonitor == nil {
+					return errWorkerDependencyUnavailable
+				}
+				if err := livenessMonitor.Ready(ctx); err != nil {
+					return err
+				}
+				return claimReady(ctx)
 			}
-			return livenessMonitor.Ready(ctx)
-		}},
+		}()},
 	}
 	for _, check := range checks {
 		if err := registry.RegisterRequired(check.name, check.check); err != nil {
@@ -610,9 +656,16 @@ func configureWorkerDependenciesWithSources(
 		}
 	}
 	workers := river.NewWorkers()
+	// claimLivenessObserver taps JobStarted so execution_liveness's claim
+	// half (claim_liveness.go) sees every REAL job this process's handlers
+	// execute, across every constructed family -- the same shared observer
+	// every family builder below receives. It delegates every other Observer
+	// method unchanged, so metrics behavior is identical to passing
+	// dependencies.metrics directly.
+	observer := claimLivenessObserver{Observer: dependencies.metrics, liveness: claim}
 	active, composeErr := composeSelectedWorkerFamilies(
 		ctx, cfg, dependencies.database, dependencies.runtimeRegistry,
-		dependencies.metrics, logger, workers, sources,
+		observer, logger, workers, sources,
 	)
 	if composeErr != nil {
 		dependencies.close()

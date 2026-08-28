@@ -168,27 +168,50 @@ missing is two check FAMILIES no existing dependency probe reproduced:
    reachable and the grants were intact, only the pooled connection's
    transaction path had gone stale.
 2. **`execution_liveness`** (`dev-health-worker`, `dev-health-reconciler`,
-   `dev-health-scheduler`) — an independent, ticking self-probe
-   (`internal/platform/selfprobe`) that opens and rolls back its own
-   transaction against the domain pool on a fixed clock (20s interval, 60s
-   staleness by default — three misses before readiness flips, absorbing one
-   transient failure without flapping), on its OWN goroutine, regardless of
-   real job traffic. This is deliberately NOT job throughput: an idle queue
-   must never read as unhealthy, so the probe never depends on real work
-   arriving. It also catches a class `idempotency_backend` cannot: a wedged
-   background scheduler or deadlocked goroutine in the worker's own process,
-   which a fresh synchronous probe spawned from a healthy HTTP handler
-   goroutine can still pass even while the process's real execution loop is
-   stuck.
+   `dev-health-scheduler`) — TWO required facts, not one:
+   - A ticking DB self-probe (`internal/platform/selfprobe`) that opens and
+     rolls back its own transaction against the domain pool on a fixed clock
+     (20s interval, 60s staleness by default — three misses before readiness
+     flips, absorbing one transient failure without flapping), on its OWN
+     goroutine, regardless of real job traffic.
+   - `dev-health-worker` ONLY: a claim-liveness fact (`claim_liveness.go`)
+     tied to River's real `JobStarted` callback — the same signal every real
+     job execution already produces — with a queue-telemetry idle fallback so
+     a genuinely empty queue still passes without a claim. **This half exists
+     because the DB self-probe alone is not sufficient**: a codex review
+     during this ticket's development correctly found that an independent
+     probe goroutine keeps succeeding even when the real River consumer is
+     deadlocked while the database stays healthy — exactly the "recent jobs
+     are all terminal-without-execution" scenario the ticket's Wanted section
+     names, and a probe disconnected from the real claim path cannot detect
+     it. `dev-health-reconciler`/`dev-health-scheduler` do not need an
+     equivalent: their own poll loops (`joboutbox.ReconcilerLoop`,
+     `internal/syncreconciler.Loop`, `internal/scheduler/sync.Loop`) already
+     self-register a staleness-based `reconciler_loop`/`sync_dispatch_observer`/
+     `scheduler_loop` readiness check tied to real step success — pre-existing,
+     unrelated to this ticket — so `execution_liveness` there is purely the
+     complementary DB-reachability signal.
 
-Both checks fail closed with reason `never_proven` before their first sample
-completes — absence of a signal is never silently read as healthy — and both
-self-heal on their own the moment the dependency recovers; no restart is
-required. `dev-health-scheduler` additionally keeps its existing
-`executed_proof_evidence` check (CHAOS-4124) unchanged — that proves the
-executed-proof evidence snapshot loaded; `execution_liveness` proves the
-transaction path the snapshot's own refresh depends on is alive at all,
-which is a strictly earlier precondition.
+   **Idle-safety without a startup deadlock:** the claim clock is seeded to
+   "now" at construction, not the zero value. `claimLivenessReady` is one of
+   the checks `preclaimReadinessComponent` evaluates BEFORE the River client
+   ever starts, so a zero-seeded clock would require evidence (a real claim)
+   that cannot yet exist on every single restart — observed live during this
+   ticket's own development: rebuilding go-worker after an unrelated
+   pgbouncer outage, with genuine multi-minute queue backlog already
+   accumulated, the worker could never pass preclaim-readiness again. Seeding
+   to "now" treats admission as the starting gun and gives the real consumer
+   a full staleness window to make its first claim before the signal can ever
+   fail — see `newClaimLiveness`'s doc comment.
+
+Both `idempotency_backend` and the DB half of `execution_liveness` fail closed
+with reason `never_proven` before their first sample completes — absence of a
+signal is never silently read as healthy — and all self-heal on their own the
+moment the dependency recovers; no restart is required. `dev-health-scheduler`
+additionally keeps its existing `executed_proof_evidence` check (CHAOS-4124)
+unchanged — that proves the executed-proof evidence snapshot loaded;
+`execution_liveness` proves the transaction path the snapshot's own refresh
+depends on is alive at all, which is a strictly earlier precondition.
 
 **Telemetry:** every registered check already gets a per-name gauge
 (`dev_health_runtime_check_failed{check="execution_liveness"}` etc,
@@ -205,15 +228,16 @@ two more, per probe name (`worker_execution_liveness`,
   `timeout`, `unconfigured`, `panicked`); never the underlying driver error
   text, which can carry a DSN.
 
-**Operator troubleshooting:** `/readyz` reporting `execution_liveness` (or,
-for `dev-health-worker`, `idempotency_backend`) failed with everything else
-green means the domain pool itself is unreachable or cannot open a
+**Operator troubleshooting:** `/readyz` reporting `execution_liveness` failed
+with everything else green (`domain_postgres`, `idempotency_backend` both
+passing on `dev-health-worker`) means the CLAIM path specifically is wedged —
+a queue has available work and nothing has claimed from it recently: suspect
+the River consumer itself (a deadlock, a stuck goroutine, GC pressure), not
+the database. `idempotency_backend` (or `execution_liveness` alongside it)
+failing means the domain pool itself is unreachable or cannot open a
 transaction RIGHT NOW — check the pooler (`pgbouncer`) first, not the role's
-grants (those are `domain_postgres`'s job, and `domain_postgres` would also
-be failing if grants were the problem). If ONLY `execution_liveness` is
-failing while `idempotency_backend`/`domain_postgres` are green, suspect the
-process's own execution loop (a deadlock, a stuck goroutine, GC pressure)
-rather than the database.
+grants (those are `domain_postgres`'s job, and `domain_postgres` would also be
+failing if grants were the problem).
 
 ### Stream-runner profiles remain separate
 

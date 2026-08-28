@@ -32,11 +32,23 @@ resolver:
 omit_slice_element_pointers: true
 
 # Custom scalars: the canonical SDL declares three (`scalar Date`,
-# `scalar DateTime`, `scalar JSON`). Map them to gqlgen's built-in
-# marshalers rather than hand-rolling -- the Python side's actual
-# serialization behavior (ISO-8601, JSON passthrough) is documented in
-# contracts/graphql/v1/README.md and must be verified against these
-# mappings before any resolver is ported (plan §4: "custom scalar
+# `scalar DateTime`, `scalar JSON`). Mapped to gqlgen's built-in
+# marshalers as a Wave-0 placeholder (nothing here is mounted -- see the
+# package doc comment above), but two are KNOWN INCORRECT, not just
+# unverified, and must be replaced with custom marshalers before any
+# resolver returning these types is ported (codex review, 2026-08-27):
+#   - `Date`: graphql.Time's RFC3339Nano parser rejects a canonical date
+#     value like "2026-08-27" (no time component), and its marshaler
+#     emits a full timestamp, not a date.
+#   - `DateTime`: graphql.Time's marshaler can format Python's UTC
+#     isoformat() `+00:00` offset as Go's `Z` instead -- a client-visible
+#     serialization difference the comparator (CHAOS-4381 rule 2/3) would
+#     have to special-case rather than the scalar just matching.
+#   - `JSON` (graphql.Map): the SDL's `JSON` accepts any ECMA-404 value;
+#     graphql.Map and the generated `map[string]any` fields accept only
+#     JSON objects, rejecting valid arrays/scalars.
+# Python's actual serialization behavior (ISO-8601, JSON passthrough) is
+# documented in contracts/graphql/v1/README.md (plan §4: "custom scalar
 # serialization ... are all client-visible contracts").
 models:
   DateTime:

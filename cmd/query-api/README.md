@@ -19,7 +19,16 @@ is enabled." What exists in this Wave:
 - `internal/routeswitch` — the per-operation reachability gate, proven by
   its own table-driven test (`switch_test.go`) rather than by a "the route
   is registered" claim (the CHAOS-3033 "cited constructor is not proof of
-  capability" lesson, applied here).
+  capability" lesson, applied here). `PostgresSwitch`
+  (`postgres_switch.go`) is the `go_api_registry`-backed implementation of
+  the same `Switch` interface, proven against a real Postgres testcontainer
+  (`postgres_switch_integration_test.go`, `go test -tags integration`).
+- `internal/principal` — the Go VERIFIER half of the effective-principal
+  envelope (CHAOS-4377): verifies the Python edge's EdDSA-signed envelope
+  via `dev-health-go`'s `authverify.Ed25519JWKSVerifier`, checks
+  issuer/audience/expiry and alg (rejecting alg-confusion), and enforces
+  the claim-schema-version contract. Not wired into a request path yet —
+  Wave 0 proves the mechanism, not a live auth flow.
 - The gqlgen-generated executable schema (`internal/graph/`), constructed
   in `main.go` to prove it builds and links against the canonical SDL, but
   **not mounted on any route**.
@@ -56,16 +65,24 @@ Off by default. See
 for the overlay and how to bring it up explicitly. Not part of the assumed
 local stack — bring it up only for deliberate verification.
 
+## dev-health-go dependency
+
+`go.mod` requires `github.com/full-chaos/dev-health-go v0.1.1` (tagged by
+CHAOS-4377, no local `replace`). The repo is **public** (chris ruling
+2026-08-28), so `go build`/`go test`/CI fetch it straight from the public
+module proxy/sumdb like any other dependency — no `GOPRIVATE`, no git
+credentials, nothing workflow-specific. (It was briefly private, requiring
+a temporary `GOPRIVATE=github.com/full-chaos/*` workaround; that scaffolding
+has been removed from `.github/workflows/go.yml` along with this note's
+earlier "CI cannot build this" caveat.)
+
 ## What's NOT here yet (later waves / other lanes)
 
-- The Go JWKS verifier for the effective-principal envelope
-  (`src/dev_health_ops/api/graphql/principal_envelope.py` issues it; the
-  verifier needs dev-health-go's `authverify` mechanisms, CHAOS-4377).
-- Any real resolver, or the ClickHouse/Postgres readers it would need
-  (the shared dev-health-go extraction is explicitly required to land
-  first — plan §6 — so query-api's first real route is built on the
+- Any real resolver, or the ClickHouse readers it would need (the shared
+  dev-health-go extraction landed its store/contract layer under
+  CHAOS-4377 — plan §6 — so query-api's first real route is built on the
   extracted readers, not hand-rolled queries needing a second port later).
-- The operation registry lookup wired into `routeswitch.Switch` (Wave 0
-  ships `StaticSwitch`/`DynamicSwitch`, in-memory only; a
-  `go_api_registry`-backed implementation of the same `Switch` interface is
-  a follow-up, not a redesign).
+- `principal.Verifier` and `routeswitch.PostgresSwitch` wired into an
+  actual request path (`/query`, mounted behind `routeswitch.Mux`) — Wave 0
+  proves both mechanisms independently; a later wave mounts them together
+  for a real (still Python-served, Go-shadowed/canaried) operation.

@@ -5,7 +5,10 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - .github/docs-legacy/plans/go-api-epic.md (the epic plan; this page documents two of its pieces in the customer-nav-visible docs tree)
-  - .github/docs-legacy/plans/chaos-4381-parity-rules-proposal.md (comparator parity rules, pending chris sign-off)
+  - .github/docs-legacy/plans/chaos-4381-parity-rules-proposal.md (comparator parity rules, ACCEPTED 2026-08-27)
+  - src/dev_health_ops/api/graphql/go_api_comparator.py (comparator implementation)
+  - cmd/query-api/internal/principal (Go envelope verifier)
+  - cmd/query-api/internal/routeswitch (reachability gate, incl. PostgresSwitch)
   - src/dev_health_ops/api/graphql/principal_envelope.py (envelope issuer)
   - src/dev_health_ops/models/go_api_registry.py (registry + ledger schema)
   - src/dev_health_ops/alembic/versions/0114_add_go_api_operation_registry.py
@@ -48,9 +51,17 @@ sequenceDiagram
     Edge->>Envelope: issue_effective_principal_envelope(user, tier, licensed_features)
     Envelope-->>Edge: signed envelope (EdDSA/Ed25519, TTL default 60s, aud=query-api)
     Edge->>QueryAPI: proxied/compared request + envelope
-    QueryAPI->>QueryAPI: verify signature via JWKS (dev-health-go authverify)
-    QueryAPI->>QueryAPI: check aud, exp, v (claim schema version)
+    QueryAPI->>QueryAPI: principal.Verifier.Verify(token)
+    Note over QueryAPI: keyFunc looks up kid in JWKS via<br/>dev-health-go authverify.Ed25519JWKSVerifier;<br/>jwt.WithValidMethods(["EdDSA"]) blocks alg confusion
+    QueryAPI->>QueryAPI: check iss, aud, exp (WithExpirationRequired), v (schema version)
 ```
+
+`cmd/query-api/internal/principal` (`Verifier`, `Claims`) is this diagram's
+Go half — verified end-to-end against a real Python-issued envelope, not
+just self-consistent Go-only fixtures. It rejects: wrong audience, wrong
+issuer, an expired or `exp`-less envelope, an unknown `kid`, a signature
+from any key not in the JWKS, `alg` other than `EdDSA` (alg-confusion), and
+a `v` this verifier was not written to handle (`ErrUnsupportedSchemaVersion`).
 
 ### Claim schema (versioned, `v`)
 
@@ -157,6 +168,38 @@ instrumented in `go_api_registry_telemetry.py`
 `devhealth_go_api_candidate_build_registered_total`,
 `devhealth_go_api_proof_run_recorded_total`).
 
+## Route switch (reachability gate)
+
+Plan §6's "cited constructor is not proof of capability" lesson, applied
+to route reachability: a registered handler in `query-api`'s `Mux` is not
+proof an operation is reachable. Only `Switch.Enabled(operation)` being
+true, checked on every dispatch, makes it reachable.
+
+```mermaid
+flowchart LR
+    Client -->|dispatch operation| Mux[routeswitch.Mux]
+    Mux -->|Enabled?| Switch{routeswitch.Switch}
+    Switch -->|StaticSwitch / DynamicSwitch| Memory[(in-memory map)]
+    Switch -->|PostgresSwitch| Registry[(go_api_routing_state<br/>schema_digest+document_digest+selected_operation)]
+    Switch -->|false| NotFound[404 -- identical to<br/>no handler registered]
+    Switch -->|true, mode in canary/primary| Handler[registered http.Handler]
+```
+
+`PostgresSwitch` (`cmd/query-api/internal/routeswitch/postgres_switch.go`)
+is the `go_api_registry`-backed `Switch` plan §6 forward-declared —
+implementing the same interface `StaticSwitch`/`DynamicSwitch` already do,
+not a redesign of it. It treats only `mode IN ('canary', 'primary')` as
+reachable: `shadow` deliberately does NOT count (the client still gets
+Python's response in shadow mode, plan §5 stage 4), and a missing row, a
+query error, or an operation with no registered document digest all
+resolve to the same safe default as an unregistered operation —
+unreachable. Proven against a real Postgres testcontainer
+(`postgres_switch_integration_test.go`, `go test -tags integration`),
+including the rollback direction: flipping `mode` away from
+`canary`/`primary` revokes reachability on the very next read, with no
+separate deploy (plan §5: "rollback is a registry change, not an image
+rollback").
+
 ## Canonical SDL pin
 
 `contracts/graphql/v1/schema.graphql` is the CI-checked export of the
@@ -167,10 +210,11 @@ divergence.
 
 ## Status
 
-As of this page's authoring (CHAOS-4366 Wave 0): the envelope issuer, the
-registry/ledger schema, and the SDL pin exist and are tested. The Go
-verifier (in `query-api`, using dev-health-go's extracted JWKS
-verification mechanisms — CHAOS-4377), the request router that actually
-reads `ROUTING_STATE`, and the comparator (CHAOS-4366 deliverable 5,
-blocked on parity-rules sign-off — CHAOS-4381) are separate, later pieces
-of this same wave.
+As of 2026-08-27, every Wave 0 deliverable exists and is tested: the
+envelope issuer and its Go verifier (`principal.Verifier`, cross-checked
+against a real Python-issued envelope), the registry/ledger schema and its
+`PostgresSwitch` reader, the SDL pin, the switch-gated-reachability empty
+scaffold, and the comparator (CHAOS-4366 deliverable 5, CHAOS-4381 signed
+off 2026-08-27 19:44 PT). None of these is wired into a live request
+path yet — that is a later wave, per plan §6's Wave-0 scope ("no
+user-facing porting").

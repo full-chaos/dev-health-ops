@@ -29,6 +29,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
+    "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
     "internal/joboperator",
@@ -208,8 +209,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # container, so the package grew its first -tags integration file.
     # CHAOS-4226 added internal/cacheinvalidation (29 -> 30): the per-org
     # cache epoch bump is proved against a real Valkey container.
-    assert "30 package(s) discovered, 0 denylisted, 30 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 30 package(s)" in result.stdout
+    # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
+    # go_api_registry-backed PostgresSwitch is proved against a real
+    # Postgres testcontainer.
+    assert "31 package(s) discovered, 0 denylisted, 31 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 31 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -235,7 +239,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 30
+    assert len(flattened) == len(set(flattened)) == 31
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -822,7 +826,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 29
+    assert len(selected_packages) == len(set(selected_packages)) == 30
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

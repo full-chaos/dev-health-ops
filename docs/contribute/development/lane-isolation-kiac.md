@@ -1,3 +1,17 @@
+---
+page_id: con-lane-isolation-kiac
+summary: Run the whole Dev Health stack one-namespace-per-lane on a local kiac cluster, seeded from backups/, so parallel agents stop contending for the shared Compose stack.
+content_type: runbook
+owner: engineering
+source_of_truth:
+  - acr/deploy/local/kiac.sh (cluster lifecycle and the image bridge)
+  - acr/deploy/local/trial-data.sh (per-namespace Postgres/ClickHouse/FalkorDB and the @backups restores)
+  - deploy/helm/dev-health (ops chart) and the ACR chart (workloads)
+  - scripts/worker/provision_river_roles.sql (runtime role provisioning)
+applicability: current
+lifecycle: active
+---
+
 # Lane isolation on a kiac cluster
 
 Run the **whole** Dev Health stack — Postgres, PgBouncer, ClickHouse, Valkey,
@@ -101,12 +115,25 @@ Check the host first. Start with **one** node and add more only if
 `container build` is broken on these Dockerfiles, so build with Docker and
 bridge the result into the cluster's containerd:
 
+Every path below is explicit, because step 1 left your shell in the ACR
+repository and the build must happen in the **ops** worktree:
+
 ```bash
-# 1. ops runtime, built from your worktree
-SHA=$(git rev-parse --verify HEAD)
+OPS_WT=<path-to-your-ops-worktree>      # e.g. worktrees/ops/<branch>
+ACR_WT=<path-to-your-acr-worktree>
+
+# 1. ops runtime, built from the OPS worktree
+SHA=$(git -C "$OPS_WT" rev-parse --verify HEAD)
 docker build --target api \
   --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+g${SHA:0:12}" \
-  -f docker/Dockerfile -t "dev-health-ops-local:${SHA:0:12}" .
+  -f "$OPS_WT/docker/Dockerfile" -t "dev-health-ops-local:${SHA:0:12}" "$OPS_WT"
+
+# 1b. the web image. The Compose stack builds it as dev-health-web:latest; the
+#     ghcr tag below only exists if you pulled it. `docker save` neither pulls
+#     nor retags, so make the reference real before saving it -- otherwise the
+#     save fails and the pullPolicy:Never web pod can never start.
+docker image inspect ghcr.io/full-chaos/dev-health-web:0.1.0 >/dev/null 2>&1 \
+  || docker tag dev-health-web:latest ghcr.io/full-chaos/dev-health-web:0.1.0
 
 # 2. the complete set. The Go worker, web and ACR images are the ones the
 #    Compose stack already builds -- `docker images | grep dev-health` shows
@@ -136,8 +163,8 @@ while IFS= read -r image; do
 done < /tmp/image-list.txt
 
 # 4. load them into every node's containerd
-cd acr && ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
-  deploy/local/kiac.sh load-image $(tr '\n' ' ' < /tmp/image-list.txt)
+ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
+  "$ACR_WT/deploy/local/kiac.sh" load-image $(tr '\n' ' ' < /tmp/image-list.txt)
 ```
 
 One image serves the four River worker groups (`heavy`, `ops`, `sync`,
@@ -200,7 +227,61 @@ but `failed_checks:"domain_postgres"`.
    pooler). Confirm `dev_health_runtime_posture_missing{role="…"} 0` for all
    three roles in its output.
 
-### 6. Install the two releases
+### 6. Create the ACR Secrets — BEFORE the Helm installs
+
+The ACR chart takes only `existingSecret` references and its migration hook
+resolves them at deploy time, so these must exist before step 7 runs — a
+release installed first simply fails.
+
+Create the ACR Secrets by hand; the chart takes only `existingSecret`
+references:
+
+| Secret | Keys |
+| --- | --- |
+| `acr-runtime` | `ACR_POSTGRES_DSN`, `ACR_CLICKHOUSE_DSN`, `ACR_EVIDENCE_ID_ACTIVE_KID`, `ACR_EVIDENCE_ID_KEYS` |
+| `acr-migration` | `ACR_POSTGRES_MIGRATION_DSN` |
+| `acr-model` | `ACR_CONTEXT_FABRIC_MODEL_API_KEY`, `ACR_CONTEXT_FABRIC_EMBED_API_KEY` |
+
+**Strip the surrounding quotes** when you copy a value out of a `.env` file.
+Docker Compose strips them; `kubectl create secret --from-literal` does not, and
+a quoted key reaches the provider as an invalid credential.
+
+## Testcontainers: which suite runs where
+
+| Suite | Where |
+| --- | --- |
+| Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
+| Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
+| `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
+| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once the script grows an explicit remote-ClickHouse mode. |
+| web Playwright e2e | The lane's own ops API and web. |
+| ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
+
+The rule: keep Testcontainers only where a suite genuinely wants a **throwaway**
+store. Anything that needs the seeded real organization must use the in-cluster
+plane.
+
+## Cost
+
+Measured on one 4 vCPU / 24 GB node with the full stack in `lane-a` and the
+datastores plus most of `lane-b`:
+
+| Step | Wall time |
+| --- | --- |
+| Cluster create to node Ready | 78 s |
+| Datastore rollout (Postgres, ClickHouse, FalkorDB) | 42 s |
+| Postgres restore (93 MB gzip, `pg_dumpall`) | 28 s |
+| ClickHouse restore (177 MB archive) | 9 s |
+| **Cold, empty machine to seeded datastores** | **157 s** |
+| `docker save` + `container image load`, 12 images | 34 s |
+| `kiac.sh load-image`, 10 images | 14 s |
+| A second seeded lane namespace | 80 s |
+
+Node use with the full stack in one namespace: 1114 m CPU (22 %) and 4449 MiB
+(18 % of 24 GB). With a second seeded lane it rose to 1550 m (31 %) and
+6997 MiB (28 %). Roughly three lanes fit on one node of this size.
+
+### 7. Install the two releases
 
 Install from **your worktree's** charts, not from `deploy/vendor/` — those
 submodules are pinned to older commits.
@@ -215,7 +296,7 @@ helm upgrade --install lane-a-acr <acr-worktree>/deploy/helm/acr \
 
 **Expect the first ops `--wait` to time out, and do not treat that as failure.**
 The pre-install hook runs Alembic only; the River grants come from the separate
-`dev-health-worker-migrate` Job in step 5.3, which cannot run until the release
+`dev-health-worker-migrate` Job in step 5, which cannot run until the release
 exists. So Helm starts the worker Deployments, they fail readiness on
 `domain_postgres`, and `--wait` gives up while everything else is healthy. Run
 the go-worker-migrate Job, then
@@ -359,78 +440,29 @@ contextFabric:
 ```
 
 The ACR chart's values schema has no `httpRoute` key; adding one fails
-rendering. Create the three Secrets in step 7 **before** installing, since the
-migration hook resolves them at deploy time.
+rendering. The three Secrets are created in step 6, before these installs, because
+the ACR migration hook resolves them at deploy time.
 
 Two things the values must NOT do:
 
 - **Do not set `migrations.hook.secretData.MIGRATION_DATABASE_URI`.** The chart
   documents it as preferred and as what activates the River step, but neither
   way of using it works:
-  - **Set it alongside `POSTGRES_URI`** and the run dies with
-    `ValueError: --db cannot be combined with MIGRATION_DATABASE_URI`, because
-    `cli.py:741` defaults the global `--db` from `POSTGRES_URI`/`DATABASE_URI`.
-  - **Set it alone** and the run dies with `migrate postgres: error: missing
-    required input(s): PostgreSQL semantic database`. The migration Secret then
-    holds only `MIGRATION_DATABASE_URI` and `CLICKHOUSE_URI` —
-    `_helpers.tpl`'s `dev-health.migrationSecretData` deliberately suppresses
-    `POSTGRES_URI`/`DATABASE_URI` once a dedicated URI is present — but the
-    Job's command still invokes `dev-hops migrate postgres` **without passing
-    `--db`**, and the CLI never reads `MIGRATION_DATABASE_URI`, so Alembic
-    never sees a DSN at all.
+    - **Set it alongside `POSTGRES_URI`** and the run dies with
+      `ValueError: --db cannot be combined with MIGRATION_DATABASE_URI`,
+      because `cli.py:741` defaults the global `--db` from
+      `POSTGRES_URI`/`DATABASE_URI`.
+    - **Set it alone** and the run dies with `migrate postgres: error: missing
+      required input(s): PostgreSQL semantic database`. The migration Secret
+      then holds only `MIGRATION_DATABASE_URI` and `CLICKHOUSE_URI` —
+      `_helpers.tpl`'s `dev-health.migrationSecretData` deliberately suppresses
+      `POSTGRES_URI`/`DATABASE_URI` once a dedicated URI is present — but the
+      Job's command still invokes `dev-hops migrate postgres` **without passing
+      `--db`**, and the CLI never reads `MIGRATION_DATABASE_URI`, so Alembic
+      never sees a DSN at all.
 
-  Set `POSTGRES_URI` instead and run River separately, per step 5.
+    Set `POSTGRES_URI` instead and run River separately, per step 5.
 - **Leave `sync-provider` at `replicas: 0`.** That group cannot compose until
   the provider job-routes are activated, and the chart renders no
   route-activation Job (Compose does this with five `*-route-activate`
   one-shots plus `go-worker-operator-credential`).
-
-### 7. Secrets
-
-Create the ACR Secrets by hand; the chart takes only `existingSecret`
-references:
-
-| Secret | Keys |
-| --- | --- |
-| `acr-runtime` | `ACR_POSTGRES_DSN`, `ACR_CLICKHOUSE_DSN`, `ACR_EVIDENCE_ID_ACTIVE_KID`, `ACR_EVIDENCE_ID_KEYS` |
-| `acr-migration` | `ACR_POSTGRES_MIGRATION_DSN` |
-| `acr-model` | `ACR_CONTEXT_FABRIC_MODEL_API_KEY`, `ACR_CONTEXT_FABRIC_EMBED_API_KEY` |
-
-**Strip the surrounding quotes** when you copy a value out of a `.env` file.
-Docker Compose strips them; `kubectl create secret --from-literal` does not, and
-a quoted key reaches the provider as an invalid credential.
-
-## Testcontainers: which suite runs where
-
-| Suite | Where |
-| --- | --- |
-| Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
-| Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
-| `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
-| ops `ci/local_validate.sh` full gate | In-cluster Postgres and a scratch ClickHouse database inside the lane's own ClickHouse. The namespace satisfies the scratch-ClickHouse safety requirement. |
-| web Playwright e2e | The lane's own ops API and web. |
-| ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
-
-The rule: keep Testcontainers only where a suite genuinely wants a **throwaway**
-store. Anything that needs the seeded real organization must use the in-cluster
-plane.
-
-## Cost
-
-Measured on one 4 vCPU / 24 GB node with the full stack in `lane-a` and the
-datastores plus most of `lane-b`:
-
-| Step | Wall time |
-| --- | --- |
-| Cluster create to node Ready | 78 s |
-| Datastore rollout (Postgres, ClickHouse, FalkorDB) | 42 s |
-| Postgres restore (93 MB gzip, `pg_dumpall`) | 28 s |
-| ClickHouse restore (177 MB archive) | 9 s |
-| **Cold, empty machine to seeded datastores** | **157 s** |
-| `docker save` + `container image load`, 12 images | 34 s |
-| `kiac.sh load-image`, 10 images | 14 s |
-| A second seeded lane namespace | 80 s |
-
-Node use with the full stack in one namespace: 1114 m CPU (22 %) and 4449 MiB
-(18 % of 24 GB). With a second seeded lane it rose to 1550 m (31 %) and
-6997 MiB (28 %). Roughly three lanes fit on one node of this size.

@@ -178,7 +178,7 @@ def test_application_migrator_applies_safe_schema_without_0066_opt_in(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0114"}
+    assert _revisions(migrated_to_0065.engine) == {"0115"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     assert _table_exists(migrated_to_0065.engine, "dev_conversations")
     # 0110 deletes the two retired kinds' routes regardless of the Celery-to-
@@ -207,7 +207,7 @@ def test_0066_real_postgres_applies_only_with_opt_in_and_downgrades(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0114"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0115"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     # 0110 deleted the two retired kinds' routes on this same upgrade.
     assert _routes(migrated_to_0065.engine, migration) == [
@@ -244,7 +244,7 @@ def test_application_migrator_opt_in_applies_both_heads(
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
 
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0114"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0115"}
     assert _table_exists(migrated_to_0065.engine, "dev_runs")
     # 0110 deleted the two retired kinds' routes on this same upgrade.
     assert _routes(migrated_to_0065.engine, migration) == [
@@ -286,7 +286,7 @@ def test_old_linear_0071_provenance_converges_to_both_heads(
     from dev_health_ops.migrate import _run_upgrade
 
     assert _run_upgrade(Namespace(db=None, revision="head")) == 0
-    assert _revisions(migrated_to_0065.engine) == {"0066", "0114"}
+    assert _revisions(migrated_to_0065.engine) == {"0066", "0115"}
     # 0110 (CHAOS-4243, authored well after this legacy-provenance scenario)
     # is new to this run too and deletes the two retired kinds' routes --
     # every other route is unchanged, exactly as the docstring above expects

@@ -27,7 +27,7 @@ from __future__ import annotations
 import contextlib
 import io
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from internal.providersync.testdata import oracle_registry
 from internal.providersync.testdata.oracle_pairs._github_work_items_helpers import (
@@ -48,7 +48,7 @@ with (
     )
     from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
 
-_PROVIDER = "linear"
+_PROVIDER: Literal["jira", "github", "gitlab", "linear"] = "linear"
 
 
 def _time(value: str | None) -> datetime:

@@ -788,8 +788,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (gitlab_tests_route_test.go, the GitLab-native twin). Neither touches a
     # database, so the integration-tagged count stays 119. Combined with
     # CHAOS-4394 above: 1084 -> 1088.
-    assert len(expected_provider_tests) == 1088
-    assert len(expected_integration_tests) == 119
+    #
+    # CHAOS-4365 item 1b added 27 new top-level tests in internal/providersync
+    # for the team_repo_ownership derivation: 19 ordinary tests in
+    # team_repo_ownership_derivation_test.go, 1 ordinary test in
+    # team_repo_ownership_donor_walk_oracle_test.go (the live-Python donor-walk
+    # gating oracle), and 7 integration-tagged tests in
+    # team_repo_ownership_derivation_integration_test.go (//go:build
+    # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
+    assert len(expected_provider_tests) == 1115
+    assert len(expected_integration_tests) == 126
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -805,7 +813,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1088
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1115
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -866,7 +874,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1088
+    assert len(selected_tests) == len(set(selected_tests)) == 1115
     assert set(selected_tests) == expected_tests
 
 

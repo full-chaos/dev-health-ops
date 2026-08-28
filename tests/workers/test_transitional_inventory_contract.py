@@ -82,7 +82,10 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # with zero producer anywhere; retirement meant deleting them entirely
     # from the registry and the worker, not leaving them dormant, so their
     # rows are removed rather than re-anchored.
-    assert inventory["row_count"] == 100
+    # = 100, + 1 added under CHAOS-4365 item 1b: the new
+    # sync.team_repo_ownership_derivation registry_kind row (native Go
+    # post-sync Fanout writer, no Celery predecessor).
+    assert inventory["row_count"] == 101
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

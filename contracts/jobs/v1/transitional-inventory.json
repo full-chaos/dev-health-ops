@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 100,
+  "row_count": 101,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -2014,11 +2014,35 @@
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:620",
-      "surface": "system.heartbeat",
+      "surface": "sync.team_repo_ownership_derivation",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
         "line": 620
+      },
+      "queue_or_cadence": "sync / sync",
+      "dispatches": "publishTeamRepoOwnershipDerivation (native_post_sync.go Fanout sibling writer)",
+      "dispatch_mechanism": "job_registry_descriptor",
+      "owner_role": "primary",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "sync.team_repo_ownership_derivation"
+      },
+      "target_kind_id": "kind:sync.team_repo_ownership_derivation",
+      "current_implementation_state": "native_go",
+      "verification_status": "verified",
+      "compatibility_dependency": "none; native Go post-sync Fanout writer with no Celery predecessor (CHAOS-4365 item 1b).",
+      "deletion_evidence_requirement": "Remove this transitional registry row after the Go-worker migration project closes and the registry becomes the sole workload inventory.",
+      "acceptance_test_id": "internal/providersync/team_repo_ownership_derivation_integration_test.go",
+      "notes": "New job kind, introduced Go-native; no Python compatibility bridge ever existed for it."
+    },
+    {
+      "id": "registry_kind:contracts/jobs/v1/registry.json:652",
+      "surface": "system.heartbeat",
+      "class": "registry_kind",
+      "source": {
+        "file": "contracts/jobs/v1/registry.json",
+        "line": 652
       },
       "queue_or_cadence": "heartbeat / ops",
       "dispatches": "phone_home_heartbeat",
@@ -2037,12 +2061,12 @@
       "notes": ""
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:653",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:685",
       "surface": "system.retention_cleanup",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 653
+        "line": 685
       },
       "queue_or_cadence": "retention / ops",
       "dispatches": "n/a (native Go, worker_job_outbox terminal-row deletes only)",
@@ -2061,12 +2085,12 @@
       "notes": "does NOT cover prune_rate_limit_observations/prune_external_ingest_batches (gap 2.6)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:695",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:727",
       "surface": "system.sync_coverage_refresh",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 695
+        "line": 727
       },
       "queue_or_cadence": "coverage / ops",
       "dispatches": "native bounded projection refresh",
@@ -2085,12 +2109,12 @@
       "notes": "Fixed scheduler emits one bounded five-minute occurrence; ops worker owns the coverage queue and native PostgreSQL projector."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:727",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:759",
       "surface": "workgraph.build",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 727
+        "line": 759
       },
       "queue_or_cadence": "workgraph / heavy",
       "dispatches": "run_work_graph_build",

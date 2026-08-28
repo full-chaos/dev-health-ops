@@ -28,18 +28,27 @@ use this file for canonical WorkUnit categorization." Its `investment_area` valu
 `security`, `infrastructure`) are free-form legacy labels — **not** the fixed five-theme taxonomy
 above, and not interchangeable with it.
 
-The canonical theme/subcategory distribution is `latest_work_unit_investments`
-(`work_graph/investment/` materialization; `theme_probs`/`subcategory_probs` computed once at
-categorization time, deterministic roll-up, never recomputed at read time), team-scoped through a
-join to `work_item_team_attributions` — see `api/queries/investment.py`'s
-`fetch_investment_breakdown(include_team_id=True)` for the reference query shape, which already
-carries ownership precedence (CHAOS-2600).
+The canonical theme/subcategory distribution comes from `work_unit_investments`
+(`theme_distribution_json`/`subcategory_distribution_json`, computed once at categorization time,
+deterministic roll-up, never recomputed at read time). `latest_work_unit_investments` is **not** a
+persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
+`api/queries/investment.py`) that dedups `work_unit_investments` to one row per
+`(org_id, work_unit_id)` via `argMax(..., computed_at)`, org-scoped. Team-scoping joins that CTE to
+`work_item_team_attributions` through the shared `build_unit_team_subquery` helper (also in
+`api/queries/investment.py`) — a `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE` subquery selecting
+`is_primary = 1`, latest `computed_at` per work item, which already carries ownership precedence
+(CHAOS-2600). `fetch_investment_team_edges` is the reference caller of this join shape; there is no
+`fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
+not a real function signature.
 
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
 CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads
 `investment_metrics_daily` and therefore surfaces the deprecated legacy taxonomy, not the
 canonical one — the same class of gap CHAOS-4347 named for repository status and CHAOS-4365 named
 for cognitive load: a real, existing, deterministic metric with no producer reading the correct
-source. A new acr producer reading the `latest_work_unit_investments` ⋈ `work_item_team_attributions`
-join is required before any team-scoped investment-mix consumer (e.g. cohort ranking) can trust its
-numbers.
+source. A new acr producer reading `latest_work_unit_investments` LEFT JOIN
+`work_item_team_attributions` (via `build_unit_team_subquery`, as `fetch_investment_team_edges`
+does) is required before any team-scoped investment-mix consumer (e.g. cohort ranking) can trust
+its numbers. There is no stable, exported query API for this join today outside
+`api/queries/investment.py` itself — a new acr producer needs either a new typed query function
+there or an equivalent join built the same way, not a guess at table access.

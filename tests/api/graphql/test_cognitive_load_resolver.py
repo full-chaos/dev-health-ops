@@ -511,7 +511,8 @@ async def test_cognitive_load_team_and_repo_id_combined_falls_back_to_repo_patte
     auto-imports never write team_repo_ownership at all -- their repos
     resolve to a team only via teams.repo_patterns. When native ownership
     resolves NOTHING for the candidate repo, the resolver must fall back
-    to the requesting team's repo_patterns before giving up."""
+    to the org's repo_patterns (via the canonical cross-team resolver)
+    before giving up."""
     ctx = _ctx()
     _setup_client(
         ctx.client,
@@ -521,7 +522,10 @@ async def test_cognitive_load_team_and_repo_id_combined_falls_back_to_repo_patte
                 [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
             ),
             _qresult([], []),  # no native ownership rows at all
-            _qresult(["repo_patterns"], [[["acme/repo"]]]),  # team's own patterns
+            _qresult(  # every team's patterns, org-wide
+                ["id", "name", "repo_patterns"],
+                [["team-alpha", "Team Alpha", ["acme/repo"]]],
+            ),
             _qresult([], []),  # user_metrics_daily
             _qresult([], []),  # team_metrics_daily
         ],
@@ -536,6 +540,99 @@ async def test_cognitive_load_team_and_repo_id_combined_falls_back_to_repo_patte
     pattern_query: str = ctx.client.query.call_args_list[2].args[0]
     assert "teams" in pattern_query
     assert "repo_patterns" in pattern_query
+    # org-wide (not filtered to the requesting team) -- see the next test
+    assert "team_id" not in pattern_query
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_pattern_fallback_respects_cross_team_precedence() -> (
+    None
+):
+    """CHAOS-4406 codex R2 (P2, correct): checking only the requesting
+    team's OWN patterns could authorize a repo a DIFFERENT team's more
+    specific pattern actually owns. team-alpha has the broad `acme/*`
+    prefix; team-beta has the exact `acme/payments` pattern. The
+    canonical RepoPatternTeamResolver picks the exact match, so
+    team-alpha must NOT be authorized for acme/payments."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/payments"]],
+            ),
+            _qresult([], []),  # no native ownership rows at all
+            _qresult(
+                ["id", "name", "repo_patterns"],
+                [
+                    ["team-alpha", "Team Alpha", ["acme/*"]],
+                    ["team-beta", "Team Beta", ["acme/payments"]],
+                ],
+            ),
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/payments")
+    )
+
+    assert result.signals == []
+    assert result.total_days == 0
+    assert ctx.client.query.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_combined_team_metrics_dedups_by_latest_generation() -> (
+    None
+):
+    """CHAOS-4406 codex R2 (P1, correct): a naive argMax(col, computed_at)
+    PER (day, team_id) dedupes each team_id label's own latest row, but
+    NOT across recomputation generations -- if this repo's tainted legacy
+    team_id changed between two backfill runs for the same day (both
+    append-only rows surviving), that shape sums BOTH generations,
+    double-counting the same underlying commits. Must instead find this
+    repo's latest computed_at PER DAY and INNER JOIN back so only rows
+    from that exact generation are summed (same-generation team_id
+    splits still combine; a stale earlier generation is excluded)."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-alpha",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    await resolve_cognitive_load(ctx, _input(team_id="team-alpha", repo_id="acme/repo"))
+
+    team_query: str = _squash_ws(ctx.client.query.call_args_list[3].args[0])
+    assert "max(computed_at) AS latest_computed_at" in team_query
+    assert "INNER JOIN" in team_query
+    assert "t.computed_at = latest_gen.latest_computed_at" in team_query
+    assert "sum(t.commits_count)" in team_query
 
 
 # ---------------------------------------------------------------------------

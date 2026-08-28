@@ -59,6 +59,7 @@ import logging
 from typing import Any
 
 from dev_health_ops.api.queries.client import query_dicts
+from dev_health_ops.providers.teams import build_repo_pattern_resolver
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -304,31 +305,6 @@ async def _fetch_team_metrics(
 # ---------------------------------------------------------------------------
 
 
-def _repo_pattern_matches(slug: str, patterns: list[str]) -> bool:
-    """Mirror ``providers/teams.py::RepoPatternTeamResolver.resolve``'s
-    match rule: an exact (case-insensitive) string, or a ``*``-suffixed
-    prefix glob, stripped of the trailing ``*``/``/``.
-    """
-    key = slug.strip().lower()
-    if not key:
-        return False
-    exact: set[str] = set()
-    prefixes: list[str] = []
-    for pattern in patterns:
-        p = str(pattern).strip().lower()
-        if not p:
-            continue
-        if "*" in p:
-            prefix = p.rstrip("*").rstrip("/")
-            if prefix:
-                prefixes.append(prefix)
-        else:
-            exact.add(p)
-    if key in exact:
-        return True
-    return any(key.startswith(prefix) for prefix in prefixes)
-
-
 async def _resolve_owned_repo_id(
     client: Any,
     *,
@@ -362,15 +338,28 @@ async def _resolve_owned_repo_id(
        ``matched`` sentinel -- ClickHouse's zero-value LEFT JOIN default,
        not NULL, would otherwise silently treat an unmatched name as
        matched to the UUID zero-value).
-    2. Ranked by ``(is_primary DESC, specificity DESC, updated_at DESC)``
-       per resolved repo id -- so a non-primary co-owner row is never
-       mistaken for the canonical owner (the first version's other bug:
-       filtering to ``team_id`` BEFORE picking a winner let a secondary
-       team read metrics the primary owner alone should see).
+    2. Ranked by ``(is_primary DESC, specificity DESC, updated_at DESC,
+       team_id ASC)`` per resolved repo id, the exact same tie-break
+       order ``load_team_repo_ownership_map`` uses -- so a non-primary
+       co-owner row is never mistaken for the canonical owner (the first
+       version's other bug: filtering to ``team_id`` BEFORE picking a
+       winner let a secondary team read metrics the primary owner alone
+       should see), and codex R2 (P1): without the final ``team_id ASC``
+       tie-break, two co-owner rows sharing identical
+       ``is_primary``/``specificity``/``updated_at`` (GitHub auto-import
+       writes every row ``is_primary=0``) left ClickHouse free to return
+       either first, making the SAME request's owned/not-owned answer
+       flap between calls.
     3. Falls back to ``teams.repo_patterns`` (glob strings) ONLY when
        native ownership resolves NO row at all for the candidate repo(s)
        -- the path GitLab/Jira/Linear auto-imports rely on entirely, since
-       none of them write ``team_repo_ownership``.
+       none of them write ``team_repo_ownership``. Resolved with the
+       SAME cross-team ``RepoPatternTeamResolver``
+       (``providers/teams.py::build_repo_pattern_resolver``) every other
+       pattern-fallback reader uses -- built from EVERY team's patterns
+       in the org, not just the requesting team's (codex R2, P2: checking
+       only the requesting team's own patterns could authorize a repo a
+       DIFFERENT team's more specific pattern actually owns).
 
     Ownership is checked as of "now", not a caller-supplied ``as_of``:
     this call decides WHICH SQL path answers the request (a routing
@@ -425,7 +414,7 @@ async def _resolve_owned_repo_id(
           AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
           AND o.valid_from <= now64(3)
           AND (o.valid_to IS NULL OR o.valid_to > now64(3))
-        ORDER BY resolved_repo_id, is_primary DESC, specificity DESC, updated_at DESC
+        ORDER BY resolved_repo_id, is_primary DESC, specificity DESC, updated_at DESC, team_id ASC
         """,
         {"org_id": org_id, "candidate_ids": candidate_ids},
     )
@@ -441,19 +430,23 @@ async def _resolve_owned_repo_id(
         return None
 
     # No native ownership row resolves ANY candidate repo -- fall back to
-    # teams.repo_patterns, the path non-GitHub-native auto-imports rely on.
-    team_rows = await query_dicts(
+    # teams.repo_patterns via the SAME canonical cross-team resolver every
+    # other pattern-fallback reader uses, built from EVERY team's patterns
+    # (not just the requesting team's), so a more specific pattern another
+    # team owns is never silently overridden by this team's own broader one.
+    all_team_rows = await query_dicts(
         client,
-        "SELECT repo_patterns FROM teams FINAL WHERE org_id = {org_id:String} AND id = {team_id:String}",
-        {"org_id": org_id, "team_id": team_id},
+        "SELECT id, name, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String}",
+        {"org_id": org_id},
     )
-    if not team_rows:
+    if not all_team_rows:
         return None
-    patterns = [str(p) for p in (team_rows[0].get("repo_patterns") or [])]
-    if not patterns:
-        return None
+    pattern_resolver = build_repo_pattern_resolver(all_team_rows)
     for row in candidate_rows:
-        if _repo_pattern_matches(str(row.get("repo") or ""), patterns):
+        resolved_team_id, _team_name = pattern_resolver.resolve(
+            str(row.get("repo") or "")
+        )
+        if resolved_team_id == team_id:
             return str(row["id"])
     return None
 
@@ -488,6 +481,26 @@ async def _fetch_repo_scoped_team_metrics(
     axis (several ``team_id`` labels collapsing onto one repo instead of
     several repos collapsing onto one team).
 
+    Codex R2 (P1, correct): a naive ``argMax(col, computed_at)`` PER
+    ``(day, team_id)`` -- this function's first version -- dedupes each
+    team_id LABEL's own latest row, but does NOT dedupe across
+    RECOMPUTATION GENERATIONS: if this repo's tainted legacy ``team_id``
+    changed between two backfill runs for the same day (append-only, so
+    BOTH generations' rows remain), that shape keeps one row per
+    generation (different team_id -> different group) and then SUMs
+    both -- double-counting the SAME underlying commits.
+    ``metrics/job_daily.py``'s finalize producer hits the identical
+    problem and fixes it the same way (its own comment: "two-step
+    instead: find each repo's latest computed_at [generation], then
+    INNER JOIN back and SUM every row that shares that exact timestamp
+    -- so multiple same-generation splits are summed together, while an
+    older, stale generation is excluded entirely"). Ported here per day:
+    the inner join finds this repo's latest ``computed_at`` FOR EACH
+    DAY, then only rows exactly at that timestamp are summed -- same-
+    generation team_id splits still combine (still correct, per the
+    docstring above), but a stale earlier generation's rows are excluded
+    instead of double-counted.
+
     Repo resolution mirrors ``_fetch_user_metrics``'s org-scoped ``repos``
     subquery (accepts either a UUID or a ``repos.repo`` slug).
     """
@@ -502,17 +515,13 @@ async def _fetch_repo_scoped_team_metrics(
             ) AS weekend_commit_ratio
         FROM (
             SELECT
-                day,
-                sum(commits_count)             AS total_commits,
-                sum(after_hours_commits_count) AS total_after_hours_commits,
-                sum(weekend_commits_count)      AS total_weekend_commits
-            FROM (
-                SELECT
-                    day,
-                    team_id,
-                    argMax(commits_count,             computed_at) AS commits_count,
-                    argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
-                    argMax(weekend_commits_count,      computed_at) AS weekend_commits_count
+                t.day AS day,
+                sum(t.commits_count)             AS total_commits,
+                sum(t.after_hours_commits_count) AS total_after_hours_commits,
+                sum(t.weekend_commits_count)      AS total_weekend_commits
+            FROM team_metrics_daily AS t
+            INNER JOIN (
+                SELECT day, max(computed_at) AS latest_computed_at
                 FROM team_metrics_daily
                 WHERE org_id = {org_id:String}
                   AND day >= {since_date:Date}
@@ -522,9 +531,19 @@ async def _fetch_repo_scoped_team_metrics(
                       WHERE org_id = {org_id:String}
                         AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
                   )
-                GROUP BY day, team_id
-            )
-            GROUP BY day
+                GROUP BY day
+            ) AS latest_gen
+                ON t.day = latest_gen.day
+                   AND t.computed_at = latest_gen.latest_computed_at
+            WHERE t.org_id = {org_id:String}
+              AND t.day >= {since_date:Date}
+              AND t.day <= {until_date:Date}
+              AND t.repo_id IN (
+                  SELECT id FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )
+            GROUP BY t.day
         )
         ORDER BY day
     """

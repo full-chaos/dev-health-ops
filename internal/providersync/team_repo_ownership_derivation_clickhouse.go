@@ -123,14 +123,38 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 func loadTeamRepoOwnershipProjectLinks(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) ([]TeamRepoOwnershipProjectLink, error) {
+	// GROUP BY + argMax(field, (updated_at, valid_from)), not FINAL: FINAL
+	// only collapses rows sharing the exact ReplacingMergeTree ORDER BY key
+	// (org_id, provider, project_id, team_id, source, valid_from) -- a
+	// re-import that corrects specificity/is_primary under a NEW valid_from
+	// is a DISTINCT key FINAL never merges, so a stale higher-specificity
+	// generation could keep outranking a newer correction indefinitely.
+	// Mirrors metrics/loaders/clickhouse.py's load_team_attribution_context
+	// (same GROUP BY + argMax shape, same tie-break tuple) exactly (codex
+	// adversarial review, 2026-08-28, confirmed finding).
+	// GROUP BY + argMax(field, (updated_at, valid_from)), not FINAL: FINAL
+	// only collapses rows sharing the exact ReplacingMergeTree ORDER BY key
+	// (org_id, provider, project_id, team_id, source, valid_from) -- a
+	// re-import that corrects specificity/is_primary under a NEW valid_from
+	// is a DISTINCT key FINAL never merges, so a stale higher-specificity
+	// generation could keep outranking a newer correction indefinitely.
+	// Mirrors metrics/loaders/clickhouse.py's load_team_attribution_context
+	// (same GROUP BY + argMax shape, same tie-break tuple) exactly (codex
+	// adversarial review, 2026-08-28, confirmed finding).
 	rows, err := conn.Query(ctx, `
-SELECT project_id, team_id, is_primary, specificity
-FROM team_project_ownership FINAL
+SELECT
+    provider,
+    project_id,
+    team_id,
+    argMax(is_primary, (updated_at, valid_from)) AS is_primary,
+    argMax(specificity, (updated_at, valid_from)) AS specificity
+FROM team_project_ownership
 WHERE org_id = ?
   AND project_id != ''
   AND team_id != ''
   AND valid_from <= ?
-  AND (valid_to IS NULL OR valid_to > ?)`,
+  AND (valid_to IS NULL OR valid_to > ?)
+GROUP BY provider, project_id, team_id`,
 		orgID, asOf, asOf)
 	if err != nil {
 		return nil, err
@@ -140,7 +164,7 @@ WHERE org_id = ?
 	for rows.Next() {
 		var link TeamRepoOwnershipProjectLink
 		var isPrimary uint8
-		if err := rows.Scan(&link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
+		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
 			return nil, err
 		}
 		link.IsPrimary = isPrimary != 0

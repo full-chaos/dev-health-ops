@@ -36,7 +36,14 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 		repoB: "acme/repo-b",
 		repoC: "acme/repo-c",
 	})
-	seedTeamProjectOwnership(t, ctx, conn, orgID, "proj-1", "team-platform", true, now)
+	// Two separate provider-tracked "proj-1" ownership rows -- the donor
+	// item below is linear-tracked, the own-project_id item is
+	// github-tracked; resolution is keyed by (provider, project_id), never
+	// bare project_id (codex adversarial review, 2026-08-28, confirmed
+	// finding), so each needs its own matching ownership row even though
+	// both happen to share the literal project_id string here.
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", "proj-1", "team-platform", true, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, now)
 	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", uuid.Nil, "proj-1", now)
 	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", now)
 	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "github", repoB, "", now)
@@ -154,7 +161,7 @@ func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *t
 
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/gitlab-repo"})
-	seedTeamProjectOwnership(t, ctx, conn, orgID, "proj-gitlab", "team-gitlab", false, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "gitlab", "proj-gitlab", "team-gitlab", false, now)
 	seedWorkItem(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", repoID, "proj-gitlab", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
@@ -169,6 +176,58 @@ func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *t
 	row, ok := got["acme/gitlab-repo"]
 	if !ok || row.teamID != "team-gitlab" {
 		t.Fatalf("expected acme/gitlab-repo -> team-gitlab, got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationCollapsesStaleGenerations is the codex
+// adversarial-review fix (2026-08-28, confirmed finding), proven against
+// real ClickHouse: a re-import writes a NEW valid_from, which is a DISTINCT
+// ReplacingMergeTree ORDER BY key FINAL never merges away -- team_repo_
+// ownership derivation's own read query (loadTeamRepoOwnershipProjectLinks)
+// used FINAL alone, so a stale, higher-scoring generation of one team's
+// claim could keep outranking a genuinely newer, lower-scoring correction
+// for the SAME (provider, project_id, team_id) forever. Here team-old's
+// claim is DOWNGRADED by a newer generation (is_primary true->false,
+// specificity 100->0); after the correction, team-new's own (single,
+// current) claim should win the project -- proving the read query collapses
+// generations via GROUP BY + argMax(field, (updated_at, valid_from)), the
+// same shape as metrics/loaders/clickhouse.py's load_team_attribution_context,
+// not a naive FINAL read.
+func TestTeamRepoOwnershipDerivationCollapsesStaleGenerations(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4365-item1b-stale-generation-org"
+
+	older := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/stale-gen-repo"})
+
+	// team-old's STALE generation: is_primary=true, specificity=100 --
+	// would win outright if this were the only row FINAL (or a naive
+	// non-collapsing read) ever saw.
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", true, 100, older)
+	// team-old's NEWER, correcting generation: downgraded to is_primary=false,
+	// specificity=0 -- this is team-old's CURRENT effective claim.
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", false, 0, newer)
+	// team-new's own (single, current) claim: is_primary=false, specificity=50
+	// -- must now outrank team-old's collapsed (corrected) claim.
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-new", false, 50, newer)
+
+	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", repoID, "proj-1", newer)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row, got %d", written)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/stale-gen-repo"]
+	if !ok || row.teamID != "team-new" {
+		t.Fatalf("expected acme/stale-gen-repo -> team-new (team-old's stale generation must not outrank the newer correction), got %+v", got)
 	}
 }
 
@@ -190,7 +249,7 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge(t *te
 
 	repoA := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgA, map[uuid.UUID]string{repoA: "acme/tenant-a-repo"})
-	seedTeamProjectOwnership(t, ctx, conn, orgA, "proj-a", "team-a-legit", true, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgA, "linear", "proj-a", "team-a-legit", true, now)
 	// A repo-bearing item with NO project_id of its own: it can only reach
 	// a team through a dependency-donor edge.
 	seedWorkItem(t, ctx, conn, orgA, "repo-item", "github", repoA, "", now)
@@ -233,7 +292,7 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsIssuePRLink(t *testi
 
 	repoA := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgA, map[uuid.UUID]string{repoA: "acme/tenant-a-repo"})
-	seedTeamProjectOwnership(t, ctx, conn, orgA, "proj-a", "team-a-legit", true, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgA, "linear", "proj-a", "team-a-legit", true, now)
 	// Resolves to team-a-legit via its own project_id; NO repo_id of its
 	// own, so Path 1+2 alone produces nothing for repoA.
 	seedWorkItem(t, ctx, conn, orgA, "resolver-item", "linear", uuid.Nil, "proj-a", now)
@@ -274,7 +333,7 @@ func seedTeamRepoOwnershipRepos(t *testing.T, ctx context.Context, conn driver.C
 
 func seedTeamProjectOwnership(
 	t *testing.T, ctx context.Context, conn driver.Conn,
-	orgID, projectID, teamID string, isPrimary bool, now time.Time,
+	orgID, provider, projectID, teamID string, isPrimary bool, now time.Time,
 ) {
 	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`)
@@ -285,7 +344,34 @@ func seedTeamProjectOwnership(
 	if isPrimary {
 		primary = 1
 	}
-	if err := batch.Append(orgID, "linear", teamID, projectID, "native", primary, uint16(100), int32(0), now, nil, now); err != nil {
+	if err := batch.Append(orgID, provider, teamID, projectID, "native", primary, uint16(100), int32(0), now, nil, now); err != nil {
+		t.Fatalf("append team_project_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send team_project_ownership batch: %v", err)
+	}
+}
+
+// seedTeamProjectOwnershipGeneration inserts one team_project_ownership row
+// with an explicit specificity and valid_from/updated_at, letting a test
+// plant multiple GENERATIONS (repeated-import rows differing in valid_from)
+// of the same (org, provider, project, team) claim -- seedTeamProjectOwnership
+// always hardcodes specificity=100 and a single timestamp, so it cannot
+// express this.
+func seedTeamProjectOwnershipGeneration(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID, provider, projectID, teamID string, isPrimary bool, specificity uint16, at time.Time,
+) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`)
+	if err != nil {
+		t.Fatalf("prepare team_project_ownership batch: %v", err)
+	}
+	primary := uint8(0)
+	if isPrimary {
+		primary = 1
+	}
+	if err := batch.Append(orgID, provider, teamID, projectID, "native", primary, specificity, int32(0), at, nil, at); err != nil {
 		t.Fatalf("append team_project_ownership row: %v", err)
 	}
 	if err := batch.Send(); err != nil {

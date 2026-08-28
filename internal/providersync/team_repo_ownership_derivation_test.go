@@ -90,6 +90,39 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 	}
 }
 
+// TestNonResolvingOwnProjectIDFallsBackToDonorWalk: the real GitHub shape
+// (codex adversarial review, 2026-08-28, confirmed high-severity finding).
+// github_work_items_rows.go unconditionally sets a GitHub PR/issue's own
+// ProjectID to the repo's full name -- a string that never appears in
+// team_project_ownership, since GitHub never writes that table. Before this
+// fix, buildDonorProjectIDResolver returned this non-resolving "own"
+// ProjectID unconditionally, permanently shadowing a valid dependency-donor
+// edge to a Linear issue that DOES resolve -- silently defeating the
+// donor-walk fallback (design check a2) for the primary real-world use
+// case chris's ruling described. The own ProjectID here ("acme/repo-a", the
+// GitHub shape) must be ignored in favor of the donor's "proj-1".
+func TestNonResolvingOwnProjectIDFallsBackToDonorWalk(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		// The PR: repo_id set, own ProjectID set to the GitHub repo-full-name
+		// shape -- present, non-empty, but never resolves to any team.
+		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: "acme/repo-a"},
+		// The donor: a Linear issue with the REAL project_id.
+		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, edges, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-platform via donor walk despite non-resolving own project_id, got %+v", got)
+	}
+}
+
 // TestBlockingRelationshipTypeNeverInherits: CHAOS-4321's "never guess" applied
 // to the donor walk -- a blocks/blocked_by edge routinely spans teams, so it
 // must NOT transfer a team, exactly like compute_work_items.py's
@@ -145,7 +178,7 @@ func TestLatestEdgeByLastSyncedWinsPerPair(t *testing.T) {
 // compute_work_items.py's donor resolution.
 func TestExtkeyDependencyTargetResolvesCrossProvider(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
-		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
+		{Provider: "linear", ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},

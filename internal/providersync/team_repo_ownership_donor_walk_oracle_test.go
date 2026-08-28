@@ -199,7 +199,10 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	links := make([]TeamRepoOwnershipProjectLink, 0, len(decoded.ProjectOwnership))
 	for _, link := range decoded.ProjectOwnership {
 		links = append(links, TeamRepoOwnershipProjectLink{
-			ProjectID: link.ProjectID, TeamID: link.TeamID, IsPrimary: true,
+			// Every oracle work item is provider="linear" (see below); the
+			// ownership rows backing them must match, now that resolution is
+			// keyed by (provider, project_id) not bare project_id.
+			Provider: "linear", ProjectID: link.ProjectID, TeamID: link.TeamID, IsPrimary: true,
 		})
 	}
 	workItems := make([]TeamRepoOwnershipWorkItem, 0, len(decoded.WorkItems))
@@ -231,10 +234,10 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	}
 
 	projectToTeam := resolveProjectToTeam(links)
-	donorProjectID := buildDonorProjectIDResolver(byID, edges)
-	projectID := donorProjectID(decoded.SourceWorkItemID)
+	donorProjectID := buildDonorProjectIDResolver(byID, edges, projectToTeam)
+	ref := donorProjectID(decoded.SourceWorkItemID)
 	row := teamRepoOwnershipDonorWalkOracleRow{}
-	if teamID, ok := projectToTeam[projectID]; ok {
+	if teamID, ok := projectToTeam[ref]; ok {
 		row.TeamID = &teamID
 	}
 	return row

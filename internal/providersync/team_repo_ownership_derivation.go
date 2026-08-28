@@ -76,23 +76,42 @@ import (
 
 // TeamRepoOwnershipProjectLink is one already-synced team_project_ownership
 // row for this org (any provider/tracker), already collapsed to one row per
-// (project_id, team_id) pair -- the caller (loadTeamRepoOwnershipProjectLinks)
-// is responsible for deduping repeated-import generations before this point,
-// same shape as metrics/loaders/clickhouse.py's
-// load_team_attribution_context (GROUP BY + argMax(field, (updated_at,
-// valid_from))). IsPrimary is NOT a reliable "this is THE owner" signal on
-// its own: GitLab's provider_access writer (team_autoimport_gitlab.py's
-// _project_ownership_rows) sets is_primary=0 on EVERY row it ever writes, so
-// requiring IsPrimary==true here would silently derive nothing for every
-// GitLab-sourced org. Specificity is the real tie-break; IsPrimary only
-// wins between otherwise-equal candidates (codex adversarial review,
-// 2026-08-28: confirmed high-severity finding, GitLab rows unconditionally
-// dropped by the prior is_primary-required design).
+// (provider, project_id, team_id) triple -- the caller
+// (loadTeamRepoOwnershipProjectLinks) is responsible for deduping
+// repeated-import generations before this point, same shape as
+// metrics/loaders/clickhouse.py's load_team_attribution_context (GROUP BY +
+// argMax(field, (updated_at, valid_from))). IsPrimary is NOT a reliable
+// "this is THE owner" signal on its own: GitLab's provider_access writer
+// (team_autoimport_gitlab.py's _project_ownership_rows) sets is_primary=0 on
+// EVERY row it ever writes, so requiring IsPrimary==true here would
+// silently derive nothing for every GitLab-sourced org. Specificity is the
+// real tie-break; IsPrimary only wins between otherwise-equal candidates
+// (codex adversarial review, 2026-08-28: confirmed high-severity finding,
+// GitLab rows unconditionally dropped by the prior is_primary-required
+// design).
+//
+// Provider is part of the match key, mirroring
+// compute_work_items.py's project_by_id (keyed by (provider, project_id),
+// not bare project_id) exactly: team_project_ownership.project_id values
+// are namespaced per-writer (e.g. "{org_id}:jira:{key}"), but requiring an
+// exact provider match too is the same defense-in-depth the canonical
+// Python precedent already applies, rather than trusting every writer's
+// namespacing convention to hold forever (codex adversarial review,
+// 2026-08-28, confirmed finding).
 type TeamRepoOwnershipProjectLink struct {
+	Provider    string
 	ProjectID   string
 	TeamID      string
 	IsPrimary   bool
 	Specificity uint16
+}
+
+// teamRepoOwnershipProjectRef identifies a team_project_ownership row's
+// join key: (provider, project_id), never bare project_id -- see
+// TeamRepoOwnershipProjectLink's doc comment.
+type teamRepoOwnershipProjectRef struct {
+	Provider  string
+	ProjectID string
 }
 
 // TeamRepoOwnershipWorkItem is one already-synced work_items row for this
@@ -189,7 +208,7 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
-	donorProjectID := buildDonorProjectIDResolver(byID, dependencyEdges)
+	donorProjectID := buildDonorProjectIDResolver(byID, dependencyEdges, projectToTeam)
 
 	repoToTeam := map[string]string{}
 	conflicted := map[string]bool{}
@@ -211,8 +230,8 @@ func deriveTeamRepoOwnership(
 		if item.RepoID == "" {
 			continue
 		}
-		projectID := donorProjectID(item.WorkItemID)
-		if teamID, ok := projectToTeam[projectID]; ok {
+		ref := donorProjectID(item.WorkItemID)
+		if teamID, ok := projectToTeam[ref]; ok {
 			assign(item.RepoID, teamID)
 		}
 	}
@@ -225,8 +244,8 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
-		projectID := donorProjectID(link.WorkItemID)
-		if teamID, ok := projectToTeam[projectID]; ok {
+		ref := donorProjectID(link.WorkItemID)
+		if teamID, ok := projectToTeam[ref]; ok {
 			assign(link.RepoID, teamID)
 		}
 	}
@@ -260,12 +279,16 @@ func deriveTeamRepoOwnership(
 //
 // A genuine tie at the TOP rank between DIFFERENT teams for the same
 // project resolves to nothing -- CHAOS-4321's "never guess" precedent.
-// Duplicate (project_id, team_id) entries (repeated-import generations
-// re-asserting the SAME team's claim) never manufacture a false tie: the
-// max-score selection below only compares DISTINCT team_ids at the current
-// best rank, so re-seeing the same team a second time is a no-op, not a
-// second competing claim.
-func resolveProjectToTeam(links []TeamRepoOwnershipProjectLink) map[string]string {
+// Duplicate (provider, project_id, team_id) entries (repeated-import
+// generations re-asserting the SAME team's claim) never manufacture a false
+// tie: the max-score selection below only compares DISTINCT team_ids at the
+// current best rank, so re-seeing the same team a second time is a no-op,
+// not a second competing claim.
+//
+// Keyed by (provider, project_id), never bare project_id -- see
+// TeamRepoOwnershipProjectLink's doc comment (codex adversarial review,
+// 2026-08-28, confirmed finding).
+func resolveProjectToTeam(links []TeamRepoOwnershipProjectLink) map[teamRepoOwnershipProjectRef]string {
 	score := func(link TeamRepoOwnershipProjectLink) int {
 		value := int(link.Specificity)
 		if link.IsPrimary {
@@ -273,45 +296,59 @@ func resolveProjectToTeam(links []TeamRepoOwnershipProjectLink) map[string]strin
 		}
 		return value
 	}
-	bestScore := map[string]int{}
-	bestTeams := map[string]map[string]bool{}
+	bestScore := map[teamRepoOwnershipProjectRef]int{}
+	bestTeams := map[teamRepoOwnershipProjectRef]map[string]bool{}
 	for _, link := range links {
 		if link.ProjectID == "" || link.TeamID == "" {
 			continue
 		}
+		ref := teamRepoOwnershipProjectRef{Provider: link.Provider, ProjectID: link.ProjectID}
 		linkScore := score(link)
-		switch existing, ok := bestScore[link.ProjectID]; {
+		switch existing, ok := bestScore[ref]; {
 		case !ok || linkScore > existing:
-			bestScore[link.ProjectID] = linkScore
-			bestTeams[link.ProjectID] = map[string]bool{link.TeamID: true}
+			bestScore[ref] = linkScore
+			bestTeams[ref] = map[string]bool{link.TeamID: true}
 		case linkScore == existing:
-			bestTeams[link.ProjectID][link.TeamID] = true
+			bestTeams[ref][link.TeamID] = true
 		}
 	}
-	resolved := make(map[string]string, len(bestTeams))
-	for projectID, teams := range bestTeams {
+	resolved := make(map[teamRepoOwnershipProjectRef]string, len(bestTeams))
+	for ref, teams := range bestTeams {
 		if len(teams) != 1 {
 			continue
 		}
 		for teamID := range teams {
-			resolved[projectID] = teamID
+			resolved[ref] = teamID
 		}
 	}
 	return resolved
 }
 
 // buildDonorProjectIDResolver returns a function mapping a work_item_id to
-// the project_id its team should be derived from: its own, or (if it has
-// none) the single deterministically-chosen dependency donor's project_id.
-// Mirrors compute_work_items.py::build_linked_issue_team_resolver's edge
-// handling exactly (see the package doc comment above for the gating
-// rules), adapted from "resolves to a team" to "resolves to a project_id"
-// since this producer's donor pool is team_project_ownership, not the
-// richer multi-tier attribution ladder.
+// the project_id its team should be derived from: its own (but ONLY if that
+// project_id actually resolves to a team via projectToTeam), or (if it has
+// none, or its own never resolves) the single deterministically-chosen
+// dependency donor's project_id. Mirrors
+// compute_work_items.py::build_linked_issue_team_resolver's edge handling
+// exactly (see the package doc comment above for the gating rules), adapted
+// from "resolves to a team" to "resolves to a project_id" since this
+// producer's donor pool is team_project_ownership, not the richer
+// multi-tier attribution ladder.
+//
+// The resolution gate on the own-project_id branch matters concretely:
+// GitHub work items (github_work_items_rows.go) unconditionally set their
+// own ProjectID to the repo's full name, which never appears in
+// team_project_ownership (GitHub never writes that table) -- without this
+// gate, a real GitHub PR/issue's non-resolving "own" project_id would
+// permanently shadow a valid dependency-donor edge to a Linear/Jira issue
+// that DOES resolve, silently defeating the donor-walk fallback for the
+// primary real-world use case (codex adversarial review, 2026-08-28,
+// confirmed high-severity finding).
 func buildDonorProjectIDResolver(
 	byID map[string]TeamRepoOwnershipWorkItem,
 	edges []TeamRepoOwnershipDependencyEdge,
-) func(workItemID string) string {
+	projectToTeam map[teamRepoOwnershipProjectRef]string,
+) func(workItemID string) teamRepoOwnershipProjectRef {
 	keyIndex := buildIssueKeyIndex(byID)
 
 	type pair struct{ source, target string }
@@ -343,18 +380,26 @@ func buildDonorProjectIDResolver(
 	}
 
 	// Deterministic tie-break: the lexicographically smallest canonical
-	// target wins when a source has multiple valid donor candidates.
-	donorProjectIDBySource := make(map[string]string, len(candidateTargets))
+	// target wins when a source has multiple valid donor candidates. The
+	// donor's OWN provider travels with its project_id -- a cross-provider
+	// extkey donor (e.g. a Jira item donating to a GitHub PR) must match
+	// against the Jira-sourced team_project_ownership row, not whatever
+	// provider the source item happens to carry.
+	donorRefBySource := make(map[string]teamRepoOwnershipProjectRef, len(candidateTargets))
 	for source, targets := range candidateTargets {
 		sort.Strings(targets)
-		donorProjectIDBySource[source] = byID[targets[0]].ProjectID
+		donor := byID[targets[0]]
+		donorRefBySource[source] = teamRepoOwnershipProjectRef{Provider: donor.Provider, ProjectID: donor.ProjectID}
 	}
 
-	return func(workItemID string) string {
+	return func(workItemID string) teamRepoOwnershipProjectRef {
 		if item, ok := byID[workItemID]; ok && item.ProjectID != "" {
-			return item.ProjectID
+			ref := teamRepoOwnershipProjectRef{Provider: item.Provider, ProjectID: item.ProjectID}
+			if _, resolves := projectToTeam[ref]; resolves {
+				return ref
+			}
 		}
-		return donorProjectIDBySource[workItemID]
+		return donorRefBySource[workItemID]
 	}
 }
 

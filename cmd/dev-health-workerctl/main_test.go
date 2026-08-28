@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -548,7 +549,7 @@ func TestRedriveDailyMetricsLedgerCallsBulkRepairBeforePartitionRedrive(t *testi
 	if len(runIDs) != 2 {
 		t.Fatalf("request run_ids = %v, want 2 entries", capturedBody["run_ids"])
 	}
-	if repaired, _ := result["repaired"].(float64); repaired != 2 {
+	if repaired, _ := result["repaired"].(int); repaired != 2 {
 		t.Fatalf("result[repaired] = %v, want 2", result["repaired"])
 	}
 }
@@ -572,5 +573,43 @@ func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDsWithoutAnyHTTPCall(t *testin
 	}
 	if result["repaired"] != 0 || result["skipped_claim_active"] != 0 {
 		t.Fatalf("result = %v, want zero-valued", result)
+	}
+}
+
+func TestRedriveDailyMetricsLedgerChunksAtTheRequestLimitAndSumsOutcomes(t *testing.T) {
+	// codex review round 2: DailyMetricsRedriveRequest.run_ids caps at
+	// max_length=200; a window spanning enough post_sync fanouts can exceed
+	// that, so the caller must chunk rather than send one oversized request
+	// the bridge would reject with 422.
+	var requestSizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RunIDs []string `json:"run_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requestSizes = append(requestSizes, len(body.RunIDs))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":0}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+
+	runIDs := make([]string, 250)
+	for index := range runIDs {
+		runIDs[index] = fmt.Sprintf("run-%d", index)
+	}
+	result, err := redriveDailyMetricsLedger(context.Background(), runIDs)
+	if err != nil {
+		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+	}
+	if len(requestSizes) != 2 || requestSizes[0] != 200 || requestSizes[1] != 50 {
+		t.Fatalf("chunk sizes = %v, want [200 50]", requestSizes)
+	}
+	if result["repaired"] != 2 {
+		t.Fatalf("summed repaired = %v, want 2 (one per chunk)", result["repaired"])
 	}
 }

@@ -1136,11 +1136,27 @@ and re-terminalizes the partition `failed_permanent`, undoing the reset):
 2. **Partition redrive second.** Resets any `failed_permanent` partition
    back to `failed` (clearing `failure_reason`), then publishes a fresh
    `metrics.daily_partition` job for every `pending`/`failed` partition in
-   scope, under a redrive-scoped dedupe key distinct from the partition's
-   original dispatch (CHAOS-4358).
+   scope — plus any `running` partition whose lease has already expired
+   (the final River attempt died after claiming it but before releasing
+   it; `ClaimPartition` already treats this as reclaimable) — under a
+   redrive-scoped dedupe key distinct from the partition's original
+   dispatch (CHAOS-4358). A live (unexpired) lease is never touched.
 
-Returns `{"ledger_repair": {"repaired", "skipped_claim_active"}, "partitions":
-{"PermanentReset", "RedispatchedRunIDs", "RedrivenPartitions"}}`.
+If step 1 reports `skipped_claim_active > 0` (an execution's original claim
+still read as active at repair time), step 2 does **not** run at all: the
+command returns `{"status":
+"ledger_repair_incomplete_retry_after_claims_settle", "partitions": null}`
+instead (codex review round 2: publishing a partition job for a run with an
+unrepaired ambiguous row is a race — that ledger row can 409
+`ambiguous_refused` the instant the job reaches it, re-terminalizing the
+partition `failed_permanent`). Re-run the same command once those claims
+have settled (their owning job finishes or its lease expires).
+
+Otherwise, returns `{"ledger_repair": {"repaired", "skipped_claim_active"},
+"partitions": {"PermanentReset", "RedispatchedRunIDs",
+"RedrivenPartitions"}}`. Ledger repairs are chunked to ≤200 run ids per
+request (the bridge's own request limit); a window spanning many post_sync
+fanouts is handled automatically.
 
 **Observability**: `dev_health_daily_metrics_redrive_partitions_total{reason}`
 is wired but not live for THIS caller — `workerctl` is a one-shot CLI with no

@@ -147,8 +147,16 @@ WHERE partition.run_id = run.id
 	// including partitions this pass just reset in step 1, and any partition
 	// that already sat 'failed' unreachable because nothing had ever
 	// re-published a metrics.daily_partition job for it (the core CHAOS-4358
-	// gap). One row per partition, carrying its run's identity alongside it,
-	// so each can be published directly without a second round trip.
+	// gap; plus 'running' with an EXPIRED lease -- codex review round 2: the
+	// final River attempt can die after ClaimPartition succeeds but before
+	// ReleasePartition ever runs, leaving the durable row 'running' forever
+	// with nothing left to reclaim it. ClaimPartition already treats this
+	// exact shape as reclaimable (classifyLease's leaseReclaimable branch)
+	// regardless of caller, so publishing a fresh job for it is exactly as
+	// safe as for a 'failed' one -- a live lease (not yet expired) stays
+	// excluded, matching ClaimPartition's own leaseHeld snooze). One row per
+	// partition, carrying its run's identity alongside it, so each can be
+	// published directly without a second round trip.
 	partitionRows, err := tx.Query(ctx, `
 SELECT partition.id::text, partition.run_id::text, partition.repo_ids::text,
        run.org_id::text, run.generation, run.status, run.target_day::text
@@ -157,8 +165,11 @@ JOIN public.daily_metrics_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid
   AND run.target_day BETWEEN $2 AND $3
   AND run.status = 'running'
-  AND partition.status IN ('pending', 'failed')
-ORDER BY partition.run_id, partition.ordinal`, orgID, from, to)
+  AND (
+    partition.status IN ('pending', 'failed')
+    OR (partition.status = 'running' AND partition.lease_expires_at < $4)
+  )
+ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	if err != nil {
 		return outcome, ErrUnavailable
 	}

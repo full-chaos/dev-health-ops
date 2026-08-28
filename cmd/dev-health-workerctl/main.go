@@ -816,6 +816,23 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		if err != nil {
 			return writeError(stderr, "ledger_repair_unavailable")
 		}
+		// codex review round 2: a nonzero skipped_claim_active means at
+		// least one ambiguous/stuck-executing ledger row was left
+		// unrepaired because its original claim still read as active at
+		// that moment. Publishing partition jobs anyway is unsafe -- if
+		// that claim is released between this call and the redriven job
+		// reaching the bridge (a real, observed race, not hypothetical),
+		// the unrepaired row answers ambiguous_refused immediately and the
+		// partition is re-terminalized failed_permanent, undoing this same
+		// pass. Stop here and report it; the operator re-runs once those
+		// claims have settled (their own owning job will finish or expire).
+		if skipped, _ := ledgerRepair["skipped_claim_active"].(float64); skipped > 0 {
+			return writeResult(stdout, stderr, map[string]any{
+				"ledger_repair": ledgerRepair,
+				"partitions":    nil,
+				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+			})
+		}
 		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
 		if err != nil {
 			return writeServiceError(stderr, err)
@@ -836,7 +853,37 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 // An empty runIDs list is a no-op (nothing to repair): it still returns a
 // zero-valued result rather than skipping the call, so a redrive over a
 // window with no 'running' runs at all is reported honestly, not silently.
+// dailyMetricsRedriveMaxRunIDsPerRequest mirrors
+// DailyMetricsRedriveRequest.run_ids's max_length=200 bound in
+// worker_metrics.py -- a window bigger than one post_sync fanout's
+// generous ceiling (up to 15 daily runs per completed sync) can still
+// exceed 200 running runs, so this chunks rather than trusting the caller
+// to stay under the bridge's own limit (codex review round 2).
+const dailyMetricsRedriveMaxRunIDsPerRequest = 200
+
+// redriveDailyMetricsLedger repairs the compatibility-bridge ledger for
+// every run id, chunking into requests no larger than the bridge's own
+// max_length bound and summing the aggregate outcome across chunks.
 func redriveDailyMetricsLedger(ctx context.Context, runIDs []string) (map[string]any, error) {
+	if len(runIDs) == 0 {
+		return redriveDailyMetricsLedgerChunk(ctx, nil)
+	}
+	totalRepaired, totalSkipped := 0, 0
+	for start := 0; start < len(runIDs); start += dailyMetricsRedriveMaxRunIDsPerRequest {
+		end := min(start+dailyMetricsRedriveMaxRunIDsPerRequest, len(runIDs))
+		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end])
+		if err != nil {
+			return nil, err
+		}
+		repaired, _ := chunkResult["repaired"].(float64)
+		skipped, _ := chunkResult["skipped_claim_active"].(float64)
+		totalRepaired += int(repaired)
+		totalSkipped += int(skipped)
+	}
+	return map[string]any{"repaired": totalRepaired, "skipped_claim_active": totalSkipped}, nil
+}
+
+func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string) (map[string]any, error) {
 	if len(runIDs) == 0 {
 		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
 	}

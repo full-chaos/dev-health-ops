@@ -1309,6 +1309,89 @@ func TestRedriveStrandedPartitionsReachesDispatchablePartitions(t *testing.T) {
 	}
 }
 
+// TestRedriveStrandedPartitionsIncludesExpiredLeaseRunningPartitions is the
+// codex-round-2 red-first proof: a partition whose final River attempt died
+// after ClaimPartition succeeded but before ReleasePartition ever ran ends
+// up durably status='running' forever with an expired lease and nothing
+// left to reclaim it -- DispatchablePartitions's own status IN ('pending',
+// 'failed') filter, which this function's scope query originally copied,
+// never picks it back up. ClaimPartition already treats this exact shape as
+// reclaimable (classifyLease's leaseReclaimable branch), so it must be
+// included.
+func TestRedriveStrandedPartitionsIncludesExpiredLeaseRunningPartitions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		orgID           = "00000000-0000-4000-8000-000000000601"
+		runID           = "00000000-0000-4000-8000-000000000602"
+		expiredLeasePID = "00000000-0000-4000-8000-000000000603"
+		liveLeasePID    = "00000000-0000-4000-8000-000000000604"
+	)
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,$3,'post-sync:expired-lease-601','running','pending',$4,$4)`, runID, orgID, targetDay, now); err != nil {
+		t.Fatal(err)
+	}
+	// Dead: attempt died with the claim held; the lease expired in the past.
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,claim_token,lease_expires_at,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'running',gen_random_uuid(),$3,5,$4,$4)`, expiredLeasePID, runID, now.Add(-time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	// Live: a claim that is still genuinely in flight (lease in the future) --
+	// must NOT be touched by a redrive.
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,claim_token,lease_expires_at,attempt_count,created_at,updated_at) VALUES ($1,$2,1,'[]'::jsonb,'running',gen_random_uuid(),$3,1,$4,$4)`, liveLeasePID, runID, now.Add(10*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := store.RedriveStrandedPartitions(ctx, publisher, orgID, targetDay, targetDay, "redrive-expired-lease-nonce")
+	if err != nil {
+		t.Fatalf("RedriveStrandedPartitions: %v", err)
+	}
+	if outcome.RedrivenPartitions != 1 {
+		t.Fatalf("RedrivenPartitions = %d, want 1 (only the expired-lease partition)", outcome.RedrivenPartitions)
+	}
+
+	var outboxCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_partition' AND dedupe_key = $1`,
+		"metrics.daily_partition:redrive:"+expiredLeasePID+":redrive-expired-lease-nonce").Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if outboxCount != 1 {
+		t.Fatalf("expired-lease partition outbox row count = %d, want 1", outboxCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_partition' AND dedupe_key LIKE $1`,
+		"metrics.daily_partition:redrive:"+liveLeasePID+"%").Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if outboxCount != 0 {
+		t.Fatalf("live-lease partition must not be redriven, outbox row count = %d, want 0", outboxCount)
+	}
+}
+
 type recordingRedriveObserver struct {
 	sink *[]struct {
 		reason string

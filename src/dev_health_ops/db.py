@@ -203,7 +203,26 @@ def get_clickhouse_uri() -> str | None:
 
 
 def normalize_async_postgres_uri(uri: str) -> str:
+    """Normalize a Postgres/sqlite URI to its async (``+asyncpg``) form.
+
+    Codex review round 2 (P2, CHAOS-4402): the bare ``postgres://`` alias
+    -- explicitly supported elsewhere in this codebase
+    (``storage/__init__.py``'s ``create_store``/``get_db_type``,
+    ``storage/utils.py``) -- reached this function unchanged before this
+    fix, since only ``postgresql://`` was recognized. A caller passing
+    ``--db postgres://...`` (or any ``POSTGRES_URI``/``DATABASE_URI`` using
+    that alias) got the URI back byte-for-byte, and
+    ``create_async_engine("postgres://...")`` then fails with
+    ``NoSuchModuleError`` -- "postgres" is not a registered SQLAlchemy
+    dialect, only "postgresql" is. Normalize the alias to
+    ``postgresql://`` first so every downstream call site (this function's
+    own ``postgresql://`` branch, every existing caller of
+    ``get_postgres_uri()``/``resolve_db_uri()``, and this PR's new
+    ``resolve_auth_seed_postgres_uri`` ``ns.db`` path alike) accepts it.
+    """
     uri = _reject_unresolved_template(uri, source="PostgreSQL URI")
+    if uri.startswith("postgres://"):
+        uri = "postgresql://" + uri[len("postgres://") :]
     if uri.startswith("postgresql://"):
         url = make_url(uri)
         uri = url.set(drivername="postgresql+asyncpg").render_as_string(

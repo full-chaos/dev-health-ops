@@ -245,3 +245,19 @@ class TestRejectsUnresolvedEnvTemplate:
         asyncpg verbatim."""
         with pytest.raises(ValueError, match=r"unresolved template placeholder"):
             db.normalize_async_postgres_uri(uri)
+
+
+class TestNormalizeAsyncPostgresUriAcceptsPostgresAlias:
+    def test_bare_postgres_scheme_normalizes_to_asyncpg(self):
+        """Codex review round 2 (P2): the bare ``postgres://`` alias --
+        explicitly supported by storage/__init__.py's create_store -- used
+        to reach create_async_engine unchanged (only ``postgresql://`` was
+        recognized), raising NoSuchModuleError for the unregistered
+        "postgres" dialect."""
+        result = db.normalize_async_postgres_uri(
+            "postgres://devhealth:devhealth@localhost:5432/devhealth"
+        )
+        url = make_url(result)
+        assert url.drivername == "postgresql+asyncpg"
+        assert url.host == "localhost"
+        assert url.database == "devhealth"

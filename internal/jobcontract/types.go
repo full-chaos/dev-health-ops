@@ -14,33 +14,34 @@ const (
 	// MaxEnvelopeBytes bounds River encoded_args before any job-specific decode.
 	MaxEnvelopeBytes = 16 * 1024
 
-	ContractVersionV1            = 1
-	ContractVersionV2            = 2
-	ContractVersionV3            = 3
-	KindBillingNotification      = "operational.billing_notification"
-	KindWebhookDelivery          = "operational.webhook_delivery"
-	KindHeartbeat                = "system.heartbeat"
-	KindSyncCoverageRefresh      = "system.sync_coverage_refresh"
-	KindRetentionCleanup         = "system.retention_cleanup"
-	KindReportExecuteOnDemand    = "report.execute_on_demand"
-	KindReportExecuteScheduled   = "report.execute_scheduled"
-	KindDailyMetricsDispatch     = "metrics.daily_dispatch"
-	KindDailyMetricsPartition    = "metrics.daily_partition"
-	KindDailyMetricsFinalize     = "metrics.daily_finalize"
-	KindTeamAutoimport           = "sync.team_autoimport"
-	KindRemainingCapacity        = "metrics.remaining.capacity"
-	KindRemainingComplexity      = "metrics.remaining.complexity"
-	KindRemainingDORA            = "metrics.remaining.dora"
-	KindRemainingMembership      = "metrics.remaining.membership_backfill"
-	KindRemainingRecommendations = "metrics.remaining.recommendations"
-	KindRemainingReleaseImpact   = "metrics.remaining.release_impact"
-	KindWorkGraphBuild           = "workgraph.build"
-	KindInvestmentMaterialize    = "investment.materialize"
-	KindInvestmentDispatch       = "investment.dispatch"
-	KindInvestmentChunk          = "investment.chunk"
-	KindInvestmentFinalize       = "investment.finalize"
-	KindSyncProviderUnit         = "sync.provider_unit"
-	RetentionWorkerTerminal      = "worker_job_terminal"
+	ContractVersionV1               = 1
+	ContractVersionV2               = 2
+	ContractVersionV3               = 3
+	KindBillingNotification         = "operational.billing_notification"
+	KindWebhookDelivery             = "operational.webhook_delivery"
+	KindHeartbeat                   = "system.heartbeat"
+	KindSyncCoverageRefresh         = "system.sync_coverage_refresh"
+	KindRetentionCleanup            = "system.retention_cleanup"
+	KindReportExecuteOnDemand       = "report.execute_on_demand"
+	KindReportExecuteScheduled      = "report.execute_scheduled"
+	KindDailyMetricsDispatch        = "metrics.daily_dispatch"
+	KindDailyMetricsPartition       = "metrics.daily_partition"
+	KindDailyMetricsFinalize        = "metrics.daily_finalize"
+	KindTeamAutoimport              = "sync.team_autoimport"
+	KindTeamRepoOwnershipDerivation = "sync.team_repo_ownership_derivation"
+	KindRemainingCapacity           = "metrics.remaining.capacity"
+	KindRemainingComplexity         = "metrics.remaining.complexity"
+	KindRemainingDORA               = "metrics.remaining.dora"
+	KindRemainingMembership         = "metrics.remaining.membership_backfill"
+	KindRemainingRecommendations    = "metrics.remaining.recommendations"
+	KindRemainingReleaseImpact      = "metrics.remaining.release_impact"
+	KindWorkGraphBuild              = "workgraph.build"
+	KindInvestmentMaterialize       = "investment.materialize"
+	KindInvestmentDispatch          = "investment.dispatch"
+	KindInvestmentChunk             = "investment.chunk"
+	KindInvestmentFinalize          = "investment.finalize"
+	KindSyncProviderUnit            = "sync.provider_unit"
+	RetentionWorkerTerminal         = "worker_job_terminal"
 	// Retention policies are table-scoped. Each one names exactly one
 	// operational table whose owning store is constructed by the ops worker;
 	// widening a policy is a contract change, not a payload change.
@@ -191,6 +192,15 @@ type DailyMetricsFinalizePayload struct {
 // TeamAutoimportPayload carries only the authoritative successful SyncRun.
 // Credentials, provider configuration, and imported rows stay server-side.
 type TeamAutoimportPayload struct {
+	SyncRunID string `json:"sync_run_id"`
+}
+
+// TeamRepoOwnershipDerivationPayload carries only the authoritative successful
+// SyncRun. CHAOS-4365 item 1b: the worker re-derives team_repo_ownership from
+// already-synced ClickHouse data (team_project_ownership, work_items,
+// work_item_dependencies, work_graph_issue_pr) -- no provider fetch, so no
+// credentials or provider configuration ever cross the wire here either.
+type TeamRepoOwnershipDerivationPayload struct {
 	SyncRunID string `json:"sync_run_id"`
 }
 
@@ -346,6 +356,13 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "sync_run",
 		OrganizationScope: "tenant",
 	},
+	KindTeamRepoOwnershipDerivation: {
+		Kind:              KindTeamRepoOwnershipDerivation,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "sync_run",
+		OrganizationScope: "tenant",
+	},
 	KindWorkGraphBuild:           {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
 	KindInvestmentMaterialize:    {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
 	KindInvestmentDispatch:       {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
@@ -494,6 +511,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindTeamRepoOwnershipDerivation:
+		var value TeamRepoOwnershipDerivationPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindWorkGraphBuild:
 		var value WorkGraphBuildPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -601,6 +627,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindDailyMetricsFinalize
 	case TeamAutoimportPayload:
 		kind = KindTeamAutoimport
+	case TeamRepoOwnershipDerivationPayload:
+		kind = KindTeamRepoOwnershipDerivation
 	case WorkGraphBuildPayload:
 		kind = KindWorkGraphBuild
 	case InvestmentMaterializePayload:
@@ -773,6 +801,10 @@ func (payload DailyMetricsFinalizePayload) validate() error {
 }
 
 func (payload TeamAutoimportPayload) validate() error {
+	return validateUUID("sync_run_id", payload.SyncRunID)
+}
+
+func (payload TeamRepoOwnershipDerivationPayload) validate() error {
 	return validateUUID("sync_run_id", payload.SyncRunID)
 }
 

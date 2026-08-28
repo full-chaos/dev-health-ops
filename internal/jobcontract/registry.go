@@ -520,29 +520,30 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		return fmt.Errorf("no compiled schema validator for version %d", version)
 	}
 	expectedFields := map[string][]string{
-		KindBillingNotification:      {"notification_id"},
-		KindWebhookDelivery:          {"delivery_id"},
-		KindReportExecuteOnDemand:    {"report_id"},
-		KindReportExecuteScheduled:   {"report_id"},
-		KindDailyMetricsDispatch:     {"run_id"},
-		KindDailyMetricsPartition:    {"partition_id"},
-		KindDailyMetricsFinalize:     {"run_id"},
-		KindTeamAutoimport:           {"sync_run_id"},
-		KindRemainingCapacity:        {"partition_id"},
-		KindRemainingComplexity:      {"partition_id"},
-		KindRemainingDORA:            {"partition_id"},
-		KindRemainingMembership:      {"partition_id"},
-		KindRemainingRecommendations: {"partition_id"},
-		KindRemainingReleaseImpact:   {"partition_id"},
-		KindWorkGraphBuild:           {"request_id"},
-		KindInvestmentMaterialize:    {"request_id"},
-		KindInvestmentDispatch:       {"request_id"},
-		KindInvestmentChunk:          {"chunk_id"},
-		KindInvestmentFinalize:       {"run_id"},
-		KindHeartbeat:                {"scheduled_for"},
-		KindSyncCoverageRefresh:      {"scheduled_for", "limit"},
-		KindRetentionCleanup:         {"batch_size", "delete_before", "retention_policy"},
-		KindSyncProviderUnit:         {"unit_id"},
+		KindBillingNotification:         {"notification_id"},
+		KindWebhookDelivery:             {"delivery_id"},
+		KindReportExecuteOnDemand:       {"report_id"},
+		KindReportExecuteScheduled:      {"report_id"},
+		KindDailyMetricsDispatch:        {"run_id"},
+		KindDailyMetricsPartition:       {"partition_id"},
+		KindDailyMetricsFinalize:        {"run_id"},
+		KindTeamAutoimport:              {"sync_run_id"},
+		KindTeamRepoOwnershipDerivation: {"sync_run_id"},
+		KindRemainingCapacity:           {"partition_id"},
+		KindRemainingComplexity:         {"partition_id"},
+		KindRemainingDORA:               {"partition_id"},
+		KindRemainingMembership:         {"partition_id"},
+		KindRemainingRecommendations:    {"partition_id"},
+		KindRemainingReleaseImpact:      {"partition_id"},
+		KindWorkGraphBuild:              {"request_id"},
+		KindInvestmentMaterialize:       {"request_id"},
+		KindInvestmentDispatch:          {"request_id"},
+		KindInvestmentChunk:             {"chunk_id"},
+		KindInvestmentFinalize:          {"run_id"},
+		KindHeartbeat:                   {"scheduled_for"},
+		KindSyncCoverageRefresh:         {"scheduled_for", "limit"},
+		KindRetentionCleanup:            {"batch_size", "delete_before", "retention_policy"},
+		KindSyncProviderUnit:            {"unit_id"},
 	}[kind]
 	if expectedFields == nil || !equalStringSet(stringSet(schema["required"]), expectedFields) || !equalStringSet(keySet(properties), expectedFields) {
 		return errors.New("schema fields drift from compiled payload type")
@@ -569,7 +570,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if kind == KindDailyMetricsPartition {
 		return validateUUIDProperty(properties["partition_id"])
 	}
-	if kind == KindTeamAutoimport {
+	if kind == KindTeamAutoimport || kind == KindTeamRepoOwnershipDerivation {
 		return validateUUIDProperty(properties["sync_run_id"])
 	}
 	if kind == KindInvestmentChunk {

@@ -121,6 +121,26 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
         into a DIFFERENT team -- the provider auto-import fallback layer.
         The two-layer resolver (``compute_work_items._resolve_membership``)
         must pick the admin team, never the provider-fallback one.
+
+        CHAOS-4365 item 1b proof (chris: "no hand-seeder -- extend the
+        dev-hops fixtures generators"): every OTHER repo below gets its
+        ``team_repo_ownership`` row written directly here, same as before --
+        that models the real GitHub-direct-writer path
+        (``team_autoimport_github.py``, ``source='provider_access'``) and
+        must stay, since several already-merged proofs (CHAOS-4338/#1958)
+        depend on it. The FIRST owned repo is deliberately withheld from
+        ``repo_rows`` -- it gets ONLY a ``team_project_ownership`` row here.
+        ``fixtures/generators/work_items.py`` already writes that repo's own
+        ``work_items`` with ``project_id`` = the repo's full name (see
+        ``generators/projects.py::project_id_for_repo``) and ``repo_id`` =
+        this repo's id, so this repo is a real, provider-shaped input for
+        CHAOS-4365 item 1b's ``team_repo_ownership`` DERIVATION (design
+        check a: a work item with its own repo_id and a project_id owned by
+        this table) to consume through the real sync -> Fanout -> River
+        pipeline -- never a hand-seeded ``team_repo_ownership`` row for this
+        one repo, so a local-stack readback with ``source='inferred'`` on it
+        is genuine end-to-end proof, not a value this generator already
+        wrote directly.
         """
         now = as_of or datetime.now(timezone.utc)
         # Comfortably in the past so every real `as_of <= now` compute-time
@@ -129,11 +149,19 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
 
         repo_rows: list[dict[str, Any]] = []
         project_rows: list[dict[str, Any]] = []
+        # CHAOS-4365 item 1b: the FIRST repo with an owner is withheld from
+        # the direct team_repo_ownership write below -- see this method's
+        # docstring. `withheld_repo_id` stops after the first match so only
+        # ONE repo is ever withheld, regardless of how many repos this org
+        # has.
+        withheld_repo_id: uuid.UUID | None = None
         for idx, owners in enumerate(repo_team_assignments):
             if not owners or idx >= len(repo_names) or idx >= len(repo_ids):
                 continue
             repo_name = repo_names[idx]
             repo_id = repo_ids[idx]
+            if withheld_repo_id is None:
+                withheld_repo_id = repo_id
             for owner_idx, team in enumerate(owners):
                 is_primary = 1 if owner_idx == 0 else 0
                 common = {
@@ -148,14 +176,15 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
                     "valid_to": None,
                     "updated_at": now,
                 }
-                repo_rows.append(
-                    {
-                        **common,
-                        "repo_id": repo_id,
-                        "repo_full_name": repo_name,
-                        "match_type": "exact",
-                    }
-                )
+                if repo_id != withheld_repo_id:
+                    repo_rows.append(
+                        {
+                            **common,
+                            "repo_id": repo_id,
+                            "repo_full_name": repo_name,
+                            "match_type": "exact",
+                        }
+                    )
                 project_rows.append(
                     {
                         **common,

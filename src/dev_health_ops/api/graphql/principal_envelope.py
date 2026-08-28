@@ -200,6 +200,7 @@ def issue_effective_principal_envelope(
         private_key = _load_private_key(_get_envelope_signing_private_key_pem())
     except EnvelopeSigningKeyError:
         _ENVELOPE_ISSUED_TOTAL.labels(outcome="key_error").inc()
+        logger.error("go_api_envelope.signing_key_error", exc_info=True)
         raise
 
     impersonation = get_impersonation_context()
@@ -284,6 +285,7 @@ def build_envelope_jwks() -> dict[str, Any]:
         private_key = _load_private_key(_get_envelope_signing_private_key_pem())
     except EnvelopeSigningKeyError:
         _ENVELOPE_ISSUED_TOTAL.labels(outcome="key_error").inc()
+        logger.error("go_api_envelope.signing_key_error", exc_info=True)
         raise
 
     public_key: Ed25519PublicKey = private_key.public_key()

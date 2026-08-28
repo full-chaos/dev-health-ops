@@ -286,6 +286,53 @@ async def test_review_edges_limit_below_one_clamped_to_one() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic tie-break (CHAOS-4421 / CHAOS-4368 Part A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_review_edges_order_by_has_deterministic_tie_break() -> None:
+    """``ORDER BY reviews_count DESC`` alone has no tie-breaker, so
+    ClickHouse does not guarantee a stable row order/set among rows with
+    equal ``reviews_count`` -- particularly at a ``LIMIT`` boundary (see
+    ClickHouse's own ORDER BY docs: "If ... rows have the same value ... the
+    resulting order of such rows is undefined and may be non-deterministic").
+    A non-deterministic row set makes stage-2 dual-run parity proof (the
+    comparator) meaningless -- comparing two non-deterministic outputs never
+    proves the Go and Python implementations agree.
+
+    This is a red-first regression test: before the fix, the emitted SQL was
+    ``ORDER BY reviews_count DESC`` with no further key, so this assertion
+    failed (the tie-break columns were entirely absent from the ORDER BY
+    clause). The fix appends the resolver's own GROUP BY key -- ``repo_id,
+    reviewer, author, day`` -- which is already a total order over the
+    deduplicated row set (each combination of those four columns identifies
+    exactly one row after the argMax/GROUP BY dedup above), so no synthetic
+    tiebreaker column is introduced.
+    """
+    ctx = _ctx()
+    ctx.client.query.return_value = _qresult([], [])
+
+    await resolve_review_edges(ctx, _input())
+
+    query: str = ctx.client.query.call_args.args[0]
+    assert "ORDER BY reviews_count DESC, repo_id, reviewer, author, day" in query, (
+        "ORDER BY must carry a full deterministic tie-break key "
+        "(repo_id, reviewer, author, day) after reviews_count DESC, "
+        "not just reviews_count DESC alone -- see CHAOS-4421."
+    )
+    # The tie-break key must appear strictly after the dedup GROUP BY (same
+    # ordering-of-clauses invariant the existing dedup test pins) and
+    # strictly before LIMIT, so it actually governs which rows the cap keeps.
+    idx_group = query.index("GROUP BY repo_id, reviewer, author, day")
+    idx_order = query.index(
+        "ORDER BY reviews_count DESC, repo_id, reviewer, author, day"
+    )
+    idx_limit = query.index("LIMIT")
+    assert idx_group < idx_order < idx_limit
+
+
+# ---------------------------------------------------------------------------
 # Org-id gate
 # ---------------------------------------------------------------------------
 

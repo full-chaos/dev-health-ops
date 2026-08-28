@@ -61,6 +61,22 @@ async def _fetch_review_edges(
     ``repo_id`` is stored as a UUID; input repo refs may be UUID strings or
     ``repos.repo`` slugs, so the predicate resolves them through the org-scoped
     catalog before comparing UUID-to-UUID.
+
+    CHAOS-4421 / CHAOS-4368 Part A: ``ORDER BY reviews_count DESC`` alone has
+    no tie-breaker. ClickHouse does NOT guarantee a stable row order among
+    rows with equal ``reviews_count`` -- an ``ORDER BY`` with ties, combined
+    with a ``LIMIT`` sitting at a tie boundary, can return a different row
+    set/order across otherwise-identical runs (parallel block processing has
+    no ordering guarantee beyond the declared sort key; see ClickHouse docs
+    on ORDER BY: "If ... rows have the same value ... the resulting order of
+    such rows is undefined and may be non-deterministic"). That makes this
+    resolver's output genuinely non-deterministic at a tie boundary, which
+    the Go/Python parity comparator (CHAOS-4381 stage 2) cannot tolerate --
+    comparing two non-deterministic outputs is not a valid proof of parity.
+    Fix: extend ``ORDER BY`` with a deterministic tie-break drawn from the
+    row's own key columns -- ``repo_id, reviewer, author, day`` is exactly
+    the ``GROUP BY`` key above, so it is already a total order over the
+    deduplicated row set; no synthetic tiebreaker column is introduced.
     """
     inner_where = """
             WHERE org_id = {org_id:String}
@@ -99,7 +115,7 @@ async def _fetch_review_edges(
             {inner_where}
             GROUP BY repo_id, reviewer, author, day
         )
-        ORDER BY reviews_count DESC
+        ORDER BY reviews_count DESC, repo_id, reviewer, author, day
         LIMIT {limit}
     """
     return await query_dicts(client, query, params)

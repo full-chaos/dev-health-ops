@@ -519,11 +519,23 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	var githubTeamCatalogObserver jobruntime.GitHubTeamCatalogObserver
+	if typed, ok := observer.(jobruntime.GitHubTeamCatalogObserver); ok {
+		githubTeamCatalogObserver = typed
+	}
 	nativeTeamCatalogCollectors := map[string]providersync.TeamCatalogCollector{
 		"linear": providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
+		},
+		// CHAOS-4434: GitHub teams/team_memberships, Go-native. No Projects
+		// surface exists for GitHub at all (auto_import_capabilities("github").
+		// projects is permanently False in Python); the collector reads
+		// selections.Projects but never produces a Projects/Ownership row.
+		"github": providersync.GitHubTeamCatalogCollector{
+			Sink:     providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+			Observer: githubTeamCatalogTelemetryBridge{observer: githubTeamCatalogObserver},
 		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{

@@ -278,16 +278,19 @@ exist. A day sync never ran for, or one whose row aged out of River's
 retention, has no row to recover. `dev-health-workerctl metrics remaining
 start --family <family> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --org <uuid>
 --review-evidence "<why>"` (CHAOS-4254) closes this gap for the day-scoped
-remaining-metrics families (`complexity`, `dora`, `release_impact`): it calls
-`remaining.PostgresStore.StartRunTx` directly with a fresh
-`manual-backfill:<timestamp>` generation, going through the same
-idempotency/validation path every automatic producer uses. This is also the
-prod recovery path for CHAOS-4384's dora-frozen-at-0 incident, since a day
-the pre-fix same-day coverage bug froze at 0 rows already has a "succeeded"
-partition — recomputing it needs a rule the automatic dora trigger
-deliberately does not apply (a 0-row day is backfillable regardless of
-whether it has closed; only a non-zero-row day is refused as already
-covered). See
+remaining-metrics families (`complexity`, `dora`, `release_impact`):
+`remaining.PostgresStore.StartManualBackfillRun` inserts through the same
+`insertRun` path every automatic producer's `StartRunTx` shares, under a
+generation derived deterministically from the request's own flags (never
+wall-clock time, so a retried invocation is idempotent rather than a
+duplicate). This is also the prod recovery path for CHAOS-4384's
+dora-frozen-at-0 incident, since a day the pre-fix same-day coverage bug
+froze at 0 rows already has a "succeeded" partition — recomputing it needs a
+rule the automatic dora trigger deliberately does not apply: an UNAMBIGUOUS
+single-day (`backfill_days == 1`) 0-row partition is backfillable regardless
+of whether the day has closed, while a non-zero-row day, an in-progress
+automatic run, or an AMBIGUOUS multi-day partition whose aggregate can't
+prove any one day's own row count are all refused. See
 [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
 for the full command shape and coverage rule.
 

@@ -782,6 +782,26 @@ func TestManualBackfillGenerationIsDeterministicAndInputSensitive(t *testing.T) 
 	}
 }
 
+func TestAnyManualBackfillDayErroredDetectsAnErrorAmongOtherStatuses(t *testing.T) {
+	// codex review, P2: an "error" status buried among other days' clean
+	// results must still be detected so the process exits nonzero.
+	results := []manualBackfillDayResult{
+		{Day: "2026-08-25", Status: "started", RunID: "r1", PartitionID: "p1"},
+		{Day: "2026-08-26", Status: "already_covered", RunID: "r2"},
+		{Day: "2026-08-27", Status: "error", Error: "operator_backend_unavailable"},
+	}
+	if !anyManualBackfillDayErrored(results) {
+		t.Fatal("expected an error to be detected among mixed-status results")
+	}
+	clean := results[:2]
+	if anyManualBackfillDayErrored(clean) {
+		t.Fatal("false positive: no day in this slice has status \"error\"")
+	}
+	if anyManualBackfillDayErrored(nil) {
+		t.Fatal("false positive on an empty/nil result slice")
+	}
+}
+
 func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)

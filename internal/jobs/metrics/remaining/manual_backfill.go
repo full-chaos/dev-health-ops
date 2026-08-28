@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,11 +18,22 @@ import (
 const maxDayScopedBackfillDays = 90
 
 // ErrDayAlreadyCovered is returned by StartManualBackfillRun when a
-// non-zero-row succeeded partition already covers the requested
-// organization/family/day. Retrying would insert a genuine duplicate row
-// into an append-only table with no dedup on replay (CHAOS-4242's
-// dora_metrics_daily finding) -- this is the one case the command refuses.
-var ErrDayAlreadyCovered = errors.New("remaining metrics day is already covered by a non-zero-row succeeded partition")
+// succeeded partition already provides UNAMBIGUOUS non-zero-row output for
+// the requested day, or an AMBIGUOUS multi-day partition's window contains
+// it (see findManualBackfillBlocker's doc comment for why an ambiguous
+// aggregate is treated as covered rather than guessed at). Retrying would
+// risk inserting a genuine duplicate row into an append-only table with no
+// dedup on replay (CHAOS-4242's dora_metrics_daily finding) -- this is the
+// one case the command refuses.
+var ErrDayAlreadyCovered = errors.New("remaining metrics day is already covered by a succeeded partition")
+
+// ErrDayInProgress is returned by StartManualBackfillRun when an automatic
+// (post-sync or fixed-schedule) run for the requested day is still
+// pending/running under a DIFFERENT generation. Its eventual completion is
+// invisible to findManualBackfillBlocker's succeeded-only coverage check, so
+// inserting a manual run alongside it risks both writing the same day
+// (codex review, P1) -- this refuses rather than race it.
+var ErrDayInProgress = errors.New("remaining metrics day already has an in-progress automatic run")
 
 // ErrUnsupportedManualBackfillFamily is returned for a family this command
 // has no day-scoped default partition scope for.
@@ -168,27 +180,58 @@ func (store *PostgresStore) StartManualBackfillRun(
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 
-	coveringRunID, covered, err := store.findNonZeroRowCoverage(ctx, tx, request.OrganizationID, request.Family, day)
+	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, request.OrganizationID, request.Family, day, generation)
 	if err != nil {
 		return ManualBackfillOutcome{}, err
 	}
-	if covered {
+	if reason == blockReasonInProgress {
+		store.observeManualBackfill(family, "in_progress")
+		return ManualBackfillOutcome{Day: day, RunID: blockingRunID}, ErrDayInProgress
+	}
+	if reason == blockReasonCovered {
 		store.observeManualBackfill(family, "already_covered")
-		return ManualBackfillOutcome{Day: day, RunID: coveringRunID}, ErrDayAlreadyCovered
+		return ManualBackfillOutcome{Day: day, RunID: blockingRunID}, ErrDayAlreadyCovered
 	}
 
-	run, created, err := store.insertRun(ctx, tx, request, publisher)
-	if err != nil {
-		return ManualBackfillOutcome{}, err
+	// codex review, P1: generation is deterministic per LOGICAL request (see
+	// the doc comment above), which is exactly what makes an in-flight retry
+	// idempotent -- but it also means a PRIOR manual attempt that already
+	// reached a terminal state under this same generation would otherwise be
+	// stuck forever: insertRun's ON CONFLICT DO NOTHING always reloads that
+	// same row, even after it legitimately needs recomputing (e.g. it
+	// itself completed with 0 rows before source data existed, and the
+	// operator is intentionally re-running the identical command once it
+	// has). Bounded retry: each pass either inserts fresh (done) or finds an
+	// existing row. A 'pending'/'running' reload is a genuine in-flight
+	// retry -- stop and report it as "already_ran". Anything else
+	// (failed/canceled, or succeeded) is safe to bump past: a succeeded
+	// reload can only be an UNAMBIGUOUS 0-row completion here, because
+	// findManualBackfillBlocker above already scanned every succeeded
+	// partition for this org+family+window (across ALL generations, not
+	// just this one) and would have refused this call outright had any real
+	// or ambiguous coverage existed.
+	attemptRequest := request
+	var run Run
+	var created bool
+	for attempt := 0; ; attempt++ {
+		run, created, err = store.insertRun(ctx, tx, attemptRequest, publisher)
+		if err != nil {
+			return ManualBackfillOutcome{}, err
+		}
+		if created || run.Status == "pending" || run.Status == "running" || attempt >= maxManualBackfillGenerationBumps {
+			break
+		}
+		attemptRequest.Generation = fmt.Sprintf("%s:retry-%d", generation, attempt+1)
 	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 	committed = true
 	// created is false when insertRun's own ON CONFLICT DO NOTHING branch
-	// loaded an existing run rather than inserting a fresh one -- this exact
-	// (org, family, generation, day) request was already started by a prior
-	// call (a retried CLI invocation reusing the same generation).
+	// loaded an existing (still pending/running) run rather than inserting a
+	// fresh one -- this exact (org, family, generation, day) request was
+	// already started by a prior call and is genuinely in flight.
 	outcome := "started"
 	if !created {
 		outcome = "already_ran"
@@ -202,68 +245,114 @@ func (store *PostgresStore) StartManualBackfillRun(
 	}, nil
 }
 
-// findNonZeroRowCoverage reports whether a NON-zero-row succeeded partition
-// for (organizationID, family) already covers day -- true coverage this
-// command must refuse, versus a 0-row completion it exists to recompute.
+// maxManualBackfillGenerationBumps bounds how many numbered-suffix
+// generations StartManualBackfillRun will try before giving up: a run stuck
+// failing/canceling on every attempt is a real problem worth surfacing as an
+// error, not retrying indefinitely inside one call.
+const maxManualBackfillGenerationBumps = 5
+
+// blockReason names why findManualBackfillBlocker refused a day.
+type blockReason int
+
+const (
+	blockReasonNone blockReason = iota
+	blockReasonInProgress
+	blockReasonCovered
+)
+
+// findManualBackfillBlocker decides whether StartManualBackfillRun must
+// refuse (organizationID, family, day), and why.
 //
-// Unlike loadRunCoveringDay's exact `scope->>'day' = day` match, this checks
-// CONTAINMENT in the partition's whole [anchor - backfill_days + 1, anchor]
-// window (codex review, P1): DORAExecutor.ComputePartition and
-// job_release_impact.py's `_date_range` both write rows for EVERY day in
-// that window from ONE partition anchored on the LATEST day, not one
-// partition per day. A post-sync catch-up run anchored on day E with
-// backfill_days=N therefore already covers every day in
-// [E-N+1, E] -- requesting an interior day of that range must see it as
-// covered, or this command would insert a genuine duplicate for data
-// already written. (complexity's BackfillDays is pinned to 1 by
-// validateFamilyScope, so its window is always a single day -- this still
-// reduces to an exact match for it, no special-casing needed.)
+// blockReasonInProgress: a run under a DIFFERENT generation is still
+// pending/running and its scope's [anchor-backfill_days+1, anchor] window
+// contains day. Its eventual completion is invisible to the succeeded-only
+// checks below, so inserting a manual run alongside it risks both writing
+// the same day once each finishes (codex review, P1) -- even the advisory
+// lock above does not help here, since it only serializes concurrent
+// transactions, not a run that already committed and is still executing.
+// A pending/running row under THIS SAME generation is excluded from this
+// check -- that is simply this call's own prior insert not yet observed,
+// which insertRun's ON CONFLICT DO NOTHING path already handles correctly
+// (reported as "already_ran"); treating it as a foreign blocker would make
+// a genuine idempotent retry refuse itself.
+//
+// blockReasonCovered: a succeeded partition's window contains day, and
+// either:
+//   - its own backfill_days == 1 -- an EXACT single-day partition, where
+//     output_evidence's rows_written IS that day's own total,
+//     unambiguously -- with non-zero evidence; or
+//   - its backfill_days > 1 -- an aggregate spanning MULTIPLE days, which
+//     CANNOT prove day itself got zero or non-zero rows (codex review, P1:
+//     DORAExecutor.ComputePartition accumulates ONE total across the whole
+//     window in dora_native.go, and complexity's compatibility-bridge
+//     evidence carries no row count at all). An ambiguous multi-day
+//     aggregate is treated as covered regardless of its zero/non-zero
+//     value -- guessing "definitely 0 rows on this specific day" from a
+//     multi-day total risks the opposite failure this command exists to
+//     fix (silently skipping a day that already has real, duplicable
+//     output). An operator who hits this should verify via the
+//     readback_hint and, if genuinely uncovered, request a narrower
+//     --day/--to range that does not land inside the ambiguous window.
 //
 // Bounded to anchors in [day, day+maxDayScopedBackfillDays-1] so this stays
-// a targeted range read keyed on the (org_id, family) index shape the exact-
-// match query already uses, not a full per-organization table scan.
-func (store *PostgresStore) findNonZeroRowCoverage(
-	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
-) (runID string, covered bool, err error) {
+// a targeted range read on the (org_id, family) index shape, not a full
+// per-organization table scan.
+func (store *PostgresStore) findManualBackfillBlocker(
+	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string,
+) (runID string, reason blockReason, err error) {
 	requested, parseErr := time.Parse("2006-01-02", day)
 	if parseErr != nil {
-		return "", false, ErrInvalidState
+		return "", blockReasonNone, ErrInvalidState
 	}
 	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
 	rows, err := tx.Query(ctx, `
-SELECT run.id::text, partition.scope->>'day', coalesce((partition.scope->>'backfill_days')::int, 1), partition.output_evidence
+SELECT run.id::text, run.generation, run.status, partition.status, partition.scope->>'day',
+       coalesce((partition.scope->>'backfill_days')::int, 1), partition.output_evidence
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
-  AND run.status = 'succeeded' AND partition.status = 'succeeded'
+  AND run.status IN ('pending', 'running', 'succeeded')
   AND partition.scope->>'day' >= $3 AND partition.scope->>'day' <= $4`,
 		organizationID, family, day, upperBound,
 	)
 	if err != nil {
-		return "", false, ErrUnavailable
+		return "", blockReasonNone, ErrUnavailable
 	}
 	defer rows.Close()
+
+	var coveredRunID string
 	for rows.Next() {
-		var id, anchorDay string
+		var id, runGeneration, runStatus, partitionStatus, anchorDay string
 		var backfillDays int
 		var outputEvidence *string
-		if err := rows.Scan(&id, &anchorDay, &backfillDays, &outputEvidence); err != nil {
-			return "", false, ErrUnavailable
-		}
-		if isZeroRowEvidence(outputEvidence) {
-			continue
+		if err := rows.Scan(&id, &runGeneration, &runStatus, &partitionStatus, &anchorDay, &backfillDays, &outputEvidence); err != nil {
+			return "", blockReasonNone, ErrUnavailable
 		}
 		anchor, parseErr := time.Parse("2006-01-02", anchorDay)
 		if parseErr != nil {
 			continue
 		}
 		windowStart := anchor.AddDate(0, 0, -(backfillDays - 1))
-		if !requested.Before(windowStart) && !requested.After(anchor) {
-			return id, true, nil
+		if requested.Before(windowStart) || requested.After(anchor) {
+			continue // this partition's window does not contain the requested day
+		}
+		if (runStatus == "pending" || runStatus == "running") && runGeneration != generation {
+			// The most actionable signal -- return immediately rather than
+			// keep scanning for a "covered" reason that matters less.
+			return id, blockReasonInProgress, nil
+		}
+		if runStatus != "succeeded" || partitionStatus != "succeeded" {
+			continue
+		}
+		if backfillDays > 1 || !isZeroRowEvidence(outputEvidence) {
+			coveredRunID = id
 		}
 	}
 	if rows.Err() != nil {
-		return "", false, ErrUnavailable
+		return "", blockReasonNone, ErrUnavailable
 	}
-	return "", false, nil
+	if coveredRunID != "" {
+		return coveredRunID, blockReasonCovered, nil
+	}
+	return "", blockReasonNone, nil
 }

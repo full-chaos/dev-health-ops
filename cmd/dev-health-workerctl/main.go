@@ -896,6 +896,30 @@ func manualBackfillGeneration(family, org, day, to string) string {
 	return "manual-backfill:" + family + ":" + org + ":" + day + ".." + to
 }
 
+// manualBackfillDayResult is one day's outcome from `metrics remaining
+// start`, in the shape printed under the response's "days" array.
+type manualBackfillDayResult struct {
+	Day         string `json:"day"`
+	Status      string `json:"status"`
+	RunID       string `json:"run_id,omitempty"`
+	PartitionID string `json:"partition_id,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// anyManualBackfillDayErrored reports whether any day's result is an
+// unexpected error (codex review, P2) -- pulled out of dispatchMetricsRemaining
+// as its own function so it can be unit tested directly against realistic
+// result shapes, the same testability reasoning
+// redriveDailyMetricsLedger's ledgerRepairWasIncomplete documents.
+func anyManualBackfillDayErrored(results []manualBackfillDayResult) bool {
+	for _, result := range results {
+		if result.Status == "error" {
+			return true
+		}
+	}
+	return false
+}
+
 // manualBackfillReadbackTable names the primary ClickHouse table each
 // day-scoped remaining-metrics family writes (families.json's "writes"
 // list), for the readback hint dispatchMetricsRemaining prints after
@@ -1006,35 +1030,40 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 		// land on insertRun's ON CONFLICT DO NOTHING path (surfaced as
 		// "already_ran") instead of a duplicate.
 		generation := manualBackfillGeneration(*family, *org, *day, toRaw)
-		type dayResult struct {
-			Day         string `json:"day"`
-			Status      string `json:"status"`
-			RunID       string `json:"run_id,omitempty"`
-			PartitionID string `json:"partition_id,omitempty"`
-			Error       string `json:"error,omitempty"`
-		}
-		var results []dayResult
+		var results []manualBackfillDayResult
 		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
 			dayString := cursor.Format("2006-01-02")
 			outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
 			switch {
 			case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
-				results = append(results, dayResult{
+				results = append(results, manualBackfillDayResult{
 					Day: dayString, Status: "already_covered", RunID: outcome.RunID,
 				})
+			case errors.Is(startErr, remaining.ErrDayInProgress):
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "in_progress", RunID: outcome.RunID,
+				})
 			case startErr != nil:
-				results = append(results, dayResult{Day: dayString, Status: "error", Error: startErr.Error()})
+				results = append(results, manualBackfillDayResult{Day: dayString, Status: "error", Error: startErr.Error()})
 			case outcome.AlreadyRan:
-				results = append(results, dayResult{
+				results = append(results, manualBackfillDayResult{
 					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
 				})
 			default:
-				results = append(results, dayResult{
+				results = append(results, manualBackfillDayResult{
 					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID,
 				})
 			}
 		}
-		return writeResult(stdout, stderr, map[string]any{
+		// codex review, P2: an "error" status buried in one day's result
+		// object must not read as overall success -- a caller that checks
+		// only the process exit code (a shell script, a scheduled job)
+		// would otherwise treat a partially or completely undispatched
+		// backfill as clean. Print the same full JSON to stdout either way
+		// (the per-day detail is the actual diagnostic), but fail the
+		// process if anything errored.
+		hadDayError := anyManualBackfillDayErrored(results)
+		code := writeResult(stdout, stderr, map[string]any{
 			"family":          *family,
 			"org":             *org,
 			"generation":      generation,
@@ -1045,6 +1074,10 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 				manualBackfillReadbackTable[*family], *org, *day, toRaw,
 			),
 		})
+		if code == 0 && hadDayError {
+			return 1
+		}
+		return code
 	default:
 		return writeError(stderr, "invalid_request")
 	}

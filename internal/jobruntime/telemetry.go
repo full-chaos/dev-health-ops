@@ -256,10 +256,16 @@ const (
 	// error.
 	RemainingMetricsManualBackfillOutcomeAlreadyRan RemainingMetricsManualBackfillOutcome = "already_ran"
 	// RemainingMetricsManualBackfillOutcomeAlreadyCovered means the command
-	// refused: a non-zero-row succeeded partition already covers this day,
-	// and inserting another would duplicate rows in an append-only table
-	// with no dedup on replay (CHAOS-4242).
+	// refused: a succeeded partition already provides unambiguous non-zero
+	// or ambiguous multi-day coverage for this day, and inserting another
+	// would risk duplicating rows in an append-only table with no dedup on
+	// replay (CHAOS-4242).
 	RemainingMetricsManualBackfillOutcomeAlreadyCovered RemainingMetricsManualBackfillOutcome = "already_covered"
+	// RemainingMetricsManualBackfillOutcomeInProgress means the command
+	// refused: an automatic run for this day is still pending/running under
+	// a different generation, and its eventual completion is invisible to
+	// the succeeded-only coverage check (codex review, P1).
+	RemainingMetricsManualBackfillOutcomeInProgress RemainingMetricsManualBackfillOutcome = "in_progress"
 )
 
 func remainingMetricsManualBackfillOutcomes() []RemainingMetricsManualBackfillOutcome {
@@ -267,6 +273,7 @@ func remainingMetricsManualBackfillOutcomes() []RemainingMetricsManualBackfillOu
 		RemainingMetricsManualBackfillOutcomeStarted,
 		RemainingMetricsManualBackfillOutcomeAlreadyRan,
 		RemainingMetricsManualBackfillOutcomeAlreadyCovered,
+		RemainingMetricsManualBackfillOutcomeInProgress,
 	}
 }
 

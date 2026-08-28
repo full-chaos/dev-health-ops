@@ -1229,20 +1229,45 @@ applies.** `StartRunTx`'s own `family=="dora"` cross-trigger dedup
 (CHAOS-4384) treats ANY succeeded partition for a day that has already
 CLOSED as terminal coverage, 0 rows or not, because for the automatic
 triggers a genuinely quiet closed day and a day nobody ever computed are
-indistinguishable. This command refuses ONLY a **non-zero-row** succeeded
-partition (`invalid_request`-shaped per-day `"already_covered"` status in
-the response, not a hard failure for the whole command) — a 0-row day, open
-or closed, is exactly the CHAOS-4384 shape this command exists to recompute.
-Retrying with the same `--day`/`--org`/`--family` after a real day's worth of
-source data has landed is therefore expected and safe; retrying a day that
-already has real output would duplicate rows in an append-only table with no
-dedup on replay (CHAOS-4242) and is refused.
+indistinguishable. This command is more precise, because a human is
+authorizing each recompute individually, and checks every succeeded
+partition whose scope window `[anchor - backfill_days + 1, anchor]`
+contains the requested day (`generation` is not part of the check — a
+prior run under ANY generation counts):
+
+- An **exact single-day partition** (`backfill_days == 1`, the shape every
+  automatic post-sync/fixed-schedule dispatch normally uses) is
+  unambiguous: its `rows_written` evidence IS that day's own total. A
+  **0-row** exact match is exactly the CHAOS-4384 shape this command
+  exists to recompute and is NOT refused; a **non-zero-row** exact match
+  is refused (`"already_covered"`).
+- A **wide multi-day partition** (`backfill_days > 1`, e.g. a post-sync
+  catch-up run) is ambiguous for any day inside its window that is not
+  provably isolated: `DORAExecutor.ComputePartition` accumulates ONE
+  `rows_written` total across the WHOLE window, so neither a zero nor a
+  non-zero aggregate proves what any single interior day got. This command
+  refuses (`"already_covered"`) rather than guess in either direction —
+  verify via the `readback_hint` query and, if the day is genuinely
+  uncovered, request it with a narrower `--day`/`--to` that does not land
+  inside the ambiguous run's window.
+- A run for the same day still **`pending`/`running`** under a different
+  generation (an automatic trigger currently executing) is refused as
+  `"in_progress"` — its eventual completion is invisible to the checks
+  above, so inserting a manual run alongside it risks a genuine duplicate
+  once both finish. Re-run once it settles.
+
+Retrying the **identical** command (same `--family`/`--org`/`--day`/`--to`,
+which derives the same `generation` — see below) is always safe: it reuses
+the same run rather than inserting a duplicate, even across an in-flight
+retry (`"already_ran"`) or after the run itself legitimately completed with
+0 rows (a fresh generation is minted automatically so the retry actually
+recomputes, rather than reloading the exhausted 0-row run forever).
 
 Returns, per day in the requested span:
 
 ```json
 {
-  "family": "dora", "org": "c6a3...", "generation": "manual-backfill:2026-08-28T...",
+  "family": "dora", "org": "c6a3...", "generation": "manual-backfill:dora:c6a3...:2026-08-25..2026-08-27",
   "days": [
     {"day": "2026-08-25", "status": "started", "run_id": "...", "partition_id": "..."},
     {"day": "2026-08-26", "status": "already_ran", "run_id": "...", "partition_id": "..."},
@@ -1252,13 +1277,17 @@ Returns, per day in the requested span:
 }
 ```
 
-`already_ran` means an identical prior invocation (same minted `generation`)
-already started this exact run — idempotent, not an error. `already_covered`
-means a non-zero-row succeeded partition already exists for that day; no run
-was inserted. Run the `readback_hint` query (or the daily-redrive query below,
-substituted with the printed `run_id`s) to confirm rows actually landed once
-the dispatched partition jobs execute — a `"started"` status is dispatch
-confirmation, not completion.
+`status` is one of `started` (a new run/partition was inserted), `already_ran`
+(idempotent retry, not an error), `already_covered` or `in_progress` (refused,
+see above), or `error` (an unexpected store/publisher failure for that one
+day — the command's own exit code is nonzero if ANY day is `error`, even
+though the full per-day JSON is still printed to stdout for diagnosis).
+`generation` is derived deterministically from the request's own flags
+(family/org/day-range), never wall-clock time, so a retried invocation is
+recognizable as the same logical request. Run the `readback_hint` query (or
+the daily-redrive query below, substituted with the printed `run_id`s) to
+confirm rows actually landed once the dispatched partition jobs execute — a
+`"started"` status is dispatch confirmation, not completion.
 
 **Observability**: `dev_health_remaining_metrics_manual_backfill_total{family,outcome}`
 is wired but not live for THIS caller, for the identical reason

@@ -4,10 +4,21 @@ import (
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// lookupTimeout bounds a single Enabled() registry read. Enabled has no
+// context parameter (the Switch interface -- shared with StaticSwitch and
+// DynamicSwitch, deliberately not redesigned here, see the package doc
+// comment -- takes none), so an unbounded context.Background() lookup
+// would let a blocked connection or exhausted pool hang a request handler
+// indefinitely during a registry outage. This is an internal bound, not a
+// caller-supplied one; a future wave that threads a real request context
+// through Dispatch can lower this further per-request.
+const lookupTimeout = 2 * time.Second
 
 // reachableModes is the subset of plan §5's mode vocabulary
 // (python|shadow|canary|primary|disabled) that makes an operation
@@ -36,6 +47,35 @@ var reachableModes = map[string]bool{
 // An operation absent from documentDigests cannot be looked up and is
 // therefore disabled -- consistent with "an operation absent from the
 // registry stays on Python" (plan §5).
+//
+// Known, deliberate gaps in what this Wave-0 implementation enforces --
+// named here so a MATCH on `mode` is never mistaken for full registry
+// enforcement (codex review, 2026-08-27; "an inaccurate coverage claim is
+// worse than an admitted gap", root AGENTS.md):
+//
+//  1. Document identity is NOT verified against the live request. Enabled
+//     trusts the CALLER's documentDigests map for "which document this
+//     operation name means"; it never receives or checks the actual
+//     document digest of the incoming request. The Switch interface
+//     (shared with StaticSwitch/DynamicSwitch) has no such parameter --
+//     Mux.Dispatch(operation, w, r) doesn't carry one either. Wiring the
+//     exact registered-document-identity contract end to end is a later
+//     wave's job, when Mux is actually mounted on a live route.
+//  2. eligible_orgs / rollout_percentage are NOT enforced. Enabled has no
+//     org/tenant argument (same interface constraint as #1), so a
+//     `canary` row scoped to specific orgs or a partial rollout
+//     percentage is currently treated as fully enabled for every caller.
+//     Real per-tenant gradual rollout requires threading the request's
+//     org through Enabled, which is exactly the interface change #1 also
+//     needs -- both wait for the same later wave.
+//  3. current_candidate_build is NOT bound to reachability. Enabled
+//     answers "is this operation's mode canary/primary", not "is THIS
+//     candidate build the one currently live" -- which build actually
+//     handles a reachable request is decided by whatever Register()'d a
+//     handler in the Mux, a separate wiring step outside Wave 0's scope.
+//     A registry rollback that changes current_candidate_build without
+//     also changing mode does not, by itself, revoke or redirect
+//     reachability here.
 type PostgresSwitch struct {
 	pool            *pgxpool.Pool
 	schemaDigest    string
@@ -74,7 +114,8 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 		return false
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	defer cancel()
 	var mode string
 	err := s.pool.QueryRow(ctx,
 		`SELECT mode FROM go_api_routing_state

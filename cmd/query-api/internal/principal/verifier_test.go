@@ -47,6 +47,19 @@ func writeJWKS(t *testing.T, pub ed25519.PublicKey, kid string) string {
 	return path
 }
 
+// mustVerifier builds a Verifier and fails the test immediately if
+// construction rejects the (valid, by construction, in every existing
+// test) issuer/audience pair -- see TestNewVerifier_RejectsEmptyIssuer and
+// TestNewVerifier_RejectsEmptyAudience for the negative cases.
+func mustVerifier(t *testing.T, jwksPath, issuer, audience string) *Verifier {
+	t.Helper()
+	v, err := NewVerifier(jwksPath, issuer, audience)
+	if err != nil {
+		t.Fatalf("NewVerifier: unexpected error: %v", err)
+	}
+	return v
+}
+
 func signEnvelope(t *testing.T, priv ed25519.PrivateKey, kid string, claims Claims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
@@ -89,7 +102,7 @@ func TestVerify_ValidEnvelopeRoundTrips(t *testing.T) {
 	jwksPath := writeJWKS(t, pub, testKID)
 	token := signEnvelope(t, priv, testKID, baseClaims())
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	claims, err := v.Verify(token)
 	if err != nil {
 		t.Fatalf("Verify: unexpected error: %v", err)
@@ -112,7 +125,7 @@ func TestVerify_RejectsWrongAudience(t *testing.T) {
 	claims.Audience = jwt.ClaimStrings{"some-other-service"}
 	token := signEnvelope(t, priv, testKID, claims)
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for wrong audience, got nil")
 	}
@@ -125,7 +138,7 @@ func TestVerify_RejectsWrongIssuer(t *testing.T) {
 	claims.Issuer = "not-the-real-edge"
 	token := signEnvelope(t, priv, testKID, claims)
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for wrong issuer, got nil")
 	}
@@ -140,7 +153,7 @@ func TestVerify_RejectsExpiredEnvelope(t *testing.T) {
 	claims.ExpiresAt = jwt.NewNumericDate(past.Add(30 * time.Second))
 	token := signEnvelope(t, priv, testKID, claims)
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for expired envelope, got nil")
 	}
@@ -153,7 +166,7 @@ func TestVerify_RejectsMissingExpiry(t *testing.T) {
 	claims.ExpiresAt = nil
 	token := signEnvelope(t, priv, testKID, claims)
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for missing exp, got nil")
 	}
@@ -166,7 +179,7 @@ func TestVerify_RejectsUnsupportedSchemaVersion(t *testing.T) {
 	claims.SchemaVersion = 2
 	token := signEnvelope(t, priv, testKID, claims)
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	_, err := v.Verify(token)
 	if err == nil {
 		t.Fatal("Verify: expected error for unsupported schema version, got nil")
@@ -181,7 +194,7 @@ func TestVerify_RejectsUnknownKID(t *testing.T) {
 	jwksPath := writeJWKS(t, pub, testKID)
 	token := signEnvelope(t, priv, "some-other-kid", baseClaims())
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for unknown kid, got nil")
 	}
@@ -195,9 +208,27 @@ func TestVerify_RejectsTokenSignedByAnotherKey(t *testing.T) {
 	jwksPath := writeJWKS(t, pub, testKID)
 	token := signEnvelope(t, otherPriv, testKID, baseClaims())
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for signature from a non-published key, got nil")
+	}
+}
+
+func TestNewVerifier_RejectsEmptyIssuer(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	jwksPath := writeJWKS(t, pub, testKID)
+
+	if _, err := NewVerifier(jwksPath, "", testAudience); err == nil {
+		t.Fatal("NewVerifier: expected error for empty issuer, got nil")
+	}
+}
+
+func TestNewVerifier_RejectsEmptyAudience(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	jwksPath := writeJWKS(t, pub, testKID)
+
+	if _, err := NewVerifier(jwksPath, testIssuer, ""); err == nil {
+		t.Fatal("NewVerifier: expected error for empty audience, got nil")
 	}
 }
 
@@ -215,7 +246,7 @@ func TestVerify_RejectsAlgConfusion(t *testing.T) {
 		t.Fatalf("sign none-alg token: %v", err)
 	}
 
-	v := NewVerifier(jwksPath, testIssuer, testAudience)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
 	if _, err := v.Verify(token); err == nil {
 		t.Fatal("Verify: expected error for alg=none, got nil")
 	}

@@ -67,16 +67,14 @@ local stack — bring it up only for deliberate verification.
 
 ## dev-health-go dependency
 
-`go.mod` requires `github.com/full-chaos/dev-health-go v0.1.0` (tagged by
-CHAOS-4377, no local `replace`). This module is **private** — building
-`cmd/query-api` needs `GOPRIVATE=github.com/full-chaos/*` (set workflow-wide
-in `.github/workflows/go.yml`) AND git credentials able to clone
-`full-chaos/dev-health-go`. Locally this works via your own SSH access; in
-CI it does **not yet work** — no checkout/git-credential step grants any
-job a token or deploy key scoped to that repo. Any CI job that actually
-builds/tests `cmd/query-api` fails on a git auth error until that is wired
-in. Verified locally: `GOPRIVATE=github.com/full-chaos/* go build ./...`
-and `go test ./cmd/query-api/...` both pass.
+`go.mod` requires `github.com/full-chaos/dev-health-go v0.1.1` (tagged by
+CHAOS-4377, no local `replace`). The repo is **public** (chris ruling
+2026-08-28), so `go build`/`go test`/CI fetch it straight from the public
+module proxy/sumdb like any other dependency — no `GOPRIVATE`, no git
+credentials, nothing workflow-specific. (It was briefly private, requiring
+a temporary `GOPRIVATE=github.com/full-chaos/*` workaround; that scaffolding
+has been removed from `.github/workflows/go.yml` along with this note's
+earlier "CI cannot build this" caveat.)
 
 ## What's NOT here yet (later waves / other lanes)
 

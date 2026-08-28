@@ -28,12 +28,26 @@ type Verifier struct {
 // Ed25519JWKSVerifier's own no-cache contract, so a rotated JWKS is picked
 // up without a restart) and requires envelopes issued by issuer for
 // audience.
-func NewVerifier(jwksPath, issuer, audience string) *Verifier {
+//
+// issuer and audience must both be non-empty. jwt.WithIssuer("") does not
+// fail closed -- an empty expectedIss disables issuer checking entirely
+// (see golang-jwt/jwt/v5's Validator.expectedIss doc comment), so a caller
+// that constructs a Verifier from an unset/misconfigured env var would
+// silently accept a validly-signed envelope from ANY issuer. Failing fast
+// here, once, at construction time is cheaper than relying on every future
+// caller to remember that footgun.
+func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
+	if issuer == "" {
+		return nil, errors.New("principal: issuer must not be empty")
+	}
+	if audience == "" {
+		return nil, errors.New("principal: audience must not be empty")
+	}
 	return &Verifier{
 		jwks:     authverify.NewEd25519JWKSVerifier(jwksPath),
 		issuer:   issuer,
 		audience: audience,
-	}
+	}, nil
 }
 
 // Verify parses and verifies tokenString as an effective-principal

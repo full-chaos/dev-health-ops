@@ -37,4 +37,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # container, so the package grew its first -tags integration file.
     # CHAOS-4226 added internal/cacheinvalidation (29 -> 30): the per-org
     # cache epoch bump is proved against a real Valkey container.
-    assert "30 package(s) discovered, 0 denylisted, 30 will run" in result.stdout
+    # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
+    # go_api_registry-backed PostgresSwitch is proved against a real
+    # Postgres testcontainer.
+    assert "31 package(s) discovered, 0 denylisted, 31 will run" in result.stdout

@@ -29,6 +29,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
+    "cmd/query-api",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -212,8 +213,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
     # go_api_registry-backed PostgresSwitch is proved against a real
     # Postgres testcontainer.
-    assert "31 package(s) discovered, 0 denylisted, 31 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 31 package(s)" in result.stdout
+    # CHAOS-4367 added cmd/query-api (31 -> 32): the featureFlags Wave-1
+    # canary's HTTP-level reachability test
+    # (query_route_integration_test.go) is proved against a real Postgres
+    # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
+    assert "32 package(s) discovered, 0 denylisted, 32 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 32 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -239,7 +244,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 31
+    assert len(flattened) == len(set(flattened)) == 32
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -876,7 +881,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 30
+    assert len(selected_packages) == len(set(selected_packages)) == 31
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

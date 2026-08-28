@@ -58,6 +58,21 @@ CLICKHOUSE_URI=… dev-hops metrics daily
 - **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix then `mypy` gate; `pre-push` `ruff format --check` + `ruff check` + `mypy`. Fix code, don't add ignores/config exclusions.
 - **Mutation testing has no shared harness — do not write one.** `scripts/mutation_harness.py`, its ~8k lines of meta-tests, and its 98 checked-in plan JSONs were removed under CHAOS-3875: no GitHub workflow ever ran them, only `ci/local_validate.sh`'s `verify` stage touched the harness at all, and the plans had to be re-anchored by hand on every refactor of the files they pinned. The durable lesson from the 2026-07-26 incident survives the tool: three ad-hoc per-lane harnesses produced false results, all the same shape — the harness could not detect its own failure. One left `if false && (guard)` on disk while reporting a restore it had "verified" with `go build`; one used `git checkout` to restore and silently reverted unrelated uncommitted edits; one waited on `pgrep -qf "m22.sh"`, matched its own command line, and hung. **Never verify a restore with a build or a git check** (`go build`/`go vet` pass on `if false && …`; `git diff` calls an *untracked* file clean whatever it contains), and **mutate compound predicates clause by clause** — a wholesale mutation reported KILLED on a condition holding a wrong, unasserted clause. If you need a one-off kill proof, run it by hand, restore by content digest, and keep it out of the tree.
 
+## Worktrees and branches
+
+Agents keep creating branches that track `origin/main`, then a bare `git push` pushes straight to `main`. The canonical recipe, every time:
+
+```bash
+git worktree add --no-track -b <branch> <path> origin/main
+# or, without a worktree: git switch -c <branch> --no-track origin/main
+git push -u origin HEAD:<branch>
+```
+
+- `--no-track` is required. A branch created without it silently tracks `origin/main`, and a bare `git push` from that branch pushes to `main`, not your branch.
+- Push with an explicit refspec, `HEAD:<branch>` (or `-u origin HEAD:<branch>` the first time) — never a bare `git push`.
+- Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
+- **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
+
 ## Landing the plane
 
 - **Push early and incrementally.** “Work is not done until `git push` succeeds” is not only end-of-run cleanup. One CHAOS-3033 lane ran 57 minutes, compacted with “commit, push, PR” still in its plan, and delivered code that was never pushed. Push after the first commit; an unpushed worktree is one crash from nothing.

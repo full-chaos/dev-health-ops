@@ -74,7 +74,7 @@ The worker cutover's incidents shared one shape: a family was ported and deploye
 1. **Proof infrastructure first** — comparator, operation registry, rollout ledger, auth-context fixture matrix, and rollback path all exist before any resolver is ported.
 2. **Local dual-run proof** — real Python and Go servers against the same producer-seeded scratch Postgres/ClickHouse/Valkey state; compare the *complete* observable response (status + contract headers, GraphQL `data`, `errors` incl. paths/extension codes, null-vs-omitted, scalar formatting, list ordering/pagination/cursors) **and server-side effects** — some resolvers (e.g. `home`/investment analytics) call telemetry/audit hooks such as `record_stale_investment_membership_scope` or increment fallback counters as a side effect of the read; response parity alone cannot catch Go silently dropping these. Inventory each resolver's side effects before porting it and assert them alongside the response digest. Every exclusion needs a written reason and must match something; the comparator itself must be falsified with planted defects (a removed row, changed nullability, changed error path, reordered results, a dropped side-effect call) — the CHAOS-3033 differential-oracle discipline applied to HTTP.
 3. **Deployed executed proof** — the exact candidate build handles the request through real ingress, auth, org/impersonation resolution, GraphQL parse/validate, resolver dispatch, real DB access, serialization. A constructor, health check, direct resolver test, or bare 200 does not qualify.
-4. **Read-only shadow** — Python serves the client response while Go receives the same authenticated operation in parallel; compare response digests only when both observed the same data watermark/snapshot.
+4. **Read-only shadow** — Python serves the client response while Go receives the same authenticated operation in parallel; compare response digests only when both observed the same data watermark/snapshot. Executing an operation twice duplicates any side effect stage 2 found (a counter increment, an audit write) even though only Python's response reaches the client — shadowing is restricted to operations proven side-effect-free in stage 2, or the Go shadow path runs with side effects explicitly suppressed/tagged as shadow-only so they never double-count against the same telemetry an operator or alert reads.
 5. **Sticky canary** — one operation, selected orgs first, widen gradually. No one-shot family deployment (the exact failure mode of the worker cutover's metrics-family ports).
 
 Semantic parity and operational safety are separate claims — a canary must also execute representative concurrency inside the real container/cgroup measuring RSS, PIDs, cancellation, latency, error rate (the RLIMIT_AS-vs-RSS lesson: neither implies the other). For mutations (later phase): never shadow-dual-write production state, prove against cloned isolated stores first, canary a single primary implementation, require authoritative DB readback plus audit/outbox/job-ledger evidence, and never fall back after dispatch once a write outcome may be ambiguous.
@@ -92,14 +92,14 @@ Non-negotiables carried over from the worker cutover's post-mortem:
 
 **Wave 1 — `featureFlags` only.** Strongest first canary: read-only, ClickHouse-only, bounded, stable explicit ordering, already has a live ClickHouse test, and exercises a real non-happy-path (missing-table degraded result). Port only `featureFlags` in the first switch, not `featureFlagEvents`. If production inventory shows `featureFlags` gets no real traffic, use it for local/staging proof only and pick `reviewEdges` as the first production canary — a route with no traffic cannot furnish production executed-proof (stage 3 above).
 
-**Recommended continuation:** (2) `reviewEdges` — after making tie-ordering deterministic; (3) `hotspots`, `complexityTimeseries`, `cognitiveLoad`; (4) higher-fan-out analytics, Work Graph, DORA, batch `analytics`; (5) Postgres report **reads only** (`savedReports` and equivalents); **mutation admission gate** — report mutations may start only once Waves 1-5 (every read operation) are stable in production per open decision 4, with per-mutation-family DB/audit/outbox readback proof; (6) admin/control REST lanes (also read-first, same mutation-admission gate applies per family); (7) public auth/impersonation edge **last**. The Python Ask Dev `dev_*` runtime is never in this sequence — it is out of scope for the Go API entirely.
+**Recommended continuation, all read-only:** (2) `reviewEdges` — after making tie-ordering deterministic; (3) `hotspots`, `complexityTimeseries`, `cognitiveLoad`; (4) higher-fan-out analytics, Work Graph, DORA, batch `analytics`; (5) Postgres-backed GraphQL reads (`savedReports` and equivalents); (6) admin/control REST reads (the 19 admin routers' `GET` surface). **Mutation admission gate** — every read operation across both GraphQL and REST (Waves 1-6, the complete read surface) must be stable in production before this gate opens; opening it earlier (e.g. after Wave 5 alone, before Wave 6's REST reads exist) does not satisfy open decision 4. (7) **Mutations** — GraphQL report mutations and admin/control REST writes together, per-mutation-family DB/audit/outbox readback proof, single-primary canary, no shadow-dual-write (see the mutation rules in section 5). (8) public auth/impersonation edge **last**. The Python Ask Dev `dev_*` runtime is never in this sequence — it is out of scope for the Go API entirely.
 
 ## 7. Open decisions for chris
 
 1. **Effective-principal trust boundary.** Should phase-one Go independently query Postgres/Valkey for auth state, or trust a short-lived signed principal envelope issued by the Python edge? *Recommendation: signed envelope — reproducing the full auth contract (disabled users, token-version revocation, org-switch membership, impersonation, tier fallback) independently in Go before it has proven anything else is unnecessary risk.*
 2. **GraphQL eligibility policy.** Must Go-routed operations be registered/persisted documents, or is arbitrary normalized-AST eligibility allowed? *Recommendation: registered documents only, initially — closes the door on an unbounded operation-shape surface during the riskiest phase.*
 3. **Canonical parity rules.** Sign off on exact treatment of error ordering, null-vs-omission, floating-point comparison, concurrent ClickHouse watermark handling, and list tie-ordering — these decide what "match" is allowed to mean, before any operation reaches stage 2 of the proof gate.
-4. **Mutation admission.** May any write operation move before the read plane is broadly proven? What DB/audit/outbox readback is required per mutation family? *Recommendation: no mutation moves until Waves 1-5 (every read operation, GraphQL and REST) are stable in production — this is the single gate; section 6's sequencing reflects it.*
+4. **Mutation admission.** May any write operation move before the read plane is broadly proven? What DB/audit/outbox readback is required per mutation family? *Recommendation: no mutation moves until Waves 1-6 (every read operation, GraphQL AND REST) are stable in production — this is the single gate; section 6's sequencing places all reads before it and puts every mutation (report mutations + admin CRUD writes) in one later wave.*
 5. **`metrics-api` retirement.** Name the exact remaining Python-compatibility families, recovery obligations, zero-traffic window, and rollback window that must all close before the `metrics-api` deployment is deleted — this is owned by CHAOS-3092, not this epic, but the two must not silently diverge.
 
 ## 8. Diagrams
@@ -143,17 +143,20 @@ flowchart LR
 
 Proof identity must be bound to the exact candidate, not just the document: a `PROOF_RUN` keyed only by `document_digest` stays valid across a `candidate_build` change, and cannot distinguish two operations selected from the same multi-operation document. `schema_digest`, `document_digest`, `selected_operation`, and `candidate_build` together are the proof's immutable key — a proof run is evidence for exactly one tuple, never carried forward across any of the four changing.
 
+`ROLLOUT_ENTRY` is append-only, one row per `candidate_build`, never updated in place — a new candidate build is a new row, not a mutation of the old one, so its primary key can include `candidate_build` and `PROOF_RUN`'s foreign key resolves against a real unique parent. `is_current` marks the row a given `(schema_digest, document_digest, selected_operation)` triple currently routes to; every prior row (and its proof runs) stays exactly as it was proven, immutably.
+
 ```mermaid
 erDiagram
   ROLLOUT_ENTRY {
     string schema_digest PK
     string document_digest PK
     string selected_operation PK
+    string candidate_build PK
+    bool is_current "exactly one true row per (schema_digest, document_digest, selected_operation)"
     string owner "python|go"
     string mode "python|shadow|canary|primary|disabled"
     string eligible_orgs
     int rollout_percentage
-    string candidate_build
     timestamp updated_at
   }
   PROOF_RUN {
@@ -161,11 +164,11 @@ erDiagram
     string schema_digest FK
     string document_digest FK
     string selected_operation FK
-    string candidate_build FK "proof is void if candidate_build changes"
+    string candidate_build FK
     string stage "dual_run|deployed_executed|shadow|canary"
     string terminal_state "match|mismatch|auth_rejected|validation_rejected|dependency_failed|timeout|cancelled|resource_exhausted|fallback|unsupported|proof_failed"
     string org_id
     timestamp observed_at
   }
-  ROLLOUT_ENTRY ||--o{ PROOF_RUN : "proven by (schema_digest+document_digest+selected_operation+candidate_build, exact match only)"
+  ROLLOUT_ENTRY ||--o{ PROOF_RUN : "proven by (schema_digest+document_digest+selected_operation+candidate_build, exact match, full 4-column FK)"
 ```

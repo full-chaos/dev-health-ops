@@ -96,12 +96,17 @@ def validate_provider_family_claim(
     """Validate one claim against its family's execution mode.
 
     Only the canonical claim carrying every declared family flag as the literal
-    boolean ``True`` is admissible for an ATOMIC_CANONICAL family. Unknown
-    ``family_dataset_*`` flags fail closed. INDEPENDENT families preserve their
-    existing per-dataset claim shape under D16, and FOLD_CONTRIBUTING families
-    (CHAOS-4078: PR-social, TestOps) admit a canonical claim carrying any
-    non-empty subset of its declared flags -- unlike ATOMIC_CANONICAL, a
-    partial fold is exactly the intended shape, not a malformed claim.
+    boolean ``True`` is admissible for an ATOMIC_CANONICAL family. INDEPENDENT
+    families preserve their existing per-dataset claim shape under D16.
+    FOLD_CONTRIBUTING families (CHAOS-4078: PR-social, TestOps) admit a
+    canonical claim carrying any subset of its declared flags, including none
+    -- unlike ATOMIC_CANONICAL, a partial fold is exactly the intended shape,
+    not a malformed claim. In every mode that IS validated: a non-canonical
+    (direct alias) claim is always malformed (folding happens onto the
+    canonical identity only), and a ``family_dataset_*`` flag belonging to a
+    DIFFERENT family than the one this dataset names fails closed -- a
+    canonical "prs" claim must never carry "cicd"'s own flag, silently
+    reaching provider execution before anything catches the contamination.
 
     ``strict_atomic`` remains a parameter so a caller can validate a claim
     without asserting atomicity (the capability contract still describes both
@@ -112,7 +117,7 @@ def validate_provider_family_claim(
     policy = provider_family_policy(provider, dataset)
     if (
         policy is None
-        or policy.mode is not FamilyExecutionMode.ATOMIC_CANONICAL
+        or policy.mode is FamilyExecutionMode.INDEPENDENT
         or not strict_atomic
     ):
         return True
@@ -121,9 +126,15 @@ def validate_provider_family_claim(
         return False
     expected = frozenset(family_dataset_flag(item) for item in policy.datasets)
     flags = processor_flags or {}
-    if any(
-        name.startswith(FAMILY_DATASET_FLAG_PREFIX) and name not in expected
-        for name in flags
-    ):
+    present_family_flags = [
+        name for name in flags if name.startswith(FAMILY_DATASET_FLAG_PREFIX)
+    ]
+    if any(name not in expected for name in present_family_flags):
         return False
-    return all(flags.get(name) is True for name in expected)
+    if policy.mode is FamilyExecutionMode.ATOMIC_CANONICAL:
+        return all(flags.get(name) is True for name in expected)
+    # FOLD_CONTRIBUTING: any subset of this family's own flags is valid,
+    # including none (a canonical-only selection with no enabled aliases).
+    # Cross-family contamination was already rejected above; each PRESENT
+    # flag just needs to be literal True.
+    return all(flags.get(name) is True for name in present_family_flags)

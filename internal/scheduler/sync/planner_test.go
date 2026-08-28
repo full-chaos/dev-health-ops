@@ -280,6 +280,49 @@ func TestBuildScheduledPlanTestOpsFoldStaysMediumWhenOnlyCicdIsEnabled(t *testin
 	}
 }
 
+func TestBuildScheduledPlanTestOpsFoldNeverStampsACaughtUpSibling(t *testing.T) {
+	// CHAOS-4078 review finding: a member whose window resolved to EMPTY this
+	// tick (already synced past `before`) must be excluded from the merge
+	// entirely -- no completion flag, no processor flags, and it must not
+	// inflate the unit's cost class. Stamping it anyway would falsely mark a
+	// sibling that did not run as processed and would permanently classify a
+	// plain cicd claim as heavy the moment tests was ever enabled alongside it.
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	older := now.AddDate(0, 0, -16)
+	units, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources: []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{
+			{Key: "cicd"}, {Key: "tests"},
+		},
+		Watermarks: map[WatermarkKey]time.Time{
+			// cicd is stale and still has work; tests is already caught up
+			// at `now` (== `before`, since Before is unset) and contributes
+			// nothing this tick.
+			{SourceID: "owner/repo", Dataset: "cicd"}:  older,
+			{SourceID: "owner/repo", Dataset: "tests"}: now,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Dataset != "cicd" {
+		t.Fatalf("units=%+v, want exactly one cicd unit", units)
+	}
+	unit := units[0]
+	if !unit.ProcessorFlags["family_dataset_cicd"] {
+		t.Errorf("family_dataset_cicd missing from %+v", unit.ProcessorFlags)
+	}
+	if unit.ProcessorFlags["family_dataset_tests"] {
+		t.Errorf("caught-up tests must not be stamped: %+v", unit.ProcessorFlags)
+	}
+	// cicd alone is medium; if the caught-up "tests" member had been folded
+	// in anyway, this would incorrectly read "heavy".
+	if unit.CostClass != "medium" {
+		t.Errorf("cost_class=%q, want %q for %+v", unit.CostClass, "medium", unit)
+	}
+}
+
 func TestBuildScheduledPlanPlansAKnownRoutablePairUnconditionally(t *testing.T) {
 	// Input symmetry: a pair the matrix knows and marks RouteReady &&
 	// Plannable is planned regardless of any input -- there is no

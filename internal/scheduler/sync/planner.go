@@ -495,9 +495,14 @@ func foldContributingFamilyUnit(
 	}
 	flags := cloneFlags(canonicalSpec.ProcessorFlags)
 	// CHAOS-4078: fan the completion flag -- and each member's own processor
-	// flags -- back only to the datasets this org actually enabled. This is
-	// the opposite of the work-item family's unconditional all-members
-	// stamp: a fold family never claims a sibling nobody asked to sync.
+	// flags -- back only to the datasets that actually CONTRIBUTED a window
+	// this tick, never every configured member. A caught-up sibling (e.g.
+	// "tests" already past `before` while "cicd" still has work) must not be
+	// stamped as processed: it did not run, its watermark must not be
+	// touched, and it must not inflate the unit's cost class or budget
+	// bucket on a tick where it contributed nothing. This is the opposite of
+	// the work-item family's unconditional all-members stamp, which is a
+	// deliberate exception for that one atomic family, not the default here.
 	//
 	// The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
 	// class among contributing members, not just the canonical identity's
@@ -507,7 +512,7 @@ func foldContributingFamilyUnit(
 	// window sizing already used each member's own spec via resolveWindow
 	// above -- this only affects the unit's stamped classification.
 	unitCostClass := canonicalSpec.CostClass
-	for _, dataset := range members {
+	for _, dataset := range contributing {
 		flags[familyDatasetFlag(dataset.Key)] = true
 		memberSpec, ok := datasetSpecification(provider, dataset.Key)
 		if !ok {

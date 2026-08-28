@@ -392,14 +392,75 @@ def test_default_off_work_item_family_keeps_legacy_claims_admissible(
 
 
 def test_provider_family_policy_leaves_independent_routes_unchanged() -> None:
+    # CHAOS-4078 gave prs/cicd their own FOLD_CONTRIBUTING policy (see
+    # test_fold_contributing_pr_social_and_testops_policies_validate_subsets_and_reject_cross_family_flags
+    # below); commits/security remain genuinely outside any family, and a
+    # bare canonical claim (no family flags at all -- no aliases enabled)
+    # stays valid under the new policy too.
+    assert validate_provider_family_claim(
+        "github", "commits", {"sync_commits": True}, strict_atomic=True
+    )
+    assert validate_provider_family_claim(
+        "github", "security", {"sync_security": True}, strict_atomic=True
+    )
     assert validate_provider_family_claim(
         "github", "prs", {"sync_prs": True}, strict_atomic=True
     )
     assert validate_provider_family_claim(
         "github", "cicd", {"sync_cicd": True}, strict_atomic=True
     )
-    assert validate_provider_family_claim(
+    # A direct alias claim is now malformed -- folding happens onto the
+    # canonical identity only, matching the work-item family's own rule.
+    assert not validate_provider_family_claim(
         "github", "tests", {"sync_tests": True}, strict_atomic=True
+    )
+
+
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+def test_fold_contributing_pr_social_and_testops_policies_validate_subsets_and_reject_cross_family_flags(
+    provider: str,
+) -> None:
+    for canonical, aliases in (
+        ("prs", ("pr-reviews", "pr-comments")),
+        ("cicd", ("tests",)),
+    ):
+        # Any non-empty subset of this family's own flags is valid -- unlike
+        # the atomic work-item family, "all or nothing" does not apply.
+        for alias in aliases:
+            flag = "family_dataset_" + alias.replace("-", "_")
+            assert validate_provider_family_claim(
+                provider, canonical, {flag: True}, strict_atomic=True
+            )
+        all_flags = {
+            "family_dataset_" + alias.replace("-", "_"): True for alias in aliases
+        }
+        assert validate_provider_family_claim(
+            provider, canonical, all_flags, strict_atomic=True
+        )
+        # A direct alias-keyed claim is always malformed.
+        for alias in aliases:
+            assert not validate_provider_family_claim(
+                provider, alias, all_flags, strict_atomic=True
+            )
+        # An unknown family_dataset_* flag fails closed.
+        assert not validate_provider_family_claim(
+            provider,
+            canonical,
+            {"family_dataset_unknown": True},
+            strict_atomic=True,
+        )
+    # Cross-family contamination fails closed: a canonical "prs" claim must
+    # never carry "cicd"'s own flag, and vice versa -- without this check the
+    # flag would sail through undetected to provider execution (the exact
+    # CHAOS-4078 review finding this test pins).
+    assert not validate_provider_family_claim(
+        provider, "prs", {"family_dataset_tests": True}, strict_atomic=True
+    )
+    assert not validate_provider_family_claim(
+        provider,
+        "cicd",
+        {"family_dataset_pr_comments": True},
+        strict_atomic=True,
     )
 
 

@@ -3313,7 +3313,7 @@ def test_dispatch_plannable_aggregate_route_has_only_the_river_writer(
     dispatcher can produce for any pair -- see
     ``.remember/chaos-4054-context.md``. The one remaining way a claimed pair
     can fail to reach River is that the matrix does not route it at all, which
-    ``test_dispatch_sync_run_non_plannable_alias_pair_is_terminalized`` covers.
+    ``test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer`` covers.
     """
 
     from dev_health_ops.workers import sync_units
@@ -3340,18 +3340,26 @@ def test_dispatch_plannable_aggregate_route_has_only_the_river_writer(
     assert _outbox_unit_keys(db_session) == {f"sync.provider_unit:{unit.id}"}
 
 
-def test_dispatch_sync_run_non_plannable_alias_pair_is_terminalized(
+def test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer(
     db_session, monkeypatch
 ):
     """An alias identity is route-ready but never plannable, so no runtime
-    owns it as a unit of its own. This test used to assert that such a pair
-    stayed on the Celery writer while the durable route was ``river_canary``;
-    CHAOS-4054 step 4 deleted that writer, so the alias now has nowhere to go
-    and dispatch terminalizes it as ``feature_disabled`` instead of publishing
-    it into a queue no consumer serves.
+    owns it as a unit of its own -- CHAOS-4078 gave the PR-social family
+    (prs/pr-reviews/pr-comments) its own fold-family claim validation,
+    mirroring the work-item family's existing
+    ``test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer``:
+    a unit persisted directly under a non-canonical dataset_key is a
+    malformed claim (going forward the planner only ever mints units under
+    the canonical "prs"/"cicd" identity, folding alias-only selections onto
+    it) and is refused loudly, before any staging, rather than gracefully
+    terminalized as ``feature_disabled``.
+
+    This test used to assert the pre-CHAOS-4078 ``feature_disabled`` shape,
+    which predates both the fold and this stricter validation.
     """
 
     from dev_health_ops.workers import sync_units
+    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -3362,19 +3370,11 @@ def test_dispatch_sync_run_non_plannable_alias_pair_is_terminalized(
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
 
-    assert sync_units.dispatch_sync_run(str(run.id)) == {
-        "status": "noop",
-        "queued_units": 0,
-    }
+    with pytest.raises(WorkerJobRouteError, match="canonical"):
+        sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.FAILED.value
-    assert unit.error == "feature_disabled"
-    assert unit.result["reason"] == (
-        "no worker can execute github/pr-comments: the provider capability "
-        "matrix does not mark it route-ready and plannable, so no shipped "
-        "writer owns it"
-    )
+    assert unit.status == SyncRunUnitStatus.PLANNED.value
     assert db_session.query(WorkerJobOutbox).count() == 0
 
 
@@ -3793,8 +3793,20 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
     exactly as it does on a never-dispatched one, and the routing decision
     must be re-made fresh per pair on the reclaiming pass rather than reusing
     whatever was decided (and lost) the first time -- here the reclaimed unit
-    is re-staged for River while its alias-identity sibling, which no writer
-    owns, is terminalized in the same pass.
+    is re-staged for River while its unroutable sibling (a pair the matrix
+    does not know at all) is terminalized in the same pass.
+
+    CHAOS-4078 note: this used to pair the reclaimed unit with a raw
+    ``github/pr-comments`` alias-identity sibling. Every alias identity is
+    now family-governed (PR-social/TestOps joined the work-item family under
+    CHAOS-4078's fold-family claim validation), so a raw alias-keyed unit is a
+    MALFORMED claim that raises ``WorkerJobRouteError`` before either pair in
+    the run is decided (see
+    ``test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer``)
+    rather than gracefully terminalizing beside a healthy sibling. This test's
+    actual subject -- reclaim + fresh per-pair redecision -- needs a
+    genuinely unroutable-but-well-formed pair instead, so it uses an unknown
+    provider/dataset the capability matrix has never heard of.
     """
     from dev_health_ops.workers import sync_units
 
@@ -3804,13 +3816,13 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
         source_type="project",
         dataset_key="feature-flags",
     )
-    alias_unit = SyncRunUnit(
+    unroutable_unit = SyncRunUnit(
         org_id=run.org_id,
         sync_run_id=run.id,
         integration_id=river_unit.integration_id,
         source_id=river_unit.source_id,
-        provider="github",
-        dataset_key="pr-comments",
+        provider="acme",
+        dataset_key="widgets",
         cost_class="medium",
         mode=SyncRunMode.INCREMENTAL.value,
         status=SyncRunUnitStatus.PLANNED.value,
@@ -3821,7 +3833,7 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
     river_unit.status = SyncRunUnitStatus.DISPATCHING.value
     river_unit.updated_at = stale
     run.total_units = 2
-    db_session.add(alias_unit)
+    db_session.add(unroutable_unit)
     db_session.flush()
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
@@ -3829,12 +3841,12 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
     result = sync_units.dispatch_sync_run(str(run.id))
 
     db_session.refresh(river_unit)
-    db_session.refresh(alias_unit)
+    db_session.refresh(unroutable_unit)
     assert result == {"status": "dispatched", "queued_units": 1}
     assert river_unit.status == SyncRunUnitStatus.DISPATCHING.value
     assert _outbox_unit_keys(db_session) == {f"sync.provider_unit:{river_unit.id}"}
-    assert alias_unit.status == SyncRunUnitStatus.FAILED.value
-    assert alias_unit.error == "feature_disabled"
+    assert unroutable_unit.status == SyncRunUnitStatus.FAILED.value
+    assert unroutable_unit.error == "feature_disabled"
 
 
 # NOTE: ``test_local_all_reclaims_stale_complete_writer_alias_to_river_without_celery``
@@ -3851,7 +3863,7 @@ def test_dispatch_sync_run_reclaims_stale_units_and_redecides_each_pair(
 # any more, so these tests have no successor. What happens to an alias
 # identity instead -- it is unroutable, so dispatch terminalizes it -- is
 # covered by
-# ``test_dispatch_sync_run_non_plannable_alias_pair_is_terminalized``, by the
+# ``test_dispatch_sync_run_non_plannable_alias_pair_never_stages_a_writer``, by the
 # reclaim test just above, and by the DISABLED_ALIASES sweep in
 # ``tests/test_disabled_alias_dispatch_strand.py``.
 

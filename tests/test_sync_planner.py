@@ -686,8 +686,50 @@ def test_pr_social_fold_merges_windows_from_only_the_enabled_aliases(db_session)
     assert unit.since_at.replace(tzinfo=timezone.utc) == older
     flags = unit.processor_flags or {}
     assert flags.get("family_dataset_pr_reviews") is True
-    assert flags.get("family_dataset_pr_comments") is True
-    assert flags.get("family_dataset_prs") is not True
+
+
+def test_testops_fold_never_stamps_a_caught_up_sibling(db_session):
+    """CHAOS-4078 review finding: a member whose window resolved to EMPTY this
+    tick (already synced past `before`) must be excluded from the merge
+    entirely -- so it gets no completion flag, none of its own processor
+    flags, and does not inflate the unit's cost class. Stamping it anyway
+    would falsely mark a sibling that did not run as processed and would
+    permanently classify a plain cicd claim as heavy the moment tests was
+    ever enabled alongside it."""
+    integration = _create_integration(db_session, provider="github")
+    source = _create_source(
+        db_session, integration, external_id="full-chaos/dev-health"
+    )
+    _create_dataset(db_session, integration, "cicd")
+    _create_dataset(db_session, integration, "tests")
+    before = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    # cicd is stale and still has work; tests is already caught up past
+    # `before` and contributes nothing this tick.
+    set_watermark(db_session, ORG_ID, source.external_id, "cicd", older)
+    set_watermark(db_session, ORG_ID, source.external_id, "tests", before)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+            before=before,
+        ),
+    )
+
+    units = _planned_units(db_session, plan.sync_run_id)
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.dataset_key == "cicd"
+    flags = unit.processor_flags or {}
+    assert flags.get("family_dataset_cicd") is True
+    assert flags.get("family_dataset_tests") is not True
+    # cicd alone is medium; if the caught-up "tests" member had been folded
+    # in anyway, this would incorrectly read "heavy".
+    assert unit.cost_class == "medium"
 
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])

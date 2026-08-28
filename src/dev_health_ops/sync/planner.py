@@ -1194,9 +1194,14 @@ def _build_fold_family_units(
 
     processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
     # CHAOS-4078: fan the completion flag -- and each member's own processor
-    # flags -- back only to the datasets this org actually enabled. This is
-    # the opposite of the work-item family's unconditional all-members stamp:
-    # a fold family never claims a sibling nobody asked to sync.
+    # flags -- back only to the datasets that actually CONTRIBUTED a window
+    # this tick, never every configured member. A caught-up sibling (e.g.
+    # "tests" already past the requested end while "cicd" still has work)
+    # must not be stamped as processed: it did not run, its watermark must
+    # not be touched, and it must not inflate the unit's cost class or budget
+    # bucket on a tick where it contributed nothing. This is the opposite of
+    # the work-item family's unconditional all-members stamp, which is a
+    # deliberate exception for that one atomic family, not the default here.
     #
     # The stamped unit also carries the MOST RESTRICTIVE (heaviest) cost
     # class among contributing members, not just the canonical identity's
@@ -1205,8 +1210,11 @@ def _build_fold_family_units(
     # plans and executes under the canonical "cicd" dataset_key. Per-member
     # window sizing already used each member's own spec via _resolve_windows
     # above -- this only affects the unit's stamped classification.
+    contributing_keys = {dataset.dataset_key for dataset, _ in contributing}
     unit_cost_class = canonical_spec.default_cost_class
     for dataset, spec in family_specs:
+        if dataset.dataset_key not in contributing_keys:
+            continue
         processor_flags[family_dataset_flag(dataset.dataset_key)] = True
         processor_flags.update(spec.processor_flags)
         if (

@@ -82,7 +82,7 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 		return 0, err
 	}
 
-	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, repoIDs)
+	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, orgID, repoIDs)
 	if err != nil {
 		return 0, err
 	}
@@ -102,7 +102,7 @@ func loadTeamRepoOwnershipProjectLinks(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) ([]TeamRepoOwnershipProjectLink, error) {
 	rows, err := conn.Query(ctx, `
-SELECT project_id, team_id, is_primary
+SELECT project_id, team_id, is_primary, specificity
 FROM team_project_ownership FINAL
 WHERE org_id = ?
   AND project_id != ''
@@ -118,7 +118,7 @@ WHERE org_id = ?
 	for rows.Next() {
 		var link TeamRepoOwnershipProjectLink
 		var isPrimary uint8
-		if err := rows.Scan(&link.ProjectID, &link.TeamID, &isPrimary); err != nil {
+		if err := rows.Scan(&link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
 			return nil, err
 		}
 		link.IsPrimary = isPrimary != 0
@@ -184,18 +184,17 @@ WHERE org_id = ?`,
 func loadTeamRepoOwnershipDependencyEdges(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]TeamRepoOwnershipDependencyEdge, error) {
-	// work_item_dependencies (011_work_item_extras.sql) carries no org_id
-	// column, so scoping goes through work_items -- only edges whose SOURCE
-	// belongs to this org are useful anyway (a donor walk only ever needs to
-	// resolve a source in this org; the target may legitimately be a
-	// cross-provider extkey: form that never appears in work_items at all).
+	// work_item_dependencies gained org_id in 024_add_org_id.sql -- filter
+	// directly on it. (An earlier version of this query scoped indirectly
+	// through an INNER JOIN against work_items, on the mistaken belief this
+	// table had no org_id column at all; that let a same-named work_item_id
+	// from a DIFFERENT org's dependency row leak into this org's donor walk
+	// whenever ids collided across tenants -- codex adversarial review,
+	// 2026-08-28, confirmed high-severity tenant-isolation finding.)
 	rows, err := conn.Query(ctx, `
 SELECT d.source_work_item_id, d.target_work_item_id, d.relationship_type, d.last_synced
 FROM work_item_dependencies AS d FINAL
-INNER JOIN (
-    SELECT DISTINCT work_item_id FROM work_items FINAL WHERE org_id = ?
-) AS source_scope
-    ON source_scope.work_item_id = d.source_work_item_id`,
+WHERE d.org_id = ?`,
 		orgID)
 	if err != nil {
 		return nil, err
@@ -216,18 +215,20 @@ INNER JOIN (
 }
 
 func loadTeamRepoOwnershipIssuePRLinks(
-	ctx context.Context, conn driver.Conn, repoIDs []uuid.UUID,
+	ctx context.Context, conn driver.Conn, orgID string, repoIDs []uuid.UUID,
 ) ([]TeamRepoOwnershipIssuePRLink, error) {
 	if len(repoIDs) == 0 {
 		return nil, nil
 	}
-	// work_graph_issue_pr (014_work_graph.sql) carries no org_id column
-	// either; scope by this org's own repo_id set instead.
+	// work_graph_issue_pr gained org_id in 024_add_org_id.sql -- filter on
+	// it directly, same fix as loadTeamRepoOwnershipDependencyEdges. The
+	// repo_id IN (?) filter is kept too (defense in depth: this org's own
+	// repo set, loaded separately), but org_id is the authoritative scope.
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, work_item_id, pr_number
 FROM work_graph_issue_pr FINAL
-WHERE repo_id IN (?)`,
-		repoIDs)
+WHERE org_id = ? AND repo_id IN (?)`,
+		orgID, repoIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +289,20 @@ func writeTeamRepoOwnershipRows(
 			info.FullName,
 			"exact",
 			"inferred",
-			uint8(1),
+			// is_primary=0, NEVER 1: the read path
+			// (providers/teams.py::load_team_repo_ownership_map) orders
+			// "ORDER BY is_primary DESC, specificity DESC" -- is_primary is
+			// checked BEFORE specificity, so an is_primary=1 inferred row
+			// would always outrank a real is_primary=0 direct GitHub grant
+			// (team_autoimport_github.py writes every row is_primary=0),
+			// silently overriding authoritative ownership with a weaker
+			// inferred signal. codex adversarial review, 2026-08-28,
+			// confirmed high-severity finding. teamRepoOwnershipInferredSpecificity's
+			// low value is what keeps this row losing to a direct row when
+			// both are is_primary=0; when this is the ONLY row for a repo,
+			// is_primary=0 does not stop it from being read -- there is no
+			// competing row to lose to.
+			uint8(0),
 			row.Specificity,
 			int32(0),
 			now,

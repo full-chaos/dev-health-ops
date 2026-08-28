@@ -75,11 +75,24 @@ import (
 // from them, exactly like a real sync would.
 
 // TeamRepoOwnershipProjectLink is one already-synced team_project_ownership
-// row for this org (any provider/tracker).
+// row for this org (any provider/tracker), already collapsed to one row per
+// (project_id, team_id) pair -- the caller (loadTeamRepoOwnershipProjectLinks)
+// is responsible for deduping repeated-import generations before this point,
+// same shape as metrics/loaders/clickhouse.py's
+// load_team_attribution_context (GROUP BY + argMax(field, (updated_at,
+// valid_from))). IsPrimary is NOT a reliable "this is THE owner" signal on
+// its own: GitLab's provider_access writer (team_autoimport_gitlab.py's
+// _project_ownership_rows) sets is_primary=0 on EVERY row it ever writes, so
+// requiring IsPrimary==true here would silently derive nothing for every
+// GitLab-sourced org. Specificity is the real tie-break; IsPrimary only
+// wins between otherwise-equal candidates (codex adversarial review,
+// 2026-08-28: confirmed high-severity finding, GitLab rows unconditionally
+// dropped by the prior is_primary-required design).
 type TeamRepoOwnershipProjectLink struct {
-	ProjectID string
-	TeamID    string
-	IsPrimary bool
+	ProjectID   string
+	TeamID      string
+	IsPrimary   bool
+	Specificity uint16
 }
 
 // TeamRepoOwnershipWorkItem is one already-synced work_items row for this
@@ -233,22 +246,54 @@ func deriveTeamRepoOwnership(
 }
 
 // resolveProjectToTeam reduces a project's possibly-multiple ownership
-// candidates to at most one team: the primary if exactly one is marked
-// primary, else unresolved (never guessed) if zero or more than one claim
-// primacy for the same project -- CHAOS-4321's "never guess" precedent.
+// candidates to at most one team, ranked by (IsPrimary, Specificity) --
+// IsPrimary breaks a tie, it is never a hard requirement, since GitLab's
+// provider_access writer (team_autoimport_gitlab.py's
+// _project_ownership_rows) sets is_primary=0 unconditionally on every row it
+// writes; requiring IsPrimary==true here silently derived nothing for every
+// GitLab-sourced org (codex adversarial review, 2026-08-28, confirmed
+// high-severity finding). Mirrors the read-time ranking
+// providers/teams.py::load_team_repo_ownership_map already applies to
+// team_repo_ownership itself (ORDER BY is_primary DESC, specificity DESC) --
+// team_project_ownership has no equivalent established ranking of its own
+// for this producer to defer to.
+//
+// A genuine tie at the TOP rank between DIFFERENT teams for the same
+// project resolves to nothing -- CHAOS-4321's "never guess" precedent.
+// Duplicate (project_id, team_id) entries (repeated-import generations
+// re-asserting the SAME team's claim) never manufacture a false tie: the
+// max-score selection below only compares DISTINCT team_ids at the current
+// best rank, so re-seeing the same team a second time is a no-op, not a
+// second competing claim.
 func resolveProjectToTeam(links []TeamRepoOwnershipProjectLink) map[string]string {
-	primaryByProject := map[string]string{}
-	primaryCount := map[string]int{}
+	score := func(link TeamRepoOwnershipProjectLink) int {
+		value := int(link.Specificity)
+		if link.IsPrimary {
+			value += 1 << 20
+		}
+		return value
+	}
+	bestScore := map[string]int{}
+	bestTeams := map[string]map[string]bool{}
 	for _, link := range links {
-		if link.ProjectID == "" || link.TeamID == "" || !link.IsPrimary {
+		if link.ProjectID == "" || link.TeamID == "" {
 			continue
 		}
-		primaryByProject[link.ProjectID] = link.TeamID
-		primaryCount[link.ProjectID]++
+		linkScore := score(link)
+		switch existing, ok := bestScore[link.ProjectID]; {
+		case !ok || linkScore > existing:
+			bestScore[link.ProjectID] = linkScore
+			bestTeams[link.ProjectID] = map[string]bool{link.TeamID: true}
+		case linkScore == existing:
+			bestTeams[link.ProjectID][link.TeamID] = true
+		}
 	}
-	resolved := make(map[string]string, len(primaryByProject))
-	for projectID, teamID := range primaryByProject {
-		if primaryCount[projectID] == 1 {
+	resolved := make(map[string]string, len(bestTeams))
+	for projectID, teams := range bestTeams {
+		if len(teams) != 1 {
+			continue
+		}
+		for teamID := range teams {
 			resolved[projectID] = teamID
 		}
 	}

@@ -261,14 +261,37 @@ func TestConflictingTeamsForTheSameRepoAreNeverGuessed(t *testing.T) {
 	}
 }
 
-// TestNonPrimaryProjectOwnershipIsNeverGuessed: a project with zero (or
-// more than one) PRIMARY team claim is never resolved, even if a
-// non-primary candidate exists -- matches this schema's is_primary
-// ownership-precedence convention rather than picking an arbitrary
-// candidate.
-func TestNonPrimaryProjectOwnershipIsNeverGuessed(t *testing.T) {
+// TestNonPrimaryProjectOwnershipStillResolvesGitLabShaped is the codex
+// adversarial-review fix (2026-08-28, confirmed high-severity): GitLab's
+// provider_access writer (team_autoimport_gitlab.py's
+// _project_ownership_rows) sets is_primary=0 UNCONDITIONALLY on every row it
+// writes. A single non-primary candidate, with no competing claim, must
+// still resolve -- IsPrimary is a tie-break among candidates, never a hard
+// requirement, or this producer silently derives nothing for every
+// GitLab-sourced org.
+func TestNonPrimaryProjectOwnershipStillResolvesGitLabShaped(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
-		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false},
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 100},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, nil, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-platform via a lone non-primary candidate, got %+v", got)
+	}
+}
+
+// TestPrimaryClaimBeatsHigherSpecificityNonPrimaryClaim: IsPrimary is the
+// FIRST-ranked field, Specificity only breaks a tie within it -- a
+// non-primary candidate never outranks a primary one no matter how much
+// higher its specificity is.
+func TestPrimaryClaimBeatsHigherSpecificityNonPrimaryClaim(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true, Specificity: 10},
+		{ProjectID: "proj-1", TeamID: "team-growth", IsPrimary: false, Specificity: 65535},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
 		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
@@ -276,8 +299,48 @@ func TestNonPrimaryProjectOwnershipIsNeverGuessed(t *testing.T) {
 
 	got := deriveTeamRepoOwnership(projectLinks, workItems, nil, nil)
 
+	if len(got) != 1 || got[0].TeamID != "team-platform" {
+		t.Fatalf("expected the primary claim to win regardless of specificity, got %+v", got)
+	}
+}
+
+// TestTiedTopRankBetweenDifferentTeamsIsNeverGuessed: two DIFFERENT teams at
+// the SAME (is_primary, specificity) rank for the same project is a genuine
+// ambiguity -- CHAOS-4321's "never guess" precedent, unchanged by the
+// ranking fix above.
+func TestTiedTopRankBetweenDifferentTeamsIsNeverGuessed(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 50},
+		{ProjectID: "proj-1", TeamID: "team-growth", IsPrimary: false, Specificity: 50},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, nil, nil)
+
 	if len(got) != 0 {
-		t.Fatalf("expected no rows for a non-primary-only project claim, got %+v", got)
+		t.Fatalf("expected no rows for a genuine tie between two teams, got %+v", got)
+	}
+}
+
+// TestDuplicateGenerationOfTheSameTeamsClaimIsNotAFalseTie: a re-imported
+// claim from the SAME team (e.g. a repeated sync run re-asserting an
+// unchanged ownership grant) must never manufacture a false tie against
+// itself, even at a lower score than its own later generation.
+func TestDuplicateGenerationOfTheSameTeamsClaimIsNotAFalseTie(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 40},
+		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 50},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+	}
+
+	got := deriveTeamRepoOwnership(projectLinks, workItems, nil, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-platform" {
+		t.Fatalf("expected repeated claims from the SAME team to resolve, not tie against themselves, got %+v", got)
 	}
 }
 

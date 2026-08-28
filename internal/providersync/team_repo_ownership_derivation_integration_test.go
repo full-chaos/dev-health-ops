@@ -40,8 +40,8 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", uuid.Nil, "proj-1", now)
 	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", now)
 	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "github", repoB, "", now)
-	seedWorkItemDependency(t, ctx, conn, "ghpr:acme/repo-b#7", "linear:PLAT-1", "relates_to", now)
-	seedWorkGraphIssuePR(t, ctx, conn, repoC, "linear:PLAT-1", 42, now)
+	seedWorkItemDependency(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "linear:PLAT-1", "relates_to", now)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoC, "linear:PLAT-1", 42, now)
 
 	// Red: before Derive() runs, nothing in this repo has ever written
 	// team_repo_ownership for this org -- confirmed against the real
@@ -79,6 +79,16 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 		}
 		if row.provider != "github" {
 			t.Fatalf("%s: expected provider=github (from repos.provider, not the work item's tracker provider), got %s", repoFullName, row.provider)
+		}
+		// codex adversarial review, 2026-08-28 (confirmed high-severity):
+		// is_primary must be 0. The read path (providers/teams.py::
+		// load_team_repo_ownership_map) orders "is_primary DESC, specificity
+		// DESC" -- is_primary=1 would let this row always outrank a real
+		// GitHub-direct grant (team_autoimport_github.py writes every row
+		// is_primary=0) regardless of this producer's deliberately-low
+		// specificity.
+		if row.isPrimary {
+			t.Fatalf("%s: expected is_primary=0 for an inferred row, got true -- this would override a real direct ownership grant", repoFullName)
 		}
 	}
 
@@ -118,6 +128,116 @@ func TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError(t *testing.T)
 		t.Fatalf("expected 0 rows written, got %d", written)
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
+}
+
+// TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership is
+// the codex adversarial-review fix (2026-08-28, confirmed high-severity),
+// proven against real ClickHouse: GitLab's provider_access writer
+// (team_autoimport_gitlab.py's _project_ownership_rows) sets is_primary=0
+// unconditionally on every team_project_ownership row it ever writes. A
+// GitLab-sourced org's donor project must still resolve through the real
+// read query, not just the pure Go unit test.
+func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4365-item1b-gitlab-org"
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/gitlab-repo"})
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "proj-gitlab", "team-gitlab", false, now)
+	seedWorkItem(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", repoID, "proj-gitlab", now)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row from a lone non-primary (GitLab-shaped) ownership claim, got %d", written)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/gitlab-repo"]
+	if !ok || row.teamID != "team-gitlab" {
+		t.Fatalf("expected acme/gitlab-repo -> team-gitlab, got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge is
+// the codex adversarial-review fix (2026-08-28, confirmed high-severity),
+// proven against real ClickHouse: work_item_dependencies carries org_id
+// (024_add_org_id.sql); a prior version of the read query scoped it
+// indirectly through a work_items JOIN (only the SOURCE side's org), which
+// does not exclude another tenant's edge row when work_item_id strings
+// collide across orgs (they carry no org prefix). Org A's own donor item
+// (own project_id, no repo_id of its own) only reaches org A's repo through
+// a dependency edge that ORG B planted under org_id=B -- proving the edge
+// itself, not just its endpoints' own data, must be org-scoped.
+func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	orgA := "chaos-4365-item1b-tenant-a"
+	orgB := "chaos-4365-item1b-tenant-b"
+
+	repoA := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgA, map[uuid.UUID]string{repoA: "acme/tenant-a-repo"})
+	seedTeamProjectOwnership(t, ctx, conn, orgA, "proj-a", "team-a-legit", true, now)
+	// A repo-bearing item with NO project_id of its own: it can only reach
+	// a team through a dependency-donor edge.
+	seedWorkItem(t, ctx, conn, orgA, "repo-item", "github", repoA, "", now)
+	// The donor: resolves to team-a-legit via its own project_id, no repo
+	// of its own.
+	seedWorkItem(t, ctx, conn, orgA, "donor-item", "linear", uuid.Nil, "proj-a", now)
+
+	// Org B -- a different tenant entirely -- happens to use the SAME two
+	// work_item_id strings (no org prefix; a realistic collision) and
+	// plants the ONLY edge connecting them, under org_id=B.
+	seedWorkItemDependency(t, ctx, conn, orgB, "repo-item", "donor-item", "relates_to", now)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, err := service.Derive(ctx, orgA)
+	if err != nil {
+		t.Fatalf("Derive for org A: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows for org A -- the ONLY edge connecting repo-item to donor-item belongs to org B and must never resolve org A's donor walk, got %d", written)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgA, 0)
+}
+
+// TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsIssuePRLink is the
+// codex adversarial-review fix's work_graph_issue_pr half, proven against
+// real ClickHouse. Org A's own work item resolves to a real team via its
+// own project_id but has NO repo_id of its own; the only association
+// between it and org A's real repo comes from a work_graph_issue_pr row org
+// B planted (repo_id constrained to org A's own known repo set, which an
+// attacker could plausibly still guess or brute-force -- org_id is the
+// authoritative scope, not repo_id membership alone).
+func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsIssuePRLink(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	orgA := "chaos-4365-item1b-tenant-a"
+	orgB := "chaos-4365-item1b-tenant-b"
+
+	repoA := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgA, map[uuid.UUID]string{repoA: "acme/tenant-a-repo"})
+	seedTeamProjectOwnership(t, ctx, conn, orgA, "proj-a", "team-a-legit", true, now)
+	// Resolves to team-a-legit via its own project_id; NO repo_id of its
+	// own, so Path 1+2 alone produces nothing for repoA.
+	seedWorkItem(t, ctx, conn, orgA, "resolver-item", "linear", uuid.Nil, "proj-a", now)
+
+	// Org B fabricates the ONLY association between "resolver-item" and
+	// org A's real repo, under org_id=B.
+	seedWorkGraphIssuePR(t, ctx, conn, orgB, repoA, "resolver-item", 99, now)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, err := service.Derive(ctx, orgA)
+	if err != nil {
+		t.Fatalf("Derive for org A: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows for org A -- the ONLY work_graph_issue_pr row associating resolver-item with repoA belongs to org B and must never attribute org A's repo, got %d", written)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgA, 0)
 }
 
 func seedTeamRepoOwnershipRepos(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, repos map[uuid.UUID]string) {
@@ -176,14 +296,14 @@ func seedWorkItem(
 
 func seedWorkItemDependency(
 	t *testing.T, ctx context.Context, conn driver.Conn,
-	sourceWorkItemID, targetWorkItemID, relationshipType string, now time.Time,
+	orgID, sourceWorkItemID, targetWorkItemID, relationshipType string, now time.Time,
 ) {
 	t.Helper()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id)`)
 	if err != nil {
 		t.Fatalf("prepare work_item_dependencies batch: %v", err)
 	}
-	if err := batch.Append(sourceWorkItemID, targetWorkItemID, relationshipType, relationshipType, now); err != nil {
+	if err := batch.Append(sourceWorkItemID, targetWorkItemID, relationshipType, relationshipType, now, orgID); err != nil {
 		t.Fatalf("append work_item_dependencies row: %v", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -193,14 +313,14 @@ func seedWorkItemDependency(
 
 func seedWorkGraphIssuePR(
 	t *testing.T, ctx context.Context, conn driver.Conn,
-	repoID uuid.UUID, workItemID string, prNumber uint32, now time.Time,
+	orgID string, repoID uuid.UUID, workItemID string, prNumber uint32, now time.Time,
 ) {
 	t.Helper()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
 	if err != nil {
 		t.Fatalf("prepare work_graph_issue_pr batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), "native", "test-seed", now); err != nil {
+	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), "native", "test-seed", now, orgID); err != nil {
 		t.Fatalf("append work_graph_issue_pr row: %v", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -230,15 +350,16 @@ func assertTeamRepoOwnershipRowCount(t *testing.T, ctx context.Context, conn dri
 }
 
 type teamRepoOwnershipReadRow struct {
-	teamID   string
-	provider string
-	source   string
+	teamID    string
+	provider  string
+	source    string
+	isPrimary bool
 }
 
 func readTeamRepoOwnership(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) map[string]teamRepoOwnershipReadRow {
 	t.Helper()
 	rows, err := conn.Query(ctx, `
-SELECT repo_full_name, team_id, provider, source
+SELECT repo_full_name, team_id, provider, source, is_primary
 FROM team_repo_ownership FINAL
 WHERE org_id = ?`, orgID)
 	if err != nil {
@@ -248,10 +369,13 @@ WHERE org_id = ?`, orgID)
 	out := map[string]teamRepoOwnershipReadRow{}
 	for rows.Next() {
 		var repoFullName, teamID, provider, source string
-		if err := rows.Scan(&repoFullName, &teamID, &provider, &source); err != nil {
+		var isPrimary uint8
+		if err := rows.Scan(&repoFullName, &teamID, &provider, &source, &isPrimary); err != nil {
 			t.Fatalf("scan team_repo_ownership row: %v", err)
 		}
-		out[repoFullName] = teamRepoOwnershipReadRow{teamID: teamID, provider: provider, source: source}
+		out[repoFullName] = teamRepoOwnershipReadRow{
+			teamID: teamID, provider: provider, source: source, isPrimary: isPrimary != 0,
+		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("team_repo_ownership rows.Err: %v", err)

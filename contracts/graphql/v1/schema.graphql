@@ -1,0 +1,2555 @@
+enum AIAttributionBucketInput {
+  AI_ASSISTED
+  AGENT_CREATED
+  AI_REVIEW
+  HUMAN
+  UNKNOWN
+}
+
+type AIAttributionEvidenceRow {
+  subjectType: String!
+  subjectId: String!
+  repoId: String
+  provider: String!
+  kind: String!
+  source: String!
+  confidence: Float!
+  actor: String
+  evidence: String!
+  observedAt: DateTime!
+  teamId: String
+}
+
+type AIAttributionMixRow {
+  kind: String!
+  count: Int!
+  share: Float!
+}
+
+type AIAttributionOverviewResult {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  mix: [AIAttributionMixRow!]!
+  totalAttributed: Int!
+  rows: [AIAttributionEvidenceRow!]!
+  hasMore: Boolean!
+  dataAvailable: Boolean!
+}
+
+input AIAttributionScopeInput {
+  repoId: String = null
+  teamId: String = null
+  buckets: [AIAttributionBucketInput!] = null
+}
+
+type AIComparison {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  aiSide: AIComparisonSide!
+  baselineSide: AIComparisonSide!
+  delta: AIComparisonDelta!
+  dataAvailable: Boolean!
+}
+
+type AIComparisonDelta {
+  cycleTimeDeltaHours: Float
+  reviewsPerPrDelta: Float
+  reworkRateDelta: Float
+  revertRateDelta: Float
+  testGapRateDelta: Float
+  incidentRateDelta: Float
+}
+
+type AIComparisonSide {
+  bucket: String!
+  prsTotal: Int!
+  prsMerged: Int!
+  cycleTimeAvgHours: Float
+  reviewsPerPr: Float
+  reworkRate: Float
+  revertRate: Float
+  testGapRate: Float
+  incidentRate: Float
+}
+
+type AIComplexityOverlapRow {
+  bucket: String!
+  prsTotal: Int!
+  prsTouchingHighComplexity: Int!
+  complexityOverlapRate: Float
+}
+
+input AIDateRangeInput {
+  startDate: Date!
+  endDate: Date!
+}
+
+type AIGovernanceCoverageRow {
+  day: Date!
+  teamId: String
+  repoId: String
+  aiArtifacts: Int!
+  declaredArtifacts: Int!
+  humanReviewedPrs: Int!
+  securityScannedPrs: Int!
+  inPolicyArtifacts: Int!
+  declarationCoverage: Float!
+  humanReviewCoverage: Float!
+  securityScanCoverage: Float!
+  inPolicyCoverage: Float!
+}
+
+type AIGovernanceSummary {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  coverage: [AIGovernanceCoverageRow!]!
+  recentViolations: [AIGovernanceViolationRow!]!
+  dataAvailable: Boolean!
+}
+
+type AIGovernanceViolationRow {
+  ruleId: String!
+  severity: String!
+  subjectType: String!
+  subjectId: String!
+  teamId: String
+  repoId: String
+  observedAt: DateTime!
+  evidence: String!
+}
+
+type AIHotspotOverlapRow {
+  bucket: String!
+  prsTotal: Int!
+  prsTouchingHotspots: Int!
+  hotspotOverlapRate: Float
+  avgHotspotRiskScore: Float
+}
+
+type AIImpactBucketRow {
+  bucket: String!
+  prsTotal: Int!
+  prsMerged: Int!
+  cycleTimeAvgHours: Float
+  reviewsPerPr: Float
+  changesRequestedPerPr: Float
+  reworkPrs: Int!
+  reworkRate: Float
+  revertPrs: Int!
+  revertRate: Float
+  incidentsCount: Int!
+  incidentRate: Float
+  testGapPrs: Int!
+  testGapRate: Float
+}
+
+type AIImpactBucketTotals {
+  bucket: String!
+  prsTotal: Int!
+  prsMerged: Int!
+  aiAssistedPrRatio: Float
+  agentCreatedPrCount: Int!
+  cycleTimeAvgHours: Float
+  aiCycleTimeDeltaHours: Float
+  aiReviewAmplification: Float
+  reworkDragRate: Float
+  revertRate: Float
+  incidentDragRate: Float
+  testGapRate: Float
+  leverage: AILeverageComponents!
+}
+
+type AIImpactScopeRollupRow {
+  scopeId: String!
+  scopeLabel: String!
+  aiPrsTotal: Int!
+  aiAssistedPrRatio: Float
+  reworkRateDelta: Float
+}
+
+type AIImpactSummary {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  totalPrs: Int!
+  aiAssistedPrs: Int!
+  agentCreatedPrs: Int!
+  humanPrs: Int!
+  unknownPrs: Int!
+  aiAssistedPrRatio: Float
+  byBucket: [AIImpactBucketTotals!]!
+  daily: [AIImpactBucketRow!]!
+  repoBreakdown: [AIImpactScopeRollupRow!]!
+  teamBreakdown: [AIImpactScopeRollupRow!]!
+  missingStates: [AIMissingState!]!
+  dataAvailable: Boolean!
+  computedAt: DateTime
+}
+
+type AILeverageComponents {
+  prsComponent: Float!
+  cycleTimeComponent: Float
+  reviewComponent: Float
+  reworkComponent: Float
+  testComponent: Float
+  incidentComponent: Float
+}
+
+type AIMissingState {
+  key: String!
+  title: String!
+  guidance: String!
+}
+
+type AIOpportunitiesResult {
+  orgId: String!
+  recommendations: [AIOpportunity!]!
+  detectorReady: Boolean!
+}
+
+type AIOpportunity {
+  opportunityId: String!
+  kind: AIOpportunityKind!
+  repoId: String
+  teamId: String
+  title: String!
+  rationale: String!
+  score: Float!
+  evidenceRefs: [String!]!
+  workGraphDrilldowns: [AIWorkGraphDrilldownRef!]!
+}
+
+enum AIOpportunityKind {
+  REPETITIVE_CHANGE
+  HIGH_REVIEW_LOAD
+  HIGH_REWORK
+  SLOW_CYCLE
+  UNCOVERED_TEST_AREA
+  TEST_GENERATION
+  DEPENDENCY_UPDATES
+  MECHANICAL_MIGRATIONS
+  DOCUMENTATION_DRIFT
+  FLAKY_TEST_TRIAGE
+}
+
+type AIReviewLoadResult {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  byBucket: [AIReviewLoadRow!]!
+  daily: [AIReviewLoadRow!]!
+  reviewerConcentration: AIReviewerConcentrationSummary!
+  missingStates: [AIMissingState!]!
+  dataAvailable: Boolean!
+}
+
+type AIReviewLoadRow {
+  bucket: String!
+  prsTotal: Int!
+  reviewsTotal: Int!
+  reviewsPerPr: Float
+  changesRequestedPerPr: Float
+  reviewAmplification: Float
+  postFirstReviewPushesCount: Int!
+  postFirstReviewPushesPerPr: Float
+  pickupLatencyHours: Float
+  reviewCommentsPerLoc: Float
+}
+
+type AIReviewerConcentrationSummary {
+  dataAvailable: Boolean!
+  reviewerCount: Int!
+  reviewerGini: Float
+}
+
+type AIRiskBreakdownResult {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  byBucket: [AIRiskBreakdownRow!]!
+  hotspotOverlap: [AIHotspotOverlapRow!]!
+  complexityOverlap: [AIComplexityOverlapRow!]!
+  missingStates: [AIMissingState!]!
+  dataAvailable: Boolean!
+}
+
+type AIRiskBreakdownRow {
+  bucket: String!
+  prsTotal: Int!
+  reworkPrs: Int!
+  reworkRate: Float
+  revertPrs: Int!
+  revertRate: Float
+  testGapPrs: Int!
+  testGapRate: Float
+  incidentsCount: Int!
+  incidentRate: Float
+}
+
+input AIScopeInput {
+  repoId: String = null
+  teamId: String = null
+  workType: String = null
+  buckets: [AIAttributionBucketInput!] = null
+}
+
+type AIWorkGraphDrilldownRef {
+  rootType: String!
+  rootId: String!
+  label: String!
+}
+
+type AIWorkflowDrilldownResult {
+  orgId: String!
+  rootType: String!
+  rootId: String!
+  nodes: [AIWorkflowGraphNodeOut!]!
+  edges: [AIWorkflowGraphEdgeOut!]!
+  partial: Boolean!
+  dataAvailable: Boolean!
+}
+
+type AIWorkflowGraphEdgeOut {
+  edgeId: String!
+  sourceType: String!
+  sourceId: String!
+  targetType: String!
+  targetId: String!
+  edgeType: String!
+  confidence: Float!
+  source: String!
+  evidence: String!
+  provider: String
+  repoId: String
+}
+
+type AIWorkflowGraphNodeOut {
+  nodeType: String!
+  nodeId: String!
+}
+
+enum AIWorkflowRootTypeInput {
+  ISSUE
+  PR
+  WORK_UNIT
+}
+
+type AiAttributedPr {
+  repoId: ID!
+  number: Int!
+  title: String
+  kind: String
+  workType: String
+  teamId: String
+  mergedAt: DateTime
+}
+
+type AiAttributedPrsResult {
+  orgId: String!
+  startDate: Date!
+  endDate: Date!
+  rows: [AiAttributedPr!]!
+  total: Int!
+  hasMore: Boolean!
+  dataAvailable: Boolean!
+}
+
+type AliasSuggestion {
+  unmappedIdentity: UnmappedIdentity!
+  suggestedCanonicalId: String!
+  confidence: Float!
+}
+
+input AnalyticsRequestInput {
+  timeseries: [TimeseriesRequestInput!]! = []
+  breakdowns: [BreakdownRequestInput!]! = []
+  sankey: SankeyRequestInput = null
+  flowMatrix: FlowMatrixRequestInput = null
+  useInvestment: Boolean = null
+  filters: FilterInput = null
+}
+
+type AnalyticsResult {
+  timeseries: [TimeseriesResult!]!
+  breakdowns: [BreakdownResult!]!
+  sankey: SankeyResult
+  flowMatrix: FlowMatrixResult
+  evidenceQualityDistribution: JSON
+  evidenceQualityStats: EvidenceQualityStats
+}
+
+type BreakdownItem {
+  key: String!
+  value: Float!
+  label: String
+}
+
+input BreakdownRequestInput {
+  dimension: DimensionInput!
+  measure: MeasureInput!
+  dateRange: DateRangeInput!
+  topN: Int! = 10
+}
+
+type BreakdownResult {
+  dimension: String!
+  measure: String!
+  items: [BreakdownItem!]!
+}
+
+enum BucketIntervalInput {
+  DAY
+  WEEK
+  MONTH
+}
+
+type BusFactor {
+  orgId: String!
+  scope: BusFactorScope!
+  value: Int!
+  topMaintainers: [MaintainerShare!]!
+  repos: [RepoBusFactor!]!
+  evidenceSampleCount: Int!
+}
+
+type BusFactorScope {
+  repoId: String
+  teamId: String
+}
+
+input BusFactorScopeInput {
+  repoId: String = null
+  teamId: String = null
+}
+
+type CapacityForecast {
+  forecastId: String!
+  computedAt: String!
+  teamId: String
+  workScopeId: String
+  backlogSize: Int!
+  targetItems: Int
+  targetDate: Date
+  p50Date: Date
+  p85Date: Date
+  p95Date: Date
+  p50Days: Int
+  p85Days: Int
+  p95Days: Int
+  p50Items: Int
+  p85Items: Int
+  p95Items: Int
+  throughputMean: Float!
+  throughputStddev: Float!
+  historyDays: Int!
+  insufficientHistory: Boolean!
+  highVariance: Boolean!
+}
+
+type CapacityForecastConnection {
+  edges: [CapacityForecastEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CapacityForecastEdge {
+  node: CapacityForecast!
+  cursor: String!
+}
+
+input CapacityForecastFilterInput {
+  teamId: String = null
+  workScopeId: String = null
+  fromDate: Date = null
+  toDate: Date = null
+  limit: Int! = 10
+}
+
+input CapacityForecastInput {
+  teamId: String = null
+  workScopeId: String = null
+  targetItems: Int = null
+  targetDate: Date = null
+  historyDays: Int! = 90
+  simulations: Int! = 10000
+}
+
+type CatalogDimension {
+  name: String!
+  description: String!
+}
+
+type CatalogLimits {
+  maxDays: Int!
+  maxBuckets: Int!
+  maxTopN: Int!
+  maxSankeyNodes: Int!
+  maxSankeyEdges: Int!
+  maxSubRequests: Int!
+}
+
+type CatalogMeasure {
+  name: String!
+  description: String!
+}
+
+type CatalogResult {
+  dimensions: [CatalogDimension!]!
+  measures: [CatalogMeasure!]!
+  limits: CatalogLimits!
+  values: [CatalogValueItem!]
+}
+
+type CatalogValueItem {
+  value: String!
+  count: Int!
+}
+
+input CloneSavedReportInput {
+  sourceReportId: String!
+  newName: String = null
+  parameterOverrides: JSON = null
+}
+
+input CognitiveLoadInput {
+  orgId: String!
+  sinceDate: Date!
+  untilDate: Date!
+  teamId: String = null
+  repoId: String = null
+}
+
+type CognitiveLoadResult {
+  orgId: String!
+  teamId: String
+  signals: [CognitiveLoadSignal!]!
+  totalDays: Int!
+}
+
+type CognitiveLoadSignal {
+  day: Date!
+  prInterruptionLoad: Float!
+  contextSpreadCount: Float!
+  reviewRequestLoad: Float!
+  afterHoursCommitRatio: Float
+  weekendCommitRatio: Float
+}
+
+type ComplexityPoint {
+  date: Date!
+  scopeId: String!
+  scopeName: String!
+  locTotal: Int
+  cyclomaticPerKloc: Float
+  cyclomaticTotal: Int
+  cyclomaticAvg: Float
+  highComplexityFunctions: Int
+  veryHighComplexityFunctions: Int
+}
+
+enum ComplexityScope {
+  REPO
+  FILE
+}
+
+input ComplexityTimeseriesInput {
+  orgId: String!
+  sinceUtc: DateTime!
+  untilUtc: DateTime!
+  granularity: TimeGranularity!
+  scope: ComplexityScope!
+  repoIds: [String!] = null
+  teamIds: [String!] = null
+  limit: Int = null
+}
+
+type ComplexityTimeseriesResult {
+  points: [ComplexityPoint!]!
+  totalScope: Int!
+}
+
+type CompoundingRiskComponents {
+  churnNorm: Float
+  complexityNorm: Float
+  ownershipNorm: Float
+  reviewNorm: Float
+  reworkChurn: Float
+  complexityDelta: Float
+  busFactor: Float
+  ownershipGini: Float
+  singleOwnerRatio: Float
+  reviewLatencyP90h: Float
+}
+
+input CompoundingRiskFilterInput {
+  day: Date = null
+  breakout: CompoundingRiskScope! = REPO
+  repoIds: [String!] = null
+  teamIds: [String!] = null
+  trendDays: Int! = 30
+}
+
+type CompoundingRiskPoint {
+  day: Date!
+  scope: CompoundingRiskScope!
+  scopeId: String!
+  scopeLabel: String!
+  score: Float
+  severity: CompoundingRiskSeverity!
+  components: CompoundingRiskComponents!
+  weights: CompoundingRiskWeights!
+  thresholds: CompoundingRiskThresholds!
+  computedAt: DateTime!
+  scopeEntity: CompoundingRiskScopeEntity!
+}
+
+type CompoundingRiskResult {
+  orgId: String!
+  breakout: CompoundingRiskScope!
+  rows: [CompoundingRiskPoint!]!
+  trend: [CompoundingRiskTrendPoint!]!
+  generatedAt: DateTime!
+}
+
+enum CompoundingRiskScope {
+  REPO
+  TEAM
+}
+
+type CompoundingRiskScopeEntity {
+  id: String!
+  displayName: String!
+}
+
+enum CompoundingRiskSeverity {
+  UNKNOWN
+  LOW
+  ELEVATED
+  HIGH
+}
+
+type CompoundingRiskThresholds {
+  elevated: Float!
+  high: Float!
+}
+
+type CompoundingRiskTrendPoint {
+  day: Date!
+  score: Float
+  severity: CompoundingRiskSeverity!
+}
+
+type CompoundingRiskWeights {
+  churn: Float!
+  complexity: Float!
+  ownership: Float!
+  review: Float!
+}
+
+type ConnectorFailure {
+  occurredAt: DateTime!
+  message: String!
+  stage: String
+}
+
+type ConnectorStatus {
+  provider: String!
+  scope: String!
+  lastSyncAt: DateTime
+  rowsIngested: Int!
+  lastFailure: ConnectorFailure
+}
+
+type Coverage {
+  reposCoveredPct: Float!
+  prsLinkedToIssuesPct: Float!
+  issuesWithCycleStatesPct: Float!
+}
+
+type CoverageStat {
+  totalRepos: Int!
+  coveredRepos: Int!
+  coveragePct: Float!
+  missing: [MissingMapping!]!
+}
+
+input CreateSavedReportInput {
+  name: String!
+  description: String = null
+  reportPlan: JSON = null
+  isTemplate: Boolean! = false
+  parameters: JSON = null
+  scheduleCron: String = null
+  scheduleTimezone: String! = "UTC"
+}
+
+type DataHealth {
+  connectors: [ConnectorStatus!]!
+  identityMapping: IdentityMappingHealth!
+  mappingCoverage: MappingCoverage!
+  metricLineage(metricId: ID!): MetricLineage
+}
+
+"""Date (isoformat)"""
+scalar Date
+
+input DateRangeInput {
+  startDate: Date!
+  endDate: Date!
+}
+
+"""Date with time (isoformat)"""
+scalar DateTime
+
+type DevActualCompletion {
+  state: DevCompletionState!
+  ruleId: String!
+  ruleVersion: String!
+  reasonCodes: [String!]!
+  requiredChildren: [DevStatusFact!]!
+  requiredChildTotal: Int
+  requiredChildComplete: Int
+  displayTruncated: Boolean!
+  conflicts: [DevStatusConflict!]!
+  sourceRefIds: [ID!]!
+  evidenceRefIds: [ID!]!
+}
+
+type DevCIStatusFact {
+  entityId: ID!
+  displayLabel: String!
+  conclusion: String!
+  required: Boolean
+  skippedRequiredWork: Boolean
+  observedAt: DateTime!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+}
+
+type DevChangeSummary {
+  contractVersion: String!
+  state: String!
+  currentWindow: DevChangeWindow!
+  comparisonWindow: DevChangeWindow!
+  changes: [DevObservedChange!]!
+  sourceRefs: [DevStatusSourceRef!]!
+  warnings: [String!]!
+}
+
+input DevChangeSummaryInput {
+  scope: DevMetricScopeInput!
+  comparisonStart: DateTime!
+  comparisonEnd: DateTime!
+  maxItems: Int! = 100
+}
+
+type DevChangeWindow {
+  start: DateTime!
+  end: DateTime!
+}
+
+enum DevCompletionState {
+  READY
+  NOT_READY
+  INDETERMINATE
+}
+
+input DevDataHealthInput {
+  scope: DevEvidenceScopeInput!
+  requiredSources: [String!]! = []
+}
+
+type DevDataHealthResult {
+  sources: [DevDataHealthSource!]!
+  completeEligible: Boolean!
+  queryVersion: String!
+}
+
+type DevDataHealthSource {
+  sourceSystem: String!
+  state: String!
+  required: Boolean!
+  lastSuccessfulAt: DateTime
+  watermark: DateTime
+  missingRepositoryIds: [ID!]!
+  missingEntityIds: [ID!]!
+  coverage: Float!
+  confidenceImpact: String
+  freshnessPolicyVersion: String
+  warning: String
+}
+
+type DevDeploymentStatusFact {
+  entityId: ID!
+  displayLabel: String!
+  status: String!
+  environment: String
+  required: Boolean!
+  observedAt: DateTime!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+}
+
+type DevEvidence {
+  evidenceRefId: ID!
+  sourceSystem: String!
+  sourceVersion: String!
+  entityType: String!
+  entityId: ID!
+  displayLabel: String!
+  link: DevEvidenceLink
+  observedAt: DateTime!
+  freshness: String!
+  provenance: String!
+  confidence: Float!
+  citationText: String
+  repositoryIds: [ID!]!
+  validEntityIds: [ID!]!
+  flags: DevEvidenceFlags!
+}
+
+type DevEvidenceFlags {
+  stale: Boolean!
+  unavailable: Boolean!
+  redacted: Boolean!
+  deleted: Boolean!
+  uncertain: Boolean!
+  conflicting: Boolean!
+  untrustedContent: Boolean!
+}
+
+type DevEvidenceLink {
+  internalPath: String
+  sourceUrl: String
+}
+
+input DevEvidenceScopeInput {
+  directScope: DevEvidenceScopeKind!
+  refs: [DevEvidenceScopeRefInput!]! = []
+  teamIds: [String!]! = []
+  presetDays: Int = 30
+  startDate: Date = null
+  endDate: Date = null
+  timezone: String! = "UTC"
+}
+
+enum DevEvidenceScopeKind {
+  ORGANIZATION
+  REPOSITORY
+  PROJECT
+  WORK_UNIT
+  ISSUE
+  PULL_REQUEST
+}
+
+input DevEvidenceScopeRefInput {
+  kind: DevEvidenceScopeKind!
+  value: String!
+}
+
+input DevEvidenceSearchInput {
+  query: String!
+  scope: DevEvidenceScopeInput!
+  limit: Int! = 25
+}
+
+type DevEvidenceSearchResult {
+  evidence: [DevEvidence!]!
+  sources: [DevEvidenceSourceState!]!
+  queryVersion: String!
+  rankingVersion: String!
+}
+
+type DevEvidenceSourceState {
+  sourceSystem: String!
+  state: String!
+  watermark: String
+  warning: String
+}
+
+type DevIncidentStatusFact {
+  entityId: ID!
+  displayLabel: String!
+  status: String!
+  active: Boolean!
+  blocking: Boolean!
+  observedAt: DateTime!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+}
+
+type DevMetricCatalog {
+  metrics: [DevMetricDefinition!]!
+  registryVersion: String!
+}
+
+input DevMetricCatalogInput {
+  directScope: DevMetricDirectScope = null
+  hasTeamFilter: Boolean! = false
+}
+
+enum DevMetricDataState {
+  VALUE
+  ZERO
+  NO_MATCH
+  INSUFFICIENT_EVIDENCE
+  PARTIAL
+  STALE
+  UNCONFIGURED
+  UNAVAILABLE
+}
+
+type DevMetricDefinition {
+  metricId: DevMetricID!
+  label: String!
+  owner: String!
+  description: String!
+  definitionVersion: String!
+  sourceTable: String!
+  sourceVersion: String!
+  queryVersion: String!
+  unit: String!
+  aggregation: String!
+  displayPrecision: Int!
+  nullSemantics: String!
+  zeroSemantics: String!
+  supportedScopes: [DevMetricDirectScope!]!
+  supportsTeamFilter: Boolean!
+  supportedDimensions: [String!]!
+  supportedPresets: [Int!]!
+  supportedTimeGrains: [String!]!
+  minRangeDays: Int!
+  maxRangeDays: Int!
+  comparisonRule: String!
+  freshnessPolicy: String!
+  expectedMaterialization: String!
+  upstreamSources: [String!]!
+  sensitivity: String!
+  entitlement: String!
+}
+
+type DevMetricDimensionValue {
+  key: String!
+  value: String!
+}
+
+enum DevMetricDirectScope {
+  ORGANIZATION
+  REPOSITORY
+  PROJECT
+  WORK_UNIT
+  ISSUE
+  PULL_REQUEST
+}
+
+enum DevMetricFreshness {
+  FRESH
+  STALE
+  UNAVAILABLE
+  UNKNOWN
+}
+
+enum DevMetricID {
+  ITEMS_COMPLETED
+  CYCLE_TIME_P50_HOURS
+  AVG_WIP
+  DEPLOYMENTS_COUNT
+  CHANGE_FAILURE_RATE
+  INVESTMENT_ALLOCATION_PCT
+  CYCLOMATIC_PER_KLOC
+  COMPOUNDING_RISK_SCORE
+}
+
+type DevMetricMetadata {
+  key: String!
+  value: String!
+}
+
+input DevMetricQueryInput {
+  metricId: DevMetricID!
+  scope: DevMetricScopeInput!
+  dimensions: [String!]! = []
+  includeComparison: Boolean! = true
+  includeSeries: Boolean! = false
+  maxSeriesPoints: Int! = 90
+}
+
+type DevMetricResult {
+  definition: DevMetricDefinition!
+  state: DevMetricDataState!
+  freshness: DevMetricFreshness!
+  values: [DevMetricValue!]!
+  coverage: Float!
+  currentWindowStart: DateTime!
+  currentWindowEnd: DateTime!
+  comparisonWindowStart: DateTime
+  comparisonWindowEnd: DateTime
+  timezone: String!
+  watermark: DateTime
+  sourceRefs: [DevMetricSourceRef!]!
+  metadata: [DevMetricMetadata!]!
+  warnings: [String!]!
+}
+
+input DevMetricScopeInput {
+  directScope: DevMetricDirectScope!
+  startDate: Date!
+  endDate: Date!
+  refs: [ID!]! = []
+  teamIds: [ID!]! = []
+  timezone: String! = "UTC"
+}
+
+type DevMetricSeriesPoint {
+  timestamp: DateTime!
+  value: Float!
+}
+
+type DevMetricSourceRef {
+  refId: ID!
+  sourceTable: String!
+  sourceVersion: String!
+  watermark: DateTime
+  queryVersion: String!
+}
+
+type DevMetricValue {
+  dimensions: [DevMetricDimensionValue!]!
+  value: Float!
+  comparisonValue: Float
+  series: [DevMetricSeriesPoint!]!
+}
+
+type DevObservedChange {
+  changeId: ID!
+  category: String!
+  entityType: String!
+  entityId: ID!
+  displayLabel: String!
+  before: String
+  after: String
+  observedAt: DateTime!
+  claimKind: String!
+  relationshipChain: [String!]!
+  metricId: DevMetricID
+  metricValue: Float
+  metricComparisonValue: Float
+  sourceRefIds: [ID!]!
+  evidenceRefIds: [ID!]!
+  confidence: Float
+}
+
+type DevPullRequestStatusFact {
+  entityId: ID!
+  displayLabel: String!
+  state: String!
+  reviewState: String
+  changesRequested: Int!
+  merged: Boolean!
+  observedAt: DateTime!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+  required: Boolean!
+}
+
+type DevScopeCandidate {
+  kind: DevScopeEntityKind!
+  canonicalId: ID!
+  label: String!
+  repositoryId: ID
+}
+
+enum DevScopeEntityKind {
+  REPOSITORY
+  PROJECT
+  WORK_UNIT
+  ISSUE
+  PULL_REQUEST
+}
+
+input DevScopeSearchInput {
+  query: String!
+  kinds: [DevScopeEntityKind!]!
+  limit: Int! = 25
+}
+
+type DevScopeSearchResult {
+  candidates: [DevScopeCandidate!]!
+  queryVersion: String!
+  catalogWatermark: String!
+}
+
+type DevStatusConflict {
+  code: String!
+  message: String!
+  severity: String!
+  sourceRefIds: [ID!]!
+  evidenceRefIds: [ID!]!
+}
+
+type DevStatusFact {
+  entityType: String!
+  entityId: ID!
+  displayLabel: String!
+  status: String!
+  observedAt: DateTime!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+  required: Boolean
+}
+
+type DevStatusScope {
+  schemaVersion: String!
+  organizationId: ID!
+  directScope: String!
+  repositoryIds: [ID!]!
+  entities: [DevStatusScopeEntity!]!
+  teamIds: [ID!]!
+  currentStart: DateTime!
+  currentEnd: DateTime!
+  comparisonStart: DateTime
+  comparisonEnd: DateTime
+  timezone: String!
+}
+
+type DevStatusScopeEntity {
+  entityType: String!
+  entityId: ID!
+  displayLabel: String!
+  repositoryId: ID
+}
+
+type DevStatusSnapshot {
+  contractVersion: String!
+  state: String!
+  scope: DevStatusScope!
+  asOf: DateTime!
+  declared: DevStatusFact
+  actual: DevActualCompletion!
+  children: [DevStatusFact!]!
+  blockers: [DevStatusFact!]!
+  pullRequests: [DevPullRequestStatusFact!]!
+  ci: [DevCIStatusFact!]!
+  deployments: [DevDeploymentStatusFact!]!
+  incidents: [DevIncidentStatusFact!]!
+  sourceRefs: [DevStatusSourceRef!]!
+  warnings: [String!]!
+}
+
+input DevStatusSnapshotInput {
+  scope: DevMetricScopeInput!
+  asOf: DateTime = null
+  maxItems: Int! = 100
+}
+
+type DevStatusSourceRef {
+  refId: ID!
+  sourceSystem: String!
+  sourceVersion: String!
+  freshness: String!
+  watermark: DateTime
+  evidenceRefIds: [ID!]!
+}
+
+enum DevWorkGraphDirection {
+  INCOMING
+  OUTGOING
+  BOTH
+}
+
+type DevWorkGraphNeighborEdge {
+  edgeId: ID!
+  sourceType: String!
+  sourceId: ID!
+  targetType: String!
+  targetId: ID!
+  relationshipType: String!
+  direction: DevWorkGraphDirection!
+  provenance: String!
+  confidence: Float!
+  sourceRefId: ID!
+  evidenceRefIds: [ID!]!
+  observedAt: DateTime!
+  freshness: String!
+}
+
+type DevWorkGraphNeighborNode {
+  nodeType: String!
+  nodeId: ID!
+  displayLabel: String!
+  resolutionState: String!
+  repositoryId: ID
+}
+
+input DevWorkGraphNeighborsInput {
+  scope: DevEvidenceScopeInput!
+  rootRefs: [DevWorkGraphRootRefInput!]!
+  relationshipTypes: [String!]!
+  direction: DevWorkGraphDirection! = BOTH
+  limit: Int! = 25
+  depth: Int! = 1
+}
+
+type DevWorkGraphNeighborsResult {
+  schemaVersion: String!
+  state: String!
+  nodes: [DevWorkGraphNeighborNode!]!
+  edges: [DevWorkGraphNeighborEdge!]!
+  sourceRefs: [DevWorkGraphSourceRef!]!
+  warnings: [String!]!
+  totalCount: Int!
+  returnedCount: Int!
+  truncated: Boolean!
+  depth: Int!
+  queryVersion: String!
+  watermark: DateTime
+}
+
+input DevWorkGraphRootRefInput {
+  nodeType: String!
+  nodeId: ID!
+}
+
+type DevWorkGraphSourceRef {
+  refId: ID!
+  sourceTable: String!
+  sourceVersion: String!
+  watermark: DateTime
+  queryVersion: String!
+}
+
+enum DimensionInput {
+  TEAM
+  REPO
+  AUTHOR
+  WORK_TYPE
+  THEME
+  SUBCATEGORY
+}
+
+type EvidenceQualityStats {
+  mean: Float
+  stddev: Float
+  total: Int!
+  bandCounts: JSON!
+}
+
+type EvidenceRef {
+  teamId: String!
+  metricTable: String!
+  windowStart: Date!
+  windowEnd: Date!
+  field: String!
+  value: Float!
+}
+
+type Experiment {
+  id: String!
+  opportunityId: String!
+  hypothesis: String!
+  metric: String!
+  owner: String!
+  stopCondition: String!
+  status: ExperimentStatus!
+  startDate: Date
+  stopDate: Date
+  outcome: String
+}
+
+enum ExperimentStatus {
+  SUGGESTED
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+type ExperimentsResult {
+  items: [Experiment!]!
+  derivedFromOpportunities: Boolean!
+}
+
+type FeatureFlagEventItem {
+  flagKey: String!
+  eventType: String!
+  prevState: String!
+  nextState: String!
+  actorType: String!
+  environment: String!
+  eventTs: String!
+}
+
+type FeatureFlagEventsResult {
+  events: [FeatureFlagEventItem!]!
+  totalCount: Int!
+  degradedReason: String
+}
+
+type FeatureFlagItem {
+  flagId: String!
+  flagKey: String!
+  provider: String!
+  projectKey: String!
+  flagType: String!
+  createdAt: String!
+  archivedAt: String
+}
+
+type FeatureFlagRegistryResult {
+  flags: [FeatureFlagItem!]!
+  totalCount: Int!
+  degradedReason: String
+}
+
+input FilterInput {
+  scope: ScopeFilterInput = null
+  who: WhoFilterInput = null
+  what: WhatFilterInput = null
+  why: WhyFilterInput = null
+  how: HowFilterInput = null
+}
+
+input FlowMatrixRequestInput {
+  dimension: DimensionInput!
+  measure: MeasureInput!
+  dateRange: DateRangeInput!
+  maxNodes: Int! = 100
+  maxEdges: Int! = 500
+  useInvestment: Boolean = null
+}
+
+type FlowMatrixResult {
+  nodes: [SankeyNode!]!
+  edges: [SankeyEdge!]!
+}
+
+type Freshness {
+  lastIngestedAt: String
+  coverage: Coverage
+}
+
+type HomeResult {
+  freshness: Freshness!
+  deltas: [MetricDelta!]!
+  reworkThemeAllocation: [ReworkThemeAllocation!]!
+}
+
+type HotspotRow {
+  filePath: String!
+  repoId: String!
+  repoName: String!
+  churnLoc30d: Int!
+  churnCommits30d: Int!
+  cyclomaticTotal: Int!
+  cyclomaticAvg: Float!
+  blameConcentration: Float
+  riskScore: Float!
+  evidenceUrl: String
+}
+
+input HotspotsInput {
+  orgId: String!
+  sinceUtc: DateTime!
+  untilUtc: DateTime!
+  repoIds: [String!] = null
+  teamIds: [String!] = null
+  limit: Int = null
+}
+
+type HotspotsResult {
+  rows: [HotspotRow!]!
+}
+
+input HowFilterInput {
+  flowStage: [String!] = null
+}
+
+type IdentityMappingHealth {
+  unmappedCount: Int!
+  unmappedIdentities: [UnmappedIdentity!]!
+  suggestedAliases: [AliasSuggestion!]!
+}
+
+type ImproveOpportunitiesResult {
+  orgId: String!
+  opportunities: [ImproveOpportunity!]!
+  detectorReady: Boolean!
+  totalCount: Int!
+}
+
+type ImproveOpportunity {
+  opportunityId: String!
+  kind: ImproveOpportunityKind!
+  entityType: String!
+  entityId: String!
+  title: String!
+  rationale: String!
+  score: Float!
+  severity: String!
+  evidenceRefs: [String!]!
+  recommendedAction: String!
+}
+
+enum ImproveOpportunityKind {
+  HIGH_REVIEW_LATENCY
+  SLOW_CYCLE_TIME
+  HIGH_REWORK
+  HIGH_WIP
+  LOW_THROUGHPUT
+  HIGH_CHURN
+  HIGH_CHANGE_FAILURE
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+type MaintainerShare {
+  author: String!
+  sharePercent: Float!
+}
+
+type MappingCoverage {
+  deployments: CoverageStat!
+  workItems: CoverageStat!
+}
+
+enum MeasureInput {
+  COUNT
+  CHURN_LOC
+  PR_REWORK_RATIO
+  CYCLE_TIME_HOURS
+  THROUGHPUT
+  PIPELINE_SUCCESS_RATE
+  PIPELINE_FAILURE_RATE
+  PIPELINE_DURATION_P95
+  PIPELINE_QUEUE_TIME
+  PIPELINE_RERUN_RATE
+  TEST_PASS_RATE
+  TEST_FAILURE_RATE
+  TEST_FLAKE_RATE
+  TEST_SUITE_DURATION_P95
+  COVERAGE_LINE_PCT
+  COVERAGE_BRANCH_PCT
+  COVERAGE_DELTA_PCT
+  FLAG_FRICTION_DELTA
+  FLAG_ERROR_RATE_DELTA
+  FLAG_COVERAGE_RATIO
+  FLAG_ACTIVATION_RATE
+}
+
+type MetricDelta {
+  metric: String!
+  label: String!
+  value: Float!
+  unit: String!
+  deltaPct: Float!
+  spark: [SparkPoint!]!
+}
+
+type MetricLineage {
+  metricId: ID!
+  sourceTables: [String!]!
+  computeWindow: WindowSpec!
+  computedAt: DateTime!
+  rowCount: Int
+}
+
+type MetricsUpdate {
+  orgId: String!
+  day: String!
+  updatedAt: DateTime!
+  message: String!
+}
+
+type MissingMapping {
+  repoName: String!
+  reason: String!
+}
+
+type Mutation {
+  """Create a new saved report"""
+  createSavedReport(orgId: String!, input: CreateSavedReportInput!): SavedReportType!
+
+  """Update an existing saved report"""
+  updateSavedReport(orgId: String!, reportId: String!, input: UpdateSavedReportInput!): SavedReportType
+
+  """Delete a saved report"""
+  deleteSavedReport(orgId: String!, reportId: String!): Boolean!
+
+  """Clone a saved report with optional overrides"""
+  cloneSavedReport(orgId: String!, input: CloneSavedReportInput!): SavedReportType
+
+  """Trigger a manual report execution"""
+  triggerReport(orgId: String!, reportId: String!): ReportRunType
+}
+
+type OperatingReview {
+  orgId: String!
+  teamId: String
+  weekStart: Date!
+  priorWeekStart: Date!
+  sections: [OperatingReviewSection!]!
+  recommendations: [String!]!
+  recommendationsEmptyState: String!
+}
+
+type OperatingReviewDelta {
+  value: Float!
+  priorValue: Float!
+  absolute: Float!
+  percent: Float
+  status: String!
+}
+
+input OperatingReviewInput {
+  teamId: String = null
+  weekStart: Date!
+}
+
+type OperatingReviewMetric {
+  key: String!
+  label: String!
+  value: Float!
+  unit: String!
+  delta: OperatingReviewDelta!
+}
+
+type OperatingReviewSection {
+  key: String!
+  title: String!
+  metrics: [OperatingReviewMetric!]!
+  changed: [String!]!
+  improved: [String!]!
+  worsened: [String!]!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type ProductTelemetryChartInteractionType {
+  chart: String!
+  action: String!
+  surface: String!
+  interactions: Int!
+  sessions: Int!
+}
+
+type ProductTelemetryClientErrorType {
+  routePattern: String!
+  boundary: String!
+  errorClass: String!
+  errors: Int!
+  affectedAnonymousUsers: Int!
+}
+
+type ProductTelemetryDailyActiveUsersType {
+  day: Date!
+  activeAnonymousUsers: Int!
+}
+
+input ProductTelemetryDashboardInput {
+  startDate: Date!
+  endDate: Date!
+}
+
+type ProductTelemetryDashboardType {
+  dailyActiveUsers: [ProductTelemetryDailyActiveUsersType!]!
+  topRoutes: [ProductTelemetryRouteUsageType!]!
+  featureViews: [ProductTelemetryFeatureViewType!]!
+  filterChanges: [ProductTelemetryFilterChangeType!]!
+  chartInteractions: [ProductTelemetryChartInteractionType!]!
+  clientErrors: [ProductTelemetryClientErrorType!]!
+  sessionSummary: ProductTelemetrySessionSummaryType!
+}
+
+type ProductTelemetryFeatureViewType {
+  feature: String!
+  surface: String!
+  views: Int!
+  anonymousUsers: Int!
+}
+
+type ProductTelemetryFilterChangeType {
+  view: String!
+  filterKey: String!
+  changes: Int!
+  avgValueCount: Float
+}
+
+type ProductTelemetryPlatformDashboardType {
+  totals: ProductTelemetryPlatformTotalsType!
+  dailyActiveUsers: [ProductTelemetryDailyActiveUsersType!]!
+  topRoutes: [ProductTelemetryRouteUsageType!]!
+  featureViews: [ProductTelemetryFeatureViewType!]!
+  filterChanges: [ProductTelemetryFilterChangeType!]!
+  chartInteractions: [ProductTelemetryChartInteractionType!]!
+  clientErrors: [ProductTelemetryClientErrorType!]!
+  sessionSummary: ProductTelemetrySessionSummaryType!
+  topOrgs: [ProductTelemetryTopOrgType!]!
+}
+
+type ProductTelemetryPlatformTotalsType {
+  activeOrgs: Int!
+  anonymousUsers: Int!
+  sessions: Int!
+  events: Int!
+}
+
+type ProductTelemetryRouteUsageType {
+  routePattern: String!
+  events: Int!
+  sessions: Int!
+  anonymousUsers: Int!
+}
+
+type ProductTelemetrySessionSummaryType {
+  p50DurationMs: Int
+  p75DurationMs: Int
+  p90DurationMs: Int
+  p95DurationMs: Int
+  avgPagesViewed: Float
+  avgInteractions: Float
+}
+
+type ProductTelemetryTopOrgType {
+  orgIdHash: String!
+  events: Int!
+  sessions: Int!
+  anonymousUsers: Int!
+  orgId: String
+  orgName: String
+  orgSlug: String
+}
+
+type PullRequestCommit {
+  hash: String!
+  message: String
+  authorName: String
+  authorEmail: String
+  authorWhen: DateTime
+  confidence: Float
+  provenance: String
+  evidence: String
+}
+
+type PullRequestDetail {
+  id: ID!
+  orgId: String!
+  repoId: ID!
+  repoName: String
+  number: Int!
+  title: String
+  body: String
+  state: String
+  authorName: String
+  authorEmail: String
+  createdAt: DateTime!
+  mergedAt: DateTime
+  closedAt: DateTime
+  headBranch: String
+  baseBranch: String
+  additions: Int
+  deletions: Int
+  changedFiles: Int
+  firstReviewAt: DateTime
+  firstCommentAt: DateTime
+  changesRequestedCount: Int!
+  reviewsCount: Int!
+  commentsCount: Int!
+  reviews: [PullRequestReview!]!
+  commits: [PullRequestCommit!]!
+  linkedIssues: [PullRequestIssueLink!]!
+}
+
+type PullRequestIssueLink {
+  workItemId: String!
+  confidence: Float!
+  provenance: String!
+  evidence: String!
+}
+
+type PullRequestReview {
+  reviewId: String!
+  reviewer: String!
+  state: String!
+  submittedAt: DateTime!
+}
+
+type Query {
+  """
+  Search authorized Ask Dev V1 direct-scope entities. Results are tenant-scoped, deterministic, and capped at 25 candidates.
+  """
+  devScopeSearch(orgId: String!, input: DevScopeSearchInput!): DevScopeSearchResult!
+
+  """List the exact authorized Ask Dev V1 metric registry."""
+  devMetricCatalog(orgId: String!, input: DevMetricCatalogInput = null): DevMetricCatalog!
+
+  """
+  Query one registered Ask Dev V1 metric through the shared bounded service, including prior-equivalent comparison and source state.
+  """
+  devMetric(orgId: String!, input: DevMetricQueryInput!): DevMetricResult!
+
+  """
+  Search bounded authorized Ask Dev evidence. Source text is sanitized and explicitly untrusted; results are capped at 25. Requires the canonical explicit-enable ask_dev entitlement.
+  """
+  devEvidenceSearch(orgId: String!, input: DevEvidenceSearchInput!): DevEvidenceSearchResult!
+
+  """
+  Report source-specific Ask Dev coverage, freshness, failures, and whether required sources permit a complete answer. Requires the canonical explicit-enable ask_dev entitlement.
+  """
+  devDataHealth(orgId: String!, input: DevDataHealthInput!): DevDataHealthResult!
+
+  """
+  Return declared status separately from deterministic, evidence-backed completion using the versioned Ask Dev status rules.
+  """
+  devStatusSnapshot(orgId: String!, input: DevStatusSnapshotInput!): DevStatusSnapshot!
+
+  """
+  Return reproducible observed changes across explicit equal-duration windows without upgrading correlation to cause.
+  """
+  devChangeSummary(orgId: String!, input: DevChangeSummaryInput!): DevChangeSummary!
+
+  """
+  Return persisted, tenant-scoped work-graph neighbors with depth fixed to one and code-owned relationship/result bounds.
+  """
+  devWorkGraphNeighbors(orgId: String!, input: DevWorkGraphNeighborsInput!): DevWorkGraphNeighborsResult!
+
+  """Get catalog of available dimensions, measures, and limits"""
+  catalog(orgId: String!, dimension: DimensionInput = null, filters: FilterInput = null): CatalogResult!
+
+  """Run batch analytics queries"""
+  analytics(orgId: String!, batch: AnalyticsRequestInput!): AnalyticsResult!
+
+  """Get first-party product telemetry dashboard metrics"""
+  productTelemetryDashboard(orgId: String!, input: ProductTelemetryDashboardInput!): ProductTelemetryDashboardType!
+
+  """
+  Cross-org product telemetry dashboard for platform/super admins. Requires is_superuser. Returns global aggregates plus a top-orgs rollup with org names resolved from Postgres.
+  """
+  productTelemetryPlatformDashboard(input: ProductTelemetryDashboardInput!): ProductTelemetryPlatformDashboardType!
+
+  """Get home dashboard metrics"""
+  home(orgId: String!, filters: FilterInput = null): HomeResult!
+
+  """Query work graph edges with optional filters"""
+  workGraphEdges(orgId: String!, filters: WorkGraphEdgeFilterInput = null): WorkGraphEdgesResult!
+
+  """
+  Pull request detail by stable id ({repo_id}#pr{number}) from persisted ClickHouse PR, review, commit, and Work Graph tables.
+  """
+  pr(orgId: String!, id: ID!): PullRequestDetail
+
+  """Per-node-type inflow/outflow over the full work graph"""
+  workGraphFlow(orgId: String!, filters: WorkGraphEdgeFilterInput = null): WorkGraphFlowResult!
+
+  """Top-N work graph nodes ranked by degree over the full graph"""
+  workGraphArtifacts(orgId: String!, filters: WorkGraphEdgeFilterInput = null): WorkGraphArtifactsResult!
+
+  """List feature flags from the ClickHouse registry"""
+  featureFlags(orgId: String!, provider: String = null, project: String = null, includeArchived: Boolean = false, limit: Int! = 1000): FeatureFlagRegistryResult!
+
+  """List feature flag state-change events"""
+  featureFlagEvents(orgId: String!, flagKey: String = null, environment: String = null, limit: Int! = 1000): FeatureFlagEventsResult!
+
+  """
+  Team-attribution provenance per work item (source/confidence/evidence/is_primary) — CHAOS-2600
+  """
+  workItemTeamAttributions(orgId: String!, workItemIds: [String!] = null, teamId: String = null): [WorkItemTeamAttribution!]!
+
+  """
+  The owning team per work UNIT (investment cluster), collapsed from its member work-item attributions by source precedence — CHAOS-2600
+  """
+  workUnitTeamAttributions(orgId: String!, workUnitIds: [String!] = null, teamId: String = null): [WorkUnitTeamAttribution!]!
+
+  """Paginated list of security alerts"""
+  securityAlerts(orgId: String!, filters: SecurityAlertFilterInput = null, pagination: SecurityPaginationInput = null): SecurityAlertConnection!
+
+  """Aggregated security posture for the dashboard"""
+  securityOverview(orgId: String!, filters: SecurityAlertFilterInput = null): SecurityOverview!
+
+  """List saved reports for an organization"""
+  savedReports(orgId: String!, limit: Int! = 50, offset: Int! = 0): SavedReportConnection!
+
+  """Get a saved report by ID"""
+  savedReport(orgId: String!, reportId: String!): SavedReportType
+
+  """List report runs for a saved report"""
+  reportRuns(orgId: String!, reportId: String!, limit: Int! = 50): ReportRunConnection!
+
+  """Compute capacity forecast on-demand"""
+  capacityForecast(orgId: String!, input: CapacityForecastInput = null): CapacityForecast
+
+  """List persisted capacity forecasts"""
+  capacityForecasts(orgId: String!, filters: CapacityForecastFilterInput = null): CapacityForecastConnection!
+
+  """Compute throughput-based capacity forecast"""
+  throughputForecast(orgId: String!, input: ThroughputForecastInput!): ThroughputForecast
+
+  """Weekly Engineering Operating Review"""
+  operatingReview(orgId: String!, input: OperatingReviewInput!): OperatingReview!
+
+  """Operator data-health and trust surface"""
+  dataHealth(team: ID!): DataHealth!
+
+  """Repository ownership concentration and bus-factor summary."""
+  busFactor(orgId: String!, scope: BusFactorScopeInput = null): BusFactor!
+
+  """
+  Compounding Risk composite: churn × complexity × ownership × review-latency. Inspectable score with persisted weights, thresholds, raw inputs, and normalized components.
+  """
+  compoundingRisk(orgId: String!, filter: CompoundingRiskFilterInput = null): CompoundingRiskResult!
+
+  """
+  Persisted TestOps Delivery Risk metrics from release confidence, quality drag, and pipeline stability tables.
+  """
+  testopsRisk(orgId: String!, input: TestOpsRiskInput!): TestOpsRiskResult!
+
+  """
+  Cyclomatic complexity trend by repo or file. Reads from append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` tables — no recomputation, pure surface of persisted data.
+  """
+  complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
+
+  """
+  Top file hotspots ranked by risk_score (churn x complexity x ownership concentration). Reads from the append-only ``file_hotspot_daily`` table.
+  """
+  hotspots(input: HotspotsInput!): HotspotsResult!
+
+  """
+  Daily cognitive-load signals (PR interruption, context spread, review request load, after-hours and weekend commit ratios). Reads from ``user_metrics_daily`` and ``team_metrics_daily`` — no recomputation, pure surface of persisted metrics.
+  """
+  cognitiveLoad(input: CognitiveLoadInput!): CognitiveLoadResult!
+
+  """
+  Reviewer-to-author collaboration edges from ``review_edges_daily``. Ordered by review count descending.  Use ``repoIds`` to narrow to specific repositories.  Org-scoped; no recomputation.
+  """
+  reviewEdges(input: ReviewEdgesInput!): ReviewEdgesResult!
+
+  """Latest rule-based recommendations for a team within a lookback window."""
+  recommendations(orgId: String!, team: ID!, window: WindowInput!): [Recommendation!]!
+
+  """
+  Experiments derived from opportunity suggested_experiments (CHAOS-2219). v1: computed at query-time — no persistence table. Each experiment is a typed promotion of a suggestion string with hypothesis / metric / owner / stop_condition. ``derived_from_opportunities`` is False when the opportunities service was unavailable; items will be empty in that case.
+  """
+  experiments(orgId: String!, filters: FilterInput = null): ExperimentsResult!
+
+  """AI workflow impact summary across the requested time range."""
+  aiImpactSummary(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null): AIImpactSummary!
+
+  """Side-by-side AI-assisted vs non-AI baseline comparison."""
+  aiComparison(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null): AIComparison!
+
+  """Per-bucket AI review-load breakdown with amplification."""
+  aiReviewLoad(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null): AIReviewLoadResult!
+
+  """Per-bucket AI risk breakdown (rework, revert, test gaps, incidents)."""
+  aiRiskBreakdown(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null): AIRiskBreakdownResult!
+
+  """
+  AI automation opportunity recommendations. Returns an empty, stable contract until the detector ships (CHAOS-1586).
+  """
+  aiOpportunities(orgId: String!, scope: AIScopeInput = null, limit: Int! = 25): AIOpportunitiesResult!
+
+  """
+  Non-AI flow opportunity recommendations for the Improve surface (CHAOS-2220). Fires threshold rules over repo and team metrics (review latency, cycle time, rework, WIP, throughput, churn, change failure) and returns scored candidates. An empty list means all metrics are within thresholds — not an error.
+  """
+  improveOpportunities(scope: AIScopeInput = null, limit: Int! = 10, windowDays: Int! = 30): ImproveOpportunitiesResult!
+
+  """AI governance coverage and recent policy violations."""
+  aiGovernanceSummary(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null, violationLimit: Int! = 100): AIGovernanceSummary!
+
+  """
+  Drilldown into AI workflow evidence rooted at an issue, PR, or work_unit. Returns Work Graph nodes and edges with provenance and short evidence references.
+  """
+  aiWorkflowDrilldown(orgId: String!, rootType: AIWorkflowRootTypeInput!, rootId: String!, depth: Int! = 3, limit: Int! = 100): AIWorkflowDrilldownResult!
+
+  """
+  List AI-attributed pull requests in the requested window so the UI can offer a concrete drilldown selector. Rows come from ai_attribution_resolved joined to git_pull_requests; no aggregation, no fabrication.
+  """
+  aiAttributedPrs(orgId: String!, dateRange: AIDateRangeInput!, scope: AIScopeInput = null, limit: Int! = 50, offset: Int! = 0): AiAttributedPrsResult!
+
+  """
+  AI attribution mix and provenance evidence for the requested window. Reads ai_attribution_resolved only - the highest-precedence, non-superseded signal per subject - so every row carries source, confidence, and evidence. Does not include a synthesized human bucket; use aiImpactSummary for the full AI-vs-human PR split.
+  """
+  aiAttributionOverview(orgId: String!, dateRange: AIDateRangeInput!, scope: AIAttributionScopeInput = null, limit: Int! = 50, offset: Int! = 0): AIAttributionOverviewResult!
+}
+
+type Recommendation {
+  ruleId: String!
+  teamId: String!
+  orgId: String!
+  computedAt: DateTime!
+  windowStart: Date!
+  windowEnd: Date!
+  severity: Severity!
+  title: String!
+  rationale: String!
+  successCriterion: String!
+  evidence: [EvidenceRef!]!
+}
+
+type RepoAlertCount {
+  repoId: String!
+  repoName: String!
+  repoUrl: String
+  count: Int!
+}
+
+type RepoBusFactor {
+  repoId: String!
+  repoName: String!
+  value: Int!
+  topMaintainers: [MaintainerShare!]!
+  evidenceSampleCount: Int!
+}
+
+type ReportRunConnection {
+  items: [ReportRunType!]!
+  total: Int!
+}
+
+type ReportRunType {
+  id: String!
+  reportId: String!
+  status: String!
+  startedAt: DateTime
+  completedAt: DateTime
+  durationSeconds: Float
+  renderedMarkdown: String
+  artifactUrl: String
+  provenanceRecords: JSON
+  error: String
+  triggeredBy: String!
+  createdAt: DateTime!
+}
+
+type ReviewEdgeRow {
+  reviewer: String!
+  author: String!
+  reviewsCount: Int!
+  day: Date!
+  repoId: String
+}
+
+input ReviewEdgesInput {
+  orgId: String!
+  sinceDate: Date!
+  untilDate: Date!
+  repoIds: [String!] = null
+  limit: Int! = 500
+}
+
+type ReviewEdgesResult {
+  edges: [ReviewEdgeRow!]!
+  totalCount: Int!
+}
+
+type ReworkThemeAllocation {
+  theme: String!
+  label: String!
+  allocation: Float!
+  allocationPct: Float!
+  prsMerged: Int!
+  churnLoc: Int!
+}
+
+type SankeyCoverage {
+  teamCoverage: Float!
+  repoCoverage: Float!
+}
+
+type SankeyEdge {
+  source: String!
+  target: String!
+  value: Float!
+}
+
+type SankeyNode {
+  id: String!
+  label: String!
+  dimension: String!
+  value: Float!
+}
+
+input SankeyRequestInput {
+  path: [DimensionInput!]!
+  measure: MeasureInput!
+  dateRange: DateRangeInput!
+  maxNodes: Int! = 100
+  maxEdges: Int! = 500
+  useInvestment: Boolean = null
+}
+
+type SankeyResult {
+  nodes: [SankeyNode!]!
+  edges: [SankeyEdge!]!
+  coverage: SankeyCoverage
+  unit: SankeyValueUnit!
+}
+
+enum SankeyValueUnit {
+  WORK_UNITS
+  LOC
+}
+
+type SavedReportConnection {
+  items: [SavedReportType!]!
+  total: Int!
+}
+
+type SavedReportType {
+  id: String!
+  orgId: String!
+  name: String!
+  description: String
+  reportPlan: JSON!
+  isTemplate: Boolean!
+  templateSourceId: String
+  parameters: JSON
+  scheduleId: String
+  isActive: Boolean!
+  lastRunAt: DateTime
+  lastRunStatus: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  createdBy: String
+}
+
+input ScopeFilterInput {
+  level: ScopeLevelInput! = ORG
+  ids: [String!]! = []
+}
+
+enum ScopeLevelInput {
+  ORG
+  TEAM
+  REPO
+  SERVICE
+  DEVELOPER
+}
+
+type SecurityAlertConnection {
+  edges: [SecurityAlertEdge!]!
+  totalCount: Int!
+  pageInfo: PageInfo!
+}
+
+type SecurityAlertEdge {
+  node: SecurityAlertNode!
+  cursor: String!
+}
+
+input SecurityAlertFilterInput {
+  repoIds: [String!] = null
+  severities: [SecuritySeverityInput!] = null
+  sources: [SecuritySourceInput!] = null
+  states: [SecurityStateInput!] = null
+  since: Date = null
+  until: Date = null
+  openOnly: Boolean! = false
+  search: String = null
+}
+
+type SecurityAlertNode {
+  alertId: String!
+  repoId: String!
+  repoName: String!
+  repoUrl: String
+  source: String!
+  severity: String!
+  state: String!
+  packageName: String
+  cveId: String
+  url: String
+  title: String
+  description: String
+  createdAt: DateTime!
+  fixedAt: DateTime
+  dismissedAt: DateTime
+}
+
+type SecurityKpis {
+  openTotal: Int!
+  critical: Int!
+  high: Int!
+  meanDaysToFix30d: Float
+  openDelta30d: Int!
+}
+
+type SecurityOverview {
+  kpis: SecurityKpis!
+  severityBreakdown: [SeverityBucket!]!
+  topRepos: [RepoAlertCount!]!
+  trend: [TrendPoint!]!
+}
+
+input SecurityPaginationInput {
+  first: Int! = 50
+  after: String = null
+}
+
+enum SecuritySeverityInput {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+  UNKNOWN
+}
+
+enum SecuritySourceInput {
+  DEPENDABOT
+  CODE_SCANNING
+  ADVISORY
+  GITLAB_VULNERABILITY
+  GITLAB_DEPENDENCY
+}
+
+enum SecurityStateInput {
+  OPEN
+  FIXED
+  DISMISSED
+  DETECTED
+  CONFIRMED
+  RESOLVED
+}
+
+enum Severity {
+  WARNING
+  CRITICAL
+}
+
+type SeverityBucket {
+  severity: String!
+  count: Int!
+}
+
+type SparkPoint {
+  ts: String!
+  value: Float!
+}
+
+type Subscription {
+  """Subscribe to metrics updates for an organization"""
+  metricsUpdated(orgId: String!): MetricsUpdate!
+
+  """Subscribe to task status updates"""
+  taskStatus(taskId: String!): TaskStatus!
+
+  """Subscribe to data sync progress"""
+  syncProgress(orgId: String!): SyncProgress!
+}
+
+type SyncProgress {
+  orgId: String!
+  provider: String!
+  status: String!
+  itemsProcessed: Int!
+  itemsTotal: Int!
+  message: String
+  updatedAt: DateTime!
+}
+
+type TaskStatus {
+  taskId: String!
+  status: String!
+  progress: Float!
+  message: String
+  result: String
+  updatedAt: DateTime!
+}
+
+enum TeamAttributionConfidence {
+  HIGH
+  MEDIUM
+  LOW
+  MANUAL
+  NONE
+}
+
+enum TeamAttributionSource {
+  NATIVE_TEAM
+  ISSUE_PROJECT
+  PROJECT_OWNERSHIP
+  REPO_OWNERSHIP
+  ASSIGNEE_MEMBERSHIP
+  LINKED_ISSUE
+  AUTHOR_MEMBERSHIP
+  MANUAL_FALLBACK
+  UNASSIGNED
+}
+
+type TestOpsRiskBreakdownItem {
+  category: String!
+  hours: Float!
+}
+
+input TestOpsRiskInput {
+  startDate: Date!
+  endDate: Date!
+}
+
+type TestOpsRiskQuadrantPoint {
+  id: String!
+  pipelineSuccessRate: Float
+  testPassRate: Float
+}
+
+type TestOpsRiskResult {
+  orgId: String!
+  releaseConfidence: Float
+  qualityDragHours: Float
+  pipelineStability: Float
+  timeseries: [TestOpsRiskTrendPoint!]!
+  qualityDragBreakdown: [TestOpsRiskBreakdownItem!]!
+  quadrantData: [TestOpsRiskQuadrantPoint!]!
+  confidenceSpark: [TestOpsRiskSparkPoint!]!
+  confidenceDelta: Float
+  dragSpark: [TestOpsRiskSparkPoint!]!
+  dragDelta: Float
+  stabilitySpark: [TestOpsRiskSparkPoint!]!
+  stabilityDelta: Float
+}
+
+type TestOpsRiskSparkPoint {
+  ts: Date!
+  value: Float!
+}
+
+type TestOpsRiskTrendPoint {
+  date: Date!
+  riskScore: Float!
+}
+
+type ThroughputEstimateCoverage {
+  ratio: Float
+  estimatedCount: Int!
+  unestimatedCount: Int!
+  backlogSize: Int!
+}
+
+type ThroughputForecast {
+  forecastId: String!
+  computedAt: String!
+  teamId: String
+  workScopeId: String
+  backlogSize: Int!
+  historyWeeks: Int!
+  p50Weeks: Int
+  p75Weeks: Int
+  p90Weeks: Int
+  rollingWindows: [ThroughputRollingWindow!]!
+  primaryRisk: ThroughputRiskOverlay!
+  wipCongestion: ThroughputRiskOverlay!
+  staleWip: ThroughputStaleWip
+  estimateCoverage: ThroughputEstimateCoverage
+  reviewBottleneck: ThroughputRiskOverlay!
+  incidentLoad: ThroughputRiskOverlay!
+  insufficientHistory: Boolean!
+}
+
+input ThroughputForecastInput {
+  teamIds: [String!] = null
+  workScopeId: String = null
+  backlogSize: Int = null
+  historyWeeks: Int! = 12
+}
+
+type ThroughputRiskOverlay {
+  kind: String!
+  score: Float!
+  label: String!
+  value: Float!
+  threshold: Float!
+  active: Boolean!
+}
+
+type ThroughputRollingWindow {
+  windowWeeks: Int!
+  meanWeeklyThroughput: Float!
+  sampleCount: Int!
+  insufficientHistory: Boolean!
+}
+
+type ThroughputStaleWip {
+  p50AgeHours: Float
+  p90AgeHours: Float
+}
+
+enum TimeGranularity {
+  DAY
+  WEEK
+}
+
+type TimeseriesBucket {
+  date: Date!
+  value: Float!
+}
+
+input TimeseriesRequestInput {
+  dimension: DimensionInput!
+  measure: MeasureInput!
+  interval: BucketIntervalInput!
+  dateRange: DateRangeInput!
+}
+
+type TimeseriesResult {
+  dimension: String!
+  dimensionValue: String!
+  measure: String!
+  buckets: [TimeseriesBucket!]!
+}
+
+type TrendPoint {
+  day: Date!
+  opened: Int!
+  fixed: Int!
+}
+
+type UnmappedIdentity {
+  provider: String!
+  email: String
+  displayName: String
+  observedCount: Int
+}
+
+input UpdateSavedReportInput {
+  name: String = null
+  description: String = null
+  reportPlan: JSON = null
+  isTemplate: Boolean = null
+  parameters: JSON = null
+  isActive: Boolean = null
+  scheduleCron: String = null
+  scheduleTimezone: String = null
+}
+
+input WhatFilterInput {
+  repos: [String!] = null
+  services: [String!] = null
+}
+
+input WhoFilterInput {
+  developers: [String!] = null
+  roles: [String!] = null
+}
+
+input WhyFilterInput {
+  workCategory: [String!] = null
+  issueType: [String!] = null
+}
+
+input WindowInput {
+  value: Int! = 4
+  unit: WindowUnit! = WEEK
+}
+
+type WindowSpec {
+  kind: String!
+  durationDays: Int
+}
+
+enum WindowUnit {
+  DAY
+  WEEK
+  CYCLE
+}
+
+type WorkGraphArtifactRow {
+  nodeType: WorkGraphNodeType!
+  nodeId: String!
+  displayName: String
+  degree: Int!
+  evidence: String
+}
+
+type WorkGraphArtifactsResult {
+  rows: [WorkGraphArtifactRow!]!
+  degradedReason: String
+  isPartial: Boolean!
+  partialScope: String
+  partialRepoIds: [String!]!
+}
+
+input WorkGraphEdgeFilterInput {
+  repoIds: [String!] = null
+  sourceType: WorkGraphNodeTypeInput = null
+  targetType: WorkGraphNodeTypeInput = null
+  edgeType: WorkGraphEdgeTypeInput = null
+  edgeTypes: [WorkGraphEdgeTypeInput!] = null
+  nodeId: String = null
+  theme: String = null
+  subcategory: String = null
+  allowScopedPartial: Boolean! = false
+  limit: Int! = 1000
+}
+
+type WorkGraphEdgeResult {
+  edgeId: String!
+  sourceType: WorkGraphNodeType!
+  sourceId: String!
+  sourceDisplayName: String
+  targetType: WorkGraphNodeType!
+  targetId: String!
+  targetDisplayName: String
+  edgeType: WorkGraphEdgeType!
+  provenance: WorkGraphProvenance!
+  confidence: Float!
+  evidence: String!
+  repoId: String
+  provider: String
+  theme: String
+  subcategory: String
+}
+
+enum WorkGraphEdgeType {
+  BLOCKS
+  RELATES
+  DUPLICATES
+  IS_BLOCKED_BY
+  IS_RELATED_TO
+  IS_DUPLICATE_OF
+  PARENT_OF
+  CHILD_OF
+  REFERENCES
+  IMPLEMENTS
+  FIXES
+  CONTAINS
+  TOUCHES
+  INTRODUCED_BY
+  CONFIG_CHANGED_BY
+  GUARDS
+  IMPACTS
+  HAS_AI_WORKFLOW
+  GENERATES
+  HAS_REVIEW_OUTCOME
+  DEPLOYS
+  LINKED_INCIDENT
+  MAPS_TO_REPOSITORY
+  HAS_INCIDENT
+  HAS_ALERT
+  HAS_TIMELINE_EVENT
+  HAS_RESPONDER
+  ASSIGNED_TO
+  ESCALATES_WITH
+  REMEDIATED_BY
+}
+
+enum WorkGraphEdgeTypeInput {
+  BLOCKS
+  RELATES
+  DUPLICATES
+  IS_BLOCKED_BY
+  IS_RELATED_TO
+  IS_DUPLICATE_OF
+  PARENT_OF
+  CHILD_OF
+  REFERENCES
+  IMPLEMENTS
+  FIXES
+  CONTAINS
+  TOUCHES
+  INTRODUCED_BY
+  CONFIG_CHANGED_BY
+  GUARDS
+  IMPACTS
+  HAS_AI_WORKFLOW
+  GENERATES
+  HAS_REVIEW_OUTCOME
+  DEPLOYS
+  LINKED_INCIDENT
+}
+
+type WorkGraphEdgesResult {
+  edges: [WorkGraphEdgeResult!]!
+  totalCount: Int!
+  pageInfo: PageInfo!
+  degradedReason: String
+  isPartial: Boolean!
+  partialScope: String
+  partialRepoIds: [String!]!
+}
+
+type WorkGraphFlowResult {
+  rows: [WorkGraphFlowRow!]!
+  degradedReason: String
+  isPartial: Boolean!
+  partialScope: String
+  partialRepoIds: [String!]!
+}
+
+type WorkGraphFlowRow {
+  nodeType: WorkGraphNodeType!
+  inflow: Int!
+  outflow: Int!
+}
+
+enum WorkGraphNodeType {
+  ISSUE
+  PR
+  COMMIT
+  FILE
+  RELEASE
+  FEATURE_FLAG
+  AI_WORKFLOW_RUN
+  DIFF
+  REVIEW_OUTCOME
+  DEPLOYMENT
+  INCIDENT
+  OPERATIONAL_SERVICE
+  OPERATIONAL_ALERT
+  INCIDENT_TIMELINE_EVENT
+  INCIDENT_RESPONDER
+  ESCALATION_POLICY
+  REPOSITORY
+  USER
+  TEAM
+}
+
+enum WorkGraphNodeTypeInput {
+  ISSUE
+  PR
+  COMMIT
+  FILE
+  RELEASE
+  FEATURE_FLAG
+  AI_WORKFLOW_RUN
+  DIFF
+  REVIEW_OUTCOME
+  DEPLOYMENT
+  INCIDENT
+}
+
+enum WorkGraphProvenance {
+  NATIVE
+  EXPLICIT_TEXT
+  HEURISTIC
+}
+
+type WorkItemTeamAttribution {
+  workItemId: String!
+  provider: String!
+  teamId: String
+  teamName: String
+  source: TeamAttributionSource!
+  confidence: TeamAttributionConfidence!
+  isPrimary: Boolean!
+  evidence: String!
+}
+
+type WorkUnitTeamAttribution {
+  workUnitId: String!
+  teamId: String
+  teamName: String
+  source: TeamAttributionSource!
+  confidence: TeamAttributionConfidence!
+  isPrimary: Boolean!
+  memberCount: Int!
+  evidence: String!
+}

@@ -939,9 +939,20 @@ func dispatchMetricsDailyFinalize(
 		return writeError(stderr, "invalid_request")
 	}
 	if hasRun {
-		if _, err := uuid.Parse(*run); err != nil {
+		parsedRun, err := uuid.Parse(*run)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
+		// codex review (P2, round 2): uuid.Parse accepts uppercase/mixed-case
+		// input, but jobcontract.MarshalCanonical rejects a non-lowercase
+		// domain id -- passing the raw (possibly uppercase) *run through
+		// would pass this validation and then fail later inside
+		// PublishRedriveFinalizeTx, turning a legitimately valid --run into
+		// a confusing publish-time error instead of a repair. Canonicalize
+		// once, here, so every downstream use (the DB query, the envelope)
+		// sees the same lowercase string.
+		canonicalRun := parsedRun.String()
+		run = &canonicalRun
 	}
 	if runtime.pools == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")

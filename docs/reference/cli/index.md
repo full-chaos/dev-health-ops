@@ -1257,6 +1257,16 @@ WHERE dedupe_key LIKE 'metrics.daily_finalize:redrive:%'
 ORDER BY created_at DESC;
 ```
 
+Each invocation mints its own nonce, so re-running this command against the
+same run before its prior redrive has been processed publishes a second,
+independently-keyed job rather than recognizing one is already in flight
+(codex review, round 2). `ClaimFinalize`'s own fencing still prevents two
+finalize attempts from ever *executing* concurrently for the same run (a
+live lease reports `LeaseActiveError`, a settled run reports nothing to
+claim) — the extra row costs River queue capacity, not correctness. Avoid
+re-running `--all-complete` in a tight loop; check the query above for
+still-`pending`/`delivered` redrive rows first if in doubt.
+
 Returns `{"candidates": [...run ids considered...], "finalize":
 {"FinalizedRunIDs": [...run ids a fresh job was actually enqueued for...]}}`.
 A `--run` id that turns out ineligible (already finalized, not all

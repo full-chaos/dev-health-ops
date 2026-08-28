@@ -293,7 +293,14 @@ WHERE run.status = 'running'
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
-ORDER BY run.updated_at
+-- codex review (P2, round 2): a bare ORDER BY updated_at lets a page of
+-- older 'failed'/expired-'running' rows -- exactly the ones --all-complete's
+-- bulk sweep will skip via allowPriorAttempt -- starve a genuinely
+-- never-attempted 'pending' row out of the LIMIT window, so a default sweep
+-- can keep returning the same unactionable candidates and never reach the
+-- one row it could actually redrive. Sort 'pending' first so it is never
+-- pushed past the limit by older rows this pass cannot act on anyway.
+ORDER BY (run.finalization_status <> 'pending'), run.updated_at
 LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, ErrUnavailable

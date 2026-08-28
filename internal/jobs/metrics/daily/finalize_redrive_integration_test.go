@@ -454,3 +454,51 @@ func TestRedriveStrandedFinalizeRequiresExplicitRunForPriorAttempt(t *testing.T)
 	processFinalizeJob(t, ctx, store, runID)
 	assertFinalizeTestRunStatus(t, ctx, pool, runID, "succeeded")
 }
+
+// TestFindStrandedFinalizeRunsPrioritizesNeverAttemptedRuns is the codex
+// review red-first proof (P2, round 2): a bare ORDER BY updated_at lets an
+// older 'failed' row (a prior-attempt shape --all-complete's bulk sweep
+// skips via allowPriorAttempt) occupy a limited page ahead of a newer
+// 'pending' row (the only shape that sweep can actually redrive) -- so a
+// bounded default sweep could keep returning the same unactionable
+// candidates and never reach the one row it could fix. 'pending' rows must
+// sort first regardless of updated_at.
+func TestFindStrandedFinalizeRunsPrioritizesNeverAttemptedRuns(t *testing.T) {
+	ctx := context.Background()
+	pool, store, _ := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000001201"
+		olderFailedID = "00000000-0000-4000-8000-000000001202"
+		olderPID      = "00000000-0000-4000-8000-000000001203"
+		newerPendID   = "00000000-0000-4000-8000-000000001204"
+		newerPID      = "00000000-0000-4000-8000-000000001205"
+	)
+	older := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return newer }
+
+	// Older run, already claimed once (finalization_status='failed') -- a
+	// bulk sweep will never redrive this one.
+	insertFinalizeTestRun(t, ctx, pool, olderFailedID, orgID, targetDay, older)
+	insertFinalizeTestPartition(t, ctx, pool, olderPID, olderFailedID, 0, "succeeded", older)
+	if _, err := pool.Exec(ctx, `UPDATE daily_metrics_runs SET finalization_status = 'failed', updated_at = $1 WHERE id = $2::uuid`, older, olderFailedID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Newer run, never attempted (finalization_status='pending') -- the one
+	// a bulk sweep exists to fix.
+	insertFinalizeTestRun(t, ctx, pool, newerPendID, orgID, targetDay, newer)
+	insertFinalizeTestPartition(t, ctx, pool, newerPID, newerPendID, 0, "succeeded", newer)
+
+	// limit=1: without prioritization, plain updated_at ordering returns the
+	// older 'failed' row and starves the pending one out of the page.
+	strandedRunIDs, err := store.FindStrandedFinalizeRuns(ctx, 1)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns: %v", err)
+	}
+	if len(strandedRunIDs) != 1 || strandedRunIDs[0] != newerPendID {
+		t.Fatalf("FindStrandedFinalizeRuns(limit=1) = %v, want [%s] (the never-attempted run, not the older failed one)", strandedRunIDs, newerPendID)
+	}
+}

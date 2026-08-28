@@ -211,15 +211,19 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
         assert by_kind[kind]["route"] == "river", kind
         assert by_kind[kind]["rollback_route"] == "celery", kind
 
-    # The canary and the post-0066 coverage kind are deliberately excluded.
-    # Asserting their identities stops a future kind from being dropped from
-    # the historical migration unnoticed.
+    # The canary and the post-0066 Go-native-only kinds are deliberately
+    # excluded. Asserting their identities stops a future kind from being
+    # dropped from the historical migration unnoticed.
     assert set(by_kind) - pinned == {
         "sync.provider_unit",
         "system.sync_coverage_refresh",
+        "sync.team_repo_ownership_derivation",
     }
     assert by_kind["sync.provider_unit"]["state"] == "canary"
     assert by_kind["sync.provider_unit"]["route"] == "river_canary"
     assert by_kind["system.sync_coverage_refresh"]["state"] == "celery_removed"
     assert by_kind["system.sync_coverage_refresh"]["route"] == "river"
     assert by_kind["system.sync_coverage_refresh"]["rollback_route"] == "none"
+    assert by_kind["sync.team_repo_ownership_derivation"]["state"] == "celery_removed"
+    assert by_kind["sync.team_repo_ownership_derivation"]["route"] == "river"
+    assert by_kind["sync.team_repo_ownership_derivation"]["rollback_route"] == "none"

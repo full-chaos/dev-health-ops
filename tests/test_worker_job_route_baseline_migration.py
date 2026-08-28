@@ -56,11 +56,13 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             )
             # CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics
             # (registered handlers with zero producer anywhere) -- 25 minus
-            # those two, plus the post-0064 system.sync_coverage_refresh
-            # addition asserted below.
-            assert len(registry_kinds) == 23
+            # those two, plus the post-0064 system.sync_coverage_refresh and
+            # CHAOS-4365 sync.team_repo_ownership_derivation additions
+            # asserted below.
+            assert len(registry_kinds) == 24
             assert set(registry_kinds) - set(migration._KINDS) == {
-                "system.sync_coverage_refresh"
+                "system.sync_coverage_refresh",
+                "sync.team_repo_ownership_derivation",
             }
             rows = connection.execute(
                 sa.text(

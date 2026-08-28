@@ -27,6 +27,7 @@ from .models import (
     KIND_SYNC_COVERAGE_REFRESH,
     KIND_SYNC_PROVIDER_UNIT,
     KIND_TEAM_AUTOIMPORT,
+    KIND_TEAM_REPO_OWNERSHIP_DERIVATION,
     KIND_WEBHOOK_DELIVERY,
     KIND_WORK_GRAPH_BUILD,
     MAX_ENVELOPE_BYTES,
@@ -59,6 +60,7 @@ from .models import (
     ScheduledReportExecutionPayload,
     SyncCoverageRefreshPayload,
     TeamAutoimportPayload,
+    TeamRepoOwnershipDerivationPayload,
     WebhookDeliveryPayload,
     WorkGraphBuildPayload,
 )
@@ -122,6 +124,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_INVESTMENT_CHUNK,
         KIND_INVESTMENT_FINALIZE,
         KIND_TEAM_AUTOIMPORT,
+        KIND_TEAM_REPO_OWNERSHIP_DERIVATION,
         *_REMAINING_PAYLOAD_BY_KIND,
         KIND_SYNC_PROVIDER_UNIT,
     }:
@@ -165,6 +168,7 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         KIND_INVESTMENT_MATERIALIZE,
         KIND_WORK_GRAPH_BUILD,
         KIND_TEAM_AUTOIMPORT,
+        KIND_TEAM_REPO_OWNERSHIP_DERIVATION,
         *_REMAINING_PAYLOAD_BY_KIND,
         KIND_SYNC_PROVIDER_UNIT,
     }
@@ -246,6 +250,12 @@ def decode_envelope(kind: str, data: bytes | str) -> Envelope:
         payload = TeamAutoimportPayload(
             sync_run_id=_decode_reference(envelope["payload"], "sync_run_id")
         )
+    elif kind == KIND_TEAM_REPO_OWNERSHIP_DERIVATION:
+        if domain_type != TeamRepoOwnershipDerivationPayload.DOMAIN_TYPE:
+            raise ContractDecodeError("domain.type does not match job kind")
+        payload = TeamRepoOwnershipDerivationPayload(
+            sync_run_id=_decode_reference(envelope["payload"], "sync_run_id")
+        )
     elif kind == KIND_WORK_GRAPH_BUILD:
         if domain_type != WorkGraphBuildPayload.DOMAIN_TYPE:
             raise ContractDecodeError("domain.type does not match job kind")
@@ -322,6 +332,7 @@ def build_envelope(
             InvestmentChunkPayload,
             InvestmentFinalizePayload,
             TeamAutoimportPayload,
+            TeamRepoOwnershipDerivationPayload,
             WebhookDeliveryPayload,
             *_REMAINING_PAYLOAD_TYPES,
             ProviderUnitPayload,
@@ -400,6 +411,8 @@ def encode_envelope(envelope: Envelope) -> bytes:
         kind = KIND_INVESTMENT_FINALIZE
     elif isinstance(envelope.payload, TeamAutoimportPayload):
         kind = KIND_TEAM_AUTOIMPORT
+    elif isinstance(envelope.payload, TeamRepoOwnershipDerivationPayload):
+        kind = KIND_TEAM_REPO_OWNERSHIP_DERIVATION
     elif isinstance(envelope.payload, _REMAINING_PAYLOAD_TYPES):
         kind = envelope.payload.KIND
     elif isinstance(envelope.payload, ProviderUnitPayload):
@@ -645,6 +658,8 @@ def _payload_document(payload: object) -> dict[str, Any]:
     if isinstance(payload, DailyMetricsFinalizePayload):
         return {"run_id": payload.run_id}
     if isinstance(payload, TeamAutoimportPayload):
+        return {"sync_run_id": payload.sync_run_id}
+    if isinstance(payload, TeamRepoOwnershipDerivationPayload):
         return {"sync_run_id": payload.sync_run_id}
     if isinstance(payload, WorkGraphBuildPayload):
         return {"request_id": payload.request_id}

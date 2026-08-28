@@ -21,5 +21,6 @@ Use Reference for exact facts. Use task guides under **Use**, **Administer**, **
 - [Product taxonomies](taxonomies/index.md)
 - [Provider limits and compatibility](limits-and-compatibility/index.md)
 - [Deprecations and replacements](deprecations/index.md)
+- [Runtime](runtime/index.md)
 
 Generated facts must identify the code or schema revision that produced them.

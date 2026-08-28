@@ -234,6 +234,9 @@ nav:
           - Provider limits: reference/limits-and-compatibility/provider-limits.md
           - Version compatibility: reference/limits-and-compatibility/compatibility.md
       - Deprecations: reference/deprecations/index.md
+      - Runtime:
+          - reference/runtime/index.md
+          - Python↔Go live-path ledger: reference/runtime/python-go-live-path-ledger.md
   - Contribute:
       - contribute/index.md
       - Get started:

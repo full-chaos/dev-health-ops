@@ -46,12 +46,29 @@ func TestBuildScheduledPlanCollapsesWorkItemFamilyAndUsesEarliestWatermark(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4078: "prs" is now ALSO a fold-family member (the PR-social
+	// family's own canonical identity), so it no longer plans through the
+	// individual per-dataset path -- it plans via foldContributingFamilyUnit,
+	// alongside the work-item family's canonical claim. Two units, found by
+	// dataset key rather than a fixed index since the fold call order is an
+	// implementation detail.
 	if len(units) != 2 {
 		t.Fatalf("len(units) = %d, want 2: %+v", len(units), units)
 	}
-	family := units[1]
-	if family.Dataset != canonicalWorkItemsDataset || family.WindowStart == nil || !family.WindowStart.Equal(items) {
-		t.Fatalf("family unit = %+v, want canonical work-items at earliest watermark", family)
+	var family, prsUnit *PlannedUnit
+	for index := range units {
+		switch units[index].Dataset {
+		case canonicalWorkItemsDataset:
+			family = &units[index]
+		case "prs":
+			prsUnit = &units[index]
+		}
+	}
+	if family == nil {
+		t.Fatalf("no canonical work-items unit in %+v", units)
+	}
+	if family.WindowStart == nil || !family.WindowStart.Equal(items) {
+		t.Fatalf("family unit = %+v, want canonical work-items at earliest watermark", *family)
 	}
 	for _, dataset := range workitemcontract.FamilyDatasets() {
 		flag := familyDatasetFlag(dataset)
@@ -61,6 +78,12 @@ func TestBuildScheduledPlanCollapsesWorkItemFamilyAndUsesEarliestWatermark(t *te
 	}
 	if !family.ProcessorFlags["sync_prs"] {
 		t.Errorf("sync_prs missing from %+v", family.ProcessorFlags)
+	}
+	if prsUnit == nil {
+		t.Fatalf("no prs unit (PR-social fold) in %+v", units)
+	}
+	if !prsUnit.ProcessorFlags["family_dataset_prs"] || !prsUnit.ProcessorFlags["sync_prs"] {
+		t.Errorf("prs fold unit missing expected flags: %+v", prsUnit.ProcessorFlags)
 	}
 }
 
@@ -185,6 +208,50 @@ func TestBuildScheduledPlanNeverPlansAnAliasIdentityEvenWithACanonicalSibling(t 
 			"units=%+v, want only the canonical prs writer: pr-comments is never independently plannable",
 			units,
 		)
+	}
+}
+
+func TestBuildScheduledPlanFoldsAnAliasOnlySelectionOntoItsCanonicalWriter(t *testing.T) {
+	// CHAOS-4078 acceptance / CHAOS-4125 root cause: an org that enables ONLY
+	// an alias -- no canonical sibling at all -- previously planned NOTHING
+	// (TestBuildScheduledPlanNeverPlansAnAliasIdentityEvenWithACanonicalSibling
+	// only covers the sibling-present case). Now it plans exactly one unit
+	// under the canonical writer, carrying the alias's own completion flag.
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		provider  string
+		alias     string
+		canonical string
+	}{
+		{"github pr-comments", "github", "pr-comments", "prs"},
+		{"github pr-reviews", "github", "pr-reviews", "prs"},
+		{"github tests", "github", "tests", "cicd"},
+		{"gitlab pr-comments", "gitlab", "pr-comments", "prs"},
+		{"gitlab tests", "gitlab", "tests", "cicd"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			units, err := BuildScheduledPlan(PlannerInput{
+				OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+				Sources: []PlanSource{
+					{ID: "source", ExternalID: "owner/repo", Provider: test.provider, FullName: "owner/repo"},
+				},
+				Datasets: []PlanDataset{{Key: test.alias}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(units) != 1 || units[0].Dataset != test.canonical {
+				t.Fatalf(
+					"units=%+v, want exactly one unit under canonical %q for alias-only selection %q",
+					units, test.canonical, test.alias,
+				)
+			}
+			flag := familyDatasetFlag(test.alias)
+			if !units[0].ProcessorFlags[flag] {
+				t.Errorf("completion flag %q missing from %+v", flag, units[0].ProcessorFlags)
+			}
+		})
 	}
 }
 

@@ -87,6 +87,57 @@ func TestWorkItemAliasCompletionMetadata(t *testing.T) {
 			},
 			wantErr: ErrInvalidConfiguration,
 		},
+		// CHAOS-4078: PR-social and TestOps folds are non-atomic -- unlike
+		// work-items, a subset of members present is the NORMAL shape, not a
+		// malformed claim.
+		{
+			name:     "pr-social fold fans back only the enabled alias",
+			provider: "github", dataset: "prs",
+			flags:     map[string]bool{"family_dataset_pr_comments": true, "sync_prs": true},
+			result:    map[string]any{"prs_synced": 3, "pr_reviews_synced": 0},
+			wantKeys:  []string{"pr-comments"},
+			wantAudit: []string{"pr-comments"},
+		},
+		{
+			name:     "pr-social fold fans back multiple enabled aliases in family order",
+			provider: "gitlab", dataset: "prs",
+			flags: map[string]bool{
+				"family_dataset_pr_reviews":  true,
+				"family_dataset_pr_comments": true,
+			},
+			result:    map[string]any{"records": 4},
+			wantKeys:  []string{"pr-reviews", "pr-comments"},
+			wantAudit: []string{"pr-reviews", "pr-comments"},
+		},
+		{
+			name:     "prs claim with no fold flags fans back only its own identity",
+			provider: "github", dataset: "prs",
+			flags:  map[string]bool{"sync_prs": true},
+			result: map[string]any{"records": 1}, wantKeys: []string{"prs"},
+		},
+		{
+			name:     "testops fold fans back only the enabled alias",
+			provider: "github", dataset: "cicd",
+			flags:     map[string]bool{"family_dataset_tests": true, "sync_cicd": true},
+			result:    map[string]any{"records": 5},
+			wantKeys:  []string{"tests"},
+			wantAudit: []string{"tests"},
+		},
+		{
+			name:     "testops fold predeclared audit fails closed",
+			provider: "gitlab", dataset: "cicd",
+			flags: map[string]bool{"family_dataset_tests": true},
+			result: map[string]any{
+				"records": 1, "family_datasets": []string{"cicd"},
+			},
+			wantErr: ErrInvalidConfiguration,
+		},
+		{
+			name:     "unknown fold flag fails closed",
+			provider: "github", dataset: "prs",
+			flags:  map[string]bool{"family_dataset_bogus": true},
+			result: map[string]any{"records": 1}, wantErr: ErrInvalidConfiguration,
+		},
 	}
 
 	for _, test := range tests {

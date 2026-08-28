@@ -6,19 +6,41 @@ import (
 	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PostgresRepository struct{ Pool *pgxpool.Pool }
+// PostgresRepository's Metrics field is deliberately optional (nil-safe on
+// every Record* call, see providerfoundation.Metrics) so every existing and
+// test-only construction site keeps compiling unchanged.
+type PostgresRepository struct {
+	Pool    *pgxpool.Pool
+	Metrics *providerfoundation.Metrics
+}
 
-func NewPostgresRepository(pool *pgxpool.Pool) (*PostgresRepository, error) {
+// NewPostgresRepository constructs the production unit repository. metrics is
+// variadic and optional (at most the first is used), matching the convention
+// already used by NewNativeDispatchSyncRunService's observers parameter, so
+// every existing one-argument call site keeps compiling. Record* calls no-op
+// on a nil receiver, so omitting it is safe -- pass the process's shared
+// providerfoundation.Metrics instance to make unit claim/fail counts
+// observable on the same /metrics surface as fetch-level telemetry
+// (CHAOS-4078: the pr-reviews/pr-comments/tests alias-fold datasets that
+// CHAOS-4125 found stuck at 100% failure needed exactly this -- a
+// per-dataset, per-reason failure counter, not just a durable DB row nobody
+// is alerting on).
+func NewPostgresRepository(pool *pgxpool.Pool, metrics ...*providerfoundation.Metrics) (*PostgresRepository, error) {
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return &PostgresRepository{Pool: pool}, nil
+	var repositoryMetrics *providerfoundation.Metrics
+	if len(metrics) > 0 {
+		repositoryMetrics = metrics[0]
+	}
+	return &PostgresRepository{Pool: pool, Metrics: repositoryMetrics}, nil
 }
 
 func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRequest) (Claim, error) {
@@ -81,6 +103,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	if err := claim.Validate(); err != nil {
 		return Claim{}, err
 	}
+	repository.Metrics.RecordUnitClaimed(claim.Provider, claim.Dataset)
 	return claim, nil
 }
 
@@ -481,6 +504,7 @@ func (repository *PostgresRepository) Fail(
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
+	repository.Metrics.RecordUnitFailed(claim.Provider, claim.Dataset, category)
 	return nil
 }
 

@@ -163,17 +163,22 @@ def is_plannable(provider: str, dataset: str) -> bool:
 def canonical_identity(provider: str, dataset: str) -> str | None:
     """The canonical writer identity that serves this pair, or ``None``.
 
-    This is the registry's answer to "which writer owns this alias", published
-    so the alias-fold work in CHAOS-4078 has one authority to plan from rather
-    than a second hand-maintained alias table. It is deliberately NOT consulted
-    by the planners yet: folding an alias-only selection onto its canonical
-    writer also requires normalising watermark loading and sync-coverage scope
-    matching, and doing it at the planner alone silently breaks both.
+    This is the registry's answer to "which writer owns this alias" -- the
+    one authority CHAOS-4078's alias-fold reads from, on both the Python
+    (``sync.planner._build_fold_family_units``) and Go
+    (``internal/scheduler/sync.foldContributingFamilyUnit``,
+    ``providersync.canonicalRouteIdentity``) sides, so the two cannot drift
+    onto separate hand-maintained alias tables.
 
-    A third surface used to be on that list -- the Celery fallback's processor
-    flags -- but CHAOS-4054 step 4 deleted the fallback, so an alias-only
-    selection can no longer diverge there. The remaining two are what CHAOS-4078
-    still has to normalise.
+    CHAOS-4078 normalised the two surfaces that made an earlier, reverted
+    planner-only fold unsafe: watermark loading resolves each alias's OWN
+    configured row before merging (never the canonical identity's), and
+    sync-coverage scope matching (``api/services/sync_coverage.py``) expands
+    a canonical composite key back to whichever alias child keys its
+    processor flags name. A third surface that used to be on this list --
+    the Celery fallback's processor flags -- is moot: CHAOS-4054 step 4
+    deleted the fallback entirely, so an alias-only selection can no longer
+    diverge there.
     """
 
     key = (provider.strip().lower(), dataset.strip().lower())

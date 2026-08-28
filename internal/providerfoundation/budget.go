@@ -273,6 +273,8 @@ type Metrics struct {
 	workItemTeamAttributionWritten map[string]uint64
 	teamAttributionMembershipLayer map[string]uint64
 	projectsV2DegradedSnapshots    map[string]uint64
+	unitClaimed                    map[string]uint64
+	unitFailed                     map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -291,6 +293,8 @@ func NewMetrics() *Metrics {
 		workItemTeamAttributionWritten: map[string]uint64{},
 		teamAttributionMembershipLayer: map[string]uint64{},
 		projectsV2DegradedSnapshots:    map[string]uint64{},
+		unitClaimed:                    map[string]uint64{},
+		unitFailed:                     map[string]uint64{},
 	}
 }
 
@@ -599,6 +603,70 @@ func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unitTerminalWithRows[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordUnitClaimed counts one provider unit successfully claimed for
+// execution, by bounded provider and dataset (CHAOS-4078). This is the
+// planned-work half of the planned/failed pair the CHAOS-4125 incident found
+// missing: pr-reviews/pr-comments/tests planned zero units for 36+ hours with
+// no counter anywhere that would have shown a flat line instead of the
+// "0 successes" durable-row-only signal an operator had to query for by
+// hand. Every claim corresponds to exactly one persisted, previously-planned
+// sync_run_units row; this does not double count retries as new plans.
+func (m *Metrics) RecordUnitClaimed(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unitClaimed[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// metricUnitFailureReasonVocabulary is the closed set of durable
+// sync_run_units failure categories (CHAOS-4078). Sourced from every reason
+// currently written into a claim's terminal `error_category` across
+// internal/syncreconciler, internal/syncdispatchruntime, and
+// internal/providersync. An unrecognized category collapses to "other"
+// rather than opening the label dimension to a hostile or buggy producer.
+var metricUnitFailureReasonVocabulary = map[string]struct{}{
+	"feature_disabled":              {},
+	"terminal_river_delivery":       {},
+	"provider_dataset_unavailable":  {},
+	"rate_limit_cooldown_deferred":  {},
+	"rate_limit_cooldown_exhausted": {},
+	"budget_deferred":               {},
+	"budget_deferral_exhausted":     {},
+	"deferral_exhausted":            {},
+	"rate_limit":                    {},
+	"dispatch_denied":               {},
+	"pagination_incomplete":         {},
+	"lease_lost":                    {},
+	"provider_error":                {},
+}
+
+// MetricUnitFailureReasonLabel bounds a unit failure category label.
+func MetricUnitFailureReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricUnitFailureReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordUnitFailed counts one provider unit that terminalized as FAILED, by
+// bounded provider, dataset, and reason (CHAOS-4078). This is the counter
+// CHAOS-4125's own forensics comment asked for: a dataset stuck at 100%
+// failure with zero successes is exactly the "zero-success-per-dataset over
+// N hours" shape CHAOS-4124 wants alertable, and prior to this the only way
+// to see it was a hand-run SQL query against sync_run_units.error.
+func (m *Metrics) RecordUnitFailed(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unitFailed[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricUnitFailureReasonLabel(reason)]++
 }
 
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
@@ -918,6 +986,20 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_all_artifacts_unreadable_total",
 		"Provider units failed because every cicd/tests artifact observed was unreadable, by bounded provider and dataset.",
 		m.allArtifactsUnreadable,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_unit_claimed_total",
+		"Provider units successfully claimed for execution, by bounded provider and dataset (CHAOS-4078).",
+		m.unitClaimed,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_unit_failed_total",
+		"Provider units terminalized FAILED, by bounded provider, dataset, and reason (CHAOS-4078).",
+		"reason", m.unitFailed,
 	); err != nil {
 		return err
 	}

@@ -14,6 +14,8 @@ from enum import StrEnum
 
 from dev_health_ops.sync.family_flags import (
     FAMILY_DATASET_FLAG_PREFIX,
+    PR_SOCIAL_DATASETS,
+    TESTOPS_DATASETS,
     WORK_ITEM_DATASETS,
     family_dataset_flag,
 )
@@ -22,6 +24,11 @@ from dev_health_ops.sync.family_flags import (
 class FamilyExecutionMode(StrEnum):
     ATOMIC_CANONICAL = "atomic_canonical"
     INDEPENDENT = "independent"
+    # CHAOS-4078: an alias-only selection folds onto its canonical writer, but
+    # -- unlike ATOMIC_CANONICAL -- membership is not all-or-nothing. Only the
+    # datasets the org actually enabled contribute a window and a completion
+    # flag; a caught-up or never-enabled sibling is never forced along.
+    FOLD_CONTRIBUTING = "fold_contributing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +62,18 @@ _POLICIES = (
         datasets=PAGERDUTY_INCIDENT_DATASETS,
         mode=FamilyExecutionMode.INDEPENDENT,
     ),
+    ProviderFamilyPolicy(
+        providers=frozenset({"github", "gitlab"}),
+        canonical_dataset="prs",
+        datasets=PR_SOCIAL_DATASETS,
+        mode=FamilyExecutionMode.FOLD_CONTRIBUTING,
+    ),
+    ProviderFamilyPolicy(
+        providers=frozenset({"github", "gitlab"}),
+        canonical_dataset="cicd",
+        datasets=TESTOPS_DATASETS,
+        mode=FamilyExecutionMode.FOLD_CONTRIBUTING,
+    ),
 )
 
 
@@ -77,9 +96,12 @@ def validate_provider_family_claim(
     """Validate one claim against its family's execution mode.
 
     Only the canonical claim carrying every declared family flag as the literal
-    boolean ``True`` is admissible for an atomic family. Unknown
-    ``family_dataset_*`` flags fail closed. Independent families preserve their
-    existing per-dataset claim shape under D16.
+    boolean ``True`` is admissible for an ATOMIC_CANONICAL family. Unknown
+    ``family_dataset_*`` flags fail closed. INDEPENDENT families preserve their
+    existing per-dataset claim shape under D16, and FOLD_CONTRIBUTING families
+    (CHAOS-4078: PR-social, TestOps) admit a canonical claim carrying any
+    non-empty subset of its declared flags -- unlike ATOMIC_CANONICAL, a
+    partial fold is exactly the intended shape, not a malformed claim.
 
     ``strict_atomic`` remains a parameter so a caller can validate a claim
     without asserting atomicity (the capability contract still describes both
@@ -90,7 +112,7 @@ def validate_provider_family_claim(
     policy = provider_family_policy(provider, dataset)
     if (
         policy is None
-        or policy.mode is FamilyExecutionMode.INDEPENDENT
+        or policy.mode is not FamilyExecutionMode.ATOMIC_CANONICAL
         or not strict_atomic
     ):
         return True

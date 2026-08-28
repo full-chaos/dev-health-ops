@@ -651,6 +651,49 @@ def test_query_dataset_keys_for_scope_unchanged_for_non_family_scope():
     assert set(keys) == {"commits", "prs"}
 
 
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+def test_effective_dataset_keys_expands_pr_social_fold(provider):
+    """CHAOS-4078: a composite ``prs`` unit produced by the PR-social fold
+    expands to only the enabled alias(es) -- e.g. pr-comments alone when
+    prs/pr-reviews were never enabled -- so a successful fold run advances
+    coverage for the dataset the org actually asked for."""
+    unit = _composite_unit(
+        provider=provider,
+        dataset_key="prs",
+        processor_flags={"family_dataset_pr_comments": True},
+    )
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["pr-comments"]
+
+
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+def test_effective_dataset_keys_expands_testops_fold(provider):
+    unit = _composite_unit(
+        provider=provider,
+        dataset_key="cicd",
+        processor_flags={"family_dataset_tests": True},
+    )
+
+    assert list(_effective_dataset_keys_for_unit(unit)) == ["tests"]
+
+
+def test_query_dataset_keys_for_scope_includes_canonical_prs_for_pr_comments_child():
+    """CHAOS-4078: a coverage query scoped to the alias ``pr-comments`` must
+    also query rows keyed under the canonical ``prs`` identity, or a
+    successful fold-collapsed unit is invisible to it."""
+    keys = _query_dataset_keys_for_scope(("pr-comments",))
+
+    assert "prs" in keys
+    assert "pr-comments" in keys
+
+
+def test_query_dataset_keys_for_scope_includes_canonical_cicd_for_tests_child():
+    keys = _query_dataset_keys_for_scope(("tests",))
+
+    assert "cicd" in keys
+    assert "tests" in keys
+
+
 @pytest.mark.parametrize("provider", _WORK_ITEM_FAMILY_PROVIDERS)
 def test_composite_success_supersedes_old_failed_child_only_when_flag_true(
     provider,

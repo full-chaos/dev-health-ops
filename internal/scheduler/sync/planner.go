@@ -30,6 +30,14 @@ const (
 	canonicalWorkItemsDataset   = "work-items"
 	familyDatasetFlagPrefix     = "family_dataset_"
 
+	// CHAOS-4078: the PR-social and TestOps alias families' canonical writer
+	// identities. Unlike the work-item family above, folding these is
+	// non-atomic (FamilyExecutionMode.FOLD_CONTRIBUTING on the Python side):
+	// only the datasets an org actually enabled contribute a window and a
+	// completion flag. See foldContributingFamilyUnit.
+	canonicalPRSocialDataset = "prs"
+	canonicalTestOpsDataset  = "cicd"
+
 	// heavyCostClass is the registry cost class the incremental window ratchet
 	// scopes to (CHAOS-3412 clause C2). Resolved from datasetSpecification, not
 	// from a hardcoded key list, so a newly-registered HEAVY dataset inherits
@@ -170,6 +178,14 @@ var supportedProviderDatasets = map[string]map[string]struct{}{
 	"pagerduty":    setOf("services", "business-services", "escalation-policies", "schedules", "on-calls", "users", "teams", "incidents", "incident-alerts", "incident-log-entries", "incident-notes"),
 }
 
+// CHAOS-4078 fold families, in the order supportedProviderDatasets lists
+// them. prs is deliberately its own first member (mirrors the work-item
+// family, whose canonical "work-items" is WORK_ITEM_DATASETS[0] on the
+// Python side): a singleton "prs"-only selection folds through the same path
+// as a multi-member selection, so there is exactly one code path, not two.
+var prSocialFamilyDatasets = []string{"prs", "pr-reviews", "pr-comments"}
+var testOpsFamilyDatasets = []string{"cicd", "tests"}
+
 var lightDatasets = setOf(
 	"repo-metadata", "incidents", "work-item-labels", "work-item-projects",
 	"services", "business-services", "escalation-policies", "schedules", "users", "teams",
@@ -233,6 +249,8 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		prsEnabled := false
 		familyDatasets := workitemcontract.FamilyDatasets()
 		family := make([]PlanDataset, 0, len(familyDatasets))
+		prSocial := make([]PlanDataset, 0, len(prSocialFamilyDatasets))
+		testOps := make([]PlanDataset, 0, len(testOpsFamilyDatasets))
 		for _, dataset := range input.Datasets {
 			spec, ok := datasetSpecification(provider, dataset.Key)
 			if !ok {
@@ -245,10 +263,22 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				family = append(family, dataset)
 				continue
 			}
+			// CHAOS-4078: fold families are collapsed below, exactly like the
+			// work-item family above. Defer them here, before the
+			// RouteReady/Plannable gate -- an alias member is never
+			// independently plannable by design, so gating it individually
+			// would silently drop it instead of folding it onto its
+			// canonical writer.
+			if slices.Contains(prSocialFamilyDatasets, dataset.Key) {
+				prSocial = append(prSocial, dataset)
+				continue
+			}
+			if slices.Contains(testOpsFamilyDatasets, dataset.Key) {
+				testOps = append(testOps, dataset)
+				continue
+			}
 			// CHAOS-4054: plan only identities the execution registry says are
-			// independently plannable. An alias identity (github pr-comments,
-			// gitlab tests, ...) folds into its canonical writer and is never
-			// minted as its own unit; a pair that is not RouteReady is not
+			// independently plannable. A pair that is not RouteReady is not
 			// shipped. This reads the registry alone -- there is no route
 			// enablement env plane to consult. Family datasets are excluded
 			// from this check above: their admission is governed by the
@@ -272,95 +302,215 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			}
 			units = append(units, newPlannedUnit(input, source, dataset.Key, spec, start, end))
 		}
-		if len(family) == 0 {
-			continue
-		}
 		// Individual family ALIASES are deliberately unchecked above -- their
 		// admission is the atomic-family collapse's business. The CANONICAL
 		// claim this collapse emits ("work-items") is an ordinary plannable
 		// identity, so gate it here, after collapse, the same way every
 		// non-family dataset already is above.
-		canonicalDescriptor, known := providersync.Descriptor(
-			provider, canonicalWorkItemsDataset,
-		)
-		if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
-			// CHAOS-4060: same executed-proof requirement as the non-family
-			// gate above, applied to the canonical claim the family collapse
-			// emits.
-			!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
-			continue
+		//
+		// CHAOS-4078: extracted to a helper (buildWorkItemFamilyUnit) rather
+		// than an early `continue` on an empty family -- a source with no
+		// work-item-family datasets still needs the PR-social/TestOps fold
+		// calls below to run.
+		if unit, ok := buildWorkItemFamilyUnit(
+			input, source, provider, now, before, family, familyDatasets, prsEnabled,
+		); ok {
+			units = append(units, unit)
 		}
-		canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
+
+		// CHAOS-4078: fold the PR-social and TestOps alias families onto
+		// their canonical writer, the same collapse shape as the work-item
+		// family above but non-atomic (FOLD_CONTRIBUTING): only the datasets
+		// this org actually enabled contribute a window and a completion
+		// flag.
+		if foldedUnit, ok := foldContributingFamilyUnit(
+			input, source, provider, now, before, prSocial, canonicalPRSocialDataset,
+		); ok {
+			units = append(units, foldedUnit)
+		}
+		if foldedUnit, ok := foldContributingFamilyUnit(
+			input, source, provider, now, before, testOps, canonicalTestOpsDataset,
+		); ok {
+			units = append(units, foldedUnit)
+		}
+	}
+	return units, nil
+}
+
+// buildWorkItemFamilyUnit collapses the atomic work-item family (all
+// providers: work-items + its four aliases) onto its canonical
+// "work-items" claim. Extracted from BuildScheduledPlan verbatim (CHAOS-4078)
+// so an empty family no longer short-circuits the PR-social/TestOps folds
+// that run after it in the same source iteration.
+func buildWorkItemFamilyUnit(
+	input PlannerInput, source PlanSource, provider string,
+	now, before time.Time, family []PlanDataset, familyDatasets []string, prsEnabled bool,
+) (PlannedUnit, bool) {
+	if len(family) == 0 {
+		return PlannedUnit{}, false
+	}
+	canonicalDescriptor, known := providersync.Descriptor(
+		provider, canonicalWorkItemsDataset,
+	)
+	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
+		// CHAOS-4060: same executed-proof requirement as the non-family gate
+		// in BuildScheduledPlan, applied to the canonical claim the family
+		// collapse emits.
+		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		return PlannedUnit{}, false
+	}
+	canonical, ok := datasetSpecification(provider, canonicalWorkItemsDataset)
+	if !ok {
+		return PlannedUnit{}, false
+	}
+	// Each family dataset owns its own watermark identity, so resolve each
+	// one independently and merge -- earliest start (a nil start means "no
+	// lower bound" and wins), latest end. CHAOS-3412: a family dataset
+	// already synced past the requested end resolves to ZERO windows and is
+	// DROPPED before the merge; if none contribute, the whole composite is
+	// dropped. Mirrors _build_work_item_family_units' `contributing` filter,
+	// which exists because the pre-fix index-aligned merge raised on a
+	// mismatched window count and took down a merely partially-caught-up
+	// plan.
+	var earliest *time.Time
+	var latest time.Time
+	contributing := make([]PlanDataset, 0, len(family))
+	openStart := false
+	for _, dataset := range family {
+		spec, ok := datasetSpecification(provider, dataset.Key)
 		if !ok {
 			continue
 		}
-		// Each family dataset owns its own watermark identity, so resolve each
-		// one independently and merge -- earliest start (a nil start means "no
-		// lower bound" and wins), latest end. CHAOS-3412: a family dataset
-		// already synced past the requested end resolves to ZERO windows and is
-		// DROPPED before the merge; if none contribute, the whole composite is
-		// dropped. Mirrors _build_work_item_family_units' `contributing` filter,
-		// which exists because the pre-fix index-aligned merge raised on a
-		// mismatched window count and took down a merely partially-caught-up
-		// plan.
-		var earliest *time.Time
-		var latest time.Time
-		contributing := make([]PlanDataset, 0, len(family))
-		openStart := false
-		for _, dataset := range family {
-			spec, ok := datasetSpecification(provider, dataset.Key)
-			if !ok {
-				continue
-			}
-			start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
-			if !ok {
-				continue
-			}
-			contributing = append(contributing, dataset)
-			if latest.IsZero() || end.After(latest) {
-				latest = end
-			}
-			if start == nil {
-				openStart = true
-				continue
-			}
-			if earliest == nil || start.Before(*earliest) {
-				value := *start
-				earliest = &value
-			}
-		}
-		if len(contributing) == 0 {
+		start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
+		if !ok {
 			continue
 		}
-		if openStart {
-			earliest = nil
+		contributing = append(contributing, dataset)
+		if latest.IsZero() || end.After(latest) {
+			latest = end
 		}
-		flags := cloneFlags(canonical.ProcessorFlags)
-		// CHAOS-3606: the native work-item route has one indivisible all-five
-		// writer. A sibling with an empty/caught-up window still has no
-		// independent owner while this canonical unit executes, so its literal
-		// flag records route ownership rather than contribution to the merged
-		// window above.
-		//
-		// CHAOS-4054: unconditional for every atomic family, matching
-		// _build_work_item_family_units and the now-unconditional strict
-		// admission in providerunit.validateProviderFamilyExecutionClaim.
-		// Stamping only the contributing aliases for gitlab/jira/linear would
-		// mint a canonical claim the executor must reject as incomplete — a
-		// self-inflicted route-fault loop the moment one sibling is caught up.
-		for _, dataset := range familyDatasets {
-			flags[familyDatasetFlag(dataset)] = true
+		if start == nil {
+			openStart = true
+			continue
 		}
-		if provider == "github" {
-			// CHAOS-646: thread the PRS-as-work-items signal onto the composite
-			// so _work_item_kwargs sets include_pull_requests correctly.
-			flags["sync_prs"] = prsEnabled
+		if earliest == nil || start.Before(*earliest) {
+			value := *start
+			earliest = &value
 		}
-		unit := newPlannedUnit(input, source, canonicalWorkItemsDataset, canonical, earliest, latest)
-		unit.ProcessorFlags = flags
-		units = append(units, unit)
 	}
-	return units, nil
+	if len(contributing) == 0 {
+		return PlannedUnit{}, false
+	}
+	if openStart {
+		earliest = nil
+	}
+	flags := cloneFlags(canonical.ProcessorFlags)
+	// CHAOS-3606: the native work-item route has one indivisible all-five
+	// writer. A sibling with an empty/caught-up window still has no
+	// independent owner while this canonical unit executes, so its literal
+	// flag records route ownership rather than contribution to the merged
+	// window above.
+	//
+	// CHAOS-4054: unconditional for every atomic family, matching
+	// _build_work_item_family_units and the now-unconditional strict
+	// admission in providerunit.validateProviderFamilyExecutionClaim.
+	// Stamping only the contributing aliases for gitlab/jira/linear would
+	// mint a canonical claim the executor must reject as incomplete — a
+	// self-inflicted route-fault loop the moment one sibling is caught up.
+	for _, dataset := range familyDatasets {
+		flags[familyDatasetFlag(dataset)] = true
+	}
+	if provider == "github" {
+		// CHAOS-646: thread the PRS-as-work-items signal onto the composite
+		// so _work_item_kwargs sets include_pull_requests correctly.
+		flags["sync_prs"] = prsEnabled
+	}
+	unit := newPlannedUnit(input, source, canonicalWorkItemsDataset, canonical, earliest, latest)
+	unit.ProcessorFlags = flags
+	return unit, true
+}
+
+// foldContributingFamilyUnit collapses a non-atomic alias family (CHAOS-4078:
+// github/gitlab PR-social {prs,pr-reviews,pr-comments}->prs and TestOps
+// {cicd,tests}->cicd) onto its canonical writer. Unlike BuildScheduledPlan's
+// work-item-family block above, membership is NOT all-or-nothing: only the
+// datasets the org actually enabled (“members“) contribute a window and
+// receive a “family_dataset_<key>“ completion flag, mirroring the shape
+// PostgresRepository.Complete already used for every non-github work-item
+// provider.
+func foldContributingFamilyUnit(
+	input PlannerInput, source PlanSource, provider string,
+	now, before time.Time, members []PlanDataset, canonicalDataset string,
+) (PlannedUnit, bool) {
+	if len(members) == 0 {
+		return PlannedUnit{}, false
+	}
+	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalDataset)
+	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
+		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
+		return PlannedUnit{}, false
+	}
+	canonicalSpec, ok := datasetSpecification(provider, canonicalDataset)
+	if !ok {
+		return PlannedUnit{}, false
+	}
+	// Each member owns its own watermark identity, so resolve independently
+	// using each member's OWN configured row (never the canonical identity),
+	// then merge (earliest start, latest end) -- exactly the work-item
+	// family's contributing-filter shape, which is what keeps watermark
+	// loading correct without loadPlanWatermarks needing any change: a
+	// pr-comments-only selection reads the pr-comments watermark row it
+	// actually wrote.
+	var earliest *time.Time
+	var latest time.Time
+	contributing := make([]PlanDataset, 0, len(members))
+	openStart := false
+	for _, dataset := range members {
+		spec, ok := datasetSpecification(provider, dataset.Key)
+		if !ok {
+			continue
+		}
+		start, end, ok := resolveWindow(input, source, dataset, spec, now, before)
+		if !ok {
+			continue
+		}
+		contributing = append(contributing, dataset)
+		if latest.IsZero() || end.After(latest) {
+			latest = end
+		}
+		if start == nil {
+			openStart = true
+			continue
+		}
+		if earliest == nil || start.Before(*earliest) {
+			value := *start
+			earliest = &value
+		}
+	}
+	if len(contributing) == 0 {
+		return PlannedUnit{}, false
+	}
+	if openStart {
+		earliest = nil
+	}
+	flags := cloneFlags(canonicalSpec.ProcessorFlags)
+	// CHAOS-4078: fan the completion flag -- and each member's own processor
+	// flags -- back only to the datasets this org actually enabled. This is
+	// the opposite of the work-item family's unconditional all-members
+	// stamp: a fold family never claims a sibling nobody asked to sync.
+	for _, dataset := range members {
+		flags[familyDatasetFlag(dataset.Key)] = true
+		memberSpec, ok := datasetSpecification(provider, dataset.Key)
+		if !ok {
+			continue
+		}
+		for flagName, flagValue := range memberSpec.ProcessorFlags {
+			flags[flagName] = flagValue
+		}
+	}
+	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
+	unit.ProcessorFlags = flags
+	return unit, true
 }
 
 // resolveWindow is the single window pipeline every planned unit goes through:

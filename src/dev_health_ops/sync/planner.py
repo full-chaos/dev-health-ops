@@ -124,6 +124,10 @@ from dev_health_ops.sync.executed_proof_ledger import (
 )
 from dev_health_ops.sync.family_flags import (
     FAMILY_CANONICAL_DATASET_KEY,
+    PR_SOCIAL_CANONICAL_DATASET_KEY,
+    PR_SOCIAL_DATASETS,
+    TESTOPS_CANONICAL_DATASET_KEY,
+    TESTOPS_DATASETS,
     WORK_ITEM_DATASETS,
     family_dataset_flag,
 )
@@ -719,36 +723,40 @@ def _build_planned_units(
         provider = source.provider
         prs_enabled = _prs_dataset_enabled(provider, datasets)
         family_specs: list[tuple[IntegrationDataset, DatasetSpec]] = []
+        pr_social_specs: list[tuple[IntegrationDataset, DatasetSpec]] = []
+        testops_specs: list[tuple[IntegrationDataset, DatasetSpec]] = []
         for dataset in datasets:
             spec = get_dataset_spec(provider, dataset.dataset_key)
             if spec is None or not spec.supported:
                 continue
 
+            # CHAOS-2721 (AD-3) / CHAOS-4078: family datasets are collapsed
+            # into a single composite unit per (source, window) below instead
+            # of one unit each. Defer them all here, before the routes_to_river
+            # gate -- an alias member is never independently routable by
+            # design (that is exactly what makes it an alias), so a per-alias
+            # gate would silently drop it instead of folding it.
+            if dataset.dataset_key in _WORK_ITEM_FAMILY_DATASETS:
+                family_specs.append((dataset, spec))
+                continue
+            if dataset.dataset_key in _PR_SOCIAL_DATASETS:
+                pr_social_specs.append((dataset, spec))
+                continue
+            if dataset.dataset_key in _TESTOPS_DATASETS:
+                testops_specs.append((dataset, spec))
+                continue
+
             # CHAOS-4054: a unit is only ever minted for an identity the
-            # capability matrix says is independently plannable. An alias
-            # identity (github pr-comments, gitlab tests, ...) folds into its
-            # canonical writer, and a pair that is not route-ready is not
-            # shipped -- either way no writer owns a unit of its own, so
-            # minting one guarantees an unserviceable unit (CHAOS-4047).
+            # capability matrix says is independently plannable. A pair that
+            # is not route-ready is not shipped -- minting one guarantees an
+            # unserviceable unit (CHAOS-4047).
             #
             # This reads the checked-in matrix ONLY. The transitional
             # switch-consultation this replaces was correct while the
             # WORKER_*_ENABLED plane existed; that plane is gone, so plan-time
             # admission is now a pure capability fact, symmetric with the Go
-            # scheduler's BuildScheduledPlan. Work-item-family datasets are
-            # deliberately excluded here: their admission is governed by the
-            # atomic-family collapse below.
-            if dataset.dataset_key not in _WORK_ITEM_FAMILY_DATASETS and (
-                not routes_to_river(provider, dataset.dataset_key)
-            ):
-                continue
-
-            # CHAOS-2721 (AD-3): work-item-family datasets are collapsed into a
-            # single composite unit per (source, window) below, instead of one
-            # unit each. Defer them; a single work-items crawl already emits the
-            # whole family.
-            if dataset.dataset_key in _WORK_ITEM_FAMILY_DATASETS:
-                family_specs.append((dataset, spec))
+            # scheduler's BuildScheduledPlan.
+            if not routes_to_river(provider, dataset.dataset_key):
                 continue
 
             processor_flags = dict(spec.processor_flags)
@@ -805,6 +813,33 @@ def _build_planned_units(
             or routes_to_river(provider, unit.dataset_key)
         ]
         planned_units.extend(family_units)
+
+        # CHAOS-4078: fold the PR-social (prs/pr-reviews/pr-comments -> prs)
+        # and TestOps (cicd/tests -> cicd) alias families onto their canonical
+        # writer, the same shape as the work-item family above but
+        # non-atomic: only the datasets this org actually enabled contribute
+        # a window and a completion flag.
+        for canonical_key, specs in (
+            (_PR_SOCIAL_CANONICAL_DATASET_KEY, pr_social_specs),
+            (_TESTOPS_CANONICAL_DATASET_KEY, testops_specs),
+        ):
+            fold_units = _build_fold_family_units(
+                session=session,
+                request=request,
+                integration=integration,
+                source=source,
+                provider=provider,
+                mode=mode,
+                now=now,
+                family_specs=specs,
+                canonical_dataset_key=canonical_key,
+            )
+            fold_units = [
+                unit
+                for unit in fold_units
+                if routes_to_river(provider, unit.dataset_key)
+            ]
+            planned_units.extend(fold_units)
     return planned_units
 
 
@@ -1070,6 +1105,108 @@ _FAMILY_CANONICAL_DATASET_KEY = FAMILY_CANONICAL_DATASET_KEY
 # in the pure family-flags module so coverage imports do not initialize planner
 # dependencies.
 _family_dataset_flag = family_dataset_flag
+
+# CHAOS-4078: the PR-social (prs/pr-reviews/pr-comments) and TestOps
+# (cicd/tests) alias families. Unlike the work-item family above, folding
+# these is non-atomic (FamilyExecutionMode.FOLD_CONTRIBUTING) -- see
+# _build_fold_family_units.
+_PR_SOCIAL_DATASETS: frozenset[str] = frozenset(PR_SOCIAL_DATASETS)
+_PR_SOCIAL_CANONICAL_DATASET_KEY = PR_SOCIAL_CANONICAL_DATASET_KEY
+_TESTOPS_DATASETS: frozenset[str] = frozenset(TESTOPS_DATASETS)
+_TESTOPS_CANONICAL_DATASET_KEY = TESTOPS_CANONICAL_DATASET_KEY
+
+
+def _build_fold_family_units(
+    *,
+    session: Session,
+    request: SyncPlanRequest,
+    integration: Integration,
+    source: IntegrationSource,
+    provider: str,
+    mode: str,
+    now: datetime,
+    family_specs: list[tuple[IntegrationDataset, DatasetSpec]],
+    canonical_dataset_key: str,
+) -> list[PlannedUnit]:
+    """Collapse a non-atomic alias family onto its canonical writer
+    (CHAOS-4078: PR-social prs/pr-reviews/pr-comments -> prs, TestOps
+    cicd/tests -> cicd).
+
+    Shaped like ``_build_work_item_family_units`` (same window-merge
+    machinery), but deliberately NOT atomic: only the datasets this org
+    actually enabled contribute a window and receive a
+    ``family_dataset_<key>`` completion flag. An org that enables only
+    ``pr-comments`` gets one ``prs`` unit carrying `family_dataset_pr_comments`
+    alone -- no sibling is forced along the way the work-item family forces
+    all five.
+    """
+    if not family_specs:
+        return []
+
+    canonical_spec = get_dataset_spec(provider, canonical_dataset_key)
+    if canonical_spec is None:
+        # Provider does not support this family's canonical dataset (should
+        # not happen for github/gitlab, the only two PR-social/TestOps
+        # providers). Stay defensive: never synthesize a unit for a dataset
+        # the provider cannot run.
+        return []
+
+    # Each family member owns its own watermark identity (org, source, key),
+    # so resolve windows independently using each member's OWN configured
+    # row, then merge (earliest start, latest end). This is what keeps
+    # watermark loading correct without any special-casing: a
+    # ``pr-comments``-only selection reads the ``pr-comments`` watermark row
+    # directly, never a canonical-keyed row that selection never wrote.
+    resolved = [
+        (
+            dataset,
+            _resolve_windows(
+                session=session,
+                request=request,
+                mode=mode,
+                org_id=integration.org_id,
+                source_provider=provider,
+                watermark_source_key=source.external_id,
+                dataset_key=dataset.dataset_key,
+                watermark_behavior=spec.watermark_behavior,
+                now=now,
+                integration=integration,
+                dataset=dataset,
+            ),
+        )
+        for dataset, spec in family_specs
+    ]
+    # A family member already synced past the requested end resolves to ZERO
+    # windows; drop it before the merge (mirrors _build_work_item_family_units).
+    contributing = [(dataset, windows) for dataset, windows in resolved if windows]
+    if not contributing:
+        return []
+    composite_windows = _merge_family_windows([windows for _, windows in contributing])
+
+    processor_flags: dict[str, bool] = dict(canonical_spec.processor_flags)
+    # CHAOS-4078: fan the completion flag -- and each member's own processor
+    # flags -- back only to the datasets this org actually enabled. This is
+    # the opposite of the work-item family's unconditional all-members stamp:
+    # a fold family never claims a sibling nobody asked to sync.
+    for dataset, spec in family_specs:
+        processor_flags[family_dataset_flag(dataset.dataset_key)] = True
+        processor_flags.update(spec.processor_flags)
+
+    return [
+        PlannedUnit(
+            org_id=integration.org_id,
+            integration_id=str(integration.id),
+            source_id=str(source.id),
+            provider=provider,
+            dataset_key=canonical_dataset_key,
+            cost_class=canonical_spec.default_cost_class.value,
+            mode=mode,
+            window_start=window_start,
+            window_end=window_end,
+            processor_flags=dict(processor_flags),
+        )
+        for window_start, window_end in composite_windows
+    ]
 
 
 def _build_work_item_family_units(

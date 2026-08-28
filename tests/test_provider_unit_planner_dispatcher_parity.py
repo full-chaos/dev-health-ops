@@ -23,9 +23,12 @@ sides. These tests assert the EFFECT, not the call:
   * ``test_dispatch_terminalizes_a_unit_whose_pair_lost_plannability`` asserts
     the dispatch-time refusal on a unit that was planned before its pair lost
     plannability (the CHAOS-4054 analog of "planned before a switch flip").
-  * A capability-matrix alias identity (never plannable) is never planned --
-    the direct successor to the old "disabled switch is never planned" family
-    of tests.
+  * A capability-matrix alias identity is never planned AS ITS OWN
+    dataset_key, but (CHAOS-4078) an alias-only selection now folds onto its
+    canonical writer instead of silently planning nothing -- the exact
+    failure shape CHAOS-4125 found in production (pr-reviews/pr-comments/
+    tests planned zero units for 36+ hours). ``canonical_identity`` is the
+    one authority both the planner and this test's expectations read.
 """
 
 from __future__ import annotations
@@ -409,40 +412,39 @@ def test_planner_and_dispatcher_agree_on_routable_set(
         f"live runtime and only {outcome['terminal_pairs']} were recorded as "
         "denied -- the remainder went nowhere and said nothing"
     )
-    # The plan-time capability gate is unconditional: a plannable pair is
-    # always planned (as one or more windowed units for that same pair), an
-    # alias pair never is. Work-item-family aliases
-    # are the one exception: requesting one enables the whole family
-    # (``_dataset_keys_for``), so the family collapse plans the CANONICAL
-    # "work-items" claim instead of the alias pair itself -- that collapse is
-    # the alias's only route to a planned unit, and it is provider-neutral.
-    if dataset in planner_module._WORK_ITEM_FAMILY_DATASETS:
-        expected_pair = (provider, planner_module._FAMILY_CANONICAL_DATASET_KEY)
-        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
-        assert set(outcome["planned_pairs"]) == {expected_pair}
-    elif (provider, dataset) in PLANNABLE_PAIRS:
-        assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
-        assert set(outcome["planned_pairs"]) == {(provider, dataset)}
-    else:
-        assert outcome["planned_pairs"] == []
+    # The plan-time capability gate is unconditional: every route_ready pair
+    # is planned under its canonical identity. For a plannable pair that IS
+    # its own canonical identity. For an alias (work-item-family,
+    # PR-social, or TestOps -- CHAOS-4078 folds the latter two the same way
+    # CHAOS-2721 already folded the former), ``canonical_identity`` names the
+    # writer the fold collapses onto: work-item-family aliases get there via
+    # ``_dataset_keys_for`` enabling the whole family, PR-social/TestOps
+    # aliases get there directly (single-alias selection folds on its own,
+    # no sibling required). One assertion covers both shapes because
+    # ``canonical_identity`` is the SAME authority the planner folds onto.
+    expected_canonical = provider_unit_route.canonical_identity(provider, dataset)
+    assert expected_canonical is not None, (
+        f"{provider}/{dataset} is route_ready but canonical_identity found no "
+        "plannable writer for it"
+    )
+    expected_pair = (provider, expected_canonical)
+    assert outcome["planned_pairs"], f"{provider}/{dataset} must be planned"
+    assert set(outcome["planned_pairs"]) == {expected_pair}
 
 
 def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
-    """Guard the sweep itself: the plannable pairs must really produce units.
+    """Guard the sweep itself: every route_ready pair must really produce a
+    planned unit, one way or another.
 
-    CHAOS-4054: capability is always on in the binary, so every pair the
-    matrix marks both route_ready and plannable plans a unit unconditionally
-    -- there is no switch left to flip. This proves that, and that the
-    non-plannable alias pairs correctly plan nothing OF THEIR OWN, so a
-    change that made ``plan_sync_run`` return zero units for every pair (or
-    units for every pair including aliases) would turn this sweep red.
-
-    A work-item-family alias is the one pair whose request still plans a
-    unit indirectly: ``_dataset_keys_for`` enables the whole family, so the
-    family collapse plans the canonical "work-items" claim. That leaves
-    exactly six pairs producing nothing at all: github/gitlab's
-    pr-reviews/pr-comments/tests aliases, which fold into ``prs``/``cicd``
-    with no collapse machinery of their own.
+    CHAOS-4054: capability is always on in the binary, so every plannable
+    pair plans a unit unconditionally -- there is no switch left to flip.
+    CHAOS-4078 closed the remaining gap: PR-social (prs/pr-reviews/
+    pr-comments) and TestOps (cicd/tests) now fold onto their canonical
+    writer exactly like the work-item family already did, so EVERY
+    route_ready pair -- plannable or alias -- produces a planned unit. A
+    change that made ``plan_sync_run`` return zero units for any pair (or
+    silently dropped an alias again, the CHAOS-4125 regression shape) would
+    turn this sweep red.
     """
 
     planning_pairs = 0
@@ -453,11 +455,10 @@ def test_matrix_sweep_is_not_vacuous(monkeypatch) -> None:
             )
         if outcome["planned_pairs"]:
             planning_pairs += 1
-    expected = len(MATRIX_PAIRS) - 6
-    assert planning_pairs == expected == 53, (
+    assert planning_pairs == len(MATRIX_PAIRS) == 59, (
         f"{planning_pairs}/{len(MATRIX_PAIRS)} matrix pairs produced planned "
-        f"units; expected exactly {expected} (every pair except the six "
-        "standalone pr/cicd aliases with no family collapse)"
+        "units; expected every route_ready pair to plan (CHAOS-4078: no more "
+        "silent alias-only gaps)"
     )
 
 
@@ -550,10 +551,13 @@ def test_dispatch_terminalizes_a_unit_whose_pair_lost_plannability(
 
 
 @pytest.mark.parametrize(("provider", "dataset"), (_GITHUB_PR_ALIAS, _GITLAB_PR_ALIAS))
-def test_alias_pair_is_never_planned(provider: str, dataset: str) -> None:
-    """CHAOS-4054 successor to the switch-off family of tests: a matrix alias
-    identity is never plannable, so nothing can make it plan a unit -- there
-    is no runtime left that could ever execute it standalone.
+def test_alias_pair_folds_onto_its_canonical_writer(
+    provider: str, dataset: str
+) -> None:
+    """CHAOS-4078 successor to the old "an alias pair is never planned" test:
+    a matrix alias identity is never plannable AS ITS OWN dataset_key, but an
+    alias-only selection now folds onto its canonical writer instead of
+    silently planning nothing (the exact CHAOS-4125 zero-success shape).
 
     This used to run the same assertion three times, once per
     ``CeleryConsumerPresence``. Step 4 deleted the consumer probe, so that
@@ -577,7 +581,19 @@ def test_alias_pair_is_never_planned(provider: str, dataset: str) -> None:
                 dataset_keys=(dataset,),
             ),
         )
-        assert plan.total_units == 0, "a non-plannable alias must never be planned"
+        assert plan.total_units == 1, (
+            "an alias-only selection must fold onto its canonical writer"
+        )
+        unit = (
+            session.query(SyncRunUnit)
+            .filter(SyncRunUnit.sync_run_id == uuid.UUID(plan.sync_run_id))
+            .one()
+        )
+        expected_canonical = provider_unit_route.canonical_identity(provider, dataset)
+        assert str(unit.dataset_key) == expected_canonical
+        assert unit.dataset_key != dataset, (
+            "the alias's own identity must never be the persisted dataset_key"
+        )
 
 
 def test_route_enabled_pair_is_still_planned(monkeypatch) -> None:
@@ -643,8 +659,13 @@ def test_capability_gate_applies_regardless_of_durable_transport(
                 triggered_by="parity-test",
             ),
         )
-        assert alias_plan.total_units == 0, (
-            "an alias pair must still be excluded off the River outbox route"
+        # CHAOS-4078: the alias folds onto its canonical writer regardless of
+        # durable transport, same as every other capability-gate decision --
+        # it is still never planned AS ITS OWN identity, which is the
+        # invariant this test exists to pin.
+        assert alias_plan.total_units == 1, (
+            "an alias pair must still fold onto its canonical writer off the "
+            "River outbox route"
         )
 
 

@@ -156,7 +156,7 @@ func TestTeamRepoOwnershipDerivationJobArgsValid(t *testing.T) {
 		"domain id does not match sync run id": mutate(func(a *TeamRepoOwnershipDerivationJobArgs) {
 			a.Domain.ID = testOrg
 		}),
-		"empty correlation id": mutate(func(a *TeamRepoOwnershipDerivationJobArgs) { a.CorrelationID = "" }),
+		"empty correlation id":  mutate(func(a *TeamRepoOwnershipDerivationJobArgs) { a.CorrelationID = "" }),
 		"empty idempotency key": mutate(func(a *TeamRepoOwnershipDerivationJobArgs) { a.Idempotency = "" }),
 	}
 	for name, args := range cases {

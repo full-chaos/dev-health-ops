@@ -60,10 +60,11 @@ run_dev_hops() {
     dev-hops "$@"
     return
   fi
-  if command -v uv >/dev/null 2>&1; then
-    uv run dev-hops "$@"
-    return
-  fi
+  # CHAOS-4411/4181/4407: `uv run dev-hops` here would trigger uv's own
+  # implicit sync of the local editable project -- reintroducing both the
+  # shared-cache lock (no UV_CACHE_DIR carries into a fresh `uv run`) and the
+  # setuptools_scm worktree hang the AGENTS.md `--no-install-project` recipe
+  # exists to avoid. The pure-module invocation needs neither.
   python3 -m dev_health_ops.cli "$@"
 }
 
@@ -77,9 +78,8 @@ exec_dev_hops() {
   if command -v dev-hops >/dev/null 2>&1; then
     exec dev-hops "$@"
   fi
-  if command -v uv >/dev/null 2>&1; then
-    exec uv run dev-hops "$@"
-  fi
+  # See run_dev_hops() above (CHAOS-4411/4181/4407) for why `uv run dev-hops`
+  # is skipped here too.
   exec python3 -m dev_health_ops.cli "$@"
 }
 

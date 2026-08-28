@@ -1066,6 +1066,7 @@ CREATE TABLE worker_job_outbox (
  max_attempts smallint NOT NULL, scheduled_at timestamptz NOT NULL,
  status varchar(16) NOT NULL, attempt_count integer NOT NULL,
  next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
+ river_job_id bigint NULL,
  created_at timestamptz NOT NULL,
  updated_at timestamptz NOT NULL
 ) ;
@@ -1083,7 +1084,7 @@ CREATE TABLE daily_metrics_finalize_redrive_events (
  CONSTRAINT ck_dfre_prior_status CHECK (prior_status <> ''),
  CONSTRAINT ck_dfre_prior_finalization_status CHECK (prior_finalization_status <> ''),
  CONSTRAINT ck_dfre_reason CHECK (reason <> ''),
- CONSTRAINT ck_dfre_status CHECK (status IN ('open', 'closed_succeeded', 'closed_failed')),
+ CONSTRAINT ck_dfre_status CHECK (status IN ('open', 'closed_succeeded', 'closed_failed', 'closed_orphaned')),
  CONSTRAINT ck_dfre_closed_at_matches_status CHECK ((status = 'open') = (closed_at IS NULL))
 )`)
 	if err != nil {

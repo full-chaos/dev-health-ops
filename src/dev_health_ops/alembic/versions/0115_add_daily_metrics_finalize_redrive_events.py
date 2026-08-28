@@ -48,6 +48,18 @@ code path ever updates, and only once, from ``'open'``), but
 ``'closed_failed'`` -- an ordinary CHAOS-4389 sweep can pick it back up like
 any other stranded run, exactly the recovery path that was missing.
 
+``'closed_orphaned'`` (team-lead escalation, same day) closes the
+remaining, narrower gap: a redriven job that is discarded/cancelled by
+River, or never even makes it into River at all (a relay-level 'dead'
+outbox row), before ``ClaimFinalize`` is ever called for it has NO
+completion path to fire ``CompleteFinalize``/``ReleaseFinalize`` at all, so
+its row would otherwise stay ``'open'`` indefinitely.
+``PostgresStore.ReconcileOrphanedFinalizeRedriveRuns`` (called from
+``daily-finalize --all-complete``, before ``FindStrandedFinalizeRuns``
+itself) checks the outbox/river-job state, not a claim resolving, and
+closes the row the same way -- so this case reaches the ordinary CHAOS-4389
+sweep too, not just an operator who happens to remember to use ``--run``.
+
 Rows are otherwise append-only and narrow: no delete path anywhere in this
 codebase, and no column but ``status``/``closed_at`` is ever updated after
 insert. ``actor`` is a closed, bounded set (today just
@@ -144,7 +156,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("reason <> ''", name="ck_dfre_reason"),
         sa.CheckConstraint(
-            "status IN ('open', 'closed_succeeded', 'closed_failed')",
+            "status IN ('open', 'closed_succeeded', 'closed_failed', 'closed_orphaned')",
             name="ck_dfre_status",
         ),
         sa.CheckConstraint(

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -97,8 +99,8 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if len(components) != 0 {
 		t.Fatalf("components = %d, want no pool lifecycle without DSNs", len(components))
 	}
-	if registry.RequiredCount() != 9 {
-		t.Fatalf("required checks = %d, want 9", registry.RequiredCount())
+	if registry.RequiredCount() != 11 {
+		t.Fatalf("required checks = %d, want 11", registry.RequiredCount())
 	}
 	// Every accepted queue set now owns registered kinds, so queue telemetry is
 	// always required and a worker without a database cannot serve a complete
@@ -117,6 +119,8 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	status := registry.Readiness(context.Background())
 	want := []string{
 		"domain_postgres",
+		"execution_liveness",
+		"idempotency_backend",
 		"queue_completeness",
 		"queue_postgres",
 		"queued_contract_versions",
@@ -419,6 +423,8 @@ func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T)
 	status := registry.Readiness(context.Background())
 	want := []string{
 		"domain_postgres",
+		"execution_liveness",
+		"idempotency_backend",
 		"queue_completeness",
 		"queue_control_config",
 		"queue_postgres",
@@ -527,9 +533,11 @@ func TestCeleryRoutedHandlersCannotPassQueueCompleteness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
 	}
-	if len(components) != 3 || components[0].Name() != "postgres-runtime-pools" ||
-		components[1].Name() != "queue-health-monitor" || components[2].Name() != "preclaim-readiness" {
-		t.Fatalf("components = %#v, want pools, telemetry, and preclaim readiness", components)
+	if len(components) != 4 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "queue-health-monitor" ||
+		components[2].Name() != "self-probe-worker_execution_liveness" ||
+		components[3].Name() != "preclaim-readiness" {
+		t.Fatalf("components = %#v, want pools, telemetry, execution liveness, and preclaim readiness", components)
 	}
 	if err := components[0].Start(context.Background()); err != nil {
 		t.Fatalf("start pool lifecycle: %v", err)
@@ -654,15 +662,16 @@ func TestSelectedQueuesComposeMultipleBuilderFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 4 || components[2].Name() != "preclaim-readiness" ||
-		components[3].Name() != "river-workers" {
+	if len(components) != 5 || components[2].Name() != "self-probe-worker_execution_liveness" ||
+		components[3].Name() != "preclaim-readiness" ||
+		components[4].Name() != "river-workers" {
 		t.Fatalf("composed components = %#v", components)
 	}
-	processWorkers, ok := components[3].(workerProcessComponent)
+	processWorkers, ok := components[4].(workerProcessComponent)
 	if !ok || len(processWorkers.components) != 1 ||
 		processWorkers.components[0].Name() != "river-worker" ||
 		processWorkers.ShutdownBudget() != 7_200*time.Second {
-		t.Fatalf("worker process = %#v", components[3])
+		t.Fatalf("worker process = %#v", components[4])
 	}
 }
 
@@ -820,14 +829,15 @@ func TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 4 || components[0].Name() != "postgres-runtime-pools" ||
-		components[2].Name() != "preclaim-readiness" ||
-		components[3].Name() != "river-workers" {
+	if len(components) != 5 || components[0].Name() != "postgres-runtime-pools" ||
+		components[2].Name() != "self-probe-worker_execution_liveness" ||
+		components[3].Name() != "preclaim-readiness" ||
+		components[4].Name() != "river-workers" {
 		t.Fatalf("production components = %#v", components)
 	}
-	queueWorkers, ok := components[3].(workerProcessComponent)
+	queueWorkers, ok := components[4].(workerProcessComponent)
 	if !ok || queueWorkers.presence == nil {
-		t.Fatalf("production queue lifecycle = %#v", components[3])
+		t.Fatalf("production queue lifecycle = %#v", components[4])
 	}
 	presence, ok := queueWorkers.presence.(*jobruntime.WorkerPresence)
 	if !ok || presence == nil {
@@ -1112,7 +1122,50 @@ type fakeWorkerDatabase struct {
 	projectsV2Configured bool
 	projectsV2Err        error
 	projectsV2Queries    int
+	// txOpenerErr controls fakeTxOpener's Begin outcome for the CHAOS-4029
+	// idempotency_backend / execution_liveness checks. Nil (the default)
+	// means a healthy transaction round trip, matching every other fake
+	// dependency in this file defaulting to healthy unless a test sets an
+	// error. Guarded by txOpenerMu so a test can flip it WHILE a background
+	// selfprobe.Monitor goroutine is concurrently sampling -- see
+	// setTxOpenerErr -- reproducing the live incident this ticket closes
+	// (the dependency changing state under a running process), not just its
+	// value at construction time.
+	txOpenerMu  sync.Mutex
+	txOpenerErr error
 }
+
+func (database *fakeWorkerDatabase) setTxOpenerErr(err error) {
+	database.txOpenerMu.Lock()
+	defer database.txOpenerMu.Unlock()
+	database.txOpenerErr = err
+}
+
+func (database *fakeWorkerDatabase) getTxOpenerErr() error {
+	database.txOpenerMu.Lock()
+	defer database.txOpenerMu.Unlock()
+	return database.txOpenerErr
+}
+
+// fakeTxOpener is a scriptable selfprobe.TxOpener double so worker tests can
+// prove idempotency_backend / execution_liveness readiness without a live
+// database. It reads the backing database's CURRENT error on every Begin
+// call (not a value snapshotted at construction), so a test can mutate
+// database state while a monitor is already running -- reproducing "the
+// dependency changed state under a live process" rather than only "the
+// dependency was already broken at construction."
+type fakeTxOpener struct{ database *fakeWorkerDatabase }
+
+func (opener fakeTxOpener) Begin(context.Context) (selfprobe.Tx, error) {
+	if err := opener.database.getTxOpenerErr(); err != nil {
+		return nil, err
+	}
+	return fakeTxOpenerTx{}, nil
+}
+
+type fakeTxOpenerTx struct{}
+
+func (fakeTxOpenerTx) Rollback(context.Context) error { return nil }
 
 type namedComponent string
 
@@ -1502,6 +1555,10 @@ func (database *fakeWorkerDatabase) NewQueueTelemetrySampler(
 
 func (database *fakeWorkerDatabase) AttachPoolAcquireObserver(observer postgres.PoolAcquireObserver) {
 	database.acquireObserver = observer
+}
+
+func (database *fakeWorkerDatabase) DomainTxOpener() selfprobe.TxOpener {
+	return fakeTxOpener{database: database}
 }
 
 func (database *fakeWorkerDatabase) Close() {

@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -446,9 +447,13 @@ func buildSchedulerLoopWithSources(
 		// every open failure as fatal, so an unconfigured scheduler container
 		// exited before it could publish its operator port at all.
 		//
-		// The same five names the goOwnsMarkers gate closes are closed here,
-		// so the externally visible readiness surface does not change shape
-		// depending on WHY the loop is not running.
+		// The same names the goOwnsMarkers gate closes are closed here, so
+		// the externally visible readiness surface does not change shape
+		// depending on WHY the loop is not running. execution_liveness
+		// (CHAOS-4029) joins that set: an unconfigured scheduler has no
+		// domain pool to self-probe, so it must report unavailable rather
+		// than silently omitting the check name a configured scheduler
+		// would otherwise carry.
 		if registerErr := processreadiness.RegisterUnavailable(
 			registry,
 			"domain_postgres",
@@ -456,6 +461,7 @@ func buildSchedulerLoopWithSources(
 			"coordinator_postgres",
 			"river_schema",
 			"scheduler_loop",
+			"execution_liveness",
 		); registerErr != nil {
 			return nil, registerErr
 		}
@@ -507,6 +513,27 @@ func buildSchedulerLoopWithSources(
 	domainPool := database.DomainPool()
 	if domainPool == nil {
 		return nil, dependencyUnavailable("scheduler_domain_pool_unavailable")
+	}
+	// execution_liveness (CHAOS-4029): the scheduler's own periodic
+	// self-probe against the domain pool, on an independent clock -- the
+	// same signal cmd/dev-health-worker and cmd/dev-health-reconciler
+	// register, so a scheduler whose handoff/reconcile loop is wedged (but
+	// whose dependency checks above still pass) goes visibly unhealthy
+	// instead of continuing to report ready while planning nothing. This is
+	// deliberately SEPARATE from executed_proof_evidence below:
+	// executed_proof_evidence proves the CHAOS-4124 evidence gate loaded;
+	// this proves the process's transaction path is still alive at all,
+	// which is the precondition executed_proof_evidence's own refresh
+	// depends on.
+	livenessMonitor := selfprobe.New("scheduler_execution_liveness", selfprobe.NewPool(domainPool), logger)
+	if livenessMonitor != nil {
+		livenessMonitor.Probe(ctx)
+		if err := registry.RegisterRequired("execution_liveness", livenessMonitor.Ready); err != nil {
+			return nil, err
+		}
+		if err := registry.RegisterMetrics("scheduler_execution_liveness", livenessMonitor); err != nil {
+			return nil, err
+		}
 	}
 	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
@@ -615,18 +642,20 @@ func buildSchedulerLoopWithSources(
 	}
 	closeOnError = false
 	return schedulerRuntime{
-		database:  database,
-		loop:      loop,
-		fixedLoop: fixedLoop,
-		fixedGate: gate,
+		database:        database,
+		loop:            loop,
+		fixedLoop:       fixedLoop,
+		fixedGate:       gate,
+		livenessMonitor: livenessMonitor,
 	}, nil
 }
 
 type schedulerRuntime struct {
-	database  schedulerDatabase
-	loop      *schedulersync.Loop
-	fixedLoop fixedScheduleRuntime
-	fixedGate *fixedScheduleGate
+	database        schedulerDatabase
+	loop            *schedulersync.Loop
+	fixedLoop       fixedScheduleRuntime
+	fixedGate       *fixedScheduleGate
+	livenessMonitor *selfprobe.Monitor
 }
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
@@ -645,6 +674,13 @@ func (component schedulerRuntime) Start(ctx context.Context) error {
 	}
 	if err := component.loop.Start(ctx); err != nil {
 		return err
+	}
+	// Starting the self-probe's background ticker is best-effort and never
+	// fails Start: Monitor.Start's return is always nil (see its doc
+	// comment), matching queueHealthMonitor's "never block startup on a
+	// dependency that already has its own required check" rule.
+	if component.livenessMonitor != nil {
+		_ = component.livenessMonitor.Start(ctx)
 	}
 	if component.fixedLoop == nil || component.fixedGate == nil {
 		return nil
@@ -668,12 +704,15 @@ func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 	if component.loop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	var fixedErr error
+	var fixedErr, livenessErr error
 	if component.fixedGate != nil {
 		component.fixedGate.detach()
 	}
 	if component.fixedLoop != nil {
 		fixedErr = component.fixedLoop.Shutdown(ctx)
 	}
-	return errors.Join(fixedErr, component.loop.Shutdown(ctx))
+	if component.livenessMonitor != nil {
+		livenessErr = component.livenessMonitor.Shutdown(ctx)
+	}
+	return errors.Join(fixedErr, livenessErr, component.loop.Shutdown(ctx))
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -504,6 +505,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	}
 
 	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
+	// livenessMonitor (CHAOS-4029) mirrors cmd/dev-health-worker's
+	// execution_liveness signal: a periodic, independent self-probe against
+	// the domain pool, proving the reconciler's OWN loop is still pumping,
+	// immune to an idle relay/sync-dispatch backlog. Registered now
+	// (captured by reference below) so the check name exists unconditionally
+	// like every other check here; resolved once dependencies.database is
+	// confirmed non-nil, below.
+	var livenessMonitor *selfprobe.Monitor
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -517,6 +526,12 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		{name: "coordinator_postgres", check: dependencies.coordinatorReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		{name: "sync_dispatch_registry", check: dependencies.syncRegistryReady},
+		{name: "execution_liveness", check: func(ctx context.Context) error {
+			if livenessMonitor == nil {
+				return errReconcilerDependencyUnavailable
+			}
+			return livenessMonitor.Ready(ctx)
+		}},
 	}
 	// If prerequisite construction failed, the existing domain/registry checks
 	// already close readiness. Once fence construction was attempted, register
@@ -549,12 +564,29 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		dependencies.close()
 		return nil, nil
 	}
-	return []lifecycle.Component{
+	components := []lifecycle.Component{
 		reconcilerDatabaseLifecycle{database: dependencies.database},
 		dependencies.loop,
 		reconcilerRecorderLifecycle{recorder: dependencies.syncRecorder},
 		dependencies.syncLoop,
-	}, nil
+	}
+	// CHAOS-4029: construct the self-probe now that dependencies.database is
+	// confirmed non-nil (it needs a real domain pool -- the same pool
+	// LeaseRepair/the Observer/every domain-pool component above already
+	// depends on). Probe synchronously so execution_liveness is meaningful
+	// the instant this function returns, not only once the lifecycle
+	// runtime later calls Start (see cmd/dev-health-worker's identical
+	// reasoning).
+	livenessMonitor = selfprobe.New("reconciler_execution_liveness", selfprobe.NewPool(dependencies.database.DomainPool()), logger)
+	if livenessMonitor != nil {
+		livenessMonitor.Probe(ctx)
+		components = append(components, livenessMonitor)
+		if err := registry.RegisterMetrics("reconciler_execution_liveness", livenessMonitor); err != nil {
+			dependencies.close()
+			return nil, err
+		}
+	}
+	return components, nil
 }
 
 func buildReconcilerDependencies(

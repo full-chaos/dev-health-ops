@@ -141,6 +141,80 @@ queue when River claim sharing and the combined capacity budget are reviewed.
 Both queues and all provider routes remain Celery-owned unless a reviewed route
 release says otherwise.
 
+### Health is a work-receipt, not process liveness (CHAOS-4029)
+
+**Incident this closes:** on 2026-08-20 every Go worker answered `/readyz`
+`200 OK` for two hours while discarding every job it claimed. `pgbouncer-1`
+was recreated 17 seconds after the workers passed their one-time,
+startup-only `preclaim-readiness` gate; nothing re-observed the domain pool
+afterward, so admission (checked once, at boot) and execution capability
+(never re-checked) silently diverged. The queue read as **idle**, not
+**stalled** — jobs were minted and discarded at the same rate, so depth
+stayed at zero and nothing alerted.
+
+**What changed:** every required readiness check registered by
+`internal/platform/health.Registry` already runs fresh on **every**
+`/readyz` poll and `/metrics` scrape, not only at startup (`Registry.Readiness`
+→ `CheckRequired`) — that part of the fix predates this ticket. What was
+missing is two check FAMILIES no existing dependency probe reproduced:
+
+1. **`idempotency_backend`** (`dev-health-worker` only) — a synchronous
+   `Begin`+`Rollback` against the domain pool, run fresh on every poll. It
+   exercises the exact primitive `internal/jobruntime.PostgresIdempotency.Begin`
+   depends on for every real job's claim. `domain_postgres` is a role-POSTURE
+   introspection query (`has_table_privilege(...)` over `pg_catalog`) and
+   does not prove a transaction can actually be opened — which is precisely
+   the class of failure that stayed silent for two hours: the pool was
+   reachable and the grants were intact, only the pooled connection's
+   transaction path had gone stale.
+2. **`execution_liveness`** (`dev-health-worker`, `dev-health-reconciler`,
+   `dev-health-scheduler`) — an independent, ticking self-probe
+   (`internal/platform/selfprobe`) that opens and rolls back its own
+   transaction against the domain pool on a fixed clock (20s interval, 60s
+   staleness by default — three misses before readiness flips, absorbing one
+   transient failure without flapping), on its OWN goroutine, regardless of
+   real job traffic. This is deliberately NOT job throughput: an idle queue
+   must never read as unhealthy, so the probe never depends on real work
+   arriving. It also catches a class `idempotency_backend` cannot: a wedged
+   background scheduler or deadlocked goroutine in the worker's own process,
+   which a fresh synchronous probe spawned from a healthy HTTP handler
+   goroutine can still pass even while the process's real execution loop is
+   stuck.
+
+Both checks fail closed with reason `never_proven` before their first sample
+completes — absence of a signal is never silently read as healthy — and both
+self-heal on their own the moment the dependency recovers; no restart is
+required. `dev-health-scheduler` additionally keeps its existing
+`executed_proof_evidence` check (CHAOS-4124) unchanged — that proves the
+executed-proof evidence snapshot loaded; `execution_liveness` proves the
+transaction path the snapshot's own refresh depends on is alive at all,
+which is a strictly earlier precondition.
+
+**Telemetry:** every registered check already gets a per-name gauge
+(`dev_health_runtime_check_failed{check="execution_liveness"}` etc,
+`internal/platform/health/server.go`). `internal/platform/selfprobe` adds
+two more, per probe name (`worker_execution_liveness`,
+`reconciler_execution_liveness`, `scheduler_execution_liveness`):
+
+- `dev_health_execution_liveness_seconds_since_success{probe="..."}` — a
+  gauge, `-1` before the first success, otherwise the age of the last one.
+  Alert on this crossing the staleness window independently of `/readyz`
+  being polled at all.
+- `dev_health_execution_liveness_probe_failures_total{probe="...",reason="..."}`
+  — a counter over the bounded reason set (`begin_failed`, `rollback_failed`,
+  `timeout`, `unconfigured`, `panicked`); never the underlying driver error
+  text, which can carry a DSN.
+
+**Operator troubleshooting:** `/readyz` reporting `execution_liveness` (or,
+for `dev-health-worker`, `idempotency_backend`) failed with everything else
+green means the domain pool itself is unreachable or cannot open a
+transaction RIGHT NOW — check the pooler (`pgbouncer`) first, not the role's
+grants (those are `domain_postgres`'s job, and `domain_postgres` would also
+be failing if grants were the problem). If ONLY `execution_liveness` is
+failing while `idempotency_backend`/`domain_postgres` are green, suspect the
+process's own execution loop (a deadlock, a stuck goroutine, GC pressure)
+rather than the database.
+
 ### Stream-runner profiles remain separate
 
 `dev-health-go-stream-runner` keeps its existing runtime profiles. The

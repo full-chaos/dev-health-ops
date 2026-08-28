@@ -92,16 +92,21 @@ ClickHouse and one FalkorDB pod per lane and can be added and removed freely.
 
 ### 1. Create the cluster (once per machine)
 
+Set the two worktree paths once; every later step uses them, so the shell's
+working directory never matters:
+
 ```bash
-cd acr
+export OPS_WT=<path-to-your-ops-worktree>    # e.g. worktrees/ops/<branch>
+export ACR_WT=<path-to-your-acr-worktree>
+
 ACR_KIAC_CLUSTER_NAME=dev-full \
 ACR_KIAC_WORKERS=0 \
 ACR_KIAC_CPUS=4 \
 ACR_KIAC_CP_MEMORY=24G \
 ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
-deploy/local/kiac.sh up
+"$ACR_WT/deploy/local/kiac.sh" up
 
-export KUBECONFIG="$(ACR_KIAC_CLUSTER_NAME=dev-full deploy/local/kiac.sh kubeconfig)"
+export KUBECONFIG="$(ACR_KIAC_CLUSTER_NAME=dev-full "$ACR_WT/deploy/local/kiac.sh" kubeconfig)"
 ```
 
 `ACR_KIAC_ALLOW_VERSION_DRIFT=1` is expected while the installed `container`
@@ -115,13 +120,10 @@ Check the host first. Start with **one** node and add more only if
 `container build` is broken on these Dockerfiles, so build with Docker and
 bridge the result into the cluster's containerd:
 
-Every path below is explicit, because step 1 left your shell in the ACR
-repository and the build must happen in the **ops** worktree:
+Every path is explicit — the build must happen in the **ops** worktree, while
+the image bridge lives in the ACR one:
 
 ```bash
-OPS_WT=<path-to-your-ops-worktree>      # e.g. worktrees/ops/<branch>
-ACR_WT=<path-to-your-acr-worktree>
-
 # 1. ops runtime, built from the OPS worktree
 SHA=$(git -C "$OPS_WT" rev-parse --verify HEAD)
 docker build --target api \
@@ -180,15 +182,14 @@ multi-architecture manifest lists (`edoburu/pgbouncer`, `valkey/valkey`) fail
 ### 3. Bring up one lane's datastores and seed them
 
 ```bash
-cd acr
 export ACR_TRIAL_DATA_NAMESPACE=lane-a
 export ACR_TRIAL_NODEPORT_BASE=30500        # one base per lane; +10 for the next
 
-deploy/local/trial-data.sh apply
-deploy/local/trial-data.sh wait
-deploy/local/trial-data.sh restore-postgres   ../backups/<ts>/postgres-all-<ts>.sql.gz
-deploy/local/trial-data.sh restore-clickhouse ../backups/<ts>/clickhouse-default-<ts>.zip
-deploy/local/trial-data.sh dsn --env          # DSNs for host-side tools
+"$ACR_WT/deploy/local/trial-data.sh" apply
+"$ACR_WT/deploy/local/trial-data.sh" wait
+"$ACR_WT/deploy/local/trial-data.sh" restore-postgres   <repo>/backups/<ts>/postgres-all-<ts>.sql.gz
+"$ACR_WT/deploy/local/trial-data.sh" restore-clickhouse <repo>/backups/<ts>/clickhouse-default-<ts>.zip
+"$ACR_WT/deploy/local/trial-data.sh" dsn --env          # DSNs for host-side tools
 ```
 
 NodePorts are **cluster**-scoped, not namespace-scoped, so every lane needs its
@@ -224,8 +225,35 @@ but `failed_checks:"domain_postgres"`.
 2. **Alembic + ClickHouse** — the ops chart's migration hook (below).
 3. **River + grants** — the `dev-health-worker-migrate` image as a one-shot Job
    with `MIGRATION_DATABASE_URI` pointing **directly** at Postgres (never at a
-   pooler). Confirm `dev_health_runtime_posture_missing{role="…"} 0` for all
-   three roles in its output.
+   pooler). Nothing in either chart renders this Job, so apply it yourself:
+
+   ```bash
+   kubectl -n lane-a apply -f - <<'YAML'
+   apiVersion: batch/v1
+   kind: Job
+   metadata: { name: go-worker-migrate }
+   spec:
+     backoffLimit: 1
+     template:
+       spec:
+         restartPolicy: Never
+         containers:
+           - name: migrate
+             image: dev-health-go-worker-migrate:latest
+             imagePullPolicy: Never
+             env:
+               - { name: MIGRATION_DATABASE_URI, value: "postgresql://devhealth:acr-trial-dev@trial-postgres:5432/devhealth" }
+               - { name: RIVER_DATABASE_SCHEMA, value: "river" }
+               - { name: RIVER_DOMAIN_DATABASE_ROLE, value: "devhealth_domain" }
+               - { name: RIVER_QUEUE_DATABASE_ROLE, value: "devhealth_queue" }
+               - { name: RIVER_COORDINATOR_DATABASE_ROLE, value: "devhealth_coordinator" }
+   YAML
+   kubectl -n lane-a wait --for=condition=complete job/go-worker-migrate --timeout=180s
+   kubectl -n lane-a logs job/go-worker-migrate
+   ```
+
+   Confirm `dev_health_runtime_posture_missing{role="…"} 0` for all three roles
+   in that output, alongside `dev_health_runtime_grants_applied_total`.
 
 ### 6. Create the ACR Secrets — BEFORE the Helm installs
 
@@ -294,16 +322,21 @@ helm upgrade --install lane-a-acr <acr-worktree>/deploy/helm/acr \
   -n lane-a -f lane-a-acr.yaml --timeout 10m --wait
 ```
 
-**Expect the first ops `--wait` to time out, and do not treat that as failure.**
-The pre-install hook runs Alembic only; the River grants come from the separate
-`dev-health-worker-migrate` Job in step 5, which cannot run until the release
-exists. So Helm starts the worker Deployments, they fail readiness on
-`domain_postgres`, and `--wait` gives up while everything else is healthy. Run
-the go-worker-migrate Job, then
-`kubectl -n <ns> delete pod -l app.kubernetes.io/component=go-worker` and they
-come up. On a lane you rebuild often, install with every `goWorkers.groups[*]`
-at `replicas: 0`, run the Job, then scale up — that avoids the timeout
-entirely.
+**Install the workers at zero first.** The pre-install hook runs Alembic only;
+the River grants come from the `dev-health-worker-migrate` Job in step 5.3,
+which cannot run until the release exists. Install with the workers already
+running and they fail readiness on `domain_postgres`, `--wait` times out, and —
+the part that matters — **Helm records the release as `failed` and leaves it
+that way** even after you fix the grants and the pods go healthy, so `helm list`
+and anything reading release status keep reporting a broken install.
+
+So: install once with every `goWorkers.groups[*].replicas: 0`, run the step-5.3
+Job, then re-run the same `helm upgrade --wait` with your real replica counts.
+The release ends `deployed`, which is true.
+
+If you already hit the timeout, recover with the migration Job followed by a
+plain `helm upgrade --wait` — deleting the pods alone makes the workloads
+healthy but leaves the release status lying.
 
 Neither values file exists in the repository — write them per lane, because
 the release name is baked into the in-cluster DNS names. Complete non-secret
@@ -357,6 +390,12 @@ migrations:
 
 goWorkers:
   enabled: true
+  # sync-provider is held at replicas 0 below (the chart has no route-activation
+  # path), so it MUST come out of the expected set. Leave the chart default
+  # [heavy, ops, sync, sync-provider] in place and /health/workers reports
+  # `"go_worker:sync-provider":"absent"` and returns 503 forever -- observed on
+  # a live lane, and fixed to 200 by this one line.
+  expectedWorkerGroups: [heavy, ops, sync]
   # Go speaks the NATIVE protocol on 9000, not Python's HTTP 8123. With an
   # external ClickHouse this is REQUIRED or every worker fails readiness.
   clickhouseURI: "clickhouse://ch:acr-trial-dev@trial-clickhouse:9000/default"

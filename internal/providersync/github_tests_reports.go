@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -318,25 +319,38 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 // exactly the backfill-targeting promise this change makes, broken for the
 // one unit that straddled the deploy.
 //
-// Every report_member skip recorded by this binary always appends at least
-// one marker, or increments SkippedArtifactsOverflow once the per-unit cap
-// (githubTestsMaxSkippedArtifactRecords) is exhausted -- appendGitHubTestsSkippedArtifact
-// never leaves both untouched. So a nonzero report_member count with BOTH
-// empty is proof this cursor predates the fix: treat it as untrusted and
-// withhold, exactly like any other window-blocking observation. This can
-// fire at most once per unit -- the checkpoint this guards against is
-// deleted the moment the unit terminalizes (repository_postgres.go's
+// The check is PER CAUSE, not aggregate presence (codex review round 2, P1
+// -- round 1's first version checked only "does SkippedArtifacts have ANY
+// entry", which a legacy cursor mixing a marked artifact_oversized skip with
+// an unmarked artifact_unavailable one would satisfy vacuously, advancing on
+// the unmarked cause anyway). SkippedArtifactsOverflow is the one exception,
+// checked in aggregate: it only exists on a THIS-binary cursor (the old
+// binary never wrote it either), so overflow>0 anywhere proves this walk's
+// marker-writing path executed for its full duration, and the sample cap
+// legitimately leaving some individual occurrences unmarked is the SAME
+// sanctioned degradation appendGitHubTestsSkippedArtifact already accepts
+// for a heavy-skip-volume unit -- not evidence of a legacy cursor.
+//
+// This can fire at most once per unit -- the checkpoint this guards against
+// is deleted the moment the unit terminalizes (repository_postgres.go's
 // deletePreparedChunkStateTx, inside the same transaction as Complete), so
 // the unit simply retries next window: today's status quo, no data lost, no
 // permanent stall, not a new outage class.
 func githubTestsReportMemberSkippedWithoutDurableMarker(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
 ) bool {
-	if len(skippedArtifacts) > 0 || overflow > 0 {
+	if overflow > 0 {
 		return false
 	}
+	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
+	for _, marker := range skippedArtifacts {
+		markedCauses[marker.Cause] = struct{}{}
+	}
 	for _, observation := range incomplete {
-		if observation.Component == githubTestsReportMemberComponent && observation.Count > 0 {
+		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
+			continue
+		}
+		if _, marked := markedCauses[observation.Cause]; !marked {
 			return true
 		}
 	}
@@ -365,6 +379,34 @@ func GitHubTestsCicdPartialSuccessReason(incomplete []GitHubTestsIncomplete) str
 		}
 	}
 	return reason
+}
+
+// DecodeGitHubTestsIncomplete accepts both the live typed value a chunked
+// route emits AND the generic []any/map[string]any shape produced when a
+// prepared chunk is reloaded from its JSONB sidecar (codex review round 2,
+// P1) -- the exact same dual-shape problem
+// applyGitHubWorkItemsIncompletePolicy and decodeCompletionValue already
+// solve for their own callers, applied here because
+// internal/jobs/providerunit's completion path (loadChunkedFinalResult ->
+// PostgresRepository.LoadPreparedChunk -> json.Unmarshal into
+// map[string]any) means EVERY real chunked completion reaches its caller
+// with "incomplete" as []any, never the typed slice -- a plain type
+// assertion there always misses, silently disabling the reader. The
+// marshal/unmarshal round-trip is a no-op on an already-typed value and a
+// real decode on the generic one, so one function correctly serves both.
+func DecodeGitHubTestsIncomplete(value any) ([]GitHubTestsIncomplete, bool) {
+	if value == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var incomplete []GitHubTestsIncomplete
+	if json.Unmarshal(encoded, &incomplete) != nil {
+		return nil, false
+	}
+	return incomplete, true
 }
 
 // validatePerRunPageBudget refuses a configuration in which a per-run PAGE

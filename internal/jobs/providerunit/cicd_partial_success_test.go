@@ -2,6 +2,7 @@ package providerunit
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +114,59 @@ func TestObserveCicdPartialSuccessFiresOnlyForItsOwnCase(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "dev_health_cicd_partial_success_total{") {
 		t.Fatalf("a malformed/decoded incomplete shape must fail closed, not count:\n%s", output.String())
+	}
+}
+
+// RED before the codex review round 2, P1 fix: the real production caller
+// never reaches observeCicdPartialSuccess with the live typed
+// []providersync.GitHubTestsIncomplete slice. loadChunkedFinalResult loads
+// the final chunk through PostgresRepository.LoadPreparedChunk, which
+// json.Unmarshal's the JSONB sidecar into map[string]any, so "incomplete"
+// arrives as []any (each element a map[string]any) every single time. A bare
+// `payload["incomplete"].([]providersync.GitHubTestsIncomplete)` type
+// assertion always misses that shape and returns ok=false, silently
+// disabling the counter in production while every test built on the live
+// typed slice (like the cases above) kept passing. This constructs the
+// payload the SAME way production does -- marshal real JSON, unmarshal into
+// map[string]any -- to prove the fix actually decodes it.
+func TestObserveCicdPartialSuccessDecodesTheJSONRoundTrippedProductionShape(t *testing.T) {
+	t.Parallel()
+	claim := providersync.Claim{}
+	claim.Provider, claim.Dataset = "github", "cicd"
+	claim.ID = "44444444-4444-4444-8444-444444444444"
+	watermark := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+
+	live := map[string]any{
+		"repo": "acme/api",
+		"incomplete": []providersync.GitHubTestsIncomplete{
+			{Component: "report_member", Cause: "artifact_unavailable", Count: 1},
+		},
+	}
+	encoded, err := json.Marshal(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the SAME operation loadPreparedChunkRow performs on the stored
+	// JSONB payload -- decode into a generic map, not the typed shape.
+	var productionShaped map[string]any
+	if err := json.Unmarshal(encoded, &productionShaped); err != nil {
+		t.Fatal(err)
+	}
+	if _, isLiveShape := productionShaped["incomplete"].([]providersync.GitHubTestsIncomplete); isLiveShape {
+		t.Fatal("premise broken: json.Unmarshal into map[string]any must not produce the live typed slice")
+	}
+
+	metrics := providerfoundation.NewMetrics()
+	handler := &Handler{ProviderMetrics: metrics}
+	handler.observeCicdPartialSuccess(claim, &watermark, productionShaped)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	line := `dev_health_cicd_partial_success_total{reason="artifact_unavailable"} 1`
+	if !strings.Contains(output.String(), line) {
+		t.Fatalf("the JSON-round-tripped production shape was not counted:\nwant line: %s\ngot:\n%s", line, output.String())
 	}
 }
 

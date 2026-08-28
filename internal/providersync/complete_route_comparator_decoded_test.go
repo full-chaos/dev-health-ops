@@ -260,4 +260,46 @@ func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t 
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v, want %v once overflow proves this binary wrote the evidence", batch.Watermark, claim.BeforeAt)
 	}
+
+	// RED before codex review round 2, P1: a legacy cursor mixing a MARKED
+	// cause (artifact_oversized, which the old binary always marked) with an
+	// UNMARKED one (artifact_unavailable, which it never did) must still
+	// withhold. Round 1's guard checked only "does SkippedArtifacts have ANY
+	// entry", which this case satisfies vacuously via the oversized marker
+	// alone, advancing on the unmarked artifact_unavailable count anyway.
+	mixedMarkerCoverage := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactOversizedCause, Count: 1},
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+		},
+		SkippedArtifacts: []GitHubTestsSkippedArtifact{{
+			RunID: "42", ArtifactID: "7", Cause: githubTestsArtifactOversizedCause,
+			SizeBytes: 200, CapBytes: 100,
+		}},
+	}
+	batch, err = githubTestsFinalMetadataBatch(claim, mixedMarkerCoverage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"watermark=%v, want nil -- artifact_unavailable has no marker even though artifact_oversized does",
+			batch.Watermark,
+		)
+	}
+
+	// The same mix, but BOTH causes marked, must advance.
+	mixedFullyMarked := mixedMarkerCoverage
+	mixedFullyMarked.SkippedArtifacts = append(
+		append([]GitHubTestsSkippedArtifact{}, mixedMarkerCoverage.SkippedArtifacts...),
+		GitHubTestsSkippedArtifact{RunID: "43", ArtifactID: "8", Cause: githubTestsArtifactUnavailableCause},
+	)
+	batch, err = githubTestsFinalMetadataBatch(claim, mixedFullyMarked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("watermark=%v, want %v once every cause present has its own marker", batch.Watermark, claim.BeforeAt)
+	}
 }

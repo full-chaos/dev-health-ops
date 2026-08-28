@@ -451,12 +451,18 @@ and retry it with a bounded backfill (`POST
 `sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
 scoped to the affected repo and the marker's run window.
 
-`dev_health_cicd_partial_success_total{repo,reason}` (CHAOS-4394) counts, at
+`dev_health_cicd_partial_success_total{reason}` (CHAOS-4394) counts, at
 unit-completion time, every cicd/tests unit that advanced its watermark while
 still carrying incomplete evidence — the UNIT-level view of "success, but with
 a durable, recorded gap", distinct from the per-artifact
 `dev_health_provider_artifact_skipped_total` and the per-run
-`dev_health_provider_per_run_truncation_total`.
+`dev_health_provider_per_run_truncation_total`. `repo` is deliberately NOT a
+label (codex review round 1 caught the cardinality risk: a long-lived worker
+would accumulate one series per repository ever added or renamed, never
+evicted) — it is logged in the structured `slog.Info` line
+`internal/jobs/providerunit.Handler.observeCicdPartialSuccess` emits
+alongside the counter, the same run-id/artifact-id-in-logs-not-labels
+precedent this file already follows elsewhere.
 
 **Total** unreadability — every artifact the walk observed failing to read —
 is a systematic route condition, such as a proxy or auth edge answering every

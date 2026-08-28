@@ -325,6 +325,16 @@ func (handler *Handler) observeAllArtifactsUnreadable(claim providersync.Claim, 
 // repo is deliberately logged, not passed to the counter -- see
 // RecordCicdPartialSuccess's doc comment on why it stays off the Prometheus
 // label.
+//
+// payload["incomplete"] is decoded via providersync.DecodeGitHubTestsIncomplete,
+// NOT a direct type assertion (codex review round 2, P1): the real
+// production caller reaches this branch through
+// loadChunkedFinalResult -> PostgresRepository.LoadPreparedChunk, which
+// reloads the final chunk's Result through a JSONB sidecar, so "incomplete"
+// arrives here as the generic []any/map[string]any shape every time, never
+// the live typed slice. A bare assertion would silently no-op this whole
+// counter in production while every unit test using the live typed slice
+// kept passing.
 func (handler *Handler) observeCicdPartialSuccess(
 	claim providersync.Claim, watermark *time.Time, payload map[string]any,
 ) {
@@ -332,7 +342,7 @@ func (handler *Handler) observeCicdPartialSuccess(
 		claim.Provider != "github" || (claim.Dataset != "cicd" && claim.Dataset != "tests") {
 		return
 	}
-	incomplete, ok := payload["incomplete"].([]providersync.GitHubTestsIncomplete)
+	incomplete, ok := providersync.DecodeGitHubTestsIncomplete(payload["incomplete"])
 	if !ok || len(incomplete) == 0 {
 		return
 	}

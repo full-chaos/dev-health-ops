@@ -115,6 +115,18 @@ cd "${ROOT}" || {
   exit 2
 }
 
+# --- Per-worktree uv cache (CHAOS-4411) ---------------------------------------------
+# uv's default cache dir is ~/.cache/uv, shared machine-wide. Every worktree's own
+# `.venv` is already isolated, but a shared cache means concurrent `uv sync` runs in
+# different worktrees serialize on ~/.cache/uv/.lock (and the editable sdist build
+# lock under ~/.cache/uv/sdists-v9/editable/<hash>/.lock) -- costing lanes 30+ minutes
+# waiting on each other. Redirect to a per-worktree, gitignored cache dir, same
+# isolation pattern as SCRATCH_DB above. This only affects a `uv` invocation that
+# inherits this script's environment; it does NOT change what `uv sync` you run
+# yourself before this gate (see the preflight die() message below -- export the
+# same var there).
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${ROOT}/.uv-cache}"
+
 # --- Config (override via env). ----------------------------------------------------
 CH_CONTAINER="${CH_CONTAINER:-dev-health-clickhouse-1}"
 CH_USER="${CH_USER:-ch}"
@@ -771,8 +783,15 @@ preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
   [ -x "${PYBIN}" ] || die "missing venv interpreter ${PYBIN}. Create it from the worktree:
-      uv sync --all-extras --dev   # or: python -m venv .venv && .venv/bin/pip install -r requirements.txt
-   (requirements.txt is '-e .[dev]'; pytest-asyncio tests mislead-fail without a fresh sync)."
+      UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" uv sync --all-extras --dev
+      # or: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+   (requirements.txt is '-e .[dev]'; pytest-asyncio tests mislead-fail without a fresh sync.
+   UV_CACHE_DIR keeps this sync off the shared ~/.cache/uv/.lock other worktrees hold — CHAOS-4411.
+   If this hangs at 0% CPU on a wedged 'git check-attr' child, that is the known setuptools_scm
+   worktree deadlock (CHAOS-4181/4407, not this gate): kill it, then run this gate's ClickHouse
+   stages via CI instead, or locally with SKIP_CLICKHOUSE=1 after
+   'uv sync --all-extras --dev --no-install-project' (no dev-hops CLI in that venv, so ch_probe
+   below cannot pass — SKIP_CLICKHOUSE=1 is required in that case).)"
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
   [ -x "${MYPY}" ] || die "missing ${MYPY}; install the [dev] extra into .venv."
   ensure_docs_deps
@@ -904,7 +923,7 @@ ch_probe_docker() {
     return 3
   fi
   if [ ! -x "${DEVHOPS}" ]; then
-    CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — install the [dev] extra: uv sync --all-extras --dev"
+    CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — either the [dev] extra was never installed, or this venv came from 'uv sync --no-install-project' (the CHAOS-4181/4407 setuptools_scm-hang workaround, which never installs the dev-hops console script); install with UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" uv sync --all-extras --dev, or run with SKIP_CLICKHOUSE=1 to skip this stage"
     return 4
   fi
   return 0

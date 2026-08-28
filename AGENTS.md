@@ -64,6 +64,9 @@ Agents keep creating branches that track `origin/main`, then a bare `git push` p
 
 ```bash
 git worktree add --no-track -b <branch> <path> origin/main
+cd <path>
+UV_CACHE_DIR="$(git rev-parse --show-toplevel)/.uv-cache" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
+  uv sync --all-extras --dev --no-install-project
 # or, without a worktree: git switch -c <branch> --no-track origin/main
 git push -u origin HEAD:<branch>
 ```
@@ -72,6 +75,8 @@ git push -u origin HEAD:<branch>
 - Push with an explicit refspec, `HEAD:<branch>` (or `-u origin HEAD:<branch>` the first time) — never a bare `git push`.
 - Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
 - **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
+- **Always set `UV_CACHE_DIR` per worktree (CHAOS-4411).** uv's default cache is `~/.cache/uv`, shared machine-wide; concurrent `uv sync` runs from different worktrees serialize on `~/.cache/uv/.lock` (and the editable sdist build lock under it), which has cost lanes 30+ minute waits. Each worktree already gets its own `.venv` — give it its own cache dir too. `.uv-cache/` is gitignored. Cost: no cross-worktree cache sharing, more disk per worktree.
+- **`--no-install-project` is required too (CHAOS-4181 / CHAOS-4407).** setuptools_scm's git file finder shells out to `git check-attr -z --stdin export-ignore` while building the editable install of `dev-health-ops` itself; the pipe deadlocks forever (0% CPU, not slow) once this repo's file list fills the 64KB buffer — every linked worktree hits it, `SETUPTOOLS_SCM_PRETEND_VERSION` does NOT avoid it (the file-listing call runs regardless of the version env var). `--no-install-project` skips that build entirely — the 158 third-party deps still install, and `pytest.ini`'s `pythonpath = src` resolves test imports without the local package being installed. Cost: no `.venv/bin/dev-hops` console script, so `ci/local_validate.sh`'s ClickHouse-dependent stages can't run in this venv locally — run those via CI, or `SKIP_CLICKHOUSE=1 bash ci/local_validate.sh` for the pure-Python stages only.
 
 ## Landing the plane
 

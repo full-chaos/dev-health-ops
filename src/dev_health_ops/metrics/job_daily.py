@@ -580,7 +580,13 @@ def _write_compounding_risk_for_day(
         # reused it across every backfilled day, so a mapping created after
         # a target day was wrongly attributed retroactively, and one valid
         # on the target day but since expired was wrongly omitted.
-        as_of = datetime.combine(day, datetime.max.time(), tzinfo=timezone.utc)
+        # Midnight (day start), not end-of-day: codex round 3 found the
+        # installed clickhouse-connect DateTime64(3) binder truncates
+        # (not rounds) sub-second precision, so `datetime.max.time()`
+        # (23:59:59.999999) was silently bound as 23:59:59.000 -- a row
+        # expiring in that final second would have been wrongly excluded.
+        # Midnight has zero sub-second component, so it round-trips exactly.
+        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
         team_repo_ownership_map = load_team_repo_ownership_map(
             primary_sink, org_id, as_of=as_of
         )

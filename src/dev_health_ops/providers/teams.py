@@ -339,6 +339,15 @@ def load_team_repo_ownership_map(
        retroactively, and one valid on the target day but since expired was
        wrongly omitted. Callers pass the target day's own instant (see
        ``job_daily.py``/``job_compounding_risk.py``).
+
+       CAVEAT (codex round 3 follow-up, confirmed live): the installed
+       clickhouse-connect version's ``{param:DateTime64(3)}`` query-parameter
+       binder TRUNCATES (not rounds) any sub-second component to ``.000``,
+       regardless of value -- ``23:59:59.999999`` is bound as
+       ``23:59:59.000``. Pass ``as_of`` values with no sub-second component
+       you rely on (both current callers use day-start midnight, which loses
+       nothing). A sub-second-precise ``as_of`` will silently lose that
+       precision here.
     2. The ``repos`` join now also matches ``provider`` (both tables carry
        it -- ``051_team_attribution_dimensions.sql``, ``028_repos_provider.sql``).
        Matching only ``org_id`` + case-insensitive name let a mixed-provider

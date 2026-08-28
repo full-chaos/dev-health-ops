@@ -65,6 +65,14 @@ func (writer markerTeam) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSync
 	return writer.write(ctx, tx, "team_autoimport", plan, "")
 }
 
+// markerTeamRepoOwnership is the CHAOS-4365 item 1b sibling of markerTeam,
+// same marker-row shape, distinct kind.
+type markerTeamRepoOwnership struct{ markerWriter }
+
+func (writer markerTeamRepoOwnership) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
+	return writer.write(ctx, tx, "team_repo_ownership_derivation", plan, "")
+}
+
 func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -94,6 +102,7 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 		markerRemaining{},
 		markerWorkGraph{},
 		markerTeam{},
+		markerTeamRepoOwnership{},
 		nil,
 	)
 	if err != nil {
@@ -113,8 +122,8 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1`, runID).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}
-	if markers != 7 {
-		t.Fatalf("markers=%d want=7", markers)
+	if markers != 8 {
+		t.Fatalf("markers=%d want=8", markers)
 	}
 	var workGraphMarkers int
 	if err := pool.QueryRow(ctx, `
@@ -142,13 +151,14 @@ WHERE sync_run_id=$1`, runID)
 		prerequisites[kind] = prerequisite
 	}
 	wantPrerequisites := map[string]string{
-		"complexity":             "",
-		"daily":                  "complexity",
-		"workgraph.build":        "daily",
-		"investment.materialize": "workgraph.build",
-		"membership_backfill":    "investment.materialize",
-		"dora":                   "",
-		"team_autoimport":        "",
+		"complexity":                     "",
+		"daily":                          "complexity",
+		"workgraph.build":                "daily",
+		"investment.materialize":         "workgraph.build",
+		"membership_backfill":            "investment.materialize",
+		"dora":                           "",
+		"team_autoimport":                "",
+		"team_repo_ownership_derivation": "",
 	}
 	for kind, want := range wantPrerequisites {
 		if got := prerequisites[kind]; got != want {
@@ -165,6 +175,7 @@ WHERE sync_run_id=$1`, runID)
 		markerRemaining{},
 		markerWorkGraph{markerWriter{failKind: "investment.materialize"}},
 		markerTeam{},
+		markerTeamRepoOwnership{},
 		nil,
 	)
 	if err != nil {
@@ -233,7 +244,7 @@ func TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID(t *testing.T
 		repositoryID  = "00000000-0000-4000-8000-000000000015"
 	)
 	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
-	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil)
+	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, markerTeamRepoOwnership{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +315,7 @@ VALUES ('00000000-0000-4000-8000-000000000026',$1,'github','blame',$2,
 			t.Fatal(err)
 		}
 	}
-	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil)
+	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, markerTeamRepoOwnership{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +371,7 @@ func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *tes
 	service, err := NewNativePostSyncService(
 		pool,
 		markerDaily{markerWriter{failKind: "daily"}},
-		markerRemaining{}, markerWorkGraph{}, markerTeam{}, nil,
+		markerRemaining{}, markerWorkGraph{}, markerTeam{}, markerTeamRepoOwnership{}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -419,6 +430,7 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWh
 		markerRemaining{},
 		markerWorkGraph{markerWriter{failKind: "investment.materialize"}},
 		markerTeam{},
+		markerTeamRepoOwnership{},
 		nil,
 	)
 	if err != nil {
@@ -486,6 +498,7 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t
 		markerRemaining{},
 		markerWorkGraph{markerWriter{panicKind: "workgraph.build"}},
 		markerTeam{},
+		markerTeamRepoOwnership{},
 		nil,
 	)
 	if err != nil {
@@ -666,11 +679,14 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 		DispatchOutbox: outboxID, RouteGeneration: 1,
 	}}
 	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
-	// Every handoff the metric fanout owns. Team autoimport is deliberately
-	// absent: it is the one that is allowed to be lost.
+	// Every handoff the metric fanout owns, PLUS team_repo_ownership_derivation
+	// (a reliable markerTeamRepoOwnership{} in every case below -- this test
+	// only varies the team-autoimport writer). Team autoimport itself is
+	// deliberately absent from this baseline: it is the one that is allowed
+	// to be lost.
 	metricHandoffs := []string{
 		"complexity", "daily", "dora", "investment.materialize",
-		"membership_backfill", "workgraph.build",
+		"membership_backfill", "workgraph.build", "team_repo_ownership_derivation",
 	}
 
 	for _, testCase := range []struct {
@@ -713,7 +729,7 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 			var logged strings.Builder
 			logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
 			service, err := NewNativePostSyncService(
-				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, testCase.team, logger,
+				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, testCase.team, markerTeamRepoOwnership{}, logger,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -754,6 +770,172 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 				t.Fatalf("committed handoffs = %v, want %v", committed, want)
 			}
 			if testCase.wantLog && !strings.Contains(logged.String(), PostSyncTeamAutoimportFailedMessage) {
+				t.Fatalf("the dropped handoff was not recorded; logs = %q", logged.String())
+			}
+			if testCase.wantLog && !strings.Contains(logged.String(), runID) {
+				t.Fatalf("the drop record does not name the sync run; logs = %q", logged.String())
+			}
+		})
+	}
+}
+
+// rejectingTeamRepoOwnershipWriter is the CHAOS-4365 item 1b sibling of
+// rejectingTeamWriter: same deterministic-rejection shape, distinct writer.
+type rejectingTeamRepoOwnershipWriter struct{ poison bool }
+
+func (writer rejectingTeamRepoOwnershipWriter) PublishTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan) error {
+	if writer.poison {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO post_sync_markers (sync_run_id, kind)
+VALUES ('this-is-not-a-uuid', 'team_repo_ownership_derivation')`); err == nil {
+			return errors.New("the poisoning statement was expected to fail")
+		}
+	}
+	return fmt.Errorf("%w: publish_not_permitted_for_route", joboutbox.ErrPolicyRejected)
+}
+
+// unavailableTeamRepoOwnershipWriter is the CHAOS-4365 item 1b sibling of
+// unavailableTeamWriter: a transient failure a later attempt can clear.
+type unavailableTeamRepoOwnershipWriter struct{}
+
+func (unavailableTeamRepoOwnershipWriter) PublishTx(context.Context, pgx.Tx, PostSyncPlan) error {
+	return joboutbox.ErrUnavailable
+}
+
+// TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy is
+// publishTeamRepoOwnershipDerivation's own proof of the same non-fatal
+// guarantee TestNativePostSyncFanoutTeamAutoimportFailurePolicy pins for the
+// team-autoimport slot -- a distinct sibling writer needs its own red-first
+// evidence, not an inference from the writer it was copied from. Same
+// deterministic-vs-transient boundary: a deterministic rejection (with or
+// without a poisoned transaction) is swallowed and every other metric
+// handoff still commits; a transient failure propagates so River retries the
+// whole fanout.
+func TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000101"
+		runID         = "00000000-0000-4000-8000-000000000102"
+		outboxID      = "00000000-0000-4000-8000-000000000103"
+		integrationID = "00000000-0000-4000-8000-000000000104"
+		repositoryID  = "00000000-0000-4000-8000-000000000105"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: 1,
+	}}
+	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	// Every handoff the metric fanout owns, PLUS team_autoimport (a reliable
+	// markerTeam{} in every case below -- this test only varies the
+	// team-repo-ownership-derivation writer).
+	metricHandoffs := []string{
+		"complexity", "daily", "dora", "investment.materialize",
+		"membership_backfill", "workgraph.build", "team_autoimport",
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		writer    TeamRepoOwnershipPostSyncWriter
+		wantErr   bool
+		wantKinds []string
+		wantLog   bool
+	}{
+		{
+			name:      "a deterministic rejection never breaks the metric fanout",
+			writer:    rejectingTeamRepoOwnershipWriter{},
+			wantKinds: metricHandoffs,
+			wantLog:   true,
+		},
+		{
+			name:      "a deterministic rejection that already aborted the transaction is recovered",
+			writer:    rejectingTeamRepoOwnershipWriter{poison: true},
+			wantKinds: metricHandoffs,
+			wantLog:   true,
+		},
+		{
+			// Unlike team-autoimport's own transient-failure case (published
+			// earlier in Fanout, so its failure aborts before anything
+			// commits), team-repo-ownership-derivation publishes LAST, right
+			// before the outer Commit -- a transient failure here still
+			// aborts the WHOLE outer transaction (a nested writer's
+			// RELEASE SAVEPOINT is not a real commit; only the final
+			// tx.Commit is), taking team_autoimport's already-released
+			// savepoint down with it. wantKinds is empty, not metricHandoffs.
+			name:      "a transient failure is propagated so the whole fanout retries",
+			writer:    unavailableTeamRepoOwnershipWriter{},
+			wantErr:   true,
+			wantKinds: []string{},
+		},
+		{
+			name:      "every handoff commits when the writer accepts",
+			writer:    markerTeamRepoOwnership{},
+			wantKinds: append(append([]string{}, metricHandoffs...), "team_repo_ownership_derivation"),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`DELETE FROM post_sync_markers WHERE sync_run_id=$1`, runID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			var logged strings.Builder
+			logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError}))
+			service, err := NewNativePostSyncService(
+				pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, testCase.writer, logger,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.now = now
+
+			err = service.Fanout(ctx, args)
+			if testCase.wantErr && err == nil {
+				t.Fatal("Fanout() = nil, want an error so River retries the whole fanout: " +
+					"a transient failure must not silently drop the handoff")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("Fanout() = %v, want nil: a deterministic team-repo-ownership-derivation "+
+					"rejection must never break the post-sync metric fanout", err)
+			}
+
+			rows, err := pool.Query(ctx,
+				`SELECT kind FROM post_sync_markers WHERE sync_run_id=$1 ORDER BY kind`, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			committed := []string{}
+			for rows.Next() {
+				var kind string
+				if err := rows.Scan(&kind); err != nil {
+					t.Fatal(err)
+				}
+				committed = append(committed, kind)
+			}
+			if rows.Err() != nil {
+				t.Fatal(rows.Err())
+			}
+			slices.Sort(committed)
+			want := append([]string{}, testCase.wantKinds...)
+			slices.Sort(want)
+			if !slices.Equal(committed, want) {
+				t.Fatalf("committed handoffs = %v, want %v", committed, want)
+			}
+			if testCase.wantLog && !strings.Contains(logged.String(), PostSyncTeamRepoOwnershipDerivationFailedMessage) {
 				t.Fatalf("the dropped handoff was not recorded; logs = %q", logged.String())
 			}
 			if testCase.wantLog && !strings.Contains(logged.String(), runID) {
@@ -863,6 +1045,7 @@ func TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories(t *testing
 				markerRemaining{},
 				markerWorkGraph{},
 				markerTeam{},
+				markerTeamRepoOwnership{},
 				nil,
 			)
 			if err != nil {

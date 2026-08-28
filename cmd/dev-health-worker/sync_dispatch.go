@@ -540,6 +540,18 @@ func buildSyncCoordinatorWorker(
 			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
 			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
 		},
+		// CHAOS-4432: GitLab teams/team_project_ownership/team_memberships +
+		// native projects catalog (CHAOS-3380), Go-native. GroupPathResolver
+		// is nil for now -- GitLab is the only provider whose group scoping
+		// isn't carried on the credential itself; it resolves from this run's
+		// sync_options once TeamCatalogReference.SyncOptions lands (CHAOS-4431
+		// follow-up), tracked separately.
+		"gitlab": providersync.GitLabTeamCatalogCollector{
+			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
+				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+			},
+		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,

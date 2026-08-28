@@ -34,6 +34,7 @@ package graphqldate
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -61,15 +62,66 @@ func New(t time.Time) Date {
 	return Date(time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC))
 }
 
-// Parse parses a "YYYY-MM-DD" string into a Date, matching Python's
-// `datetime.date.fromisoformat` for this exact wire format (both reject a
-// value carrying a time component or a non-hyphenated separator).
+// basicLayout is ISO 8601's "basic format" (no separators), e.g.
+// "20260827" -- accepted by Python's `datetime.date.fromisoformat` since
+// Python 3.11 alongside the canonical extended form.
+const basicLayout = "20060102"
+
+// isoWeekDateRE matches ISO 8601 week-date notation, e.g. "2026-W34-4"
+// (ISO year, ISO week 01-53, ISO weekday 1=Monday..7=Sunday) -- also
+// accepted by `datetime.date.fromisoformat` since Python 3.11. NOTE: an
+// ISO week-date's calendar date does not follow from its digits by simple
+// substitution (e.g. "2026-W34-4" is 2026-08-20, not "26 Aug"-shaped) --
+// see parseISOWeekDate.
+var isoWeekDateRE = regexp.MustCompile(`^(\d{4})-W(\d{2})-([1-7])$`)
+
+// Parse parses a Date string, matching every wire form Python's
+// `datetime.date.fromisoformat` actually accepts (confirmed empirically,
+// not assumed -- codex review, 2026-08-28: an earlier version of this
+// function accepted ONLY the canonical "YYYY-MM-DD" extended form,
+// rejecting valid Strawberry Date inputs like "20260827" (basic format)
+// and "2026-W34-4" (week-date), which Python's real parser accepts --
+// a genuine cross-language divergence for the same registered scalar,
+// even though real web traffic only ever sends the canonical form).
+// MarshalGQL/String always emit the canonical "YYYY-MM-DD" form
+// regardless of which input form was parsed -- this widens what Parse
+// ACCEPTS, it does not change what this type PRODUCES.
 func Parse(s string) (Date, error) {
-	t, err := time.Parse(Layout, s)
-	if err != nil {
-		return Date{}, fmt.Errorf("graphqldate: invalid Date %q: %w", s, err)
+	if t, err := time.Parse(Layout, s); err == nil {
+		return Date(t), nil
 	}
-	return Date(t), nil
+	if t, err := time.Parse(basicLayout, s); err == nil {
+		return Date(t), nil
+	}
+	if t, ok := parseISOWeekDate(s); ok {
+		return Date(t), nil
+	}
+	return Date{}, fmt.Errorf("graphqldate: invalid Date %q", s)
+}
+
+// parseISOWeekDate parses ISO 8601 week-date notation ("YYYY-Www-D") into
+// the calendar date it names. ISO 8601 defines week 1 of a year as the
+// week containing that year's first Thursday (equivalently, the week
+// containing January 4th) -- there is no Go stdlib layout for this, since
+// it is not a simple positional substitution the way "2006-01-02" is.
+func parseISOWeekDate(s string) (time.Time, bool) {
+	m := isoWeekDateRE.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, false
+	}
+	year, _ := strconv.Atoi(m[1])
+	week, _ := strconv.Atoi(m[2])
+	weekday, _ := strconv.Atoi(m[3])
+	if week < 1 || week > 53 {
+		return time.Time{}, false
+	}
+	jan4 := time.Date(year, time.January, 4, 0, 0, 0, 0, time.UTC)
+	isoWeekday := int(jan4.Weekday()) // Sunday=0..Saturday=6
+	if isoWeekday == 0 {
+		isoWeekday = 7 // ISO 8601: Monday=1..Sunday=7
+	}
+	week1Monday := jan4.AddDate(0, 0, -(isoWeekday - 1))
+	return week1Monday.AddDate(0, 0, (week-1)*7+(weekday-1)), true
 }
 
 // Time returns the underlying time.Time (UTC midnight on the date).

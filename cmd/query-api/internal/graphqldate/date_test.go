@@ -102,6 +102,70 @@ func TestNew_TruncatesToUTCMidnight(t *testing.T) {
 	}
 }
 
+// TestParse_AcceptsPythonFromisoformatExtraForms is the codex-review
+// regression proof (2026-08-28): Python's `datetime.date.fromisoformat`
+// (used by Strawberry's Date scalar parse_value) accepts more than the
+// canonical "YYYY-MM-DD" extended form since Python 3.11 -- confirmed
+// empirically against the real interpreter, not assumed:
+//
+//	date.fromisoformat("20260827")   -> date(2026, 8, 27)   (basic format)
+//	date.fromisoformat("2026-W34-4") -> date(2026, 8, 20)   (week-date;
+//	    NOT 2026-08-27 -- a week-date's calendar date does not follow from
+//	    its digits by substitution)
+//
+// Both forms must parse identically here, or a real (if rare) client
+// input accepted by Python would 400 against the Go canary.
+func TestParse_AcceptsPythonFromisoformatExtraForms(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // canonical YYYY-MM-DD this input should resolve to
+	}{
+		{in: "20260827", want: "2026-08-27"},
+		{in: "2026-W34-4", want: "2026-08-20"},
+	}
+	for _, tc := range cases {
+		got, err := Parse(tc.in)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.in, err)
+		}
+		if got.String() != tc.want {
+			t.Errorf("Parse(%q).String() = %q, want %q", tc.in, got.String(), tc.want)
+		}
+	}
+}
+
+// TestParse_StillRejectsNonIsoformatForms proves the widened acceptance
+// above did not also start accepting Python's own rejects (verified
+// against the real interpreter alongside the accepted cases: both
+// "2026-8-27" and a full timestamp raise ValueError from
+// `date.fromisoformat` too).
+func TestParse_StillRejectsNonIsoformatForms(t *testing.T) {
+	cases := []string{"2026-8-27", "2026-08-27T10:00:00", "2026-234", "not-a-date", ""}
+	for _, s := range cases {
+		if _, err := Parse(s); err == nil {
+			t.Errorf("Parse(%q) accepted, want an error (Python's fromisoformat rejects this too)", s)
+		}
+	}
+}
+
+// TestMarshalGQL_AlwaysEmitsCanonicalFormRegardlessOfParsedInputForm
+// proves Parse's widened ACCEPTANCE does not change what this type
+// PRODUCES: a Date built from a non-canonical input form still
+// round-trips to the canonical "YYYY-MM-DD" on the wire, matching
+// Python's own behavior (isoformat() always normalizes to the extended
+// form regardless of which fromisoformat variant parsed the input).
+func TestMarshalGQL_AlwaysEmitsCanonicalFormRegardlessOfParsedInputForm(t *testing.T) {
+	d, err := Parse("20260827")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	var buf bytes.Buffer
+	d.MarshalGQL(&buf)
+	if got, want := buf.String(), `"2026-08-27"`; got != want {
+		t.Errorf("MarshalGQL = %q, want %q", got, want)
+	}
+}
+
 func TestParse_MatchesNewForSameCalendarDate(t *testing.T) {
 	parsed, err := Parse("2026-08-27")
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
@@ -39,7 +40,7 @@ type GitLabTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, manual_members)`
+const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const gitlabTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const gitlabTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
@@ -176,37 +177,68 @@ func gitlabTeamCatalogDestination(destination string) bool {
 	}
 }
 
-// existingGitLabTeamRow reads the currently-persisted (manual_members,
-// members) pair for a team id, so a write can carry forward whichever of
-// those this run is not authoritative for. found=false means no row exists
-// yet (a genuinely new team -- an empty manual_members/roster is correct,
-// not a preservation failure).
-func (sink GitLabTeamCatalogClickHouseEffects) existingGitLabTeamRow(
-	ctx context.Context, orgID, teamID string,
-) (manualMembers []string, members []string, found bool, err error) {
-	result, err := sink.Conn.Query(ctx,
-		`SELECT manual_members, members FROM teams FINAL WHERE org_id = ? AND id = ? LIMIT 1`,
-		orgID, teamID,
+// gitlabExistingTeamRosterQuery batch-reads the currently-persisted
+// `members` roster for every team a caller is about to write, mirroring
+// PreserveExistingTeamManualMembers's shape (team_manual_members.go) but for
+// the GitLab-specific members-off preservation case (CHAOS-4323 round 2):
+// unlike manual_members, no other native provider needs this today --
+// Linear always collects members alongside teams in one GraphQL walk, so it
+// has no "teams selected, members not" partial-collection mode at all. A
+// team with no existing row simply has no entry in the returned map; the
+// caller defaults that to an empty roster (a genuinely new team), never
+// treats a missing entry as an error.
+func gitlabExistingTeamRoster(
+	ctx context.Context, conn driver.Conn, orgID string, teamIDs []string,
+) (map[string][]string, error) {
+	if conn == nil || strings.TrimSpace(orgID) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	if len(teamIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := conn.Query(ctx,
+		"SELECT id, members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}",
+		clickhouse.Named("org_id", orgID), clickhouse.Named("team_ids", teamIDs),
 	)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
-	defer result.Close()
-	for result.Next() {
-		if err := result.Scan(&manualMembers, &members); err != nil {
-			return nil, nil, false, err
+	defer rows.Close()
+	existing := make(map[string][]string, len(teamIDs))
+	for rows.Next() {
+		var id string
+		var members []string
+		if err := rows.Scan(&id, &members); err != nil {
+			return nil, err
 		}
-		found = true
+		existing[id] = members
 	}
-	if err := result.Err(); err != nil {
-		return nil, nil, false, err
-	}
-	return manualMembers, members, found, nil
+	return existing, rows.Err()
 }
 
 func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, claim Claim, rows []gitlabTeamCatalogTeamRow) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	teamIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		teamIDs = append(teamIDs, row.ID)
+	}
+	// CHAOS-4321/CHAOS-4446: batched, one round trip for every touched team,
+	// shared with every native provider's teams writer (Linear included) so
+	// the carry-forward logic lives in exactly one place.
+	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, claim.OrgID, teamIDs)
+	if err != nil {
+		// Fail closed: a read failure must never fall through to writing an
+		// unconfirmed manual_members reset.
+		return err
+	}
+	existingRoster, err := gitlabExistingTeamRoster(ctx, sink.Conn, claim.OrgID, teamIDs)
+	if err != nil {
+		// Fail closed (team_autoimport_gitlab._existing_team_members): a
+		// read failure must never fall through to writing an unconfirmed
+		// empty roster either.
+		return err
 	}
 	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
 	if err != nil {
@@ -218,27 +250,20 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		manualMembers, existingMembers, _, err := sink.existingGitLabTeamRow(ctx, claim.OrgID, row.ID)
-		if err != nil {
-			// Fail closed (team_autoimport_gitlab._existing_team_members):
-			// a read failure must never fall through to writing an
-			// unconfirmed empty roster or silently dropping a manual
-			// override.
-			return err
-		}
 		members := row.Members
 		if !row.MembersAuthoritative {
-			members = existingMembers
+			members = existingRoster[row.ID]
 		}
 		if members == nil {
 			members = []string{}
 		}
+		manualMembers := existingManualMembers[row.ID]
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
 		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, members, row.ProjectKeys, row.RepoPatterns,
-			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, manualMembers,
+			row.ID, teamUUID, row.Name, row.Description, members, manualMembers, row.ProjectKeys, row.RepoPatterns,
+			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 		); err != nil {
 			return err
 		}

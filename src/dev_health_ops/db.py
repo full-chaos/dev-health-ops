@@ -134,7 +134,9 @@ def _log_postgres_connection_posture(uri: str, kwargs: dict[str, Any]) -> None:
     )
 
 
-_UNRESOLVED_ENV_TEMPLATE_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+_UNRESOLVED_ENV_TEMPLATE_RE = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:(?::?[-=?+])[^}]*)?\}"
+)
 
 
 def _reject_unresolved_template(uri: str, *, source: str) -> str:
@@ -150,6 +152,15 @@ def _reject_unresolved_template(uri: str, *, source: str) -> str:
     raises a confusing ``InvalidPasswordError`` for user
     ``"${POSTGRES_USER"`` (the DSN parser splits on the literal ``:``
     inside the template) instead of naming the real problem.
+
+    Codex review round 1 (P2, correct): the bare-``${VAR}`` pattern missed
+    Compose's parameter-expansion forms (``${VAR:-default}``,
+    ``${VAR-default}``, ``${VAR:=default}``, ``${VAR:?message}``,
+    ``${VAR:+alt}``) -- a DSN using any of those still reached asyncpg
+    verbatim. The pattern now matches an optional ``:-``/``-``/``:=``/``=``/
+    ``:?``/``?``/``:+``/``+`` operator and everything up to the closing
+    ``}``, covering every POSIX/Compose parameter-expansion form, not just
+    the bare-name one.
     """
     match = _UNRESOLVED_ENV_TEMPLATE_RE.search(uri)
     if match:

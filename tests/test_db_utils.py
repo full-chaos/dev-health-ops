@@ -227,3 +227,21 @@ class TestRejectsUnresolvedEnvTemplate:
             db.normalize_async_postgres_uri(
                 "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/db"
             )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "postgresql://${POSTGRES_USER:-postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER-postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:=postgres}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:?required}@postgres:5432/db",
+            "postgresql://${POSTGRES_USER:+alt}@postgres:5432/db",
+        ],
+    )
+    def test_rejects_compose_parameter_expansion_forms(self, uri):
+        """Codex review round 1 (P2): the bare ${VAR} pattern missed
+        Compose/POSIX parameter-expansion forms with a default, error, or
+        alternate-value operator -- a DSN using any of those still reached
+        asyncpg verbatim."""
+        with pytest.raises(ValueError, match=r"unresolved template placeholder"):
+            db.normalize_async_postgres_uri(uri)

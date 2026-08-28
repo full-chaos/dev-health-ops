@@ -361,17 +361,39 @@ async def test_cognitive_load_team_and_repo_id_combined_checks_ownership_first()
     fall straight into the tainted two-query merge, filtering
     user_metrics_daily/team_metrics_daily on their OWN team_id column --
     the same taint CHAOS-4365 fixed for the single-team path. The combined
-    path must instead confirm ownership via team_repo_ownership FIRST (one
-    query), then -- once owned -- filter both data queries by repo_id
-    ALONE, never by the tainted team_id column.
+    path must instead confirm ownership via team_repo_ownership FIRST
+    (candidate-repo lookup + ranked ownership query), then -- once owned --
+    filter both data queries by repo_id ALONE, never by the tainted
+    team_id column.
     """
     ctx = _ctx()
     _setup_client(
         ctx.client,
         [
-            _qresult(["repo_id"], [["3fa85f64-5717-4562-b3fc-2c963f66afa6"]]),
-            _qresult([], []),
-            _qresult([], []),
+            _qresult(  # candidate repos matching the slug
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(  # ranked native ownership rows
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-alpha",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
         ],
     )
 
@@ -380,12 +402,14 @@ async def test_cognitive_load_team_and_repo_id_combined_checks_ownership_first()
     )
 
     assert result.team_id == "team-alpha"
-    assert ctx.client.query.call_count == 3
-    ownership_query: str = ctx.client.query.call_args_list[0].args[0]
-    user_query: str = ctx.client.query.call_args_list[1].args[0]
-    team_query: str = ctx.client.query.call_args_list[2].args[0]
+    assert ctx.client.query.call_count == 4
+    candidate_query: str = ctx.client.query.call_args_list[0].args[0]
+    ownership_query: str = ctx.client.query.call_args_list[1].args[0]
+    user_query: str = ctx.client.query.call_args_list[2].args[0]
+    team_query: str = ctx.client.query.call_args_list[3].args[0]
+    assert "FROM repos" in candidate_query
     assert "team_repo_ownership" in ownership_query
-    assert "team_id" in ownership_query
+    assert "is_primary" in ownership_query and "specificity" in ownership_query
     # Once ownership is confirmed, neither data query FILTERS by the
     # tainted team_id column -- only by the now-resolved repo_id.
     # team_query still legitimately GROUPs BY team_id internally (to
@@ -403,33 +427,115 @@ async def test_cognitive_load_team_and_repo_id_combined_checks_ownership_first()
     # The resolved canonical UUID from the ownership check, not the
     # caller's original slug, is what scopes the data queries.
     assert (
-        ctx.client.query.call_args_list[1].kwargs["parameters"]["repo_id"]
+        ctx.client.query.call_args_list[2].kwargs["parameters"]["repo_id"]
         == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     )
     assert (
-        ctx.client.query.call_args_list[2].kwargs["parameters"]["repo_id"]
+        ctx.client.query.call_args_list[3].kwargs["parameters"]["repo_id"]
         == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     )
 
 
 @pytest.mark.asyncio
-async def test_cognitive_load_team_and_repo_id_combined_empty_when_not_owned() -> None:
-    """The requested team does not own the requested repo (per
-    team_repo_ownership): return an explicit empty result rather than
-    either the wrong team's data or a confusing error. Only ONE query
-    fires -- the ownership check -- never the two data queries.
-    """
+async def test_cognitive_load_team_and_repo_id_combined_empty_when_repo_not_found() -> (
+    None
+):
+    """The requested repo doesn't resolve to anything in ``repos`` at all:
+    an explicit empty result after exactly the one candidate-lookup query
+    -- never the ownership query or either data query."""
     ctx = _ctx()
     _setup_client(ctx.client, [_qresult([], [])])
 
     result = await resolve_cognitive_load(
-        ctx, _input(team_id="team-alpha", repo_id="acme/other-repo")
+        ctx, _input(team_id="team-alpha", repo_id="acme/nonexistent-repo")
     )
 
     assert result.team_id == "team-alpha"
     assert result.signals == []
     assert result.total_days == 0
     assert ctx.client.query.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_empty_when_owned_by_other_team() -> (
+    None
+):
+    """CHAOS-4406 codex R1 (P1, canonical-owner ranking): the repo exists
+    and DOES have a native ownership row, but its ranked (is_primary,
+    specificity) winner is a DIFFERENT team than the one requested. Must
+    return empty, never that other team's data, and never fall through to
+    the repo_patterns fallback (native ownership DID resolve the repo)."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult(
+                [
+                    "resolved_repo_id",
+                    "team_id",
+                    "is_primary",
+                    "specificity",
+                    "updated_at",
+                ],
+                [
+                    [
+                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                        "team-beta",
+                        1,
+                        10,
+                        "2026-05-01",
+                    ]
+                ],
+            ),
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.signals == []
+    assert result.total_days == 0
+    assert ctx.client.query.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cognitive_load_team_and_repo_id_combined_falls_back_to_repo_patterns() -> (
+    None
+):
+    """CHAOS-4406 codex R1 (P1, provider coverage): GitLab/Jira/Linear
+    auto-imports never write team_repo_ownership at all -- their repos
+    resolve to a team only via teams.repo_patterns. When native ownership
+    resolves NOTHING for the candidate repo, the resolver must fall back
+    to the requesting team's repo_patterns before giving up."""
+    ctx = _ctx()
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(
+                ["id", "repo"],
+                [["3fa85f64-5717-4562-b3fc-2c963f66afa6", "acme/repo"]],
+            ),
+            _qresult([], []),  # no native ownership rows at all
+            _qresult(["repo_patterns"], [[["acme/repo"]]]),  # team's own patterns
+            _qresult([], []),  # user_metrics_daily
+            _qresult([], []),  # team_metrics_daily
+        ],
+    )
+
+    result = await resolve_cognitive_load(
+        ctx, _input(team_id="team-alpha", repo_id="acme/repo")
+    )
+
+    assert result.team_id == "team-alpha"
+    assert ctx.client.query.call_count == 5
+    pattern_query: str = ctx.client.query.call_args_list[2].args[0]
+    assert "teams" in pattern_query
+    assert "repo_patterns" in pattern_query
 
 
 # ---------------------------------------------------------------------------

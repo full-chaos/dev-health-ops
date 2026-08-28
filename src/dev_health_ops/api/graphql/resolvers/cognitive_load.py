@@ -304,6 +304,31 @@ async def _fetch_team_metrics(
 # ---------------------------------------------------------------------------
 
 
+def _repo_pattern_matches(slug: str, patterns: list[str]) -> bool:
+    """Mirror ``providers/teams.py::RepoPatternTeamResolver.resolve``'s
+    match rule: an exact (case-insensitive) string, or a ``*``-suffixed
+    prefix glob, stripped of the trailing ``*``/``/``.
+    """
+    key = slug.strip().lower()
+    if not key:
+        return False
+    exact: set[str] = set()
+    prefixes: list[str] = []
+    for pattern in patterns:
+        p = str(pattern).strip().lower()
+        if not p:
+            continue
+        if "*" in p:
+            prefix = p.rstrip("*").rstrip("/")
+            if prefix:
+                prefixes.append(prefix)
+        else:
+            exact.add(p)
+    if key in exact:
+        return True
+    return any(key.startswith(prefix) for prefix in prefixes)
+
+
 async def _resolve_owned_repo_id(
     client: Any,
     *,
@@ -311,59 +336,126 @@ async def _resolve_owned_repo_id(
     team_id: str,
     repo_id: str,
 ) -> str | None:
-    """Resolve ``repo_id`` (a UUID or ``repos.repo`` slug) to its canonical
-    repo UUID IFF ``team_id`` currently owns it per ``team_repo_ownership``
-    -- ``None`` if the repo does not exist, or is not currently owned by
-    this team.
+    """Resolve ``repo_id`` (a UUID or ``repos.repo`` slug) to a repo UUID
+    IFF ``team_id`` currently, CANONICALLY owns it -- ``None`` if the repo
+    does not exist, or resolves to a different team.
 
     CHAOS-4406: the team+repo COMBINED path can trust neither
     ``user_metrics_daily``/``team_metrics_daily``'s own ``team_id`` column
     (tainted, CHAOS-4396) nor simply drop the team filter and serve every
-    signal for the repo regardless of owner. ``team_repo_ownership`` is the
-    one ownership-only (CHAOS-4321) source of truth for "does this team own
-    this repo" -- the SAME table, same temporal predicate
-    (``valid_from``/``valid_to``), and same collapse-to-latest-row
-    (``argMax(..., (updated_at, valid_from))``) as
-    ``api/dev/native_status_change.py``'s canonical ``team_repository_ids``
-    re-derivation, narrowed here to one candidate repo instead of a team's
-    full owned set, and reusing the identical repo UUID-or-slug resolution
-    predicate ``_fetch_user_metrics`` already applies.
+    signal for the repo regardless of owner. Mirrors the SAME two-source,
+    ownership-wins-over-pattern merge every OTHER ownership-scoped reader
+    in this codebase uses (``providers/teams.py::load_team_repo_ownership_map``
+    docstring; ``job_daily.py::_repo_to_team_map_for_compounding_risk``;
+    ``metrics/team_cognitive_load.py``'s own write-time resolution) --
+    codex R1 found the first version of this function reinvented a
+    narrower, incorrect version of that merge:
 
-    Ownership is checked as of "now" (``now64(3)``), not a caller-supplied
-    ``as_of``: this call decides WHICH SQL path answers the request (a
-    routing decision), not the attributed data itself -- the daily rows
-    returned afterwards are still date-ranged historical repo-level facts,
+    1. Native ``team_repo_ownership`` wins where it resolves the repo.
+       GitHub auto-import (``team_autoimport_github.py``) writes every row
+       with ``repo_id = NULL`` and only ``repo_full_name`` set -- a bare
+       ``argMax(repo_id, ...) IS NOT NULL`` filter (the first version's
+       bug) silently rejects EVERY native GitHub ownership row. Resolved
+       here via ``coalesce(o.repo_id, r.id)`` against a LEFT JOIN on
+       ``(org_id, provider, lower(repo_full_name))``, matching
+       ``load_team_repo_ownership_map``'s exact join (including its
+       ``matched`` sentinel -- ClickHouse's zero-value LEFT JOIN default,
+       not NULL, would otherwise silently treat an unmatched name as
+       matched to the UUID zero-value).
+    2. Ranked by ``(is_primary DESC, specificity DESC, updated_at DESC)``
+       per resolved repo id -- so a non-primary co-owner row is never
+       mistaken for the canonical owner (the first version's other bug:
+       filtering to ``team_id`` BEFORE picking a winner let a secondary
+       team read metrics the primary owner alone should see).
+    3. Falls back to ``teams.repo_patterns`` (glob strings) ONLY when
+       native ownership resolves NO row at all for the candidate repo(s)
+       -- the path GitLab/Jira/Linear auto-imports rely on entirely, since
+       none of them write ``team_repo_ownership``.
+
+    Ownership is checked as of "now", not a caller-supplied ``as_of``:
+    this call decides WHICH SQL path answers the request (a routing
+    decision), not the attributed data itself -- the daily rows returned
+    afterwards are still date-ranged historical repo-level facts,
     unaffected by today's ownership snapshot.
+
+    Known residual limitation (codex R1, P2, not fully closed here): if
+    the org has the SAME repo slug under two different providers and
+    ``team_id`` owns only one of them, this resolves to whichever
+    candidate ``team_id`` owns (never a repo it doesn't own -- no
+    cross-team leak) but does not merge signals from a second,
+    same-slug repo the SAME team also owns. That combination is rare
+    (matches ``_fetch_user_metrics``'s own pre-existing slug-resolution
+    shape, which already carries this ambiguity for the org-wide path)
+    and is left as a follow-up rather than widening this fix's scope.
     """
-    query = """
-        SELECT toString(g.repo_id) AS repo_id
-        FROM (
-            SELECT
-                org_id,
-                provider,
-                repo_full_name,
-                team_id,
-                argMax(repo_id, (updated_at, valid_from)) AS repo_id
-            FROM team_repo_ownership
-            WHERE org_id = {org_id:String}
-              AND team_id = {team_id:String}
-              AND valid_from <= now64(3)
-              AND (valid_to IS NULL OR valid_to > now64(3))
-            GROUP BY org_id, provider, repo_full_name, team_id
-        ) AS g
-        WHERE g.repo_id IS NOT NULL
-          AND g.repo_id IN (
-              SELECT id FROM repos
-              WHERE org_id = {org_id:String}
-                AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
-          )
-        LIMIT 1
-    """
-    params = {"org_id": org_id, "team_id": team_id, "repo_id": repo_id}
-    rows = await query_dicts(client, query, params)
-    if not rows:
+    candidate_rows = await query_dicts(
+        client,
+        """
+        SELECT toString(id) AS id, repo AS repo
+        FROM repos
+        WHERE org_id = {org_id:String}
+          AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+        """,
+        {"org_id": org_id, "repo_id": repo_id},
+    )
+    if not candidate_rows:
         return None
-    return str(rows[0]["repo_id"])
+    candidate_ids = [str(row["id"]) for row in candidate_rows]
+
+    ownership_rows = await query_dicts(
+        client,
+        """
+        SELECT
+            coalesce(toString(o.repo_id), toString(r.id)) AS resolved_repo_id,
+            o.team_id AS team_id,
+            o.is_primary AS is_primary,
+            o.specificity AS specificity,
+            o.updated_at AS updated_at
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+            WHERE org_id = {org_id:String}
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = {org_id:String}
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
+          AND o.valid_from <= now64(3)
+          AND (o.valid_to IS NULL OR o.valid_to > now64(3))
+        ORDER BY resolved_repo_id, is_primary DESC, specificity DESC, updated_at DESC
+        """,
+        {"org_id": org_id, "candidate_ids": candidate_ids},
+    )
+    if ownership_rows:
+        canonical_owner: dict[str, str] = {}
+        for row in ownership_rows:
+            canonical_owner.setdefault(
+                str(row["resolved_repo_id"]), str(row["team_id"])
+            )
+        for candidate_id, owning_team_id in canonical_owner.items():
+            if owning_team_id == team_id:
+                return candidate_id
+        return None
+
+    # No native ownership row resolves ANY candidate repo -- fall back to
+    # teams.repo_patterns, the path non-GitHub-native auto-imports rely on.
+    team_rows = await query_dicts(
+        client,
+        "SELECT repo_patterns FROM teams FINAL WHERE org_id = {org_id:String} AND id = {team_id:String}",
+        {"org_id": org_id, "team_id": team_id},
+    )
+    if not team_rows:
+        return None
+    patterns = [str(p) for p in (team_rows[0].get("repo_patterns") or [])]
+    if not patterns:
+        return None
+    for row in candidate_rows:
+        if _repo_pattern_matches(str(row.get("repo") or ""), patterns):
+            return str(row["id"])
+    return None
 
 
 async def _fetch_repo_scoped_team_metrics(

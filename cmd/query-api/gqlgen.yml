@@ -1,0 +1,57 @@
+# gqlgen config for query-api (CHAOS-4366 Wave 0, deliverable 6).
+#
+# Schema-first FROM THE CANONICAL SDL PIN: this points directly at
+# contracts/graphql/v1/schema.graphql (the CI-checked export of the
+# Strawberry schema -- see contracts/graphql/v1/README.md), never a copy.
+# Regenerating this package after a schema.graphql change is therefore the
+# same drift-detection contract as web's codegen: run `go generate ./...`
+# (or the gqlgen command below) and the diff IS the review.
+schema:
+  - ../../contracts/graphql/v1/schema.graphql
+
+exec:
+  filename: internal/graph/generated.go
+  package: graph
+
+model:
+  filename: internal/graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: internal/graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+# Wave 0 deliberately implements NO resolvers (plan §6: "deploy an empty Go
+# query-api and prove a route becomes reachable when, and only when, its
+# individual switch is enabled" -- resolver logic is a LATER wave). gqlgen's
+# default generated resolver bodies panic with "not implemented" for every
+# field, which is exactly the honest, loud failure this repo's conventions
+# require (root AGENTS.md rule #4) rather than a silent zero-value stub.
+omit_slice_element_pointers: true
+
+# Custom scalars: the canonical SDL declares three (`scalar Date`,
+# `scalar DateTime`, `scalar JSON`). Map them to gqlgen's built-in
+# marshalers rather than hand-rolling -- the Python side's actual
+# serialization behavior (ISO-8601, JSON passthrough) is documented in
+# contracts/graphql/v1/README.md and must be verified against these
+# mappings before any resolver is ported (plan §4: "custom scalar
+# serialization ... are all client-visible contracts").
+models:
+  DateTime:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  Date:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  JSON:
+    model:
+      - github.com/99designs/gqlgen/graphql.Map
+
+# autobind intentionally omitted: Wave 0 has no Go domain model package to
+# bind generated GraphQL types to yet (no resolver logic exists). Every
+# type below is therefore gqlgen-generated in graph/model, not bound to a
+# hand-written struct -- correct for an empty scaffold, and it should be
+# revisited once the first real resolver (Wave 1, featureFlags) needs to
+# bind to a store-layer type.

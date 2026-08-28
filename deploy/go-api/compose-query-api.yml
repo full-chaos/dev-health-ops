@@ -1,0 +1,44 @@
+# query-api compose overlay (CHAOS-4366 Wave 0). Default OFF — a bare
+# `docker compose up -d` does not create this service.
+#
+# Same pattern as deploy/go-workers/compose-go-workers.yml: the canonical
+# local stack is the repo-root /dev-health/compose.yml (outside any git
+# repo), so this file is the reviewed, versioned source of truth for the
+# service definition below, either pasted into the root file or layered as
+# an overlay:
+#
+#   cd /path/to/dev-health
+#   docker compose -f compose.yml \
+#     -f ops/deploy/go-api/compose-query-api.yml \
+#     --profile go-api up -d --build
+#
+# The root compose.yml MUST be the first -f (compose resolves every
+# relative path against the first file's directory).
+#
+# Wave 0 scope: this service has NO resolver logic (every GraphQL field
+# panics "not implemented" — see cmd/query-api/main.go's package doc) and
+# depends on nothing but process liveness. It is not wired to Postgres,
+# ClickHouse, or the operation registry yet — those arrive with the Go
+# verifier / real resolvers in later waves, once dev-health-go (CHAOS-4377)
+# lands. Bringing this service up therefore proves only that the binary
+# starts and answers /healthz and /readyz — never start it as part of an
+# assumed-working stack; per this lane's standing orders, it and the other
+# go-* services stay down unless explicitly brought up for verification.
+
+services:
+  query-api:
+    build:
+      context: ${DEV_HEALTH_OPS_ROOT:-./ops}
+      dockerfile: docker/query-api.Dockerfile
+      target: runtime
+    profiles: ["go-api"]
+    restart: unless-stopped
+    labels:
+      logging.service.name: dev-health-query-api
+      logging.service.namespace: dev-health
+    environment:
+      QUERY_API_ADDR: ":8090"
+    ports:
+      - "${QUERY_API_PORT:-8091}:8090"
+    networks:
+      - dev-health

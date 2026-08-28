@@ -71,6 +71,44 @@ func decodeCompletionValue(result map[string]any, key string, target any) error 
 	return nil
 }
 
+// decodeOptionalGitHubTestsSkippedArtifacts decodes batch.Result["skipped_artifacts"]
+// leniently, unlike decodeCompletionValue's required fields: an ABSENT key
+// means "no markers", not a validation failure. skipped_artifacts is
+// optional supplementary evidence (CHAOS-4315, extended CHAOS-4394) --
+// a completion batch that predates it entirely, or a synthetic test batch
+// that never set it (see TestGitHubTestsCompletionWatermarkInvariantIsBidirectional),
+// is exactly what "no durable marker" means, which is itself meaningful
+// input to githubTestsBlocksWatermark, not something to reject on sight.
+func decodeOptionalGitHubTestsSkippedArtifacts(result map[string]any) []GitHubTestsSkippedArtifact {
+	value, present := result["skipped_artifacts"]
+	if !present {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var markers []GitHubTestsSkippedArtifact
+	if json.Unmarshal(encoded, &markers) != nil {
+		return nil
+	}
+	return markers
+}
+
+// decodeOptionalGitHubTestsSkippedArtifactsOverflow is
+// decodeOptionalGitHubTestsSkippedArtifacts's twin for the overflow counter,
+// tolerant of both the live int and a JSON-decoded float64.
+func decodeOptionalGitHubTestsSkippedArtifactsOverflow(result map[string]any) int {
+	switch value := result["skipped_artifacts_overflow"].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
 func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error {
 	var complete bool
 	var skipped int
@@ -80,6 +118,8 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 		decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil {
 		return ErrInvalidConfiguration
 	}
+	skippedArtifacts := decodeOptionalGitHubTestsSkippedArtifacts(batch.Result)
+	skippedArtifactsOverflow := decodeOptionalGitHubTestsSkippedArtifactsOverflow(batch.Result)
 	if skipped < 0 || githubTestsIncompleteCount(incomplete) != skipped {
 		return ErrInvalidConfiguration
 	}
@@ -104,7 +144,7 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 	// identically on every future window, so demanding a nil watermark there
 	// pins since_at forever -- which is exactly what left three sources at zero
 	// cicd coverage for four days.
-	if githubTestsBlocksWatermark(incomplete) {
+	if githubTestsBlocksWatermark(incomplete, skippedArtifacts, skippedArtifactsOverflow) {
 		if batch.Watermark != nil {
 			return ErrInvalidConfiguration
 		}

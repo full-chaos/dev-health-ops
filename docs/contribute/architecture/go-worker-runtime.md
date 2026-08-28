@@ -406,42 +406,63 @@ for cicd/tests, kept only as the comparison implementation) still treats a
 size-bound breach as terminal, the same as the in-archive `archive_bounds` /
 `report_cap` bounds below; only the chunked production path changed.
 
-Whether that skip also **withholds the watermark** now splits on a
-DETERMINISTIC vs TRANSIENT classification — the same rule CHAOS-4142
-established for the per-run item cap (see "Two alternatives are ruled out"
-above), reapplied one level down at artifact granularity:
+Whether that skip also **withholds the watermark** was reclassified twice.
+CHAOS-4315 first split it on a DETERMINISTIC vs TRANSIENT theory — the same
+rule CHAOS-4142 established for the per-run item cap (see "Two alternatives
+are ruled out" above), reapplied one level down at artifact granularity:
+`artifact_oversized` advances (the same bytes are the same size on every
+future re-walk, so withholding recovers nothing and only pins the window
+forever); `artifact_unavailable` (no Location header) and `unreadable_archive`
+(bytes obtained, container would not open) were left withholding, on the
+theory that each is a property of ONE download ATTEMPT — a redirect, a
+connection, the bytes actually received THIS time — so a later re-walk might
+genuinely observe the same artifact differently.
 
-- **Transient causes withhold.** `artifact_unavailable` (no Location header)
-  and `unreadable_archive` (bytes obtained, container would not open) are
-  properties of ONE download ATTEMPT — a redirect, a connection, the bytes
-  actually received THIS time. A later re-walk of the same window might
-  genuinely observe that same artifact differently, so withholding the
-  watermark buys a real chance at recovering full coverage next time. A
-  genuine I/O failure reading the artifact body (a dropped connection) is
-  the most transient case of all and stays fully terminal rather than even a
-  withholding skip: unlike a fixed artifact size, silently skipping it would
-  risk losing data a retry would have recovered in full.
-- **`artifact_oversized` advances instead.** It is a property of the
-  ARTIFACT, not the attempt: the same bytes are the same size on every
-  future re-walk of the same window, so withholding recovers nothing and
-  only pins that window on it forever — re-walking an unrecoverable loss
-  hourly until GitHub's retention expires it. This was CHAOS-4315's actual
-  prod symptom: `sync_watermarks.last_synced_at` pinned at 2026-08-19 by
-  exactly this mechanism, not by the unit failing outright (an earlier
-  revision of this section, and the fix's own first pass, treated
-  skip-and-continue as sufficient without also flipping this — it is not:
-  a skip that still withholds forever reproduces the identical symptom one
-  layer down).
+**CHAOS-4394 (2026-08-28) found that theory does not survive its own prod
+evidence.** Nine days after CHAOS-4315 shipped, `sync_watermarks` for
+ops/acr/web was STILL pinned at 2026-08-19 — the SAME artifacts recurring as
+`artifact_unavailable` and `unreadable_archive` on every hourly attempt,
+identically, not intermittently. Whatever theoretical transience the
+redirect/connection mechanism has, these particular failures behave exactly
+like the oversized case in practice: the provider answers the same way every
+time. All three whole-artifact `report_member` skip causes now advance the
+watermark alike: skip the one artifact, keep walking, record a durable marker,
+advance. `reports_complete` still reports `false` regardless — coverage
+honesty is unaffected; only the permanent-stall consequence of withholding is
+removed. A genuine I/O failure reading the artifact body (a dropped
+connection) is a different case and stays fully terminal rather than even a
+withholding skip: unlike a fixed artifact size or a provider-answered
+redirect/parse outcome, silently skipping it would risk losing data a retry
+would have recovered in full.
 
 Because a watermark-advancing window still permanently loses that one
-artifact's reports, each `artifact_oversized` skip also gets a durable
-per-artifact marker (`GitHubTestsSkippedArtifact`: run id, artifact id,
-observed size, cap) alongside the closed-vocabulary count — bounded at
-`githubTestsMaxSkippedArtifactRecords` per unit, with an overflow counter
-past the cap, so a source with heavy skip volume cannot push the resumable
-chunk cursor over its own byte budget. Run id and artifact id are
-provider-supplied and unbounded, which is why they live on this separate
-bounded record rather than on `GitHubTestsIncomplete` itself.
+artifact's reports, every `report_member` skip (all three causes, extended
+from `artifact_oversized`-only by CHAOS-4394) gets a durable per-artifact
+marker (`GitHubTestsSkippedArtifact`: run id, artifact id, cause, and —
+for `artifact_oversized` only — observed size and cap) alongside the
+closed-vocabulary count — bounded at `githubTestsMaxSkippedArtifactRecords`
+per unit, with an overflow counter past the cap, so a source with heavy skip
+volume cannot push the resumable chunk cursor over its own byte budget. Run id
+and artifact id are provider-supplied and unbounded, which is why they live on
+this separate bounded record rather than on `GitHubTestsIncomplete` itself. An
+operator can find the run/artifact behind a recurring skip from this marker
+and retry it with a bounded backfill (`POST
+/api/v1/admin/sync-configs/{config_id}/backfill` — never touches
+`sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
+scoped to the affected repo and the marker's run window.
+
+`dev_health_cicd_partial_success_total{reason}` (CHAOS-4394) counts, at
+unit-completion time, every cicd/tests unit that advanced its watermark while
+still carrying incomplete evidence — the UNIT-level view of "success, but with
+a durable, recorded gap", distinct from the per-artifact
+`dev_health_provider_artifact_skipped_total` and the per-run
+`dev_health_provider_per_run_truncation_total`. `repo` is deliberately NOT a
+label (codex review round 1 caught the cardinality risk: a long-lived worker
+would accumulate one series per repository ever added or renamed, never
+evicted) — it is logged in the structured `slog.Info` line
+`internal/jobs/providerunit.Handler.observeCicdPartialSuccess` emits
+alongside the counter, the same run-id/artifact-id-in-logs-not-labels
+precedent this file already follows elsewhere.
 
 **Total** unreadability — every artifact the walk observed failing to read —
 is a systematic route condition, such as a proxy or auth edge answering every
@@ -473,10 +494,10 @@ shipped:
   cause.
 
 Partial degradation's existing signals
-(`dev_health_provider_artifact_skipped_total`, the per-skip warning log, and
-a watermark that withholds on transient causes but advances on the
-deterministic `artifact_oversized` cause — see above) are unchanged and
-still fire underneath total unreadability up to the point it terminalizes;
+(`dev_health_provider_artifact_skipped_total`, `dev_health_cicd_partial_success_total`,
+the per-skip warning log, and a watermark that advances on all three
+`report_member` skip causes — see above) are unchanged and still fire
+underneath total unreadability up to the point it terminalizes;
 `dev_health_provider_all_artifacts_unreadable_total` is the new, separate
 signal for the terminal condition itself.
 

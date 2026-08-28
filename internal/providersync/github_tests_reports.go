@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -119,22 +120,31 @@ type GitHubTestsIncomplete struct {
 }
 
 // GitHubTestsSkippedArtifact is a durable per-artifact marker for ONE
-// oversized-artifact skip (CHAOS-4315): enough for an operator to find the
-// exact GitHub artifact behind an artifact_oversized GitHubTestsIncomplete
-// count, which -- unlike GitHubTestsIncomplete's closed Component/Cause
-// vocabulary -- deliberately carries no provider-supplied identifiers at
-// all. RunID and ArtifactID ARE provider-supplied and unbounded, which is
-// exactly why this type is separate and why the number of records is capped
+// report_member artifact skip: enough for an operator to find the exact
+// GitHub artifact behind a GitHubTestsIncomplete count, which -- unlike
+// GitHubTestsIncomplete's closed Component/Cause vocabulary -- deliberately
+// carries no provider-supplied identifiers at all. RunID and ArtifactID ARE
+// provider-supplied and unbounded, which is exactly why this type is
+// separate and why the number of records is capped
 // (githubTestsMaxSkippedArtifactRecords) rather than growing with every
 // skip: the chunk cursor that carries it between resumes has its own hard
 // byte budget (maxChunkCursorBytes), and an unbounded per-artifact list
 // would risk making the cursor itself unencodable on a source with heavy,
 // sustained skip volume.
+//
+// Originally scoped to artifact_oversized skips only (CHAOS-4315). CHAOS-4394
+// extended it to every report_member cause, once the watermark started
+// advancing past all three: an operator retrying artifact_unavailable or
+// unreadable_archive needs the same run id/artifact id an oversized retry
+// needed. SizeBytes/CapBytes stay zero for the two causes that never had a
+// size bound to report; Cause disambiguates the record without an operator
+// having to cross-reference the count on GitHubTestsIncomplete.
 type GitHubTestsSkippedArtifact struct {
 	RunID      string `json:"run_id"`
 	ArtifactID string `json:"artifact_id"`
-	SizeBytes  int64  `json:"size_bytes"`
-	CapBytes   int64  `json:"cap_bytes"`
+	Cause      string `json:"cause"`
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	CapBytes   int64  `json:"cap_bytes,omitempty"`
 }
 
 // githubTestsMaxSkippedArtifactRecords bounds how many GitHubTestsSkippedArtifact
@@ -194,10 +204,9 @@ const (
 	// githubTestsUnreadableArchiveCause records that ONE artifact's archive
 	// could not be opened, so none of its reports could be read and the
 	// artifact was skipped. It joins the report_member vocabulary alongside
-	// unreadable, malformed, archive_bounds and report_cap, which is what
-	// makes it WITHHOLD the watermark: report_member is absent from
-	// githubTestsWatermarkAdvancingPairs, and the skipped archive's contents
-	// were never observed (CHAOS-4177).
+	// unreadable, malformed, archive_bounds and report_cap (CHAOS-4177). It
+	// ADVANCES the watermark as of CHAOS-4394 -- see
+	// githubTestsWatermarkAdvancingPairs for why.
 	githubTestsUnreadableArchiveCause = "unreadable_archive"
 	// githubTestsArtifactUnavailableCause records that ONE artifact could
 	// never be fetched at all: the provider answered the artifact-download
@@ -207,7 +216,8 @@ const (
 	// obtained and the container just would not open, this means the bytes
 	// were never obtained -- so the two must not be conflated in the durable
 	// evidence or an operator reading the cause could not tell which failure
-	// actually happened (CHAOS-4191).
+	// actually happened (CHAOS-4191). It ADVANCES the watermark as of
+	// CHAOS-4394 -- see githubTestsWatermarkAdvancingPairs for why.
 	githubTestsArtifactUnavailableCause = "artifact_unavailable"
 	// githubTestsArtifactOversizedCause records that ONE artifact's download
 	// exceeded githubTestsMaxDownloadSize, so its bytes were never fully read
@@ -243,34 +253,67 @@ const (
 // re-fetching returns exactly the same items. Withholding there recovers
 // nothing and pins since_at forever, which is the CHAOS-4142 outage.
 //
-// report_member is mostly still withholding, preserving its pre-CHAOS-4142
-// behavior; see CHAOS-4153. The single exception, added by CHAOS-4315, is
-// githubTestsArtifactOversizedCause -- and the reason is the SAME rule as
-// the item cap above, restated at DETERMINISTIC vs TRANSIENT rather than
-// SEEN vs UNKNOWN: report_member's other causes (artifact_unavailable,
-// unreadable_archive, malformed, unreadable) are properties of ONE download
-// ATTEMPT -- a redirect with no Location, a connection that dropped, bytes
-// that would not parse -- and a later re-walk might genuinely observe that
-// same artifact differently, so withholding buys a real chance at full
-// coverage. An oversized artifact is a property of the ARTIFACT: the same
-// bytes are the same size on every future attempt, so a re-walk can never
-// recover it, and withholding only pins the window on it forever -- CHAOS-4315's
-// prod symptom (since_at pinned since 2026-08-19) was this exact mechanism,
-// one component up from where CHAOS-4142 first named it. Every other
-// report_member cause stays withholding: this exception is scoped to the
-// one cause that is provably deterministic, not to the whole component.
+// report_member's three whole-artifact skip causes (artifact_oversized,
+// artifact_unavailable, unreadable_archive) all advance. malformed/unreadable
+// (report-parse-time issues inside an otherwise-read artifact, CHAOS-4153)
+// stay withholding, unchanged.
+//
+// CHAOS-4315 first carved out ONLY githubTestsArtifactOversizedCause, on the
+// theory that the other two causes are properties of ONE download ATTEMPT --
+// a redirect with no Location, a connection that dropped -- so a later
+// re-walk might genuinely observe that same artifact differently, and
+// withholding buys a real chance at full coverage. That theory does not
+// survive its own prod evidence: CHAOS-4394 (2026-08-28, 9 days after
+// CHAOS-4315 shipped) found sync_watermarks for ops/acr/web STILL pinned at
+// 2026-08-19, with the SAME artifacts recurring as artifact_unavailable and
+// unreadable_archive on every hourly attempt -- identically, not
+// intermittently. Whatever theoretical transience the redirect/connection
+// mechanism has, these particular failures behave exactly like the
+// oversized case in practice: the provider answers the same way every time,
+// so withholding recovers nothing and pins since_at forever. All three
+// report_member causes are therefore treated alike: skip the one artifact,
+// keep walking, record a durable per-artifact marker (GitHubTestsSkippedArtifact,
+// extended in CHAOS-4394 to cover all three) for a targeted backfill, and
+// advance. reports_complete stays false regardless, so coverage honesty is
+// unaffected -- only the permanent-stall consequence of withholding is
+// removed. The totality gate (githubTestsCheckAllArtifactsUnreadable) is the
+// real backstop against a systematically broken repository: it fails the
+// unit outright, before any of this, when EVERY observed artifact was
+// unreadable.
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}},
-	githubTestsReportMemberComponent: {githubTestsArtifactOversizedCause: {}},
+	githubTestsReportMemberComponent: {
+		githubTestsArtifactOversizedCause:   {},
+		githubTestsArtifactUnavailableCause: {},
+		githubTestsUnreadableArchiveCause:   {},
+	},
 }
 
 // githubTestsBlocksWatermark reports whether these observations leave any part
 // of the requested window, or of a run inside it, UNOBSERVED. Coverage honesty
 // is a SEPARATE claim: reports_complete stays false for any observation,
 // withholding or not.
-func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
+//
+// skippedArtifacts and overflow feed the upgrade-boundary guard folded in
+// here (codex review round 3, P1, CHAOS-4394): this function is the SINGLE
+// source of truth for the blocking decision, called identically from
+// githubTestsFinalMetadataBatch (which computes Watermark) and
+// validateGitHubTestsCompletion (which validates it). Round 1 first wrote
+// the guard as a SEPARATE check the Watermark closure applied on top of this
+// function's result -- but validateGitHubTestsCompletion still called only
+// the narrower, unaware function, so a legacy cursor that correctly withheld
+// (nil Watermark) failed comparator validation instead of completing safely:
+// the comparator's bidirectional invariant (githubTestsBlocksWatermark
+// false => Watermark MUST equal BeforeAt, see
+// TestGitHubTestsCompletionWatermarkInvariantIsBidirectional) rejected the
+// batch outright, turning an intended safe fallback into a hard failure.
+// Folding the guard in here, so both callers see the identical verdict, is
+// what makes the invariant hold again.
+func githubTestsBlocksWatermark(
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+) bool {
 	for _, observation := range incomplete {
 		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
 		if !advancing {
@@ -280,7 +323,131 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 			return true
 		}
 	}
+	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow)
+}
+
+// githubTestsSkippedArtifactCause returns a marker's cause, recognizing a
+// PRE-CHAOS-4394 marker as artifact_oversized even though it decodes with
+// Cause == "" (codex review round 3, P2): that field did not exist before
+// this change, and oversized was the ONLY cause CHAOS-4315 ever wrote a
+// marker for, so an old marker's absence-of-Cause has exactly one possible
+// meaning. SizeBytes disambiguates it from a genuinely malformed/empty
+// marker: only the oversized branch (github_tests_chunked_route.go) ever
+// sets it, so its presence is unambiguous corroborating evidence, not a
+// guess. Treating a legacy oversized marker as unmarked would needlessly
+// withhold a unit whose oversized skip was ALWAYS durably identified, just
+// under a schema one field narrower.
+func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
+	if marker.Cause != "" {
+		return marker.Cause
+	}
+	if marker.SizeBytes > 0 {
+		return githubTestsArtifactOversizedCause
+	}
+	return ""
+}
+
+// githubTestsReportMemberSkippedWithoutDurableMarker guards a narrow
+// upgrade-boundary gap (codex review round 1, P1, CHAOS-4394): a chunk
+// cursor checkpointed by the PRE-CHAOS-4394 binary can already carry
+// artifact_unavailable/unreadable_archive counts on Incomplete with NO
+// GitHubTestsSkippedArtifact marker, because the old binary only ever wrote
+// markers for artifact_oversized. If such a cursor resumes under THIS binary
+// and reaches "done", the plain per-(component,cause) allowlist alone would
+// let it advance on report_member evidence that has no run/artifact identity
+// behind it -- exactly the backfill-targeting promise this change makes,
+// broken for the one unit that straddled the deploy.
+//
+// The check is PER CAUSE, not aggregate presence (codex review round 2, P1
+// -- round 1's first version checked only "does SkippedArtifacts have ANY
+// entry", which a legacy cursor mixing a marked artifact_oversized skip with
+// an unmarked artifact_unavailable one would satisfy vacuously, advancing on
+// the unmarked cause anyway). SkippedArtifactsOverflow is the one exception,
+// checked in aggregate: it only exists on a THIS-binary cursor (the old
+// binary never wrote it either), so overflow>0 anywhere proves this walk's
+// marker-writing path executed for its full duration, and the sample cap
+// legitimately leaving some individual occurrences unmarked is the SAME
+// sanctioned degradation appendGitHubTestsSkippedArtifact already accepts
+// for a heavy-skip-volume unit -- not evidence of a legacy cursor.
+//
+// This can fire at most once per unit -- the checkpoint this guards against
+// is deleted the moment the unit terminalizes (repository_postgres.go's
+// deletePreparedChunkStateTx, inside the same transaction as Complete), so
+// the unit simply retries next window: today's status quo, no data lost, no
+// permanent stall, not a new outage class.
+func githubTestsReportMemberSkippedWithoutDurableMarker(
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+) bool {
+	if overflow > 0 {
+		return false
+	}
+	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
+	for _, marker := range skippedArtifacts {
+		if cause := githubTestsSkippedArtifactCause(marker); cause != "" {
+			markedCauses[cause] = struct{}{}
+		}
+	}
+	for _, observation := range incomplete {
+		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
+			continue
+		}
+		if _, marked := markedCauses[observation.Cause]; !marked {
+			return true
+		}
+	}
 	return false
+}
+
+// GitHubTestsCicdPartialSuccessReason collapses a unit's incomplete
+// observations into the bounded reason label RecordCicdPartialSuccess takes.
+// Callers only reach this once githubTestsBlocksWatermark has already
+// returned false for the same slice, so every cause present is, by
+// construction, one that advances the watermark. A single distinct cause
+// reports itself; more than one collapses to "mixed" rather than growing an
+// unbounded combination label -- MetricCicdPartialSuccessReasonLabel bounds
+// it again defensively on the write side. Exported: the telemetry call site
+// lives in internal/jobs/providerunit, at the durable-completion boundary
+// (codex review round 1, P2), not in this route.
+func GitHubTestsCicdPartialSuccessReason(incomplete []GitHubTestsIncomplete) string {
+	reason := ""
+	for _, observation := range incomplete {
+		if reason == "" {
+			reason = observation.Cause
+			continue
+		}
+		if reason != observation.Cause {
+			return "mixed"
+		}
+	}
+	return reason
+}
+
+// DecodeGitHubTestsIncomplete accepts both the live typed value a chunked
+// route emits AND the generic []any/map[string]any shape produced when a
+// prepared chunk is reloaded from its JSONB sidecar (codex review round 2,
+// P1) -- the exact same dual-shape problem
+// applyGitHubWorkItemsIncompletePolicy and decodeCompletionValue already
+// solve for their own callers, applied here because
+// internal/jobs/providerunit's completion path (loadChunkedFinalResult ->
+// PostgresRepository.LoadPreparedChunk -> json.Unmarshal into
+// map[string]any) means EVERY real chunked completion reaches its caller
+// with "incomplete" as []any, never the typed slice -- a plain type
+// assertion there always misses, silently disabling the reader. The
+// marshal/unmarshal round-trip is a no-op on an already-typed value and a
+// real decode on the generic one, so one function correctly serves both.
+func DecodeGitHubTestsIncomplete(value any) ([]GitHubTestsIncomplete, bool) {
+	if value == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var incomplete []GitHubTestsIncomplete
+	if json.Unmarshal(encoded, &incomplete) != nil {
+		return nil, false
+	}
+	return incomplete, true
 }
 
 // validatePerRunPageBudget refuses a configuration in which a per-run PAGE

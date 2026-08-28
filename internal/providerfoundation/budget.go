@@ -275,6 +275,7 @@ type Metrics struct {
 	projectsV2DegradedSnapshots    map[string]uint64
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
+	cicdPartialSuccess             map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -295,6 +296,7 @@ func NewMetrics() *Metrics {
 		projectsV2DegradedSnapshots:    map[string]uint64{},
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
+		cicdPartialSuccess:             map[string]uint64{},
 	}
 }
 
@@ -464,13 +466,16 @@ func MetricArtifactSkipReasonLabel(value string) string {
 // observed. (Its other cause, per_run_page_budget, withholds -- the series is
 // not uniformly advancing, which is precisely why its cause label matters.)
 //
-// A skipped artifact is neither: its contents were never observed, so it
-// always withholds -- report_member is absent from
-// githubTestsWatermarkAdvancingPairs entirely, at the component level rather
-// than per cause. Folding it in as a third cause on the truncation series
-// would put a permanently-withholding condition beside a
-// conditionally-advancing one, so an operator could no longer read the series
-// as "bounded truncation" at all (CHAOS-4177).
+// A skipped artifact is different again: this series counts every skip
+// regardless of whether that skip's cause advances or withholds the
+// watermark (report_member's per-cause split lives in
+// githubTestsWatermarkAdvancingPairs, providersync/github_tests_reports.go
+// -- as of CHAOS-4394 all three whole-artifact causes advance; the doc
+// comment there is the up-to-date statement of which pairs do). Folding this
+// into a cause on the truncation series would still be wrong: that series is
+// about RUNS truncated by a per-run cap, a different unit of measure than
+// artifacts skipped, so an operator could no longer read either series
+// cleanly (CHAOS-4177).
 func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	if m == nil {
 		return
@@ -479,6 +484,62 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// metricCicdPartialSuccessReasonVocabulary bounds the reason label on
+// RecordCicdPartialSuccess to the report_member causes that can advance the
+// watermark (see githubTestsWatermarkAdvancingPairs), plus "mixed" for a unit
+// whose incomplete observations span more than one distinct cause. Anything
+// else -- including an as-yet-unregistered cause -- collapses to "other"
+// rather than opening the label.
+var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
+	"artifact_oversized":   {},
+	"artifact_unavailable": {},
+	"unreadable_archive":   {},
+	"per_run_cap":          {},
+	"mixed":                {},
+}
+
+// MetricCicdPartialSuccessReasonLabel bounds the RecordCicdPartialSuccess
+// reason label the same way MetricArtifactSkipReasonLabel bounds its own.
+func MetricCicdPartialSuccessReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricCicdPartialSuccessReasonVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordCicdPartialSuccess counts ONE completed cicd/tests unit that
+// advanced its watermark despite carrying non-empty incomplete evidence
+// (CHAOS-4394): a real partial success, not a stall, because every
+// contributing cause is on githubTestsWatermarkAdvancingPairs and its
+// artifacts are durably recorded (GitHubTestsSkippedArtifact) for a targeted
+// backfill. This is a UNIT-level signal, distinct from RecordArtifactSkipped
+// (which counts per-artifact) and RecordPerRunTruncation (which counts
+// per-run).
+//
+// repo is deliberately NOT a label here, unlike the ticket's original ask --
+// codex review round 1 caught that a synced repository, unlike provider or
+// dataset, is not drawn from a fixed, small vocabulary this process can
+// enumerate up front: a long-lived worker accumulates one series per
+// repository ever added AND renamed over its lifetime, with nothing to ever
+// evict a stale one, which is exactly the unbounded-map-growth failure
+// MetricDatasetLabel/metricProvider/MetricArtifactSkipReasonLabel's ALLOWLIST
+// bounding exists to prevent (see MetricDatasetLabel's doc comment). This
+// matches the existing house rule for run id / artifact id -- provider-
+// supplied and unbounded, so it belongs in the caller's structured log line,
+// never in a durable metric label (see RecordPerRunTruncation and
+// recordGitHubTestsSkippedArtifact). The caller logs repo alongside this
+// call for per-repo triage; this counter answers "how much, by reason", not
+// "which repo".
+func (m *Metrics) RecordCicdPartialSuccess(reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cicdPartialSuccess[MetricCicdPartialSuccessReasonLabel(reason)]++
 }
 
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
@@ -1044,6 +1105,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			reason, m.projectsV2DegradedSnapshots[reason]); err != nil {
 			return err
 		}
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_cicd_partial_success_total",
+		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by the report_member/per-run cause that made it partial (CHAOS-4394). Not labeled by repo -- see RecordCicdPartialSuccess's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
+		"reason", m.cicdPartialSuccess,
+	); err != nil {
+		return err
 	}
 	return nil
 }

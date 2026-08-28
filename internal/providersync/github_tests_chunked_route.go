@@ -485,7 +485,13 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 		// recovered coverage -- the cap is deterministic -- and pins since_at
 		// forever, which is the CHAOS-4142 defect.
 		Watermark: func() *time.Time {
-			if githubTestsBlocksWatermark(incomplete) {
+			// githubTestsBlocksWatermark is the single source of truth for
+			// this decision -- validateGitHubTestsCompletion (the production
+			// comparator) must reach the identical verdict from the same
+			// evidence, or a legacy cursor that correctly withholds here
+			// fails comparator validation instead of completing safely
+			// (codex review round 3, P1).
+			if githubTestsBlocksWatermark(incomplete, skippedArtifacts, cursor.SkippedArtifactsOverflow) {
 				return nil
 			}
 			return claim.BeforeAt
@@ -541,6 +547,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if batchErr != nil {
 			return batchErr
 		}
+		// CHAOS-4394 telemetry (dev_health_cicd_partial_success_total) is NOT
+		// recorded here. This closure runs once per attempt, including attempts
+		// whose completion later fails to commit (codex review round 1, P2):
+		// emit() only stages the batch for the executor to persist, and the
+		// durable transition happens later in PostgresRepository.Complete. A
+		// counter fired here would over-count a unit that gets recollected
+		// after a completion failure, and under-fire nothing on a genuine
+		// success -- both wrong. See
+		// internal/jobs/providerunit.Handler's post-Complete success branch,
+		// which fires this exactly once per unit, the same discipline
+		// observeTerminalWithCommittedRows/observeAllArtifactsUnreadable use.
 		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
@@ -881,6 +898,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsArtifactUnavailableCause,
 								)
+								// Durable per-artifact marker (CHAOS-4394, extending
+								// CHAOS-4315's oversized-only marker to every
+								// report_member cause that now advances the
+								// watermark): an operator needs the run/artifact id
+								// to target a backfill regardless of which of the
+								// three causes skipped it.
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+									GitHubTestsSkippedArtifact{
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										Cause: githubTestsArtifactUnavailableCause,
+									},
+								)
 								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
@@ -917,6 +947,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 										GitHubTestsSkippedArtifact{
 											RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+											Cause:     githubTestsArtifactOversizedCause,
 											SizeBytes: sizeErr.SizeBytes, CapBytes: sizeErr.CapBytes,
 										},
 									)
@@ -978,6 +1009,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 								githubTestsUnreadableArchiveCause,
 							)
+							// Durable per-artifact marker (CHAOS-4394): see the
+							// identical comment on the artifact_unavailable branch
+							// above.
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+								GitHubTestsSkippedArtifact{
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+									Cause: githubTestsUnreadableArchiveCause,
+								},
+							)
 							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
@@ -992,6 +1033,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
 									githubTestsUnreadableArchiveCause,
+								)
+								// Durable per-artifact marker (CHAOS-4394): see the
+								// identical comment on the artifact_unavailable
+								// branch above.
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+									GitHubTestsSkippedArtifact{
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										Cause: githubTestsUnreadableArchiveCause,
+									},
 								)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue

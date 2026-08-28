@@ -1074,6 +1074,13 @@ CREATE TABLE worker_job_completion_fences (
  completion_key text PRIMARY KEY,
  completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 );
+CREATE TABLE worker_job_delivery_abandonments (
+ dedupe_key varchar(256) PRIMARY KEY,
+ job_kind varchar(96) NOT NULL,
+ abandoned_at timestamptz NOT NULL,
+ attempt_count integer NOT NULL,
+ last_error_code varchar(64)
+);
 CREATE TABLE daily_metrics_finalize_redrive_events (
  id uuid PRIMARY KEY, run_id uuid NOT NULL, org_id uuid NOT NULL, target_day date NOT NULL,
  prior_status varchar(16) NOT NULL, prior_finalization_status varchar(16) NOT NULL,

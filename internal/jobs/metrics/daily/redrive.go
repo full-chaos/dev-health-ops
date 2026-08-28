@@ -862,11 +862,23 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 // invisible to every recovery tool including an unattended
 // `daily-finalize --all-complete` sweep.
 //
-// Two orphan shapes are positively confirmable and closed the same way:
-//   - The redrive's outbox row never reached River at all: relay-level
-//     status='dead' (internal/joboutbox/repository.go exhausts its own
-//     delivery attempts and sets this). Needs no queue-control pool or
-//     River read at all.
+// Three orphan shapes are positively confirmable and closed the same way:
+//   - The redrive's outbox row never reached River at all and is still
+//     there: relay-level status='dead' (internal/joboutbox/repository.go
+//     exhausts its own delivery attempts and sets this). Needs no
+//     queue-control pool or River read at all.
+//   - The outbox row is GONE, but Repository.DeleteTerminalBefore's own
+//     retention pass left a durable fact behind: it inserts into
+//     public.worker_job_delivery_abandonments (keyed by the SAME
+//     dedupe_key) in the SAME statement that deletes a 'dead' row, and
+//     that table is never itself deleted from. So a missing outbox row
+//     with a matching abandonment row is exactly as confirmable as an
+//     outbox row still sitting at status='dead' -- the fact just outlived
+//     the row it was about (codex review finding on #1971, delta round).
+//     This table is queue-role-owned (DeleteTerminalBefore always runs on
+//     the queue-control pool -- see cmd/dev-health-worker/operational.go's
+//     "the domain role is producer-only for worker_job_outbox" comment),
+//     so this checks queueControlPool, not the domain pool.
 //   - The outbox row WAS delivered into River (status='delivered',
 //     river_job_id set -- worker_job_outbox's own delivery-state check
 //     constraint guarantees the two travel together), but River itself
@@ -876,17 +888,18 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 //     matching every other caller of river_job in this codebase (e.g.
 //     internal/joboutbox/strand_repair.go's NewStrandRepair).
 //
-// A THIRD shape -- the outbox row is entirely absent -- is deliberately
-// NOT treated as orphaned (codex review finding on #1971). The publish
-// always lands in the same transaction as the event's own insert
-// (redriveOneFinalizeForRange), so a missing row now can only mean
-// Repository.DeleteTerminalBefore's retention already deleted a
-// status='delivered' row once its delivered_at aged past that policy's
-// horizon -- which can happen while the River job it named is still
-// legitimately scheduled/retrying under backoff, with ClaimFinalize never
-// having run. Once the row is gone, the river_job_id needed to check that
-// safely is gone with it. Treating "evidence gone" as "job gone" would risk
-// closing a still-healthy in-flight event and letting the next sweep
+// A missing outbox row with NO matching abandonment row is deliberately
+// NOT treated as orphaned (codex review finding on #1971, first round).
+// The publish always lands in the same transaction as the event's own
+// insert (redriveOneFinalizeForRange), so this shape can only mean
+// DeleteTerminalBefore's retention already deleted a status='delivered'
+// row once its delivered_at aged past that policy's horizon (a
+// 'delivered' row leaves no abandonment fact -- only a 'dead' one does) --
+// which can happen while the River job it named is still legitimately
+// scheduled/retrying under backoff, with ClaimFinalize never having run.
+// Once the row is gone, the river_job_id needed to check that safely is
+// gone with it. Treating "evidence gone" as "job gone" would risk closing
+// a still-healthy in-flight event and letting the next sweep
 // double-dispatch it, so this case is left 'open' -- see the switch below
 // for exactly where.
 //
@@ -903,10 +916,11 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 // riverSchema must pass riverSchemaPattern -- it is interpolated into SQL
 // identifier position, not bound as a parameter. queueControlPool may be nil
 // (and riverSchema may be anything) as long as no candidate actually needs
-// the River-side check; a candidate that does need it with no pool
-// configured is a hard ErrUnavailable, never a silent skip, since silently
-// leaving it 'open' is exactly the invisible-forever failure this function
-// exists to close.
+// it -- for the River-side check, or for the abandonment-fact check on a
+// missing outbox row. A candidate that does need it with no pool configured
+// is a hard ErrUnavailable, never a silent skip, since silently leaving it
+// 'open' is exactly the invisible-forever failure this function exists to
+// close.
 func (store *PostgresStore) ReconcileOrphanedFinalizeRedriveRuns(
 	ctx context.Context,
 	queueControlPool *pgxpool.Pool,
@@ -917,7 +931,9 @@ func (store *PostgresStore) ReconcileOrphanedFinalizeRedriveRuns(
 	}
 
 	rows, err := store.pool.Query(ctx, `
-SELECT event.id::text, outbox.status, outbox.river_job_id
+SELECT event.id::text,
+       'metrics.daily_finalize:redrive:' || event.run_id::text || ':' || event.nonce AS dedupe_key,
+       outbox.status, outbox.river_job_id
 FROM public.daily_metrics_finalize_redrive_events AS event
 LEFT JOIN public.worker_job_outbox AS outbox
   ON outbox.dedupe_key = 'metrics.daily_finalize:redrive:' || event.run_id::text || ':' || event.nonce
@@ -929,37 +945,31 @@ WHERE event.status = 'open'`)
 		eventID    string
 		riverJobID int64
 	}
+	type pendingAbandonmentCheck struct {
+		eventID   string
+		dedupeKey string
+	}
 	var orphanedEventIDs []string
 	var riverCandidates []pendingRiverCheck
+	var missingRowCandidates []pendingAbandonmentCheck
 	for rows.Next() {
-		var eventID string
+		var eventID, dedupeKey string
 		var outboxStatus *string
 		var riverJobID *int64
-		if err := rows.Scan(&eventID, &outboxStatus, &riverJobID); err != nil {
+		if err := rows.Scan(&eventID, &dedupeKey, &outboxStatus, &riverJobID); err != nil {
 			rows.Close()
 			return 0, ErrUnavailable
 		}
 		switch {
 		case outboxStatus == nil:
-			// codex review finding on #1971: the outbox row cannot be
-			// missing because the publish never landed -- redriveOneFinalize
-			// ForRange writes the provenance event and the outbox row in the
-			// SAME transaction, so an event existing at all guarantees its
-			// outbox row was created too. The only way this row is gone NOW
-			// is retention (Repository.DeleteTerminalBefore deletes
-			// status='delivered' rows once delivered_at ages past its
-			// horizon) -- and a 'delivered' row can age out while the River
-			// job it named is still legitimately scheduled/retrying under
-			// backoff, well past that horizon, with ClaimFinalize never
-			// having run. Once the row is gone we have lost the
-			// river_job_id needed to check that safely, so unlike the
-			// 'dead' case below there is no way to positively confirm
-			// orphan-hood here -- treating "evidence gone" as "job gone"
-			// risks closing a still-healthy in-flight event and letting the
-			// next sweep double-dispatch it. Leave it 'open': the narrower
-			// residual case this creates (a 'delivered' row ages out AND is
-			// never claimed AND no sweep runs again before that) is
-			// disclosed in the PR, not silently accepted here.
+			// codex review finding on #1971 (first round): the outbox row
+			// cannot be missing because the publish never landed --
+			// redriveOneFinalizeForRange writes the provenance event and
+			// the outbox row in the SAME transaction, so an event existing
+			// at all guarantees its outbox row was created too. Defer to
+			// the abandonment-fact check below, which is the only thing
+			// that can positively confirm this shape.
+			missingRowCandidates = append(missingRowCandidates, pendingAbandonmentCheck{eventID: eventID, dedupeKey: dedupeKey})
 		case *outboxStatus == "dead":
 			// Relay-level: exhausted its own delivery attempts before this
 			// job ever reached River (internal/joboutbox/repository.go).
@@ -979,6 +989,54 @@ WHERE event.status = 'open'`)
 	rows.Close()
 	if rowsErr != nil {
 		return 0, ErrUnavailable
+	}
+
+	if len(missingRowCandidates) > 0 {
+		// codex review finding on #1971 (delta round): a missing outbox
+		// row is not automatically ambiguous -- DeleteTerminalBefore only
+		// ever deletes a 'dead' row alongside inserting a durable
+		// abandonment fact (public.worker_job_delivery_abandonments,
+		// keyed by the same dedupe_key, never itself deleted). If that
+		// fact exists, this row was 'dead' at the moment it was reaped,
+		// exactly as confirmable as an outbox row still sitting at
+		// 'dead' today. Runs on queueControlPool: this table is
+		// queue-role-owned (DeleteTerminalBefore always runs there), not
+		// domain-owned.
+		if queueControlPool == nil {
+			return 0, ErrUnavailable
+		}
+		dedupeKeys := make([]string, len(missingRowCandidates))
+		for i, candidate := range missingRowCandidates {
+			dedupeKeys[i] = candidate.dedupeKey
+		}
+		abandonmentRows, err := queueControlPool.Query(ctx,
+			"SELECT dedupe_key FROM public.worker_job_delivery_abandonments WHERE dedupe_key = ANY($1)",
+			dedupeKeys)
+		if err != nil {
+			return 0, ErrUnavailable
+		}
+		abandoned := make(map[string]struct{}, len(dedupeKeys))
+		for abandonmentRows.Next() {
+			var dedupeKey string
+			if err := abandonmentRows.Scan(&dedupeKey); err != nil {
+				abandonmentRows.Close()
+				return 0, ErrUnavailable
+			}
+			abandoned[dedupeKey] = struct{}{}
+		}
+		abandonmentRowsErr := abandonmentRows.Err()
+		abandonmentRows.Close()
+		if abandonmentRowsErr != nil {
+			return 0, ErrUnavailable
+		}
+		for _, candidate := range missingRowCandidates {
+			if _, ok := abandoned[candidate.dedupeKey]; ok {
+				orphanedEventIDs = append(orphanedEventIDs, candidate.eventID)
+			}
+			// Not found: the row was deleted after 'delivered', not
+			// 'dead' -- genuinely ambiguous, stays 'open' (see this
+			// function's own doc comment).
+		}
 	}
 
 	if len(riverCandidates) > 0 {

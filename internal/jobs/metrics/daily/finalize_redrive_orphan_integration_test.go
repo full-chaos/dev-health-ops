@@ -142,6 +142,214 @@ WHERE run_id = $1::uuid ORDER BY created_at LIMIT 1`, runID).
 	}
 }
 
+// TestReconcileOrphanedFinalizeRedriveRunsClosesAnEventWhenTheDeadOutboxRowWasReapedButLeftAnAbandonmentFact
+// is codex's delta-round finding on #1971: a 'dead' outbox row does not sit
+// forever -- Repository.DeleteTerminalBefore's retention eventually deletes
+// it, but in the SAME statement it inserts a durable fact into
+// worker_job_delivery_abandonments (keyed by the same dedupe_key, never
+// itself deleted). A missing outbox row with a matching abandonment row is
+// exactly as confirmable as one still sitting at 'dead' today. Checked out
+// against the commit before this fix, ReconcileOrphanedFinalizeRedriveRuns
+// leaves this event 'open' forever (RED): it treats every missing-row case
+// identically, with no way to tell "reaped 'dead'" apart from "reaped
+// 'delivered'".
+func TestReconcileOrphanedFinalizeRedriveRunsClosesAnEventWhenTheDeadOutboxRowWasReapedButLeftAnAbandonmentFact(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+	var redriveObservations []struct {
+		outcome string
+		count   int
+	}
+	store.SetFinalizeRedriveObserver(recordingFinalizeRedriveObserver{sink: &redriveObservations})
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000002901"
+		runID       = "00000000-0000-4000-8000-000000002902"
+		partitionID = "00000000-0000-4000-8000-000000002903"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 5, 9, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := store.RedriveFinalizeForRange(
+		ctx, publisher, orgID, targetDay, targetDay, "orphan-nonce-reaped", true, testFinalizeRedriveReason, false,
+	)
+	if err != nil {
+		t.Fatalf("RedriveFinalizeForRange: %v", err)
+	}
+	if len(outcome.Days) != 1 || outcome.Days[0].Outcome != "redriven_reset_from_succeeded" {
+		t.Fatalf("RedriveFinalizeForRange outcome = %#v, want redriven_reset_from_succeeded", outcome)
+	}
+
+	// Simulate DeleteTerminalBefore's own retention pass on a 'dead' row:
+	// delete the outbox row and insert the durable abandonment fact it
+	// leaves behind, matching internal/joboutbox/repository.go's real
+	// DeleteTerminalBefore statement shape (dedupe_key/job_kind/
+	// abandoned_at/attempt_count/last_error_code).
+	dedupeKey := "metrics.daily_finalize:redrive:" + runID + ":orphan-nonce-reaped"
+	if _, err := pool.Exec(ctx, `DELETE FROM worker_job_outbox WHERE dedupe_key = $1`, dedupeKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO worker_job_delivery_abandonments (dedupe_key, job_kind, abandoned_at, attempt_count, last_error_code)
+VALUES ($1, 'metrics.daily_finalize', $2, 5, 'test_dead')`, dedupeKey, now); err != nil {
+		t.Fatal(err)
+	}
+
+	strandedBefore, err := store.FindStrandedFinalizeRuns(ctx, 0)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns (before reconcile): %v", err)
+	}
+	for _, id := range strandedBefore {
+		if id == runID {
+			t.Fatalf("FindStrandedFinalizeRuns reported %s before reconciliation ran -- RED baseline setup is wrong", runID)
+		}
+	}
+
+	// queueControlPool must be non-nil here: this candidate needs the
+	// abandonment-fact check, which ReconcileOrphanedFinalizeRedriveRuns
+	// runs against queueControlPool, not the domain pool. The same admin
+	// pool doubles as both in this test stack (see
+	// newFinalizeRedriveTestStackWithRiverSchema's own doc comment on the
+	// identical pattern).
+	closed, err := store.ReconcileOrphanedFinalizeRedriveRuns(ctx, pool, "river")
+	if err != nil {
+		t.Fatalf("ReconcileOrphanedFinalizeRedriveRuns: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("ReconcileOrphanedFinalizeRedriveRuns closed = %d, want 1", closed)
+	}
+
+	var eventStatus string
+	var closedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT status, closed_at FROM daily_metrics_finalize_redrive_events
+WHERE run_id = $1::uuid ORDER BY created_at LIMIT 1`, runID).
+		Scan(&eventStatus, &closedAt); err != nil {
+		t.Fatal(err)
+	}
+	if eventStatus != "closed_orphaned" || closedAt == nil {
+		t.Fatalf("redrive event after reconciliation = status=%q closed_at=%v, want closed_orphaned with a timestamp", eventStatus, closedAt)
+	}
+
+	strandedAfter, err := store.FindStrandedFinalizeRuns(ctx, 0)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns (after reconcile): %v", err)
+	}
+	found := false
+	for _, id := range strandedAfter {
+		if id == runID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("FindStrandedFinalizeRuns = %v, want it to include %s once its orphaned redrive event closed", strandedAfter, runID)
+	}
+
+	var orphanedCount int
+	for _, observation := range redriveObservations {
+		if observation.outcome == "redriven_orphaned" {
+			orphanedCount += observation.count
+		}
+	}
+	if orphanedCount != 1 {
+		t.Fatalf("redriven_orphaned telemetry observations = %d (all: %#v), want 1", orphanedCount, redriveObservations)
+	}
+}
+
+// TestReconcileOrphanedFinalizeRedriveRunsLeavesAMissingOutboxRowOpenWithoutAnAbandonmentFact
+// is the negative case pinning the first-round codex fix: a missing outbox
+// row with NO matching abandonment fact (the 'delivered'-then-reaped shape,
+// where the underlying River job might still be legitimately alive under
+// backoff) must NOT be closed -- there is nothing to positively confirm it.
+func TestReconcileOrphanedFinalizeRedriveRunsLeavesAMissingOutboxRowOpenWithoutAnAbandonmentFact(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+	var redriveObservations []struct {
+		outcome string
+		count   int
+	}
+	store.SetFinalizeRedriveObserver(recordingFinalizeRedriveObserver{sink: &redriveObservations})
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000002904"
+		runID       = "00000000-0000-4000-8000-000000002905"
+		partitionID = "00000000-0000-4000-8000-000000002906"
+	)
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := store.RedriveFinalizeForRange(
+		ctx, publisher, orgID, targetDay, targetDay, "orphan-nonce-ambiguous", true, testFinalizeRedriveReason, false,
+	)
+	if err != nil {
+		t.Fatalf("RedriveFinalizeForRange: %v", err)
+	}
+	if len(outcome.Days) != 1 || outcome.Days[0].Outcome != "redriven_reset_from_succeeded" {
+		t.Fatalf("RedriveFinalizeForRange outcome = %#v, want redriven_reset_from_succeeded", outcome)
+	}
+
+	// Delete the outbox row WITHOUT leaving an abandonment fact -- the
+	// shape a 'delivered' row (not 'dead') leaves behind once retention
+	// reaps it. No river_job_id survives to check either.
+	dedupeKey := "metrics.daily_finalize:redrive:" + runID + ":orphan-nonce-ambiguous"
+	if _, err := pool.Exec(ctx, `DELETE FROM worker_job_outbox WHERE dedupe_key = $1`, dedupeKey); err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := store.ReconcileOrphanedFinalizeRedriveRuns(ctx, pool, "river")
+	if err != nil {
+		t.Fatalf("ReconcileOrphanedFinalizeRedriveRuns: %v", err)
+	}
+	if closed != 0 {
+		t.Fatalf("ReconcileOrphanedFinalizeRedriveRuns closed = %d, want 0 (nothing positively confirms this row as orphaned)", closed)
+	}
+
+	var eventStatus string
+	if err := pool.QueryRow(ctx, `
+SELECT status FROM daily_metrics_finalize_redrive_events
+WHERE run_id = $1::uuid ORDER BY created_at LIMIT 1`, runID).
+		Scan(&eventStatus); err != nil {
+		t.Fatal(err)
+	}
+	if eventStatus != "open" {
+		t.Fatalf("redrive event status = %q, want open (unconfirmed orphan-hood must never close it)", eventStatus)
+	}
+
+	strandedAfter, err := store.FindStrandedFinalizeRuns(ctx, 0)
+	if err != nil {
+		t.Fatalf("FindStrandedFinalizeRuns: %v", err)
+	}
+	for _, id := range strandedAfter {
+		if id == runID {
+			t.Fatalf("FindStrandedFinalizeRuns reported %s -- its event is still open and must stay excluded", runID)
+		}
+	}
+
+	for _, observation := range redriveObservations {
+		if observation.outcome == "redriven_orphaned" {
+			t.Fatalf("an unconfirmed missing-outbox-row case observed redriven_orphaned telemetry: %#v", redriveObservations)
+		}
+	}
+}
+
 // TestReconcileOrphanedFinalizeRedriveRunsClosesAnEventWhenRiverDiscardedTheJob
 // is the harder orphan sub-case: the outbox row WAS delivered into a real
 // River job, but River discarded it before a worker ever reached

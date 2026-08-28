@@ -455,6 +455,19 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// Report-domain dedup guard (CHAOS-4140). The weekly-report engine
+	// (internal/jobs/report) reads several append-only daily rollup tables
+	// through a latest-generation subquery (dedupFromSource) because a
+	// legitimate re-drive -- a DORA partition retry, a cicd/deploy/incident
+	// post-sync re-trigger -- writes a fresh computed_at generation without
+	// deleting the prior one. Both maps are keyed by "<table>|<reason>" and
+	// gain the key together on first emit, so observedRows and skippedRows
+	// for the same key are always both present -- skipped==0 is itself an
+	// informative reading (this query's key range currently carries no
+	// duplicate generation), not an absent series.
+	reportDedupObservedRows map[string]uint64
+	reportDedupSkippedRows  map[string]uint64
+
 	// budgetEstimateFailures counts dispatch_sync_run's BudgetGuard falling
 	// open on a bridge estimate fetch, by reason (CHAOS-4175). Standing
 	// order: new fail-open logic must carry a counter, so a fetch that
@@ -1375,6 +1388,57 @@ func (collector *MetricsCollector) ObserveDORARefused(reason string) error {
 	return nil
 }
 
+// Report dedup-guard reasons (CHAOS-4140). A closed set of exactly one value
+// today: the guard exists to protect a single shape (an append-only daily
+// rollup carrying more than one compute generation for the same natural key
+// after a partition retry). It is still a named, bounded reason -- not a bare
+// counter -- so a second guard shape introduced later (e.g. a table merged
+// mid-flight from two writers) adds a reason rather than overloading this
+// one's meaning.
+const ReportDedupReasonRetryGeneration = "retry_generation"
+
+var reportDedupGuardReasons = []string{ReportDedupReasonRetryGeneration}
+
+// ObserveReportDedupGuard records one dedup-guarded report chart read over an
+// append-only daily rollup table (internal/jobs/report/dedup.go's
+// appendOnlyDailyKeys). observedRows is the physical row count the guard's
+// key range scanned; skippedRows is how many of those it discarded as a
+// stale compute generation (a row sharing a natural key with another row
+// carrying a later computed_at). CHAOS-4140 found dora_metrics_daily itself
+// unguarded (a straight fall-through to the raw table, silently double- or
+// triple-counting every retried partition into every DORA chart); this
+// counter is the positive signal that the guard is both reachable and
+// actually encountering the duplicate generations it exists to discard --
+// skippedRows==0 across every table is exactly as informative as a nonzero
+// reading, so it is recorded every call, not only when duplicates are found.
+func (collector *MetricsCollector) ObserveReportDedupGuard(table, reason string, observedRows, skippedRows int) error {
+	if observedRows < 0 || skippedRows < 0 {
+		return errors.New("report dedup guard counts cannot be negative")
+	}
+	if skippedRows > observedRows {
+		return fmt.Errorf(
+			"report dedup guard skipped %d rows exceeds observed %d for table %q",
+			skippedRows, observedRows, table,
+		)
+	}
+	if table == "" {
+		return errors.New("report dedup guard table must not be empty")
+	}
+	if !slices.Contains(reportDedupGuardReasons, reason) {
+		return fmt.Errorf("unknown report dedup guard reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.reportDedupObservedRows == nil {
+		collector.reportDedupObservedRows = map[string]uint64{}
+		collector.reportDedupSkippedRows = map[string]uint64{}
+	}
+	key := table + "|" + reason
+	collector.reportDedupObservedRows[key] += uint64(observedRows)
+	collector.reportDedupSkippedRows[key] += uint64(skippedRows)
+	return nil
+}
+
 // Capacity refusal reasons. Closed set, bounded label cardinality.
 const (
 	// Both of these are REACHABLE, which was not true of the set they replace.
@@ -1632,6 +1696,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writePostSyncFanout(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
+	collector.writeReportDedupGuard(&output)
 	collector.writeZeroUnitFinalizations(&output)
 	collector.writeCoverageCacheInvalidations(&output)
 	collector.writeExternalIngest(&output)
@@ -2052,6 +2117,36 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, family := range compatibilityBridgeFamilies {
 		writeUintSample(output, "worker_remaining_bridge_zero_row_partitions_total",
 			[]metricLabel{{"family", family}}, collector.compatibilityZeroRowPartitions[family])
+	}
+}
+
+// writeReportDedupGuard exposes CHAOS-4140's report dedup-guard counters
+// (ObserveReportDedupGuard). Unlike the DORA/capacity refusal reasons above,
+// the (table, reason) key set is not statically known to this package --
+// internal/jobs/report owns appendOnlyDailyKeys, not jobruntime -- so only
+// keys actually observed are emitted, in sorted order for a deterministic
+// snapshot.
+func (collector *MetricsCollector) writeReportDedupGuard(output *strings.Builder) {
+	if len(collector.reportDedupObservedRows) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(collector.reportDedupObservedRows))
+	for key := range collector.reportDedupObservedRows {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	writeMetadata(output, "worker_report_dedup_guard_observed_rows_total", "Physical rows a report chart's dedup guard scanned for its query's key range, by source table and reason.", "counter")
+	for _, key := range keys {
+		table, reason, _ := strings.Cut(key, "|")
+		writeUintSample(output, "worker_report_dedup_guard_observed_rows_total",
+			[]metricLabel{{"table", table}, {"reason", reason}}, collector.reportDedupObservedRows[key])
+	}
+	writeMetadata(output, "worker_report_dedup_guard_skipped_rows_total", "Rows a report chart's dedup guard discarded as a stale compute generation (a retried partition's earlier computed_at), by source table and reason.", "counter")
+	for _, key := range keys {
+		table, reason, _ := strings.Cut(key, "|")
+		writeUintSample(output, "worker_report_dedup_guard_skipped_rows_total",
+			[]metricLabel{{"table", table}, {"reason", reason}}, collector.reportDedupSkippedRows[key])
 	}
 }
 

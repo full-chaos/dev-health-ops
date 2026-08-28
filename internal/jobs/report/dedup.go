@@ -52,6 +52,23 @@ var appendOnlyDailyKeys = map[string][]string{
 	"incident_metrics_daily":         {"org_id", "repo_id", "day"},
 	"testops_release_confidence":     {"org_id", "repo_id", "day"},
 	"testops_pipeline_stability":     {"org_id", "repo_id", "day"},
+	// CHAOS-4140: dora_metrics_daily was missing from this map entirely, so
+	// dedupFromSource fell through to the bare table name for the "value"
+	// chart metric (metric_registry.json's dora entry) -- the exact
+	// unguarded shape TestBuildChartQueryDedupsCicdMetricsDaily exists to
+	// catch for the other tables. A DORA partition retry writes a fresh
+	// computed_at generation for every (org_id, repo_id, day, metric_name)
+	// it recomputes without deleting the prior generation (job_dora.py /
+	// dora_native.go, by design -- see CHAOS-4130's
+	// preserve-Python's-disposition ruling), so this package's bare
+	// avg()/sum() aggregate summed every generation together. Python's
+	// mirror (clickhouse_dedup._APPEND_ONLY_DAILY_KEYS) has registered this
+	// table since CHAOS-4242; this Go map, created later by CHAOS-4246,
+	// never picked up that entry. metric_name is part of the key (not just
+	// org_id/repo_id/day) because compute_dora.py's contract is one row per
+	// (repo, metric_name, day) -- omitting it would collapse the 4 distinct
+	// DORA metrics for one repo/day into a single arbitrary row.
+	"dora_metrics_daily": {"org_id", "repo_id", "day", "metric_name"},
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

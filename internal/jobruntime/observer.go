@@ -88,6 +88,16 @@ type RemainingMetricsLeaseObserver interface {
 	ObserveRemainingMetricsLeaseReleaseLost() error
 }
 
+// ReportDedupGuardObserver is the narrow capability the weekly-report query
+// adapter depends on after running a chart read over an append-only daily
+// rollup through its dedup guard (CHAOS-4140). Generic runtime middleware
+// cannot infer this: only the code that built and ran the guarded query knows
+// how many physical rows it scanned and how many it discarded as a stale
+// compute generation.
+type ReportDedupGuardObserver interface {
+	ObserveReportDedupGuard(table, reason string, observedRows, skippedRows int) error
+}
+
 // DailyMetricsLeaseObserver is the narrow capability the daily-metrics store
 // depends on after it resolves an existing lease durably. Generic runtime
 // middleware cannot infer this: a claim that parks for a live lease and a claim

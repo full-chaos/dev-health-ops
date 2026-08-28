@@ -12,6 +12,7 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -214,6 +215,12 @@ func stringSlice(value any) []string {
 type ClickHouseQueryAdapter struct {
 	loader ReportLoader
 	conn   driver.Conn
+	// dedupObserver is optional (CHAOS-4140) and stays nil unless
+	// SetDedupObserver is called -- every existing construction of this
+	// adapter (tests, and production before this change) keeps working
+	// with the dedup guard itself unaffected; only its telemetry is gated
+	// on this being set.
+	dedupObserver jobruntime.ReportDedupGuardObserver
 }
 
 func NewClickHouseQueryAdapter(loader ReportLoader, conn driver.Conn) (*ClickHouseQueryAdapter, error) {
@@ -221,6 +228,15 @@ func NewClickHouseQueryAdapter(loader ReportLoader, conn driver.Conn) (*ClickHou
 		return nil, ErrDependencyUnavailable
 	}
 	return &ClickHouseQueryAdapter{loader: loader, conn: conn}, nil
+}
+
+// SetDedupObserver wires the report dedup-guard counter (CHAOS-4140). Optional:
+// production wiring calls this after construction (see
+// NewProductionRuntimeAdapters); a nil observer (the default) makes
+// executeChart skip the companion count query entirely, so this adds no cost
+// to a caller that never wires it.
+func (adapter *ClickHouseQueryAdapter) SetDedupObserver(observer jobruntime.ReportDedupGuardObserver) {
+	adapter.dedupObserver = observer
 }
 
 func (adapter *ClickHouseQueryAdapter) Query(ctx context.Context, input QueryInput) (QueryResult, error) {
@@ -337,7 +353,103 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	if err := rows.Err(); err != nil {
 		return ChartResult{}, fmt.Errorf("iterate report chart: %w", ErrDependencyUnavailable)
 	}
+	// CHAOS-4140: best-effort telemetry for the dedup guard buildChartQuery
+	// just applied (or, for a source with no re-drive risk, did not need
+	// to). A telemetry fault here must never fail a chart that itself
+	// rendered successfully -- same philosophy as ObserveDORAPartition's
+	// callers ignoring its error.
+	adapter.observeDedupGuard(ctx, spec, definition)
 	return result, nil
+}
+
+// buildChartWhere builds the WHERE clause and bound parameters shared by
+// buildChartQuery's chart aggregate and observeDedupGuard's companion count
+// query (CHAOS-4140) -- both must scan exactly the same key range, or the
+// dedup-guard counters would not describe the chart they are attached to.
+func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any, error) {
+	clauses := []string{spec.Metric + " IS NOT NULL"}
+	parameters := make([]any, 0, 5)
+	if spec.OrganizationID != "" {
+		clauses = append(clauses, "org_id = {org_id:String}")
+		parameters = append(parameters, clickhouse.Named("org_id", spec.OrganizationID))
+	}
+	if spec.TimeRangeStart != "" {
+		if _, err := time.Parse(time.DateOnly, spec.TimeRangeStart); err != nil {
+			return "", nil, ErrContractMismatch
+		}
+		clauses = append(clauses, "day >= {time_range_start:Date}")
+		parameters = append(parameters, clickhouse.Named("time_range_start", spec.TimeRangeStart))
+	}
+	if spec.TimeRangeEnd != "" {
+		if _, err := time.Parse(time.DateOnly, spec.TimeRangeEnd); err != nil {
+			return "", nil, ErrContractMismatch
+		}
+		clauses = append(clauses, "day <= {time_range_end:Date}")
+		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
+	}
+	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") {
+		clauses = append(clauses, "team_id IN {filter_teams:Array(String)}")
+		parameters = append(parameters, clickhouse.Named("filter_teams", spec.FilterTeams))
+	}
+	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
+		clauses = append(clauses, "repo_id IN {filter_repos:Array(String)}")
+		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
+	}
+	return strings.Join(clauses, " AND\n        "), parameters, nil
+}
+
+// dedupGuardQuery returns a companion COUNT query for a chart metric whose
+// source table is registered in appendOnlyDailyKeys (CHAOS-4140's dedup
+// guard applies), or ok=false for a table with no known re-drive risk (no
+// guard to measure). It scans the SAME where clause and bound parameters
+// buildChartQuery's aggregate applies, so "observed" is exactly the physical
+// row count behind that chart's key range; uniqExact over the table's own
+// natural key gives the deduped row count dedupFromSource's LIMIT 1 BY would
+// collapse to, so observed-minus-that is the retried-generation rows the
+// guard discarded.
+func dedupGuardQuery(spec ChartSpec, definition metricDefinition) (statement string, parameters []any, table string, ok bool) {
+	keys, ok := appendOnlyDailyKeys[definition.SourceTable]
+	if !ok {
+		return "", nil, "", false
+	}
+	where, parameters, err := buildChartWhere(spec, definition)
+	if err != nil {
+		return "", nil, "", false
+	}
+	statement = fmt.Sprintf(`SELECT
+        count() AS observed,
+        uniqExact(%s) AS distinct_keys
+    FROM %s
+    WHERE
+        %s`, strings.Join(keys, ", "), definition.SourceTable, where)
+	return statement, parameters, definition.SourceTable, true
+}
+
+// observeDedupGuard runs dedupGuardQuery and reports it to the wired
+// observer, best-effort. adapter.dedupObserver is nil unless
+// SetDedupObserver was called (production wiring only, see
+// NewProductionRuntimeAdapters), so this is a no-op for every existing test
+// construction of ClickHouseQueryAdapter and adds no query when unwired.
+func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, spec ChartSpec, definition metricDefinition) {
+	if adapter == nil || adapter.dedupObserver == nil {
+		return
+	}
+	statement, parameters, table, ok := dedupGuardQuery(spec, definition)
+	if !ok {
+		return
+	}
+	row := adapter.conn.QueryRow(ctx, statement, parameters...)
+	var observed, distinctKeys uint64
+	if err := row.Scan(&observed, &distinctKeys); err != nil {
+		return
+	}
+	if distinctKeys > observed {
+		return
+	}
+	skipped := observed - distinctKeys
+	_ = adapter.dedupObserver.ObserveReportDedupGuard(
+		table, jobruntime.ReportDedupReasonRetryGeneration, int(observed), int(skipped),
+	)
 }
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {
@@ -373,35 +485,10 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// scope, not just a team's own repos, silently changing an org-wide
 	// chart's existing equal-weighted "avg across teams" semantics into a
 	// commit-weighted ratio across the whole org.
-	clauses := []string{spec.Metric + " IS NOT NULL"}
-	parameters := make([]any, 0, 5)
-	if spec.OrganizationID != "" {
-		clauses = append(clauses, "org_id = {org_id:String}")
-		parameters = append(parameters, clickhouse.Named("org_id", spec.OrganizationID))
+	where, parameters, err := buildChartWhere(spec, definition)
+	if err != nil {
+		return "", nil, err
 	}
-	if spec.TimeRangeStart != "" {
-		if _, err := time.Parse(time.DateOnly, spec.TimeRangeStart); err != nil {
-			return "", nil, ErrContractMismatch
-		}
-		clauses = append(clauses, "day >= {time_range_start:Date}")
-		parameters = append(parameters, clickhouse.Named("time_range_start", spec.TimeRangeStart))
-	}
-	if spec.TimeRangeEnd != "" {
-		if _, err := time.Parse(time.DateOnly, spec.TimeRangeEnd); err != nil {
-			return "", nil, ErrContractMismatch
-		}
-		clauses = append(clauses, "day <= {time_range_end:Date}")
-		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
-	}
-	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") {
-		clauses = append(clauses, "team_id IN {filter_teams:Array(String)}")
-		parameters = append(parameters, clickhouse.Named("filter_teams", spec.FilterTeams))
-	}
-	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
-		clauses = append(clauses, "repo_id IN {filter_repos:Array(String)}")
-		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
-	}
-	where := strings.Join(clauses, " AND\n        ")
 	// CHAOS-4246: dedupFromSource wraps a re-run-affected table in its
 	// latest-generation source (see dedup.go) so a re-drive is never summed
 	// alongside its earlier generation. A table with no known re-drive risk

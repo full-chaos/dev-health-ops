@@ -28,34 +28,45 @@ type ProviderClientResolver interface {
 // sync_configurations flags (auto_import_teams/auto_import_projects/
 // auto_import_members) for this sync run's own integration, for the same
 // multiple-active-integrations reason ProviderClientResolver's doc comment
-// explains. Used by the POST-SYNC team-autoimport dispatcher only (mirrors
-// Python's non-strict run_team_autoimport, which does gate on these flags) --
-// NOT by TeamCatalogDiscoveryExecutor below, which mirrors run_team_autoimport_strict
-// instead (src/dev_health_ops/workers/team_autoimport.py:98-103: "This is the
-// ONLY call site that threads the resulting selection into the populator
-// scope -- run_team_autoimport_strict deliberately does not... reference
-// discovery and backfill keep importing everything they always have").
+// explains. Used by BOTH the post-sync team-autoimport dispatcher and
+// TeamCatalogDiscoveryExecutor below.
+//
+// An earlier revision of this file exempted the reference-discovery path
+// from selection gating, reasoning that Python's run_team_autoimport_strict
+// never consults sync_options and reference discovery mirrors it. That
+// reasoning was wrong: lane-4430 proved (CHAOS-4437, red test on
+// team-item-selection-gate-proof) that run_team_autoimport_strict ignoring
+// selections is itself a DEFECT -- chris's CHAOS-4323 rule is that each of
+// the three items is independently selectable, unselected means not
+// written, full stop. Parity with a known defect is not the spec. Both
+// native paths gate on this resolver; CHAOS-4437 (a separate lane) is fixing
+// the Python side to match.
 type TeamCatalogSelectionsResolver interface {
 	ResolveSelections(ctx context.Context, orgID, runID, provider string) (providersync.TeamCatalogSelections, error)
 }
 
-// teamCatalogStrictSelections always selects every surface: the strict
-// reference-discovery path (run_team_autoimport_strict) never consults
-// sync_options, so the native equivalent must not invent a gate Python never
-// had.
-var teamCatalogStrictSelections = providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}
-
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
-// a provider with a registered native collector runs it directly (importing
-// every surface unconditionally, matching run_team_autoimport_strict) and
-// skips the Python bridge entirely; every other provider falls through to
-// Fallback, the existing BridgeDiscoveryExecutor. It implements the same
-// DiscoveryExecutor seam VerifiedDiscoveryExecutor already wraps, so
-// ClickHouse readback verification covers native and bridge providers alike.
+// a provider with a registered native collector runs it directly (gated by
+// CHAOS-4323 selections, same as the post-sync path) and skips the Python
+// bridge entirely; every other provider falls through to Fallback, the
+// existing BridgeDiscoveryExecutor. It implements the same DiscoveryExecutor
+// seam VerifiedDiscoveryExecutor already wraps, so ClickHouse readback
+// verification covers native and bridge providers alike.
+//
+// When every selection is off, this returns success with NO
+// "reference_team_keys"/"reference_sprint_ids" keys at all (not empty
+// slices under those keys -- their absence), per lane-4437's executed
+// answer (native_dispatch_sync_run_service.go:242-253 gates unit dispatch
+// only on the discovery ledger reaching status=success; that status is
+// earned by ReferenceReadbackVerifier.Verify, clickhouse_readback.go:228-236,
+// which is a no-op -- and therefore trivially succeeds -- exactly when the
+// summary claims no keys at all). So an all-off native provider still lets
+// dispatch proceed, with zero ClickHouse writes and zero bridge calls.
 type TeamCatalogDiscoveryExecutor struct {
-	Native   map[string]providersync.TeamCatalogCollector
-	Fallback DiscoveryExecutor
-	Clients  ProviderClientResolver
+	Native     map[string]providersync.TeamCatalogCollector
+	Fallback   DiscoveryExecutor
+	Clients    ProviderClientResolver
+	Selections TeamCatalogSelectionsResolver
 	// Observer is optional: a nil Observer records nothing, the same
 	// convention every other telemetry hook in this codebase uses.
 	Observer jobruntime.TeamCatalogObserver
@@ -91,8 +102,21 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeBridge)
 		return executor.Fallback.Discover(ctx, orgID, runID, provider)
 	}
-	if executor.Clients == nil {
+	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
+	}
+	selections, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
+	if err != nil {
+		return nil, err
+	}
+	if !selections.Any() {
+		// Nothing selected: no collector call, no bridge call, no CH writes.
+		// Deliberately omit reference_team_keys/reference_sprint_ids (not an
+		// empty slice under those keys -- their absence) so
+		// ReferenceReadbackVerifier.Verify no-ops and the discovery ledger
+		// still reaches status=success, letting unit dispatch proceed.
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeSkipped)
+		return map[string]any{"provider": normalizedProvider, "outcome": "skipped"}, nil
 	}
 	credential, client, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
@@ -100,7 +124,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	}
 	result, err := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
 		OrgID: orgID, SyncRunID: runID,
-	}, credential, client, teamCatalogStrictSelections, executor.now())
+	}, credential, client, selections, executor.now())
 	if err != nil {
 		return nil, err
 	}

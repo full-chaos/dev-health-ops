@@ -20,7 +20,7 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 const linearReferenceOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -236,6 +236,20 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if len(rows) == 0 {
 		return nil
 	}
+	// CHAOS-4446: read every touched team's CURRENT manual_members before
+	// preparing the insert, so this write carries it forward instead of
+	// clobbering an admin's roster override with the schema default ([]).
+	// A team with no existing row (genuinely new) defaults to [] below,
+	// which is correct -- PreserveExistingTeamManualMembers's own doc
+	// comment covers why a missing map entry is not an error.
+	teamIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		teamIDs = append(teamIDs, row.ID)
+	}
+	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, rows[0].OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceTeamsInsert)
 	if err != nil {
 		return err
@@ -246,7 +260,8 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, row.Members, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID); err != nil {
+		manualMembers := existingManualMembers[row.ID]
+		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID); err != nil {
 			return err
 		}
 	}

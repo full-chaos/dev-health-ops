@@ -542,15 +542,17 @@ func buildSyncCoordinatorWorker(
 		},
 		retry: providerfoundation.DefaultRetryPolicy(),
 	}
+	teamCatalogSelections := teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain}
 	var teamCatalogObserver jobruntime.TeamCatalogObserver
 	if typed, ok := observer.(jobruntime.TeamCatalogObserver); ok {
 		teamCatalogObserver = typed
 	}
 	teamCatalogExecutor := &syncdispatchruntime.TeamCatalogDiscoveryExecutor{
-		Native:   nativeTeamCatalogCollectors,
-		Fallback: bridgeDiscoveryExecutor,
-		Clients:  teamCatalogClients,
-		Observer: teamCatalogObserver,
+		Native:     nativeTeamCatalogCollectors,
+		Fallback:   bridgeDiscoveryExecutor,
+		Clients:    teamCatalogClients,
+		Selections: teamCatalogSelections,
+		Observer:   teamCatalogObserver,
 	}
 	discoveryExecutor, err := syncdispatchruntime.NewVerifiedDiscoveryExecutor(teamCatalogExecutor, readbackVerifier)
 	if err != nil {
@@ -622,7 +624,7 @@ func buildSyncCoordinatorWorker(
 			},
 			native:     nativeTeamCatalogCollectors,
 			clients:    teamCatalogClients,
-			selections: teamCatalogSelectionsResolver{pool: postgresDatabase.pools.Domain},
+			selections: teamCatalogSelections,
 			observer:   teamCatalogObserver,
 		}
 		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportBridge); err != nil {

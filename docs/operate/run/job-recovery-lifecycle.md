@@ -271,6 +271,26 @@ terminalizes the partition `failed_permanent`, undoing the reset (see
 [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
 for the exact env vars and required-order rationale).
 
+**The redrive above does not cover a run stranded one step LATER, after every
+partition already succeeded (CHAOS-4389).** `CompletePartition` enqueues the
+run's single `metrics.daily_finalize` job exactly once, the instant the last
+partition transitions to `succeeded`, under the fixed key
+`metrics.daily_finalize:<run id>` — permanently deduped by the outbox like
+every other kind here. If THAT job is discarded by River before
+`CompleteFinalize` ever runs (e.g. the compatibility bridge's `Finalize` call
+hitting the same memory-bound class CHAOS-4361 fixed for partitions), the run
+sits `status='running'` forever despite 100% partition success, and
+`daily-redrive`'s own stranded-partition predicate never matches it (it
+requires at least one non-succeeded partition). `dev-health-workerctl metrics
+daily-finalize --run <uuid>|--all-complete --review-evidence "<what you
+verified>"` closes this the same way: a fresh, nonce-scoped
+`metrics.daily_finalize:redrive:<run id>:<nonce>` job, published only after
+re-verifying under a row lock that the run is still `running`, every
+partition is still `succeeded`, and finalization has not already settled. See
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for the exact command shape, `--all-complete`'s cross-organization sweep, and
+its two telemetry counters.
+
 **Neither of the above covers a day that was never dispatched at all.**
 `jobs retry` and `metrics daily-redrive` both recover a run/partition that
 was dispatched and then stranded or discarded — they need a row to already
@@ -303,6 +323,9 @@ for the full command shape and coverage rule.
 - CHAOS-4358 / CHAOS-4304 — targeted redrive for daily-metrics runs stranded by
   discarded `daily_partition` jobs, and the ledger-side ambiguous/executing
   repair that must run alongside it
+- CHAOS-4389 — targeted redrive for daily-metrics runs stranded one step
+  later, by a discarded `daily_finalize` job after every partition already
+  succeeded
 - CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
   was never dispatched at all, and its use as the recovery path for a dora
   day frozen at 0 rows by the pre-fix same-day coverage bug

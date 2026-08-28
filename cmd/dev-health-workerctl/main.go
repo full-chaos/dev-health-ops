@@ -877,9 +877,116 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 			"ledger_repair": ledgerRepair,
 			"partitions":    outcome,
 		})
+	case "daily-finalize":
+		return dispatchMetricsDailyFinalize(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
+// the operator entry point that repairs a daily-metrics run stranded because
+// River discarded the ONE metrics.daily_finalize job CompletePartition ever
+// enqueues for it (fixed idempotency key, permanently deduped by the
+// outbox), leaving the run status='running' forever despite 100% of its
+// partitions having succeeded. Exactly one of --run/--all-complete selects
+// the scope: --run repairs one named run; --all-complete sweeps every
+// organization for runs in this exact stranded shape (bounded by --limit)
+// and redrives each one found. Mirrors `metrics daily-redrive`'s shape
+// (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
+// --review-evidence required, quiet flags, JSON result) and, like it,
+// deliberately bypasses joboperator.Service's Action/audit pipeline.
+func dispatchMetricsDailyFinalize(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics daily-finalize")
+	run := flags.String("run", "", "single daily_metrics_runs id (uuid) to finalize")
+	allComplete := flags.Bool("all-complete", false, "sweep every organization for runs status='running' with 100% partitions succeeded whose finalize was NEVER attempted (finalization_status='pending'), and redrive each one found -- see --run for a run whose finalize already ran at least once")
+	limit := flags.Int("limit", 0, "max runs one --all-complete sweep pass redrives (default 500)")
+	// codex review round 3 on daily-redrive (CHAOS-4358) established the bar
+	// this mirrors: an operator authorizing a repeat execution must state in
+	// their own words what they verified, no default, no generic hardcoded
+	// string. Finalize is not a mechanical retry either -- CompatibilityExecutor.Finalize
+	// writes user_metrics_daily/ic_landscape_rolling_30d directly, so the
+	// evidence an operator should state here is that the ORIGINAL finalize
+	// never durably wrote (e.g. no completion fence, no rows for the run's
+	// target_day yet) rather than the partition-redrive concern about
+	// per-row output_evidence.
+	//
+	// codex review (CHAOS-4389, P1): finalization_status='failed' does NOT
+	// mean finalize never ran -- FinalizeHandler.Work sets it both when the
+	// compatibility call itself failed AND when it SUCCEEDED (writing real
+	// user_metrics_daily/compounding_risk_daily/team_cognitive_load_daily
+	// rows) but the bookkeeping CompleteFinalize write failed afterward.
+	// --all-complete's bulk sweep only ever redrives the provably-safe
+	// 'pending' (never attempted) subset for exactly this reason; a run
+	// whose finalize was already claimed at least once needs a human to
+	// name it individually with --run, after actually checking whether it
+	// already wrote real output -- mirrors `daily-redrive`'s own split
+	// between its bulk retry_safe path and confirm_succeeded's
+	// single-execution-only endpoint.
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing a repeat finalize -- for --run, state whether the run's finalize already wrote real output (e.g. \"confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d/compounding_risk_daily rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize\"); for --all-complete, why this sweep is authorized now (--all-complete never touches a run whose finalize already ran at least once, regardless of this text)")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	hasRun := strings.TrimSpace(*run) != ""
+	if hasRun == *allComplete {
+		// Exactly one of --run/--all-complete must be set: neither named a
+		// scope, or both did and this command cannot tell which one governs.
+		return writeError(stderr, "invalid_request")
+	}
+	if hasRun {
+		parsedRun, err := uuid.Parse(*run)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		// codex review (P2, round 2): uuid.Parse accepts uppercase/mixed-case
+		// input, but jobcontract.MarshalCanonical rejects a non-lowercase
+		// domain id -- passing the raw (possibly uppercase) *run through
+		// would pass this validation and then fail later inside
+		// PublishRedriveFinalizeTx, turning a legitimately valid --run into
+		// a confusing publish-time error instead of a repair. Canonicalize
+		// once, here, so every downstream use (the DB query, the envelope)
+		// sees the same lowercase string.
+		canonicalRun := parsedRun.String()
+		run = &canonicalRun
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	var candidates []string
+	if hasRun {
+		candidates = []string{*run}
+	} else {
+		candidates, err = store.FindStrandedFinalizeRuns(ctx, *limit)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+	}
+	// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
+	// single-target operator action that MAY authorize redriving a run whose
+	// finalize already ran at least once; --all-complete's bulk sweep never
+	// does, regardless of --review-evidence's text (see the flag's own help
+	// and RedriveStrandedFinalize's doc comment for why).
+	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, candidates, uuid.NewString(), hasRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"candidates": candidates,
+		"finalize":   outcome,
+	})
 }
 
 // manualBackfillGeneration derives a deterministic generation for one

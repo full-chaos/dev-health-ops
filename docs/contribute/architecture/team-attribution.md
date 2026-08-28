@@ -1474,6 +1474,82 @@ flowchart TD
 
 ---
 
+## 6. Team complexity rollup (CHAOS-4365 item 3 / 4347-C)
+
+`team_complexity_daily` (ops migration `082_team_complexity_daily.sql`) is a
+new, append-only, ownership-scoped table: team-keyed cyclomatic complexity,
+rolled up from the repo-level `repo_complexity_daily` (already productionized
+— `job_complexity.py`/`job_complexity_db.py`, `metrics complexity` CLI). Only
+the team rollup was greenfield; repo-level complexity compute is unchanged.
+
+Same CHAOS-4321 hard rule as items 1-2: team = project/repo **ownership**
+only. `repo_complexity_daily` carries no `team_id` column of its own (unlike
+`user_metrics_daily`/`team_metrics_daily`, CHAOS-4396's taint source), so
+there is nothing to route around here — the resolution path
+(`team_repo_ownership` merged over `teams.repo_patterns`, §0.2/§1.1) is
+reused purely for consistency with items 1-2, not to avoid a tainted column.
+
+```mermaid
+flowchart LR
+    RCD["repo_complexity_daily\n(per repo, per day)"] -->|"argMax(*, computed_at)\nreadback, org+day scoped"| FIN
+    TRO["team_repo_ownership\n⋈ teams.repo_patterns"] -->|"repo_id → team_id map"| FIN
+    FIN["run_daily_metrics_finalize\n(once per org/day)"] -->|"SUM loc/cc/high/very_high;\nrecompute cc_per_kloc from sums"| TCD["team_complexity_daily\n(per team, per day)"]
+```
+
+| Column | Type | Notes |
+|---|---|---|
+| `org_id`, `team_id` | `String` | |
+| `day` | `Date` | |
+| `loc_total`, `cyclomatic_total`, `high_complexity_functions`, `very_high_complexity_functions` | `UInt64` | Summed across every `repo_complexity_daily` row the team owns this day (absolute counts, additive) |
+| `cyclomatic_per_kloc` | `Float64` | Recomputed from the summed totals (`cyclomatic_total / (loc_total / 1000)`, `0.0` when `loc_total` is `0`) — **never** a naive average of each owned repo's own ratio. A ratio is not additive: averaging a 1-repo team's noisy 50.0 cc/kloc with a 9x-larger repo's 10.0 cc/kloc would give 30.0, when the loc-weighted true value is 14.0 |
+| `contributing_repo_count` | `UInt32` | Diagnosability: how many distinct owned repos contributed a `repo_complexity_daily` row this day |
+| `computed_at` | `DateTime64(6, 'UTC')` | |
+
+`ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`
+— append-only, matching every other daily rollup in this schema
+(`compounding_risk_daily`, `team_cognitive_load_daily` included): a
+re-computation inserts a new row with a later `computed_at`; readers dedup
+per `(org_id, team_id, day)` via `argMax(<col>, computed_at)`. Never
+`ReplacingMergeTree`.
+
+**Producer runs in the finalize step, once per org/day** —
+`run_daily_metrics_finalize` (`metrics/job_daily.py`,
+`_write_team_complexity_for_day`), the same once-per-org/day stage
+CHAOS-4399 established for `compounding_risk_daily`'s team-scope rows and
+`team_cognitive_load_daily`. Unlike `team_cognitive_load_daily` (which
+aggregates the current run's already-computed in-memory rows directly),
+`team_complexity_daily` reads `repo_complexity_daily` back from ClickHouse
+via `argMax(*, computed_at)` for the org/day
+(`_fetch_repo_complexity_for_day`) — `repo_complexity_daily` is written by a
+separate job (`metrics complexity`) on its own cadence, not inside the daily
+partition loop, so there is no in-memory copy to reuse. A day with no
+`repo_complexity_daily` rows yet degrades to zero team rows, logged and
+counted (never raised) — same CHAOS-4246 contract every finalize family
+follows.
+
+**Fixtures finding (CHAOS-4365 item 3):** `dev-hops fixtures generate
+--with-metrics` never called `run_daily_metrics_finalize` before this
+change — it only ran `run_daily_metrics_job`'s own older, narrower inline
+finalize block (IC metrics/landscape only). Every `--with-metrics` fixtures
+run therefore produced REPO-scope rows only for `compounding_risk_daily`,
+and **zero** rows for `compounding_risk_daily` scope=team and
+`team_cognitive_load_daily` — silently, with no exception or warning,
+since `run_daily_metrics_job` never invoked the code path that would have
+logged the zero-rows warning either. Fixed in `fixtures/runner.py`: the
+`--with-metrics` path now also calls `run_daily_metrics_finalize` once per
+generated day, mirroring `_cmd_metrics_daily`'s CLI pattern. This closes a
+test-coverage gap for items 1-2 as well as item 3 — see the ops PR body for
+before/after readback counts.
+
+**Schema pin:** column types and the `ORDER BY`/engine clause are pinned
+byte-for-byte in `full-chaos/dev-health-go`'s `schema.go`
+(`ProductionColumns["team_complexity_daily"]` / `EngineFull`, tagged
+`v0.4.0`) with a test asserting they match an **embedded copy** of this
+migration's DDL exactly — same manually-synchronized pin as
+`team_cognitive_load_daily` (§0.2), not automatic cross-repo enforcement.
+
+---
+
 ## Stale references to this document (swept 2026-08-19, CHAOS-3968)
 
 This page's old pre-migration path, `docs/architecture/team-attribution.md`, is still cited in

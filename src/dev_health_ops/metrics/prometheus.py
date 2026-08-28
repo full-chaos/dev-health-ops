@@ -401,6 +401,32 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # ---------------------------------------------------------------------------
+    # team_complexity_daily finalize-step producer (CHAOS-4365 item 3 / 4347-C)
+    # ---------------------------------------------------------------------------
+    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_team_complexity_daily_rows_written_total",
+            "team_complexity_daily rows written by run_daily_metrics_finalize. "
+            "Decision-basis signal for the CHAOS-4365 item 3 producer: a "
+            "sustained flatline here (while repo_complexity_daily keeps "
+            "writing) means ownership resolution or the finalize wiring "
+            "regressed, without needing a fresh investigation to notice.",
+        )
+    )
+    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT = (
+        _prometheus_client_module.Histogram(
+            "dev_health_team_complexity_daily_contributing_repo_count",
+            "contributing_repo_count on each team_complexity_daily row "
+            "written. Same CHAOS-4399 bug-class signature as "
+            "dev_health_team_metrics_daily_repo_count: a value stuck at 1 "
+            "across every multi-repo team means the finalize-step "
+            "aggregation regressed to a per-repo write. A value of 1 is an "
+            "ordinary single-repo team, not a defect.",
+            buckets=(1, 2, 3, 5, 8, 13, 21, 34, 55),
+        )
+    )
+
+    # ---------------------------------------------------------------------------
     # Recommendations readiness gate (CHAOS-4073)
     # ---------------------------------------------------------------------------
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _prometheus_client_module.Counter(
@@ -743,6 +769,8 @@ else:
     DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _noop_histogram()
     DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM = _noop_histogram()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
+    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL = _noop_counter()
+    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _noop_gauge()
@@ -931,6 +959,24 @@ def record_team_metrics_daily_repo_rows(rows: list[Any]) -> None:
         repos_by_team.setdefault(row.team_id, set()).add(row.repo_id)
     for repo_ids in repos_by_team.values():
         DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT.observe(len(repo_ids))
+
+
+def record_team_complexity_daily_rows(rows: list[Any]) -> None:
+    """Observe team_complexity_daily's rows-written counter and per-row
+    contributing_repo_count histogram (CHAOS-4365 item 3). ``rows`` is the
+    exact list passed to ``write_team_complexity_daily`` -- every row must
+    carry a ``contributing_repo_count`` attribute
+    (``TeamComplexityDailyRecord`` does). Call once per write, after the
+    sink call, never per-sink (a dual-sink write would otherwise double
+    every observation) -- mirrors ``record_team_metrics_daily_repo_rows``.
+    """
+    if not rows:
+        return
+    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL.inc(len(rows))
+    for row in rows:
+        DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT.observe(
+            row.contributing_repo_count
+        )
 
 
 def record_metrics_family_zero_rows(*, family: str, cause: str) -> None:

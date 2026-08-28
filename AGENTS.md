@@ -36,7 +36,7 @@ Canonical intent documents (Linear, Dev Health Ops project):
 
 One-line definition: *Ask Dev turns a natural engineering question into a bounded investigation across canonical facts, organizational context, graph evidence, and derived findings, then returns the strongest defensible explanation, evidence, uncertainty, and next action in the form best suited to the user's intent.*
 
-Design checks every Ask Dev / acr / ops-metrics change must pass (North Star §22):
+Design checks every Ask Dev / acr / ops-metrics change must pass — checks 1–15 are North Star §22 principles; checks 16–18 are repository operating rules from the review doc above:
 1. Intent determines evidence — never answer the nearest measurable question.
 2. Retrieval is part of reasoning — correct intent with failed retrieval is a failed answer.
 3. Preserve semantic distinctions — status ≠ completion ≠ readiness ≠ health ≠ pressure ≠ investment ≠ burden ≠ productivity.
@@ -58,7 +58,7 @@ Design checks every Ask Dev / acr / ops-metrics change must pass (North Star §2
 
 Contract rule: any acr contract widening ⇒ ask-dev pin bump before any live proof. Team authorization is ownership-derived (`team_repo_ownership` rows), so team answers are impossible until ownership is synced.
 
-Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual mappings.
+Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual TEAM mappings (ClickHouse `manual_fallback` records remain valid for work-item/PR attribution — never for team authorization).
 
 Checks that bite hardest here: 3, 9, 12, 13, 17 — plus: team is OWNERSHIP only, never person→membership→team; metrics readers use append-only daily tables + `argMax`, never zero-fill missing days.
 

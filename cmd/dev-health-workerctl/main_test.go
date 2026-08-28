@@ -742,6 +742,46 @@ func TestDispatchMetricsRemainingStartRejectsUnknownFamilyFlag(t *testing.T) {
 	}
 }
 
+func TestDispatchMetricsRemainingStartRejectsFutureDay(t *testing.T) {
+	// codex review, P2: this is a HISTORICAL recovery tool -- a mistyped
+	// future year must not silently create a durable run.
+	var stdout, stderr bytes.Buffer
+	future := time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "start", "--family", "dora", "--day", future,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("future --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestManualBackfillGenerationIsDeterministicAndInputSensitive(t *testing.T) {
+	// codex review, P1: the generation MUST be a pure function of the
+	// request (never wall-clock time) so a retried CLI invocation reuses
+	// the same generation and is caught by the store's ON CONFLICT DO
+	// NOTHING idempotency, rather than dispatching a second run.
+	first := manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27")
+	second := manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27")
+	if first != second {
+		t.Fatalf("same inputs produced different generations: %q vs %q", first, second)
+	}
+	if len(first) > 128 {
+		t.Fatalf("generation exceeds remaining.maxGenerationLength (128 runes): %d runes: %q", len(first), first)
+	}
+	variants := []string{
+		manualBackfillGeneration("complexity", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000002", "2026-08-25", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-24", "2026-08-27"),
+		manualBackfillGeneration("dora", "00000000-0000-4000-8000-000000000001", "2026-08-25", "2026-08-28"),
+	}
+	for _, variant := range variants {
+		if variant == first {
+			t.Fatalf("a different request produced the SAME generation as the baseline: %q", variant)
+		}
+	}
+}
+
 func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)

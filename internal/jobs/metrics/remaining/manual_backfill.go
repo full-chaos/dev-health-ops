@@ -5,7 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
+
+// maxDayScopedBackfillDays mirrors validateFamilyScope's own bound on
+// dora/release_impact's BackfillDays (scopes.go: 1-90) -- the widest window
+// a single succeeded partition could possibly cover, and therefore the
+// furthest ahead of the requested day findNonZeroRowCoverage needs to look
+// for an anchor that might contain it.
+const maxDayScopedBackfillDays = 90
 
 // ErrDayAlreadyCovered is returned by StartManualBackfillRun when a
 // non-zero-row succeeded partition already covers the requested
@@ -73,9 +82,16 @@ type ManualBackfillOutcome struct {
 // StartManualBackfillRun starts an operator-triggered remaining-metrics run
 // for one historical (organization, family, day) that no automatic trigger
 // ever dispatched (CHAOS-4254 -- the prod recovery path for CHAOS-4384's
-// frozen dora days). generation MUST be distinct per operator invocation
-// (the CLI mints "manual-backfill:<RFC3339 timestamp>") so a manual run
-// never collides with a post-sync or fixed-schedule run's own generation.
+// frozen dora days). generation MUST be deterministic per LOGICAL request
+// (the CLI derives "manual-backfill:<family>:<org>:<from>..<to>" from its
+// own flags, not a wall-clock timestamp) so a retried CLI invocation reuses
+// the SAME generation and lands on insertRun's ON CONFLICT DO NOTHING path
+// instead of inserting a second run while the first is still
+// pending/running (codex review, P1: coverage only recognizes SUCCEEDED
+// partitions, so a timestamp-derived generation made a same-second retry
+// indistinguishable from a genuinely new request). It must still differ
+// from any post-sync/fixed-schedule generation, which the "manual-backfill:"
+// prefix guarantees.
 //
 // Coverage rule -- deliberately NOT the same one StartRunTx's automatic
 // family=="dora" block applies: that block treats ANY succeeded partition
@@ -131,28 +147,34 @@ func (store *PostgresStore) StartManualBackfillRun(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
-	// Serialize against a concurrent automatic (post-sync / fixed-schedule)
-	// or manual dispatch for the SAME (org, family, day): the same
-	// advisory-lock keyspace shape StartRunTx's dora block uses, widened
-	// with the family so complexity/release_impact -- which have no
-	// cross-generation coverage collision in the automatic path -- still
-	// never race a concurrent manual invocation for the same day.
+	// Serialize against a concurrent dispatch for the SAME (org, family,
+	// day). For "dora" this MUST be the exact same advisory-lock keyspace
+	// StartRunTx's own family=="dora" block uses (postgres.go) --
+	// ("remaining_metrics_dora_day", org+":"+day), no family segment --
+	// otherwise the two never actually serialize against each other (codex
+	// review, P1): a manual backfill and a concurrent post-sync/fixed-
+	// schedule dispatch for the same org+day would each see no coverage and
+	// insert their own append-only computation. complexity/release_impact
+	// have no such automatic cross-generation collision, so they use a
+	// manual-only key scoped by family, purely to self-serialize concurrent
+	// manual invocations.
+	lockNamespace, lockKey := "remaining_metrics_manual_backfill_day", request.OrganizationID+":"+request.Family+":"+day
+	if request.Family == "dora" {
+		lockNamespace, lockKey = "remaining_metrics_dora_day", request.OrganizationID+":"+day
+	}
 	if _, err := tx.Exec(ctx,
-		"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-		"remaining_metrics_manual_backfill_day", request.OrganizationID+":"+request.Family+":"+day,
+		"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", lockNamespace, lockKey,
 	); err != nil {
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 
-	covering, outputEvidence, found, err := store.loadRunCoveringDay(
-		ctx, tx, request.OrganizationID, request.Family, day, 1,
-	)
+	coveringRunID, covered, err := store.findNonZeroRowCoverage(ctx, tx, request.OrganizationID, request.Family, day)
 	if err != nil {
 		return ManualBackfillOutcome{}, err
 	}
-	if found && !isZeroRowEvidence(outputEvidence) {
+	if covered {
 		store.observeManualBackfill(family, "already_covered")
-		return ManualBackfillOutcome{Day: day, RunID: covering.ID}, ErrDayAlreadyCovered
+		return ManualBackfillOutcome{Day: day, RunID: coveringRunID}, ErrDayAlreadyCovered
 	}
 
 	run, created, err := store.insertRun(ctx, tx, request, publisher)
@@ -178,4 +200,70 @@ func (store *PostgresStore) StartManualBackfillRun(
 		PartitionID: deterministicPartitionID(run.ID, 1),
 		AlreadyRan:  outcome == "already_ran",
 	}, nil
+}
+
+// findNonZeroRowCoverage reports whether a NON-zero-row succeeded partition
+// for (organizationID, family) already covers day -- true coverage this
+// command must refuse, versus a 0-row completion it exists to recompute.
+//
+// Unlike loadRunCoveringDay's exact `scope->>'day' = day` match, this checks
+// CONTAINMENT in the partition's whole [anchor - backfill_days + 1, anchor]
+// window (codex review, P1): DORAExecutor.ComputePartition and
+// job_release_impact.py's `_date_range` both write rows for EVERY day in
+// that window from ONE partition anchored on the LATEST day, not one
+// partition per day. A post-sync catch-up run anchored on day E with
+// backfill_days=N therefore already covers every day in
+// [E-N+1, E] -- requesting an interior day of that range must see it as
+// covered, or this command would insert a genuine duplicate for data
+// already written. (complexity's BackfillDays is pinned to 1 by
+// validateFamilyScope, so its window is always a single day -- this still
+// reduces to an exact match for it, no special-casing needed.)
+//
+// Bounded to anchors in [day, day+maxDayScopedBackfillDays-1] so this stays
+// a targeted range read keyed on the (org_id, family) index shape the exact-
+// match query already uses, not a full per-organization table scan.
+func (store *PostgresStore) findNonZeroRowCoverage(
+	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
+) (runID string, covered bool, err error) {
+	requested, parseErr := time.Parse("2006-01-02", day)
+	if parseErr != nil {
+		return "", false, ErrInvalidState
+	}
+	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
+	rows, err := tx.Query(ctx, `
+SELECT run.id::text, partition.scope->>'day', coalesce((partition.scope->>'backfill_days')::int, 1), partition.output_evidence
+FROM public.remaining_metric_partitions AS partition
+JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
+WHERE run.org_id = $1::uuid AND run.family = $2
+  AND run.status = 'succeeded' AND partition.status = 'succeeded'
+  AND partition.scope->>'day' >= $3 AND partition.scope->>'day' <= $4`,
+		organizationID, family, day, upperBound,
+	)
+	if err != nil {
+		return "", false, ErrUnavailable
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, anchorDay string
+		var backfillDays int
+		var outputEvidence *string
+		if err := rows.Scan(&id, &anchorDay, &backfillDays, &outputEvidence); err != nil {
+			return "", false, ErrUnavailable
+		}
+		if isZeroRowEvidence(outputEvidence) {
+			continue
+		}
+		anchor, parseErr := time.Parse("2006-01-02", anchorDay)
+		if parseErr != nil {
+			continue
+		}
+		windowStart := anchor.AddDate(0, 0, -(backfillDays - 1))
+		if !requested.Before(windowStart) && !requested.After(anchor) {
+			return id, true, nil
+		}
+	}
+	if rows.Err() != nil {
+		return "", false, ErrUnavailable
+	}
+	return "", false, nil
 }

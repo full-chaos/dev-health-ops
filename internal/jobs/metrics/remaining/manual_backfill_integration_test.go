@@ -24,7 +24,20 @@ func seedSucceededDoraPartition(
 	orgID, day string, rowsWritten int, generation string,
 ) string {
 	t.Helper()
-	scope := json.RawMessage(`{"version":1,"day":"` + day + `","sink":"auto","interval":"daily","backfill_days":1}`)
+	return seedSucceededDoraPartitionWithBackfillDays(t, ctx, store, pool, orgID, day, 1, rowsWritten, generation)
+}
+
+// seedSucceededDoraPartitionWithBackfillDays is seedSucceededDoraPartition
+// generalized to an anchor day whose window covers backfillDays days ending
+// on it (DORAExecutor.ComputePartition's dayRange semantics) -- used to seed
+// a wide post-sync catch-up run that covers several INTERIOR days from one
+// partition anchored on the latest of them.
+func seedSucceededDoraPartitionWithBackfillDays(
+	t *testing.T, ctx context.Context, store *PostgresStore, pool *pgxpool.Pool,
+	orgID, anchorDay string, backfillDays, rowsWritten int, generation string,
+) string {
+	t.Helper()
+	scope := json.RawMessage(`{"version":1,"day":"` + anchorDay + `","sink":"auto","interval":"daily","backfill_days":` + strconv.Itoa(backfillDays) + `}`)
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -249,5 +262,103 @@ func TestStartManualBackfillRunIsIdempotentForARepeatedGeneration(t *testing.T) 
 	}
 	if runCount != 1 {
 		t.Fatalf("expected exactly 1 run across both calls, found %d", runCount)
+	}
+}
+
+// TestStartManualBackfillRunDetectsCoverageFromAWiderMultiDayRun is
+// red-on-baseline for codex review's P1 finding: DORAExecutor.ComputePartition
+// writes rows for EVERY day in [anchor-backfill_days+1, anchor] from ONE
+// partition anchored on the LATEST day, not one partition per day. A
+// same-day-only coverage check misses this entirely for any day strictly
+// before the anchor.
+func TestStartManualBackfillRunDetectsCoverageFromAWiderMultiDayRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004257"
+
+	// A post-sync catch-up run anchored 2026-08-27 with backfill_days=3
+	// covers 2026-08-25, 2026-08-26, and 2026-08-27 -- one partition, one
+	// row per day (or more), no separate partition for the interior days.
+	anchorDay := "2026-08-27"
+	interiorDay := "2026-08-25"
+	seededRunID := seedSucceededDoraPartitionWithBackfillDays(
+		t, ctx, store, pool, orgID, anchorDay, 3, 7, "post-sync:wide-catchup",
+	)
+
+	outcome, err := store.StartManualBackfillRun(ctx, "dora", orgID, interiorDay, "manual-backfill:test-3", nopPartitionPublisher{})
+	if !errors.Is(err, ErrDayAlreadyCovered) {
+		t.Fatalf(
+			"expected ErrDayAlreadyCovered for %s (covered by the %s anchor's 3-day window), got err=%v outcome=%+v",
+			interiorDay, anchorDay, err, outcome,
+		)
+	}
+	if outcome.RunID != seededRunID {
+		t.Fatalf("expected the refusal to report the wide-window run %s, got %q", seededRunID, outcome.RunID)
+	}
+
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM remaining_metric_runs WHERE org_id = $1::uuid AND family = 'dora'",
+		orgID,
+	).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 {
+		t.Fatalf("expected no duplicate run to be inserted (still 1), found %d", runCount)
+	}
+}
+
+// TestStartManualBackfillRunAllowsADayOutsideAWiderRunsWindow is the
+// companion negative case: a day just outside the wide run's window must
+// still be treated as uncovered.
+func TestStartManualBackfillRunAllowsADayOutsideAWiderRunsWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004258"
+
+	// Anchored 2026-08-27, backfill_days=3 covers 08-25..08-27. 08-24 is
+	// one day outside that window and must still be backfillable.
+	seedSucceededDoraPartitionWithBackfillDays(
+		t, ctx, store, pool, orgID, "2026-08-27", 3, 7, "post-sync:wide-catchup",
+	)
+
+	outcome, err := store.StartManualBackfillRun(ctx, "dora", orgID, "2026-08-24", "manual-backfill:test-4", nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("day just outside the wide run's window was refused: %v (outcome=%+v)", err, outcome)
+	}
+	if outcome.AlreadyRan {
+		t.Fatal("expected a genuinely new run")
 	}
 }

@@ -882,6 +882,20 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	}
 }
 
+// manualBackfillGeneration derives a deterministic generation for one
+// `metrics remaining start` request from its own request shape (codex
+// review, P1) -- NOT from wall-clock time, so a retried CLI invocation with
+// identical flags reuses the SAME generation and lands on
+// remaining.PostgresStore's ON CONFLICT DO NOTHING idempotency instead of
+// inserting a second run per day while the first is still pending/running
+// (StartManualBackfillRun's coverage check only recognizes SUCCEEDED
+// partitions). remaining.maxGenerationLength is 128 runes; the widest inputs
+// here (a 15-rune family, a 36-rune UUID, two 10-rune dates) fit with room
+// to spare.
+func manualBackfillGeneration(family, org, day, to string) string {
+	return "manual-backfill:" + family + ":" + org + ":" + day + ".." + to
+}
+
 // manualBackfillReadbackTable names the primary ClickHouse table each
 // day-scoped remaining-metrics family writes (families.json's "writes"
 // list), for the readback hint dispatchMetricsRemaining prints after
@@ -963,6 +977,14 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 		if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
 			return writeError(stderr, "invalid_request")
 		}
+		// codex review, P2: this is a HISTORICAL recovery tool -- a future
+		// --day/--to (a mistyped year, most likely) would still create a
+		// durable run and, for release_impact/dora's backfill_days window,
+		// silently compute PAST days as a side effect of an operator error
+		// that should have been an invalid_request instead.
+		if toDay.After(time.Now().UTC().Truncate(24 * time.Hour)) {
+			return writeError(stderr, "invalid_request")
+		}
 		if runtime.pools == nil || runtime.registry == nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
@@ -974,7 +996,16 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 		if err != nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
-		generation := "manual-backfill:" + time.Now().UTC().Format(time.RFC3339Nano)
+		// codex review, P1: a wall-clock generation made a retried CLI
+		// invocation (identical flags, rerun after the first commit but
+		// before its result was observed) indistinguishable from a
+		// genuinely new request -- coverage only recognizes SUCCEEDED
+		// partitions, so the retry could insert and dispatch a second run
+		// per day while the first was still pending/running. Deriving
+		// generation from the request's own shape makes an identical rerun
+		// land on insertRun's ON CONFLICT DO NOTHING path (surfaced as
+		// "already_ran") instead of a duplicate.
+		generation := manualBackfillGeneration(*family, *org, *day, toRaw)
 		type dayResult struct {
 			Day         string `json:"day"`
 			Status      string `json:"status"`

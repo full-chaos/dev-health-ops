@@ -20,6 +20,7 @@ from sqlalchemy.sql.dml import Update
 
 from dev_health_ops.metrics.prometheus import (
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL,
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL,
 )
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.integrations import (
@@ -576,6 +577,29 @@ def _effective_dataset_keys(
         return [str(dataset_key)]
     family_keys = dataset_keys_from_flags(members, processor_flags)
     return family_keys or [str(dataset_key)]
+
+
+def _record_folded_key_resolution(dataset_key: str, effective_key: str) -> None:
+    """Record ONE genuine alias-fold coverage resolution.
+
+    Call once per accepted effective key (after any scope filter a call site
+    already applies for its own logic -- an alias whose scope was excluded
+    never produced a projected window and must not inflate the "folding
+    happened" signal), and never for the canonical key resolving to itself
+    (e.g. a ``cicd`` unit carrying only ``family_dataset_cicd=true``, no
+    ``family_dataset_tests`` -- that member IS the canonical identity, not an
+    alias fold). Coverage call sites ONLY -- ``_effective_dataset_keys`` is
+    also imported by ``IntegrationRunService.build_dataset_freshness``
+    (``api/services/integrations.py``) to render admin watermark-lag reads
+    that never build a coverage projection, so the increment lives at each
+    coverage call site rather than inside that shared helper (Codex review,
+    CHAOS-4393 rounds 1-2).
+    """
+    if effective_key == str(dataset_key):
+        return
+    SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL.labels(
+        canonical_dataset_key=str(dataset_key)
+    ).inc()
 
 
 def _effective_dataset_keys_for_unit(unit: _DatasetKeyUnit) -> list[str]:
@@ -1166,6 +1190,7 @@ async def _terminal_unit_windows(
         for effective_key in _effective_dataset_keys_for_unit(unit):
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(str(unit.dataset_key), effective_key)
             if len(windows) >= MAX_COVERAGE_UNIT_WINDOWS:
                 raise SyncCoverageComplexityError(
                     stage="expanded_unit_windows",
@@ -1243,11 +1268,13 @@ async def _stream_compact_unit_windows(
         before = ensure_utc(row.before_at)
         if since >= before:
             continue
-        for effective_key in _effective_dataset_keys(
+        effective_keys = _effective_dataset_keys(
             str(row.dataset_key), row.processor_flags
-        ):
+        )
+        for effective_key in effective_keys:
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(str(row.dataset_key), effective_key)
             pair = (str(row.source_id), effective_key)
             state = states[pair]
             interval = CoverageInterval(since=since, before=before)
@@ -1363,9 +1390,11 @@ async def _active_run_ids(
         budget,
         stage="active_units",
     ):
-        for effective_key in _effective_dataset_keys(dataset_key, processor_flags):
+        effective_keys = _effective_dataset_keys(dataset_key, processor_flags)
+        for effective_key in effective_keys:
             if effective_key not in scope.dataset_keys:
                 continue
+            _record_folded_key_resolution(dataset_key, effective_key)
             pairs.add((str(source_id), effective_key))
     return pairs
 
@@ -1395,6 +1424,7 @@ async def _backfill_job_run_pair_windows(
     org_id: str,
     run_id: uuid.UUID,
     budget: _CoverageQueryBudget,
+    scope_dataset_keys: Sequence[str],
 ) -> dict[tuple[str, str], list[CoverageInterval]]:
     """Return each (source_id, dataset_key) pair's merged unit-window union for a SyncRun.
 
@@ -1408,6 +1438,13 @@ async def _backfill_job_run_pair_windows(
     ``dataset_key``, so a collapsed composite unit's window is attributed to
     each of its actually-enabled child datasets rather than the invisible
     canonical "work-items" key.
+
+    ``scope_dataset_keys`` drops an effective key ``_backfill_requested_ranges``
+    would filter out anyway once it dataset-scopes the pair -- filtering here
+    instead is what lets folded-key telemetry count only a resolution that
+    actually reaches a projected window, not one a now-disabled or
+    out-of-scope alias flag would otherwise inflate the counter with
+    (Codex review, CHAOS-4393 round 3).
     """
     stmt = select(
         SyncRunUnit.source_id,
@@ -1439,7 +1476,11 @@ async def _backfill_job_run_pair_windows(
         interval = CoverageInterval(
             since=ensure_utc(since_at), before=ensure_utc(before_at)
         )
-        for effective_key in _effective_dataset_keys(dataset_key, processor_flags):
+        effective_keys = _effective_dataset_keys(dataset_key, processor_flags)
+        for effective_key in effective_keys:
+            if effective_key not in scope_dataset_keys:
+                continue
+            _record_folded_key_resolution(dataset_key, effective_key)
             pair = (str(source_id), effective_key)
             raw_windows[pair].append(interval)
     return {pair: merge_intervals(intervals) for pair, intervals in raw_windows.items()}
@@ -1450,6 +1491,7 @@ async def _resolve_backfill_job_pair_windows(
     org_id: str,
     job: _BackfillJobLike,
     budget: _CoverageQueryBudget,
+    scope_dataset_keys: Sequence[str],
 ) -> dict[tuple[str, str], list[CoverageInterval]] | None:
     """Resolve a backfill job's linked-run pair windows, or ``None`` if unresolvable.
 
@@ -1465,7 +1507,9 @@ async def _resolve_backfill_job_pair_windows(
         run_uuid = uuid.UUID(run_id_str)
     except ValueError:
         return None
-    return await _backfill_job_run_pair_windows(session, org_id, run_uuid, budget)
+    return await _backfill_job_run_pair_windows(
+        session, org_id, run_uuid, budget, scope_dataset_keys
+    )
 
 
 def _clip_intervals(
@@ -1544,6 +1588,7 @@ async def _backfill_requested_ranges(
             org_id,
             job,
             budget,
+            scope.dataset_keys,
         )
         if pair_windows is None:
             ranges.append(

@@ -70,6 +70,51 @@ var policies = []Policy{
 	},
 }
 
+// FamilyMembers returns the collapsible family's full canonical-order member
+// list for a CANONICAL dataset key (e.g. "cicd" -> ["cicd", "tests"], or
+// "prs" -> ["prs", "pr-reviews", "pr-comments"]), or false if `dataset` is
+// not a fold/atomic family's canonical identity. Independent families (e.g.
+// PagerDuty "incidents") are excluded: their membership is catalogued for
+// ownership/tests only and was never meant to collapse execution or
+// coverage math.
+//
+// Provider-agnostic on purpose (CHAOS-4393): coverage math sees only a
+// persisted SyncRunUnit's raw dataset_key and processor_flags -- never its
+// provider -- and no two providers disagree about what a given canonical
+// dataset's family contains, so scanning every policy regardless of its
+// provider set is safe.
+func FamilyMembers(dataset string) ([]string, bool) {
+	dataset = normalize(dataset)
+	for _, policy := range policies {
+		if policy.Mode == Independent {
+			continue
+		}
+		if policy.CanonicalDataset == dataset {
+			return slices.Clone(policy.Datasets), true
+		}
+	}
+	return nil, false
+}
+
+// FamilyCanonical returns the canonical dataset key that owns `dataset`'s
+// collapsible family, if `dataset` is a member of any fold/atomic family
+// (including its own canonical identity, which maps to itself). See
+// FamilyMembers for why this is provider-agnostic.
+func FamilyCanonical(dataset string) (string, bool) {
+	dataset = normalize(dataset)
+	for _, policy := range policies {
+		if policy.Mode == Independent {
+			continue
+		}
+		for _, member := range policy.Datasets {
+			if member == dataset {
+				return policy.CanonicalDataset, true
+			}
+		}
+	}
+	return "", false
+}
+
 func stringSet(values ...string) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {

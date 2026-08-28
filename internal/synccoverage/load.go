@@ -124,6 +124,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			if !containsString(scope.DatasetKeys, effectiveKey) {
 				continue
 			}
+			recordFoldedKeyResolution(dataset, effectiveKey)
 			key := sourceID.String() + "\x00" + effectiveKey
 			state := states[key]
 			if state == nil {
@@ -199,6 +200,7 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 		}
 		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
 			if containsString(scope.DatasetKeys, effectiveKey) {
+				recordFoldedKeyResolution(dataset, effectiveKey)
 				pairs[sourceID.String()+"\x00"+effectiveKey] = struct{}{}
 			}
 		}
@@ -251,7 +253,7 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 			result = append(result, base)
 			continue
 		}
-		pairWindows, err := loadBackfillPairWindows(ctx, tx, config.OrgID, runID)
+		pairWindows, err := loadBackfillPairWindows(ctx, tx, config.OrgID, runID, scope.DatasetKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +286,15 @@ func backfillRunID(taskID *string) (uuid.UUID, bool) {
 	return parsed, err == nil
 }
 
-func loadBackfillPairWindows(ctx context.Context, tx pgx.Tx, orgID string, runID uuid.UUID) (map[string][]coverageInterval, error) {
+// scopeDatasetKeys narrows which effective keys are accepted into the
+// returned map -- and, on that narrowed set, which folded-key resolutions
+// get recorded (CHAOS-4393 round 3). The caller (buildPayload) drops any
+// unscoped dataset before it reaches a projected window regardless, so
+// filtering here changes no observable output; it just moves the filter to
+// where a genuine, PROJECTED alias resolution can be told apart from one a
+// now-disabled or out-of-scope alias flag would otherwise inflate the
+// counter with.
+func loadBackfillPairWindows(ctx context.Context, tx pgx.Tx, orgID string, runID uuid.UUID, scopeDatasetKeys []string) (map[string][]coverageInterval, error) {
 	rows, err := tx.Query(ctx, `
 SELECT source_id, dataset_key, processor_flags, since_at, before_at
 FROM public.sync_run_units
@@ -304,6 +314,10 @@ WHERE org_id = $1 AND sync_run_id = $2
 			return nil, fmt.Errorf("scan linked backfill unit: %w", err)
 		}
 		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
+			if !containsString(scopeDatasetKeys, effectiveKey) {
+				continue
+			}
+			recordFoldedKeyResolution(dataset, effectiveKey)
 			key := sourceID.String() + "\x00" + effectiveKey
 			result[key] = append(result[key], coverageInterval{Since: since.UTC(), Before: before.UTC()})
 		}

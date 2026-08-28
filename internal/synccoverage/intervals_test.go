@@ -29,6 +29,93 @@ func TestMergeAndSubtractIntervalsMatchCoverageContract(t *testing.T) {
 	}
 }
 
+// CHAOS-4393: mergeIntervals unions SourceIDs across ANY time-adjacent
+// interval, so fusing two different sources' gaps with it blends a real
+// gap on one source onto a fully-covered sibling source. Mirrors the exact
+// live-prod repro (org c6a38355..., dataset "blame"): source A has an
+// open gap (unit still RUNNING), source B is 100% covered for the same
+// window with zero gap of its own.
+func TestMergeIntervalsBySourceScopeKeepsSourceScopedGapsSeparate(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	gapA := coverageInterval{Since: base, Before: base.Add(90 * time.Minute), SourceIDs: []string{"source-a"}}
+	gapB := coverageInterval{Since: base.Add(89 * time.Minute), Before: base.Add(3 * time.Hour), SourceIDs: []string{"source-b"}}
+
+	fused := mergeIntervals([]coverageInterval{gapA, gapB})
+	if len(fused) != 1 {
+		t.Fatalf("sanity check: plain mergeIntervals should fuse these two adjacent intervals, got %#v", fused)
+	}
+
+	scoped := mergeIntervalsBySourceScope([]coverageInterval{gapA, gapB})
+	if len(scoped) != 2 {
+		t.Fatalf("mergeIntervalsBySourceScope(gapA, gapB) = %#v, want 2 source-scoped intervals, not fused", scoped)
+	}
+	for _, interval := range scoped {
+		if len(interval.SourceIDs) != 1 {
+			t.Fatalf("interval %#v blends more than one source", interval)
+		}
+	}
+}
+
+// The inverse: two intervals with the IDENTICAL source scope still merge,
+// exactly like plain mergeIntervals would.
+func TestMergeIntervalsBySourceScopeStillMergesSameSourceScope(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	got := mergeIntervalsBySourceScope([]coverageInterval{
+		{Since: base, Before: base.Add(time.Hour), SourceIDs: []string{"source-a"}},
+		{Since: base.Add(time.Hour).Add(time.Microsecond), Before: base.Add(3 * time.Hour), SourceIDs: []string{"source-a"}},
+	})
+	if len(got) != 1 || !got[0].Since.Equal(base) || !got[0].Before.Equal(base.Add(3*time.Hour)) {
+		t.Fatalf("mergeIntervalsBySourceScope(same-source pair) = %#v", got)
+	}
+}
+
+// buildDatasetCoverage-level repro of the live prod shape: two pairs on the
+// SAME dataset key but different sources -- one with a gap, one fully
+// covered -- must not fuse into one blended gap interval naming both
+// sources.
+func TestBuildDatasetCoverageKeepsPerSourceGapsSeparate(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	pairs := []pairCoverage{
+		{
+			SourceID:   "source-a",
+			DatasetKey: "blame",
+			Requested:  []coverageInterval{{Since: base, Before: base.Add(90 * time.Minute), SourceIDs: []string{"source-a"}}},
+			Gaps:       []coverageInterval{{Since: base, Before: base.Add(90 * time.Minute), SourceIDs: []string{"source-a"}}},
+			Status:     "gaps",
+		},
+		// source-b's own gap is unrelated (a different, independently-closed
+		// slice) but time-overlaps source-a's still-open gap. Plain
+		// mergeIntervals fuses the two into one interval naming BOTH
+		// sources -- the exact live-prod shape (org c6a38355..., dataset
+		// "blame": source 0b7b5241 has a real open gap, source 8e7c37bc is
+		// 100% covered elsewhere but its own gap interval still overlaps).
+		{
+			SourceID:   "source-b",
+			DatasetKey: "blame",
+			Requested:  []coverageInterval{{Since: base, Before: base.Add(3 * time.Hour), SourceIDs: []string{"source-b"}}},
+			Gaps:       []coverageInterval{{Since: base.Add(89 * time.Minute), Before: base.Add(3 * time.Hour), SourceIDs: []string{"source-b"}}},
+			Status:     "gaps",
+		},
+	}
+
+	result := buildDatasetCoverage([]string{"blame"}, pairs)
+	if len(result) != 1 {
+		t.Fatalf("buildDatasetCoverage returned %d datasets, want 1", len(result))
+	}
+	blame := result[0]
+	if len(blame.Gaps) != 2 {
+		t.Fatalf("blame.Gaps = %#v, want 2 source-scoped gaps, not fused into one", blame.Gaps)
+	}
+	for _, gap := range blame.Gaps {
+		if len(gap.SourceIDs) != 1 {
+			t.Fatalf("blame.Gaps entry %#v blends more than one source", gap)
+		}
+	}
+}
+
 func TestEffectiveWorkItemFamilyExpansion(t *testing.T) {
 	t.Parallel()
 	flags := json.RawMessage(`{

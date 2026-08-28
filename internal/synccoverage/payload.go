@@ -280,7 +280,12 @@ func buildDatasetCoverage(keys []string, pairs []pairCoverage) []datasetCoverage
 		}
 		item.Requested = mergeIntervals(item.Requested)
 		item.Covered = mergeIntervals(item.Covered)
-		item.Gaps = mergeIntervals(item.Gaps)
+		// CHAOS-4393: gaps merge by source scope ONLY -- plain mergeIntervals
+		// unions SourceIDs across any time-adjacent interval regardless of
+		// which source(s) produced it, which fuses a real gap on one source
+		// onto a fully-covered sibling source. Requested/Covered/FailedRanges
+		// stay on plain mergeIntervals, matching the Python original.
+		item.Gaps = mergeIntervalsBySourceScope(item.Gaps)
 		item.StaleRanges = mergeIntervals(item.StaleRanges)
 		item.FailedRanges = mergeIntervals(item.FailedRanges)
 		item.Status = statusFromParts(statusParts{FailedCount: len(item.FailedRanges), GapCount: len(item.Gaps),

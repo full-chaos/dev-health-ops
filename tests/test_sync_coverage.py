@@ -828,3 +828,62 @@ def test_active_composite_run_marks_only_flagged_child_pair_running(provider):
     datasets = {dataset["dataset_key"]: dataset for dataset in summary["datasets"]}
     assert datasets["work-item-comments"]["status"] == "running"
     assert datasets["work-item-labels"]["status"] != "running"
+
+
+@pytest.mark.parametrize(
+    ("canonical_dataset_key", "flag", "folded_dataset_key"),
+    (
+        ("cicd", "family_dataset_tests", "tests"),
+        ("prs", "family_dataset_pr_comments", "pr-comments"),
+    ),
+)
+def test_chaos4393_fold_family_composite_success_supersedes_old_failed_child(
+    canonical_dataset_key, flag, folded_dataset_key
+):
+    """CHAOS-4393: the CHAOS-4078 PR-social/TestOps folds must close a
+    folded child dataset's gap the same way the CHAOS-2721 work-items fold
+    already does -- a later successful canonical unit (``cicd``/``prs``)
+    carrying the child's ``family_dataset_*`` flag must supersede an old
+    failed unit persisted directly under the child's own alias key
+    (``tests``/``pr-comments``), which is exactly the shape a pre-fold
+    planner left behind. Before CHAOS-4393, ``_effective_dataset_keys`` only
+    expanded the canonical ``work-items`` key, so a folded key's requested
+    windows could never be satisfied by SUCCESS units of its canonical key --
+    this test, and its Go mirror in
+    ``internal/synccoverage/datasets_test.go``, previously did not exist for
+    either fold family."""
+    source_id = uuid.uuid4()
+    config = _config()
+    scope = EffectiveScope(
+        integration_id=config.integration_id,
+        sources=(_source(source_id),),
+        dataset_keys=(folded_dataset_key, canonical_dataset_key),
+    )
+    old_failed_child = _window(
+        _dt(1),
+        _dt(2),
+        source_id=source_id,
+        dataset_key=folded_dataset_key,
+        status="failed",
+        run_time=_dt(2),
+    )
+    composite = _composite_unit(
+        provider="github",
+        source_id=source_id,
+        dataset_key=canonical_dataset_key,
+        processor_flags={flag: True},
+        status="success",
+    )
+    later_success_windows = _expand_unit_to_windows(
+        composite, since=_dt(1), before=_dt(2), run_time=_dt(3)
+    )
+    summary = _summary(
+        [old_failed_child, *later_success_windows], config=config, scope=scope
+    )
+    datasets = {d["dataset_key"]: d for d in summary["datasets"]}
+    assert datasets[folded_dataset_key]["failed_ranges"] == [], datasets[
+        folded_dataset_key
+    ]
+    assert datasets[folded_dataset_key]["status"] == "healthy", datasets[
+        folded_dataset_key
+    ]

@@ -101,6 +101,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.daily_metrics_finalize_redrive_events (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
@@ -137,7 +138,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		// worker never opens either kind of row.
 		"GRANT SELECT, UPDATE ON TABLE public.backfill_jobs, public.job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + authorizedDomainRole,
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.worker_job_runs TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.daily_metrics_finalize_redrive_events, public.worker_job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + authorizedDomainRole,

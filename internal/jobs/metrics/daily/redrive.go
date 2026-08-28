@@ -862,12 +862,11 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 // invisible to every recovery tool including an unattended
 // `daily-finalize --all-complete` sweep.
 //
-// Two independent orphan shapes, both closed the same way:
+// Two orphan shapes are positively confirmable and closed the same way:
 //   - The redrive's outbox row never reached River at all: relay-level
 //     status='dead' (internal/joboutbox/repository.go exhausts its own
-//     delivery attempts and sets this), or the row itself is simply absent
-//     (defensive -- the publish that should have created it never landed).
-//     Neither needs the queue-control pool or River at all.
+//     delivery attempts and sets this). Needs no queue-control pool or
+//     River read at all.
 //   - The outbox row WAS delivered into River (status='delivered',
 //     river_job_id set -- worker_job_outbox's own delivery-state check
 //     constraint guarantees the two travel together), but River itself
@@ -876,6 +875,20 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 //     the domain pool (store.pool) has no grants on the river schema,
 //     matching every other caller of river_job in this codebase (e.g.
 //     internal/joboutbox/strand_repair.go's NewStrandRepair).
+//
+// A THIRD shape -- the outbox row is entirely absent -- is deliberately
+// NOT treated as orphaned (codex review finding on #1971). The publish
+// always lands in the same transaction as the event's own insert
+// (redriveOneFinalizeForRange), so a missing row now can only mean
+// Repository.DeleteTerminalBefore's retention already deleted a
+// status='delivered' row once its delivered_at aged past that policy's
+// horizon -- which can happen while the River job it named is still
+// legitimately scheduled/retrying under backoff, with ClaimFinalize never
+// having run. Once the row is gone, the river_job_id needed to check that
+// safely is gone with it. Treating "evidence gone" as "job gone" would risk
+// closing a still-healthy in-flight event and letting the next sweep
+// double-dispatch it, so this case is left 'open' -- see the switch below
+// for exactly where.
 //
 // For each event found orphaned, this closes it 'closed_orphaned' with its
 // own small UPDATE ... WHERE status = 'open' on the domain pool -- one exec
@@ -928,11 +941,25 @@ WHERE event.status = 'open'`)
 		}
 		switch {
 		case outboxStatus == nil:
-			// No outbox row at all -- defensive: the publish that should
-			// have created it alongside this event, in the same
-			// transaction, never landed (or it was already cleaned up).
-			// Either way, nothing will ever complete this claim.
-			orphanedEventIDs = append(orphanedEventIDs, eventID)
+			// codex review finding on #1971: the outbox row cannot be
+			// missing because the publish never landed -- redriveOneFinalize
+			// ForRange writes the provenance event and the outbox row in the
+			// SAME transaction, so an event existing at all guarantees its
+			// outbox row was created too. The only way this row is gone NOW
+			// is retention (Repository.DeleteTerminalBefore deletes
+			// status='delivered' rows once delivered_at ages past its
+			// horizon) -- and a 'delivered' row can age out while the River
+			// job it named is still legitimately scheduled/retrying under
+			// backoff, well past that horizon, with ClaimFinalize never
+			// having run. Once the row is gone we have lost the
+			// river_job_id needed to check that safely, so unlike the
+			// 'dead' case below there is no way to positively confirm
+			// orphan-hood here -- treating "evidence gone" as "job gone"
+			// risks closing a still-healthy in-flight event and letting the
+			// next sweep double-dispatch it. Leave it 'open': the narrower
+			// residual case this creates (a 'delivered' row ages out AND is
+			// never claimed AND no sweep runs again before that) is
+			// disclosed in the PR, not silently accepted here.
 		case *outboxStatus == "dead":
 			// Relay-level: exhausted its own delivery attempts before this
 			// job ever reached River (internal/joboutbox/repository.go).

@@ -361,8 +361,9 @@ means the ClickHouse `teams` dimension is empty.
 > to resolve a team, then stamp that team onto the **original** item's own `repo_id` (already a
 > `work_items` column; no join to `repos` needed to get it). The provider column is iterated
 > generically -- no provider branches. Rows land with **`source = 'inferred'`, at lower
-> `specificity` than a direct native row**, so a GitHub-team-owned repo's own row still wins the
-> `is_primary` tie-break for that repo. `inferred` is already a live value in
+> `specificity` than a direct producer row**, so a GitHub-team-owned repo's own row (`source =
+> 'provider_access'`, §0.4a) still wins the `is_primary` tie-break for that repo. `inferred` is
+> already a live value in
 > `team_repo_ownership.source`'s `Enum8('native'=1, 'jira_legacy'=2, 'provider_access'=3,
 > 'manual'=4, 'inferred'=5)` (migration `051`) -- this producer is its **first writer**, not a new
 > enum value, and needs **no migration**. It is **not** a new row 2.5 in `_SOURCE_ORDER` above:
@@ -890,7 +891,7 @@ flowchart TD
     TPO -->|"match: work_items.project_id (item's OWN project)"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
     TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own"| WI
 
-    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id -- no join to repos needed<br/>provider column iterated, no provider branches<br/>source=inferred (already-declared value, first writer PENDING -- CHAOS-4365)<br/>lower specificity than a direct native row"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id -- no join to repos needed<br/>provider column iterated, no provider branches<br/>source=inferred (already-declared value, first writer PENDING -- CHAOS-4365)<br/>lower specificity than a direct producer row (native or provider_access)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
     ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/>(CHAOS-4321) -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
     ADMIN -. overrides .-> TPO
@@ -995,11 +996,12 @@ erDiagram
     work_item_cycle_times ||--o{ team_exchange_chord : "activity/day/scope bridge"
 
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
-    team_project_ownership }o--|| projects : "project_id"
-    work_items }o--|| projects : "project_id -- Jira/GitLab/Linear only (attribution source 1: issue_project); for GitHub, project_id IS repo_full_name (no native Project entity, no projects row -- this edge does not hold for GitHub work items)"
+    team_project_ownership }o..o{ work_items : "project_id OR project_key, direct value match -- attribution never joins through projects (metrics/compute_work_items.py:559-577)"
+    teams ||--o{ work_items : "teams.project_keys array vs work_scope_id/project_key, direct resolver match (attribution source 1: issue_project) -- also never via projects"
+    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear by id; Jira by project_key; GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
-    team_repo_ownership }o--|| repos : "repo_id / repo_full_name"
+    team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
     repos ||--o{ work_items : "repo_id"
     team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, PENDING): work_items' own OR (via work_item_dependencies, §2) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer"
 
@@ -1068,7 +1070,7 @@ erDiagram
         string   org_id
         string   provider
         string   team_id
-        uuid     repo_id
+        uuid     repo_id "Nullable -- often NULL, resolved by name at read time"
         string   repo_full_name
         string   match_type
         string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is PENDING, CHAOS-4365 -- §0.2)"
@@ -1135,6 +1137,18 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `team_repo_ownership` are written by the sync (§0.4a), not by an admin — `teams` ⇄ `identities` /
   `team_memberships` is the separate override/fallback membership layer (below), never an ownership
   source.
+- **The attribution resolver never joins `work_items` to `projects` — two of its ranks match
+  directly instead.** Rank 1 `issue_project` resolves via `ProjectKeyTeamResolver` against
+  `teams.project_keys` (`work_scope_id`/`project_key`, no `projects` row involved at all). Rank 2
+  `project_ownership` matches `team_project_ownership.project_id`/`.project_key` directly against
+  `work_items`' own columns (`attribution_context.project_by_id`/`project_by_key`,
+  `metrics/compute_work_items.py:559-577`) — again never through `projects`. The `projects` table
+  is real and sync-written (§0.4a), but its only consumer that actually JOINS `work_items` to it is
+  a **different** subsystem: Ask Dev's investigation/evidence queries
+  (`api/dev/_project_identity.py`), and even there the join is provider-specific, not a uniform
+  `project_id = id` — Linear matches by raw id, Jira by `project_key`, and GitLab by `project_key`
+  too (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
+  `work_items.project_id`).
 - **Two different "cross-provider link" tables exist for two different consumers — do not conflate
   them.** (1) `work_item_dependencies` (already in this diagram) is what the **attribution ladder's**
   `linked_issue` source (rank 5, §0.1/§0.2) reads — a GitHub/GitLab PR is itself normalized as a
@@ -1154,10 +1168,11 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   ClickHouse accepts for this column (migration `051`) — this producer is its first writer, so a
   repo can get a team from ANY tracker's project ownership, reached by walking a work item's own or
   a donor's `project_id` (provider-agnostic per chris's 08:07 PT amendment, quoted above), when no
-  direct native row (e.g. GitHub team auto-import) exists for that repo. The attribution resolver's
-  rank-3 `repo_ownership` source (§0.1) reads `team_repo_ownership` uniformly regardless of which
-  sub-source populated the winning row — see the §0.2 callout below for how `specificity` keeps an
-  `inferred` row from ever beating a direct native one for the same repo. **Not yet implemented** —
+  direct producer row (`native` for Jira/Linear, `provider_access` for GitHub/GitLab team
+  auto-import — §0.4a) exists for that repo. The attribution resolver's rank-3 `repo_ownership`
+  source (§0.1) reads `team_repo_ownership` uniformly regardless of which sub-source populated the
+  winning row — see the §0.2 callout below for how `specificity` keeps an `inferred` row from ever
+  beating a direct one for the same repo. **Not yet implemented** —
   grepped clean for any code writing `inferred` as of this page's writing; see the
   ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an

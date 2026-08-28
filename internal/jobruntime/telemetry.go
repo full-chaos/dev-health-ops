@@ -190,6 +190,12 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 // (PostSyncTeamRepoOwnershipDerivationFailedMessage), makes a persistently
 // missing/paused route visible instead of indistinguishable from a
 // healthy no-op.
+// "rows_retracted" (team-lead ruling, 2026-08-28, codex R3 finding: "removed
+// ownership remains authorized indefinitely") is observed SEPARATELY from
+// the primary outcome above whenever a run closes out one or more prior
+// inferred (team, repo) claims absent from its new derivation -- a run can
+// both retract stale claims and write fresh ones (or error afterward), and
+// neither fact should shadow the other in telemetry.
 type TeamRepoOwnershipDerivationOutcome string
 
 const (
@@ -198,6 +204,7 @@ const (
 	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
 	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
 	TeamRepoOwnershipDerivationOutcomeRouteMissing   TeamRepoOwnershipDerivationOutcome = "route_missing"
+	TeamRepoOwnershipDerivationOutcomeRowsRetracted  TeamRepoOwnershipDerivationOutcome = "rows_retracted"
 )
 
 func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
@@ -207,6 +214,7 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 		TeamRepoOwnershipDerivationOutcomeInputsNotReady,
 		TeamRepoOwnershipDerivationOutcomeError,
 		TeamRepoOwnershipDerivationOutcomeRouteMissing,
+		TeamRepoOwnershipDerivationOutcomeRowsRetracted,
 	}
 }
 

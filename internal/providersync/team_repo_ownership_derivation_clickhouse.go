@@ -39,8 +39,10 @@ type teamRepoOwnershipRepoInfo struct {
 }
 
 // Derive loads orgID's already-synced ownership/linkage rows, runs the pure
-// derivation, and writes the result to team_repo_ownership. Returns the
-// number of rows written and whether this org's INPUTS were present at all.
+// derivation, writes the result to team_repo_ownership, and retracts any
+// PRIOR inferred (team, repo) claim this run no longer derives. Returns the
+// number of rows written, the number of rows retracted, and whether this
+// org's INPUTS were present at all.
 //
 // inputsReady=false (team-lead ruling, CHAOS-4365 item 1b codex finding #4,
 // 2026-08-28: "leave the no-prerequisite design... make it observable
@@ -54,34 +56,53 @@ type teamRepoOwnershipRepoInfo struct {
 // qualifying sync (this producer is idempotent and re-triggered by every
 // sync with git||hasWorkItems), so it is surfaced as its own telemetry
 // outcome (inputs_not_ready) rather than treated as a failure or sequenced
-// against those other producers' own completion.
+// against those other producers' own completion. Retraction NEVER runs on
+// an inputsReady=false evaluation -- an incomplete input snapshot is not a
+// trustworthy basis for deciding a prior claim is gone.
 //
 // inputsReady=true with written=0 is the OTHER, unrelated zero-row case:
 // inputs existed but genuinely produced nothing (every candidate conflicted,
 // or matched no repo-bearing item) -- the designed-empty case, reported as
-// no_signal.
-func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, inputsReady bool, err error) {
+// no_signal (unless retracted>0, in which case every prior claim was
+// retracted and none replaced it).
+//
+// Retraction (team-lead ruling, 2026-08-28, codex R3 finding: "removed
+// ownership remains authorized indefinitely" -- confirmed pre-existing
+// across every OTHER writer of this table too, github/jira/linear/gitlab
+// autoimport, none of which ever sets valid_to; tracked separately as its
+// own cross-writer ticket, CHAOS-4321-adjacent -- but THIS producer, being
+// new, must not add to that exposure): every sync recomputes the org's
+// COMPLETE (team_id, repo_full_name) inferred set from scratch, so a prior
+// active inferred row absent from the new set is provably stale -- its
+// project ownership or donor linkage was removed or reassigned. Retracted
+// by writing a replacement row under the SAME (org_id, provider,
+// repo_full_name, team_id, source, valid_from) ReplacingMergeTree key with
+// valid_to=now and a newer updated_at, so FINAL/argMax(updated_at) readers
+// (providers/teams.py::load_team_repo_ownership_map,
+// native_status_change.py's _TEAM_REPOSITORIES_SQL -- both already filter
+// on valid_to) see it as expired on their very next query.
+func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error) {
 	if service.Conn == nil || ctx == nil || orgID == "" {
-		return 0, false, ErrTeamRepoOwnershipDerivationUnavailable
+		return 0, 0, false, ErrTeamRepoOwnershipDerivationUnavailable
 	}
 	now := time.Now().UTC()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if len(projectLinks) == 0 {
 		// No project ownership synced for this org yet -- nothing to derive,
 		// and no reason to touch work_items/repos at all.
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if len(repos) == 0 {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
 	for id := range repos {
@@ -90,34 +111,47 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 
 	workItems, err := loadTeamRepoOwnershipWorkItems(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	dependencyEdges, err := loadTeamRepoOwnershipDependencyEdges(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, orgID, repoIDs)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
 		// team_project_ownership and repos both exist, but not a single
 		// linkage row of any kind has synced yet -- also the first-sync gap,
 		// not a genuine no-signal evaluation.
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 
 	derived := deriveTeamRepoOwnership(projectLinks, workItems, dependencyEdges, issuePRLinks)
+
+	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, err
+	}
+	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+	if len(toRetract) > 0 {
+		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
+		if err != nil {
+			return 0, 0, true, err
+		}
+	}
+
 	if len(derived) == 0 {
-		return 0, true, nil
+		return 0, retracted, true, nil
 	}
 	written, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
 	if err != nil {
-		return 0, true, err
+		return 0, retracted, true, err
 	}
-	return written, true, nil
+	return written, retracted, true, nil
 }
 
 func loadTeamRepoOwnershipProjectLinks(
@@ -293,6 +327,133 @@ WHERE org_id = ? AND repo_id IN (?)`,
 		out = append(out, link)
 	}
 	return out, rows.Err()
+}
+
+// teamRepoOwnershipActiveRow is one currently-active (valid_to IS NULL or
+// still in the future) source='inferred' row for this org -- the "prior
+// claim" snapshot retraction diffs the new derivation against. Carries
+// every column the ReplacingMergeTree ORDER BY key needs so a retraction
+// can replace it exactly (org_id, provider, repo_full_name, team_id,
+// source, valid_from), plus the remaining columns so the replacement row is
+// otherwise identical to the row it retracts.
+type teamRepoOwnershipActiveRow struct {
+	Provider     string
+	TeamID       string
+	RepoID       uuid.UUID
+	RepoFullName string
+	MatchType    string
+	IsPrimary    bool
+	Specificity  uint16
+	Priority     int32
+	ValidFrom    time.Time
+}
+
+func loadTeamRepoOwnershipActiveInferredRows(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]teamRepoOwnershipActiveRow, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from
+FROM team_repo_ownership FINAL
+WHERE org_id = ?
+  AND source = 'inferred'
+  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []teamRepoOwnershipActiveRow
+	for rows.Next() {
+		var row teamRepoOwnershipActiveRow
+		var repoID uuid.UUID
+		var isPrimary uint8
+		if err := rows.Scan(
+			&row.Provider, &row.TeamID, &repoID, &row.RepoFullName, &row.MatchType,
+			&isPrimary, &row.Specificity, &row.Priority, &row.ValidFrom,
+		); err != nil {
+			return nil, err
+		}
+		row.RepoID = repoID
+		row.IsPrimary = isPrimary != 0
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// diffTeamRepoOwnershipRetractions returns every activeRows entry whose
+// (team_id, repo_full_name) pair is absent from the newly-derived set --
+// pure, no I/O, exhaustively unit-testable. Resolves each derived row's
+// repo_full_name via the SAME repos snapshot writeTeamRepoOwnershipRows
+// uses, so a derived row that writeTeamRepoOwnershipRows would itself skip
+// (unresolvable repo_id) never wrongly protects an active row from
+// retraction.
+func diffTeamRepoOwnershipRetractions(
+	activeRows []teamRepoOwnershipActiveRow,
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+) []teamRepoOwnershipActiveRow {
+	type pair struct{ teamID, repoFullName string }
+	desired := make(map[pair]bool, len(derived))
+	for _, row := range derived {
+		repoID, err := uuid.Parse(row.RepoID)
+		if err != nil || repoID == uuid.Nil {
+			continue
+		}
+		info, ok := repos[repoID]
+		if !ok || info.FullName == "" {
+			continue
+		}
+		desired[pair{teamID: row.TeamID, repoFullName: info.FullName}] = true
+	}
+	var toRetract []teamRepoOwnershipActiveRow
+	for _, row := range activeRows {
+		if desired[pair{teamID: row.TeamID, repoFullName: row.RepoFullName}] {
+			continue
+		}
+		toRetract = append(toRetract, row)
+	}
+	return toRetract
+}
+
+// retractTeamRepoOwnershipRows closes out every row in toRetract: a
+// replacement under the SAME ReplacingMergeTree key (org_id, provider,
+// repo_full_name, team_id, source, valid_from) with valid_to=now and a
+// newer updated_at, so FINAL/argMax(updated_at) readers see it as expired
+// on their very next query.
+func retractTeamRepoOwnershipRows(
+	ctx context.Context,
+	conn driver.Conn,
+	orgID string,
+	now time.Time,
+	toRetract []teamRepoOwnershipActiveRow,
+) (int, error) {
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range toRetract {
+		if err := batch.Append(
+			orgID,
+			row.Provider,
+			row.TeamID,
+			row.RepoID,
+			row.RepoFullName,
+			row.MatchType,
+			"inferred",
+			uint8(0),
+			row.Specificity,
+			row.Priority,
+			row.ValidFrom,
+			now,
+			now,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, err
+	}
+	return len(toRetract), nil
 }
 
 const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`

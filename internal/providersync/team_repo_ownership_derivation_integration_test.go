@@ -56,12 +56,15 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, inputsReady, err := service.Derive(ctx, orgID)
+	written, retracted, inputsReady, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
 	if written != 3 {
 		t.Fatalf("expected 3 rows written (repo-a, repo-b, repo-c), got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted -- this org has no prior inferred rows to retract, got %d", retracted)
 	}
 	if !inputsReady {
 		t.Fatal("expected inputsReady=true -- this org's project ownership and linkage rows are present")
@@ -108,7 +111,7 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	// valid_from) collapses re-derivation to the same logical row set once
 	// merged, and this read path uses FINAL, so it must already read back
 	// exactly the same 3 rows.
-	written2, _, err := service.Derive(ctx, orgID)
+	written2, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
 	}
@@ -134,7 +137,7 @@ func TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError(t *testing.T)
 	orgID := "chaos-4365-item1b-empty-org"
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, inputsReady, err := service.Derive(ctx, orgID)
+	written, _, inputsReady, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive on an org with no project ownership: %v", err)
 	}
@@ -165,7 +168,7 @@ func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *t
 	seedWorkItem(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", repoID, "proj-gitlab", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, _, err := service.Derive(ctx, orgID)
+	written, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -217,7 +220,7 @@ func TestTeamRepoOwnershipDerivationCollapsesStaleGenerations(t *testing.T) {
 	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", repoID, "proj-1", newer)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, _, err := service.Derive(ctx, orgID)
+	written, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -228,6 +231,93 @@ func TestTeamRepoOwnershipDerivationCollapsesStaleGenerations(t *testing.T) {
 	row, ok := got["acme/stale-gen-repo"]
 	if !ok || row.teamID != "team-new" {
 		t.Fatalf("expected acme/stale-gen-repo -> team-new (team-old's stale generation must not outrank the newer correction), got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationRetractsAReassignedRepo is the team-lead
+// ruling (2026-08-28, codex R3 finding "removed ownership remains
+// authorized indefinitely"), proven against real ClickHouse: a repo whose
+// project ownership is REASSIGNED from one team to another must have its
+// PRIOR inferred row retracted (valid_to set), not left active forever
+// alongside the new team's row -- the exact authorization-exposure shape
+// native_status_change.py's _TEAM_REPOSITORIES_SQL would otherwise trust
+// (it filters on valid_to, but only if this producer ever sets it).
+func TestTeamRepoOwnershipDerivationRetractsAReassignedRepo(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4365-item1b-retraction-org"
+
+	t0 := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/retraction-repo"})
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", true, 100, t0)
+	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", repoID, "proj-1", t0)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("first Derive: %v", err)
+	}
+	if written != 1 || retracted != 0 {
+		t.Fatalf("first Derive: written=%d retracted=%d, want written=1 retracted=0", written, retracted)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	if row, ok := got["acme/retraction-repo"]; !ok || row.teamID != "team-old" {
+		t.Fatalf("expected acme/retraction-repo -> team-old after the first Derive, got %+v", got)
+	}
+
+	// Reassignment: team-new's claim on proj-1 now outranks team-old's
+	// (higher specificity, same is_primary) -- exactly what a real
+	// team_project_ownership re-import looks like, since no existing writer
+	// of that table retracts its own prior rows either (team-lead ruling:
+	// pre-existing, cross-writer, tracked separately -- not fixed here).
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-new", true, 200, t1)
+
+	written, retracted, _, err = service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("second Derive: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("second Derive: expected 1 row written (team-new), got %d", written)
+	}
+	if retracted != 1 {
+		t.Fatalf("second Derive: expected 1 row retracted (team-old), got %d", retracted)
+	}
+
+	rows, err := conn.Query(ctx, `
+SELECT team_id, is_primary, valid_to IS NULL AS active
+FROM team_repo_ownership FINAL
+WHERE org_id = ? AND repo_full_name = 'acme/retraction-repo' AND source = 'inferred'
+ORDER BY team_id`, orgID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer rows.Close()
+	type resultRow struct {
+		teamID    string
+		isPrimary uint8
+		active    bool
+	}
+	var results []resultRow
+	for rows.Next() {
+		var r resultRow
+		if err := rows.Scan(&r.teamID, &r.isPrimary, &r.active); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 rows (team-old retracted + team-new active), got %+v", results)
+	}
+	if results[0].teamID != "team-new" || !results[0].active || results[0].isPrimary != 0 {
+		t.Fatalf("expected team-new active with is_primary=0, got %+v", results[0])
+	}
+	if results[1].teamID != "team-old" || results[1].active || results[1].isPrimary != 0 {
+		t.Fatalf("expected team-old retracted (inactive) with is_primary=0, got %+v", results[1])
 	}
 }
 
@@ -263,7 +353,7 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge(t *te
 	seedWorkItemDependency(t, ctx, conn, orgB, "repo-item", "donor-item", "relates_to", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, inputsReady, err := service.Derive(ctx, orgA)
+	written, _, inputsReady, err := service.Derive(ctx, orgA)
 	if err != nil {
 		t.Fatalf("Derive for org A: %v", err)
 	}
@@ -302,7 +392,7 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsIssuePRLink(t *testi
 	seedWorkGraphIssuePR(t, ctx, conn, orgB, repoA, "resolver-item", 99, now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, inputsReady, err := service.Derive(ctx, orgA)
+	written, _, inputsReady, err := service.Derive(ctx, orgA)
 	if err != nil {
 		t.Fatalf("Derive for org A: %v", err)
 	}

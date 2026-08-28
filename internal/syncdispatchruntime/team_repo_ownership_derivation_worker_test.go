@@ -20,14 +20,15 @@ import (
 
 type recordingDerivationRunner struct {
 	written     int
+	retracted   int
 	inputsReady bool
 	err         error
 	calls       []string
 }
 
-func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, bool, error) {
+func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, int, bool, error) {
 	runner.calls = append(runner.calls, orgID)
-	return runner.written, runner.inputsReady, runner.err
+	return runner.written, runner.retracted, runner.inputsReady, runner.err
 }
 
 type recordingDerivationObserver struct {
@@ -108,6 +109,54 @@ func TestTeamRepoOwnershipDerivationWorkerRecordsInputsNotReadyOutcome(t *testin
 	}
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeInputsNotReady {
 		t.Fatalf("observed outcomes = %v, want [inputs_not_ready]", observer.outcomes)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerRecordsRowsRetractedOutcome pins the
+// team-lead ruling (2026-08-28, codex R3 finding "removed ownership remains
+// authorized indefinitely"): retraction is observed as its OWN outcome,
+// separately from and in addition to the primary written/no_signal outcome
+// -- a single run that both retracts a stale claim and writes a fresh one
+// (a repo reassigned from one team to another in the same sync) must record
+// BOTH facts, not let one shadow the other.
+func TestTeamRepoOwnershipDerivationWorkerRecordsRowsRetractedOutcome(t *testing.T) {
+	t.Parallel()
+	runner := &recordingDerivationRunner{written: 1, retracted: 1, inputsReady: true}
+	observer := &recordingDerivationObserver{}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
+	args := validTeamRepoOwnershipDerivationJobArgs()
+
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	if len(observer.outcomes) != 2 {
+		t.Fatalf("observed outcomes = %v, want 2 (rows_retracted + rows_written)", observer.outcomes)
+	}
+	if observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeRowsRetracted || observer.written[0] != 1 {
+		t.Fatalf("first observation = (%v, %d), want (rows_retracted, 1)", observer.outcomes[0], observer.written[0])
+	}
+	if observer.outcomes[1] != jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten || observer.written[1] != 1 {
+		t.Fatalf("second observation = (%v, %d), want (rows_written, 1)", observer.outcomes[1], observer.written[1])
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerRecordsRowsRetractedOutcomeAlongsideNoSignal
+// covers the OTHER shape: every prior claim retracted, nothing replaced it
+// (e.g. the org's last owned repo lost its donor linkage entirely).
+func TestTeamRepoOwnershipDerivationWorkerRecordsRowsRetractedOutcomeAlongsideNoSignal(t *testing.T) {
+	t.Parallel()
+	runner := &recordingDerivationRunner{written: 0, retracted: 2, inputsReady: true}
+	observer := &recordingDerivationObserver{}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
+	args := validTeamRepoOwnershipDerivationJobArgs()
+
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	if len(observer.outcomes) != 2 ||
+		observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeRowsRetracted ||
+		observer.outcomes[1] != jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal {
+		t.Fatalf("observed outcomes = %v, want [rows_retracted, no_signal]", observer.outcomes)
 	}
 }
 

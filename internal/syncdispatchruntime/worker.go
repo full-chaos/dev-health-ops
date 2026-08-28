@@ -105,16 +105,18 @@ func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBrid
 // TeamRepoOwnershipDerivationRunner is the narrow capability
 // sync.team_repo_ownership_derivation's worker depends on: derive and write
 // team_repo_ownership for one org against already-synced ClickHouse data,
-// returning the row count written and whether this org's inputs (team_
-// project_ownership + linkage rows) were present at all yet (team-lead
-// ruling, codex finding #4, 2026-08-28 -- see providersync.
-// TeamRepoOwnershipDerivationService.Derive's doc comment for the full
-// rationale). Satisfied directly by providersync.
+// returning the row count written, the row count retracted (team-lead
+// ruling, 2026-08-28, codex R3 finding: a prior inferred claim absent from
+// this run's derivation is retracted rather than left active forever), and
+// whether this org's inputs (team_project_ownership + linkage rows) were
+// present at all yet (team-lead ruling, codex finding #4, 2026-08-28 -- see
+// providersync.TeamRepoOwnershipDerivationService.Derive's doc comment for
+// the full rationale). Satisfied directly by providersync.
 // TeamRepoOwnershipDerivationService (its Derive method already has this
 // exact signature) -- named here as an interface only so the worker stays
 // testable without a real ClickHouse connection.
 type TeamRepoOwnershipDerivationRunner interface {
-	Derive(ctx context.Context, orgID string) (written int, inputsReady bool, err error)
+	Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error)
 }
 
 // RegisterTeamRepoOwnershipDerivationWorker registers the CHAOS-4365 item 1b
@@ -243,7 +245,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	defer func() { finishCoordinatorSpan(span, err) }()
-	written, inputsReady, err := worker.service.Derive(ctx, job.Args.OrgID)
+	written, retracted, inputsReady, err := worker.service.Derive(ctx, job.Args.OrgID)
 	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
 	switch {
 	case err != nil:
@@ -258,6 +260,16 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal
 	}
 	if worker.observer != nil {
+		// Retraction is observed separately from the primary written/
+		// no_signal/inputs_not_ready/error outcome above -- team-lead
+		// ruling, 2026-08-28: a run that both retracts stale claims and
+		// writes fresh ones (or errors after retracting) must not lose
+		// either fact to the other.
+		if retracted > 0 {
+			_ = worker.observer.ObserveTeamRepoOwnershipDerivation(
+				jobruntime.TeamRepoOwnershipDerivationOutcomeRowsRetracted, retracted,
+			)
+		}
 		_ = worker.observer.ObserveTeamRepoOwnershipDerivation(outcome, written)
 	}
 	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation",
@@ -265,6 +277,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		"org_id", job.Args.OrgID,
 		"sync_run_id", job.Args.Payload.SyncRunID,
 		"rows_written", written,
+		"rows_retracted", retracted,
 	)
 	return err
 }

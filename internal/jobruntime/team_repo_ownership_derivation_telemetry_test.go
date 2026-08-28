@@ -29,6 +29,9 @@ func TestObserveTeamRepoOwnershipDerivationExposesCounterAndHistogram(t *testing
 	if err := collector.ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcomeNoSignal, 0); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcomeRowsRetracted, 1); err != nil {
+		t.Fatal(err)
+	}
 	// error is deliberately left unobserved so its pre-seeded zero (asserted
 	// below) is proven, not merely assumed.
 
@@ -42,6 +45,7 @@ func TestObserveTeamRepoOwnershipDerivationExposesCounterAndHistogram(t *testing
 	for _, want := range []string{
 		`dev_health_team_repo_ownership_derivation_total{outcome="rows_written"} 2`,
 		`dev_health_team_repo_ownership_derivation_total{outcome="no_signal"} 1`,
+		`dev_health_team_repo_ownership_derivation_total{outcome="rows_retracted"} 1`,
 		`dev_health_team_repo_ownership_derivation_total{outcome="error"} 0`,
 	} {
 		if !strings.Contains(text, want+"\n") {
@@ -49,7 +53,7 @@ func TestObserveTeamRepoOwnershipDerivationExposesCounterAndHistogram(t *testing
 		}
 	}
 	if !strings.Contains(text, `dev_health_team_repo_ownership_derivation_row_count_count 2`) {
-		t.Fatalf("expected the row-count histogram to have observed exactly the 2 rows_written outcomes (not the no_signal one):\n%s", text)
+		t.Fatalf("expected the row-count histogram to have observed exactly the 2 rows_written outcomes (not no_signal or rows_retracted):\n%s", text)
 	}
 }
 

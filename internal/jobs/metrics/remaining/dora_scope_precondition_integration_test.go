@@ -621,6 +621,214 @@ func TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay(t *testing.T) 
 	}
 }
 
+// TestStartRunTxRecomputesAZeroRowDoraCoverageOnAnOpenDay is the CHAOS-4384
+// red-on-baseline reproduction. Prod shape: postSyncRemainingScope
+// (cmd/dev-health-worker/sync_dispatch.go) fires on the FIRST sync of each
+// UTC day, so its "day" is TODAY (still open) rather than a closed prior
+// day. That first run legitimately writes 0 rows (no deployments/incidents
+// exist yet) and succeeds -- and before this fix, loadRunCoveringDay's
+// cross-trigger coverage check (postgres.go, CHAOS-4242) then treated that
+// 0-row success as permanent coverage for the day, so org c6a38355's ~23
+// later hourly post-sync triggers each reused the same empty run instead of
+// recomputing, freezing dora_metrics_daily at 0 forever (confirmed on prod
+// 08-26/27/28).
+//
+// This must FAIL on origin/main: the second StartRunTx call returns the
+// first (0-row) run instead of creating a new one to recompute.
+func TestStartRunTxRecomputesAZeroRowDoraCoverageOnAnOpenDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004384"
+	today := time.Now().UTC().Format("2006-01-02")
+	scope := json.RawMessage(`{"version":1,"day":"` + today + `","sink":"auto","interval":"daily","backfill_days":1}`)
+
+	// First trigger: the day's earliest post-sync, ~00:00Z. Computes and
+	// completes with 0 rows -- legitimately, nothing has landed for the
+	// day yet.
+	firstTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := store.StartRunTx(ctx, firstTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:first-sync-of-day",
+		ScopeKey:       "post-sync-scope-1",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("first StartRunTx: %v", err)
+	}
+	if err := firstTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(firstRun.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("first run's partition was not claimable")
+	}
+	// Exactly compatibilityCompletionResult's format for RowsWritten=0
+	// (handler.go) -- the real shape DORAExecutor.ComputePartition produces
+	// through PartitionHandler.Work, not a hand-authored evidence string.
+	if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+partitionID+":rows_written=0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second trigger: a later hourly post-sync the SAME UTC day, after real
+	// deployments have landed. Must create a NEW run to actually recompute,
+	// not reuse the empty first one.
+	secondTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartRunTx(ctx, secondTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:second-sync-of-day",
+		ScopeKey:       "post-sync-scope-2",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("second StartRunTx: %v", err)
+	}
+	if err := secondTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if secondRun.ID == firstRun.ID {
+		t.Fatalf(
+			"the later same-day trigger reused the first run's 0-row coverage "+
+				"(%s) instead of recomputing -- this is the exact CHAOS-4384 "+
+				"prod shape: dora_metrics_daily frozen at 0 forever because the "+
+				"day's earliest post-sync ran before any deployments existed",
+			firstRun.ID,
+		)
+	}
+	secondPartition, err := store.ClaimPartition(ctx, deterministicPartitionID(secondRun.ID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondPartition == nil {
+		t.Fatal("the second run's own partition is not claimable -- it was not really a fresh recompute")
+	}
+
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM remaining_metric_runs WHERE org_id = $1::uuid AND family = 'dora'",
+		orgID,
+	).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 2 {
+		t.Fatalf("expected 2 dora runs (the frozen 0-row one plus the recompute), found %d", runCount)
+	}
+}
+
+// TestStartRunTxTreatsAZeroRowDoraCoverageAsTerminalOnceTheDayCloses is
+// TestStartRunTxRecomputesAZeroRowDoraCoverageOnAnOpenDay's companion: once a
+// day has fully elapsed, a genuine 0-row day (nothing happened) is real
+// coverage again and must stay terminal -- CHAOS-4384's fix only widens the
+// window while the day can still gain rows, it does not make dora recompute
+// closed days forever.
+func TestStartRunTxTreatsAZeroRowDoraCoverageAsTerminalOnceTheDayCloses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createRemainingTables(t, ctx, pool)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orgID = "00000000-0000-4000-8000-000000004384"
+	closedDay := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	scope := json.RawMessage(`{"version":1,"day":"` + closedDay + `","sink":"auto","interval":"daily","backfill_days":1}`)
+
+	firstTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRun, err := store.StartRunTx(ctx, firstTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "post-sync:closed-day-sync",
+		ScopeKey:       "post-sync-scope-closed",
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("first StartRunTx: %v", err)
+	}
+	if err := firstTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	partitionID := deterministicPartitionID(firstRun.ID, 1)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim == nil {
+		t.Fatal("first run's partition was not claimable")
+	}
+	if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+partitionID+":rows_written=0"); err != nil {
+		t.Fatal(err)
+	}
+
+	secondTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartRunTx(ctx, secondTx, StartRunRequest{
+		OrganizationID: orgID,
+		Family:         "dora",
+		Generation:     "fixed-schedule:dora_daily_fanout:catch-up",
+		ScopeKey:       closedDay,
+		Scopes:         []json.RawMessage{scope},
+	}, nopPartitionPublisher{})
+	if err != nil {
+		t.Fatalf("second StartRunTx: %v", err)
+	}
+	if err := secondTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if secondRun.ID != firstRun.ID {
+		t.Fatalf(
+			"a closed-day 0-row completion (%s) was NOT treated as terminal "+
+				"coverage -- a genuinely quiet closed day must not be "+
+				"recomputed forever, only an open one",
+			firstRun.ID,
+		)
+	}
+}
+
 type nopPartitionPublisher struct{}
 
 func (nopPartitionPublisher) PublishPartitionTx(

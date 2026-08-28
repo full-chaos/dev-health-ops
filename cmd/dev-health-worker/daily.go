@@ -257,6 +257,9 @@ func buildDailyWorker(
 			remainingLeaseObservers = append(remainingLeaseObservers, leaseObserver)
 		}
 		store, storeErr := remaining.NewPostgresStore(postgresDatabase.pools.Domain, remainingLeaseObservers...)
+		if openDayZeroRowObserver, ok := observer.(remaining.OpenDayZeroRowObserver); ok {
+			store.SetOpenDayZeroRowObserver(openDayZeroRowObserver)
+		}
 		var compatibilityObserver remaining.CompatibilityObserver
 		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
 			compatibilityObserver = candidate

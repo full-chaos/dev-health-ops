@@ -68,5 +68,8 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 .venv/
 .mypy_cache/
 .ruff_cache/
+# Per-worktree uv cache (CHAOS-4411) — UV_CACHE_DIR points here so concurrent
+# `uv sync` runs in different worktrees don't serialize on ~/.cache/uv/.lock.
+.uv-cache/
 worktrees/
 dev-health-workerctl

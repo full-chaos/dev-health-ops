@@ -15,7 +15,8 @@ so a `GATE PASSED. [8/8 ...]` line says nothing about a Go diff. Any change unde
 
 ```bash
 cd <your ops worktree root>
-uv sync --all-extras --dev                       # once per worktree
+UV_CACHE_DIR="$(git rev-parse --show-toplevel)/.uv-cache" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
+  uv sync --all-extras --dev --no-install-project   # once per worktree — see AGENTS.md § Worktrees and branches
 PYTHON="$PWD/.venv/bin/python" bash ci/check_go.sh all
 ```
 
@@ -79,9 +80,13 @@ CHAOS-3913 (lefthook resolving a global `mypy`/`ruff`), in a third place.
 
 ## Hard rules
 
-- **Never build the worktree venv with pyenv.** Use `uv sync --all-extras --dev`.
-  It is the sanctioned path precisely because creating the venv under pyenv is
-  awkward; this is settled, do not re-derive a pip alternative.
+- **Never build the worktree venv with pyenv.** Use the `uv sync` recipe above
+  (canonical form: `AGENTS.md` § Worktrees and branches). It is the sanctioned
+  path precisely because creating the venv under pyenv is awkward; this is
+  settled, do not re-derive a pip alternative. A bare `uv sync --all-extras
+  --dev` without `UV_CACHE_DIR` and `--no-install-project` reintroduces the
+  shared-cache lock contention and setuptools_scm hang the canonical recipe
+  exists to avoid (CHAOS-4411 / CHAOS-4181 / CHAOS-4407).
 - **`ok` does not mean "ran".** Env-gated suites skip and the package still
   prints `ok`. Count before believing a green:
   ```bash

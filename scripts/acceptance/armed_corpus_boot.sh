@@ -78,7 +78,7 @@ mkdir -p "${log_dir}"
 
 venv_python="${ops_root}/.venv/bin/python"
 if [[ ! -x "${venv_python}" ]]; then
-  echo "expected the worktree venv at ${venv_python} -- run 'uv sync --all-extras --dev' first" >&2
+  echo "expected the worktree venv at ${venv_python} -- run the uv sync recipe in AGENTS.md (Worktrees and branches) first" >&2
   exit 64
 fi
 

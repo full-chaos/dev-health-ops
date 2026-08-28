@@ -1040,9 +1040,9 @@ pyenv shim or a Homebrew install, not this tree's `.venv`. Measured instance:
 four `github/work-items` REST mutations reported a baseline failure from
 `ModuleNotFoundError: pytest_asyncio` and were carried in two consecutive
 reports as "pre-existing environment noise". They were neither pre-existing
-nor noise — with the venv synced (`uv sync --all-extras --dev`) and prefixed
-onto `PATH`, all four are `KILLED`. A mutation whose baseline was already red
-proved **nothing**; never total it alongside kills.
+nor noise — with the venv synced (per `AGENTS.md`'s worktree `uv sync` recipe)
+and prefixed onto `PATH`, all four are `KILLED`. A mutation whose baseline was
+already red proved **nothing**; never total it alongside kills.
 
 ## Difficulty tiers for the remaining GitHub pairs
 

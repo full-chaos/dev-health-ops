@@ -24,7 +24,7 @@ cluster-isolated lane they do not apply:**
 | --- | --- |
 | Downgrade an unmerged Alembic revision when you finish, so you do not break another lane's `migrate` | **Not needed.** `alembic_version` is per database and each namespace has its own Postgres. Two namespaces sat at 0115 and 0109 simultaneously with both stacks healthy. |
 | Give a cross-domain heads-up before `compose up -d --build` | **Not needed.** `helm upgrade` touches one namespace. |
-| Take the host-wide `local_validate` lock | **Not needed** for a gate pointed at a lane namespace's own DSNs. Still required for anything that runs against the Compose stack. |
+| Take the host-wide `local_validate` lock | **Still required — no exemption yet.** `ci/local_validate.sh`'s `main` calls `acquire_lock` unconditionally (`ci/local_validate.sh:1408`) and its ClickHouse provisioning still probes for the Compose Docker container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace does not make the lock optional — a run either serializes behind it anyway or fails outright without Compose. Keep taking the lock until the script grows an explicit remote-ClickHouse mode. |
 | Never write to the shared Postgres/ClickHouse | **Not needed.** Write freely; the blast radius is the namespace. |
 
 What does **not** change: never touch another lane's namespace, never run
@@ -213,6 +213,17 @@ helm upgrade --install lane-a-acr <acr-worktree>/deploy/helm/acr \
   -n lane-a -f lane-a-acr.yaml --timeout 10m --wait
 ```
 
+**Expect the first ops `--wait` to time out, and do not treat that as failure.**
+The pre-install hook runs Alembic only; the River grants come from the separate
+`dev-health-worker-migrate` Job in step 5.3, which cannot run until the release
+exists. So Helm starts the worker Deployments, they fail readiness on
+`domain_postgres`, and `--wait` gives up while everything else is healthy. Run
+the go-worker-migrate Job, then
+`kubectl -n <ns> delete pod -l app.kubernetes.io/component=go-worker` and they
+come up. On a lane you rebuild often, install with every `goWorkers.groups[*]`
+at `replicas: 0`, run the Job, then scale up — that avoids the timeout
+entirely.
+
 Neither values file exists in the repository — write them per lane, because
 the release name is baked into the in-cluster DNS names. Complete non-secret
 templates for a lane named `lane-a` follow; substitute your ops image tag, and
@@ -259,7 +270,7 @@ migrations:
     events: [pre-install, pre-upgrade]
     localBundledPostgres: false
     secretData:
-      MIGRATION_DATABASE_URI: ""     # MUST stay empty -- see the note below
+      MIGRATION_DATABASE_URI: ""     # MUST stay empty: the Job never passes it to Alembic
       POSTGRES_URI: "postgresql://postgres:acr-trial-dev@trial-postgres:5432/devhealth"
       CLICKHOUSE_URI: "clickhouse://ch:acr-trial-dev@trial-clickhouse:8123/default"
 
@@ -354,11 +365,21 @@ migration hook resolves them at deploy time.
 Two things the values must NOT do:
 
 - **Do not set `migrations.hook.secretData.MIGRATION_DATABASE_URI`.** The chart
-  documents it as preferred, but the CLI defaults its global `--db` from
-  `POSTGRES_URI` *or* `DATABASE_URI`, and the migration Job always inherits
-  `DATABASE_URI` from the app Secret, so the two always collide
-  (`--db cannot be combined with MIGRATION_DATABASE_URI`). Set `POSTGRES_URI`
-  instead and run River separately, per step 5.
+  documents it as preferred and as what activates the River step, but neither
+  way of using it works:
+  - **Set it alongside `POSTGRES_URI`** and the run dies with
+    `ValueError: --db cannot be combined with MIGRATION_DATABASE_URI`, because
+    `cli.py:741` defaults the global `--db` from `POSTGRES_URI`/`DATABASE_URI`.
+  - **Set it alone** and the run dies with `migrate postgres: error: missing
+    required input(s): PostgreSQL semantic database`. The migration Secret then
+    holds only `MIGRATION_DATABASE_URI` and `CLICKHOUSE_URI` —
+    `_helpers.tpl`'s `dev-health.migrationSecretData` deliberately suppresses
+    `POSTGRES_URI`/`DATABASE_URI` once a dedicated URI is present — but the
+    Job's command still invokes `dev-hops migrate postgres` **without passing
+    `--db`**, and the CLI never reads `MIGRATION_DATABASE_URI`, so Alembic
+    never sees a DSN at all.
+
+  Set `POSTGRES_URI` instead and run River separately, per step 5.
 - **Leave `sync-provider` at `replicas: 0`.** That group cannot compose until
   the provider job-routes are activated, and the chart renders no
   route-activation Job (Compose does this with five `*-route-activate`

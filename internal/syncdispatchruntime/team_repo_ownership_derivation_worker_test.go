@@ -19,14 +19,15 @@ import (
 // a CoordinatorBridge).
 
 type recordingDerivationRunner struct {
-	written int
-	err     error
-	calls   []string
+	written     int
+	inputsReady bool
+	err         error
+	calls       []string
 }
 
-func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, error) {
+func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, bool, error) {
 	runner.calls = append(runner.calls, orgID)
-	return runner.written, runner.err
+	return runner.written, runner.inputsReady, runner.err
 }
 
 type recordingDerivationObserver struct {
@@ -55,7 +56,7 @@ func validTeamRepoOwnershipDerivationJobArgs() TeamRepoOwnershipDerivationJobArg
 
 func TestTeamRepoOwnershipDerivationWorkerRecordsRowsWrittenOutcome(t *testing.T) {
 	t.Parallel()
-	runner := &recordingDerivationRunner{written: 3}
+	runner := &recordingDerivationRunner{written: 3, inputsReady: true}
 	observer := &recordingDerivationObserver{}
 	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
 	args := validTeamRepoOwnershipDerivationJobArgs()
@@ -76,7 +77,7 @@ func TestTeamRepoOwnershipDerivationWorkerRecordsRowsWrittenOutcome(t *testing.T
 
 func TestTeamRepoOwnershipDerivationWorkerRecordsNoSignalOutcome(t *testing.T) {
 	t.Parallel()
-	runner := &recordingDerivationRunner{written: 0}
+	runner := &recordingDerivationRunner{written: 0, inputsReady: true}
 	observer := &recordingDerivationObserver{}
 	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
 	args := validTeamRepoOwnershipDerivationJobArgs()
@@ -89,10 +90,31 @@ func TestTeamRepoOwnershipDerivationWorkerRecordsNoSignalOutcome(t *testing.T) {
 	}
 }
 
+// TestTeamRepoOwnershipDerivationWorkerRecordsInputsNotReadyOutcome pins the
+// team-lead ruling on codex finding #4 (2026-08-28): a zero-row Derive with
+// inputsReady=false (this org's team_project_ownership and/or linkage rows
+// have not synced yet -- the first-sync gap) is its own outcome, distinct
+// from no_signal, and Work() still returns nil (never a failure; the next
+// qualifying sync will re-derive).
+func TestTeamRepoOwnershipDerivationWorkerRecordsInputsNotReadyOutcome(t *testing.T) {
+	t.Parallel()
+	runner := &recordingDerivationRunner{written: 0, inputsReady: false}
+	observer := &recordingDerivationObserver{}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
+	args := validTeamRepoOwnershipDerivationJobArgs()
+
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeInputsNotReady {
+		t.Fatalf("observed outcomes = %v, want [inputs_not_ready]", observer.outcomes)
+	}
+}
+
 func TestTeamRepoOwnershipDerivationWorkerRecordsErrorOutcomeAndPropagates(t *testing.T) {
 	t.Parallel()
 	deriveErr := errors.New("clickhouse unavailable")
-	runner := &recordingDerivationRunner{written: 0, err: deriveErr}
+	runner := &recordingDerivationRunner{written: 0, inputsReady: true, err: deriveErr}
 	observer := &recordingDerivationObserver{}
 	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
 	args := validTeamRepoOwnershipDerivationJobArgs()
@@ -123,7 +145,7 @@ func TestTeamRepoOwnershipDerivationWorkerRejectsInvalidJobArgsWithoutCallingDer
 
 func TestTeamRepoOwnershipDerivationWorkerToleratesNilObserver(t *testing.T) {
 	t.Parallel()
-	runner := &recordingDerivationRunner{written: 1}
+	runner := &recordingDerivationRunner{written: 1, inputsReady: true}
 	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: nil}
 	args := validTeamRepoOwnershipDerivationJobArgs()
 

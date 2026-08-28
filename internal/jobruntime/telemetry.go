@@ -160,22 +160,37 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 
 // TeamRepoOwnershipDerivationOutcome is the bounded result of one
 // sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
-// "no_signal" names an org with no team_project_ownership rows yet (a
-// GitHub-only org, or team auto-import never configured) -- the designed-
-// empty case, not a failure; distinct from "error", a genuine ClickHouse
-// read/write failure the worker's own retry/backoff will re-attempt.
+// "no_signal" names an org whose team_project_ownership/linkage rows exist
+// but genuinely produced nothing (every candidate conflicted, or matched no
+// repo-bearing item) -- the designed-empty case, not a failure.
+// "inputs_not_ready" (team-lead ruling, codex finding #4, 2026-08-28) is a
+// DIFFERENT zero-row case: this org has zero team_project_ownership rows,
+// or zero linkage rows of any kind (work_items, work_item_dependencies,
+// work_graph_issue_pr) -- the first-sync gap this producer's deliberately
+// unsequenced Fanout publish (no prerequisite completion key, same as
+// team-autoimport, see native_post_sync.go's publishTeamRepoOwnershipDerivation)
+// can hit when its sibling producers (team-autoimport's async Python
+// bridge, the workgraph builder) have not landed their own writes for this
+// org yet. It converges on the next qualifying sync (idempotent,
+// re-triggered by every sync with git||hasWorkItems) -- observable here so
+// a persistently high inputs_not_ready rate for one org is diagnosable,
+// rather than sequenced against those other producers' own completion.
+// "error" is a genuine ClickHouse read/write failure the worker's own
+// retry/backoff will re-attempt.
 type TeamRepoOwnershipDerivationOutcome string
 
 const (
-	TeamRepoOwnershipDerivationOutcomeRowsWritten TeamRepoOwnershipDerivationOutcome = "rows_written"
-	TeamRepoOwnershipDerivationOutcomeNoSignal    TeamRepoOwnershipDerivationOutcome = "no_signal"
-	TeamRepoOwnershipDerivationOutcomeError       TeamRepoOwnershipDerivationOutcome = "error"
+	TeamRepoOwnershipDerivationOutcomeRowsWritten    TeamRepoOwnershipDerivationOutcome = "rows_written"
+	TeamRepoOwnershipDerivationOutcomeNoSignal       TeamRepoOwnershipDerivationOutcome = "no_signal"
+	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
+	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
 )
 
 func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
 	return []TeamRepoOwnershipDerivationOutcome{
 		TeamRepoOwnershipDerivationOutcomeRowsWritten,
 		TeamRepoOwnershipDerivationOutcomeNoSignal,
+		TeamRepoOwnershipDerivationOutcomeInputsNotReady,
 		TeamRepoOwnershipDerivationOutcomeError,
 	}
 }

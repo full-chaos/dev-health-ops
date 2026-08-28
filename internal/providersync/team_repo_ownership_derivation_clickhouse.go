@@ -40,32 +40,48 @@ type teamRepoOwnershipRepoInfo struct {
 
 // Derive loads orgID's already-synced ownership/linkage rows, runs the pure
 // derivation, and writes the result to team_repo_ownership. Returns the
-// number of rows written. A zero result with a nil error is the normal,
-// expected outcome for an org with no team_project_ownership rows yet (a
-// GitHub-only org, or an org with no team auto-import configured at all) --
-// never an error.
-func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (int, error) {
+// number of rows written and whether this org's INPUTS were present at all.
+//
+// inputsReady=false (team-lead ruling, CHAOS-4365 item 1b codex finding #4,
+// 2026-08-28: "leave the no-prerequisite design... make it observable
+// instead of sequenced") means this org had zero team_project_ownership
+// rows, or zero linkage rows of any kind (work_items, work_item_dependencies,
+// or work_graph_issue_pr) -- the first-sync gap this producer's deliberately
+// unsequenced Fanout publish (no prerequisite completion key, same as
+// team-autoimport) can hit: team_project_ownership from team-autoimport's
+// async Python bridge, or work_graph_issue_pr from the workgraph builder,
+// simply have not landed yet for a brand-new org. It converges on the NEXT
+// qualifying sync (this producer is idempotent and re-triggered by every
+// sync with git||hasWorkItems), so it is surfaced as its own telemetry
+// outcome (inputs_not_ready) rather than treated as a failure or sequenced
+// against those other producers' own completion.
+//
+// inputsReady=true with written=0 is the OTHER, unrelated zero-row case:
+// inputs existed but genuinely produced nothing (every candidate conflicted,
+// or matched no repo-bearing item) -- the designed-empty case, reported as
+// no_signal.
+func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, inputsReady bool, err error) {
 	if service.Conn == nil || ctx == nil || orgID == "" {
-		return 0, ErrTeamRepoOwnershipDerivationUnavailable
+		return 0, false, ErrTeamRepoOwnershipDerivationUnavailable
 	}
 	now := time.Now().UTC()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if len(projectLinks) == 0 {
 		// No project ownership synced for this org yet -- nothing to derive,
 		// and no reason to touch work_items/repos at all.
-		return 0, nil
+		return 0, false, nil
 	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if len(repos) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
 	for id := range repos {
@@ -74,28 +90,34 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 
 	workItems, err := loadTeamRepoOwnershipWorkItems(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	dependencyEdges, err := loadTeamRepoOwnershipDependencyEdges(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, orgID, repoIDs)
 	if err != nil {
-		return 0, err
+		return 0, false, err
+	}
+	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
+		// team_project_ownership and repos both exist, but not a single
+		// linkage row of any kind has synced yet -- also the first-sync gap,
+		// not a genuine no-signal evaluation.
+		return 0, false, nil
 	}
 
 	derived := deriveTeamRepoOwnership(projectLinks, workItems, dependencyEdges, issuePRLinks)
 	if len(derived) == 0 {
-		return 0, nil
+		return 0, true, nil
 	}
-	written, err := writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
+	written, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
 	if err != nil {
-		return 0, err
+		return 0, true, err
 	}
-	return written, nil
+	return written, true, nil
 }
 
 func loadTeamRepoOwnershipProjectLinks(

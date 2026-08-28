@@ -49,12 +49,15 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, err := service.Derive(ctx, orgID)
+	written, inputsReady, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
 	if written != 3 {
 		t.Fatalf("expected 3 rows written (repo-a, repo-b, repo-c), got %d", written)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- this org's project ownership and linkage rows are present")
 	}
 
 	got := readTeamRepoOwnership(t, ctx, conn, orgID)
@@ -98,7 +101,7 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	// valid_from) collapses re-derivation to the same logical row set once
 	// merged, and this read path uses FINAL, so it must already read back
 	// exactly the same 3 rows.
-	written2, err := service.Derive(ctx, orgID)
+	written2, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
 	}
@@ -114,18 +117,25 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 // TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError covers the
 // designed-empty case (§0.2): an org with zero team_project_ownership rows
 // (a GitHub-only org, or team auto-import never configured) derives zero
-// rows and returns no error -- never guessed, never a failure.
+// rows and returns no error -- never guessed, never a failure. This is also
+// exactly the inputs_not_ready case (team-lead ruling, codex finding #4,
+// 2026-08-28): inputsReady must be false here, since it is this exact
+// signal -- zero team_project_ownership rows -- the worker's telemetry
+// distinguishes from a genuine no-signal evaluation.
 func TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := "chaos-4365-item1b-empty-org"
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, err := service.Derive(ctx, orgID)
+	written, inputsReady, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive on an org with no project ownership: %v", err)
 	}
 	if written != 0 {
 		t.Fatalf("expected 0 rows written, got %d", written)
+	}
+	if inputsReady {
+		t.Fatal("expected inputsReady=false -- zero team_project_ownership rows is the first-sync gap, not a genuine no-signal evaluation")
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
 }
@@ -148,7 +158,7 @@ func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *t
 	seedWorkItem(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", repoID, "proj-gitlab", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, err := service.Derive(ctx, orgID)
+	written, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -194,12 +204,15 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge(t *te
 	seedWorkItemDependency(t, ctx, conn, orgB, "repo-item", "donor-item", "relates_to", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, err := service.Derive(ctx, orgA)
+	written, inputsReady, err := service.Derive(ctx, orgA)
 	if err != nil {
 		t.Fatalf("Derive for org A: %v", err)
 	}
 	if written != 0 {
 		t.Fatalf("expected 0 rows for org A -- the ONLY edge connecting repo-item to donor-item belongs to org B and must never resolve org A's donor walk, got %d", written)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- org A's own project ownership and work_items rows ARE present; only the cross-tenant edge is (correctly) invisible")
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgA, 0)
 }
@@ -230,12 +243,15 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsIssuePRLink(t *testi
 	seedWorkGraphIssuePR(t, ctx, conn, orgB, repoA, "resolver-item", 99, now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
-	written, err := service.Derive(ctx, orgA)
+	written, inputsReady, err := service.Derive(ctx, orgA)
 	if err != nil {
 		t.Fatalf("Derive for org A: %v", err)
 	}
 	if written != 0 {
 		t.Fatalf("expected 0 rows for org A -- the ONLY work_graph_issue_pr row associating resolver-item with repoA belongs to org B and must never attribute org A's repo, got %d", written)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- org A's own project ownership and work_items rows ARE present; only the cross-tenant PR link is (correctly) invisible")
 	}
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgA, 0)
 }

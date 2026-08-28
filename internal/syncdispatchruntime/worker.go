@@ -105,12 +105,16 @@ func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBrid
 // TeamRepoOwnershipDerivationRunner is the narrow capability
 // sync.team_repo_ownership_derivation's worker depends on: derive and write
 // team_repo_ownership for one org against already-synced ClickHouse data,
-// returning the row count written. Satisfied directly by
-// providersync.TeamRepoOwnershipDerivationService (its Derive method already
-// has this exact signature) -- named here as an interface only so the worker
-// stays testable without a real ClickHouse connection.
+// returning the row count written and whether this org's inputs (team_
+// project_ownership + linkage rows) were present at all yet (team-lead
+// ruling, codex finding #4, 2026-08-28 -- see providersync.
+// TeamRepoOwnershipDerivationService.Derive's doc comment for the full
+// rationale). Satisfied directly by providersync.
+// TeamRepoOwnershipDerivationService (its Derive method already has this
+// exact signature) -- named here as an interface only so the worker stays
+// testable without a real ClickHouse connection.
 type TeamRepoOwnershipDerivationRunner interface {
-	Derive(ctx context.Context, orgID string) (int, error)
+	Derive(ctx context.Context, orgID string) (written int, inputsReady bool, err error)
 }
 
 // RegisterTeamRepoOwnershipDerivationWorker registers the CHAOS-4365 item 1b
@@ -239,11 +243,18 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	defer func() { finishCoordinatorSpan(span, err) }()
-	written, err := worker.service.Derive(ctx, job.Args.OrgID)
+	written, inputsReady, err := worker.service.Derive(ctx, job.Args.OrgID)
 	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
-	if err != nil {
+	switch {
+	case err != nil:
 		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeError
-	} else if written == 0 {
+	case written == 0 && !inputsReady:
+		// The first-sync gap (team-lead ruling, codex finding #4): this org's
+		// team_project_ownership and/or linkage rows have not synced yet.
+		// Converges on the next qualifying sync -- not a failure, and
+		// distinct from a genuine no-signal evaluation.
+		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeInputsNotReady
+	case written == 0:
 		outcome = jobruntime.TeamRepoOwnershipDerivationOutcomeNoSignal
 	}
 	if worker.observer != nil {

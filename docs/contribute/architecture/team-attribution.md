@@ -573,7 +573,12 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > flags: it derives from already-synced `team_project_ownership` (however THAT got populated -- any
 > row of the table above, or the dormant Linear-native route) joined against `work_items`/
 > `work_item_dependencies`/`work_graph_issue_pr`, so it runs for every provider combination, not just
-> GitHub.
+> GitHub. It also carries no prerequisite completion key against those OTHER producers (team-lead
+> ruling, codex adversarial-review finding #4, 2026-08-28): a brand-new org's first qualifying sync
+> can run this producer before team-autoimport's async Python bridge or the workgraph builder have
+> landed their own writes, observed as the `inputs_not_ready` telemetry outcome rather than an
+> error -- it converges on that org's next qualifying sync, since this producer is idempotent and
+> re-triggered by every sync with git-or-work-items data.
 
 **Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 

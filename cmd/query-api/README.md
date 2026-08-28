@@ -1,10 +1,35 @@
 # query-api
 
 Go, read-only GraphQL analytics service. Part of the Go API epic
-(CHAOS-4352), Wave 0 (CHAOS-4366) — see
+(CHAOS-4352). Wave 0 (CHAOS-4366) built the proof infrastructure below;
+Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`, on top
+of it — see
 [`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
 [`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
+
+## Wave 1: featureFlags is live behind the switch
+
+`internal/featureflags` ports
+`dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flags`
+verbatim (same WHERE clauses, argMax latest-row selection, ORDER BY,
+LIMIT clamp, and missing-table degraded path). `main.go` mounts `/query`
+when `CLICKHOUSE_URI`, `GO_API_REGISTRY_POSTGRES_URI`,
+`GO_API_ENVELOPE_JWKS_PATH`, `GO_API_ENVELOPE_ISSUER`,
+`GO_API_ENVELOPE_AUDIENCE`, and `GO_API_SCHEMA_DIGEST` are all set —
+otherwise it stays Wave-0-empty (only `/healthz`/`/readyz`). `/query`
+requests are gated by `routeswitch.Mux` + `PostgresSwitch` (reachable only
+when `go_api_routing_state.mode` is `canary`/`primary` for the
+featureFlags operation) and authenticated by `principal.Verifier`
+(effective-principal envelope, Bearer token). GraphQL eligibility is
+registered-documents-only (`query_route.go`'s
+`registeredFeatureFlagsDocument`) — see that file's doc comment for the
+known gap (a hand-registered single document, not yet sourced from Wave
+0's real web-operations inventory).
+
+Stage-2 local dual-run proof (real Python + real Go server, same
+producer-seeded scratch state, compared via the CHAOS-4381 comparator):
+`tests/api/graphql/test_go_api_dual_run_feature_flags.py`.
 
 ## Wave 0 scope: intentionally empty
 
@@ -78,11 +103,12 @@ earlier "CI cannot build this" caveat.)
 
 ## What's NOT here yet (later waves / other lanes)
 
-- Any real resolver, or the ClickHouse readers it would need (the shared
-  dev-health-go extraction landed its store/contract layer under
-  CHAOS-4377 — plan §6 — so query-api's first real route is built on the
-  extracted readers, not hand-rolled queries needing a second port later).
-- `principal.Verifier` and `routeswitch.PostgresSwitch` wired into an
-  actual request path (`/query`, mounted behind `routeswitch.Mux`) — Wave 0
-  proves both mechanisms independently; a later wave mounts them together
-  for a real (still Python-served, Go-shadowed/canaried) operation.
+- Any resolver besides `featureFlags` — every other field still panics
+  with `"not implemented"`.
+- The registered-document registry sourced from Wave 0's real
+  web-operations inventory (deliverable 2) — Wave 1 hand-registers its own
+  single canary document instead (`query_route.go`).
+- Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — this
+  wave delivers only local dual-run proof (stage 2); a deploy is routed
+  through the epic orchestrator, not this lane.
+- `featureFlagEvents` — explicitly out of scope for this canary (plan §6).

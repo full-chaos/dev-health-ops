@@ -8,6 +8,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/vektah/gqlparser/v2/gqlerror"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
 
@@ -121,9 +126,57 @@ func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, fi
 	panic(fmt.Errorf("not implemented: WorkGraphArtifacts - workGraphArtifacts"))
 }
 
-// FeatureFlags is the resolver for the featureFlags field.
+// FeatureFlags is the resolver for the featureFlags field (CHAOS-4367
+// Wave 1 canary). Ports
+// dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flags
+// via featureflags.Resolve -- see that package's doc comment for the
+// exact parity contract (WHERE clauses, argMax latest-row selection,
+// ORDER BY, LIMIT clamp, missing-table degraded path).
+//
+// Authorization mirrors require_org_id's contract at the boundary this
+// Go plane actually owns: query-api trusts the effective-principal
+// envelope (plan §3), not an independent Postgres/Valkey lookup, so the
+// check here is "does the envelope's org match the orgId argument the
+// client is asking about" -- a caller cannot read another org's flags by
+// passing a different orgId than their own envelope carries.
 func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider *string, project *string, includeArchived *bool, limit int) (*model.FeatureFlagRegistryResult, error) {
-	panic(fmt.Errorf("not implemented: FeatureFlags - featureFlags"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	includeArchivedValue := false
+	if includeArchived != nil {
+		includeArchivedValue = *includeArchived
+	}
+
+	recordFeatureFlagsCall(ctx)
+	result, err := featureflags.Resolve(ctx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
+	if err != nil {
+		recordFeatureFlagsOutcome("error")
+		return nil, fmt.Errorf("featureFlags: %w", err)
+	}
+	if result.DegradedReason != nil {
+		recordFeatureFlagsOutcome("degraded")
+	} else {
+		recordFeatureFlagsOutcome("ok")
+	}
+	return result, nil
 }
 
 // FeatureFlagEvents is the resolver for the featureFlagEvents field.

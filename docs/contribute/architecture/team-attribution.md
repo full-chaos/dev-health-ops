@@ -367,6 +367,45 @@ means the ClickHouse `teams` dimension is empty.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
 
+> **CHAOS-4365 item 2: `team_cognitive_load_daily` — a new append-only, ownership-scoped table.**
+> Team-keyed cognitive load (interruption load, context spread, review-request load,
+> after-hours/weekend commit ratios) did not exist before this ticket — `user_metrics_daily`
+> (migration `016`) carries these signals per person/repo only, and its own `team_id` column
+> falls back to membership resolution (CHAOS-4396), which CHAOS-4321 forbids as a team key.
+> `team_cognitive_load_daily` (migration `081_team_cognitive_load_daily.sql`) is written by
+> aggregating `user_metrics_daily`/`team_metrics_daily` rows **by `repo_id`**, then mapping
+> `repo_id → team` through the same `team_repo_ownership` (merged over `teams.repo_patterns`)
+> resolution CHAOS-4365 item 1 wired into `providers/teams.py::load_team_repo_ownership_map` —
+> never through either source table's own `team_id` column.
+>
+> | Column | Type | Notes |
+> |---|---|---|
+> | `org_id`, `team_id` | `String` | |
+> | `day` | `Date` | |
+> | `pr_interruption_load`, `context_spread_count`, `review_request_load` | `Float64` | Summed across every author on every repo the team owns |
+> | `after_hours_commit_ratio`, `weekend_commit_ratio` | `Nullable(Float64)` | Recomputed from summed after-hours/weekend commit counts across owned repos — never averaged directly (a ratio is not additive); `NULL` when no source row exists for any owned repo that day, distinct from a measured `0.0` |
+> | `contributing_repo_count`, `sample_author_count` | `UInt32` | Diagnosability: how many owned repos and distinct authors rolled up into the row |
+> | `computed_at` | `DateTime64(6, 'UTC')` | |
+>
+> `ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)` — **append-only**,
+> matching every other daily rollup in this schema (`compounding_risk_daily` included): a
+> re-computation inserts a new row with a later `computed_at`, it never updates in place, and
+> readers dedup per `(org_id, team_id, day)` via `argMax(<col>, computed_at)`. Never
+> `ReplacingMergeTree`.
+>
+> **Producer runs in the finalize step, once per org/day** — `run_daily_metrics_finalize`
+> (`metrics/job_daily.py`), the same once-per-org/day stage CHAOS-4399 moved
+> `compounding_risk_daily`'s team-scope aggregation into. It reads that day's per-repo rows back
+> from ClickHouse (`argMax`-deduped) and writes exactly one row per `(org_id, team_id, day)` — a
+> per-repo write inside the daily partition loop was the CHAOS-4399 bug class (a multi-repo team
+> silently kept only the last-processed repo's numbers) and must never be reintroduced here.
+>
+> **Schema pin:** column types and the `ORDER BY`/engine clause are pinned byte-for-byte in
+> `full-chaos/dev-health-go`'s `schema.go` (`ProductionColumns["team_cognitive_load_daily"]` /
+> `EngineFull`, tagged `v0.2.0`) with a test asserting they match this migration's DDL exactly. A
+> column added, renamed, or retyped here without updating that map breaks `dev-health-go` CI, not
+> this repo's.
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |

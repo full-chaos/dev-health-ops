@@ -1,14 +1,15 @@
 # CHAOS-4381 — Canonical parity rules for the proof-gate comparator
 
-Status: PROPOSED, awaiting chris sign-off. Author: lane-4366 (CHAOS-4366 Wave 0).
+Status: ACCEPTED (chris 2026-08-27 19:44 PT, CHAOS-4381 Done). Author:
+lane-4366 (CHAOS-4366 Wave 0).
 Parent: `go-api-epic.md` §5 (five-stage proof gate), §7 open decision 3.
 
 This document is the CONTENT of decision 3 (process was already accepted:
 parity rules are a process gate). It fixes what "match" is allowed to mean
 before any operation reaches stage 2 (local dual-run proof). The comparator
-implementation is built against this proposal and flagged
-`pending sign-off` in its PR until chris signs off here or in the linked
-Linear comment.
+(CHAOS-4366 deliverable 5) is implemented against sections 1-6 below with
+the planted-defect controls from §6; no `pending sign-off` flag is carried
+in its PR.
 
 ## 1. Error ordering
 
@@ -138,7 +139,6 @@ planted-defect tests before it is trusted for any operation:
 
 ## Sign-off
 
-This proposal is posted as a comment on CHAOS-4381 for chris's sign-off.
-The comparator (CHAOS-4366 deliverable 5) is implemented against sections
-1-6 above and its PR is flagged `pending sign-off` until this document (or
-an amended version) is accepted.
+Accepted by chris, 2026-08-27 19:44 PT (CHAOS-4381 Done, ruling comment on
+the ticket). The comparator implementation (`src/dev_health_ops/api/graphql/
+go_api_comparator.py`) applies sections 1-6 above verbatim.

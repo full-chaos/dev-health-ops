@@ -307,15 +307,53 @@ func githubTestsBlocksWatermark(incomplete []GitHubTestsIncomplete) bool {
 	return false
 }
 
-// githubTestsCicdPartialSuccessReason collapses a unit's incomplete
+// githubTestsReportMemberSkippedWithoutDurableMarker guards a narrow
+// upgrade-boundary gap (codex review round 1, P1, CHAOS-4394): a chunk
+// cursor checkpointed by the PRE-CHAOS-4394 binary can already carry
+// artifact_unavailable/unreadable_archive counts on Incomplete with NO
+// GitHubTestsSkippedArtifact marker, because the old binary only ever wrote
+// markers for artifact_oversized. If such a cursor resumes under THIS binary
+// and reaches "done", githubTestsBlocksWatermark alone would let it advance
+// on report_member evidence that has no run/artifact identity behind it --
+// exactly the backfill-targeting promise this change makes, broken for the
+// one unit that straddled the deploy.
+//
+// Every report_member skip recorded by this binary always appends at least
+// one marker, or increments SkippedArtifactsOverflow once the per-unit cap
+// (githubTestsMaxSkippedArtifactRecords) is exhausted -- appendGitHubTestsSkippedArtifact
+// never leaves both untouched. So a nonzero report_member count with BOTH
+// empty is proof this cursor predates the fix: treat it as untrusted and
+// withhold, exactly like any other window-blocking observation. This can
+// fire at most once per unit -- the checkpoint this guards against is
+// deleted the moment the unit terminalizes (repository_postgres.go's
+// deletePreparedChunkStateTx, inside the same transaction as Complete), so
+// the unit simply retries next window: today's status quo, no data lost, no
+// permanent stall, not a new outage class.
+func githubTestsReportMemberSkippedWithoutDurableMarker(
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+) bool {
+	if len(skippedArtifacts) > 0 || overflow > 0 {
+		return false
+	}
+	for _, observation := range incomplete {
+		if observation.Component == githubTestsReportMemberComponent && observation.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// GitHubTestsCicdPartialSuccessReason collapses a unit's incomplete
 // observations into the bounded reason label RecordCicdPartialSuccess takes.
 // Callers only reach this once githubTestsBlocksWatermark has already
 // returned false for the same slice, so every cause present is, by
 // construction, one that advances the watermark. A single distinct cause
 // reports itself; more than one collapses to "mixed" rather than growing an
 // unbounded combination label -- MetricCicdPartialSuccessReasonLabel bounds
-// it again defensively on the write side.
-func githubTestsCicdPartialSuccessReason(incomplete []GitHubTestsIncomplete) string {
+// it again defensively on the write side. Exported: the telemetry call site
+// lives in internal/jobs/providerunit, at the durable-completion boundary
+// (codex review round 1, P2), not in this route.
+func GitHubTestsCicdPartialSuccessReason(incomplete []GitHubTestsIncomplete) string {
 	reason := ""
 	for _, observation := range incomplete {
 		if reason == "" {

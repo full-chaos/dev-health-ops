@@ -202,3 +202,62 @@ func TestGitHubTestsChunkedFinalMetadataIncompleteRunSurvivesComparator(t *testi
 		t.Fatalf("incomplete chunked completion advanced watermark=%v", batch.Watermark)
 	}
 }
+
+// TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers
+// pins the upgrade-boundary guard codex review round 1 (P1, CHAOS-4394)
+// required: a cursor checkpointed by the PRE-CHAOS-4394 binary can carry an
+// artifact_unavailable/unreadable_archive count on Incomplete with NO
+// GitHubTestsSkippedArtifact marker, because the old binary only ever wrote
+// markers for artifact_oversized. Resuming such a cursor here must still
+// withhold the watermark -- advancing it would promise a backfill-targeting
+// marker that was never recorded, permanently.
+func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	legacy := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{{
+			Component: githubTestsReportMemberComponent,
+			Cause:     githubTestsArtifactUnavailableCause, Count: 1,
+		}},
+		// No SkippedArtifacts, no SkippedArtifactsOverflow: exactly what a
+		// pre-CHAOS-4394 cursor decodes as.
+	}
+	batch, err := githubTestsFinalMetadataBatch(claim, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"a legacy cursor with a report_member skip but no durable marker advanced watermark=%v, want nil",
+			batch.Watermark,
+		)
+	}
+
+	// The identical incomplete evidence, but with a marker attached (as this
+	// binary always writes going forward), must advance -- proving the guard
+	// keys on marker presence, not merely on having seen a legacy-shaped
+	// cursor.
+	withMarker := legacy
+	withMarker.SkippedArtifacts = []GitHubTestsSkippedArtifact{{
+		RunID: "42", ArtifactID: "7", Cause: githubTestsArtifactUnavailableCause,
+	}}
+	batch, err = githubTestsFinalMetadataBatch(claim, withMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("watermark=%v, want %v once a durable marker backs the skip", batch.Watermark, claim.BeforeAt)
+	}
+
+	// The overflow-only case: the marker sample was capped but the overflow
+	// counter proves this binary's code path actually ran.
+	withOverflow := legacy
+	withOverflow.SkippedArtifactsOverflow = 1
+	batch, err = githubTestsFinalMetadataBatch(claim, withOverflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("watermark=%v, want %v once overflow proves this binary wrote the evidence", batch.Watermark, claim.BeforeAt)
+	}
+}

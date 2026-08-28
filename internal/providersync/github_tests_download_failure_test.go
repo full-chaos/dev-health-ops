@@ -526,8 +526,8 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 				walk.final.Watermark, want,
 			)
 		}
-		if got := githubTestsCicdPartialSuccessReason(walk.cursor.Incomplete); got != "mixed" {
-			t.Fatalf("githubTestsCicdPartialSuccessReason=%q, want mixed", got)
+		if got := GitHubTestsCicdPartialSuccessReason(walk.cursor.Incomplete); got != "mixed" {
+			t.Fatalf("GitHubTestsCicdPartialSuccessReason=%q, want mixed", got)
 		}
 	})
 
@@ -606,41 +606,29 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 	})
 }
 
-// RED on the pre-CHAOS-4394 baseline: a unit that skips one artifact as
-// artifact_unavailable and still finalizes with an advanced watermark is
-// exactly the "partial success" this counter exists to surface, distinct
-// from dev_health_provider_artifact_skipped_total's per-artifact count. On
-// main this unit's watermark stayed nil, so RecordCicdPartialSuccess was
-// never called at all and this metric line would be entirely absent.
-func TestGitHubTestsCicdPartialSuccessTelemetry(t *testing.T) {
+// dev_health_cicd_partial_success_total is NOT recorded from this route
+// (codex review round 1, P2): the route only STAGES a batch via emit(); the
+// executor still has to validate, prepare, and commit it, and only
+// PostgresRepository.Complete succeeding is the durable transition. Recording
+// the counter here would over-count a unit whose completion later fails to
+// commit and gets recollected. The actual call lives in
+// internal/jobs/providerunit.Handler, at the post-Complete success branch --
+// see cicd_partial_success_test.go there. This route's job is only to make
+// the data that telemetry needs -- an advanced Watermark plus a "repo" and
+// "incomplete" entry in Result -- durably correct, which
+// TestGitHubTestsArtifactDownloadMissingLocationDoesNotSinkTheUnit already
+// pins.
+func TestGitHubTestsRouteNeverRecordsCicdPartialSuccessTelemetryItself(t *testing.T) {
 	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, noLocation: map[int]bool{1: true}}
 	client := githubTestsClient(t, doer)
 	client.Metrics = providerfoundation.NewMetrics()
 
-	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
+	walk, err := walkGitHubTestsChunksResult(t, client, 4)
+	if err != nil {
 		t.Fatalf("walk returned err=%v", err)
 	}
-
-	var buffer bytes.Buffer
-	if err := client.Metrics.WritePrometheus(&buffer); err != nil {
-		t.Fatalf("WritePrometheus: %v", err)
-	}
-	want := `dev_health_cicd_partial_success_total{repo="Acme/API",reason="artifact_unavailable"} 1`
-	if !strings.Contains(buffer.String(), want) {
-		t.Fatalf("metrics did not carry the partial success:\nwant line: %s\ngot:\n%s", want, buffer.String())
-	}
-}
-
-// A unit with nothing incomplete must never touch this counter: it is
-// specifically a signal for "success, but with a durable, recorded gap", not
-// a count of every successful unit.
-func TestGitHubTestsCicdPartialSuccessDoesNotFireOnACleanUnit(t *testing.T) {
-	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 1}
-	client := githubTestsClient(t, doer)
-	client.Metrics = providerfoundation.NewMetrics()
-
-	if _, err := walkGitHubTestsChunksResult(t, client, 4); err != nil {
-		t.Fatalf("walk returned err=%v", err)
+	if walk.final.Watermark == nil {
+		t.Fatalf("premise broken: this walk must advance to make the telemetry-omission claim meaningful")
 	}
 
 	var buffer bytes.Buffer
@@ -648,6 +636,6 @@ func TestGitHubTestsCicdPartialSuccessDoesNotFireOnACleanUnit(t *testing.T) {
 		t.Fatalf("WritePrometheus: %v", err)
 	}
 	if strings.Contains(buffer.String(), "dev_health_cicd_partial_success_total{") {
-		t.Fatalf("a clean unit must not record a partial success:\n%s", buffer.String())
+		t.Fatalf("the route itself must never record this counter:\n%s", buffer.String())
 	}
 }

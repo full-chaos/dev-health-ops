@@ -311,6 +311,41 @@ func (handler *Handler) observeAllArtifactsUnreadable(claim providersync.Claim, 
 	handler.ProviderMetrics.RecordAllArtifactsUnreadable(claim.Provider, claim.Dataset)
 }
 
+// observeCicdPartialSuccess reports a github cicd/tests unit that advanced
+// its watermark despite carrying non-empty incomplete evidence (CHAOS-4394).
+// Call it only from the branch where Repository.Complete has ALREADY
+// returned nil, for the identical reason observeTerminalWithCommittedRows and
+// observeAllArtifactsUnreadable are: a metric fired before the durable
+// transition commits would over-count a unit that fails to complete and gets
+// recollected later (codex review round 1, P2). watermark is the SAME value
+// just passed to Repository.Complete, and payload is the SAME map just
+// persisted -- reading them here, after the commit, rather than re-deriving
+// them, is what keeps this in sync with what was actually written.
+//
+// repo is deliberately logged, not passed to the counter -- see
+// RecordCicdPartialSuccess's doc comment on why it stays off the Prometheus
+// label.
+func (handler *Handler) observeCicdPartialSuccess(
+	claim providersync.Claim, watermark *time.Time, payload map[string]any,
+) {
+	if handler == nil || watermark == nil ||
+		claim.Provider != "github" || (claim.Dataset != "cicd" && claim.Dataset != "tests") {
+		return
+	}
+	incomplete, ok := payload["incomplete"].([]providersync.GitHubTestsIncomplete)
+	if !ok || len(incomplete) == 0 {
+		return
+	}
+	reason := providersync.GitHubTestsCicdPartialSuccessReason(incomplete)
+	repo, _ := payload["repo"].(string)
+	handler.ProviderMetrics.RecordCicdPartialSuccess(reason)
+	slog.Info(
+		"cicd/tests unit advanced its watermark with a durable, recorded gap",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repo, "reason", reason,
+	)
+}
+
 // logLifecycle records the safe, authoritative identity of one provider-unit
 // attempt. River arguments deliberately carry only the unit ID, so provider,
 // dataset, mode, and run identity become available only after Claim. Keep this
@@ -544,6 +579,7 @@ func (handler *Handler) Work(
 			); completeErr != nil {
 				err = completeErr
 			} else {
+				handler.observeCicdPartialSuccess(session.Claim, result.Watermark, payload)
 				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded", nil)
 				return nil
 			}

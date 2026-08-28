@@ -510,28 +510,6 @@ func MetricCicdPartialSuccessReasonLabel(value string) string {
 	return lowered
 }
 
-// metricRepoLabel bounds a provider-supplied repository identifier before it
-// becomes a Prometheus label. Unlike a run id or artifact id (deliberately
-// kept OFF every label in this file -- see RecordPerRunTruncation and
-// recordGitHubTestsSkippedArtifact's doc comments), a synced repository is a
-// human-configured integration target: its cardinality is bounded by how many
-// repositories an org actually connects, not by ongoing provider activity.
-// This still truncates defensively and strips a key-composing delimiter byte,
-// rather than trusting an upstream string never to misbehave.
-const metricRepoLabelMaxBytes = 200
-
-func metricRepoLabel(repo string) string {
-	trimmed := strings.TrimSpace(repo)
-	trimmed = strings.ReplaceAll(trimmed, "\x00", "")
-	if trimmed == "" {
-		return "unknown"
-	}
-	if len(trimmed) > metricRepoLabelMaxBytes {
-		trimmed = trimmed[:metricRepoLabelMaxBytes]
-	}
-	return trimmed
-}
-
 // RecordCicdPartialSuccess counts ONE completed cicd/tests unit that
 // advanced its watermark despite carrying non-empty incomplete evidence
 // (CHAOS-4394): a real partial success, not a stall, because every
@@ -539,16 +517,29 @@ func metricRepoLabel(repo string) string {
 // artifacts are durably recorded (GitHubTestsSkippedArtifact) for a targeted
 // backfill. This is a UNIT-level signal, distinct from RecordArtifactSkipped
 // (which counts per-artifact) and RecordPerRunTruncation (which counts
-// per-run): it is what lets an operator see, by repo, how much of a source's
-// hourly coverage is arriving as "success with a durable, recorded gap"
-// rather than a clean success.
-func (m *Metrics) RecordCicdPartialSuccess(repo, reason string) {
+// per-run).
+//
+// repo is deliberately NOT a label here, unlike the ticket's original ask --
+// codex review round 1 caught that a synced repository, unlike provider or
+// dataset, is not drawn from a fixed, small vocabulary this process can
+// enumerate up front: a long-lived worker accumulates one series per
+// repository ever added AND renamed over its lifetime, with nothing to ever
+// evict a stale one, which is exactly the unbounded-map-growth failure
+// MetricDatasetLabel/metricProvider/MetricArtifactSkipReasonLabel's ALLOWLIST
+// bounding exists to prevent (see MetricDatasetLabel's doc comment). This
+// matches the existing house rule for run id / artifact id -- provider-
+// supplied and unbounded, so it belongs in the caller's structured log line,
+// never in a durable metric label (see RecordPerRunTruncation and
+// recordGitHubTestsSkippedArtifact). The caller logs repo alongside this
+// call for per-repo triage; this counter answers "how much, by reason", not
+// "which repo".
+func (m *Metrics) RecordCicdPartialSuccess(reason string) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cicdPartialSuccess[metricRepoLabel(repo)+"\x00"+MetricCicdPartialSuccessReasonLabel(reason)]++
+	m.cicdPartialSuccess[MetricCicdPartialSuccessReasonLabel(reason)]++
 }
 
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
@@ -1115,10 +1106,10 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			return err
 		}
 	}
-	if err := writeRepoReasonCounter(
+	if err := writeLabeledCounter(
 		writer, "dev_health_cicd_partial_success_total",
-		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by repo and the report_member/per-run cause that made it partial (CHAOS-4394).",
-		m.cicdPartialSuccess,
+		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by the report_member/per-run cause that made it partial (CHAOS-4394). Not labeled by repo -- see RecordCicdPartialSuccess's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
+		"reason", m.cicdPartialSuccess,
 	); err != nil {
 		return err
 	}
@@ -1148,36 +1139,6 @@ func writeLabeledCounter(
 	for _, key := range keys {
 		if _, err := fmt.Fprintf(
 			writer, "%s{%s=%q} %d\n", name, labelName, key, values[key],
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeRepoReasonCounter is the repo/reason twin of writeProviderDatasetReasonCounter.
-// It splits on NUL rather than ":" because, unlike every other compound key in
-// this file, repo is not drawn from a closed vocabulary and could in
-// principle contain ":" itself; metricRepoLabel already strips NUL bytes from
-// the label value, so NUL is safe as the ONLY delimiter and SplitN into
-// exactly two parts is total.
-func writeRepoReasonCounter(writer io.Writer, name, help string, values map[string]uint64) error {
-	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
-		return err
-	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		parts := strings.SplitN(key, "\x00", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if _, err := fmt.Fprintf(
-			writer, "%s{repo=%q,reason=%q} %d\n",
-			name, parts[0], parts[1], values[key],
 		); err != nil {
 			return err
 		}

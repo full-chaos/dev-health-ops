@@ -120,3 +120,65 @@ def test_run_team_autoimport_strict_raises_capable_provider_missing_populator(
             org_id="org-1",
             credentials={"token": "secret"},
         )
+
+
+def test_run_team_autoimport_strict_ignores_org_disabled_selection(
+    monkeypatch,
+) -> None:
+    """CHAOS-4430 red test: reference discovery's strict populate path must
+    honour the org's CHAOS-4323 per-category selection, the same way the
+    best-effort ``run_team_autoimport`` already does.
+
+    Executed proof (local, org 70d529e0-3c06-4597-8480-794fd02328b6, real
+    data): ``sync_configurations`` for provider=github and provider=gitlab
+    both carry ``auto_import_teams/projects/members`` = False. Yet
+    ``sync_run_reference_discoveries`` shows hourly success rows for both
+    providers (e.g. github sync_run 702a2dd5-6833-5191-98c9-738d60905036,
+    updated_at 2026-08-28 22:03:22 UTC), and ClickHouse ``team_memberships``
+    carries 454 fresh github rows / ``team_project_ownership`` carries 208
+    fresh gitlab rows (source=provider_access, last write 2026-08-28
+    22:03:1x UTC) -- exactly matching those reference-discovery timestamps.
+
+    Root cause: ``run_team_autoimport_strict`` (unlike ``run_team_autoimport``)
+    never reads ``scope["sync_options"]`` / never sets
+    ``import_categories`` on the populator scope, so every populator call
+    defaults every category to True regardless of what the org selected --
+    the toggle a user unchecks in the sync-config UI has no effect on this
+    path at all.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"members_imported": 0}
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    team_autoimport.run_team_autoimport_strict(
+        provider="github",
+        org_id="org-1",
+        credentials={"token": "secret"},
+        scope={
+            "sync_options": {
+                "auto_import_teams": False,
+                "auto_import_projects": False,
+                "auto_import_members": False,
+            }
+        },
+    )
+
+    assert len(calls) == 1
+    # DESIRED: an org with every CHAOS-4323 category off must not have any of
+    # them imported by reference discovery either. FAILS on origin/main:
+    # calls[0]["scope"] carries no "import_categories" key at all today, so
+    # the populator falls back to "unrestricted" (every category True) --
+    # see team_autoimport_categories.import_categories_from_sync_options's
+    # None-sync_options branch, which is exactly what happens because this
+    # call site drops sync_options on the floor instead of threading it.
+    assert calls[0]["scope"].get("import_categories") == {
+        "teams": False,
+        "projects": False,
+        "members": False,
+    }

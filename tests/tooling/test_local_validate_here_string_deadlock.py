@@ -53,7 +53,6 @@ measured threshold should re-run this file's bisection and convert them too.
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -344,299 +343,171 @@ def test_probe_harness_hook_is_reachable_and_documented() -> None:
     )
 
 
-_FUNCTION_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
+# Codex reviews rounds 3-5 kept finding gaps in a hand-rolled bash parser
+# (missing a helper, a false call-match, an unindented brace, a quoted/
+# commented brace) used to compute which functions are "reachable" from
+# metrics_readback_diff_relevant() so their bodies could be scanned for a
+# reintroduced `<<<`. There is no natural end to that: any closure over
+# bash's actual call graph, computed by regex instead of a real parser,
+# will keep finding new edge cases forever. Team-lead ruling (round 6):
+# stop growing the parser. Replace it with a simpler, COMPLETE invariant
+# that needs no parsing at all -- scan the WHOLE script, unconditionally,
+# for every line containing a here-redirection operator (`<<`, which also
+# matches `<<<`), and assert that exact set of lines equals a pinned
+# allowlist. No function boundaries, no brace/quote parsing, one-liners
+# included by construction (a one-line function's `<<<` is still a line
+# containing `<<`). Anything new or moved anywhere in the script --
+# including inside a future one-line helper, a third helper, a renamed
+# variable, or a stray comment mention -- fails this test until someone
+# explicitly adds it to the allowlist with a reason. That is strictly
+# stronger than the closure it replaces (which only ever covered ONE
+# call path) and does not depend on getting a parser right.
+_KNOWN_SAFE_HERE_REDIRECTION_LINES: dict[str, str] = {
+    # The three genuine `<<<` (here-string) redirections in the script,
+    # exactly as they read today (leading/trailing whitespace stripped --
+    # see test_here_redirections_match_the_pinned_allowlist's docstring
+    # for why matching by content, not line number, is deliberate).
+    "IFS='|' read -r LOCK_OWNER_PID LOCK_OWNER_LSTART LOCK_OWNER_CWD <<<\"${target}\"": (
+        "lock-metadata read (parse_lock_owner): payload is a `pid|lstart|cwd`"
+        " triple written by this same script (release_lock's own writer),"
+        " always well under the ~500-550 byte here-string deadlock threshold"
+        " measured on this host -- see"
+        " test_here_string_deadlock_is_not_payload_agnostic below, which"
+        " proves this exact construct shape does NOT hang at this site's"
+        " realistic payload size. NOT converted to the temp-file pattern in"
+        " this PR; a future change that grows this payload past the"
+        " threshold should re-run this file's bisection and convert it."
+    ),
+    "IFS=',' read -r -a DECLARED_STAGE_IDS <<<\"${declared_csv}\"": (
+        "stage-id-list read (--stage-manifest-mismatch-probe test harness):"
+        " a short, fixed, comma-separated list of this script's own known"
+        " stage ids, nowhere near the deadlock threshold. Same audit as the"
+        " lock-metadata read above; NOT converted in this PR."
+    ),
+    "IFS=',' read -r -a EXECUTED_STAGE_IDS <<<\"${executed_csv}\"": (
+        "stage-id-list read: same shape, same bound, same audit as"
+        " DECLARED_STAGE_IDS immediately above."
+    ),
+    # Comment lines that merely MENTION `<<` / `<<<` / `<<EOF` in prose --
+    # not executable redirections at all -- but a whole-file substring scan
+    # sees them too, and this test deliberately does not try to distinguish
+    # code from comments (that would be exactly the "parsing" this
+    # simplification exists to avoid). Pinning them here is cheaper and
+    # more honest than adding comment-detection logic.
+    "# That is not theoretical here. Measured on this host, `cat >/dev/null <<EOF`:": (
+        "comment prose (CHAOS-3362 discussion) citing a heredoc construct as"
+        " a measurement example -- does not use one."
+    ),
+    "# fork, nothing that can block. Using `cat >file <<EOF` here would reintroduce": (
+        "comment prose (this fix's own rationale) explaining why a heredoc"
+        " was rejected in favor of the temp-file pattern -- does not use one."
+    ),
+    '# CHAOS-4487 (why not the here-string either, `grep -qE ... <<<"$1"`): a': (
+        "comment prose (this fix's own rationale) -- does not use a here-string."
+    ),
+    "# implements `<<<` by forking a child that does the heredoc_write into a": (
+        "comment prose (this fix's own rationale) describing bash's"
+        " here-string implementation -- does not use one."
+    ),
+}
 
 
-def _same_line_close(text: str, open_brace: int, line_end: int) -> int:
-    """If the function whose `{` is at `open_brace` also closes on that
-    SAME line (a `name() { ...; }` one-liner, e.g. `c_red`), return the
-    index of that closing `}`; otherwise -1.
+def test_here_redirections_match_the_pinned_allowlist() -> None:
+    """The complete, parser-free regression guard for CHAOS-4487 (codex
+    review round 6): every line in the WHOLE script containing `<<` (which
+    also matches `<<<`, so here-strings and heredocs are both covered by
+    one check) must be one of the exact, pinned, justified lines in
+    `_KNOWN_SAFE_HERE_REDIRECTION_LINES` above -- no more, no fewer.
 
-    Codex review round 4, P2: the original version of `_all_function_bodies`
-    only ever looked for an unindented `\\n}\\n`, so a one-line helper --
-    this script already has several, e.g. `c_red() { printf ...; }` -- has
-    no such sequence and was silently DROPPED from `bodies` entirely,
-    never entering the reachable-call-path closure below even when a
-    reachable function genuinely calls it (as `_metrics_diff_relevant_check`
-    calls `c_red` for its own WARN messages). A future refactor moving the
-    vulnerable `<<<` into a one-line helper would pass this guard clean.
+    Matches by exact (stripped) LINE CONTENT, never by line number: a line
+    number shifts every time an unrelated edit adds or removes a line
+    above it, which would make this test either spuriously fail (churn
+    with no real change) or, worse, silently stop checking the line it
+    meant to if a renumbering ever lined up two different lines by
+    coincidence. Content is stable across unrelated edits and only
+    changes when the line ITSELF changes -- which is exactly when this
+    test should have an opinion.
 
-    Uses a brace-DEPTH count rather than a bare rightmost/leftmost `}`
-    search, so a `${...}` parameter expansion on the same line (whose `}`
-    would otherwise look like a false close) is not mistaken for the
-    function's own end: each `${` contributes a balanced +1/-1 pair that
-    nets to zero, so only the function's OWN closing brace brings the
-    depth back to 0.
+    This replaces the round 3-5 reachable-call-path closure entirely: that
+    approach re-derived bash's call graph and function/brace/quote
+    structure with regexes, and every review round surfaced a new way for
+    that re-derivation to be wrong (a missed helper, a false call-match
+    on incidental text, an unindented brace, a quoted or commented brace).
+    A whole-file, unconditional line scan needs none of that -- there is
+    no function boundary to compute, so a one-line helper's `<<<` is
+    caught by construction, not by a special case for one-liners.
 
-    Codex review round 5, P2: a raw depth count over EVERY `{`/`}`
-    character is still wrong the other direction -- a `}` sitting inside a
-    single- or double-quoted string, or after an unquoted `#` comment, on
-    the opening line has no matching `{` and would decrement the count to
-    0 too EARLY, truncating a genuinely multi-line function's body right
-    there. Any `<<<` the real body added AFTER that point would silently
-    never enter the closure. Tracks single/double-quote state (ignoring
-    `{`/`}` while inside either, matching bash's own quoting: no escaping
-    inside single quotes, backslash-escaping inside double quotes and in
-    bare code) and stops at an unquoted `#` (nothing after a real comment
-    marker is code), so only brace characters that are genuine shell
-    syntax count toward the depth.
-    """
-
-    depth = 1
-    i = open_brace + 1
-    in_single = False
-    in_double = False
-    while i < line_end:
-        ch = text[i]
-        if in_single:
-            if ch == "'":
-                in_single = False
-        elif in_double:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == '"':
-                in_double = False
-        else:
-            if ch == "'":
-                in_single = True
-            elif ch == '"':
-                in_double = True
-            elif ch == "\\":
-                i += 2
-                continue
-            elif ch == "#":
-                break
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return i
-        i += 1
-    return -1
-
-
-def _all_function_bodies(text: str) -> dict[str, str]:
-    """Every top-level-indented `name() { ... }` function in the script, as
-    {name: body}. Used to compute a real reachable-call-path closure below,
-    not a hand-picked pair of function names.
-
-    Tries a same-line close first (`_same_line_close`, for one-line helpers
-    like `c_red`), then falls back to bounding the closing `\\n}\\n` search
-    to end at the START of the NEXT `^name() {`-shaped match (or EOF for
-    the last one), and skips (rather than crashes on) any match with
-    neither. This file has exactly one such skipped case: a nested
-    `cleanup_scratch() {` REDEFINITION inside the `--lock-probe-exit-order`
-    test-only harness block, whose closing brace is indented to match its
-    enclosing `if` (`  }`, not `}`) because it is a local override for
-    that one probe, not a real top-level helper. Skipping it is correct,
-    not a hack: it plays no part in `metrics_readback_diff_relevant`'s
-    reachable call path, and bounding the multi-line search keeps a skip
-    from ever swallowing a LATER real function's body by accident.
-    """
-
-    matches = list(_FUNCTION_DEF.finditer(text))
-    bodies: dict[str, str] = {}
-    for i, match in enumerate(matches):
-        name = match.group(1)
-        start = match.start()
-        bound = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        open_brace = match.end() - 1
-        line_end = text.find("\n", start, bound)
-        if line_end == -1:
-            line_end = bound
-        same_line_close = _same_line_close(text, open_brace, line_end)
-        if same_line_close != -1:
-            end = same_line_close + 1
-        else:
-            end = text.find("\n}\n", start, bound)
-            if end == -1:
-                continue
-        bodies[name] = text[start:end]
-    return bodies
-
-
-def _reachable_call_path_bodies(text: str, entry_point: str) -> dict[str, str]:
-    """The transitive closure of every function body reachable from
-    `entry_point`, by textual call reference -- not just the one or two
-    function names a human happened to name explicitly.
-
-    Codex review round 3, P2: a static guard that only scans two
-    hard-coded function names (however correctly chosen today) misses a
-    FUTURE refactor that moves the relevant logic into a third helper --
-    that helper's `<<<` would never be scanned, and the guard would stay
-    green while the deadlock returns. This closes that gap mechanically:
-    starting from `entry_point`, find every OTHER known function name
-    referenced anywhere in the current frontier's bodies as a bare call
-    (still deliberately over-inclusive of comment mentions -- a function
-    name mentioned in a comment costs one extra body scanned, which is the
-    safe direction; under-inclusion is the unsafe one), and keep expanding
-    until a fixed point. This is a real reachability computation over the
-    script's actual function set, not a scan of two names chosen by a
-    person.
-
-    A plain `\bname\b` word-boundary search is too loose to use here: this
-    script's own `metrics_readback_diff_relevant()` body contains the
-    literal string `origin/main` (a git ref), which false-matches `\bmain\b`
-    (`/` is a non-word character, so it *is* a word boundary) and pulls in
-    the `main()` entry point -- and from there the ENTIRE script, since
-    `main()` calls virtually every stage. That silently defeats the guard's
-    purpose: it would stop being a scoped check on the metrics-diff call
-    path and become "no `<<<` anywhere in the file," which is false today
-    (the other three sites are a deliberate, evidence-backed exception --
-    see `test_here_string_deadlock_is_not_payload_agnostic`) and would
-    forever fail for a reason unrelated to CHAOS-4487. `_CALL_REFERENCE`
-    instead requires a name to NOT be immediately preceded by a word
-    character, `/`, `.`, or `-` (ruling out path/ref fragments like
-    `origin/main` or `foo-main`) and NOT immediately followed by a word
-    character or `(` (ruling out being a prefix of a longer identifier or
-    matching a function's own `name() {` signature).
-    """
-
-    all_bodies = _all_function_bodies(text)
-    assert entry_point in all_bodies, (
-        f"{entry_point!r} is not a `name() {{ ... }}` function in {SCRIPT}"
-        " -- has it been renamed or removed?"
-    )
-
-    reachable: dict[str, str] = {}
-    frontier = {entry_point}
-    while frontier:
-        name = frontier.pop()
-        if name in reachable:
-            continue
-        body = all_bodies[name]
-        reachable[name] = body
-        for other_name, other_body in all_bodies.items():
-            if other_name in reachable or other_name == name:
-                continue
-            call_reference = re.compile(
-                r"(?<![\w/.-])" + re.escape(other_name) + r"(?![\w(])"
-            )
-            if call_reference.search(body) and other_body:
-                frontier.add(other_name)
-    return reachable
-
-
-def test_same_line_close_ignores_quoted_and_commented_braces() -> None:
-    """Codex review round 5, P2: a raw brace-depth count over EVERY `{`/`}`
-    character is wrong when a `}` on the opening line sits inside a
-    quoted string or after an unquoted `#` comment -- it has no matching
-    `{`, so a naive counter hits depth 0 too EARLY and truncates a
-    genuinely multi-line function's body right there. Anything the real
-    body adds after that point (including a future `<<<`) would then
-    silently never enter `_all_function_bodies`'s output, and so never
-    enter the reachable-call-path closure either.
-
-    Constructs three synthetic one-open-line function shapes, each with a
-    `}` on the opening line that has no matching `{` (inside a
-    double-quoted string, a single-quoted string, and a `#` comment) and
-    a REAL closing brace two lines down, past a `<<<` that must not be
-    missed. `_same_line_close` must return -1 for all three (correctly
-    recognizing "not actually closed on this line"), letting
-    `_all_function_bodies`'s multi-line fallback find the true body --
-    the one with the `<<<` in it.
-    """
-
-    cases = [
-        'foo() { echo "some } weird string"\n  cmd <<<"${x}"\n}\n',
-        "foo() { echo 'some } weird string'\n  cmd <<<\"${x}\"\n}\n",
-        'foo() { # a comment mentioning a } brace\n  cmd <<<"${x}"\n}\n',
-    ]
-    for text in cases:
-        open_brace = text.index("{")
-        line_end = text.index("\n")
-        assert _same_line_close(text, open_brace, line_end) == -1, (
-            f"_same_line_close treated a quoted/commented `}}` as a real"
-            f" same-line close in: {text!r}"
-        )
-
-
-def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> None:
-    """Portable, environment-independent regression guard (codex review
-    round 1): the live-reproduction tests above are SKIPPED, not failed, on
-    a host/run that is not currently under the specific bash-5.3 pipe
-    pressure needed to observe the deadlock -- expected on most CI runners
-    most of the time, since the phenomenon is host/load-dependent, not a
-    portable bash invariant. That means this file's only ALWAYS-run guard
-    against the construct regressing is a static one: assert the fix's
-    actual shape (a `mktemp` + `printf` BUILTIN write, per the argMax
-    stage's own established pattern) is present, and that NO here-string
-    (`<<<`, in ANY form) exists anywhere in this check's whole reachable
-    call path.
-
-    Codex review round 2, P2: an earlier version of this test only rejected
-    the one LITERAL string `<<<"${changed}"` inside
-    `_metrics_diff_relevant_check` alone -- a refactor that renamed the
-    variable (`<<<"$changed"`, no braces) would restore the identical
-    deadlock while keeping that narrower check green. Widened to scan two
-    hard-coded function bodies for ANY `<<<` occurrence.
-
-    Codex review round 3, P2: hard-coding "two" function names is still a
-    person's guess at the call path, not a computed one -- a FUTURE
-    refactor that moves the relevant logic into a third helper (that
-    EITHER of the two calls into) would introduce a `<<<` this test still
-    could not see. `_reachable_call_path_bodies` closes this properly: it
-    computes the REAL transitive closure of every function textually
-    reachable from `metrics_readback_diff_relevant` and scans all of them,
-    so a future third (or fourth, or fifth) helper is covered automatically
-    the moment it is called from this path, with no test edit required.
-
-    Codex review round 4, P2: the round-3 closure had a concrete blind
-    spot for ONE-LINE shell functions -- `_all_function_bodies` could only
-    find a multi-line `\n}\n` close, so a one-liner like `c_red() { printf
-    ...; }` was silently dropped from the closure entirely, even though
-    `_metrics_diff_relevant_check` genuinely calls it (`"$(c_red 'WARN:')"`,
-    twice, for its own error messages). A future refactor moving the
-    vulnerable `<<<` into a one-line helper would have passed this guard
-    clean. `_same_line_close` fixes this with a brace-depth count, so
-    `c_red` (and any other one-line helper reachable from this path) is
-    now genuinely present in the closure below -- asserted explicitly, not
-    just assumed.
+    Two failure directions, both real:
+      - A NEW or MOVED `<<` appears that isn't allowlisted (the CHAOS-4487
+        regression itself, in any function, at any indentation, on any
+        line, one-liner or not) -- caught by `unexpected` below.
+      - An allowlisted line goes stale (edited, removed, or its
+        justification no longer applies) without updating this list --
+        caught by `missing` below, so the allowlist cannot silently drift
+        out of sync with the real file.
     """
 
     text = SCRIPT.read_text(encoding="utf-8")
-    reachable = _reachable_call_path_bodies(text, "metrics_readback_diff_relevant")
+    found = {line.strip() for line in text.splitlines() if "<<" in line}
+    allowlisted = set(_KNOWN_SAFE_HERE_REDIRECTION_LINES)
 
-    # Sanity check on the closure itself: it must have actually found
-    # these functions, or the closure computation is broken and everything
-    # below would vacuously pass by scanning too little.
-    assert "metrics_readback_diff_relevant" in reachable
-    assert "_metrics_diff_relevant_check" in reachable, (
-        "the reachable-call-path closure from metrics_readback_diff_relevant"
-        " did not find _metrics_diff_relevant_check -- either the call was"
-        " removed, or the closure computation in this test needs fixing;"
-        " either way this test cannot currently verify the real fix"
-    )
-    assert "c_red" in reachable, (
-        "the reachable-call-path closure did not find c_red -- it is a"
-        " genuine one-line function (`c_red() { printf ...; }`) that"
-        " _metrics_diff_relevant_check calls directly. If this assertion"
-        " fails, _all_function_bodies has regressed to silently dropping"
-        " one-line helpers again (codex review round 4, P2), and the <<<"
-        " scan below is once more running on an incomplete closure"
-        " without any visible sign of it"
+    unexpected = found - allowlisted
+    assert not unexpected, (
+        "found a `<<`/`<<<` redirection not on the pinned allowlist in"
+        " ci/local_validate.sh -- this is the exact CHAOS-4487 class of"
+        " construct (bash-5.3 heredoc_write pipe deadlock on a large"
+        " payload) REGARDLESS of which function, variable name, or"
+        " indentation it uses. Route any unbounded payload through a temp"
+        " file instead (mktemp + the printf BUILTIN -- see"
+        " _metrics_diff_relevant_check's implementation), or, if this"
+        " specific line is genuinely safe (small, bounded payload), add it"
+        " to _KNOWN_SAFE_HERE_REDIRECTION_LINES above with a justification."
+        "\nUnexpected line(s):\n"
+        + "\n".join(f"  {line!r}" for line in sorted(unexpected))
     )
 
-    for name, body in sorted(reachable.items()):
-        assert "<<<" not in body, (
-            f"a here-string (`<<<`) has reappeared in {name}() in"
-            " ci/local_validate.sh, reachable from"
-            " metrics_readback_diff_relevant() -- this is the exact"
-            " CHAOS-4487 class of construct (bash-5.3 heredoc_write pipe"
-            " deadlock on a large payload), REGARDLESS of which function or"
-            " variable name it uses; route any unbounded payload through a"
-            " temp file instead (mktemp + the printf BUILTIN, see"
-            " _metrics_diff_relevant_check's current implementation)"
-        )
+    missing = allowlisted - found
+    assert not missing, (
+        "an allowlisted line in _KNOWN_SAFE_HERE_REDIRECTION_LINES no"
+        " longer appears in ci/local_validate.sh -- either it was edited"
+        " (update the allowlist entry's text to match) or removed entirely"
+        " (delete the stale allowlist entry), so this test is not"
+        " silently checking a line that no longer exists."
+        "\nMissing line(s):\n" + "\n".join(f"  {line!r}" for line in sorted(missing))
+    )
 
-    check_body = reachable["_metrics_diff_relevant_check"]
 
-    # The fix's actual shape must be present: a temp file created via
-    # mktemp, written via the printf BUILTIN (not `cat <<EOF`, which would
-    # reintroduce the identical CHAOS-3362 pipe -- see the argMax stage's
-    # own comment for why), and grep reading that file rather than stdin.
+def _metrics_diff_relevant_check_body(text: str) -> str:
+    """The literal body of `_metrics_diff_relevant_check` -- a single,
+    hardcoded extraction of the ONE function this fix touches, not a
+    general-purpose function-body parser. This is deliberately narrower
+    than the round 3-5 closure it replaces: it only ever needs to look at
+    this one function's own shape (does it still write via mktemp + the
+    printf builtin, per the argMax stage's established pattern?), which
+    never needed reachability computation in the first place -- the
+    reachability closure existed only to serve the now-deleted `<<<`
+    scan, and `test_here_redirections_match_the_pinned_allowlist` above
+    covers that job for the whole script unconditionally instead.
+    """
+
+    start = text.index("_metrics_diff_relevant_check() {")
+    end = text.index("\n}\n", start)
+    return text[start:end]
+
+
+def test_fixed_code_writes_the_metrics_diff_payload_via_a_temp_file() -> None:
+    """The fix's actual shape must be present in `_metrics_diff_relevant_check`:
+    a temp file created via `mktemp`, written via the `printf` BUILTIN (no
+    pipe, no fork -- not `cat <<EOF`, which would reintroduce the identical
+    CHAOS-3362 pipe; see the argMax stage's own comment for why), with
+    `grep` reading that file directly rather than stdin. This check is
+    unchanged by the round 6 simplification -- only the separate `<<<`
+    reachability scan was replaced, not this one.
+    """
+
+    text = SCRIPT.read_text(encoding="utf-8")
+    check_body = _metrics_diff_relevant_check_body(text)
+
     assert "mktemp" in check_body, (
         "_metrics_diff_relevant_check no longer creates a temp file via"
         " mktemp -- has the fix been reverted?"

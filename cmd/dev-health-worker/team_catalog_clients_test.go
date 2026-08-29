@@ -320,6 +320,45 @@ func TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure(t *testing.
 	}
 }
 
+// TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult is the
+// CHAOS-4432 regression proof (team-lead confirmation, 2026-08-28): a
+// collector that made NO writes and returned a clean, successful zero
+// result (providersync.TeamCatalogResult.Skipped -- GitLab's non-strict
+// walk-failure Python-parity fix) must record the DEDICATED skipped
+// outcome, never the plain "native" success outcome a bare zero result
+// would otherwise be indistinguishable from ("zero-row success = defect").
+// Distinct from TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection,
+// which never even calls the collector -- here the collector IS called and
+// itself chooses to report a skip.
+func TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult(t *testing.T) {
+	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{Skipped: true, SkipReason: "group_projects_fetch_failed"}}
+	observer := &fakeTeamCatalogObserver{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: &fakeCoordinatorBridge{},
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:           fakeAutoimportClientResolver{},
+		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:          observer,
+	}
+	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if !native.called {
+		t.Fatal("native collector was not called -- this test proves the collector's OWN skip decision, not the pre-collector no-selection skip")
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeSkipped,
+	}) {
+		t.Fatalf("observer dispatches=%+v, want a single TeamCatalogOutcomeSkipped dispatch", observer.dispatches)
+	}
+	if len(observer.rows) != 0 {
+		t.Fatalf("observer rows=%+v, want no rows-written calls for a skipped result", observer.rows)
+	}
+}
+
 func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testing.T) {
 	native := &linearCollectorSpy{}
 	fallback := &fakeCoordinatorBridge{}

@@ -476,6 +476,19 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 				return nil
 			}
+			if result.Skipped {
+				// CHAOS-4432 (team-lead ruling, 2026-08-28): a collector
+				// that made NO writes and is reporting a clean, successful
+				// zero result (Python parity for a non-strict walk
+				// failure) must record the dedicated skipped outcome, not
+				// "native" -- a zero-row success must never be silently
+				// indistinguishable from a real, healthy zero-row run.
+				// result.SkipReason (e.g. "group_projects_fetch_failed")
+				// is not yet a metric label, but is warn-logged by the
+				// collector itself at the point of failure.
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
+				return nil
+			}
 			if result.RosterPreservationFailed {
 				// A collector may choose to continue after its own
 				// existing-members pre-read failed rather than hard-failing

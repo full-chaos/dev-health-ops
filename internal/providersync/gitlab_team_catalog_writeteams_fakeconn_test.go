@@ -197,6 +197,9 @@ func TestGitLabTeamCatalogCollectorNonStrictWalkFailureMakesNoWrites(t *testing.
 		result.ProjectsWritten != 0 || result.OwnershipWritten != 0 || len(result.TeamKeys) != 0 {
 		t.Fatalf("result=%+v, want a zero TeamCatalogResult", result)
 	}
+	if !result.Skipped || result.SkipReason != "subgroups_fetch_failed" {
+		t.Fatalf("result=%+v, want Skipped=true SkipReason=subgroups_fetch_failed -- a caller must be able to tell this apart from a real zero-row success", result)
+	}
 	if conn.batch != nil {
 		t.Fatalf("PrepareBatch was called (batch=%+v) -- a non-strict walk failure must make ZERO Sink calls", conn.batch)
 	}

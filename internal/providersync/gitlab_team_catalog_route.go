@@ -551,8 +551,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// Checked BEFORE the pagination-cap gate below: WalkSkipped batches
 		// also set Complete=true so they would not trip it anyway, but this
 		// makes the "clean nil, not an error" contract explicit rather than
-		// incidental.
-		return TeamCatalogResult{}, nil
+		// incidental. Skipped/SkipReason (shared TeamCatalogResult fields,
+		// team-lead ruling) let the caller record
+		// jobruntime.TeamCatalogOutcomeSkipped instead of the plain
+		// "native" success outcome a bare zero result would otherwise be
+		// indistinguishable from -- "zero-row success = defect".
+		return TeamCatalogResult{Skipped: true, SkipReason: batch.Result.WalkSkipReason}, nil
 	}
 	// codex review finding: a bounded GitLab listing hitting its page cap
 	// (evidence.Truncated / !batch.Result.Complete) must never be written as

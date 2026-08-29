@@ -134,6 +134,23 @@ type TeamCatalogResult struct {
 	// membership conflict check is independent of team policy
 	// (team-attribution.md:793-797).
 	MembershipsSkippedManualConflict int
+	// Skipped (team-lead ruling, 2026-08-28, GitLab's non-strict walk-
+	// failure Python-parity fix -- CHAOS-4432) is true when a collector's
+	// non-strict run hit a failure severe enough that it made NO writes at
+	// all and is reporting a clean, successful zero result rather than an
+	// error -- mirroring Python's own _zero_summary(reason=...) pattern.
+	// Exists so this is never indistinguishable from "genuinely nothing to
+	// do" in telemetry ("zero-row success = defect"): a caller that sees
+	// Skipped=true must record jobruntime.TeamCatalogOutcomeSkipped, not
+	// TeamCatalogOutcomeNative, even though err is nil. False for every
+	// other outcome, including "nothing selected" (that path returns
+	// before ever calling the collector, so it never reaches here) and a
+	// genuinely empty but successful collection (e.g. an org with zero
+	// GitLab groups).
+	Skipped bool
+	// SkipReason names why (e.g. "group_projects_fetch_failed"), mirroring
+	// _zero_summary's own `reason` string. Empty when Skipped is false.
+	SkipReason string
 }
 
 // TeamCatalogCollector is the shared, provider-neutral seam every native

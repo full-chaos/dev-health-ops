@@ -104,6 +104,30 @@ func (c *fakeReviewEdgesCHClient) Query(_ context.Context, _ string, _ []clickho
 	}}, nil
 }
 
+// fakeCognitiveLoadCHClient is a minimal cognitiveload.QueryClient double
+// for the CHAOS-4369 Wave 3 reachability test below. The org-wide path
+// (no teamId/repoId in cognitiveLoadVariables) issues exactly TWO
+// sequential queries PER Resolve invocation (user metrics, then team
+// metrics) -- this fake alternates by call PARITY, not a one-shot "first
+// call ever" check, since it is reused across MULTIPLE resolver
+// invocations within one test function (same discipline fakeCHClient's
+// own doc comment documents, and the same bug class it exists to avoid:
+// a one-shot version returns real data only for the very first Resolve
+// call across the whole test, then silently empty results for every
+// subsequent subtest). It is NOT a substitute for the real-ClickHouse
+// dual-run proof (ops/tests/api/graphql/test_go_api_dual_run_cognitive_load.py).
+type fakeCognitiveLoadCHClient struct{ calls int }
+
+func (c *fakeCognitiveLoadCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.calls++
+	if c.calls%2 == 1 {
+		return &fakeRows{rows: [][]any{
+			{time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), uint64(4), uint64(2), uint64(1)},
+		}}, nil
+	}
+	return &fakeRows{rows: nil}, nil
+}
+
 func writeTestJWKS(t *testing.T, pub ed25519.PublicKey) string {
 	t.Helper()
 	doc := map[string]any{
@@ -414,6 +438,102 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 		setRoutingMode(t, pool, documentDigest, "reviewEdges", "disabled")
 		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		}
+	})
+}
+
+func cognitiveLoadVariables() map[string]any {
+	return map[string]any{
+		"input": map[string]any{
+			"orgId":     "org-1",
+			"sinceDate": "2026-08-01",
+			"untilDate": "2026-08-31",
+		},
+	}
+}
+
+// TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4369 Wave
+// 3's extension of TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled to
+// the THIRD operation this route now mounts: it exercises the same real
+// HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
+// real Postgres table, real gqlgen server, real principal.Verifier), this
+// time dispatching cognitiveLoad, proving its reachability is gated
+// independently by its OWN go_api_routing_state row.
+func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest)
+	documentDigest := digestHex(registeredCognitiveLoadDocument)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	t.Run("disabled_by_default", func(t *testing.T) {
+		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "2026-08-20") {
+			t.Fatalf("expected response to contain the fake row's day with no errors, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
+		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, "", cognitiveLoadVariables())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no token: got %d, want 401", rec.Code)
+		}
+	})
+
+	// The three operations sharing one Mux/PostgresSwitch instance must
+	// NOT leak reachability into each other.
+	t.Run("enabling_cognitiveLoad_does_not_enable_featureFlags_or_reviewEdges", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
+		if rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token); rec.Code != http.StatusNotFound {
+			t.Fatalf("featureFlags should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
+		}
+		if rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, token, reviewEdgesVariables()); rec.Code != http.StatusNotFound {
+			t.Fatalf("reviewEdges should stay unreachable when only cognitiveLoad is canaried: got %d", rec.Code)
+		}
+	})
+
+	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "2026-08-20") {
+			t.Fatalf("expected a real cognitiveLoad result before rollback, got %s", rec.Body.String())
+		}
+		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "disabled")
+		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code != http.StatusNotFound {
 			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
 		}
 	})

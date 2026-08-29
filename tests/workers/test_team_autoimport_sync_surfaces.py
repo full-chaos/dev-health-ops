@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import date
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -26,100 +25,96 @@ _TEAM_AUTOIMPORT_TASK = "dev_health_ops.workers.tasks.run_post_sync_team_autoimp
 _ORG = "team-autoimport-sync-org"
 
 
-def test_backfill_autoimport_false_or_absent_runs_strict_discovery(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
+def test_backfill_reference_discovery_arms_ledger_and_returns_ledger_result(
+    monkeypatch,
+) -> None:
+    """CHAOS-4498: _run_strict_reference_discovery_for_backfill arms the
+    shared sync_run_reference_discoveries ledger (via
+    sync.planner.seed_reference_discovery_run) and waits for it
+    (await_reference_discovery_terminal) instead of calling
+    run_team_autoimport_strict directly -- for jira exactly like every
+    other provider, since the native-vs-bridge choice is made entirely by
+    TeamCatalogDiscoveryExecutor on the Go side, not by this function."""
+    seed_calls: list[dict[str, Any]] = []
 
-    def fake_run_team_autoimport(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {"status": "success"}
+    def fake_seed(session: Any, **kwargs: Any) -> str:
+        seed_calls.append(kwargs)
+        return "22222222-2222-2222-2222-222222222222"
 
+    monkeypatch.setattr(
+        "dev_health_ops.sync.planner.seed_reference_discovery_run", fake_seed
+    )
     monkeypatch.setattr(
         backfill_runner,
-        "run_team_autoimport_strict",
-        fake_run_team_autoimport,
+        "get_postgres_session_sync",
+        lambda: _session_ctx_noop(),
     )
-
-    assert backfill_runner._run_strict_reference_discovery_for_backfill(
-        provider="jira",
-        org_id="org-1",
-        credentials={},
-        sync_options={},
-        sync_config_id="cfg-1",
-        since=date(2026, 1, 1),
-        before=date(2026, 1, 7),
-        window_count=1,
-        analytics_db_url=None,
-    ) == {"status": "success"}
-    assert backfill_runner._run_strict_reference_discovery_for_backfill(
-        provider="jira",
-        org_id="org-1",
-        credentials={},
-        sync_options={"auto_import_teams": False},
-        sync_config_id="cfg-1",
-        since=date(2026, 1, 1),
-        before=date(2026, 1, 7),
-        window_count=1,
-        analytics_db_url=None,
-    ) == {"status": "success"}
-    assert len(calls) == 2
-    assert calls[0]["scope"] == {
-        "mode": "backfill",
-        "sync_config_id": "cfg-1",
-        "sync_options": {},
-        "window_count": 1,
-        "since": "2026-01-01",
-        "before": "2026-01-07",
-    }
-    assert calls[1]["scope"] == {
-        "mode": "backfill",
-        "sync_config_id": "cfg-1",
-        "sync_options": {"auto_import_teams": False},
-        "window_count": 1,
-        "since": "2026-01-01",
-        "before": "2026-01-07",
-    }
-
-
-def test_backfill_autoimport_true_calls_once(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
-
-    def fake_run_team_autoimport(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {"status": "success"}
-
     monkeypatch.setattr(
-        backfill_runner, "run_team_autoimport_strict", fake_run_team_autoimport
+        backfill_runner,
+        "await_reference_discovery_terminal",
+        lambda sync_run_id, **kwargs: {
+            "outcome": "success",
+            "sync_run_id": sync_run_id,
+            "result": {"status": "success", "teams_imported": 1},
+        },
     )
-    monkeypatch.setattr(backfill_runner, "_verify_reference_readback", lambda **_: None)
 
     result = backfill_runner._run_strict_reference_discovery_for_backfill(
         provider="jira",
         org_id="org-1",
-        credentials={"email": "dev@example.com"},
-        sync_options={"auto_import_teams": True, "project_keys": ["OPS"]},
+        integration_id="integration-1",
         sync_config_id="cfg-1",
-        since=date(2026, 1, 1),
-        before=date(2026, 1, 7),
-        window_count=1,
-        analytics_db_url="clickhouse://backfill-dsn",
+        triggered_by="operator_backfill",
     )
 
-    assert result == {"status": "success"}
-    assert len(calls) == 1
-    assert calls[0] == {
-        "provider": "jira",
+    assert result == {"status": "success", "teams_imported": 1}
+    assert len(seed_calls) == 1
+    assert seed_calls[0] == {
+        "integration_id": "integration-1",
         "org_id": "org-1",
-        "credentials": {"email": "dev@example.com"},
-        "analytics_db_url": "clickhouse://backfill-dsn",
-        "scope": {
-            "mode": "backfill",
-            "sync_config_id": "cfg-1",
-            "sync_options": {"auto_import_teams": True, "project_keys": ["OPS"]},
-            "window_count": 1,
-            "since": "2026-01-01",
-            "before": "2026-01-07",
-        },
+        "triggered_by": "operator_backfill",
     }
+
+
+@contextmanager
+def _session_ctx_noop():
+    class _Session:
+        def commit(self) -> None:
+            pass
+
+    yield _Session()
+
+
+def test_backfill_reference_discovery_raises_on_failed_ledger_outcome(
+    monkeypatch,
+) -> None:
+    """CHAOS-4498: a failed ledger outcome raises with the row's reason --
+    never falls back to calling the Python populator directly."""
+    monkeypatch.setattr(
+        "dev_health_ops.sync.planner.seed_reference_discovery_run",
+        lambda session, **kwargs: "22222222-2222-2222-2222-222222222222",
+    )
+    monkeypatch.setattr(
+        backfill_runner, "get_postgres_session_sync", lambda: _session_ctx_noop()
+    )
+    monkeypatch.setattr(
+        backfill_runner,
+        "await_reference_discovery_terminal",
+        lambda sync_run_id, **kwargs: {
+            "outcome": "failed",
+            "sync_run_id": sync_run_id,
+            "reason": "missing Jira credentials",
+        },
+    )
+
+    with pytest.raises(ValueError, match="missing Jira credentials"):
+        backfill_runner._run_strict_reference_discovery_for_backfill(
+            provider="jira",
+            org_id="org-1",
+            integration_id="integration-1",
+            sync_config_id="cfg-1",
+            triggered_by="operator_backfill",
+        )
 
 
 # ---------------------------------------------------------------------------

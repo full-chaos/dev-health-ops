@@ -525,6 +525,21 @@ func buildSyncCoordinatorWorker(
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
 		},
+		// CHAOS-4434: GitHub teams/team_memberships, Go-native. No Projects
+		// surface exists for GitHub at all (auto_import_capabilities("github").
+		// projects is permanently False in Python); the collector reads
+		// selections.Projects but never produces a Projects/Ownership row.
+		// Telemetry is generic (jobruntime.TeamCatalogObserver, wired below via
+		// teamCatalogObserver) -- no per-provider Observer field needed here.
+		"github": providersync.GitHubTeamCatalogCollector{
+			// ResolveEmail: true mirrors PyGithub's lazy NamedUser.email
+			// completion (team_membership.py's discover_members_github) --
+			// without it, every membership facet set collapses to just
+			// "github:<login>" and an email-based assignee can no longer
+			// match team attribution (codex round 1, P2).
+			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
+			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,

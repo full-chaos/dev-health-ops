@@ -291,6 +291,41 @@ def _github_org(
     ) or _first_string(sync_options, "org", "organization", "org_name", "owner")
 
 
+def _github_team_row(
+    *,
+    org_id: str,
+    team_id: str,
+    name: str,
+    description: str | None,
+    repo_patterns: list[str],
+    native_team_key: str,
+    parent_team_id: str | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """The exact `teams` row shape for one discovered GitHub team.
+
+    Extracted from `_team_rows`'s loop body (CHAOS-4434) so the Go port's
+    live-python-oracle (internal/providersync/testdata/oracle_pairs/
+    github_team-catalog_team.py) can call this SAME function directly rather
+    than a hand-duplicated copy of its dict literal -- no behavior change,
+    `_team_rows` below calls this unmodified.
+    """
+    return {
+        "id": team_id,
+        "name": name,
+        "description": description,
+        "members": [],
+        "project_keys": [],
+        "repo_patterns": repo_patterns,
+        "is_active": True,
+        "updated_at": now,
+        "org_id": org_id,
+        "provider": PROVIDER,
+        "native_team_key": native_team_key,
+        "parent_team_id": parent_team_id,
+    }
+
+
 def _team_rows(
     *, org_id: str, teams: Iterable[Any], now: datetime
 ) -> list[dict[str, Any]]:
@@ -299,22 +334,49 @@ def _team_rows(
         associations = _mapping(getattr(team, "associations", None))
         team_id = _team_id(str(getattr(team, "provider_team_id")))
         rows.append(
-            {
-                "id": team_id,
-                "name": str(getattr(team, "name", team_id)),
-                "description": getattr(team, "description", None),
-                "members": [],
-                "project_keys": [],
-                "repo_patterns": _strings(associations.get("repo_patterns")),
-                "is_active": True,
-                "updated_at": now,
-                "org_id": org_id,
-                "provider": PROVIDER,
-                "native_team_key": str(getattr(team, "provider_team_id")),
-                "parent_team_id": _parent_team_id(associations),
-            }
+            _github_team_row(
+                org_id=org_id,
+                team_id=team_id,
+                name=str(getattr(team, "name", team_id)),
+                description=getattr(team, "description", None),
+                repo_patterns=_strings(associations.get("repo_patterns")),
+                native_team_key=str(getattr(team, "provider_team_id")),
+                parent_team_id=_parent_team_id(associations),
+                now=now,
+            )
         )
     return rows
+
+
+def _github_repo_ownership_row(
+    *,
+    org_id: str,
+    team_id: str,
+    repo_full_name: str,
+    specificity: int,
+    now: datetime,
+) -> TeamRepoOwnershipRecord:
+    """The exact `team_repo_ownership` row for one (team, repo) grant.
+
+    Extracted from `_repo_ownership_rows`'s loop body (CHAOS-4434) so the Go
+    port's live-python-oracle (internal/providersync/testdata/oracle_pairs/
+    github_team-catalog_repo-ownership.py) can call this SAME function
+    directly -- no behavior change, `_repo_ownership_rows` below calls this
+    unmodified.
+    """
+    return TeamRepoOwnershipRecord(
+        org_id=org_id,
+        provider=PROVIDER,
+        team_id=team_id,
+        repo_full_name=repo_full_name,
+        match_type="exact",
+        source="provider_access",
+        is_primary=0,
+        specificity=specificity,
+        priority=PROVIDER_ACCESS_PRIORITY,
+        valid_from=now,
+        updated_at=now,
+    )
 
 
 def _repo_ownership_rows(
@@ -335,18 +397,12 @@ def _repo_ownership_rows(
                 continue
             seen.add(key)
             rows.append(
-                TeamRepoOwnershipRecord(
+                _github_repo_ownership_row(
                     org_id=org_id,
-                    provider=PROVIDER,
                     team_id=team_id,
                     repo_full_name=repo_full_name,
-                    match_type="exact",
-                    source="provider_access",
-                    is_primary=0,
                     specificity=specificity,
-                    priority=PROVIDER_ACCESS_PRIORITY,
-                    valid_from=now,
-                    updated_at=now,
+                    now=now,
                 )
             )
     return rows
@@ -413,23 +469,51 @@ async def _membership_rows(
                 if facet not in roster_for_team:
                     roster_for_team.append(facet)
             rows.append(
-                TeamMembershipRecord(
+                _github_membership_row(
                     org_id=org_id,
-                    provider=PROVIDER,
                     team_id=team_id,
                     member_id=member_id,
                     raw_provider_user_id=facets[0],
                     raw_email=getattr(member, "email", None),
                     identity_facets=facets,
-                    source="provider_access",
-                    is_primary=0,
-                    specificity=BASE_SPECIFICITY,
-                    priority=PROVIDER_ACCESS_PRIORITY,
-                    valid_from=now,
-                    updated_at=now,
+                    now=now,
                 )
             )
     return rows, roster, observed_team_ids
+
+
+def _github_membership_row(
+    *,
+    org_id: str,
+    team_id: str,
+    member_id: str,
+    raw_provider_user_id: str,
+    raw_email: str | None,
+    identity_facets: list[str],
+    now: datetime,
+) -> TeamMembershipRecord:
+    """The exact `team_memberships` row for one discovered GitHub team member.
+
+    Extracted from `_membership_rows`'s loop body (CHAOS-4434) so the Go
+    port's live-python-oracle (internal/providersync/testdata/oracle_pairs/
+    github_team-catalog_membership.py) can call this SAME function directly
+    -- no behavior change, `_membership_rows` above calls this unmodified.
+    """
+    return TeamMembershipRecord(
+        org_id=org_id,
+        provider=PROVIDER,
+        team_id=team_id,
+        member_id=member_id,
+        raw_provider_user_id=raw_provider_user_id,
+        raw_email=raw_email,
+        identity_facets=identity_facets,
+        source="provider_access",
+        is_primary=0,
+        specificity=BASE_SPECIFICITY,
+        priority=PROVIDER_ACCESS_PRIORITY,
+        valid_from=now,
+        updated_at=now,
+    )
 
 
 def _sink(scope: Mapping[str, Any]) -> ClickHouseMetricsSink:

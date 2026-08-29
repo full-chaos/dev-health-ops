@@ -159,6 +159,16 @@ type githubTeamCatalogRows struct {
 	Teams         []githubTeamRow
 	Memberships   []githubMembershipRow
 	RepoOwnership []githubTeamRepoOwnershipRow
+	// FailedMemberFetchTeamIDs (CHAOS-4461) lists the teams (by their "gh:"
+	// id, matching githubTeamRow.ID) whose member fetch failed under a
+	// non-strict Collect while members were globally selected. The roster
+	// rebuild below can only ever produce [] for these teams (no
+	// memberships were ever added for them); the caller (GitHubTeamCatalog
+	// Collector.CollectTeamCatalog) MUST NOT write that empty roster --
+	// it must confirm and carry forward the currently-persisted one instead,
+	// the same roster_write_safe discipline the members-globally-off path
+	// already uses, applied per-team.
+	FailedMemberFetchTeamIDs []string
 }
 
 // githubTeamID mirrors team_autoimport_github.py's _team_id: "gh:" + the

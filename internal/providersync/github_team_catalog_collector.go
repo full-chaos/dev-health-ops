@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -123,6 +124,53 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	rows, _, err := collector.Collect(ctx, ref.OrgID, selections.Teams, selections.Members)
 	if err != nil {
 		return TeamCatalogResult{}, err
+	}
+
+	// CHAOS-4461: a per-team member-fetch failure under non-strict, with
+	// members globally selected, must not let this team's roster get
+	// rebuilt to [] below -- confirm and carry forward its currently-
+	// persisted roster instead (never write an unconfirmed empty one, the
+	// same discipline the members-globally-off branch below already uses).
+	// Python has no equivalent for this per-team case (team_autoimport_
+	// github.py's roster-preservation only ever engages when want_members
+	// is globally False) -- team-lead ruling 2026-08-28: fix in Go only,
+	// tracked as a Python-side gap in CHAOS-4461 (dies with CHAOS-4435).
+	if selections.Members && len(rows.FailedMemberFetchTeamIDs) > 0 {
+		preserved, ok := adapter.Sink.ExistingTeamMembers(ctx, ref.OrgID, rows.FailedMemberFetchTeamIDs)
+		failed := make(map[string]struct{}, len(rows.FailedMemberFetchTeamIDs))
+		for _, id := range rows.FailedMemberFetchTeamIDs {
+			failed[id] = struct{}{}
+		}
+		if !ok {
+			// Cannot confirm these teams' current rosters -- skip writing
+			// THEIR rows entirely this cycle rather than risk clobbering an
+			// unconfirmed roster. Every other team still writes normally.
+			filtered := rows.Teams[:0]
+			for _, team := range rows.Teams {
+				if _, isFailed := failed[team.ID]; !isFailed {
+					filtered = append(filtered, team)
+				}
+			}
+			rows.Teams = filtered
+			slog.Default().WarnContext(ctx, "github_team_catalog_roster_preservation_failed",
+				"org_id", ref.OrgID, "team_ids", rows.FailedMemberFetchTeamIDs)
+		} else {
+			for index := range rows.Teams {
+				if _, isFailed := failed[rows.Teams[index].ID]; !isFailed {
+					continue
+				}
+				members := preserved[rows.Teams[index].ID]
+				if members == nil {
+					// No prior row for this team (genuinely new) has
+					// nothing to preserve -- [] is the correct, confirmed
+					// answer here, not an unconfirmed guess.
+					members = []string{}
+				}
+				rows.Teams[index].Members = members
+			}
+			slog.Default().InfoContext(ctx, "github_team_catalog_roster_preserved_after_fetch_failure",
+				"org_id", ref.OrgID, "team_ids", rows.FailedMemberFetchTeamIDs)
+		}
 	}
 
 	// Mirrors _populate_async's roster_write_safe gate: a teams-only run

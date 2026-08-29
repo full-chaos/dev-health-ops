@@ -223,3 +223,62 @@ func TestGitHubTeamCatalogCollectorFallsBackToSyncOptionsOrgName(t *testing.T) {
 		t.Fatalf("sync_options org fallback did not take effect: result=%+v requests=%v", result, doer.requests)
 	}
 }
+
+// TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure is
+// the CHAOS-4461 regression proof: with members globally selected, ONE
+// team's member fetch failing must not wipe that team's roster to [] --
+// its existing roster must survive, exactly like the members-globally-off
+// path already guarantees. A second, healthy team in the same run gets its
+// freshly observed roster, proving the fix is per-team, not all-or-nothing.
+func TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "github-adapter-org-partial-fetch-failure"
+	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	// Seed platform's existing roster, as if a prior successful run had
+	// already written it. ops has no prior row -- a genuinely new team.
+	seedTeam, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTeam.Members = []string{"github:octocat"}
+	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{seedTeam}); err != nil {
+		t.Fatal(err)
+	}
+
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Operations"}]`,
+		"/orgs/acme/teams/platform/repos":   `[]`,
+		"/orgs/acme/teams/ops/repos":        `[]`,
+		"/orgs/acme/teams/platform/members": `not json`,
+		"/orgs/acme/teams/ops/members":      `[{"login":"monalisa"}]`,
+	}}
+	adapter := GitHubTeamCatalogCollector{Sink: sink}
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	client := githubTeamCatalogAdapterClient(t, doer)
+
+	result, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both teams still get written -- platform's failed fetch does not
+	// abort the run or exclude it from the teams table.
+	if result.TeamsWritten != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+
+	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform", "gh:ops"})
+	if !ok {
+		t.Fatal("roster readback not-ok")
+	}
+	if len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
+		t.Fatalf("platform's existing roster was NOT preserved after its member fetch failed: roster=%+v", roster)
+	}
+	if len(roster["gh:ops"]) != 1 || roster["gh:ops"][0] != "github:monalisa" {
+		t.Fatalf("ops (healthy fetch, genuinely new team) got the wrong roster: roster=%+v", roster)
+	}
+}

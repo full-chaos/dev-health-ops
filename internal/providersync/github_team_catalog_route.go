@@ -222,6 +222,10 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
+				// CHAOS-4461: this team must not have its roster silently
+				// rebuilt to [] below -- the caller confirms and carries
+				// forward its currently-persisted roster instead.
+				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, githubTeamID(slug))
 			}
 		}
 	}

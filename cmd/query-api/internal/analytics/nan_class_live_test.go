@@ -253,6 +253,15 @@ func TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal(t *testing.T) 
 			"this pinned dependency version, or this value was not actually NaN by the time it reached "+
 			"the marshaler", buf.String())
 	}
+	// VENDOR STRING, NOT OURS: this exact text is github.com/99designs/gqlgen's
+	// own error (float.go:38-45), pinned at go.mod's current v0.17.66. Same
+	// rot shape the clientcontract_test.go fake's dev-health-go pin already
+	// flags: it documents today's behaviour precisely and will need
+	// revisiting -- an update to the message text, not the mechanism -- on a
+	// future gqlgen bump. Coordinator ruling 2026-08-29: any assertion on
+	// text this package does not own is a scheduled maintenance event: fine
+	// when noted here, expensive when discovered as a mystifying failure in
+	// an unrelated version-bump PR.
 	if got := marshalErr.Error(); got != "cannot marshal infinite no NaN float values" {
 		t.Fatalf("expected gqlgen's exact stock error text, got %q -- if gqlgen's wording changed, "+
 			"that's fine to update here, but confirm it's still the SAME NaN/Inf guard and not a "+

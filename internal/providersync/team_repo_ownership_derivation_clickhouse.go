@@ -187,7 +187,24 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+	// CHAOS-4537 codex review round 3, second P1 (confirmed real, traced
+	// through diffTeamRepoOwnershipRetractions below): that diff is a single
+	// GLOBAL comparison over the whole org's activeRows vs. derived -- it is
+	// not scoped per resolution arm. The guard above can let a cycle proceed
+	// with projectLinks empty (a Linear-native signal from ONE work item was
+	// enough), but `derived` can never reproduce a project_id-arm-derived
+	// pair in that state (the arm has no projectToTeam entries to resolve
+	// from at all). Diffing anyway would treat "this cycle cannot reconfirm
+	// them" as "they're no longer true" and retract every previously-good
+	// project_id-arm row for the org, including ones for repos the single
+	// Linear item never touches (a mixed-org false retraction). Skip
+	// retraction entirely whenever projectLinks is empty; still derive and
+	// write any newly-resolvable linear_team_key rows. A later cycle that
+	// re-syncs team_project_ownership resumes normal retraction.
+	var toRetract []teamRepoOwnershipActiveRow
+	if len(projectLinks) > 0 {
+		toRetract = diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+	}
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {

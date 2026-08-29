@@ -1032,8 +1032,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg
     # (`//go:build integration`, team_repo_ownership_derivation_integration_test.go).
     # 1251 -> 1254 top-level; 148 -> 149 integration-tagged.
-    assert len(expected_provider_tests) == 1254
-    assert len(expected_integration_tests) == 149
+    #
+    # A delta-only re-review of round 3's own fix (the final allowed codex
+    # pass per the round cap -- its finding gets a minimal fix, no further
+    # round) found a second real P1: diffTeamRepoOwnershipRetractions is a
+    # single GLOBAL diff over the whole org, not scoped per resolution arm.
+    # Round 3's hasResolvableLinearNativeTeamKey guard let a cycle proceed
+    # with projectLinks empty on ONE Linear item's valid native key, but
+    # `derived` can never reproduce a project_id-arm-derived pair in that
+    # state -- retracting would wrongly wipe every previously-good
+    # project_id-arm row for a MIXED org. Fixed: skip retraction entirely
+    # whenever projectLinks is empty (still derive/write new linear_team_key
+    # rows). Added 1 new `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg.
+    # 1254 -> 1255 top-level; 149 -> 150 integration-tagged.
+    assert len(expected_provider_tests) == 1255
+    assert len(expected_integration_tests) == 150
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1049,7 +1064,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1254
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1255
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1110,7 +1125,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1254
+    assert len(selected_tests) == len(set(selected_tests)) == 1255
     assert set(selected_tests) == expected_tests
 
 

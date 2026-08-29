@@ -425,6 +425,85 @@ func TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIs
 	}
 }
 
+// TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg
+// is codex review (round 3, second P1, confirmed real) on this PR's OWN
+// round-3-first fix (the sibling test above): that fix let a cycle proceed
+// (inputsReady=true) with projectLinks empty as long as ONE Linear work item
+// has a validly-known native_team_key -- but diffTeamRepoOwnershipRetractions
+// is a single GLOBAL diff over the whole org, not scoped per resolution arm.
+// A MIXED org has a pre-existing project_id-arm row for one repo (from a
+// prior cycle, before team_project_ownership went transiently empty) AND a
+// Linear work item with a valid native key for a DIFFERENT repo this cycle.
+// Before this fix: `derived` would contain only the new linear_team_key row
+// (the project_id arm has no projectToTeam entries to resolve the first repo
+// with at all), and the diff would wrongly retract the first repo's real,
+// previously-derived row. This proves both halves at once: the new
+// linear_team_key row is still written, and the pre-existing project_id-arm
+// row survives untouched.
+func TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-mixed-org-transient-tpo-gap"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	githubRepoID := uuid.New()
+	linearRepoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{
+		githubRepoID: "acme/github-repo",
+		linearRepoID: "acme/linear-repo",
+	})
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org this cycle, simulating the exact transient gap
+	// CHAOS-4537 targets.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", linearRepoID,
+		"", "CHAOS", now,
+	)
+
+	// A pre-existing active inferred row for the OTHER repo, as if a PRIOR
+	// Derive() run (before the transient gap) had resolved it via the
+	// project_id arm.
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", "team-platform", githubRepoID, "acme/github-repo",
+		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		now, nil, now,
+	); err != nil {
+		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send pre-existing team_repo_ownership row: %v", err)
+	}
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- a real, already-synced Linear work item with a validly-known native_team_key is genuine input")
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted -- the pre-existing project_id-arm row for acme/github-repo must survive a cycle that cannot reconfirm it, got %d", retracted)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row written via native_team_key, got %d", written)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 1 {
+		t.Fatalf("expected armCounts[linear_team_key] = 1, got %d (%+v)", got, armCounts)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	if row, ok := got["acme/github-repo"]; !ok || row.teamID != "team-platform" {
+		t.Fatalf("expected the pre-existing acme/github-repo -> team-platform row to survive untouched, got %+v", got)
+	}
+	if row, ok := got["acme/linear-repo"]; !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected the new acme/linear-repo -> CHAOS row via native_team_key, got %+v", got)
+	}
+}
+
 // TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError covers the
 // designed-empty case (§0.2): an org with zero team_project_ownership rows
 // (a GitHub-only org, or team auto-import never configured) derives zero

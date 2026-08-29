@@ -1196,6 +1196,21 @@ alias-resolution machinery was added for a case that cannot occur; instead,
 `linear_reference_catalog_test.go`'s existing `chaos4530CollectReferenceCatalog` harness) so a FUTURE
 change that lets the two columns diverge fails loudly here, not silently in production.
 
+**Delta-only re-review of round 3's own fix (the final allowed codex pass per the round cap — minimal
+fix only, no further round): P1 confirmed real, the readiness guard fixed above was still retraction-
+unsafe for a MIXED org.** `diffTeamRepoOwnershipRetractions` is a single GLOBAL diff over the whole
+org's active rows vs. `derived`, not scoped per resolution arm. The `hasResolvableLinearNativeTeamKey`
+guard above correctly lets a cycle proceed (`inputsReady=true`) when `projectLinks` is empty but ONE
+Linear item has a validly-known native key — but `derived` can never reproduce a `project_id`-arm pair
+in that state (the arm has no `projectToTeam` entries to resolve from at all with `projectLinks` empty).
+Diffing anyway would treat "this cycle cannot reconfirm them" as "they're no longer true" and retract
+every previously-good `project_id`-arm row for the org, including repos the single Linear item never
+touches. Fixed: skip the retraction diff entirely whenever `projectLinks` is empty (still derive and
+write any newly-resolvable `linear_team_key` rows); a later cycle that re-syncs `team_project_ownership`
+resumes normal retraction. `TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
+pins both halves: the new row is written, and the pre-existing `project_id`-arm row for the other repo
+survives untouched.
+
 The team-key-shaped `team_project_ownership` row itself is **still written** today
 (`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial
 from this reader's point of view, kept only as a still-open fast-follow: once this redirect is proven

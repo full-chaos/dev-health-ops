@@ -3,7 +3,9 @@
 Go, read-only GraphQL analytics service. Part of the Go API epic
 (CHAOS-4352). Wave 0 (CHAOS-4366) built the proof infrastructure below;
 Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`;
-Wave 2 (CHAOS-4368) ports the second, `reviewEdges` — see
+Wave 2 (CHAOS-4368) ported the second, `reviewEdges`; Wave 3 (CHAOS-4369)
+ports `cognitiveLoad` (this lane) alongside `complexityTimeseries` and
+`hotspots` (a sibling lane, same wave) — see
 [`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
 [`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
@@ -40,22 +42,76 @@ port reproduces that "authorized org always wins" behavior exactly (see
 `/healthz`/`/readyz`). `/query` requests are gated by `routeswitch.Mux` +
 `PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
 `canary`/`primary` for the SPECIFIC operation being dispatched —
-featureFlags and reviewEdges each have their own row and are gated fully
-independently) and authenticated by `principal.Verifier`
+featureFlags, reviewEdges, and cognitiveLoad each have their own row and
+are gated fully independently) and authenticated by `principal.Verifier`
 (effective-principal envelope, Bearer token). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
-`registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument`) — see
-those constants' doc comments for the known gap (hand-registered single
-documents, not yet sourced from Wave 0's real web-operations inventory)
-and for the Wave-1 codex-round-3 lesson both documents are sourced from
-the real web client file to avoid repeating (a wrong operation name on
-both the test and route sides would still "match" locally while 404-ing
-every real client request).
+`registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument` /
+`registeredCognitiveLoadDocument`, indexed by operation name via
+`newQueryHandler`'s `digestByOperation` map) — see those constants' doc
+comments for the known gap (hand-registered single documents, not yet
+sourced from Wave 0's real web-operations inventory) and for the Wave-1
+codex-round-3 lesson every document is sourced from the real web client
+file to avoid repeating (a wrong operation name on both the test and
+route sides would still "match" locally while 404-ing every real client
+request).
 
 Stage-2 local dual-run proof (real Python + real Go server, same
 producer-seeded scratch state, compared via the CHAOS-4381 comparator):
-`tests/api/graphql/test_go_api_dual_run_feature_flags.py` and
-`tests/api/graphql/test_go_api_dual_run_review_edges.py`.
+`tests/api/graphql/test_go_api_dual_run_feature_flags.py`,
+`tests/api/graphql/test_go_api_dual_run_review_edges.py`, and
+`tests/api/graphql/test_go_api_dual_run_cognitive_load.py`.
+
+## Wave 3: cognitiveLoad (CHAOS-4369)
+
+`internal/cognitiveload` ports
+`dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load`
+verbatim, including the TWO distinct read paths the Python resolver picks
+between on `teamId`/`repoId` **at the actual feature-branch tip**:
+
+1. **Single-team** (`teamId` set, `repoId` unset): reads
+   `team_cognitive_load_daily` directly — already team-scoped and
+   OWNERSHIP-resolved at write time (CHAOS-4365 item 2). One dedup query,
+   no merge. The ratio fields are genuinely `Nullable(Float64)` here
+   (unmeasured vs. a measured `0.0`); ported via one bundled
+   `argMax(tuple(...), computed_at)` rather than five independent
+   per-column `argMax` calls, so a day whose latest row is genuinely NULL
+   never surfaces a stale non-null value from an older row.
+2. **Org-wide (`teamId` unset) OR team+repo combined (both set)**: the
+   original two-query merge over `user_metrics_daily`/`team_metrics_daily`,
+   each deduplicated via `argMax(..., computed_at)` before aggregating,
+   merged over the UNION of days. `repoId`, when set, narrows only
+   `user_metrics_daily`; `team_metrics_daily` (`fetchTeamMetrics`) takes no
+   `repoId` argument at all in either sub-case.
+
+**Finding, not an assumption (root AGENTS.md: reproduce claims, don't
+trust a briefing):** the Wave 3 task briefing stated CHAOS-4406's
+ownership-gated team+repo-combined path (commit `8519cd2a8`, which adds a
+THIRD branch resolving `team_repo_ownership`/`teams.repo_patterns` before
+filtering by `repo_id` alone) was "already in the feature base". Verified
+false: `git merge-base --is-ancestor 8519cd2a8
+origin/feature/chaos-4352-go-api` returns non-zero (not an ancestor) — the
+commit exists only on `origin/main`. This port targets the Python that
+ACTUALLY exists at the feature-branch tip today, confirmed by reading
+`src/dev_health_ops/api/graphql/resolvers/cognitive_load.py` directly in
+this worktree (437 lines, two branches, ends at commit `4795fc4e2`) rather
+than trusting the branch-count/behavior claimed in the handoff doc. The
+team+repo-combined case therefore still filters `user_metrics_daily` by
+BOTH `team_id` AND `repo_id` (the same tainted `team_id` column
+CHAOS-4396/CHAOS-4406 flag on `main`) — unchanged here, since fixing it is
+out of this port's scope. Tracked as **CHAOS-4462** (child of CHAOS-4352,
+"Go cognitiveLoad port must absorb main's 3-path resolver (CHAOS-4406)
+when the feature branch takes main"): a later wave that merges `main`'s
+CHAOS-4406 fix into the feature branch will need a follow-up PR to
+`internal/cognitiveload`.
+
+Like `reviewEdges` (unlike `featureFlags`), `resolve_cognitive_load` has
+no missing-table degraded path — no `degradedReason` field on
+`CognitiveLoadResult` at all — so a ClickHouse error propagates as a real
+GraphQL error on both sides, and this port does not invent one.
+Authorization mirrors `reviewEdges` exactly: the envelope's authorized org
+always wins over a mismatched `orgId` argument (`schema.resolvers.go`'s
+`CognitiveLoad` doc comment).
 
 ## The `Date` GraphQL scalar (fixed in Wave 2)
 
@@ -152,17 +208,19 @@ earlier "CI cannot build this" caveat.)
 
 ## What's NOT here yet (later waves / other lanes)
 
-- Any resolver besides `featureFlags` and `reviewEdges` — every other
-  field still panics with `"not implemented"`.
+- Any resolver besides `featureFlags`, `reviewEdges`, and `cognitiveLoad`
+  — every other field still panics with `"not implemented"`
+  (`complexityTimeseries`/`hotspots` are a sibling Wave-3 lane's scope, not
+  this PR's).
 - The registered-document registry sourced from Wave 0's real
-  web-operations inventory (deliverable 2) — Waves 1 and 2 each
-  hand-register their own single canary document instead
-  (`query_route.go`).
-- Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — both
-  waves deliver only local dual-run proof (stage 2); a deploy is routed
+  web-operations inventory (deliverable 2) — every wave so far
+  hand-registers its own canary document(s) instead (`query_route.go`).
+- Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — every
+  wave delivers only local dual-run proof (stage 2); a deploy is routed
   through the epic orchestrator, not this lane.
 - `featureFlagEvents` — explicitly out of scope for the Wave 1 canary
   (plan §6).
 - The `DateTime` and `JSON` GraphQL scalars are still the same Wave-0
   placeholder mappings, still KNOWN INCORRECT for the reasons `gqlgen.yml`
-  documents — Wave 2 fixed only `Date` (`reviewEdges`'s own scalar need).
+  documents — Wave 2 fixed only `Date` (`reviewEdges`'s/`cognitiveLoad`'s
+  own scalar need); neither `DateTime` nor `JSON` is used by `cognitiveLoad`.

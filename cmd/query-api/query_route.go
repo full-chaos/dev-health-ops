@@ -113,6 +113,30 @@ const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInpu
   }
 }`
 
+// registeredCognitiveLoadDocument is CHAOS-4369 Wave 3's registered
+// document for the cognitiveLoad operation -- same "registered documents
+// only" contract, sourced byte-for-byte from the REAL production query
+// (web/src/lib/graphql/queries.ts's COGNITIVE_LOAD_QUERY, operation name
+// "CognitiveLoad", input variable named `$input` of type
+// `CognitiveLoadInput!` -- same single-input-object shape as
+// registeredReviewEdgesDocument above, not featureFlags's individual
+// scalar args).
+const registeredCognitiveLoadDocument = `query CognitiveLoad($input: CognitiveLoadInput!) {
+  cognitiveLoad(input: $input) {
+    orgId
+    teamId
+    totalDays
+    signals {
+      day
+      prInterruptionLoad
+      contextSpreadCount
+      reviewRequestLoad
+      afterHoursCommitRatio
+      weekendCommitRatio
+    }
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -236,18 +260,34 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // canary enforcement is a stage-5 concern this PR does not claim to
 // satisfy.
 func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
-	featureFlagsDigest := digestHex(registeredFeatureFlagsDocument)
-	reviewEdgesDigest := digestHex(registeredReviewEdgesDocument)
-	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, map[string]string{
-		"featureFlags": featureFlagsDigest,
-		"reviewEdges":  reviewEdgesDigest,
-	})
+	// digestByOperation is this route's registered-document inventory:
+	// operation name -> the sha256 digest of that operation's registered
+	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
+	// as two named locals (featureFlagsDigest, reviewEdgesDigest) into a
+	// map keyed by operation name, so a later wave adding a further
+	// operation extends this map rather than threading another positional
+	// parameter through newQueryHandler/operationForDocument.
+	digestByOperation := map[string]string{
+		"featureFlags":  digestHex(registeredFeatureFlagsDocument),
+		"reviewEdges":   digestHex(registeredReviewEdgesDocument),
+		"cognitiveLoad": digestHex(registeredCognitiveLoadDocument),
+	}
+	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
+
+	// operationByDigest is digestByOperation's reverse index, built once
+	// here rather than on every request -- operationForDocument does a
+	// single map lookup per request, not a linear scan.
+	operationByDigest := make(map[string]string, len(digestByOperation))
+	for operation, digest := range digestByOperation {
+		operationByDigest[digest] = operation
+	}
 
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient}})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
-	routeMux.Register("featureFlags", gqlHandler)
-	routeMux.Register("reviewEdges", gqlHandler)
+	for operation := range digestByOperation {
+		routeMux.Register(operation, gqlHandler)
+	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -283,7 +323,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			return
 		}
 
-		operation, ok := operationForDocument(parsed.Query, featureFlagsDigest, reviewEdgesDigest)
+		operation, ok := operationForDocument(parsed.Query, operationByDigest)
 		if !ok {
 			// Unregistered document: plan §5's safe default ("unregistered
 			// documents ... stay on Python") applied at this router --
@@ -313,20 +353,14 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 
 // operationForDocument resolves a request's raw query text to a
 // registered operation name -- "registered documents only" (plan §7 open
-// decision 2), never an AST-shape match. Digests the query text exactly
-// ONCE and compares against both registered digests, rather than calling
-// digestHex per candidate -- purely a minor efficiency choice, not a
-// correctness one (either shape gives the same answer).
-func operationForDocument(query, featureFlagsDigest, reviewEdgesDigest string) (string, bool) {
-	digest := digestHex(query)
-	switch digest {
-	case featureFlagsDigest:
-		return "featureFlags", true
-	case reviewEdgesDigest:
-		return "reviewEdges", true
-	default:
-		return "", false
-	}
+// decision 2), never an AST-shape match. operationByDigest is the reverse
+// (digest -> operation) index newQueryHandler builds once from
+// digestByOperation, so this is a single O(1) map lookup per request
+// regardless of how many operations this route registers, rather than a
+// growing chain of per-operation switch cases.
+func operationForDocument(query string, operationByDigest map[string]string) (string, bool) {
+	operation, ok := operationByDigest[digestHex(query)]
+	return operation, ok
 }
 
 // defaultGraphQLMaxQueryBytes mirrors security.py's

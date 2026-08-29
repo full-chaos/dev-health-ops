@@ -10,6 +10,7 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
@@ -272,9 +273,48 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 	panic(fmt.Errorf("not implemented: Hotspots - hotspots"))
 }
 
-// CognitiveLoad is the resolver for the cognitiveLoad field.
+// CognitiveLoad is the resolver for the cognitiveLoad field (CHAOS-4369
+// Wave 3). Ports
+// dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load
+// via cognitiveload.Resolve -- see that package's doc comment for the
+// exact parity contract (the TWO read paths at the feature-branch tip:
+// single-team direct read, and org-wide/team+repo-combined merge -- and
+// the finding that CHAOS-4406's ownership-gated team+repo path is NOT yet
+// on this feature branch, only on origin/main).
+//
+// Authorization mirrors resolve_cognitive_load's/ReviewEdges's ACTUAL
+// behavior exactly, not FeatureFlags's stricter Go-side equality check:
+// Python's resolver calls require_org_id(context) (raises when the
+// envelope has no org) and then, if input.org_id differs from the
+// authorized org, does NOT error -- it logs a debug line and silently
+// uses the authorized org for every query regardless of what the client
+// sent. This resolver reproduces that "authorized org always wins,
+// client-supplied orgId in the input is never trusted for scoping"
+// behavior by construction: it passes claims.OrgID, never input.OrgID, to
+// cognitiveload.Resolve.
 func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.CognitiveLoadInput) (*model.CognitiveLoadResult, error) {
-	panic(fmt.Errorf("not implemented: CognitiveLoad - cognitiveLoad"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startCognitiveLoadSpan(ctx)
+	result, err := cognitiveload.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.TeamID, input.RepoID)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("cognitiveLoad: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // ReviewEdges is the resolver for the reviewEdges field (CHAOS-4368 Wave

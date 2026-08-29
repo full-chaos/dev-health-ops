@@ -96,6 +96,19 @@ by hand: `acr/deploy/local/lane.sh` composes the pieces that already exist —
 `kiac.sh` owns the cluster and the image bridge, `trial-data.sh` owns the
 per-namespace datastores and the `@backups` restores — into one command.
 
+**`up` does not do everything in the Recipe.** On a cold machine, or after an
+image cleanup, do these first or `up` fails before a lane exists:
+
+- **Build and bridge the images** — Recipe step 2, stages 1–3 (`docker build`,
+  tag the web image, `docker save` → `container image load`), so every
+  required image already sits in the Docker daemon or the apple/container
+  image store. `lane.sh` loads images **into the cluster** itself
+  (`kiac.sh load-image`), but it does not build or bridge them.
+- **Unless `LANE_SKIP_ACR=1`: the evidence-key files must already exist** —
+  `$MONO_ROOT/.acr-dev/evidence-kid` and `$MONO_ROOT/.acr-dev/evidence-keys`
+  (the same keys step 6's `acr-runtime` Secret uses). `up` reads them to
+  build that Secret; it does not create them.
+
 ```bash
 export OPS_WT=<path-to-your-ops-worktree>    # e.g. worktrees/ops/<branch>
 export ACR_WT=<path-to-your-acr-worktree>

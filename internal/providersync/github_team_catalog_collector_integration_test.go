@@ -352,6 +352,59 @@ func TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterC
 	}
 }
 
+// TestGitHubTeamCatalogCollectorSkipsTeamsOnlyWriteEntirelyWhenRosterConfirmReadFails
+// is the RED-FIRST proof for codex round 2's P1 finding (team-lead ruling
+// 2026-08-28): this is a regression introduced by the round-1 P2 fix. On a
+// teams-only run (Members deselected), when ExistingTeamMembers cannot
+// confirm the currently-persisted roster, the ENTIRE team-dimension write
+// must be skipped -- not just flagged -- because writing anyway persists
+// whatever roster Collect gave the row (empty, since members were never
+// fetched this run), clobbering the previously-good roster during exactly
+// the transient failure this guard exists to prevent. EXPECTED TO FAIL on
+// the pre-fix tip: platform's existing roster gets overwritten with [].
+func TestGitHubTeamCatalogCollectorSkipsTeamsOnlyWriteEntirelyWhenRosterConfirmReadFails(t *testing.T) {
+	ctx, realConn := newWorkItemEffectsConn(t)
+	conn := rosterConfirmReadFailingConn{Conn: realConn}
+	orgID := "github-adapter-org-teams-only-confirm-read-failure"
+	sink := GitHubTeamCatalogClickHouseEffects{Conn: realConn}
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	// Seed platform's existing roster, as if a prior successful run had
+	// already written it.
+	seedTeam, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTeam.Members = []string{"github:octocat"}
+	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{seedTeam}); err != nil {
+		t.Fatal(err)
+	}
+
+	doer := githubTeamCatalogAdapterDoer(t) // team "platform", member "octocat" (never fetched -- Members is off)
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	client := githubTeamCatalogAdapterClient(t, doer)
+
+	result, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
+		credential, client, TeamCatalogSelections{Teams: true, Members: false}, now.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.RosterPreservationFailed {
+		t.Fatal("want RosterPreservationFailed=true -- the roster confirm-read was injected to fail")
+	}
+	if result.TeamsWritten != 0 {
+		t.Fatalf("want the team-dimension write skipped ENTIRELY when its roster cannot be confirmed on a "+
+			"teams-only run -- result=%+v", result)
+	}
+	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
+	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
+		t.Fatalf("platform's existing roster was clobbered instead of left alone: roster=%+v ok=%v", roster, ok)
+	}
+}
+
 // TestGitHubTeamCatalogCollectorSkipsNativeMembershipConflictingWithManualPinToADifferentTeam
 // is a RED-FIRST proof (team-lead ruling, 2026-08-28): GitHub's collector has
 // no equivalent of Linear's CHAOS-4431 codex-review-finding-#6 fail-safe

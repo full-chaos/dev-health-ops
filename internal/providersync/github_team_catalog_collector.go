@@ -241,7 +241,20 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			}
 			existing, ok := adapter.Sink.ExistingTeamMembers(ctx, ref.OrgID, teamIDs)
 			if !ok {
+				// codex review round 2, P1 (team-lead ruling 2026-08-28):
+				// this branch's roster confirm-read failure is a GLOBAL
+				// flag, not per-team like CHAOS-4461's members-selected
+				// branch -- a teams-only run never fetched any rosters this
+				// call, so every row here still carries whatever empty/
+				// stale roster Collect gave it. Clearing rows.Teams entirely
+				// is what makes the "skip the team-dimension write entirely
+				// if that read cannot be confirmed" comment above actually
+				// true; leaving it non-empty here let WriteTeams below
+				// persist an empty roster over a previously-good one during
+				// exactly the transient failure this guard exists to
+				// prevent.
 				rosterPreservationFailed = true
+				rows.Teams = rows.Teams[:0]
 			} else {
 				for index := range rows.Teams {
 					members := existing[rows.Teams[index].ID]

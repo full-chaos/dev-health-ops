@@ -379,8 +379,9 @@ func TestGitLabTeamCatalogNativeProjectCatalogIncompleteWhenSelectedSourceIsMiss
 // newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects has 3 groups:
 // org (root), org/team-a, org/team-b. org's /projects succeeds; org/team-a's
 // /projects returns a hard HTTP failure; org/team-b's /projects would
-// succeed but must never be reached (the walk stops at the failure under
-// non-strict). Mirrors newGitLabTeamCatalogFakeServer's payload shapes.
+// succeed but must never be reached under the Python-parity ruling: a
+// non-strict walk failure skips the WHOLE walk, not just the rest of it.
+// Mirrors newGitLabTeamCatalogFakeServer's payload shapes.
 func newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t *testing.T) *gitlabTeamCatalogFakeServer {
 	t.Helper()
 	fake := &gitlabTeamCatalogFakeServer{}
@@ -410,7 +411,7 @@ func newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t *testing.T) *gi
 		case "/api/v4/groups/org%2Fteam-a/projects":
 			http.Error(w, "simulated projects fetch failure", http.StatusInternalServerError)
 		case "/api/v4/groups/org%2Fteam-b/projects":
-			t.Error("org/team-b's /projects must never be reached -- the walk must stop at org/team-a's failure")
+			t.Error("org/team-b's /projects must never be reached -- the whole walk is skipped, not just the rest of it")
 			writeGitLabTeamCatalogJSON(t, w, []map[string]any{projectPayload(102, "org/team-b/svc", "svc")})
 		default:
 			http.NotFound(w, r)
@@ -420,13 +421,17 @@ func newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t *testing.T) *gi
 	return fake
 }
 
-// TestGitLabTeamCatalogRouteHandlerNonStrictGroupWalkKeepsPrefixOnProjectsFailure
-// is the non-strict partial-batch regression proof (team-lead ruling,
-// 2026-08-28): under non-strict, a per-group /projects fetch failure must
-// keep whatever earlier groups already collected (org's team row here), not
-// discard the whole walk. The walk stops at the failing group -- org/team-b
-// (after the failing org/team-a) must never even be requested.
-func TestGitLabTeamCatalogRouteHandlerNonStrictGroupWalkKeepsPrefixOnProjectsFailure(t *testing.T) {
+// TestGitLabTeamCatalogRouteHandlerNonStrictWalkFailureReturnsCleanZero is
+// the Python-parity regression proof (team-lead ruling, 2026-08-28,
+// superseding an earlier partial-prefix approach after Python's actual
+// source was checked): team_autoimport_gitlab.py's discover_gitlab call is
+// a SINGLE unified walk wrapped in ONE outer try/except with no inner
+// per-group catch -- under non-strict, ANY failure inside it (root,
+// subgroups, or a per-group /projects fetch, exercised here) returns
+// _zero_summary: a clean, SUCCESSFUL empty result, not an error, and NOT a
+// partial prefix. org's row (built before org/team-a's failure) must NOT
+// survive -- the whole walk is skipped.
+func TestGitLabTeamCatalogRouteHandlerNonStrictWalkFailureReturnsCleanZero(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
 	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
@@ -436,23 +441,26 @@ func TestGitLabTeamCatalogRouteHandlerNonStrictGroupWalkKeepsPrefixOnProjectsFai
 
 	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err != nil {
-		t.Fatalf("non-strict must not error on a per-group fetch failure: %v", err)
+		t.Fatalf("non-strict must not error on a walk failure: %v", err)
 	}
-	if len(batch.Rows.Teams) != 1 || batch.Rows.Teams[0].ID != "gl:org" {
-		t.Fatalf("Rows.Teams = %+v, want only org's row (the already-collected prefix)", batch.Rows.Teams)
+	if len(batch.Rows.Teams) != 0 {
+		t.Fatalf("Rows.Teams = %+v, want empty -- the whole walk is skipped, not a partial prefix", batch.Rows.Teams)
 	}
-	if !batch.Evidence.GroupWalkIncomplete {
-		t.Fatal("Evidence.GroupWalkIncomplete = false, want true")
+	if !batch.Result.WalkSkipped {
+		t.Fatal("Result.WalkSkipped = false, want true")
 	}
-	if batch.Evidence.GroupsSkippedAfterFetchFailure != 2 {
-		t.Fatalf("GroupsSkippedAfterFetchFailure = %d, want 2 (org/team-a itself + org/team-b never reached)", batch.Evidence.GroupsSkippedAfterFetchFailure)
+	if batch.Result.WalkSkipReason != "group_projects_fetch_failed" {
+		t.Fatalf("Result.WalkSkipReason = %q, want %q", batch.Result.WalkSkipReason, "group_projects_fetch_failed")
+	}
+	if !batch.Result.Complete {
+		t.Fatal("Result.Complete = false, want true -- a skipped walk must not also trip the pagination fail-closed gate")
 	}
 }
 
-// TestGitLabTeamCatalogRouteHandlerStrictGroupWalkHardFailsOnProjectsFailure
-// proves the strict side is unchanged: a per-group /projects fetch failure
-// still aborts the whole call with an error under strict.
-func TestGitLabTeamCatalogRouteHandlerStrictGroupWalkHardFailsOnProjectsFailure(t *testing.T) {
+// TestGitLabTeamCatalogRouteHandlerStrictWalkFailureStillErrors proves the
+// strict side is unchanged: a walk failure still aborts the whole call with
+// an error under strict, matching Python's re-raise.
+func TestGitLabTeamCatalogRouteHandlerStrictWalkFailureStillErrors(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
 	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true}
@@ -463,6 +471,136 @@ func TestGitLabTeamCatalogRouteHandlerStrictGroupWalkHardFailsOnProjectsFailure(
 	_, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err == nil {
 		t.Fatal("expected an error under strict mode, got nil")
+	}
+}
+
+// newGitLabTeamCatalogFakeServerWithFailingRootFetch fails the ROOT group
+// fetch itself -- proves the Python-parity clean-zero treatment applies to
+// every named walk failure point, not just the per-group /projects case.
+func newGitLabTeamCatalogFakeServerWithFailingRootFetch(t *testing.T) *gitlabTeamCatalogFakeServer {
+	t.Helper()
+	fake := &gitlabTeamCatalogFakeServer{}
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.requests = append(fake.requests, r.URL.String())
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			http.Error(w, "simulated root group fetch failure", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+// TestGitLabTeamCatalogRouteHandlerNonStrictRootFetchFailureReturnsCleanZero
+// proves the root-group-fetch failure point independently.
+func TestGitLabTeamCatalogRouteHandlerNonStrictRootFetchFailureReturnsCleanZero(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingRootFetch(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a root fetch failure: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "root_group_fetch_failed" {
+		t.Fatalf("Result=%+v, want WalkSkipped=true reason=root_group_fetch_failed", batch.Result)
+	}
+}
+
+// newGitLabTeamCatalogFakeServerWithFailingSubgroupsFetch fails the
+// subgroups fetch (root group fetch succeeds) -- proves the subgroups
+// failure point independently.
+func newGitLabTeamCatalogFakeServerWithFailingSubgroupsFetch(t *testing.T) *gitlabTeamCatalogFakeServer {
+	t.Helper()
+	fake := &gitlabTeamCatalogFakeServer{}
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.requests = append(fake.requests, r.URL.String())
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			writeGitLabTeamCatalogJSON(t, w, map[string]any{"id": 1, "full_path": "org", "name": "Org", "description": nil})
+		case "/api/v4/groups/org/subgroups":
+			http.Error(w, "simulated subgroups fetch failure", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+// TestGitLabTeamCatalogRouteHandlerNonStrictSubgroupsFetchFailureReturnsCleanZero
+// proves the subgroups-fetch failure point independently.
+func TestGitLabTeamCatalogRouteHandlerNonStrictSubgroupsFetchFailureReturnsCleanZero(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingSubgroupsFetch(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a subgroups fetch failure: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "subgroups_fetch_failed" {
+		t.Fatalf("Result=%+v, want WalkSkipped=true reason=subgroups_fetch_failed", batch.Result)
+	}
+}
+
+// newGitLabTeamCatalogFakeServerWithFailingNativeProjectsFetch succeeds the
+// whole per-group walk (one group, teams selected) but fails the post-loop
+// native "all projects" listing -- proves that failure point independently.
+func newGitLabTeamCatalogFakeServerWithFailingNativeProjectsFetch(t *testing.T) *gitlabTeamCatalogFakeServer {
+	t.Helper()
+	fake := &gitlabTeamCatalogFakeServer{}
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.requests = append(fake.requests, r.URL.String())
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			writeGitLabTeamCatalogJSON(t, w, map[string]any{"id": 1, "full_path": "org", "name": "Org", "description": nil})
+		case "/api/v4/groups/org/subgroups":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
+		case "/api/v4/groups/org/projects":
+			if r.URL.Query().Get("include_subgroups") == "true" {
+				http.Error(w, "simulated native projects fetch failure", http.StatusInternalServerError)
+				return
+			}
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+// TestGitLabTeamCatalogRouteHandlerNonStrictNativeProjectsFetchFailureReturnsCleanZero
+// proves the post-loop native "all projects" fetch failure point
+// independently -- and that a healthy per-group walk's own results (teams)
+// do NOT survive either, since the native-projects fetch failure still
+// skips the WHOLE batch under the Python-parity ruling.
+func TestGitLabTeamCatalogRouteHandlerNonStrictNativeProjectsFetchFailureReturnsCleanZero(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingNativeProjectsFetch(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true, Projects: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a native projects fetch failure: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "native_projects_fetch_failed" {
+		t.Fatalf("Result=%+v, want WalkSkipped=true reason=native_projects_fetch_failed", batch.Result)
+	}
+	if len(batch.Rows.Teams) != 0 {
+		t.Fatalf("Rows.Teams = %+v, want empty -- the whole batch is skipped", batch.Rows.Teams)
 	}
 }
 

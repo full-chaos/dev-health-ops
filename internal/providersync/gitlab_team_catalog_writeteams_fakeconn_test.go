@@ -2,7 +2,10 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -138,5 +141,63 @@ func TestWriteTeamsSkipsRosterReadEntirelyWhenAllRowsAreAuthoritative(t *testing
 	}
 	if len(conn.batch.appendedIDs) != 2 {
 		t.Fatalf("appendedIDs=%v, want both rows written (roster read never needed)", conn.batch.appendedIDs)
+	}
+}
+
+// TestGitLabTeamCatalogCollectorNonStrictWalkFailureMakesNoWrites is the
+// full adapter-level proof of the Python-parity ruling: a non-strict walk
+// failure must reach ZERO Sink calls -- no PrepareBatch, no Query for
+// roster/manual-members preservation, nothing. Uses a real HTTP fake server
+// (the walk failure itself) plus fakeGitLabWriteTeamsConn as the Sink,
+// which errors on any unexpected query and would surface a non-nil
+// conn.batch if PrepareBatch were ever called.
+func TestGitLabTeamCatalogCollectorNonStrictWalkFailureMakesNoWrites(t *testing.T) {
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			_ = json.NewEncoder(w).Encode(group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			http.Error(w, "simulated subgroups fetch failure", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", server.URL, http.DefaultClient,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn := &fakeGitLabWriteTeamsConn{}
+	collector := GitLabTeamCatalogCollector{
+		Handler: GitLabTeamCatalogRouteHandler{},
+		Sink: GitLabTeamCatalogClickHouseEffects{
+			Conn:  conn,
+			Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		},
+	}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+
+	result, err := collector.CollectTeamCatalog(context.Background(), ref, credential, client, TeamCatalogSelections{Teams: true}, time.Now())
+	if err != nil {
+		t.Fatalf("non-strict walk failure must not error: %v", err)
+	}
+	if result.TeamsWritten != 0 || result.MembersWritten != 0 || result.MembershipsWritten != 0 ||
+		result.ProjectsWritten != 0 || result.OwnershipWritten != 0 || len(result.TeamKeys) != 0 {
+		t.Fatalf("result=%+v, want a zero TeamCatalogResult", result)
+	}
+	if conn.batch != nil {
+		t.Fatalf("PrepareBatch was called (batch=%+v) -- a non-strict walk failure must make ZERO Sink calls", conn.batch)
 	}
 }

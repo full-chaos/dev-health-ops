@@ -12,31 +12,30 @@ import (
 // (linear_team_catalog_collector.go, team_sync_policy_guard.go,
 // team_membership_conflict_guard.go).
 //
-// Member-scoped conflict semantics (codex review round 2, P1 -- team-lead
-// relay, 2026-08-28): an active manual team_memberships row for the EXACT
-// SAME team as a native row CONFIRMS that native row (an admin agreeing
-// with discovery), not a conflict -- keep it. An active manual row for the
-// SAME MEMBER but a DIFFERENT team is the real conflict (an admin pinned
-// this member elsewhere; a native row asserting THIS team would contradict
-// that pin) -- skip it. A member-scoped manual_attribution_fallbacks match
-// is a conflict regardless of team, unchanged.
+// Conflict semantics (codex review round 3 -- team-lead relay, 2026-08-28):
+// both sources (manual team_memberships and manual_attribution_fallbacks)
+// are team-scoped. A row (manual or fallback) to the EXACT SAME team as the
+// incoming native row CONFIRMS it. A row to ANY OTHER team is a conflict --
+// checked across EVERY active row for that member/identity, not just
+// whether the incoming team is present in the set: a member with active
+// rows for BOTH the incoming team and another team is still a conflict.
 
 // TestGitLabMembershipConflictsWithManualStateTreatsSamePairAsConfirmation
-// pins the corrected semantics' headline change: an exact (member_id,
-// team_id) match against an active manual membership is NOT a conflict.
+// pins the base case: a manual membership to the EXACT SAME team as the
+// incoming row, and nothing else, is a confirmation, not a conflict.
 func TestGitLabMembershipConflictsWithManualStateTreatsSamePairAsConfirmation(t *testing.T) {
 	row := gitlabTeamCatalogMembershipRow{MemberID: "gitlab:alice", TeamID: "gl:org"}
 	manualTeamsByMember := map[string]map[string]struct{}{
 		"gitlab:alice": {"gl:org": {}},
 	}
 	if gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
-		t.Fatal("an exact (member_id, team_id) manual match is a CONFIRMATION, not a conflict -- must not be skipped")
+		t.Fatal("a manual membership to the SAME team, and nothing else, is a CONFIRMATION -- must not be skipped")
 	}
 }
 
 // TestGitLabMembershipConflictsWithManualStateTreatsDifferentTeamAsConflict
-// pins the corrected semantics' other half: an active manual membership for
-// the SAME member but a DIFFERENT team is the real conflict.
+// pins the conflict case: a manual membership to a DIFFERENT team than the
+// incoming row.
 func TestGitLabMembershipConflictsWithManualStateTreatsDifferentTeamAsConflict(t *testing.T) {
 	row := gitlabTeamCatalogMembershipRow{MemberID: "gitlab:alice", TeamID: "gl:org/team-a"}
 	manualTeamsByMember := map[string]map[string]struct{}{
@@ -47,23 +46,58 @@ func TestGitLabMembershipConflictsWithManualStateTreatsDifferentTeamAsConflict(t
 	}
 }
 
-// TestGitLabMembershipConflictsWithManualStateSkipsMemberScopedFallback
-// proves the member-scoped manual_attribution_fallbacks check is unchanged
-// by the pair-semantics correction: it still blocks regardless of team.
-func TestGitLabMembershipConflictsWithManualStateSkipsMemberScopedFallback(t *testing.T) {
+// TestGitLabMembershipConflictsWithManualStateConflictsWhenAnyOtherTeamPresent
+// is the codex round-3 correction's own regression proof: a member with
+// active manual memberships to BOTH the incoming team AND another team is
+// STILL a conflict -- the incoming team being present in the set does not
+// clear it, because Python's loop checks every row, not just the first
+// match.
+func TestGitLabMembershipConflictsWithManualStateConflictsWhenAnyOtherTeamPresent(t *testing.T) {
+	row := gitlabTeamCatalogMembershipRow{MemberID: "gitlab:alice", TeamID: "gl:org"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"gitlab:alice": {"gl:org": {}, "gl:org/team-a": {}},
+	}
+	if !gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("an active manual membership to ANOTHER team must still be a conflict, even though the incoming team is ALSO present")
+	}
+}
+
+// TestGitLabMembershipConflictsWithManualStateFallbackSameTeamIsConfirmation
+// proves the round-3 correction's other half: an active member-scoped
+// manual_attribution_fallbacks row is now team-scoped too -- a fallback to
+// the SAME team as the incoming row is a confirmation, not a conflict.
+func TestGitLabMembershipConflictsWithManualStateFallbackSameTeamIsConfirmation(t *testing.T) {
 	row := gitlabTeamCatalogMembershipRow{
 		MemberID: "gitlab:alice", TeamID: "gl:org",
 		IdentityFacets: []string{"gitlab:alice", "alice@example.com"},
 	}
-	fallbacks := map[string]struct{}{"alice@example.com": {}}
-	if !gitlabMembershipConflictsWithManualState(row, nil, fallbacks) {
-		t.Fatal("want conflict for a normalized-matching member-scoped fallback")
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"alice@example.com": {"gl:org": {}},
+	}
+	if gitlabMembershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("a fallback row to the SAME team, and nothing else, is a CONFIRMATION -- must not be skipped")
+	}
+}
+
+// TestGitLabMembershipConflictsWithManualStateFallbackDifferentTeamIsConflict
+// proves a fallback row to a DIFFERENT team is still a conflict, matching
+// the manual-membership source's shape exactly.
+func TestGitLabMembershipConflictsWithManualStateFallbackDifferentTeamIsConflict(t *testing.T) {
+	row := gitlabTeamCatalogMembershipRow{
+		MemberID: "gitlab:alice", TeamID: "gl:org/team-a",
+		IdentityFacets: []string{"gitlab:alice", "alice@example.com"},
+	}
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"alice@example.com": {"gl:org": {}},
+	}
+	if !gitlabMembershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("want conflict for a fallback row pointing at a DIFFERENT team")
 	}
 }
 
 // TestGitLabMembershipConflictsWithManualStateAllowsCleanRow is the negative
-// case: no manual pin at all for this member, and no matching fallback --
-// a genuinely clean native row must never be skipped.
+// case: no manual or fallback row at all for this member/identity -- a
+// genuinely clean native row must never be skipped.
 func TestGitLabMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	row := gitlabTeamCatalogMembershipRow{
 		MemberID: "gitlab:carol", TeamID: "gl:org",
@@ -72,9 +106,11 @@ func TestGitLabMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	manualTeamsByMember := map[string]map[string]struct{}{
 		"gitlab:someone-else": {"gl:org": {}},
 	}
-	fallbacks := map[string]struct{}{"someone-else@example.com": {}}
-	if gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, fallbacks) {
-		t.Fatal("a clean row with no matching manual pin or fallback must not be skipped")
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"someone-else@example.com": {"gl:org": {}},
+	}
+	if gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
+		t.Fatal("a clean row with no matching manual or fallback row must not be skipped")
 	}
 }
 

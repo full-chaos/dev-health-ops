@@ -44,24 +44,25 @@ func applyGitLabTeamSyncPolicyGuard(
 }
 
 // gitlabMembershipConflictsWithManualState mirrors membershipConflictsWithManualState
-// exactly (CORRECTED, member-scoped semantics -- codex review round 2, P1):
-// an active manual team_memberships row for the EXACT SAME team as this
-// native row is a CONFIRMATION, not a conflict. The conflict is a manual
-// membership to a DIFFERENT team for the SAME member -- an admin pinned
-// them elsewhere, so writing this team's native row would contradict that
-// pin. A member-scoped manual_attribution_fallbacks match blocks
-// regardless of team, same as Linear's.
+// exactly (CORRECTED, codex review round 3: fallback rows are now team-
+// scoped too, and the rule is "any active manual/fallback row names a team
+// OTHER than the incoming one", not "the incoming team is absent from the
+// set" -- a member/identity with an active row for BOTH the incoming team
+// and another team is still a conflict, since Python's loop checks every
+// row rather than stopping at the first match): a manual-membership or
+// fallback row to the EXACT SAME team as this native row is a CONFIRMATION;
+// a row to ANY OTHER team is the conflict.
 func gitlabMembershipConflictsWithManualState(
 	row gitlabTeamCatalogMembershipRow,
 	manualTeamsByMember map[string]map[string]struct{},
-	fallbackIdentities map[string]struct{},
+	fallbackTeamsByIdentity map[string]map[string]struct{},
 ) bool {
 	if manualTeams, hasManual := manualTeamsByMember[row.MemberID]; hasManual {
-		if _, confirmed := manualTeams[row.TeamID]; !confirmed {
+		if anyTeamDiffersFrom(manualTeams, row.TeamID) {
 			return true
 		}
 	}
-	if len(fallbackIdentities) == 0 {
+	if len(fallbackTeamsByIdentity) == 0 {
 		return false
 	}
 	candidates := make([]string, 0, len(row.IdentityFacets)+2)
@@ -73,8 +74,12 @@ func gitlabMembershipConflictsWithManualState(
 	}
 	candidates = append(candidates, row.IdentityFacets...)
 	for _, candidate := range candidates {
-		if normalized := normalizeMembershipIdentity(candidate); normalized != "" {
-			if _, conflict := fallbackIdentities[normalized]; conflict {
+		normalized := normalizeMembershipIdentity(candidate)
+		if normalized == "" {
+			continue
+		}
+		if fallbackTeams, hasFallback := fallbackTeamsByIdentity[normalized]; hasFallback {
+			if anyTeamDiffersFrom(fallbackTeams, row.TeamID) {
 				return true
 			}
 		}
@@ -98,14 +103,14 @@ func applyGitLabTeamMembershipConflictGuard(
 	if err != nil {
 		return nil, 0, err
 	}
-	fallbackIdentities, err := resolveActiveMemberAttributionFallbackIdentities(ctx, conn, orgID, provider)
+	fallbackTeamsByIdentity, err := resolveActiveMemberAttributionFallbackTeams(ctx, conn, orgID, provider)
 	if err != nil {
 		return nil, 0, err
 	}
 	kept := make([]gitlabTeamCatalogMembershipRow, 0, len(rows))
 	skipped := 0
 	for _, row := range rows {
-		if gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackIdentities) {
+		if gitlabMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 			skipped++
 			continue
 		}

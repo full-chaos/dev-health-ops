@@ -18,7 +18,7 @@ import (
 type fakeGitLabGuardConn struct {
 	driver.Conn
 	manualRows   [][2]string // member_id, team_id
-	fallbackRows []string    // scope_id
+	fallbackRows [][2]string // scope_id, team_id (codex round 3: fallbacks are team-scoped too)
 }
 
 func (f *fakeGitLabGuardConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
@@ -59,11 +59,12 @@ func (r *fakeGitLabGuardMembershipRows) Scan(dest ...any) error {
 func (r *fakeGitLabGuardMembershipRows) Close() error { return nil }
 func (r *fakeGitLabGuardMembershipRows) Err() error   { return nil }
 
-// fakeGitLabGuardFallbackRows backs resolveActiveMemberAttributionFallbackIdentities's
-// `SELECT scope_id` shape.
+// fakeGitLabGuardFallbackRows backs resolveActiveMemberAttributionFallbackTeams's
+// `SELECT scope_id, team_id` shape (codex round 3: fallbacks are team-scoped
+// too, same shape as the manual-membership rows).
 type fakeGitLabGuardFallbackRows struct {
 	driver.Rows
-	rows  []string
+	rows  [][2]string
 	index int
 }
 
@@ -73,11 +74,13 @@ func (r *fakeGitLabGuardFallbackRows) Next() bool {
 }
 
 func (r *fakeGitLabGuardFallbackRows) Scan(dest ...any) error {
-	scopeID, ok := dest[0].(*string)
-	if !ok {
+	scopeID, ok1 := dest[0].(*string)
+	teamID, ok2 := dest[1].(*string)
+	if !ok1 || !ok2 {
 		return fmt.Errorf("fakeGitLabGuardFallbackRows: unexpected Scan dest shape")
 	}
-	*scopeID = r.rows[r.index]
+	*scopeID = r.rows[r.index][0]
+	*teamID = r.rows[r.index][1]
 	return nil
 }
 

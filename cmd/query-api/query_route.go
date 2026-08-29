@@ -228,6 +228,78 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
   }
 }`
 
+// registeredWorkGraphEdgesDocument is CHAOS-4352 Wave 4 Lane A's
+// (CHAOS-4504) registered document for the workGraphEdges operation --
+// same "registered documents only" contract, same "sourced from the real
+// client file, not reconstructed" discipline as
+// registeredReviewEdgesDocument above. Copied byte-for-byte from
+// web/src/lib/graphql/queries.ts:427's WORK_GRAPH_EDGES_QUERY, operation
+// name "WorkGraphEdges", `$orgId`/`$filters` scalar+input arguments (NOT
+// a single wrapping `$input` object, a different shape than
+// reviewEdges/cognitiveLoad/complexityTimeseries/hotspots above --
+// matches featureFlags's individual-argument shape instead).
+const registeredWorkGraphEdgesDocument = `query WorkGraphEdges($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
+  workGraphEdges(orgId: $orgId, filters: $filters) {
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      sourceDisplayName
+      targetType
+      targetId
+      targetDisplayName
+      edgeType
+      provenance
+      confidence
+      evidence
+      repoId
+      provider
+      theme
+      subcategory
+    }
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    degradedReason
+  }
+}`
+
+// registeredWorkGraphFlowDocument is CHAOS-4504's registered document for
+// the workGraphFlow operation. Copied byte-for-byte from
+// web/src/lib/graphql/queries.ts:462's WORK_GRAPH_FLOW_QUERY, operation
+// name "WorkGraphFlow".
+const registeredWorkGraphFlowDocument = `query WorkGraphFlow($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
+  workGraphFlow(orgId: $orgId, filters: $filters) {
+    rows {
+      nodeType
+      inflow
+      outflow
+    }
+    degradedReason
+  }
+}`
+
+// registeredWorkGraphArtifactsDocument is CHAOS-4504's registered document
+// for the workGraphArtifacts operation. Copied byte-for-byte from
+// web/src/lib/graphql/queries.ts:477's WORK_GRAPH_ARTIFACTS_QUERY,
+// operation name "WorkGraphArtifacts".
+const registeredWorkGraphArtifactsDocument = `query WorkGraphArtifacts($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
+  workGraphArtifacts(orgId: $orgId, filters: $filters) {
+    rows {
+      nodeType
+      nodeId
+      displayName
+      degree
+      evidence
+    }
+    degradedReason
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -365,6 +437,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"complexityTimeseries": digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":             digestHex(registeredHotspotsDocument),
 		"operatingReview":      digestHex(registeredOperatingReviewDocument),
+		"workGraphEdges":       digestHex(registeredWorkGraphEdgesDocument),
+		"workGraphFlow":        digestHex(registeredWorkGraphFlowDocument),
+		"workGraphArtifacts":   digestHex(registeredWorkGraphArtifactsDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

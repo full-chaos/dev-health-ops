@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -110,9 +111,44 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 	panic(fmt.Errorf("not implemented: Home - home"))
 }
 
-// WorkGraphEdges is the resolver for the workGraphEdges field.
+// WorkGraphEdges is the resolver for the workGraphEdges field (CHAOS-4352
+// Wave 4 Lane A / CHAOS-4504). Ports
+// dev_health_ops.api.graphql.resolvers.work_graph.resolve_work_graph_edges
+// via workgraph.ResolveEdges -- see that package's doc comment for the full
+// parity contract, the CHAOS-4515 Go-side dedup fix (a DELIBERATE
+// divergence from Python), and the resolve_work_graph_edges splice trap.
+//
+// Authorization mirrors resolve_work_graph_edges's ACTUAL behavior exactly,
+// same "authorized org always wins" convention as ReviewEdges/CognitiveLoad
+// above: Python's require_org_id(context) raises when the envelope has no
+// org, then silently uses the authorized org for every query regardless of
+// what the client sent as the orgId argument. This resolver reproduces that
+// by construction: it passes claims.OrgID, never the orgID argument, to
+// workgraph.ResolveEdges.
 func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphEdgesResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphEdges - workGraphEdges"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphEdgesSpan(ctx)
+	result, err := workgraph.ResolveEdges(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphEdges: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // Pr is the resolver for the pr field.
@@ -120,14 +156,66 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 	panic(fmt.Errorf("not implemented: Pr - pr"))
 }
 
-// WorkGraphFlow is the resolver for the workGraphFlow field.
+// WorkGraphFlow is the resolver for the workGraphFlow field (CHAOS-4352
+// Wave 4 Lane A / CHAOS-4504). Ports resolve_work_graph_flow via
+// workgraph.ResolveFlow -- see workgraph package doc comment. Same
+// "authorized org always wins" authorization convention as WorkGraphEdges
+// above.
 func (r *queryResolver) WorkGraphFlow(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphFlowResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphFlow - workGraphFlow"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphFlowSpan(ctx)
+	result, err := workgraph.ResolveFlow(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphFlow: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
-// WorkGraphArtifacts is the resolver for the workGraphArtifacts field.
+// WorkGraphArtifacts is the resolver for the workGraphArtifacts field
+// (CHAOS-4352 Wave 4 Lane A / CHAOS-4504). Ports
+// resolve_work_graph_artifacts via workgraph.ResolveArtifacts -- see
+// workgraph package doc comment. Same "authorized org always wins"
+// authorization convention as WorkGraphEdges above.
 func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphArtifactsResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphArtifacts - workGraphArtifacts"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphArtifactsSpan(ctx)
+	result, err := workgraph.ResolveArtifacts(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphArtifacts: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // FeatureFlags is the resolver for the featureFlags field (CHAOS-4367

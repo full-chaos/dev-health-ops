@@ -137,6 +137,30 @@ const registeredCognitiveLoadDocument = `query CognitiveLoad($input: CognitiveLo
   }
 }`
 
+// registeredComplexityTimeseriesDocument is CHAOS-4369 Wave 3's registered
+// document for the complexityTimeseries operation -- same "registered
+// documents only" contract, same "sourced from the real client file, not
+// reconstructed" discipline as registeredReviewEdgesDocument above. Copied
+// byte-for-byte from web/src/lib/graphql/queries.ts's
+// COMPLEXITY_TIMESERIES_QUERY, operation name "ComplexityTimeseries",
+// input variable named `$input` of type `ComplexityTimeseriesInput!`.
+const registeredComplexityTimeseriesDocument = `query ComplexityTimeseries($input: ComplexityTimeseriesInput!) {
+  complexityTimeseries(input: $input) {
+    points {
+      date
+      scopeId
+      scopeName
+      locTotal
+      cyclomaticPerKloc
+      cyclomaticTotal
+      cyclomaticAvg
+      highComplexityFunctions
+      veryHighComplexityFunctions
+    }
+    totalScope
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -268,9 +292,10 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// operation extends this map rather than threading another positional
 	// parameter through newQueryHandler/operationForDocument.
 	digestByOperation := map[string]string{
-		"featureFlags":  digestHex(registeredFeatureFlagsDocument),
-		"reviewEdges":   digestHex(registeredReviewEdgesDocument),
-		"cognitiveLoad": digestHex(registeredCognitiveLoadDocument),
+		"featureFlags":         digestHex(registeredFeatureFlagsDocument),
+		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
+		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
+		"complexityTimeseries": digestHex(registeredComplexityTimeseriesDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

@@ -60,6 +60,8 @@ func (r *fakeRows) Scan(dest ...any) error {
 			*ptr = row[i].(uint64)
 		case *uint32:
 			*ptr = row[i].(uint32)
+		case *float64:
+			*ptr = row[i].(float64)
 		}
 	}
 	return nil
@@ -126,6 +128,28 @@ func (c *fakeCognitiveLoadCHClient) Query(_ context.Context, _ string, _ []click
 		}}, nil
 	}
 	return &fakeRows{rows: nil}, nil
+}
+
+// fakeComplexityTimeseriesCHClient is a minimal complexitytimeseries.QueryClient
+// double for the CHAOS-4369 Wave 3 reachability test below. Resolve's default
+// REPO-scope path issues two queries in order (the repo timeseries fetch,
+// then a repo-label lookup for the repo IDs it saw) -- this fake scripts one
+// row for each call in that order, enough to prove the HTTP-level
+// reachability contract this test exists for. It is NOT a substitute for the
+// real-ClickHouse dual-run proof (Python-side stage-2 test,
+// ops/tests/api/graphql/test_go_api_dual_run_complexity_timeseries.py).
+type fakeComplexityTimeseriesCHClient struct{ calls int }
+
+func (c *fakeComplexityTimeseriesCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.calls++
+	if c.calls%2 == 1 {
+		return &fakeRows{rows: [][]any{
+			{time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), "repo-a", uint64(1000), uint64(50), float64(12.5), uint64(2), uint64(1)},
+		}}, nil
+	}
+	return &fakeRows{rows: [][]any{
+		{"repo-a", "org/repo-a"},
+	}}, nil
 }
 
 func writeTestJWKS(t *testing.T, pub ed25519.PublicKey) string {
@@ -534,6 +558,102 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		}
 		setRoutingMode(t, pool, documentDigest, "cognitiveLoad", "disabled")
 		if rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, token, cognitiveLoadVariables()); rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		}
+	})
+}
+
+func complexityTimeseriesVariables() map[string]any {
+	return map[string]any{
+		"input": map[string]any{
+			"orgId":       "org-1",
+			"sinceUtc":    "2026-08-01T00:00:00Z",
+			"untilUtc":    "2026-08-31T23:59:59Z",
+			"granularity": "DAY",
+			"scope":       "REPO",
+			"limit":       500,
+		},
+	}
+}
+
+// TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4369
+// Wave 3's extension of the same reachability contract to a THIRD operation
+// this route now mounts: real Mux, real PostgresSwitch reading a real
+// Postgres table, real gqlgen server, real principal.Verifier -- proving
+// complexityTimeseries's reachability is gated independently by its OWN
+// go_api_routing_state row.
+func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest)
+	documentDigest := digestHex(registeredComplexityTimeseriesDocument)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	t.Run("disabled_by_default", func(t *testing.T) {
+		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
+			t.Fatalf("expected response to contain the fake row's repo label with no errors, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
+		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, "", complexityTimeseriesVariables())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no token: got %d, want 401", rec.Code)
+		}
+	})
+
+	// The three operations sharing one Mux/PostgresSwitch instance must NOT
+	// leak reachability into each other.
+	t.Run("enabling_complexityTimeseries_does_not_enable_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
+		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("featureFlags should stay unreachable when only complexityTimeseries is canaried: got %d", rec.Code)
+		}
+	})
+
+	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
+			t.Fatalf("expected a real complexityTimeseries result before rollback, got %s", rec.Body.String())
+		}
+		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "disabled")
+		if rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables()); rec.Code != http.StatusNotFound {
 			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
 		}
 	})

@@ -10,11 +10,12 @@ import "github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags
 // the shared dev-health-go query client (main.go builds the real one;
 // featureflags.QueryClient is the narrow interface a test can fake) --
 // CHAOS-4367 Wave 1's featureFlags resolver is the first field to use it.
-// reviewedges.QueryClient (CHAOS-4368 Wave 2) and cognitiveload.QueryClient
-// (CHAOS-4369 Wave 3) each have an identical single-method shape, so
-// ClickHouse satisfies them too without a second field or a wrapper --
-// Go's interface-to-interface assignability only requires a matching
-// method set, not a shared declared type.
+// reviewedges.QueryClient (CHAOS-4368 Wave 2), cognitiveload.QueryClient,
+// and complexitytimeseries.QueryClient (CHAOS-4369 Wave 3) each have an
+// identical single-method shape, so ClickHouse satisfies them too
+// without a second field or a wrapper -- Go's interface-to-interface
+// assignability only requires a matching method set, not a shared
+// declared type.
 type Resolver struct {
 	ClickHouse featureflags.QueryClient
 }

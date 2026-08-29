@@ -278,6 +278,7 @@ type Metrics struct {
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
+	duplicateNaturalKey            map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -301,6 +302,7 @@ func NewMetrics() *Metrics {
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
+		duplicateNaturalKey:            map[string]uint64{},
 	}
 }
 
@@ -588,6 +590,50 @@ func (m *Metrics) RecordDuplicateTestSuite(provider, dataset string, count int) 
 	m.duplicateTestSuite[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
 }
 
+// metricDuplicateNaturalKeyTableVocabulary is the closed set of cicd/tests
+// ClickHouse destinations a recordGitHubTestsKey rejection can name (CHAOS-4557).
+// Bounded because it becomes a Prometheus label; an unrecognized table
+// collapses to "other" rather than opening the label's cardinality to
+// whatever a future call site happens to pass.
+var metricDuplicateNaturalKeyTableVocabulary = map[string]struct{}{
+	"ci_pipeline_runs": {}, "ci_job_runs": {}, "ci_acceptance_checks": {},
+	"test_suite_results": {}, "test_case_results": {}, "coverage_snapshots": {},
+}
+
+// MetricDuplicateNaturalKeyTableLabel bounds a duplicate_natural_key
+// destination table name to the closed vocabulary above.
+func MetricDuplicateNaturalKeyTableLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricDuplicateNaturalKeyTableVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordDuplicateNaturalKeyCollision counts one cicd/tests effect batch
+// REJECTED outright by recordGitHubTestsKey with ErrDuplicateNaturalKey --
+// distinct from RecordDuplicateTestCase/RecordDuplicateTestSuite above, which
+// count collisions the producer successfully disambiguated before the batch
+// ever reached WriteEffect. This counter is the operational signal for "a
+// collision recordGitHubTestsKey still had to refuse the whole batch over"
+// (CHAOS-4557), labeled by the destination table so an operator can tell
+// test_case_results from ci_job_runs etc. without reading a log line that may
+// no longer exist.
+//
+// repo is deliberately NOT a label here, matching RecordDuplicateTestCase's
+// house rule -- find the repo in the persisted natural-key detail
+// (DuplicateNaturalKeyDetailFrom) or the structured log line, not this
+// counter's labels.
+func (m *Metrics) RecordDuplicateNaturalKeyCollision(provider, dataset, table string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := metricProvider(provider) + ":" + MetricDatasetLabel(dataset) + ":" + MetricDuplicateNaturalKeyTableLabel(table)
+	m.duplicateNaturalKey[key]++
+}
+
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
 // route snapshot may be discarded. Bounded because it becomes a Prometheus
 // label; an unknown reason collapses to "other" rather than opening the
@@ -761,6 +807,14 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	"rate_limit":                      {},
 	"provider_unit_exhausted":         {},
 	"github_files_inventory_failed":   {},
+	// duplicate_natural_key (CHAOS-4557): deterministicTerminalCategory's
+	// ErrDuplicateNaturalKey branch (providerunit.go) has existed since
+	// CHAOS-4392, but this vocabulary was never cross-referenced against it,
+	// so every duplicate_natural_key termination silently collapsed to
+	// "other" on dev_health_provider_unit_failed_total -- discovered by
+	// TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey
+	// while building the CHAOS-4557 structured-detail fix.
+	"duplicate_natural_key": {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.
@@ -1091,6 +1145,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_cicd_duplicate_test_suite_total",
 		"Sibling suite-object natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestSuite's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
 		m.duplicateTestSuite,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_cicd_duplicate_natural_key_total",
+		"cicd/tests effect batches recordGitHubTestsKey rejected outright with ErrDuplicateNaturalKey, by bounded provider, dataset, and destination table. Not labeled by repo -- see RecordDuplicateNaturalKeyCollision's doc comment; find the repo and full key in the persisted natural-key detail or the structured log line.",
+		"table", m.duplicateNaturalKey,
 	); err != nil {
 		return err
 	}

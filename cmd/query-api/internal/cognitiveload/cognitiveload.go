@@ -1,41 +1,36 @@
 // Package cognitiveload is the Go port of
 // dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load
 // (ops/src/dev_health_ops/api/graphql/resolvers/cognitive_load.py),
-// CHAOS-4369 Wave 3.
+// CHAOS-4369 Wave 3 (initial 2-path port), extended to the THIRD path by
+// CHAOS-4462 after the feature branch took origin/main's CHAOS-4406 fix
+// (commit 8519cd2a8) via the CHAOS-4352 rebase lane.
 //
-// Ported deliberately verbatim, including the TWO distinct read paths the
-// Python resolver picks between at the feature-branch tip (see Resolve's
-// doc comment):
+// Ported deliberately verbatim, including the THREE distinct read paths
+// the Python resolver picks between (see Resolve's doc comment):
 //
 //  1. Single-team (teamId set, repoId NOT set): reads
 //     team_cognitive_load_daily directly -- already team-scoped and
 //     OWNERSHIP-resolved at write time (CHAOS-4365 item 2). One dedup
 //     query, no merge.
-//  2. Org-wide OR team+repo COMBINED (teamId unset, OR both teamId and
-//     repoId set): the original two-query merge over
+//  2. Team+repo COMBINED (both set, CHAOS-4406/CHAOS-4462): neither
+//     user_metrics_daily's nor team_metrics_daily's own team_id column can
+//     be trusted (CHAOS-4396 taint -- author-membership fallback, or
+//     unset for a native org with empty repo_patterns). resolveOwnedRepoID
+//     confirms via team_repo_ownership (falling back to teams.repo_patterns
+//     only when native ownership resolves no row at all) that the
+//     requested repo is CURRENTLY, CANONICALLY owned by the requested
+//     team. If not owned (or the repo does not exist), returns an
+//     explicit empty result rather than either the wrong team's data or a
+//     confusing error. If owned, both queries filter by repo_id ALONE --
+//     never team_id -- since ownership already scopes every signal for
+//     that repo to this team.
+//  3. Org-wide (teamId unset): the original two-query merge over
 //     user_metrics_daily/team_metrics_daily, each deduplicating
 //     append-only rows via argMax(..., computed_at) before aggregating,
-//     merged over the UNION of days. repoId, when set, narrows only
-//     user_metrics_daily (team_metrics_daily has no repo_id FILTER
-//     dimension in this path, even though the table itself carries a
-//     repo_id column since CHAOS-4329 for its own internal dedup).
-//
-// IMPORTANT (verified against the actual feature-branch tip, not assumed
-// from a briefing): CHAOS-4406's ownership-gated team+repo-combined path
-// (resolving team_repo_ownership/teams.repo_patterns to confirm a repo is
-// owned by the requesting team before filtering by repo_id alone) exists
-// ONLY on origin/main (commit 8519cd2a8) as of this port -- it is NOT an
-// ancestor of origin/feature/chaos-4352-go-api's tip
-// (`git merge-base --is-ancestor 8519cd2a8
-// origin/feature/chaos-4352-go-api` returns false). The Wave 3 task
-// briefing's claim that this fix was "already in the feature base" was
-// incorrect; this port targets the Python that ACTUALLY exists at the
-// feature-branch tip today (team+repo combined still filters
-// user_metrics_daily by BOTH team_id AND repo_id -- the same tainted
-// team_id column CHAOS-4396/CHAOS-4406 flag, unchanged here since fixing
-// it is out of this port's scope). Tracked as CHAOS-4462 (child of
-// CHAOS-4352): a future wave that merges main's CHAOS-4406 fix into the
-// feature branch will need a follow-up PR to this package.
+//     merged over the UNION of days. repoId, when set (without teamId),
+//     narrows only user_metrics_daily (team_metrics_daily has no repo_id
+//     FILTER dimension in this path, even though the table itself carries
+//     a repo_id column since CHAOS-4329 for its own internal dedup).
 //
 // Both source tables are plain MergeTree (NOT ReplacingMergeTree): a
 // recompute/backfill appends a NEW row for the same logical key rather
@@ -61,6 +56,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -144,11 +140,44 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 		}, nil
 	}
 
-	// Path 2: org-wide (teamID unset) OR team+repo combined (both set --
-	// team_cognitive_load_daily has no repo_id dimension to filter by, so
-	// this falls through to the same two-query merge Python's
-	// resolve_cognitive_load uses; repoID narrows user_metrics_daily
-	// only, team_metrics_daily is filtered by teamID alone).
+	// Path 2 (CHAOS-4406/CHAOS-4462): team+repo combined -- ownership-gated.
+	// team_cognitive_load_daily has no repo_id dimension, and neither
+	// user_metrics_daily's nor team_metrics_daily's own team_id column can
+	// be trusted for this case (CHAOS-4396 taint), so this resolves
+	// ownership FIRST and then filters both fetches by repoId alone.
+	if nonEmpty(teamID) && nonEmpty(repoID) {
+		ownedRepoID, found, err := resolveOwnedRepoID(ctx, client, orgID, *teamID, *repoID)
+		if err != nil {
+			return nil, fmt.Errorf("cognitiveload: resolve owned repo: %w", err)
+		}
+		if !found {
+			return &model.CognitiveLoadResult{
+				OrgID:     orgID,
+				TeamID:    teamID,
+				Signals:   []model.CognitiveLoadSignal{},
+				TotalDays: 0,
+			}, nil
+		}
+		userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, nil, &ownedRepoID)
+		if err != nil {
+			return nil, fmt.Errorf("cognitiveload: fetch user metrics: %w", err)
+		}
+		teamRows, err := fetchRepoScopedTeamMetrics(ctx, client, orgID, since, until, ownedRepoID)
+		if err != nil {
+			return nil, fmt.Errorf("cognitiveload: fetch repo-scoped team metrics: %w", err)
+		}
+		signals := mergeUserAndTeamRows(userRows, teamRows)
+		return &model.CognitiveLoadResult{
+			OrgID:     orgID,
+			TeamID:    teamID,
+			Signals:   signals,
+			TotalDays: len(signals),
+		}, nil
+	}
+
+	// Path 3: org-wide -- teamID unset (repoID, when set without teamID,
+	// narrows user_metrics_daily only; team_metrics_daily is filtered by
+	// teamID alone, which is always nil/empty here).
 	userRows, err := fetchUserMetrics(ctx, client, orgID, since, until, teamID, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("cognitiveload: fetch user metrics: %w", err)
@@ -473,6 +502,394 @@ func fetchTeamCognitiveLoad(ctx context.Context, client QueryClient, orgID, team
 			afterHoursCommitRatio: afterHours,
 			weekendCommitRatio:    weekend,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// team_repo_ownership (CHAOS-4406/CHAOS-4462, team+repo combined path)
+// ---------------------------------------------------------------------------
+
+// repoCandidate is one row from the repos lookup: repoID resolves EITHER a
+// repos.id UUID or a repos.repo slug to a concrete repo, keeping both the
+// id (for ownership matching) and the repo slug (for the repo_patterns
+// fallback, which matches on the slug, never the UUID).
+type repoCandidate struct {
+	id   string
+	repo string
+}
+
+// ownershipRow is one row from the team_repo_ownership join, already
+// resolved and ordered by ClickHouse per resolveOwnedRepoID's ORDER BY --
+// only resolvedRepoID/teamID are read; is_primary/specificity/updated_at
+// exist purely to drive that ORDER BY server-side, same as Python's query
+// (which selects but never re-reads them either).
+type ownershipRow struct {
+	resolvedRepoID string
+	teamID         string
+}
+
+// patternTeam is one team's repo_patterns row, for the pattern-fallback
+// resolver -- team_name is not needed (only team_id is ever compared).
+type patternTeam struct {
+	id           string
+	repoPatterns []string
+}
+
+// resolveOwnedRepoID ports _resolve_owned_repo_id verbatim (see that
+// Python function's docstring for the full rationale -- native
+// team_repo_ownership wins where it resolves the repo, ranked by
+// (is_primary DESC, specificity DESC, updated_at DESC, team_id ASC) same
+// as load_team_repo_ownership_map; teams.repo_patterns is consulted ONLY
+// for a candidate repo ownership resolves no row for at all, via the same
+// cross-team pattern resolver every other pattern-fallback reader uses).
+// Returns ("", false, nil) when repoID does not exist, or resolves to a
+// different team than teamID.
+func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, repoID string) (string, bool, error) {
+	candidates, err := fetchRepoCandidates(ctx, client, orgID, repoID)
+	if err != nil {
+		return "", false, fmt.Errorf("candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		return "", false, nil
+	}
+	candidateIDs := make([]string, len(candidates))
+	for i, c := range candidates {
+		candidateIDs[i] = c.id
+	}
+
+	ownershipRows, err := fetchOwnershipCandidates(ctx, client, orgID, candidateIDs)
+	if err != nil {
+		return "", false, fmt.Errorf("ownership: %w", err)
+	}
+
+	// canonical_owner: first-seen team per resolved_repo_id, in the exact
+	// order ClickHouse's ORDER BY (resolved_repo_id, is_primary DESC,
+	// specificity DESC, updated_at DESC, team_id ASC) returns rows --
+	// mirrors Python's dict.setdefault-over-ordered-rows, including
+	// iteration order (a Python dict preserves insertion order, so the
+	// later "return the first matching entry" loop walks resolved_repo_id
+	// ascending; `order` below reproduces that).
+	canonicalOwner := make(map[string]string, len(ownershipRows))
+	order := make([]string, 0, len(ownershipRows))
+	for _, row := range ownershipRows {
+		if _, seen := canonicalOwner[row.resolvedRepoID]; seen {
+			continue
+		}
+		canonicalOwner[row.resolvedRepoID] = row.teamID
+		order = append(order, row.resolvedRepoID)
+	}
+	for _, resolvedRepoID := range order {
+		if canonicalOwner[resolvedRepoID] == teamID {
+			return resolvedRepoID, true, nil
+		}
+	}
+
+	// A candidate resolved by NATIVE ownership to a DIFFERENT team is
+	// claimed and never re-checked against patterns; only a candidate with
+	// NO native ownership row at all gets a pattern-fallback chance.
+	var unresolved []repoCandidate
+	for _, c := range candidates {
+		if _, ok := canonicalOwner[c.id]; !ok {
+			unresolved = append(unresolved, c)
+		}
+	}
+	if len(unresolved) == 0 {
+		return "", false, nil
+	}
+
+	teamRows, err := fetchAllTeamsForPatternFallback(ctx, client, orgID)
+	if err != nil {
+		return "", false, fmt.Errorf("teams: %w", err)
+	}
+	if len(teamRows) == 0 {
+		return "", false, nil
+	}
+	resolver := newRepoPatternResolver(teamRows)
+	for _, c := range unresolved {
+		if resolvedTeamID, ok := resolver.resolve(c.repo); ok && resolvedTeamID == teamID {
+			return c.id, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// fetchRepoCandidates ports the candidate_rows query inside
+// _resolve_owned_repo_id: resolves repoID (a UUID or a repos.repo slug) to
+// every repos row it could refer to, reading FINAL (repos is
+// ReplacingMergeTree -- a just-renamed repo can briefly have both its old
+// and new row present until the background merge collapses them; an
+// unqualified read could treat the stale row as a live candidate, codex
+// R4 on the Python side).
+func fetchRepoCandidates(ctx context.Context, client QueryClient, orgID, repoID string) ([]repoCandidate, error) {
+	query := `
+        SELECT toString(id) AS id, repo AS repo
+        FROM repos FINAL
+        WHERE org_id = {org_id:String}
+          AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})`
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "repo_id", Value: repoID},
+	}
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []repoCandidate
+	for rows.Next() {
+		var c repoCandidate
+		if scanErr := rows.Scan(&c.id, &c.repo); scanErr != nil {
+			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		result = append(result, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return result, nil
+}
+
+// fetchOwnershipCandidates ports the ownership_rows query inside
+// _resolve_owned_repo_id: LEFT JOINs team_repo_ownership against repos on
+// (org_id, provider, lower(repo)) so a native GitHub auto-import row
+// (repo_id NULL, only repo_full_name set) still resolves, via
+// coalesce(o.repo_id, r.id) -- matching load_team_repo_ownership_map's
+// exact join, including its "matched" sentinel (ClickHouse's zero-value
+// LEFT JOIN default, not NULL, would otherwise silently treat an
+// unmatched name as matched to the UUID zero-value). Only
+// resolved_repo_id/team_id are selected -- is_primary/specificity/
+// updated_at drive the ORDER BY by direct column reference instead of a
+// selected alias, so this port never has to scan values it never reads.
+func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID string, candidateIDs []string) ([]ownershipRow, error) {
+	query := `
+        SELECT
+            coalesce(toString(o.repo_id), toString(r.id)) AS resolved_repo_id,
+            o.team_id AS team_id
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+            WHERE org_id = {org_id:String}
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = {org_id:String}
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
+          AND o.valid_from <= now64(3)
+          AND (o.valid_to IS NULL OR o.valid_to > now64(3))
+        ORDER BY resolved_repo_id, o.is_primary DESC, o.specificity DESC, o.updated_at DESC, team_id ASC`
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "candidate_ids", Value: candidateIDs},
+	}
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []ownershipRow
+	for rows.Next() {
+		var row ownershipRow
+		if scanErr := rows.Scan(&row.resolvedRepoID, &row.teamID); scanErr != nil {
+			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return result, nil
+}
+
+// fetchAllTeamsForPatternFallback ports the all_team_rows query inside
+// _resolve_owned_repo_id: every team's id + repo_patterns in the org, so
+// the pattern resolver is built from EVERY team's patterns (not just the
+// requesting team's) -- a more specific pattern another team owns must
+// never be silently overridden by this team's own broader one.
+func fetchAllTeamsForPatternFallback(ctx context.Context, client QueryClient, orgID string) ([]patternTeam, error) {
+	query := `SELECT id, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String}`
+	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []patternTeam
+	for rows.Next() {
+		var t patternTeam
+		if scanErr := rows.Scan(&t.id, &t.repoPatterns); scanErr != nil {
+			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		result = append(result, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return result, nil
+}
+
+// repoPatternResolver ports RepoPatternTeamResolver/build_repo_pattern_resolver
+// (src/dev_health_ops/providers/teams.py:94,248) -- deliberately a private
+// copy scoped to this package rather than a shared import: query-api is a
+// read-only service and does not import internal/jobs/... (the worker's
+// own copy lives in internal/jobs/metrics/daily/wellbeing_native_clickhouse.go
+// as repoPatternResolver/NewRepoPatternResolver, verified against this
+// same Python function already) -- same convention this package's
+// QueryClient doc comment already documents for why small per-package
+// helpers are not pulled through a shared library here.
+type repoPatternResolver struct {
+	exact    map[string]string // repo slug (lowercased) -> team_id
+	prefixes []repoPatternPrefix
+}
+
+type repoPatternPrefix struct {
+	prefix string
+	teamID string
+}
+
+// newRepoPatternResolver builds the resolver build_repo_pattern_resolver
+// builds: an exact-match map for patterns with no "*", and a prefix list
+// (pattern with trailing "*" and "/" stripped) for the rest, sorted
+// longest-prefix-first so the most specific pattern wins when several
+// match.
+func newRepoPatternResolver(teams []patternTeam) *repoPatternResolver {
+	exact := make(map[string]string)
+	var prefixes []repoPatternPrefix
+	for _, team := range teams {
+		teamID := strings.TrimSpace(team.id)
+		if teamID == "" || len(team.repoPatterns) == 0 {
+			continue
+		}
+		for _, raw := range team.repoPatterns {
+			pattern := strings.ToLower(strings.TrimSpace(raw))
+			if pattern == "" {
+				continue
+			}
+			if strings.Contains(pattern, "*") {
+				prefix := strings.TrimRight(strings.TrimRight(pattern, "*"), "/")
+				if prefix != "" {
+					prefixes = append(prefixes, repoPatternPrefix{prefix: prefix, teamID: teamID})
+				}
+				continue
+			}
+			exact[pattern] = teamID
+		}
+	}
+	sort.SliceStable(prefixes, func(i, j int) bool {
+		return len(prefixes[i].prefix) > len(prefixes[j].prefix)
+	})
+	return &repoPatternResolver{exact: exact, prefixes: prefixes}
+}
+
+// resolve ports RepoPatternTeamResolver.resolve: exact match first, then
+// the longest matching prefix.
+func (r *repoPatternResolver) resolve(repoName string) (string, bool) {
+	if r == nil || repoName == "" {
+		return "", false
+	}
+	key := strings.ToLower(strings.TrimSpace(repoName))
+	if key == "" {
+		return "", false
+	}
+	if teamID, ok := r.exact[key]; ok {
+		return teamID, true
+	}
+	for _, p := range r.prefixes {
+		if strings.HasPrefix(key, p.prefix) {
+			return p.teamID, true
+		}
+	}
+	return "", false
+}
+
+// fetchRepoScopedTeamMetrics ports _fetch_repo_scoped_team_metrics
+// (CHAOS-4406): one repo's after-hours/weekend commit-timing ratio, by
+// day, collapsed across every team_id label team_metrics_daily attached
+// to that repo's rows -- never filtered BY team_id, since the caller has
+// already confirmed ownership via resolveOwnedRepoID and every commit
+// against this repo belongs to that team by definition regardless of
+// which (possibly wrong) team_id an individual row carries. The inner
+// join finds this repo's latest computed_at PER DAY, then only rows
+// exactly at that timestamp are summed -- excludes a stale earlier
+// recompute generation instead of double-counting it (same fix
+// metrics/job_daily.py's finalize producer uses, ported per Python's
+// docstring).
+func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, sinceDate, untilDate, repoID string) ([]teamRatioRow, error) {
+	query := `
+        SELECT
+            day,
+            if(total_commits > 0,
+               total_after_hours_commits / total_commits, 0.0
+            ) AS after_hours_commit_ratio,
+            if(total_commits > 0,
+               total_weekend_commits / total_commits, 0.0
+            ) AS weekend_commit_ratio
+        FROM (
+            SELECT
+                t.day AS day,
+                sum(t.commits_count)             AS total_commits,
+                sum(t.after_hours_commits_count) AS total_after_hours_commits,
+                sum(t.weekend_commits_count)      AS total_weekend_commits
+            FROM team_metrics_daily AS t
+            INNER JOIN (
+                SELECT day, max(computed_at) AS latest_computed_at
+                FROM team_metrics_daily
+                WHERE org_id = {org_id:String}
+                  AND day >= {since_date:Date}
+                  AND day <= {until_date:Date}
+                  AND repo_id IN (
+                      SELECT toString(id) FROM repos
+                      WHERE org_id = {org_id:String}
+                        AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+                  )
+                GROUP BY day
+            ) AS latest_gen
+                ON t.day = latest_gen.day
+                   AND t.computed_at = latest_gen.latest_computed_at
+            WHERE t.org_id = {org_id:String}
+              AND t.day >= {since_date:Date}
+              AND t.day <= {until_date:Date}
+              AND t.repo_id IN (
+                  SELECT toString(id) FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )
+            GROUP BY t.day
+        )
+        ORDER BY day`
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "since_date", Value: sinceDate},
+		{Name: "until_date", Value: untilDate},
+		{Name: "repo_id", Value: repoID},
+	}
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []teamRatioRow
+	for rows.Next() {
+		var day time.Time
+		var afterHours, weekend float64
+		if scanErr := rows.Scan(&day, &afterHours, &weekend); scanErr != nil {
+			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		result = append(result, teamRatioRow{day: day, afterHoursCommitRatio: afterHours, weekendCommitRatio: weekend})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)

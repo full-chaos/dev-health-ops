@@ -235,23 +235,32 @@ uri_encode() {
 # already succeeded. Lifting either limit means routing migrate through the
 # repository parser -- an ops-side change to the migration path, out of scope
 # for this gate script.
+# The credential restriction is NOT transport-scoped (codex R3). Encoding now
+# applies to SCRATCH_URI in BOTH modes, so a docker-mode CH_PASS='sec!ret'
+# becomes sec%21ret, the upgrade decodes it, and status --check authenticates
+# with the literal encoded string -- failing AFTER create and migrate, in the
+# default configuration. The limitation belongs to the migrate path, so the
+# guard has to sit outside the transport check.
+case "${CH_USER}${CH_PASS}" in
+*[!A-Za-z0-9._~-]*)
+  printf 'CH_USER/CH_PASS must contain only unreserved URI characters (A-Za-z0-9._~-)\n' >&2
+  printf '  `migrate clickhouse status --check` passes the DSN straight to\n' >&2
+  printf '  clickhouse-connect, which does not percent-decode userinfo, so an\n' >&2
+  printf '  encoded credential fails there even though CREATE and upgrade accept\n' >&2
+  printf '  it. Tracked as CHAOS-4469.\n' >&2
+  exit 2
+  ;;
+esac
 if [ "${CH_TRANSPORT}" = "http" ]; then
   if [ "${CH_HTTP_SCHEME}" = "https" ] \
      && [ "${CH_HTTP_PORT}" != "443" ] && [ "${CH_HTTP_PORT}" != "8443" ]; then
     printf 'CH_HTTP_SCHEME=https is only supported on port 443 or 8443 (got %s):\n' "${CH_HTTP_PORT}" >&2
     printf '  clickhouse-connect infers TLS from the port, not the URI scheme, so\n' >&2
     printf '  `migrate clickhouse status --check` would reconnect in plaintext.\n' >&2
+    printf '  Publish the endpoint on 443/8443 (or port-forward to one) until\n' >&2
+    printf '  CHAOS-4469 lands.\n' >&2
     exit 2
   fi
-  case "${CH_USER}${CH_PASS}" in
-  *[!A-Za-z0-9._~-]*)
-    printf 'CH_USER/CH_PASS must contain only unreserved URI characters (A-Za-z0-9._~-)\n' >&2
-    printf '  for CH_TRANSPORT=http: `migrate clickhouse status --check` does not\n' >&2
-    printf '  percent-decode userinfo, so an encoded credential fails there even\n' >&2
-    printf '  though curl and the upgrade accept it.\n' >&2
-    exit 2
-    ;;
-  esac
 fi
 CH_USER_ENC="$(uri_encode "${CH_USER}")"
 CH_PASS_ENC="$(uri_encode "${CH_PASS}")"

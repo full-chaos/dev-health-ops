@@ -17,6 +17,7 @@ resolve `CLICKHOUSE_URI` from the environment, which the gate already exports.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -185,3 +186,89 @@ def test_remote_clickhouse_consumers_are_proxy_neutralised() -> None:
         "these remote-ClickHouse invocations are not proxy-neutralised, so an "
         f"ambient HTTP_PROXY can receive the credential: {unguarded}"
     )
+
+
+_PROBE = 'bash "%s" --ch-query-probe "SELECT 1"'
+
+
+def _stub_path(tmp_path: Path) -> str:
+    """A PATH with inert curl/docker, so the config guards are what we observe."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name in ("curl", "docker"):
+        stub = bindir / name
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+    return f"{bindir}:{os.environ.get('PATH', '')}"
+
+
+def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", _PROBE % _GATE],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        cwd=_ROOT,
+    )
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"CH_HTTP_SCHEME": "https", "CH_HTTP_PORT": "30501"}, "port 443 or 8443"),
+        ({"CH_PASS": "sec/ret"}, "unreserved URI characters"),
+        ({"CH_USER": "user@host"}, "unreserved URI characters"),
+    ],
+)
+def test_unsupported_http_combinations_refuse_up_front(
+    env: dict[str, str], expected: str, tmp_path: Path
+) -> None:
+    """Fail fast, not three stages deep.
+
+    Both limits come from one root: `migrate clickhouse status --check` calls
+    clickhouse_connect.get_client(dsn=...) directly (migrate.py:360,461) rather
+    than through a repository parser. It infers TLS from the PORT, not the
+    `clickhouse+https` scheme, and it does not percent-decode userinfo. So a TLS
+    NodePort would silently reconnect in plaintext, and an encoded credential
+    would authenticate for curl and the upgrade and then fail at status --
+    after two stages had already succeeded. Refusing at startup with the reason
+    is the loud fallback.
+    """
+    result = _run_gate(
+        {
+            "PATH": _stub_path(tmp_path),
+            "CH_TRANSPORT": "http",
+            "CH_HOST": "192.0.2.10",
+            "CH_HTTP_PORT": "30501",
+            "CH_USER": "ch",
+            "CH_PASS": "secret",
+            **env,
+        }
+    )
+    combined = result.stdout + result.stderr
+    assert expected in combined, (
+        f"expected a refusal mentioning {expected!r}; got: {combined}"
+    )
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+def test_supported_http_combinations_are_not_refused(tmp_path: Path) -> None:
+    """The guard must not over-reject: plain http and TLS on 8443 both pass."""
+    for env in (
+        {"CH_HTTP_SCHEME": "http", "CH_HTTP_PORT": "30501"},
+        {"CH_HTTP_SCHEME": "https", "CH_HTTP_PORT": "8443"},
+    ):
+        result = _run_gate(
+            {
+                "PATH": _stub_path(tmp_path),
+                "CH_TRANSPORT": "http",
+                "CH_HOST": "192.0.2.10",
+                "CH_USER": "ch",
+                "CH_PASS": "secret",
+                **env,
+            }
+        )
+        combined = result.stdout + result.stderr
+        assert "only supported on port" not in combined, (env, combined)
+        assert "unreserved URI characters" not in combined, (env, combined)

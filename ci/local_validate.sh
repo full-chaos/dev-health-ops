@@ -215,6 +215,44 @@ uri_encode() {
     esac
   done
 }
+# Two limits of the http transport, enforced HERE rather than discovered three
+# stages later (codex round 2). Both come from one root: `dev-hops migrate
+# clickhouse status --check` calls clickhouse_connect.get_client(dsn=...)
+# DIRECTLY (src/dev_health_ops/migrate.py:360,461) instead of going through a
+# repository parser, so it sees the raw DSN with none of the handling the rest
+# of the path applies.
+#
+#   1. clickhouse-connect infers TLS from the PORT (443/8443) and explicit
+#      options, not from a `clickhouse+https://` scheme. On a TLS endpoint
+#      published at any other port -- a Kubernetes NodePort, exactly the case
+#      this transport exists for -- status would reconnect in PLAINTEXT and the
+#      gate would fail after a successful CREATE and upgrade.
+#   2. clickhouse-connect's DSN parser does not percent-DECODE userinfo, so a
+#      credential we correctly encoded as `sec%2Fret` reaches it verbatim.
+#      curl and the upgrade authenticate as `sec/ret`; status then fails auth.
+#
+# Refusing up front, with the reason, beats failing deep after two stages have
+# already succeeded. Lifting either limit means routing migrate through the
+# repository parser -- an ops-side change to the migration path, out of scope
+# for this gate script.
+if [ "${CH_TRANSPORT}" = "http" ]; then
+  if [ "${CH_HTTP_SCHEME}" = "https" ] \
+     && [ "${CH_HTTP_PORT}" != "443" ] && [ "${CH_HTTP_PORT}" != "8443" ]; then
+    printf 'CH_HTTP_SCHEME=https is only supported on port 443 or 8443 (got %s):\n' "${CH_HTTP_PORT}" >&2
+    printf '  clickhouse-connect infers TLS from the port, not the URI scheme, so\n' >&2
+    printf '  `migrate clickhouse status --check` would reconnect in plaintext.\n' >&2
+    exit 2
+  fi
+  case "${CH_USER}${CH_PASS}" in
+  *[!A-Za-z0-9._~-]*)
+    printf 'CH_USER/CH_PASS must contain only unreserved URI characters (A-Za-z0-9._~-)\n' >&2
+    printf '  for CH_TRANSPORT=http: `migrate clickhouse status --check` does not\n' >&2
+    printf '  percent-decode userinfo, so an encoded credential fails there even\n' >&2
+    printf '  though curl and the upgrade accept it.\n' >&2
+    exit 2
+    ;;
+  esac
+fi
 CH_USER_ENC="$(uri_encode "${CH_USER}")"
 CH_PASS_ENC="$(uri_encode "${CH_PASS}")"
 # clickhouse+https:// is how clickhouse-connect is told to use TLS; the plain

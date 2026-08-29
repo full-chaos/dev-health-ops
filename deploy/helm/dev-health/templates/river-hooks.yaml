@@ -46,6 +46,21 @@ database can never get workers pointed at it.
 
 Both are gated OFF by default so no existing deployment changes behaviour on
 upgrade. Prod opts in deliberately.
+
+OFF is not "River never happens", and the difference matters on a fresh
+install. With riverMigrate.enabled=false there are exactly two paths:
+
+  * the migration Secret carries MIGRATION_DATABASE_URI -> `dev-hops migrate
+    postgres` runs dev-health-worker-migrate itself, inside the weight-0 Job.
+    That is the Compose-equivalent arrangement, and it is safe only where the
+    runtime roles ALREADY exist -- i.e. an upgrade. On a fresh database its
+    preflight fails before anything provisions the roles.
+  * the Secret carries no such URI -> weight 0 is Alembic plus the ClickHouse
+    migrator only, and nothing applies the River schema at all. The operator
+    runs dev-health-worker-migrate out of band.
+
+Turning the hook ON moves that step to its own weight-10 Job, after role
+provisioning, which is the only ordering a fresh install survives.
 */}}
 {{- if .Values.migrations.hook.enabled }}
 {{- $hookEvents := .Values.migrations.hook.events }}

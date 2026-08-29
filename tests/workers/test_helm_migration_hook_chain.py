@@ -754,3 +754,72 @@ def test_weight_10_job_applies_river_with_the_elevated_dsn(tmp_path: Path) -> No
             "the weight-10 Job did not see the elevated DSN, so River would "
             f"either no-op or run against the wrong database: {line!r}"
         )
+
+
+# --- what riverMigrate.enabled=false actually means --------------------------
+#
+# GW's correction: "off" is NOT "the old behaviour" in one sense and IS in
+# another, and the difference is the Secret's contents. With the hook off there
+# are exactly two paths, and neither is "River does not happen":
+#
+#   * the migration Secret carries the URI  -> `dev-hops migrate postgres` runs
+#     dev-health-worker-migrate ITSELF, inside the weight-0 Job. That is the
+#     Compose-equivalent arrangement (`compose.yml`'s migrate service does
+#     exactly this when MIGRATION_DATABASE_URI is non-empty), and it is only
+#     safe where the roles already exist -- an upgrade, not a fresh install.
+#   * the Secret carries no URI -> the weight-0 Job is Alembic + ClickHouse
+#     only and NOTHING applies the River schema. The operator has to run
+#     dev-health-worker-migrate out of band.
+
+
+def _values_no_dsn(river_migrate: bool) -> str:
+    return textwrap.dedent(f"""
+        migrations:
+          hook:
+            provisionRoles: {{enabled: true}}
+            riverMigrate: {{enabled: {str(river_migrate).lower()}}}
+            secretData:
+              MIGRATION_DATABASE_URI: ""
+              POSTGRES_URI: "postgresql://alembic:pw@postgres:5432/devhealth"
+              CLICKHOUSE_URI: ""
+        """)
+
+
+def test_hook_off_without_a_dsn_leaves_river_to_the_operator(
+    tmp_path: Path,
+) -> None:
+    """No URI anywhere means no River step at all -- by design, not by accident.
+
+    Without this, the "hook off keeps the old behaviour" claim would be
+    untested for the configuration where there is no elevated DSN, which is the
+    one where an operator most needs to know the step is theirs to run.
+    """
+    jobs = _jobs_from_values(_values_no_dsn(river_migrate=False), tmp_path)
+    code, calls = _run_migrate_command(
+        jobs[_MIGRATE],
+        tmp_path,
+        POSTGRES_URI="postgresql://alembic:pw@postgres:5432/devhealth",
+        DATABASE_URI="",
+    )
+    assert code == 0, calls
+    argv, seen, seen_file = _postgres_invocation(calls)
+    assert (seen, seen_file) == ("unset", "unset"), (
+        f"with no URI configured, migrate.py's River step must stay dormant: {calls!r}"
+    )
+    assert "--db" not in argv, argv
+
+
+def test_hook_off_with_a_dsn_keeps_the_secret_key_that_activates_river(
+    tmp_path: Path,
+) -> None:
+    """The Compose-equivalent path: weight 0 runs River itself.
+
+    Pinned at the Secret as well as at the entrypoint, because the split added
+    for the hook-on case must not leak into the hook-off case -- that would
+    silently disable River for every deployment that has not opted in.
+    """
+    secrets = _secrets_from_values(_values(river_migrate=False), tmp_path)
+    assert (
+        secrets[_MIGRATE_SECRETS]["stringData"]["MIGRATION_DATABASE_URI"]
+        == _MIGRATION_DSN
+    )

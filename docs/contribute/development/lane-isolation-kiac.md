@@ -4,6 +4,7 @@ summary: Run the whole Dev Health stack one-namespace-per-lane on a local kiac c
 content_type: runbook
 owner: engineering
 source_of_truth:
+  - acr/deploy/local/lane.sh (one-command lane lifecycle; composes the two below)
   - acr/deploy/local/kiac.sh (cluster lifecycle and the image bridge)
   - acr/deploy/local/trial-data.sh (per-namespace Postgres/ClickHouse/FalkorDB and the @backups restores)
   - deploy/helm/dev-health (ops chart) and the ACR chart (workloads)
@@ -87,6 +88,76 @@ are fixed at **create time** (there is no live-resize path), so a node per lane
 would freeze the split before the lanes exist and resizing would cost a cluster
 recreate, which destroys the PVC data. Namespaces cost one Postgres, one
 ClickHouse and one FalkorDB pod per lane and can be added and removed freely.
+
+## The short path: `lane.sh`
+
+Everything under **Recipe** below is what a lane needs. You do not have to run it
+by hand: `acr/deploy/local/lane.sh` composes the pieces that already exist —
+`kiac.sh` owns the cluster and the image bridge, `trial-data.sh` owns the
+per-namespace datastores and the `@backups` restores — into one command.
+
+```bash
+acr/deploy/local/lane.sh up <lane> [--backups <dir>] [--nodeport-base <n>]
+acr/deploy/local/lane.sh down <lane>
+acr/deploy/local/lane.sh status [<lane>]
+```
+
+`up` is **idempotent**: every step checks whether it is already done, so a re-run
+repairs a partial lane rather than failing or duplicating work. Read the manual
+recipe anyway the first time — when a lane misbehaves, the failure is always in
+one of those steps, and the script cannot tell you which one you did not read.
+
+Useful environment overrides (`lane.sh` prints the full list with no arguments):
+
+| Variable | Default | Why you would change it |
+| --- | --- | --- |
+| `LANE_CLUSTER` | `dev-full` | the kiac cluster to use or create |
+| `LANE_SKIP_ACR=1` | unset | ops only — faster, and needs no model key |
+| `LANE_DS_CPU_REQUEST` | `50m` | CPU request per datastore pod, vs the standing trial plane's `250m`; this plus the ops tier is what caps lanes per node |
+| `LANE_ORG_ID` | the `@backups` dev org | org allow-listed for the projector |
+
+### The ownership guard, and the one-time adoption step
+
+`up` labels a namespace `app.kubernetes.io/managed-by=lane.sh` **only when it
+created that namespace successfully**, and `down` **refuses any namespace without
+that label**. This is deliberate and it is the guard that matters most in this
+document: `down` deletes a namespace and its PVCs.
+
+A namespace created before the labelling existed will therefore be refused —
+the guard working as designed, because it cannot distinguish it from a namespace
+`lane.sh` never made. Adopt one deliberately, and only one you are certain is a
+disposable lane:
+
+```bash
+kubectl label namespace <lane> app.kubernetes.io/managed-by=lane.sh
+```
+
+**Never label `acr-trial-data`.** It is the standing trial plane with the seeded
+`@backups` PVCs; labelling it would let `down` delete it, which is exactly what
+the guard exists to prevent.
+
+### Readiness is gated on the ACR API, not the projector — CHAOS-4465
+
+`up` waits on acr-api `/readyz`, **not** on the projector. On a cold org the
+projector legitimately cycles: it drains toward its ~150 s tick deadline, exits 0
+with `drain_yield_reason=context_done`, and restarts, while the graph keeps
+growing (observed climbing 30,141 → 41,465 nodes across restarts). That is
+progress, not a crash loop — but a readiness gate cannot tell the difference, so
+gating `up` on it turned a **144 s** bring-up into **781 s**. Tracked as
+**CHAOS-4465**; until it is fixed, a lane is "up" when the API is ready and the
+projector is still catching up.
+
+Verified on a resumed cluster: `lane.sh up lane-c` reached READY in **144 s**
+with all six application checks green, graph 41,465 nodes, alembic 0115, and 116
+domain grants.
+
+### "Up" means the health endpoints answer
+
+A lane is not up because its pods are `Running`. Twenty-one of twenty-one pods
+were green in a lane whose `/health/workers` returned **503** (`sync-provider:
+absent`). Judge a lane by its application-level endpoints — `/readyz`,
+`/health/workers` — never by pod phase. `lane.sh status` reports those checks;
+if you bring a lane up by hand, query them yourself.
 
 ## Recipe
 
@@ -273,49 +344,6 @@ references:
 **Strip the surrounding quotes** when you copy a value out of a `.env` file.
 Docker Compose strips them; `kubectl create secret --from-literal` does not, and
 a quoted key reaches the provider as an invalid credential.
-
-## Testcontainers: which suite runs where
-
-| Suite | Where |
-| --- | --- |
-| Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
-| Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
-| `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
-| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. Tracked as **CHAOS-4457** (local_validate remote-datastore mode). It is closer than it looks: the lock is already scoped to `CH_CONTAINER` (`LOCK_DIR=/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`), so a lane-scoped name gives the run its own lock, and the only docker-bound call is `ch_query()` (`ci/local_validate.sh:939`) doing the scratch `CREATE`/`DROP DATABASE` — every other ClickHouse access already goes over HTTP via the env-overridable `CH_HOST`/`CH_HTTP_PORT`. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once that one function has an HTTP path. |
-| web Playwright e2e | The lane's own ops API and web. |
-| ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
-
-The rule: keep Testcontainers only where a suite genuinely wants a **throwaway**
-store. Anything that needs the seeded real organization must use the in-cluster
-plane.
-
-**One caveat learned by running it.** Pointing `DEV_HEALTH_POSTGRES_TEST_URI` at
-a lane's seeded Postgres opts in a set of live-PG tests that normally skip, and
-two of them assume an **empty** `worker_job_outbox`: they seed one wakeup and
-claim it back with `limit=1`, which fails on a restored snapshot that already
-carries 32 `pending` rows. Use the asyncpg dialect (`postgresql+asyncpg://`, not
-the psycopg2 sync fallback) and expect fixture assumptions like this to surface
-— the skip path hides them entirely on the Compose stack.
-
-## Cost
-
-Measured on one 4 vCPU / 24 GB node with the full stack in `lane-a` and the
-datastores plus most of `lane-b`:
-
-| Step | Wall time |
-| --- | --- |
-| Cluster create to node Ready | 78 s |
-| Datastore rollout (Postgres, ClickHouse, FalkorDB) | 42 s |
-| Postgres restore (93 MB gzip, `pg_dumpall`) | 28 s |
-| ClickHouse restore (177 MB archive) | 9 s |
-| **Cold, empty machine to seeded datastores** | **157 s** |
-| `docker save` + `container image load`, 12 images | 34 s |
-| `kiac.sh load-image`, 10 images | 14 s |
-| A second seeded lane namespace | 80 s |
-
-Node use with the full stack in one namespace: 1114 m CPU (22 %) and 4449 MiB
-(18 % of 24 GB). With a second seeded lane it rose to 1550 m (31 %) and
-6997 MiB (28 %). Roughly three lanes fit on one node of this size.
 
 ### 7. Install the two releases
 
@@ -513,3 +541,121 @@ Two things the values must NOT do:
   the provider job-routes are activated, and the chart renders no
   route-activation Job (Compose does this with five `*-route-activate`
   one-shots plus `go-worker-operator-credential`).
+
+## Testcontainers: which suite runs where
+
+| Suite | Where |
+| --- | --- |
+| Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
+| Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
+| `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
+| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. Tracked as **CHAOS-4457** (local_validate remote-datastore mode). It is closer than it looks: the lock is already scoped to `CH_CONTAINER` (`LOCK_DIR=/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`), so a lane-scoped name gives the run its own lock, and the only docker-bound call is `ch_query()` (`ci/local_validate.sh:939`) doing the scratch `CREATE`/`DROP DATABASE` — every other ClickHouse access already goes over HTTP via the env-overridable `CH_HOST`/`CH_HTTP_PORT`. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once that one function has an HTTP path. |
+| web Playwright e2e | The lane's own ops API and web. |
+| ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
+
+The rule: keep Testcontainers only where a suite genuinely wants a **throwaway**
+store. Anything that needs the seeded real organization must use the in-cluster
+plane.
+
+**One caveat learned by running it.** Pointing `DEV_HEALTH_POSTGRES_TEST_URI` at
+a lane's seeded Postgres opts in a set of live-PG tests that normally skip, and
+two of them assume an **empty** `worker_job_outbox`: they seed one wakeup and
+claim it back with `limit=1`, which fails on a restored snapshot that already
+carries 32 `pending` rows. Use the asyncpg dialect (`postgresql+asyncpg://`, not
+the psycopg2 sync fallback) and expect fixture assumptions like this to surface
+— the skip path hides them entirely on the Compose stack.
+
+## Cost
+
+Measured on one 4 vCPU / 24 GB node with the full stack in `lane-a` and the
+datastores plus most of `lane-b`:
+
+| Step | Wall time |
+| --- | --- |
+| Cluster create to node Ready | 78 s |
+| Datastore rollout (Postgres, ClickHouse, FalkorDB) | 42 s |
+| Postgres restore (93 MB gzip, `pg_dumpall`) | 28 s |
+| ClickHouse restore (177 MB archive) | 9 s |
+| **Cold, empty machine to seeded datastores** | **157 s** |
+| `docker save` + `container image load`, 12 images | 34 s |
+| `kiac.sh load-image`, 10 images | 14 s |
+| A second seeded lane namespace | 80 s |
+
+Node use with the full stack in one namespace: 1114 m CPU (22 %) and 4449 MiB
+(18 % of 24 GB). With a second seeded lane it rose to 1550 m (31 %) and
+6997 MiB (28 %). Roughly three lanes fit on one node of this size.
+
+## Host CPU budget — one kiac cluster at a time
+
+**Standing rule (chris, 2026-08-28 19:30): never bring up more than one kiac
+cluster, and only when a lane actually needs it.** Any other kiac cluster and any
+kind cluster stay down while Docker Desktop runs.
+
+| Consumer | vCPU | Note |
+| --- | --- | --- |
+| Docker Desktop VM | 4 | `docker info` NCPU |
+| kiac `dev-full` node | 4 | `ACR_KIAC_CPUS=4`, fixed at create time |
+| kiac `acr-local` node | 4 | the acr pilot and the standing trial data plane |
+| **subtotal, all three up** | **12** | the contention this rule exists to stop |
+| buildkit | 2 | |
+| **committed** | **14** | of **16** logical (`sysctl hw.logicalcpu`) |
+
+Two vCPU left for the host, the editors and every agent is why the machine
+stalled with three cluster-types up. With the rule applied — Docker 4 + one kiac
+4 — it is **8 of 16**.
+
+Two consequences worth separating, because they answer different questions:
+
+- **Resource requests** govern how many lanes fit *inside* one node. **This
+  budget** governs how many *nodes* may exist at all. A lane that fits
+  comfortably still costs 4 host vCPU if it needs a second cluster — which is
+  the argument for namespace-per-lane over cluster-per-lane.
+- **A node's vCPU is fixed at create time** (no live resize), so the budget is
+  spent when the cluster is created, not when a lane starts.
+
+Before any `kiac resume` or `container system start`, send the budget line and
+wait for a go-ahead.
+
+### Which cluster hosts what — ruling of 2026-08-28 19:47
+
+> "acr-local will be the cluster for now for running/testing our trials against
+> still to be consistent. That being said, namespace per lane is fine, cluster
+> size can be bigger with more nodes accommodate all once we are moved off
+> docker-desktop for the entire local stack's needs. Which shouldn't be hard
+> once the kiac lane is done."
+
+- **`acr-trial-data` stays on `acr-local`.** Trials run there, not in a
+  `dev-full` lane namespace — a trial whose data plane moved mid-series is not
+  comparable to the ones before it.
+- **`dev-full` is lane work.** Under the one-cluster rule the two **serialize at
+  cluster granularity**: while lanes run, trials wait, and vice versa. This is an
+  accepted cost with a fixed end date, not a steady state.
+- **Namespace-per-lane is the isolation unit at every cluster size.**
+
+### Target state: one multi-node cluster, Docker Desktop retired
+
+The end state is **one bigger multi-node kiac cluster hosting the whole local
+stack** (replacing Compose), carrying namespace-per-lane *and* the trial plane.
+That removes the serialization by removing the second cluster, and removes
+Docker's 4 vCPU by removing Docker Desktop.
+
+| Consumer | vCPU |
+| --- | --- |
+| Docker Desktop VM | **0** — retired |
+| host, editors, agents | 4 |
+| buildkit | 2 — unless image builds move in-cluster |
+| **available for kiac** | **10** of 16 |
+
+At `ACR_KIAC_CPUS=4` that is **2 nodes with 2 spare**, or **3 nodes if buildkit
+moves in-cluster**. The node count turns on whether image builds stay on the
+host.
+
+**One figure must be reconciled before this is sized for real.** Two lanes were
+observed reserving **4850m of 5000m** on the `dev-full` node, but that node was
+created with `ACR_KIAC_CPUS=4`, which should advertise roughly 4000m allocatable.
+Those numbers disagree and are not yet resolved. The per-lane cost of **680m**
+and the memory-bound ceiling of **~5.8 lanes** are measured and stand; the
+nodes-per-host figure above is derived from the create-time setting and must be
+re-derived from live `Allocatable` (`kubectl describe node`) on the next cluster
+brought up. Sizing a cluster on an unreconciled allocatable is how a capacity
+plan comes out wrong in the direction that looks fine until it saturates.

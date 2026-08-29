@@ -800,3 +800,146 @@ def test_reference_discovery_noop_for_non_capable_provider_arms_dispatch(
     assert ledger.completed_at is not None
     assert len(dispatch_outbox) == 1
     assert dispatch_outbox[0].status == OUTBOX_STATUS_PENDING
+
+
+def test_seed_reference_discovery_run_arms_ledger_and_outbox_like_plan_sync_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: seed_reference_discovery_run must arm the SAME
+    SyncRunReferenceDiscovery + OUTBOX_KIND_DISCOVERY row shape
+    plan_sync_run seeds unconditionally, off a zero-unit anchor SyncRun --
+    the exact row NativeReferenceDiscoveryService (Go) claims."""
+    from dev_health_ops.sync.planner import seed_reference_discovery_run
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="linear",
+        name="Linear integration",
+        config={},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+
+    sync_run_id = seed_reference_discovery_run(
+        db_session,
+        integration_id=str(integration.id),
+        org_id=org_id,
+        triggered_by="test",
+    )
+    db_session.flush()
+
+    run = db_session.get(SyncRun, uuid.UUID(sync_run_id))
+    assert run is not None
+    assert run.mode == SyncRunMode.BACKFILL.value
+    assert run.status == SyncRunStatus.PLANNED.value
+    assert run.total_units == 0
+
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    assert ledger.status == "planned"
+    assert ledger.attempts == 0
+
+    outbox = _outbox_rows(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert len(outbox) == 1
+    assert outbox[0].status == OUTBOX_STATUS_PENDING
+
+
+def test_await_reference_discovery_terminal_returns_success_with_result(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+
+    ledger.status = "success"
+    ledger.result = {"status": "success", "teams_imported": 1}
+    db_session.flush()
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {
+        "outcome": "success",
+        "sync_run_id": str(run.id),
+        "result": {"status": "success", "teams_imported": 1},
+    }
+
+
+def test_await_reference_discovery_terminal_returns_failed_with_reason(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+
+    ledger.status = "failed"
+    ledger.error = "Reference discovery failed"
+    db_session.flush()
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {
+        "outcome": "failed",
+        "sync_run_id": str(run.id),
+        "reason": "Reference discovery failed",
+    }
+
+
+def test_await_reference_discovery_terminal_reports_not_claimed_past_lease_bound(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: a row stuck PLANNED past one full lease window (no
+    worker ever claimed it) reports not_claimed -- fails closed, never
+    falls back to calling the Python populator directly. The bound is the
+    Go service's own SYNC_REFERENCE_DISCOVERY_LEASE_SECONDS constant
+    (_discovery_lease_seconds), shrunk here so the test runs in
+    milliseconds, not an invented separate constant."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    _add_discovery(db_session, run)  # stays "planned" -- never claimed
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(reference_discovery, "_discovery_lease_seconds", lambda: 0.05)
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {"outcome": "not_claimed", "sync_run_id": str(run.id)}
+
+
+def test_await_reference_discovery_terminal_reports_timeout_running_past_lifetime_bound(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: a row claimed (RUNNING) but never reaching terminal
+    within the Go service's own max-lifetime bound
+    (_max_discovery_lifetime_seconds) reports timeout_running, not a silent
+    fallback."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    ledger.status = "running"
+    ledger.lease_owner = str(uuid.uuid4())
+    ledger.lease_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        reference_discovery, "_max_discovery_lifetime_seconds", lambda: 0.05
+    )
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {"outcome": "timeout_running", "sync_run_id": str(run.id)}

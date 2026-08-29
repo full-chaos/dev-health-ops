@@ -7,10 +7,14 @@ from typing import Any
 
 from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+from dev_health_ops.metrics.prometheus import (
+    record_backfill_reference_discovery_outcome,
+)
 from dev_health_ops.models.settings import SyncConfiguration
-from dev_health_ops.workers.reference_discovery import _verify_reference_readback
+from dev_health_ops.workers.reference_discovery import (
+    await_reference_discovery_terminal,
+)
 from dev_health_ops.workers.task_utils import _jira_query_options
-from dev_health_ops.workers.team_autoimport import run_team_autoimport_strict
 
 from .chunker import chunk_date_range
 
@@ -90,36 +94,55 @@ def _run_strict_reference_discovery_for_backfill(
     *,
     provider: str,
     org_id: str,
-    credentials: dict[str, Any] | None,
-    sync_options: dict[str, Any],
+    integration_id: str,
     sync_config_id: str,
-    since: date,
-    before: date,
-    window_count: int,
-    analytics_db_url: str | None,
+    triggered_by: str,
 ) -> dict[str, Any] | None:
-    summary = run_team_autoimport_strict(
-        provider=provider,
-        org_id=org_id,
-        credentials=credentials or {},
-        scope={
-            "mode": "backfill",
-            "sync_config_id": sync_config_id,
-            "sync_options": dict(sync_options),
-            "window_count": window_count,
-            "since": since.isoformat(),
-            "before": before.isoformat(),
-        },
-        analytics_db_url=analytics_db_url,
-    )
-    if analytics_db_url is not None:
-        _verify_reference_readback(
+    """Arm strict reference discovery for an operator backfill through the
+    SAME native-Go-collector-or-Python-bridge seam sync-time dispatch uses
+    (CHAOS-4498), instead of calling ``run_team_autoimport_strict`` directly.
+
+    Never calls the Python populator in-process for any provider, jira
+    included: a native provider (linear/github/gitlab) is served by
+    ``TeamCatalogDiscoveryExecutor``'s Go-native collector; every other
+    provider (jira today) is served by its existing ``Fallback`` to the
+    live ``/reference-discovery-populate`` bridge -- the exact same code
+    path ``reference_discovery.run_reference_discovery_populate_for_sync_run``
+    already serves for sync-time discovery. This function only arms the
+    ledger/outbox row and waits for a terminal outcome; it never falls back
+    to a direct Python call on any outcome (see
+    ``await_reference_discovery_terminal``'s docstring).
+    """
+    from dev_health_ops.sync.planner import seed_reference_discovery_run
+
+    with get_postgres_session_sync() as session:
+        sync_run_id = seed_reference_discovery_run(
+            session,
+            integration_id=integration_id,
             org_id=org_id,
-            provider=provider,
-            summary=summary,
-            analytics_db_url=analytics_db_url,
+            triggered_by=triggered_by,
         )
-    return summary
+        session.commit()
+
+    outcome = await_reference_discovery_terminal(sync_run_id)
+    record_backfill_reference_discovery_outcome(
+        provider=provider, outcome=outcome["outcome"]
+    )
+    if outcome["outcome"] == "success":
+        return outcome.get("result")
+    if outcome["outcome"] == "failed":
+        raise ValueError(
+            f"reference discovery failed for provider={provider} "
+            f"org_id={org_id} sync_config_id={sync_config_id}: "
+            f"{outcome.get('reason')}"
+        )
+    # not_claimed / timeout_running: fail closed, never fall back to the
+    # direct Python call this function replaces (CHAOS-4498 ruling).
+    raise RuntimeError(
+        f"reference discovery did not complete for provider={provider} "
+        f"org_id={org_id} sync_config_id={sync_config_id}: "
+        f"outcome={outcome['outcome']} sync_run_id={sync_run_id}"
+    )
 
 
 def run_backfill_for_config(
@@ -133,6 +156,7 @@ def run_backfill_for_config(
     chunk_days: int = 7,
     progress_cb: ProgressCallback | None = None,
     credentials: dict[str, Any] | None = None,
+    triggered_by: str = "operator_backfill",
 ) -> dict[str, Any]:
     config_uuid = uuid.UUID(sync_config_id)
     with get_postgres_session_sync() as session:
@@ -160,19 +184,24 @@ def run_backfill_for_config(
         provider = str(config.provider or "").strip().lower()
         sync_options = dict(config.sync_options or {})
         sync_targets = [str(t) for t in (config.sync_targets or [])]
+        integration_id = (
+            str(config.integration_id) if config.integration_id is not None else None
+        )
+
+    if integration_id is None:
+        raise ValueError(
+            f"Sync configuration {sync_config_id} has no integration_id; "
+            "cannot arm reference discovery (CHAOS-4498)"
+        )
 
     windows = chunk_date_range(since=since, before=before, chunk_days=chunk_days)
 
     reference_discovery = _run_strict_reference_discovery_for_backfill(
         provider=provider,
         org_id=org_id,
-        credentials=credentials,
-        sync_options=sync_options,
+        integration_id=integration_id,
         sync_config_id=sync_config_id,
-        since=since,
-        before=before,
-        window_count=len(windows),
-        analytics_db_url=db_url,
+        triggered_by=triggered_by,
     )
 
     for idx, (window_since, window_before) in enumerate(windows, start=1):

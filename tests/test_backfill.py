@@ -118,15 +118,34 @@ class _FakeConfig:
         provider: str = "github",
         sync_options: dict[str, object] | None = None,
         sync_targets: list[str] | None = None,
+        integration_id: str | None = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     ) -> None:
         self.id = org_id
         self.org_id = org_id
         self.provider = provider
         self.sync_options = sync_options or {}
         self.sync_targets = sync_targets or []
+        self.integration_id = integration_id
 
 
-def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) -> None:
+_ARMED_SYNC_RUN_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _patch_session_with_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config: object,
+    *,
+    seed_calls: list[dict[str, object]] | None = None,
+    await_outcome: dict[str, object] | None = None,
+) -> None:
+    """Patch run_backfill_for_config's session lookup + the two CHAOS-4498
+    seams (seed_reference_discovery_run, await_reference_discovery_terminal)
+    that replaced the direct run_team_autoimport_strict call. Never patches
+    run_team_autoimport_strict itself -- tests that need to prove it is
+    unreachable spy on the REAL function instead (see
+    test_backfill_never_calls_python_populator_directly below).
+    """
+
     class _Query:
         def filter(self, *args, **kwargs):
             return self
@@ -137,6 +156,9 @@ def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) 
     class _Session:
         def query(self, *args, **kwargs):
             return _Query()
+
+        def commit(self):
+            pass
 
     class _Ctx:
         def __enter__(self):
@@ -149,13 +171,26 @@ def _patch_session_with_config(monkeypatch: pytest.MonkeyPatch, config: object) 
         "dev_health_ops.backfill.runner.get_postgres_session_sync",
         lambda: _Ctx(),
     )
+
+    def _fake_seed(session, **kwargs: object) -> str:
+        if seed_calls is not None:
+            seed_calls.append(kwargs)
+        return _ARMED_SYNC_RUN_ID
+
     monkeypatch.setattr(
-        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
-        lambda **_: {"status": "success"},
+        "dev_health_ops.sync.planner.seed_reference_discovery_run",
+        _fake_seed,
     )
     monkeypatch.setattr(
-        "dev_health_ops.backfill.runner._verify_reference_readback",
-        lambda **_: None,
+        "dev_health_ops.backfill.runner.await_reference_discovery_terminal",
+        lambda sync_run_id, **kwargs: dict(
+            await_outcome
+            or {
+                "outcome": "success",
+                "sync_run_id": sync_run_id,
+                "result": {"status": "success"},
+            }
+        ),
     )
 
 
@@ -190,6 +225,8 @@ def test_run_backfill_derives_org_from_config_when_org_omitted(
 def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """CHAOS-4498: a failed ledger outcome still blocks work-item writes,
+    exactly like the direct run_team_autoimport_strict raise used to."""
     config_org = "55555555-5555-5555-5555-555555555555"
     _patch_session_with_config(
         monkeypatch,
@@ -198,15 +235,16 @@ def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
             provider="linear",
             sync_options={"auto_import_teams": False},
         ),
+        await_outcome={
+            "outcome": "failed",
+            "sync_run_id": _ARMED_SYNC_RUN_ID,
+            "reason": "missing Linear credentials",
+        },
     )
     writes: list[dict[str, object]] = []
     monkeypatch.setattr(
         "dev_health_ops.backfill.runner.run_work_items_sync_job",
         lambda *args, **kwargs: writes.append(kwargs),
-    )
-    monkeypatch.setattr(
-        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
-        lambda **_: (_ for _ in ()).throw(ValueError("missing Linear credentials")),
     )
 
     with pytest.raises(ValueError, match="missing Linear credentials"):
@@ -221,32 +259,60 @@ def test_run_backfill_strict_reference_discovery_failure_blocks_writes(
     assert writes == []
 
 
-def test_run_backfill_strict_reference_discovery_runs_when_autoimport_disabled(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("outcome_name", ["not_claimed", "timeout_running"])
+def test_run_backfill_degraded_ledger_outcome_blocks_writes_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, outcome_name: str
 ) -> None:
+    """CHAOS-4498 ruling: not_claimed / timeout_running must exit non-zero
+    (raise) and must NEVER silently fall back to calling the Python
+    populator directly -- that would reintroduce the exact bypass this
+    ticket closes. Red-first: this fails if the guard in
+    _run_strict_reference_discovery_for_backfill is weakened to `return
+    outcome.get("result")` for every outcome instead of raising on
+    non-success."""
     config_org = "55555555-5555-5555-5555-555555555555"
     _patch_session_with_config(
         monkeypatch,
-        _FakeConfig(
-            config_org,
-            provider="linear",
-            sync_options={"auto_import_teams": False},
-        ),
+        _FakeConfig(config_org, provider="linear"),
+        await_outcome={"outcome": outcome_name, "sync_run_id": _ARMED_SYNC_RUN_ID},
     )
-    calls: list[dict[str, object]] = []
     writes: list[dict[str, object]] = []
-
-    def _strict_discovery(**kwargs: object) -> dict[str, object]:
-        calls.append(kwargs)
-        return {"status": "success", "teams_imported": 1, "sprints_imported": 1}
-
-    monkeypatch.setattr(
-        "dev_health_ops.backfill.runner.run_team_autoimport_strict",
-        _strict_discovery,
-    )
     monkeypatch.setattr(
         "dev_health_ops.backfill.runner.run_work_items_sync_job",
         lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match=outcome_name):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id="66666666-6666-6666-6666-666666666666",
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+    assert writes == []
+
+
+@pytest.mark.parametrize("provider", ["linear", "github", "gitlab", "jira"])
+def test_run_backfill_arms_reference_discovery_ledger_for_every_provider(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """CHAOS-4498: the runner is provider-agnostic -- it arms the SAME
+    ledger/outbox row for every provider (linear/github/gitlab AND jira)
+    and lets TeamCatalogDiscoveryExecutor route native-vs-bridge on the Go
+    side. No per-provider branching lives in the runner any more."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    integration_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    seed_calls: list[dict[str, object]] = []
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider=provider, integration_id=integration_id),
+        seed_calls=seed_calls,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: None,
     )
 
     result = run_backfill_for_config(
@@ -257,22 +323,79 @@ def test_run_backfill_strict_reference_discovery_runs_when_autoimport_disabled(
         before=date(2026, 1, 3),
     )
 
-    assert len(calls) == 1
-    assert calls[0]["provider"] == "linear"
-    assert calls[0]["scope"] == {
-        "mode": "backfill",
-        "sync_config_id": "66666666-6666-6666-6666-666666666666",
-        "sync_options": {"auto_import_teams": False},
-        "window_count": 1,
-        "since": "2026-01-01",
-        "before": "2026-01-03",
-    }
-    assert len(writes) == 1
-    assert result["team_autoimport"] == {
-        "status": "success",
-        "teams_imported": 1,
-        "sprints_imported": 1,
-    }
+    assert len(seed_calls) == 1
+    assert seed_calls[0]["integration_id"] == integration_id
+    assert seed_calls[0]["org_id"] == config_org
+    assert result["team_autoimport"] == {"status": "success"}
+
+
+def test_run_backfill_raises_when_config_has_no_integration_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4498: reference discovery needs a real integration to arm the
+    ledger against -- a config with no integration_id must fail loudly
+    rather than crash deep inside seed_reference_discovery_run."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="linear", integration_id=None),
+    )
+
+    with pytest.raises(ValueError, match="no integration_id"):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id="66666666-6666-6666-6666-666666666666",
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+
+def test_backfill_runner_never_imports_or_calls_python_populator_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4498 red-first: backfill/runner.py must not import
+    run_team_autoimport_strict at all (the direct call site this ticket
+    removes), and must never reach the real populator function even
+    end-to-end -- proven by spying on the REAL
+    dev_health_ops.workers.team_autoimport.run_team_autoimport_strict (not
+    a runner-local alias) and asserting it is never invoked while running a
+    full run_backfill_for_config pass. Red on pre-CHAOS-4498 code: the old
+    runner imported and called it directly at
+    backfill/runner.py:101, so this spy would have recorded exactly one
+    call."""
+    from dev_health_ops.backfill import runner as runner_module
+    from dev_health_ops.workers import team_autoimport as team_autoimport_module
+
+    assert not hasattr(runner_module, "run_team_autoimport_strict"), (
+        "backfill/runner.py must not import run_team_autoimport_strict "
+        "(CHAOS-4498: it now arms the shared reference-discovery ledger "
+        "instead of calling the Python populator directly)"
+    )
+
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        team_autoimport_module,
+        "run_team_autoimport_strict",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(monkeypatch, _FakeConfig(config_org, provider="linear"))
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: None,
+    )
+
+    run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id="66666666-6666-6666-6666-666666666666",
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert calls == []
 
 
 def test_run_backfill_raises_on_org_mismatch(

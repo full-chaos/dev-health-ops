@@ -76,12 +76,18 @@ def resolve_import_categories(scope: Mapping[str, object]) -> dict[str, bool]:
 
     ``scope["import_categories"]`` is set by both ``run_team_autoimport``
     (best-effort) and, since CHAOS-4437, ``run_team_autoimport_strict``
-    (called by reference discovery AND by backfill's
-    ``run_backfill_for_config``) -- every production caller now threads the
-    org's real selection into the populator. When it is absent -- a caller
-    that predates this split, or a direct test call -- every category
-    defaults to ``True`` (unrestricted), matching behavior from before
-    CHAOS-4323.
+    (called by reference discovery's ``run_reference_discovery_populate_*``
+    -- the ONLY caller as of CHAOS-4498, reached via the strict populate
+    bridge for any non-native provider). Backfill (``run_backfill_for_config``)
+    no longer calls ``run_team_autoimport_strict`` directly: it arms the
+    same ``sync_run_reference_discoveries`` ledger sync-time dispatch uses
+    and lets ``TeamCatalogDiscoveryExecutor`` route to a native collector or
+    this same strict-populate bridge, so its selection is honoured
+    identically to any other sync run's discovery, via the canonical
+    ``SyncConfiguration`` resolved from the (synthesized) sync run's
+    integration. When ``import_categories`` is absent -- a caller that
+    predates this split, or a direct test call -- every category defaults
+    to ``True`` (unrestricted), matching behavior from before CHAOS-4323.
     """
 
     categories = scope.get("import_categories")

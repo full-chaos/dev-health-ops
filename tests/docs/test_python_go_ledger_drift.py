@@ -147,3 +147,61 @@ def test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row(
     except SystemExit:
         raised = True
     assert raised, "consistency guard did not fail on an untracked new worker file"
+
+
+def test_team_item_kinds_native_for_linear_github_gitlab_chaos_4492() -> None:
+    """CHAOS-4492: linear/github/gitlab team-item writes must read as Go-native.
+
+    #1989 (27bef7286, Linear), #1984 (950752653, GitHub), and #1985
+    (5bff38a5a, GitLab) merged native Go collectors for `teams` /
+    `team_memberships` / `team_project_ownership`. The ledger's
+    `sync.team_autoimport` kind row must say so -- citing all three merge
+    SHAs -- and must no longer claim those three providers are still
+    "In Progress" ports.
+    """
+    gen = _load_gen_module()
+    row = gen.KIND_LEDGER["sync.team_autoimport"]
+    row_text = " ".join(row.values()).lower()
+
+    for provider in ("linear", "github", "gitlab"):
+        assert provider in row_text, (
+            f"sync.team_autoimport ledger row must mention {provider}"
+        )
+    assert "native" in row.get("state", "").lower(), (
+        "sync.team_autoimport state must claim native for the ported providers "
+        f"(got: {row.get('state')!r})"
+    )
+    for sha in ("27bef7286", "950752653", "5bff38a5a"):
+        assert sha in row_text, (
+            f"sync.team_autoimport ledger row must cite merge SHA {sha}"
+        )
+    assert "in progress" not in row_text, (
+        "sync.team_autoimport row must not still call 4431/4432/4434 In Progress -- they are Done"
+    )
+    # jira is explicitly out of scope for this cutover -- must still be named as bridge.
+    assert "jira" in row_text, (
+        "sync.team_autoimport row must still name jira as the remaining bridge provider"
+    )
+
+
+def test_bridge_routes_marked_dead_after_5_6_readback_chaos_4492() -> None:
+    """CHAOS-4492: the two live bridge routes are dead for 3/4 providers, pending prod proof.
+
+    `/team-autoimport` and `/reference-discovery-populate` stay live only for
+    jira until the 5.6 prod readback confirms the native linear/github/gitlab
+    routes are actually running in prod -- the ledger must say so explicitly,
+    not claim the routes are fully dead before that proof exists.
+    """
+    gen = _load_gen_module()
+    for route in (
+        "/api/internal/worker-sync/team-autoimport",
+        "/api/internal/worker-sync/reference-discovery-populate",
+    ):
+        row = gen.BRIDGE_ROUTE_LEDGER[route]
+        state = row.get("state", "").lower()
+        assert "dead" in state and "5.6" in state, (
+            f"{route} state must document dead-after-5.6-readback (got: {row.get('state')!r})"
+        )
+        assert "jira" in state, (
+            f"{route} state must say it stays live for jira (got: {row.get('state')!r})"
+        )

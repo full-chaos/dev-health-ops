@@ -269,6 +269,22 @@ type DailyMetricsFinalizeRedriveObserver interface {
 	ObserveDailyMetricsFinalizeRedrive(outcome string, count int) error
 }
 
+// DailyMetricsPartitionRecomputeObserver is the narrow capability
+// PostgresStore.RedrivePartitionsForRange depends on (CHAOS-4459): an
+// operator-invoked historical recompute that resets an already-'succeeded'
+// daily_metrics_run's partitions back to a claimable state for one org
+// across a [from, to] calendar-day range, one day at a time -- the
+// partition-level counterpart to DailyMetricsFinalizeRedriveObserver.
+// "redriven" counts calendar days a fresh metrics.daily_partition job was
+// actually enqueued for; "skipped_ineligible" counts days in the requested
+// range with no eligible run (no run at all for that day, its partitions
+// not 100% succeeded, or a concurrent caller already reset it). A nil
+// observer makes this a silent no-op, matching every other observer in this
+// package: telemetry must never gate durable state.
+type DailyMetricsPartitionRecomputeObserver interface {
+	ObserveDailyMetricsPartitionRecompute(family, outcome string, count int) error
+}
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition

@@ -1494,6 +1494,105 @@ process). `redriven_failed` is different: it is observed by
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
 
+#### `metrics partition-recompute` (CHAOS-4459)
+
+Historical recompute: reset an already-`'succeeded'` daily-metrics run's
+**partitions** (not its finalize step — see `finalize-redrive` above for
+that) back to a claimable state for one organization across `[--from, --to]`,
+one calendar day at a time. This is the partition-level gap
+`finalize-redrive` does not close and `daily-redrive` cannot reach:
+`daily-redrive`'s own eligibility scan only ever targets stranded/failed
+partitions on a run still `status='running'` — a run whose partitions are
+ALL `'succeeded'` is invisible to it by construction, even when the family
+output those partitions wrote is now known to be wrong. Prod-observed
+motivating case (CHAOS-4459): the native `repo_user_commit` executor wrote
+`org_id=""` on `repo_metrics_daily`/`user_metrics_daily`/`commit_metrics`
+before PR #1960 (CHAOS-4341) — every org-scoped read of those tables for a
+day computed before the fix sees zero rows, and no operator path could ever
+recompute that day once its partition read `'succeeded'`.
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics partition-recompute \
+  --org c6a38355-dad6-42e4-8cc9-4c712450827d \
+  --from 2026-08-20 --to 2026-08-27 \
+  --family repo_user_commit \
+  --dry-run
+```
+
+Then run for real:
+
+```bash
+WORKER_OPERATOR_TOKEN=<operator-token> \
+dev-health-workerctl metrics partition-recompute \
+  --org c6a38355-dad6-42e4-8cc9-4c712450827d \
+  --from 2026-08-20 --to 2026-08-27 \
+  --family repo_user_commit \
+  --review-evidence "CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this range because the partition succeeded under the pre-#1960 writer that stamped org_id=''"
+```
+
+`--family` is restricted to a closed list (`daily.SupportedPartitionRecomputeFamilies`
+— today just `repo_user_commit`) and is recorded on the provenance row for
+audit/intent, but does **not** narrow the actual recompute: one
+`metrics.daily` partition always computes every family in ONE HTTP
+compatibility-bridge call plus whichever native executors have cut over
+(`job_daily.py`'s `run_daily_metrics_job`), so resetting a partition
+recomputes ALL of its families, not just the named one. This is safe —
+every native/bridge family's writer is append-only with `computed_at`-keyed
+reader dedup — but it is not free, which is exactly why `--family` stays a
+required, closed-vocabulary flag rather than an implied default: it forces
+an operator to name which specific gap they are repairing, even though the
+mechanism underneath is the same for all of them today.
+
+Same `generation`-reset mechanism as `finalize-redrive`, applied one layer
+earlier: `ClaimPartition` hard-requires `run.status='running'` (exactly like
+`ClaimFinalize`'s `status='running'` requirement), so a bare partition
+status reset alone would never make the run reachable again. This command
+transactionally resets the run to `status='running'`,
+`finalization_status='pending'`, **and a fresh `generation`** (a short
+`recompute:<nonce>` value), and every one of its partitions back to
+`status='pending'` with claim/lease/attempt state cleared — all in the SAME
+transaction as the provenance row and the fresh per-partition publish. The
+fresh `generation` is load-bearing for the same reason `finalize-redrive`'s
+is: the compatibility bridge's execution-ledger identity is
+`uuid5(run_id, family, generation, scope_digest)`, and the ORIGINAL identity
+already reached `'succeeded'` — an unchanged generation would make
+`_reserve_execution` find it and skip re-executing.
+
+One run per calendar day is targeted (whichever run for that day has every
+partition `'succeeded'`, preferring the most recently updated). A run still
+genuinely `status='running'` (mid-dispatch, not yet fully succeeded) is
+`skipped_ineligible` — that shape belongs to `daily-redrive`/the automatic
+path, not this command, since resetting it here would race whatever is
+currently executing it.
+
+**Provenance.** Every reset writes one row to
+`daily_metrics_partition_recompute_events` — `run_id`, `org_id`,
+`target_day`, `family`, the run's exact prior `status`/`generation`, `actor`
+(always `'partition-recompute'`), the operator's `reason` (their
+`--review-evidence` text, verbatim), and the redrive `nonce` — in the SAME
+transaction as the reset and the publish. Either all three (provenance +
+reset + fresh outbox rows) land, or none do; a `--dry-run` pass writes none
+of them. Deliberately append-only, unlike `finalize-redrive`'s
+`daily_metrics_finalize_redrive_events`: there is no unattended sweep for
+this class today that needs an open/closed lifecycle to avoid
+double-dispatching an in-flight redrive (see the migration's own doc
+comment, `0117_add_daily_metrics_partition_recompute_events.py`) — tracked
+as follow-up scope if/when one is added.
+
+Returns `{"partition_recompute": {"Days": [{"Day": "...", "RunID": "...",
+"Outcome": "..."}, ...]}, "dry_run": true|false}`, one entry per calendar
+day in the requested range. `Outcome` is `"redriven"` for a real pass that
+reset and republished a day, `"skipped_ineligible"` for a day with no
+eligible run (none exists, partitions not 100% succeeded, or a concurrent
+caller already reset it), or the `"would_"`-prefixed equivalents under
+`--dry-run`. `RunID` is empty when no run exists at all for that day.
+
+**Observability**: `dev_health_daily_metrics_partition_recompute_days_total{family,outcome}`
+is wired but not live for THIS caller, for the same reason every other
+`workerctl` counter above is not: a one-shot CLI with no Prometheus scrape
+endpoint.
+
 #### `metrics remaining start` (CHAOS-4254)
 
 Dispatch a **new** remaining-metrics run for a historical `(organization,

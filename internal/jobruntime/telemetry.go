@@ -421,6 +421,28 @@ var dailyMetricsFinalizeRedriveOutcomes = []string{
 	"redriven", "redriven_reset_from_succeeded", "skipped_ineligible", "redriven_failed", "redriven_orphaned",
 }
 
+// dailyMetricsPartitionRecomputeFamilies mirrors
+// daily.SupportedPartitionRecomputeFamilies (kept as a duplicated closed
+// list rather than an import: internal/jobruntime cannot import
+// internal/jobs/metrics/daily, the same layering reason
+// remainingMetricsManualBackfillFamilies duplicates
+// remaining.ManualBackfillDayScopedFamilies above).
+var dailyMetricsPartitionRecomputeFamilies = []string{"repo_user_commit"}
+
+// dailyMetricsPartitionRecomputeOutcomes is the closed set of bounded
+// outcomes a CHAOS-4459 historical partition-recompute pass can report.
+// "redriven" counts calendar days a fresh metrics.daily_partition job was
+// actually enqueued for a run that was reset from 'succeeded';
+// "skipped_ineligible" counts days in the requested range with no eligible
+// run. A dry run never calls this observer -- it makes no durable state
+// change, so it must never move a counter meant to describe real work.
+var dailyMetricsPartitionRecomputeOutcomes = []string{"redriven", "skipped_ineligible"}
+
+type dailyMetricsPartitionRecomputeLabels struct {
+	Family  string
+	Outcome string
+}
+
 var durationBuckets = []float64{
 	0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600,
 }
@@ -603,6 +625,11 @@ type MetricsCollector struct {
 	// day considered. See dailyMetricsFinalizeRedriveOutcomes for the
 	// vocabulary.
 	dailyMetricsFinalizeRedrive map[string]uint64
+	// dailyMetricsPartitionRecompute (CHAOS-4459) counts operator-invoked
+	// historical partition-recompute activity by family and bounded
+	// outcome, per calendar day considered. See
+	// dailyMetricsPartitionRecomputeOutcomes for the vocabulary.
+	dailyMetricsPartitionRecompute map[dailyMetricsPartitionRecomputeLabels]uint64
 	// Native family compute (CHAOS-4276, the daily bridge's per-partition
 	// counterpart to the DORA/capacity counters above). Duration is tracked
 	// per family since native families are cut over independently and one
@@ -749,6 +776,7 @@ var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeRedriveObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsPartitionRecomputeObserver = (*MetricsCollector)(nil)
 
 func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error) {
 	if len(dimensions.Jobs) > maxMetricJobs {
@@ -797,6 +825,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
+		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
@@ -895,6 +924,11 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeRedriveOutcomes {
 		collector.dailyMetricsFinalizeRedrive[outcome] = 0
+	}
+	for _, family := range dailyMetricsPartitionRecomputeFamilies {
+		for _, outcome := range dailyMetricsPartitionRecomputeOutcomes {
+			collector.dailyMetricsPartitionRecompute[dailyMetricsPartitionRecomputeLabels{Family: family, Outcome: outcome}] = 0
+		}
 	}
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		collector.dailyMetricsCompatRetry[decision] = 0
@@ -1305,6 +1339,26 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeRedrive(outcome st
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFinalizeRedrive[outcome] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsPartitionRecompute records count calendar days for one
+// CHAOS-4459 operator-invoked historical partition-recompute pass, keyed by
+// family and bounded outcome (dailyMetricsPartitionRecomputeOutcomes). See
+// DailyMetricsPartitionRecomputeObserver's doc comment for the vocabulary.
+func (collector *MetricsCollector) ObserveDailyMetricsPartitionRecompute(family, outcome string, count int) error {
+	if !slices.Contains(dailyMetricsPartitionRecomputeFamilies, family) {
+		return errors.New("daily metrics partition recompute family is not registered")
+	}
+	if !slices.Contains(dailyMetricsPartitionRecomputeOutcomes, outcome) {
+		return errors.New("daily metrics partition recompute outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics partition recompute count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsPartitionRecompute[dailyMetricsPartitionRecomputeLabels{Family: family, Outcome: outcome}] += uint64(count)
 	return nil
 }
 
@@ -2057,6 +2111,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFinalizeSweep(&output)
 	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
 	collector.writeDailyMetricsFinalizeRedrive(&output)
+	collector.writeDailyMetricsPartitionRecompute(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
@@ -2392,6 +2447,21 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeRedrive(output *stri
 	for _, outcome := range dailyMetricsFinalizeRedriveOutcomes {
 		writeUintSample(output, "dev_health_daily_metrics_finalize_redrive_days_total",
 			[]metricLabel{{"outcome", outcome}}, collector.dailyMetricsFinalizeRedrive[outcome])
+	}
+}
+
+// writeDailyMetricsPartitionRecompute exposes the CHAOS-4459 historical
+// partition-recompute counter, by family and bounded outcome (redriven vs
+// skipped_ineligible) -- the partition-level counterpart to
+// writeDailyMetricsFinalizeRedrive above.
+func (collector *MetricsCollector) writeDailyMetricsPartitionRecompute(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_partition_recompute_days_total", "Calendar days considered by an operator-invoked CHAOS-4459 historical partition-recompute pass, by family and bounded outcome.", "counter")
+	for _, family := range dailyMetricsPartitionRecomputeFamilies {
+		for _, outcome := range dailyMetricsPartitionRecomputeOutcomes {
+			writeUintSample(output, "dev_health_daily_metrics_partition_recompute_days_total",
+				[]metricLabel{{"family", family}, {"outcome", outcome}},
+				collector.dailyMetricsPartitionRecompute[dailyMetricsPartitionRecomputeLabels{Family: family, Outcome: outcome}])
+		}
 	}
 }
 

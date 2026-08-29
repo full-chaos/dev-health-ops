@@ -79,14 +79,15 @@ const postSyncGenerationPrefix = "post-sync:"
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool                    *pgxpool.Pool
-	lease                   time.Duration
-	now                     func() time.Time
-	leaseObserver           jobruntime.DailyMetricsLeaseObserver
-	discoveryObserver       jobruntime.DailyMetricsDiscoveryObserver
-	redriveObserver         jobruntime.DailyMetricsRedriveObserver
-	finalizeSweepObserver   jobruntime.DailyMetricsFinalizeSweepObserver
-	finalizeRedriveObserver jobruntime.DailyMetricsFinalizeRedriveObserver
+	pool                       *pgxpool.Pool
+	lease                      time.Duration
+	now                        func() time.Time
+	leaseObserver              jobruntime.DailyMetricsLeaseObserver
+	discoveryObserver          jobruntime.DailyMetricsDiscoveryObserver
+	redriveObserver            jobruntime.DailyMetricsRedriveObserver
+	finalizeSweepObserver      jobruntime.DailyMetricsFinalizeSweepObserver
+	finalizeRedriveObserver    jobruntime.DailyMetricsFinalizeRedriveObserver
+	partitionRecomputeObserver jobruntime.DailyMetricsPartitionRecomputeObserver
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -137,6 +138,23 @@ func (store *PostgresStore) SetFinalizeRedriveObserver(observer jobruntime.Daily
 func (store *PostgresStore) observeFinalizeRedrive(outcome string, count int) {
 	if store.finalizeRedriveObserver != nil && count > 0 {
 		_ = store.finalizeRedriveObserver.ObserveDailyMetricsFinalizeRedrive(outcome, count)
+	}
+}
+
+// SetPartitionRecomputeObserver wires the optional CHAOS-4459 historical
+// partition-recompute telemetry observer. Telemetry must never gate durable
+// state: a nil or never-set observer makes observePartitionRecompute a
+// silent no-op, matching finalizeRedriveObserver's discipline.
+func (store *PostgresStore) SetPartitionRecomputeObserver(observer jobruntime.DailyMetricsPartitionRecomputeObserver) {
+	if store == nil {
+		return
+	}
+	store.partitionRecomputeObserver = observer
+}
+
+func (store *PostgresStore) observePartitionRecompute(family, outcome string, count int) {
+	if store.partitionRecomputeObserver != nil && count > 0 {
+		_ = store.partitionRecomputeObserver.ObserveDailyMetricsPartitionRecompute(family, outcome, count)
 	}
 }
 

@@ -1093,6 +1093,17 @@ CREATE TABLE daily_metrics_finalize_redrive_events (
  CONSTRAINT ck_dfre_reason CHECK (reason <> ''),
  CONSTRAINT ck_dfre_status CHECK (status IN ('open', 'closed_succeeded', 'closed_failed', 'closed_orphaned')),
  CONSTRAINT ck_dfre_closed_at_matches_status CHECK ((status = 'open') = (closed_at IS NULL))
+);
+CREATE TABLE daily_metrics_partition_recompute_events (
+ id uuid PRIMARY KEY, run_id uuid NOT NULL, org_id uuid NOT NULL, target_day date NOT NULL,
+ family varchar(64) NOT NULL, prior_status varchar(16) NOT NULL, prior_generation varchar(64) NOT NULL,
+ actor varchar(32) NOT NULL, reason text NOT NULL, nonce varchar(64) NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CONSTRAINT ck_dpre_actor CHECK (actor IN ('partition-recompute')),
+ CONSTRAINT ck_dpre_family CHECK (family <> ''),
+ CONSTRAINT ck_dpre_prior_status CHECK (prior_status <> ''),
+ CONSTRAINT ck_dpre_prior_generation CHECK (prior_generation <> ''),
+ CONSTRAINT ck_dpre_reason CHECK (reason <> '')
 )`)
 	if err != nil {
 		t.Fatal(err)

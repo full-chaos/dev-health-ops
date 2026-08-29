@@ -69,6 +69,14 @@ var appendOnlyDailyKeys = map[string][]string{
 	// (repo, metric_name, day) -- omitting it would collapse the 4 distinct
 	// DORA metrics for one repo/day into a single arbitrary row.
 	"dora_metrics_daily": {"org_id", "repo_id", "day", "metric_name"},
+	// CHAOS-4459 (codex review, rounds 2-3): registered in
+	// clickhouse_dedup.py's _APPEND_ONLY_DAILY_KEYS but missing here --
+	// this package's own bare avg()/sum() aggregate over
+	// metric_registry.json's file_metrics_daily/file_hotspot_daily entries
+	// was reading them raw, exactly the CHAOS-4246 gap this file exists to
+	// close. Natural keys mirror the Python registry exactly.
+	"file_metrics_daily": {"org_id", "repo_id", "day", "path"},
+	"file_hotspot_daily": {"org_id", "repo_id", "day", "file_path"},
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

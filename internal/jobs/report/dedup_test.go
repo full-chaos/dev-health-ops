@@ -104,7 +104,9 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},
 		{"testops_coverage_metrics_daily", "(SELECT * FROM testops_coverage_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_coverage_metrics_daily"},
 		{"dora_metrics_daily", "(SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily"},
-		{"file_metrics_daily", "file_metrics_daily"}, // not registered -- passes through unchanged
+		// CHAOS-4459 (codex review rounds 2-3): both now registered.
+		{"file_metrics_daily", "(SELECT * FROM file_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, path) AS file_metrics_daily"},
+		{"file_hotspot_daily", "(SELECT * FROM file_hotspot_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, file_path) AS file_hotspot_daily"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.table, func(t *testing.T) {

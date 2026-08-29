@@ -192,6 +192,38 @@ func (store *PostgresStore) RedrivePartitionsForRange(
 	// wrong. Restricting to the fan-out generation makes the selected run's
 	// scope unambiguous and always org-wide; a day with no succeeded
 	// fan-out run is reported skipped_ineligible rather than guessed at.
+	//
+	// KNOWN GAP (codex review round 3, P1, code-argued, not attempted here):
+	// RedriveFinalizeForRange (CHAOS-4405) REPLACES a run's whole
+	// generation with "redrive:<nonce>" when it redrives an already-
+	// succeeded run's finalize step (redriveOneFinalizeForRange,
+	// redrive.go) -- destroying the "fixed-schedule:..." classification
+	// prefix this filter depends on, permanently. A day whose only
+	// succeeded run was EVER touched by finalize-redrive therefore becomes
+	// unrecomputable by this verb (reported skipped_ineligible), even if
+	// it was originally the org-wide fan-out run. Deliberately not
+	// "fixed" by also accepting a "redrive:"-prefixed generation here:
+	// redriveOneFinalizeForRange's own candidate scan accepts ANY
+	// succeeded run for a day (fan-out OR a narrow post-sync one), so a
+	// "redrive:"-prefixed generation does not reliably mean "was
+	// originally fan-out" -- accepting it here would risk reintroducing
+	// the exact narrow-scope-silently-redriven bug this file's own P1 fix
+	// (above) exists to prevent. The correct permanent fix is
+	// RedriveFinalizeForRange adopting this file's OWN append-not-replace
+	// pattern (baseGeneration/recomputeGenerationMarker below) instead of
+	// a bare replacement, so classification survives every redrive kind,
+	// not just this one; tracked as a CHAOS-4459 follow-up, since it means
+	// changing CHAOS-4405's already-shipped code, not this file's.
+	// Tie-break order (codex review round 3, P2) matches
+	// _LATEST_DAILY_METRICS_RUN_SQL's own `ORDER BY run.created_at DESC,
+	// run.generation DESC` exactly (workers/recommendations_tasks.py) --
+	// not run.updated_at, which a later, unrelated reconciliation touch
+	// (or a stranded-finalize sweep's own retry) can bump forward without
+	// that run being the org's authoritative fan-out for the day. Picking
+	// by updated_at could select an older, non-authoritative generation
+	// whose repository snapshot excludes repos only the TRUE authoritative
+	// fan-out (the newest by created_at) actually covers -- reporting the
+	// day "redriven" while those repos stay unrepaired.
 	rows, err := store.pool.Query(ctx, `
 SELECT DISTINCT ON (run.target_day) run.target_day::text, run.id::text
 FROM public.daily_metrics_runs AS run
@@ -206,7 +238,7 @@ WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2 AND $3
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
-ORDER BY run.target_day, run.updated_at DESC`, orgID, from, to, scheduledFanoutGenerationPrefix+"%")
+ORDER BY run.target_day, run.created_at DESC, run.generation DESC`, orgID, from, to, scheduledFanoutGenerationPrefix+"%")
 	if err != nil {
 		return outcome, ErrUnavailable
 	}

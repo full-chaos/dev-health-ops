@@ -43,3 +43,21 @@ def test_file_metrics_daily_alias_is_preserved() -> None:
     # keep that alias so those references stay valid.
     source = dedup_from("file_metrics_daily")
     assert source.rstrip().endswith("AS file_metrics_daily")
+
+
+def test_file_hotspot_daily_source_is_deduplicated_on_read() -> None:
+    # CHAOS-4459 (codex review round 3): file_hotspot_daily is the
+    # file_risk_hotspots family's own output table, missing from the
+    # GENERIC report-registry dedup path (reports/charts.py's
+    # dedup_from(definition.source_table)) even though its hand-rolled
+    # readers already dedup correctly.
+    source = dedup_from("file_hotspot_daily")
+    assert source != "file_hotspot_daily", (
+        "dedup_from('file_hotspot_daily') returned the RAW table name -- "
+        "the generic report-registry chart path (reports/charts.py) reads "
+        "it unguarded."
+    )
+    assert "LIMIT 1 BY" in source
+    assert "computed_at DESC" in source
+    for column in ("org_id", "repo_id", "day", "file_path"):
+        assert column in source, f"file_hotspot_daily dedup key is missing {column}"

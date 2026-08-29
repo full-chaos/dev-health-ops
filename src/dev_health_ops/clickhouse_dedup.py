@@ -81,6 +81,18 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     # Natural key includes path: file_metrics_daily's own sorting key is
     # (org_id, repo_id, day, path) (migration 027).
     "file_metrics_daily": ("org_id", "repo_id", "day", "path"),
+    # CHAOS-4459 (codex review round 3): file_hotspot_daily is the
+    # file_risk_hotspots family's own output table, same append-only
+    # MergeTree shape and same partition-recompute exposure as
+    # file_metrics_daily above. Its hand-rolled readers (metrics/
+    # operating_review.py, metrics/loaders/ai_impact.py,
+    # recommendations/loader.py, api/graphql/resolvers/complexity.py) all
+    # already argMax-dedup correctly -- this registration is for the
+    # GENERIC report-registry path (reports/charts.py's
+    # dedup_from(definition.source_table), reports/metric_registry.py's
+    # file_hotspot_daily entry), which was reading it raw. Natural key
+    # matches migration 027's sorting key (org_id, repo_id, day, file_path).
+    "file_hotspot_daily": ("org_id", "repo_id", "day", "file_path"),
 }
 
 

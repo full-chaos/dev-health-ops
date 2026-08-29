@@ -201,6 +201,39 @@ spec:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}
 {{- if .Values.migrations.hook.riverMigrate.enabled }}
+{{- /*
+This hook owns the River step, so the elevated DSN reaches it under
+MIGRATION_DATABASE_URI and reaches the weight-0 migrate Job under POSTGRES_URI
+instead -- two consumers, two variable names, which is exactly how Compose
+splits them (`migrate` reads MIGRATION_DATABASE_URI, go-river-migrate reads
+GO_WORKER_MIGRATION_DATABASE_URI). A shared Secret cannot do that, so the hook
+gets its own, on the same weight -5 as the other hook-scoped copies.
+
+With secrets.create=false the operator owns one Secret for both Jobs and the
+chart cannot split its keys; there the migrate Job's entrypoint unsets the
+variable before calling dev-hops, which is what Compose (compose.yml:188-189)
+and the kustomize Job (deploy/kubernetes/migrate-job.yaml:60-61) do.
+*/}}
+{{- if .Values.secrets.create }}
+{{- $riverDSN := include "dev-health.riverMigrationDSN" . }}
+{{- if $riverDSN }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dev-health.fullname" . }}-river-migrate-secrets
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "river-migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  MIGRATION_DATABASE_URI: {{ $riverDSN | quote }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -271,7 +304,7 @@ spec:
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}
-                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+                name: {{ include "dev-health.fullname" . }}-river-migrate-secrets
               {{- else }}
                 name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
               {{- end }}

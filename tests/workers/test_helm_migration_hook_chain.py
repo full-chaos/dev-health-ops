@@ -549,3 +549,141 @@ def test_provisioning_without_any_dsn_fails_loudly(tmp_path: Path) -> None:
     assert "MIGRATION_DATABASE_URI" in stderr, (
         f"the error must name the value the operator has to supply: {stderr!r}"
     )
+
+
+# --- the elevated DSN must not be IN the weight-0 Job's environment ---------
+#
+# GW (migrate-path owner), 2026-08-29. Unsetting the variable inside the
+# entrypoint is what Compose (`compose.yml:188-189`,
+# `compose.production.yml:83-84`) and the kustomize Job
+# (`deploy/kubernetes/migrate-job.yaml:60-61`) do, and it is what makes the
+# operator-owned-Secret path safe. Where the chart owns the Secret it can do
+# better than that: keep the key out of the weight-0 Job's environment
+# altogether, the way Compose keeps the two DSNs in two different variables.
+#
+# An empty-string override would NOT work and is the trap this pins:
+# `_run_river_upgrade` tests `os.getenv(...) is not None`
+# (`src/dev_health_ops/migrate.py:264-268`), so `MIGRATION_DATABASE_URI=""`
+# still runs `dev-health-worker-migrate`. Absent and empty are different here.
+
+
+def _secrets_from_values(values: str, tmp_path: Path) -> dict[str, dict]:
+    return {
+        doc["metadata"]["name"]: doc
+        for doc in _docs_from_values(values, tmp_path)
+        if doc.get("kind") == "Secret"
+    }
+
+
+_MIGRATE_SECRETS = f"{_RELEASE}-dev-health-migrate-secrets"
+_RIVER_SECRETS = f"{_RELEASE}-dev-health-river-migrate-secrets"
+
+
+def test_weight_0_secret_omits_the_elevated_dsn(tmp_path: Path) -> None:
+    secrets = _secrets_from_values(_values(river_migrate=True), tmp_path)
+    data = secrets[_MIGRATE_SECRETS]["stringData"]
+    assert "MIGRATION_DATABASE_URI" not in data, (
+        "the weight-0 Job envFroms this Secret, so the key reaching it at all "
+        "makes `dev-hops migrate postgres` run dev-health-worker-migrate "
+        "before the weight-5 hook has created the roles"
+    )
+    assert data.get("POSTGRES_URI") == _MIGRATION_DSN, (
+        "Alembic still needs the DSN: with the River step delegated, the same "
+        f"value must arrive under the compatibility alias instead: {data}"
+    )
+
+
+def test_weight_10_secret_carries_the_elevated_dsn(tmp_path: Path) -> None:
+    docs = _docs_from_values(_values(river_migrate=True), tmp_path)
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+    assert _RIVER_SECRETS in secrets, (
+        f"no dedicated Secret for the River hook: {sorted(secrets)}"
+    )
+    assert secrets[_RIVER_SECRETS]["stringData"]["MIGRATION_DATABASE_URI"] == (
+        _MIGRATION_DSN
+    )
+
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    sources = [
+        item["secretRef"]["name"]
+        for item in container["envFrom"]
+        if "secretRef" in item
+    ]
+    assert _RIVER_SECRETS in sources, (
+        f"the River Job does not read its own Secret: {sources}"
+    )
+
+
+def test_river_secret_is_created_before_the_job_that_reads_it(
+    tmp_path: Path,
+) -> None:
+    secrets = _secrets_from_values(_values(river_migrate=True), tmp_path)
+    annotations = secrets[_RIVER_SECRETS]["metadata"]["annotations"]
+    assert "pre-install" in annotations["helm.sh/hook"].split(",")
+    assert int(annotations["helm.sh/hook-weight"]) < 10
+
+
+def test_weight_0_secret_is_unchanged_when_the_river_hook_is_off(
+    tmp_path: Path,
+) -> None:
+    """The split is scoped to the hook taking the River step over.
+
+    Without this, moving the key unconditionally would pass the tests above
+    while silently removing the River migration from every deployment that has
+    not opted into the new hook.
+    """
+    secrets = _secrets_from_values(_values(river_migrate=False), tmp_path)
+    data = secrets[_MIGRATE_SECRETS]["stringData"]
+    assert data["MIGRATION_DATABASE_URI"] == _MIGRATION_DSN
+    assert _RIVER_SECRETS not in secrets
+
+
+# --- the fresh-DB Celery->River route-table cutover -------------------------
+#
+# `dev-hops migrate postgres` defers revision 0066 unless
+# DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1: `_effective_postgres_upgrade_revision`
+# returns `<branch>@head` instead of `heads`
+# (`src/dev_health_ops/migrate.py:216-231`, gate at `:176-177`). Compose carries
+# the variable on its migrate service as an operator passthrough
+# (`compose.yml:198`, `compose.production.yml:95`) and the kustomize Job carries
+# it as an optional secretKeyRef (`deploy/kubernetes/migrate-job.yaml:72-78`).
+# The chart carried it nowhere, so a fresh install could not reach the cutover
+# revision at all.
+
+
+def test_migrate_job_can_carry_the_cutover_authorisation(tmp_path: Path) -> None:
+    values = _values(river_migrate=True) + textwrap.dedent("""
+        migrations:
+          hook:
+            secretData:
+              DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
+        """)
+    docs = _docs_from_values(values, tmp_path)
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+    assert (
+        secrets[_MIGRATE_SECRETS]["stringData"]["DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"]
+        == "1"
+    )
+
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    env = {
+        item["name"]: item
+        for item in jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0].get(
+            "env", []
+        )
+    }
+    ref = env["DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"]["valueFrom"]["secretKeyRef"]
+    assert ref["key"] == "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
+    assert ref["optional"] is True, (
+        "an install that never authorises the cutover must still render"
+    )
+
+
+def test_cutover_authorisation_is_absent_by_default(tmp_path: Path) -> None:
+    """Compose's value is an operator passthrough that defaults to empty."""
+    secrets = _secrets_from_values(_values(river_migrate=True), tmp_path)
+    assert (
+        "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
+        not in secrets[_MIGRATE_SECRETS]["stringData"]
+    )

@@ -298,3 +298,37 @@ def test_serving_deployments_never_dip_below_capacity(
             f"{component} with maxUnavailable 0 and no surge cannot roll at "
             f"all -- it would deadlock: {rolling}"
         )
+
+
+def test_a_group_without_an_autoscaling_block_is_rejected_chart_wide(
+    tmp_path: Path,
+) -> None:
+    """The PDB gate dereferences `$group.autoscaling` unguarded, and that is
+    safe because the chart already requires the block on EVERY group:
+    `go-workers.yaml:171` reads `$group.autoscaling.enabled` with no default,
+    and it is the first such dereference in the chart.
+
+    Pinned rather than guarded. A `| default dict` in the PDB template would be
+    unreachable code that reads as defensiveness, and it would mask the render
+    error an operator needs to see -- which names the template that actually
+    owns the requirement.
+    """
+    values = textwrap.dedent("""
+        goWorkers:
+          enabled: true
+          groups:
+            - name: solo
+              image: ghcr.io/full-chaos/dev-health-go-worker:latest
+              queues: [heartbeat]
+              queueConcurrency: {heartbeat: 1}
+              replicas: 3
+              terminationGracePeriodSeconds: 60
+              resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+        """)
+    completed = _render(values, tmp_path)
+    assert completed.returncode != 0, (
+        "a group with no autoscaling block must not render silently"
+    )
+    assert "autoscaling" in completed.stderr, (
+        f"the error must name the missing block: {completed.stderr}"
+    )

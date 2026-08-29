@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -437,7 +438,7 @@ def test_here_redirections_match_the_pinned_allowlist() -> None:
     no function boundary to compute, so a one-line helper's `<<<` is
     caught by construction, not by a special case for one-liners.
 
-    Two failure directions, both real:
+    Three failure directions, all real:
       - A NEW or MOVED `<<` appears that isn't allowlisted (the CHAOS-4487
         regression itself, in any function, at any indentation, on any
         line, one-liner or not) -- caught by `unexpected` below.
@@ -445,10 +446,20 @@ def test_here_redirections_match_the_pinned_allowlist() -> None:
         justification no longer applies) without updating this list --
         caught by `missing` below, so the allowlist cannot silently drift
         out of sync with the real file.
+      - An allowlisted line's exact text is COPIED or DUPLICATED to a
+        second, unaudited call site (codex review round 6 follow-up, P2):
+        a plain set comparison discards occurrence count, so a second
+        identical-looking line -- possibly relocated next to a genuinely
+        unbounded payload -- would pass silently, because its text alone
+        was already "seen" by the first, actually-audited occurrence.
+        Caught by `duplicated` below: each allowlisted line must appear
+        EXACTLY once.
     """
 
     text = SCRIPT.read_text(encoding="utf-8")
-    found = {line.strip() for line in text.splitlines() if "<<" in line}
+    found_lines = [line.strip() for line in text.splitlines() if "<<" in line]
+    found_counts = Counter(found_lines)
+    found = set(found_counts)
     allowlisted = set(_KNOWN_SAFE_HERE_REDIRECTION_LINES)
 
     unexpected = found - allowlisted
@@ -474,6 +485,21 @@ def test_here_redirections_match_the_pinned_allowlist() -> None:
         " (delete the stale allowlist entry), so this test is not"
         " silently checking a line that no longer exists."
         "\nMissing line(s):\n" + "\n".join(f"  {line!r}" for line in sorted(missing))
+    )
+
+    duplicated = {line: n for line, n in found_counts.items() if n > 1}
+    assert not duplicated, (
+        "an allowlisted here-redirection line appears MORE THAN ONCE in"
+        " ci/local_validate.sh (codex review round 6 follow-up, P2): exact"
+        " line-content matching alone cannot tell a harmless second copy"
+        " apart from the SAME bounded-payload line copied or relocated"
+        " next to a genuinely unbounded call site elsewhere -- both look"
+        " identical by content. Each allowlisted line must appear exactly"
+        " once; if a second, deliberate use is intentional, give it its"
+        " own DISTINCT allowlist entry (e.g. a trailing marker comment"
+        " that makes its line text unique) with its own justification,"
+        " rather than relying on the first occurrence's audit to cover it."
+        f"\nDuplicated line(s) and counts: {duplicated!r}"
     )
 
 

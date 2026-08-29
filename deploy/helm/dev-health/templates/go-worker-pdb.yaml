@@ -1,12 +1,20 @@
 {{- /*
 CHAOS-4428: PodDisruptionBudget per Go worker group.
 
-Gated on replicas >= 2, and that gate is the point rather than a nicety. A PDB
-with maxUnavailable: 1 over a SINGLE replica permits zero voluntary evictions:
-`kubectl drain` on that node then blocks forever, waiting for a replacement
-that cannot be scheduled until the drain it is blocking completes. Rendering a
-PDB for every group regardless of size would therefore convert a routine node
-drain into a wedged one, which is worse than having no PDB at all.
+Gated on whether the group can ever run TWO pods, and that gate is the point
+rather than a nicety. A PDB with maxUnavailable: 1 over a SINGLE replica
+permits zero voluntary evictions: `kubectl drain` on that node then blocks
+forever, waiting for a replacement that cannot be scheduled until the drain it
+is blocking completes. Rendering a PDB for every group regardless of size would
+therefore convert a routine node drain into a wedged one, which is worse than
+having no PDB at all.
+
+"Can run two pods" is NOT the static replica count. Every shipped group starts
+at replicas: 0 so a fresh install stays inert, and four of them carry an HPA to
+maxReplicas: 2 -- gating on the static value alone left exactly the groups that
+do run multiple pods with no budget at all, so a node drain could evict every
+co-located worker simultaneously. An autoscaled group is therefore budgeted on
+its ceiling, and a group whose ceiling is one pod still is not.
 
 maxUnavailable (not minAvailable) so the budget keeps meaning the same thing
 when an HPA changes the replica count underneath it: minAvailable: 1 over an
@@ -14,12 +22,14 @@ autoscaled group silently becomes a 50% budget at 2 replicas and a 10% budget
 at 10.
 
 Coordinator-role groups (reconciler, scheduler) are singletons by design -- the
-chart fails closed if an active scheduler is replicated -- so they never reach
-the threshold and never render one.
+chart fails closed if an active scheduler is replicated -- so they carry no HPA,
+never reach the threshold, and never render one.
 */}}
 {{- if .Values.goWorkers.enabled }}
 {{- range $group := .Values.goWorkers.groups }}
-{{- if ge (int $group.replicas) 2 }}
+{{- $autoscaling := $group.autoscaling }}
+{{- $ceiling := max (int $group.replicas) (ternary (int $autoscaling.maxReplicas) 0 $autoscaling.enabled) }}
+{{- if ge $ceiling 2 }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

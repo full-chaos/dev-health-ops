@@ -33,7 +33,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _group(*, name: str, queues: list[str], replicas: int, grace: int) -> str:
+def _group(
+    *,
+    name: str,
+    queues: list[str],
+    replicas: int,
+    grace: int,
+    autoscaling: str = "{enabled: false}",
+) -> str:
     """One goWorkers group as a values document.
 
     A values FILE, not `--set goWorkers.groups[0].x=y`: --set on a list index
@@ -53,7 +60,7 @@ def _group(*, name: str, queues: list[str], replicas: int, grace: int) -> str:
               replicas: {replicas}
               terminationGracePeriodSeconds: {grace}
               resources: {{requests: {{cpu: 250m, memory: 256Mi}}, limits: {{cpu: "1", memory: 1Gi}}}}
-              autoscaling: {{enabled: false}}
+              autoscaling: {autoscaling}
               bridgeUrl: ""
         """)
 
@@ -192,6 +199,75 @@ def test_pdb_selector_matches_the_deployment_it_budgets(tmp_path: Path) -> None:
             f"PDB selector {key}={value} does not match the pod template "
             f"({pod_labels.get(key)!r}); the budget would apply to no pods"
         )
+
+
+_AUTOSCALED = (
+    "{enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, "
+    "oldestAgeSeconds: 60, saturationMilli: 800m}"
+)
+_AUTOSCALED_TO_ONE = (
+    "{enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, "
+    "oldestAgeSeconds: 60, saturationMilli: 800m}"
+)
+
+
+def test_autoscaled_group_renders_a_pdb_at_zero_static_replicas(
+    tmp_path: Path,
+) -> None:
+    """Static `replicas` is the HPA's starting point, not its running size.
+
+    Every shipped worker group starts at replicas: 0 so a fresh install stays
+    inert, and four of them scale to two pods under load. Gating on the static
+    value alone renders no budget for exactly the groups that do run more than
+    one pod, so a node drain can evict every co-located worker at once -- which
+    is the disruption this file exists to prevent.
+    """
+    values = _group(
+        name="heavy",
+        queues=["metrics"],
+        replicas=0,
+        grace=_METRICS_FLOOR,
+        autoscaling=_AUTOSCALED,
+    )
+    pdbs = _pdbs(values, tmp_path)
+    assert len(pdbs) == 1, (
+        f"an HPA group that reaches 2 pods has no budget: {sorted(pdbs)}"
+    )
+    (pdb,) = pdbs.values()
+    assert pdb["spec"]["maxUnavailable"] == 1
+
+
+def test_autoscaled_group_that_cannot_reach_two_renders_no_pdb(
+    tmp_path: Path,
+) -> None:
+    """The wedge hazard is about the pod count, not about having an HPA.
+
+    Without this, widening the gate to "autoscaling.enabled" alone would pass
+    the test above while reintroducing the single-replica PDB that blocks
+    `kubectl drain` forever.
+    """
+    values = _group(
+        name="heavy",
+        queues=["metrics"],
+        replicas=0,
+        grace=_METRICS_FLOOR,
+        autoscaling=_AUTOSCALED_TO_ONE,
+    )
+    assert _pdbs(values, tmp_path) == {}, (
+        "a group capped at one pod still permits zero voluntary evictions"
+    )
+
+
+def test_chart_defaults_budget_their_own_autoscaled_groups(tmp_path: Path) -> None:
+    """The shipped values are the configuration this gate is judged on."""
+    pdbs = _pdbs(None, tmp_path)
+    budgeted = {
+        doc["metadata"]["labels"]["dev-health.io/worker-group"] for doc in pdbs.values()
+    }
+    assert budgeted == {"heavy", "ops", "sync", "sync-provider"}, (
+        "exactly the four groups whose HPA reaches maxReplicas: 2 must be "
+        f"budgeted; the singletons must not be: {sorted(budgeted)}"
+    )
 
 
 # --- 3. rollout capacity for the serving Deployments ------------------------

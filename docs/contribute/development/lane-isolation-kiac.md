@@ -180,8 +180,13 @@ domain grants.
 A lane is not up because its pods are `Running`. Twenty-one of twenty-one pods
 were green in a lane whose `/health/workers` returned **503** (`sync-provider:
 absent`). Judge a lane by its application-level endpoints — `/readyz`,
-`/health/workers` — never by pod phase. `lane.sh status` reports those checks;
-if you bring a lane up by hand, query them yourself.
+`/health/workers` — never by pod phase.
+
+**`lane.sh status <lane>` runs those checks. Bare `lane.sh status`, with no
+lane name, does NOT.** The aggregate form only counts `Running` pods and lists
+Helm releases per namespace — it would report the 21/21-pods-but-503 lane
+above as healthy. Always pass the lane name to get the real health check; if
+you bring a lane up by hand, query the endpoints yourself.
 
 ## Recipe
 

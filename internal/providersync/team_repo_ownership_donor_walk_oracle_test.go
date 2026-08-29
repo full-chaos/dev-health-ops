@@ -257,10 +257,19 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	}
 
 	projectToTeam := resolveProjectToTeam(links)
-	donorProjectID := buildDonorProjectIDResolver("org-1", byID, edges, projectToTeam)
-	ref, _ := donorProjectID(decoded.SourceWorkItemID)
+	// CHAOS-4537 renamed buildDonorProjectIDResolver to buildDonorTeamIDResolver
+	// and changed its return from a team_project_ownership lookup key to the
+	// resolved team_id directly -- see that function's doc comment. None of
+	// these oracle cases exercise the Linear-only linear_team_key arm (no
+	// NativeTeamKey field in this oracle's input shape at all), so this
+	// change is a pure simplification here: the extra projectToTeam[ref]
+	// re-lookup this test used to need is gone.
+	// CHAOS-4537 codex review P1 added a knownLinearTeamKeys param; nil here
+	// since no oracle case in this file exercises the Linear-only arm.
+	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil)
+	teamID, _ := donorTeamID(decoded.SourceWorkItemID)
 	row := teamRepoOwnershipDonorWalkOracleRow{}
-	if teamID, ok := projectToTeam[ref]; ok {
+	if teamID != "" {
 		row.TeamID = &teamID
 	}
 	return row

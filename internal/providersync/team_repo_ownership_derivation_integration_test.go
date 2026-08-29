@@ -130,13 +130,20 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 // (team_autoimport_linear.py's default-project-key path, when a team has no
 // explicit Linear Project associations), while the Linear work item's OWN
 // project_id is the raw Linear Project UUID -- a disjoint id space (see
-// TeamRepoOwnershipWorkItem's doc comment). Before this fix this derived
+// TeamRepoOwnershipWorkItem's doc comment). Before CHAOS-4458b this derived
 // ZERO rows for a Linear-only org (confirmed locally on org 70d529e0: 0 of
 // 3168 project-id-bearing Linear work items matched their org's ownership
 // row). Exercises BOTH the own-resolution path (the Linear issue itself) and
 // the donor walk (a bare GitHub PR with no project_id of its own, linked via
 // a relates_to edge), and asserts the resolution-arm tally the worker's
 // telemetry now reports.
+//
+// CHAOS-4537 rewrite: the seeded team_project_ownership row for this
+// identity is now a DECOY, pointed at a WRONG team -- resolveWorkItemTeamID
+// no longer looks it up at all for the linear_team_key arm, and the resolved
+// team_id is the raw NativeTeamKey value ("CHAOS") directly, proven against
+// the real ClickHouse read path (loadTeamRepoOwnershipProjectLinks still
+// loads that decoy row; the assertion below proves it is never consulted).
 func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := "chaos-4458b-item1b-linear-team-key-org"
@@ -144,14 +151,18 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
-	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", orgID+":linear:CHAOS", "team-chaos", true, now)
+	// CHAOS-4537 codex review P1: "CHAOS" must be a validly-known team
+	// (teams row) for the linear_team_key arm to trust NativeTeamKey.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", orgID+":linear:CHAOS", "team-WRONG-decoy", true, now)
 	// The Linear issue's OWN project_id is a raw Linear Project UUID -- never
-	// matches the ownership row above -- but native_team_key ("CHAOS") does.
+	// matches the ownership row above -- but native_team_key ("CHAOS") is now
+	// the resolved team_id directly, no ownership row needed at all.
 	seedWorkItemWithNativeTeamKey(
 		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", uuid.Nil,
 		"11111111-1111-4111-8111-111111111111", "CHAOS", now,
 	)
-	// A bare GitHub PR: no project_id of its own, reaches team-chaos only
+	// A bare GitHub PR: no project_id of its own, reaches "CHAOS" only
 	// through the dependency-donor walk onto the Linear issue above.
 	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "github", repoID, "", now)
 	seedWorkItemDependency(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "linear:CHAOS-1", "relates_to", now)
@@ -180,8 +191,316 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 	}
 	got := readTeamRepoOwnership(t, ctx, conn, orgID)
 	row, ok := got["acme/linear-repo"]
-	if !ok || row.teamID != "team-chaos" {
-		t.Fatalf("expected acme/linear-repo -> team-chaos, got %+v", got)
+	if !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected acme/linear-repo -> CHAOS (the raw native_team_key, not the decoy ownership row's team-WRONG-decoy), got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll
+// is CHAOS-4537's own red-first proof for the ClickHouse-loading Derive
+// method (not just the pure deriveTeamRepoOwnership function already covered
+// above): an org with a real, already-synced Linear work item carrying
+// native_team_key, but ZERO team_project_ownership rows of ANY kind -- the
+// plausible real-world ordering where work-items sync and team autoimport
+// are independent per-config selections (CHAOS-4323) and the latter simply
+// has not run yet for this org. Before this fix, Derive's own early return
+// on `len(projectLinks) == 0` bailed out before even loading work_items,
+// reporting inputsReady=false and deriving nothing -- silently zeroing the
+// linear_team_key arm for exactly the org shape CHAOS-4537 was built to
+// stop depending on team_project_ownership for.
+func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-linear-team-key-no-tpo-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// CHAOS-4537 codex review P1: "CHAOS" must be a validly-known team
+	// (teams row) for the linear_team_key arm to trust NativeTeamKey -- a
+	// SEPARATE table from team_project_ownership, which this test's premise
+	// (zero rows, any provider) is specifically about and stays true below.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org, of any provider.
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		"", "CHAOS", now,
+	)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- a real, already-synced Linear work item with native_team_key is genuine input, even with zero team_project_ownership rows")
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted, got %d", retracted)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row written via native_team_key alone, got %d", written)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 1 {
+		t.Fatalf("expected armCounts[linear_team_key] = 1, got %d (%+v)", got, armCounts)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/linear-repo"]
+	if !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected acme/linear-repo -> CHAOS via native_team_key with zero team_project_ownership rows, got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey is codex review
+// (round 2, P1, confirmed real) fix's own red-first proof against the real
+// ClickHouse read path: identical fixture to the sibling test above EXCEPT
+// no seedLinearTeam call at all -- "CHAOS" never appears in `teams` for this
+// org. The linear_team_key arm must resolve nothing rather than mint phantom
+// ownership for a native_team_key that names no team currently in the org's
+// catalog -- see TeamRepoOwnershipKnownTeam's doc comment.
+func TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-linear-team-key-unknown-team-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// No seedLinearTeam call -- "CHAOS" is not a known team for this org.
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		"", "CHAOS", now,
+	)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, _, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows written -- native_team_key names a team absent from this org's catalog, never guessed, got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted, got %d", retracted)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 0 {
+		t.Fatalf("expected armCounts[linear_team_key] = 0, got %d (%+v)", got, armCounts)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
+}
+
+// TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap
+// is codex review P1 on this PR (confirmed real): removing the
+// projectLinks-only early return (the test above) must NOT also remove the
+// SEPARATE guard that protects every provider, not just Linear, from a
+// different failure mode -- team_project_ownership has already synced for
+// this org, but work_items/dependencyEdges/issuePRLinks have not (the
+// OPPOSITE ordering from the test above), a plausible transient state
+// during a partial sync. Deliberately GitHub-shaped (no NativeTeamKey
+// anywhere) per AGENTS.md's provider-matrix rule -- CHAOS-4537's own fix is
+// provider-agnostic machinery (the readiness/retraction gate), and this
+// proves it protects a non-Linear org, not only the Linear-only scenario
+// the sibling test above covers. Before the codex fix, this snapshot would
+// have read as inputsReady=true with derived=[], and
+// diffTeamRepoOwnershipRetractions would have retracted the pre-existing
+// active row below -- silently wiping real, previously-derived ownership
+// during a transient sync gap.
+func TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-transient-linkage-gap-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/github-repo"})
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, now)
+	// No seedWorkItem/seedWorkItemDependency/seedWorkGraphIssuePR calls at
+	// all -- work_items, work_item_dependencies, and work_graph_issue_pr are
+	// all empty for this org, simulating team_project_ownership having
+	// synced strictly before work-items sync reached it.
+
+	// A pre-existing active inferred row, as if a PRIOR Derive() run (before
+	// the transient gap) had already resolved and written it -- seeded
+	// directly via the same insert shape writeTeamRepoOwnershipRows uses,
+	// since this test needs it present WITHOUT the current call ever having
+	// derived it itself.
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", "team-platform", repoID, "acme/github-repo",
+		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		now, nil, now,
+	); err != nil {
+		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send pre-existing team_repo_ownership row: %v", err)
+	}
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if inputsReady {
+		t.Fatal("expected inputsReady=false -- work_items/dependencyEdges/issuePRLinks are all empty, a transient linkage gap, not a genuine no-signal evaluation")
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows written during a transient linkage gap, got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted during a transient linkage gap -- retracting here would wipe real, previously-derived ownership, got %d", retracted)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/github-repo"]
+	if !ok || row.teamID != "team-platform" {
+		t.Fatalf("expected the pre-existing acme/github-repo -> team-platform row to survive untouched, got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg
+// is codex review (round 3, P1, confirmed real) on this PR's OWN round-1
+// fix: round 1 correctly restored the linkage-empty guard (the sibling test
+// above), but round 1's OTHER change -- unconditionally removing the
+// projectLinks-empty guard so the linear_team_key arm could resolve without
+// any team_project_ownership rows -- reopened the identical retraction
+// hazard for the MIRROR input combination: team_project_ownership
+// transiently empty (the exact gap CHAOS-4537 targets), but for a
+// NON-Linear org (or a Linear org with no native_team_key signal). Here
+// work_items is non-empty (the linkage guard does not fire), but with
+// projectLinks empty and no Linear-native signal, NEITHER arm can resolve
+// anything -- derived comes back empty, and before this fix the retraction
+// diff would have wiped the pre-existing active row below. Deliberately
+// GitHub-shaped per AGENTS.md's provider-matrix rule, mirroring the sibling
+// test's own justification for doing the same.
+func TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-transient-tpo-gap-non-linear-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/github-repo"})
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org, simulating team autoimport not having synced
+	// yet while work-items sync already has (the OPPOSITE ordering from
+	// TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap
+	// above).
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/github-repo#1", "github", repoID, "proj-1", now)
+
+	// A pre-existing active inferred row, as if a PRIOR Derive() run (before
+	// the transient gap) had already resolved and written it.
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", "team-platform", repoID, "acme/github-repo",
+		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		now, nil, now,
+	); err != nil {
+		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send pre-existing team_repo_ownership row: %v", err)
+	}
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if inputsReady {
+		t.Fatal("expected inputsReady=false -- team_project_ownership is empty and no Linear-native signal exists, a transient tpo gap for a non-Linear org, not a genuine no-signal evaluation")
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows written during a transient team_project_ownership gap, got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted during a transient team_project_ownership gap -- retracting here would wipe real, previously-derived ownership, got %d", retracted)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/github-repo"]
+	if !ok || row.teamID != "team-platform" {
+		t.Fatalf("expected the pre-existing acme/github-repo -> team-platform row to survive untouched, got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg
+// is codex review (round 3, second P1, confirmed real) on this PR's OWN
+// round-3-first fix (the sibling test above): that fix let a cycle proceed
+// (inputsReady=true) with projectLinks empty as long as ONE Linear work item
+// has a validly-known native_team_key -- but diffTeamRepoOwnershipRetractions
+// is a single GLOBAL diff over the whole org, not scoped per resolution arm.
+// A MIXED org has a pre-existing project_id-arm row for one repo (from a
+// prior cycle, before team_project_ownership went transiently empty) AND a
+// Linear work item with a valid native key for a DIFFERENT repo this cycle.
+// Before this fix: `derived` would contain only the new linear_team_key row
+// (the project_id arm has no projectToTeam entries to resolve the first repo
+// with at all), and the diff would wrongly retract the first repo's real,
+// previously-derived row. This proves both halves at once: the new
+// linear_team_key row is still written, and the pre-existing project_id-arm
+// row survives untouched.
+func TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-mixed-org-transient-tpo-gap"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	githubRepoID := uuid.New()
+	linearRepoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{
+		githubRepoID: "acme/github-repo",
+		linearRepoID: "acme/linear-repo",
+	})
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org this cycle, simulating the exact transient gap
+	// CHAOS-4537 targets.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", linearRepoID,
+		"", "CHAOS", now,
+	)
+
+	// A pre-existing active inferred row for the OTHER repo, as if a PRIOR
+	// Derive() run (before the transient gap) had resolved it via the
+	// project_id arm.
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", "team-platform", githubRepoID, "acme/github-repo",
+		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		now, nil, now,
+	); err != nil {
+		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send pre-existing team_repo_ownership row: %v", err)
+	}
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- a real, already-synced Linear work item with a validly-known native_team_key is genuine input")
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted -- the pre-existing project_id-arm row for acme/github-repo must survive a cycle that cannot reconfirm it, got %d", retracted)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row written via native_team_key, got %d", written)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 1 {
+		t.Fatalf("expected armCounts[linear_team_key] = 1, got %d (%+v)", got, armCounts)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	if row, ok := got["acme/github-repo"]; !ok || row.teamID != "team-platform" {
+		t.Fatalf("expected the pre-existing acme/github-repo -> team-platform row to survive untouched, got %+v", got)
+	}
+	if row, ok := got["acme/linear-repo"]; !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected the new acme/linear-repo -> CHAOS row via native_team_key, got %+v", got)
 	}
 }
 
@@ -479,6 +798,30 @@ func seedTeamRepoOwnershipRepos(t *testing.T, ctx context.Context, conn driver.C
 	}
 	if err := batch.Send(); err != nil {
 		t.Fatalf("send repos batch: %v", err)
+	}
+}
+
+// seedLinearTeam inserts a `teams` row for a Linear team (CHAOS-4537 codex
+// review, round 2, P1): loadTeamRepoOwnershipKnownTeams reads this table to
+// validate a Linear work item's native_team_key before the linear_team_key
+// arm trusts it -- see TeamRepoOwnershipKnownTeam's doc comment. Column
+// order/shape mirrors linearReferenceTeamsInsert
+// (linear_reference_catalog_effects_clickhouse.go).
+func seedLinearTeam(t *testing.T, ctx context.Context, conn driver.Conn, orgID, teamKey string, now time.Time) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`)
+	if err != nil {
+		t.Fatalf("prepare teams batch: %v", err)
+	}
+	if err := batch.Append(
+		teamKey, uuid.New(), teamKey, (*string)(nil),
+		[]string{}, []string{}, []string{}, []string{},
+		uint8(1), now, orgID, "linear", &teamKey, (*string)(nil),
+	); err != nil {
+		t.Fatalf("append teams row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send teams batch: %v", err)
 	}
 }
 

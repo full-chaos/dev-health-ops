@@ -91,17 +91,15 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
-	if len(projectLinks) == 0 {
-		// No project ownership synced for this org yet -- nothing to derive,
-		// and no reason to touch work_items/repos at all.
-		return 0, 0, false, nil, nil
-	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
 	if len(repos) == 0 {
+		// No repos synced for this org yet -- nothing derivable can attach to
+		// a repo regardless of which arm would otherwise resolve a team, so
+		// this gate is unaffected by CHAOS-4537 and stays first.
 		return 0, 0, false, nil, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
@@ -123,20 +121,90 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
+	// CHAOS-4537: the early return that used to sit right after loading
+	// projectLinks (before workItems/dependencyEdges/issuePRLinks were even
+	// loaded) assumed every resolution arm required a team_project_ownership
+	// row, which is no longer true: the linear_team_key arm now resolves
+	// straight from a Linear work item's own native_team_key column (see
+	// deriveTeamRepoOwnership's doc comment). An org with real,
+	// already-synced Linear work items but a team_project_ownership table
+	// that has not synced yet (a plausible ordering: work-items sync and
+	// team autoimport are independent per-config selections, CHAOS-4323) is
+	// NOT a first-sync gap for this arm. This guard is NOT gone, though
+	// (round 1's fix unconditionally removed it; round 3's codex review
+	// caught that this reopened a retraction hazard for the case with no
+	// Linear-native signal -- see the guard reinstated below, after
+	// knownTeams loads): it now only skips when a Linear-native signal is
+	// actually present.
+	//
+	// The guard below (unchanged from before this ticket, codex review round
+	// 1 P1: keep it) is a DIFFERENT, still-necessary check: if
+	// workItems/dependencyEdges/issuePRLinks are ALL empty, nothing can be
+	// derived by ANY arm regardless of projectLinks' state -- proceeding
+	// anyway would treat a transient partial-sync snapshot (team_project_
+	// ownership synced, work-items not yet -- the OPPOSITE ordering from
+	// the paragraph above) as a genuine inputsReady=true, derived=[]
+	// evaluation, and RETRACT every previously-derived row for this org via
+	// diffTeamRepoOwnershipRetractions below. Removing only the
+	// projectLinks-only guard, not this one, is what makes the Linear-only
+	// case resolve while a transient linkage gap still reports
+	// inputsReady=false instead of wiping prior rows.
 	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
-		// team_project_ownership and repos both exist, but not a single
-		// linkage row of any kind has synced yet -- also the first-sync gap,
-		// not a genuine no-signal evaluation.
 		return 0, 0, false, nil, nil
 	}
 
-	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks)
+	// CHAOS-4537 codex review round 2 P1: the linear_team_key arm validates a
+	// Linear work item's native_team_key against the org's CURRENT team
+	// catalog before trusting it -- see TeamRepoOwnershipKnownTeam's doc
+	// comment. Loaded here (before the guard below, not after) because that
+	// guard now needs to know whether a Linear-native signal exists.
+	knownTeams, err := loadTeamRepoOwnershipKnownTeams(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, false, nil, err
+	}
+
+	// CHAOS-4537 codex review round 3 P1 (confirmed real): removing the
+	// projectLinks-only guard UNCONDITIONALLY (round 1's fix) reopened the
+	// exact retraction hazard round 1 closed, mirrored onto the opposite
+	// input combination. Consider team_project_ownership transiently empty
+	// (the gap this ticket targets) for a NON-Linear org (or a Linear org
+	// with no native_team_key signal): workItems/dependencyEdges/issuePRLinks
+	// are non-empty, so the guard above does not fire, but with
+	// projectLinks==nil neither arm can resolve anything (the project_id arm
+	// has no projectToTeam entries; the linear_team_key arm never applies to
+	// a non-Linear item) -- derived comes back empty, and the retraction
+	// diff below would then wipe every previously-derived row for the org,
+	// having nothing to protect them with. Only skip this guard (treat as
+	// ready despite projectLinks==0) when a Linear-native signal is actually
+	// present -- the one case removing the guard was meant to unblock.
+	if len(projectLinks) == 0 && !hasResolvableLinearNativeTeamKey(workItems, knownTeams) {
+		return 0, 0, false, nil, nil
+	}
+
+	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+	// CHAOS-4537 codex review round 3, second P1 (confirmed real, traced
+	// through diffTeamRepoOwnershipRetractions below): that diff is a single
+	// GLOBAL comparison over the whole org's activeRows vs. derived -- it is
+	// not scoped per resolution arm. The guard above can let a cycle proceed
+	// with projectLinks empty (a Linear-native signal from ONE work item was
+	// enough), but `derived` can never reproduce a project_id-arm-derived
+	// pair in that state (the arm has no projectToTeam entries to resolve
+	// from at all). Diffing anyway would treat "this cycle cannot reconfirm
+	// them" as "they're no longer true" and retract every previously-good
+	// project_id-arm row for the org, including ones for repos the single
+	// Linear item never touches (a mixed-org false retraction). Skip
+	// retraction entirely whenever projectLinks is empty; still derive and
+	// write any newly-resolvable linear_team_key rows. A later cycle that
+	// re-syncs team_project_ownership resumes normal retraction.
+	var toRetract []teamRepoOwnershipActiveRow
+	if len(projectLinks) > 0 {
+		toRetract = diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+	}
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
@@ -269,6 +337,45 @@ WHERE org_id = ?`,
 			item.RepoID = repoID.String()
 		}
 		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// loadTeamRepoOwnershipKnownTeams loads this org's CURRENT team catalog
+// (CHAOS-4537 codex review, round 2, P1) -- deriveTeamRepoOwnership's
+// linear_team_key arm uses this to validate a Linear work item's
+// native_team_key before trusting it as a resolved team_id, exactly like
+// every other native-team resolution in this codebase (see
+// TeamRepoOwnershipKnownTeam's doc comment). GROUP BY + argMax on `is_active`
+// mirrors github_work_items_derivation_context.go's loadTeams -- the
+// established convention for reading `teams` here, since its
+// ReplacingMergeTree ORDER BY is `(id)` alone (no org_id), so a plain `FINAL`
+// filtered only by a WHERE clause is not itself a safe per-org collapse.
+// Scoped to provider='linear' since that is the only provider this
+// validation set is used for.
+func loadTeamRepoOwnershipKnownTeams(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]TeamRepoOwnershipKnownTeam, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, id, argMax(is_active, (updated_at, last_synced, is_active)) AS is_active
+FROM teams
+WHERE org_id = ? AND provider = 'linear'
+GROUP BY provider, id`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TeamRepoOwnershipKnownTeam
+	for rows.Next() {
+		var provider, id string
+		var isActive uint8
+		if err := rows.Scan(&provider, &id, &isActive); err != nil {
+			return nil, err
+		}
+		if isActive != 0 {
+			out = append(out, TeamRepoOwnershipKnownTeam{Provider: provider, ID: id})
+		}
 	}
 	return out, rows.Err()
 }

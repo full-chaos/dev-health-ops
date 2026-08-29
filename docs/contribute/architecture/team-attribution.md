@@ -998,9 +998,8 @@ flowchart TD
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
     LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
-    TPO -->|"OR (Linear only, CHAOS-4458 part b) match: work_items.native_team_key<br/>against the synthetic team-key-shaped row org_id:linear:team_key --<br/>fallback for a Linear item never assigned to any Project (project_id='')<br/>-- resolution arm 'linear_team_key', tried only when the project_id arm above does not resolve"| WI
-    TPO -->|"OR match: a DONOR's project_id/native_team_key (same two arms above),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
     WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
@@ -1107,10 +1106,125 @@ left), and re-run it if that is in doubt: the verb is idempotent (its `SELECT` a
 the identical predicate), so a clean second pass finds nothing and is a safe way to confirm no
 straggler wrote the row back.
 
+**CHAOS-4537 update: the `linear_team_key` arm no longer reads `team_project_ownership` at all.**
+CHAOS-4530 deliberately KEPT the team-key-shaped `team_project_ownership` row (the paragraph above,
+"the matching `team_project_ownership` row is not") because `resolveWorkItemProjectRef`
+(as it was then named) still reconstructed the `"{org_id}:linear:{team_key}"` identity and looked it
+up there. CHAOS-4537 removed that indirection: the renamed `resolveWorkItemTeamID`
+(`team_repo_ownership_derivation.go`) trusts a Linear work item's own `work_items.native_team_key`
+column **as the resolved `team_id` directly, once validated against the org's current team catalog**
+(see the codex round 2 paragraph below) — no `teamRepoOwnershipProjectRef` construction, no
+`team_project_ownership` lookup, for this arm. This was always a safe, value-preserving change: the
+ownership writer's team-key-shaped row's `team_id` column was always stamped to the team's own key
+(`linear_reference_catalog_route.go`'s "The MATCHING team_project_ownership row below" block,
+`teamID := team.ID` where `team.ID` is itself the team key —
+`linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`), the exact same string
+`work_items.native_team_key` already carries. The `project_id` arm (this section's main narrative,
+above) is completely unaffected — still tried first, still the same `team_project_ownership` lookup,
+still outranks `linear_team_key` via `teamRepoOwnershipResolutionArmPriority` on a conflict. The
+mermaid diagram above reflects this: the `linear_team_key` edge no longer originates from `TPO`.
+
+Two correctness fixes rode along, both early-return short-circuits that assumed every resolution
+path required a `team_project_ownership` row — sound before CHAOS-4537, no longer true after.
+`deriveTeamRepoOwnership` used to return early with zero rows whenever `team_project_ownership`
+produced no `project_id`-arm links at all (`len(projectToTeam) == 0`); removed. One layer up, the
+ClickHouse-loading `Derive` had its OWN early return on `len(projectLinks) == 0`, *before even
+loading `work_items`* — also removed, so an org with real, already-synced Linear work items but a
+`team_project_ownership` table that has not synced yet no longer reports `inputsReady=false` and
+skips resolution.
+
+Codex review on the CHAOS-4537 PR (P1, confirmed real) caught that this removal was too broad: `Derive`
+has a SEPARATE guard — `len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0` —
+that protects every provider, not just Linear, from a different failure mode: if none of the linkage
+tables have synced yet REGARDLESS of `team_project_ownership`'s state (the opposite ordering — ownership
+synced, work-items not yet, a plausible transient partial-sync snapshot), proceeding anyway would read
+as a genuine `inputsReady=true`, `derived=[]` evaluation and retract every previously-derived row for
+the org. That guard is unchanged, still in place; only the `projectLinks`-only guard above it was
+removed.
+
+**Codex review, round 2 (P1, confirmed real): `native_team_key` must be validated against the org's
+CURRENT team catalog, never trusted unconditionally.** The first version of this redirect trusted
+`item.NativeTeamKey` straight through with no check at all — a divergence from the established
+"native_team" resolution contract every OTHER native-team lookup in this codebase follows: this
+section's own §0.2 table (rank 0, `native_team`: `WorkItem.native_team_key -> teams`),
+`compute_work_items.py`'s `_native_team_candidate`/`build_project_key_resolver`, and this repo's own
+Go port for GitHub work items, `github_work_items_derivation_context.go`'s
+`nativeTeamCandidate`/`projectKeyTeams` — all validate a native-team-key column against a resolver
+built from the org's CURRENT `teams` rows before trusting it, precisely because `work_items` reflects
+whatever was true AT SYNC TIME, not necessarily the team catalog's current state (a team can be
+renamed or deleted in Linear without every work item that once carried its old key being re-synced).
+Without validation, a stale, renamed, or garbage `native_team_key` would mint phantom
+`team_repo_ownership` for a team that no longer exists. Fixed: `deriveTeamRepoOwnership` now takes a
+`knownTeams []TeamRepoOwnershipKnownTeam` parameter (loaded by
+`loadTeamRepoOwnershipKnownTeams`, `GROUP BY provider, id` + `argMax` on `is_active` — `teams`'
+`ReplacingMergeTree` `ORDER BY` is `(id)` alone, no `org_id`, so a plain `FINAL` is not itself a safe
+per-org collapse; this mirrors `github_work_items_derivation_context.go`'s `loadTeams`, the
+established convention for reading this table), and `resolveWorkItemTeamID`'s linear_team_key branch
+only trusts `NativeTeamKey` when it is a member of that set. Loading zero known teams is never itself
+an unconditional `inputsReady=false` signal on its own (unlike the linkage-empty guard above) — it just
+means the arm resolves nothing that cycle, same as an org with no `team_project_ownership` rows leaves
+the `project_id` arm resolving nothing. It DOES factor into the combined readiness guard the next
+paragraph describes, though — see there for why "zero known teams" alone is not sufficient reasoning.
+
+**Codex review, round 3 (final; P1, confirmed real): the `projectLinks`-empty guard's removal was too
+unconditional.** Round 1's fix removed that guard outright so the `linear_team_key` arm could resolve
+with zero `team_project_ownership` rows. Round 3 caught that this reopened the SAME retraction hazard
+round 1 itself had just fixed, mirrored onto the opposite input combination: `team_project_ownership`
+transiently empty (the exact gap this ticket targets) for a **non-Linear org, or a Linear org with no
+`native_team_key` signal at all**. In that case `workItems`/`dependencyEdges`/`issuePRLinks` are
+non-empty (the linkage-empty guard does not fire), but with `projectLinks` empty and no Linear-native
+signal, NEITHER arm can resolve anything — `derived` comes back empty, and the retraction diff would
+wipe every previously-derived row for the org. Fixed with a new pure helper,
+`hasResolvableLinearNativeTeamKey(workItems, knownTeams)` (true iff at least one Linear work item
+carries a `NativeTeamKey` that is a member of `knownTeams`): `Derive` now skips the `projectLinks`-empty
+guard (treats it as ready despite `len(projectLinks) == 0`) ONLY when that helper reports a genuine
+Linear-native signal is present — the one case the guard's removal was meant to unblock. This requires
+loading `knownTeams` BEFORE this guard runs, not after (its call site moved earlier in `Derive`).
+
+**Codex review, round 3 (final; P2 raised, verified NOT applicable to this codebase): native keys are
+not resolved to a separately-looked-up canonical team id.** `resolveWorkItemTeamID` validates
+`NativeTeamKey` against `TeamRepoOwnershipKnownTeam.ID` (`teams.id`) and then returns `NativeTeamKey`
+itself as the resolved `team_id` — never a distinct `teams.id` value looked up via an alias. Codex
+raised this as a P1 (a hypothetical `teams.id != teams.native_team_key` shape); executed-read
+verification (not assumed) found it is NOT reachable in this codebase: EVERY Linear team row ever
+written — the live Go writer, `linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`
+(`nativeTeamKey := teamKey; ...; ID: teamKey, ..., NativeTeamKey: &nativeTeamKey`), and the retired
+Python writer, `team_autoimport_linear.py`'s `_linear_team_row` (`"id": team_id, ...,
+"native_team_key": team_id`) — stamps both columns from the exact same source value, always. No
+alias-resolution machinery was added for a case that cannot occur; instead,
+`TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey` pins the invariant directly (reusing
+`linear_reference_catalog_test.go`'s existing `chaos4530CollectReferenceCatalog` harness) so a FUTURE
+change that lets the two columns diverge fails loudly here, not silently in production.
+
+**Delta-only re-review of round 3's own fix (the final allowed codex pass per the round cap — minimal
+fix only, no further round): P1 confirmed real, the readiness guard fixed above was still retraction-
+unsafe for a MIXED org.** `diffTeamRepoOwnershipRetractions` is a single GLOBAL diff over the whole
+org's active rows vs. `derived`, not scoped per resolution arm. The `hasResolvableLinearNativeTeamKey`
+guard above correctly lets a cycle proceed (`inputsReady=true`) when `projectLinks` is empty but ONE
+Linear item has a validly-known native key — but `derived` can never reproduce a `project_id`-arm pair
+in that state (the arm has no `projectToTeam` entries to resolve from at all with `projectLinks` empty).
+Diffing anyway would treat "this cycle cannot reconfirm them" as "they're no longer true" and retract
+every previously-good `project_id`-arm row for the org, including repos the single Linear item never
+touches. Fixed: skip the retraction diff entirely whenever `projectLinks` is empty (still derive and
+write any newly-resolvable `linear_team_key` rows); a later cycle that re-syncs `team_project_ownership`
+resumes normal retraction. `TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
+pins both halves: the new row is written, and the pre-existing `project_id`-arm row for the other repo
+survives untouched.
+
+The team-key-shaped `team_project_ownership` row itself is **still written** today
+(`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial
+from this reader's point of view, kept only as a still-open fast-follow: once this redirect is proven
+live, the collector can stop writing it entirely, closing the last trace of the
+`"{org_id}:linear:{team_key}"` identity out of this schema. `linearTeamKeyProjectID` (still present in
+`team_repo_ownership_derivation.go`) is kept only so `linear_reference_catalog_test.go`'s
+`TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader` can still name that row's shape by
+construction — it has no other caller.
+
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s
-`buildDonorProjectIDResolver`) reuses these exact rules rather than a looser first-donor walk:
+`buildDonorTeamIDResolver`, renamed from `buildDonorProjectIDResolver` by CHAOS-4537) reuses these
+exact rules rather than a looser first-donor walk:
 - only **inheritance-safe** relationship types transfer a team
   (`relates_to`, `relates`, `duplicates`, `external_issue_key`); blocking links
   (`blocks` / `blocked_by`) routinely span teams and are ignored;

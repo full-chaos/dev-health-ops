@@ -897,7 +897,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # Merged total (this branch's +6/+1 delta applied on top of origin/main's
     # independent +110/+18 delta from the same 1115/126 base): 1225 -> 1231
     # top-level; 144 -> 145 integration-tagged.
-    assert len(expected_provider_tests) == 1231
+    #
+    # lane-4458b-live's compose live-proof (2026-08-29) added 2 more ordinary
+    # top-level tests to team_repo_ownership_derivation_test.go
+    # (TestLinearTeamKeyOwnResolutionWithEmptyProjectID,
+    # TestLinearTeamKeyResolvesViaPRInheritanceIssueLink -- closing two
+    # fixture gaps the live proof found: no prior test used an actually-empty
+    # `project_id`, and none exercised the `issuePRLinks`/PR-inheritance path
+    # with a Linear donor). Neither is `-tags=integration`. 1231 -> 1233
+    # top-level; 145 unchanged.
+    assert len(expected_provider_tests) == 1233
     assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
@@ -914,7 +923,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1231
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1233
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -975,7 +984,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1231
+    assert len(selected_tests) == len(set(selected_tests)) == 1233
     assert set(selected_tests) == expected_tests
 
 

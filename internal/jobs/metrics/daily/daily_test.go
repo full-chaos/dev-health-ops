@@ -388,7 +388,14 @@ func TestRetryCompatibilityErrorAttachesBoundedReasonAndPreservesCause(t *testin
 // TestPartitionCompatibilityFailureIsRetryableWithReason drives the failure
 // through the real Handler.Work path (not just retryCompatibilityError in
 // isolation) so the wiring at the actual call site is what's under test, not
-// just the helper.
+// just the helper. Uses ErrUnavailable -- a genuinely unclassified failure
+// with no dedicated branch in Work's if/else chain -- as the example of the
+// generic fallback path. CHAOS-4543: this used to use
+// ErrCompatibilityProcessSignaled, but that error now has its own explicit
+// releasePartitionWithReason branch (see
+// TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable), so it
+// is no longer a valid example of "falls through to the plain,
+// reason-less release" -- swapped to preserve this test's actual intent.
 func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{
@@ -398,7 +405,7 @@ func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
 		},
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProcessSignaled})
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrUnavailable})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,11 +413,14 @@ func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
 		t.Fatalf("compatibility failure = %v, want retryable", err)
 	}
-	if !errors.Is(err, ErrCompatibilityProcessSignaled) {
-		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProcessSignaled", err)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrUnavailable", err)
 	}
 	if store.partitionReleases != 1 {
 		t.Fatalf("partitionReleases = %d, want 1", store.partitionReleases)
+	}
+	if store.releasesWithReason != 0 {
+		t.Fatalf("releasesWithReason = %d, want 0 -- a genuinely unclassified failure must not fabricate a reason", store.releasesWithReason)
 	}
 }
 
@@ -446,6 +456,213 @@ func TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable(t *testi
 	}
 	if store.partitionReleases != 0 {
 		t.Fatalf("partitionReleases = %d, want 0 -- a liveness kill must release WITH a reason, not through the plain path", store.partitionReleases)
+	}
+}
+
+// TestPartitionResourceExhaustedPersistsFailureReasonAndStaysRetryable is the
+// CHAOS-4543 red-first proof. Before this fix, ErrCompatibilityResourceExhausted
+// (the runner's RSS watchdog kill or its own RLIMIT_AS/row-cap-guard
+// MemoryError, both classified resource_exhausted by classifyCompatibilityError)
+// had no explicit branch here and fell through to the generic
+// releasePartition/retryCompatibilityError path at the bottom of this
+// function -- releasing the partition back to 'failed' with failure_reason
+// left NULL. A daily-metrics run whose partition dies this way is retryable
+// in principle (a fresh attempt, a lower-volume day, or a raised budget could
+// all succeed later), but with the reason never persisted, an operator
+// reading daily_metrics_partitions after River exhausts its attempt budget
+// and discards the job sees only a bare 'failed' row with no clue why --
+// exactly the CHAOS-4543 "raw text not captured" gap. Mirrors
+// TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable's shape
+// (same non-terminal semantics: releasePartitionWithReason, not
+// FailPartitionPermanently -- a resource_exhausted partition is not a claim
+// this row can never satisfy).
+func TestPartitionResourceExhaustedPersistsFailureReasonAndStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhausted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if !errors.Is(err, ErrCompatibilityResourceExhausted) {
+		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityResourceExhausted", err)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != "resource_exhausted" {
+		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/resource_exhausted", store.releasesWithReason, store.releaseReason)
+	}
+	if store.partitionReleases != 0 {
+		t.Fatalf("partitionReleases = %d, want 0 -- a resource_exhausted kill must release WITH a reason, not through the plain path", store.partitionReleases)
+	}
+	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted {
+		t.Fatalf("observer decisions = %v, want exactly [released_resource_exhausted]", observer.decisions)
+	}
+}
+
+// TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable is the
+// CHAOS-4543 red-first proof for the sibling class: a runner subprocess
+// killed by an external signal (kernel OOM, SIGTERM) hit the exact same
+// missing-branch gap as ErrCompatibilityResourceExhausted above.
+func TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProcessSignaled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if !errors.Is(err, ErrCompatibilityProcessSignaled) {
+		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProcessSignaled", err)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != "process_signaled" {
+		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/process_signaled", store.releasesWithReason, store.releaseReason)
+	}
+	if store.partitionReleases != 0 {
+		t.Fatalf("partitionReleases = %d, want 0 -- a signaled kill must release WITH a reason, not through the plain path", store.partitionReleases)
+	}
+	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled {
+		t.Fatalf("observer decisions = %v, want exactly [released_process_signaled]", observer.decisions)
+	}
+}
+
+// TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason
+// is the CHAOS-4543 red-first proof for the deterministic-guard distinction
+// (codex review / team-lead direction): a resource_exhausted kill the Python
+// bridge itself classified as deterministic (a known guard like
+// TestopsRowCapExceeded, never the RSS watchdog) must stop River retrying
+// (Permanent, not Retryable) since 5 attempts only reproduce the identical
+// refusal -- but the DURABLE failure_reason on the partition row stays the
+// same "resource_exhausted" string as the non-deterministic case, and the
+// partition still releases to plain 'failed' (never 'failed_permanent'),
+// since a future lower-volume day or a raised operator cap could still
+// succeed.
+func TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("deterministic resource_exhausted failure = %v, want permanent", err)
+	}
+	if !errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
+		t.Fatalf("failure = %v, want it to unwrap to ErrCompatibilityResourceExhaustedDeterministic", err)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != "resource_exhausted" {
+		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/resource_exhausted (SAME string as the non-deterministic case)", store.releasesWithReason, store.releaseReason)
+	}
+	if store.permanentFailures != 0 {
+		t.Fatalf("permanentFailures = %d, want 0 -- must release to plain 'failed' (releasePartitionWithReason), never 'failed_permanent'", store.permanentFailures)
+	}
+	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic {
+		t.Fatalf("observer decisions = %v, want exactly [released_resource_exhausted_deterministic]", observer.decisions)
+	}
+}
+
+// TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry is the codex-
+// review red-first proof (CHAOS-4543): releasePartitionWithReason's durable
+// write can itself fail (a transient DB error, or the lease already expired
+// out from under this attempt) -- releaseWithReasonErr injects exactly that.
+// Before this fix, the observeCompatRetry call was unconditional, so a
+// released_* telemetry decision fired even though the partition row was
+// never actually transitioned -- a telemetry/reality mismatch of the same
+// shape this ticket's own root-cause diagnosis had to work around
+// (failure_reason silently NULL despite a classified failure).
+func TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhausted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
+	}
+}
+
+// TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable is
+// the codex-review red-first proof (CHAOS-4543 round 2), the deterministic
+// sibling of TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry above:
+// the deterministic branch's Permanent classification must NEVER fire unless
+// the durable release write is CONFIRMED to have landed -- mirrors
+// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable's existing
+// rule for the ambiguous_stuck branch. Before this fix, a failed write here
+// (lease already expired, a transient DB error) still returned Permanent,
+// telling River to stop retrying a job that recorded nothing durable at all
+// -- the exact silent-loss shape CHAOS-4319 exists to close, reintroduced by
+// this ticket's own no-retry optimization if left unguarded.
+func TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("deterministic resource_exhausted failure = %v, want retryable (write failed, must not go Permanent)", err)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
 	}
 }
 
@@ -812,6 +1029,7 @@ type fakeStore struct {
 	permanentFailureErr           error
 	releasesWithReason            int
 	releaseReason                 string
+	releaseWithReasonErr          error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -862,7 +1080,7 @@ func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error 
 func (store *fakeStore) ReleasePartitionWithReason(_ context.Context, _ PartitionClaim, reason string) error {
 	store.releasesWithReason++
 	store.releaseReason = reason
-	return nil
+	return store.releaseWithReasonErr
 }
 func (store *fakeStore) FailPartitionPermanently(_ context.Context, _ PartitionClaim, reason string) error {
 	store.permanentFailures++

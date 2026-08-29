@@ -55,6 +55,23 @@ var (
 	// exhausted -- see worker_metrics.py's _await_pids_capacity). Always
 	// retryable: capacity pressure is transient container state.
 	ErrCompatibilityCapacityExhausted = errors.New("daily metrics compatibility runner capacity was exhausted")
+	// ErrCompatibilityResourceExhaustedDeterministic (CHAOS-4543) marks a
+	// resource_exhausted kill the Python bridge itself classified as
+	// deterministic -- today, only worker_metrics_runner.py's
+	// TestopsRowCapExceeded guard (a fixed per-repo/day row-count threshold
+	// against data that does not change within a day once synced), NEVER
+	// the RSS watchdog's own kill (real observed memory, which can
+	// legitimately vary attempt to attempt under different concurrent
+	// load). Retrying this 5 times before River discards the job
+	// reproduces the identical guard refusal every time -- pure wasted
+	// compute on a cycle that repeats every ~15-60 minutes in prod. Marked
+	// Permanent in retryCompatibilityError (stops after this one attempt),
+	// while PartitionHandler.Work still calls releasePartitionWithReason
+	// with the SAME "resource_exhausted" failure_reason as the
+	// non-deterministic case -- the partition stays ordinarily
+	// re-dispatchable (daily-redrive, or a future day once the guard's
+	// data volume changes), only River's own retry budget is spared.
+	ErrCompatibilityResourceExhaustedDeterministic = errors.New("daily metrics compatibility runner exceeded its memory bound (deterministic guard)")
 )
 
 // compatibilityErrorBody is the shape of a non-2xx response body from the
@@ -75,6 +92,12 @@ type compatibilityErrorBody struct {
 	Detail struct {
 		Reason string `json:"reason"`
 		State  string `json:"state"`
+		// Deterministic (CHAOS-4543) is read only when Reason ==
+		// "resource_exhausted" -- see
+		// ErrCompatibilityResourceExhaustedDeterministic's doc comment. A
+		// bounded bool, not raw text: safe to cross this boundary the same
+		// way State already does.
+		Deterministic bool `json:"deterministic"`
 	} `json:"detail"`
 }
 
@@ -87,6 +110,26 @@ func classifyCompatibilityError(data []byte) error {
 	case "process_signaled":
 		return ErrCompatibilityProcessSignaled
 	case "resource_exhausted":
+		// codex review (CHAOS-4543 round 2): a multi-repo partition where an
+		// EARLIER repo already wrote before a LATER repo hits the
+		// deterministic guard is marked ambiguous by the Python bridge
+		// (_execute's safe_to_retry=False path -- progress_seen is true) --
+		// "state": "ambiguous" travels alongside "deterministic": true in
+		// that response. The stuck-ambiguous ledger row is the MORE severe
+		// condition: it refuses every future claim 409 until a human
+		// /repair call, exactly the CHAOS-4319 class the "ambiguous_refused"
+		// case below already defers to. Checked BEFORE Deterministic, for
+		// the same reason CHAOS-4319 established: applying the
+		// no-retry-on-a-known-guard optimization here would let River
+		// discard the job Permanent after one attempt while the ledger
+		// identity stays wedged, with no natural retry left to ever reach
+		// the failPartitionPermanently path that actually resolves it.
+		if body.Detail.State == "ambiguous" {
+			return ErrCompatibilityAmbiguousStuck
+		}
+		if body.Detail.Deterministic {
+			return ErrCompatibilityResourceExhaustedDeterministic
+		}
 		return ErrCompatibilityResourceExhausted
 	case "ambiguous_refused":
 		if body.Detail.State == "ambiguous" {

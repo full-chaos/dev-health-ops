@@ -81,28 +81,28 @@ type teamRepoOwnershipRepoInfo struct {
 // (providers/teams.py::load_team_repo_ownership_map,
 // native_status_change.py's _TEAM_REPOSITORIES_SQL -- both already filter
 // on valid_to) see it as expired on their very next query.
-func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error) {
+func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error) {
 	if service.Conn == nil || ctx == nil || orgID == "" {
-		return 0, 0, false, ErrTeamRepoOwnershipDerivationUnavailable
+		return 0, 0, false, nil, ErrTeamRepoOwnershipDerivationUnavailable
 	}
 	now := time.Now().UTC()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(projectLinks) == 0 {
 		// No project ownership synced for this org yet -- nothing to derive,
 		// and no reason to touch work_items/repos at all.
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(repos) == 0 {
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
 	for id := range repos {
@@ -111,47 +111,53 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 
 	workItems, err := loadTeamRepoOwnershipWorkItems(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 
 	dependencyEdges, err := loadTeamRepoOwnershipDependencyEdges(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 
 	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, orgID, repoIDs)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
 		// team_project_ownership and repos both exist, but not a single
 		// linkage row of any kind has synced yet -- also the first-sync gap,
 		// not a genuine no-signal evaluation.
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 
-	derived := deriveTeamRepoOwnership(projectLinks, workItems, dependencyEdges, issuePRLinks)
+	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks)
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, true, err
+		return 0, 0, true, nil, err
 	}
 	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
-			return 0, 0, true, err
+			return 0, 0, true, nil, err
 		}
 	}
 
 	if len(derived) == 0 {
-		return 0, retracted, true, nil
+		return 0, retracted, true, nil, nil
 	}
-	written, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
+	// armCounts (CHAOS-4458 part (b)) is computed by writeTeamRepoOwnershipRows
+	// itself from the rows it actually COMMITS, not from `derived` up front
+	// (codex adversarial review, 2026-08-29, confirmed finding): a derived
+	// candidate can still be dropped (unresolvable repo_id) or the whole
+	// batch can fail before Send() -- counting from `derived` would report a
+	// linear_team_key/project_id row that was never actually written.
+	written, armCounts, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
 	if err != nil {
-		return 0, retracted, true, err
+		return 0, retracted, true, nil, err
 	}
-	return written, retracted, true, nil
+	return written, retracted, true, armCounts, nil
 }
 
 func loadTeamRepoOwnershipProjectLinks(
@@ -237,8 +243,14 @@ WHERE org_id = ?`,
 func loadTeamRepoOwnershipWorkItems(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]TeamRepoOwnershipWorkItem, error) {
+	// native_team_key (migration 050) alongside project_id -- CHAOS-4458
+	// part (b): a Linear work item's project_id is a raw Linear Project UUID,
+	// a SEPARATE id space from team_project_ownership's Linear rows (keyed
+	// "{org_id}:linear:{team_key}"); native_team_key carries the raw Linear
+	// team key (issue.team.key) that DOES match. Empty string (ClickHouse's
+	// column default, migration 050) for every non-Linear provider.
 	rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, repo_id, project_id
+SELECT work_item_id, provider, repo_id, project_id, native_team_key
 FROM work_items FINAL
 WHERE org_id = ?`,
 		orgID)
@@ -250,7 +262,7 @@ WHERE org_id = ?`,
 	for rows.Next() {
 		var item TeamRepoOwnershipWorkItem
 		var repoID uuid.UUID
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
 			return nil, err
 		}
 		if repoID != uuid.Nil {
@@ -466,6 +478,16 @@ const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provid
 // under concurrent sync) is skipped rather than written with a blank
 // repo_full_name, which would collide this table's ORDER BY key across
 // unrelated repos owned by the same team.
+//
+// armCounts (CHAOS-4458 part (b)) is tallied from the SAME rows that make it
+// into the batch, and is only meaningful once Send() has actually succeeded
+// -- an error return (from Append or Send) always pairs with a nil armCounts,
+// mirroring the existing written=0-on-error contract, so a caller can never
+// export a resolution-arm count for a row that was not actually committed
+// (codex adversarial review, 2026-08-29, confirmed finding: counting
+// pre-write candidates let the metric report rows that were skipped for a
+// missing repo snapshot, or never committed at all because the whole batch
+// failed).
 func writeTeamRepoOwnershipRows(
 	ctx context.Context,
 	conn driver.Conn,
@@ -473,12 +495,13 @@ func writeTeamRepoOwnershipRows(
 	now time.Time,
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-) (int, error) {
+) (int, map[string]int, error) {
 	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	written := 0
+	armCounts := map[string]int{}
 	for _, row := range derived {
 		repoID, err := uuid.Parse(row.RepoID)
 		if err != nil || repoID == uuid.Nil {
@@ -516,15 +539,18 @@ func writeTeamRepoOwnershipRows(
 			nil,
 			now,
 		); err != nil {
-			return written, err
+			return written, nil, err
 		}
 		written++
+		if row.ResolutionArm != "" {
+			armCounts[row.ResolutionArm]++
+		}
 	}
 	if written == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if err := batch.Send(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return written, nil
+	return written, armCounts, nil
 }

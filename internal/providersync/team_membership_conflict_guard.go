@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -181,29 +182,46 @@ func membershipConflictsWithManualState(
 // write and a count of how many were skipped (team-lead ruling, 2026-08-28:
 // reported under a distinct "skipped_manual_conflict" reason, never folded
 // into MembershipsWritten so "skipped for a real conflict" is never
-// indistinguishable from "nothing to write this run").
+// indistinguishable from "nothing to write this run"). CHAOS-4444: every
+// skipped (conflicting) row is now ALSO staged as a team_drift_changes row
+// via the shared reviewMembershipsForDrift engine
+// (identity_drift_review.go), and a stale pending row for a member this run
+// observed but no longer sees conflicting (or sees at all) is
+// resolved/superseded. observedTeamIDs names the teams whose member fetch
+// was attempted this run (Linear always collects members alongside teams
+// in one walk -- no per-team partial-failure model -- so this is simply
+// every team id CollectReferenceCatalog returned when Members was
+// selected).
 func applyTeamMembershipConflictGuard(
-	ctx context.Context, conn driver.Conn, orgID, provider string, rows []linearReferenceMembershipRow,
-) ([]linearReferenceMembershipRow, int, error) {
-	if len(rows) == 0 {
-		return rows, 0, nil
+	ctx context.Context, conn driver.Conn, orgID, provider string, rows []linearReferenceMembershipRow, observedTeamIDs []string, now time.Time,
+) ([]linearReferenceMembershipRow, int, int, int, error) {
+	if len(rows) == 0 && len(observedTeamIDs) == 0 {
+		return rows, 0, 0, 0, nil
 	}
 	manualTeamsByMember, err := resolveActiveManualMembershipTeams(ctx, conn, orgID, provider)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
 	}
 	fallbackTeamsByIdentity, err := resolveActiveMemberAttributionFallbackTeams(ctx, conn, orgID, provider)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
 	}
 	kept := make([]linearReferenceMembershipRow, 0, len(rows))
 	skipped := 0
-	for _, row := range rows {
+	conflictedIdx := make(map[int]struct{})
+	views := make([]teamDriftMembershipView, len(rows))
+	for index, row := range rows {
+		views[index] = linearMembershipRowToDriftView(row)
 		if membershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 			skipped++
+			conflictedIdx[index] = struct{}{}
 			continue
 		}
 		kept = append(kept, row)
 	}
-	return kept, skipped, nil
+	staged, superseded, err := reviewMembershipsForDrift(ctx, conn, orgID, provider, views, conflictedIdx, observedTeamIDs, now)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	return kept, skipped, staged, superseded, nil
 }

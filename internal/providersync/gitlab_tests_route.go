@@ -265,6 +265,14 @@ func (handler GitLabTestsRouteHandler) Collect(
 					"repository", fullName, "run", runID, "count", duplicates,
 				)
 			}
+			if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
+				client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, duplicates)
+				slog.Info(
+					"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", fullName, "run", runID, "count", duplicates,
+				)
+			}
 			suites = append(suites, reportSuites...)
 			cases = append(cases, reportCases...)
 		}
@@ -686,12 +694,26 @@ func normalizeGitLabNativeTestReport(claim Claim, repoID, runID string, report g
 	at = at.UTC().Truncate(time.Millisecond)
 	suites := make([]testSuiteResultRow, 0, len(report.Suites))
 	cases := make([]testCaseResultRow, 0)
+	// suiteOccurrence disambiguates sibling suite OBJECTS sharing a name in
+	// the SAME native test_report response, the GitLab-native twin of
+	// parseJUnitRows' identical fix (CHAOS-4508, github_tests_reports.go):
+	// two suites sharing a name otherwise hash to the same suiteID below,
+	// and their first same-named case then also collides on caseID since
+	// caseOccurrence is reset fresh per suite object.
+	suiteOccurrence := map[string]int{}
 	for _, rawSuite := range report.Suites {
 		if len(rawSuite.Cases) == 0 {
 			continue
 		}
 		name := firstNonEmpty(stringValue(rawSuite.Name), "unnamed")
 		suiteID := hashTestIdentifier(runID, name, "")
+		// Folded into the hash ONLY when non-zero, matching CHAOS-4392's
+		// caseOccurrence fix below, so the first (and every non-colliding)
+		// suite keeps the exact suiteID it always has.
+		if occurrence := suiteOccurrence[name]; occurrence > 0 {
+			suiteID = hashTestIdentifier(suiteID, strconv.Itoa(occurrence))
+		}
+		suiteOccurrence[name]++
 		row := testSuiteResultRow{OrgID: claim.OrgID, RepoID: repoID, RunID: runID, SuiteID: suiteID,
 			SuiteName: name, Framework: testsOptionalString("gitlab_ci"), TotalCount: int64(len(rawSuite.Cases)),
 			DurationSeconds: optionalGitLabTestsFloat(rawSuite.TotalTime), StartedAt: cloneTime(started), FinishedAt: cloneTime(finished), LastSynced: at}

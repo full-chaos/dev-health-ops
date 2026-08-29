@@ -225,3 +225,32 @@ func TestDuplicateTestCaseCounterAggregatesByProviderDatasetOnly(t *testing.T) {
 		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
 	}
 }
+
+// The suite twin of TestDuplicateTestCaseCounterAggregatesByProviderDatasetOnly
+// (CHAOS-4508): repo must not become a label dimension, and a zero-count call
+// must not mint an empty series.
+func TestDuplicateTestSuiteCounterAggregatesByProviderDatasetOnly(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordDuplicateTestSuite("github", "cicd", 1)
+	metrics.RecordDuplicateTestSuite("github", "cicd", 1)
+	metrics.RecordDuplicateTestSuite("mystery-provider", "mystery-dataset", 1)
+	metrics.RecordDuplicateTestSuite("gitlab", "tests", 0)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		`dev_health_cicd_duplicate_test_suite_total{provider="github",dataset="cicd"} 2`,
+		`dev_health_cicd_duplicate_test_suite_total{provider="other",dataset="other"} 1`,
+		"# TYPE dev_health_cicd_duplicate_test_suite_total counter",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `dev_health_cicd_duplicate_test_suite_total{provider="gitlab",dataset="tests"}`) {
+		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
+	}
+}

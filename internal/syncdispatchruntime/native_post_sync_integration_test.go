@@ -959,6 +959,12 @@ func (observer *recordingTeamRepoOwnershipDerivationObserver) ObserveTeamRepoOwn
 	return nil
 }
 
+func (observer *recordingTeamRepoOwnershipDerivationObserver) ObserveTeamRepoOwnershipDerivationResolutionArm(
+	jobruntime.TeamRepoOwnershipResolutionArm, int,
+) error {
+	return nil
+}
+
 // TestNativePostSyncFanoutTeamRepoOwnershipDerivationRecordsRouteMissingOnDeterministicRejection
 // is the team-lead ruling (2026-08-28, "non-fatal != silent"): the exact
 // same deterministic-rejection swallow TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy

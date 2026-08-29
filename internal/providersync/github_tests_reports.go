@@ -112,7 +112,16 @@ type githubTestsReportRows struct {
 	// unique by construction, this is only the telemetry input for
 	// dev_health_cicd_duplicate_test_case_total.
 	DuplicateCases int
-	issues         []githubTestsReportIssue
+	// DuplicateSuites counts sibling suite-OBJECT natural-key collisions this
+	// parse disambiguated with an ordinal suffix (CHAOS-4508) -- see
+	// parseJUnitRows' suiteOccurrence. Purely observational: the rows
+	// themselves are already unique by construction, this is only the
+	// telemetry input for dev_health_cicd_duplicate_test_suite_total. Scoped
+	// to the WHOLE artifact (every report member combined), matching the
+	// occurrence counter's own scope, so it is set once after all members are
+	// parsed rather than accumulated per member like DuplicateCases.
+	DuplicateSuites int
+	issues          []githubTestsReportIssue
 }
 
 // GitHubTestsIncomplete is the bounded, provider-specific evidence retained
@@ -648,6 +657,12 @@ func parseGitHubTestsArtifact(
 	result := githubTestsReportRows{}
 	processed := 0
 	var expanded uint64
+	// suiteOccurrence is scoped to the WHOLE artifact (every report member
+	// combined), not to one parseJUnitRows call, so it disambiguates BOTH
+	// sibling <testsuite> elements sharing a name inside one report file AND
+	// same-named root suites produced by two separate report files bundled
+	// into the same artifact zip (CHAOS-4508) -- see parseJUnitRows.
+	suiteOccurrence := map[string]int{}
 	members := reader.File
 	if len(members) > githubTestsMaxArchiveEntries {
 		members = members[:githubTestsMaxArchiveEntries]
@@ -689,7 +704,7 @@ func parseGitHubTestsArtifact(
 		processed++
 		switch kind {
 		case "junit":
-			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt)
+			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
 				result.recordSkipped("malformed", false)
 				continue
@@ -706,6 +721,11 @@ func parseGitHubTestsArtifact(
 			result.Coverage = append(result.Coverage, coverage)
 		}
 	}
+	// Computed once over every suite this artifact produced, across all
+	// report members, matching suiteOccurrence's artifact-wide scope --
+	// unlike DuplicateCases, which is scoped within one suite and so is
+	// correctly accumulated per member above.
+	result.DuplicateSuites = countDuplicateTestSuites(result.Suites)
 	return result, nil
 }
 
@@ -896,10 +916,18 @@ func classifyGitHubTestReport(name string, body []byte) string {
 	return ""
 }
 
+// suiteOccurrence is the CALLER-owned, artifact-wide counter keyed on
+// normalized suite name that disambiguates sibling suite OBJECTS sharing a
+// name (CHAOS-4508) -- the suite-level twin of caseOccurrence below. It is
+// threaded in rather than allocated per call so two report members in the
+// SAME artifact that each emit a same-named root suite (e.g. two files both
+// producing <testsuite name="pytest">) are disambiguated too, not just
+// siblings within one XML document.
 func parseJUnitRows(
 	body []byte, artifactID, repoID, runID, orgID string,
 	fallbackStarted, fallbackFinished *time.Time,
 	normalizedAt time.Time,
+	suiteOccurrence map[string]int,
 ) ([]testSuiteResultRow, []testCaseResultRow, error) {
 	if len(body) > githubTestsMaxReportBytes || bytes.Contains(bytes.ToUpper(body), []byte("<!DOCTYPE")) || bytes.Contains(bytes.ToUpper(body), []byte("<!ENTITY")) {
 		return nil, nil, ErrGitHubTestsReportInvalid
@@ -939,6 +967,25 @@ func parseJUnitRows(
 		}
 		framework := inferJUnitFramework(suite)
 		suiteID := hashTestIdentifier(runID, artifactID, name, "")
+		// suiteObjectOccurrence disambiguates two SIBLING suite OBJECTS that
+		// hash to the identical suiteID above because they share a
+		// (run, artifact, name) triple (CHAOS-4508, prod sync_run
+		// a7b60282-4af1-58ad-a094-8dc8baab7a1f, run_id=33248832747): an
+		// ordinary shape when one artifact bundles multiple report files or
+		// matrix legs that each emit a generically-named root suite (e.g.
+		// two files both producing <testsuite name="pytest">). Neither
+		// CHAOS-4190 (artifact scoping) nor CHAOS-4392's caseOccurrence
+		// below (reset fresh per suite OBJECT, so two colliding objects each
+		// start their first case at occurrence=0 and collide too) covers
+		// this. Folded into the hash ONLY when non-zero -- hash-of-hash, not
+		// a three-way join through hashTestIdentifier's unescaped "::"
+		// separator, matching caseOccurrence's own fix below -- so the first
+		// (and every non-colliding) suite keeps the exact suiteID it always
+		// has: existing rows for single-suite artifacts are unaffected.
+		if suiteObjectOccurrence := suiteOccurrence[name]; suiteObjectOccurrence > 0 {
+			suiteID = hashTestIdentifier(suiteID, strconv.Itoa(suiteObjectOccurrence))
+		}
+		suiteOccurrence[name]++
 		started := parseGitHubTestsTime(suite.Timestamp)
 		hasSuiteTimestamp := started != nil
 		if started == nil {
@@ -1271,6 +1318,26 @@ func countDuplicateTestCases(cases []testCaseResultRow) int {
 			continue
 		}
 		seen[key] = struct{}{}
+	}
+	return duplicates
+}
+
+// countDuplicateTestSuites reports how many rows in suites collided on the
+// same SuiteName, artifact-wide, before parseJUnitRows'/
+// normalizeGitLabNativeTestReport's suiteOccurrence disambiguated their
+// suite_id with an ordinal suffix (CHAOS-4508). The rows are already unique
+// by construction by the time this runs; this exists purely to feed the
+// dev_health_cicd_duplicate_test_suite_total counter so an operator can see
+// how often the collision fires, not to detect or fix anything itself.
+func countDuplicateTestSuites(suites []testSuiteResultRow) int {
+	seen := make(map[string]struct{}, len(suites))
+	duplicates := 0
+	for _, row := range suites {
+		if _, exists := seen[row.SuiteName]; exists {
+			duplicates++
+			continue
+		}
+		seen[row.SuiteName] = struct{}{}
 	}
 	return duplicates
 }

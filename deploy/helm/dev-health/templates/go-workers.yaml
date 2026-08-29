@@ -2,6 +2,28 @@
 {{- if .Values.goWorkers.enabled }}
 {{- range $group := .Values.goWorkers.groups }}
 {{- $coordinator := has $group.name (list "reconciler" "scheduler") }}
+{{- /*
+CHAOS-4428: fail the render when a `metrics` group's grace period is too
+short to finish a job it has already claimed.
+
+terminationGracePeriodSeconds becomes --shutdown-timeout below (line ~72), and
+a metrics job's own registry timeout is 7200s. Anything under 7200+60 means the
+kubelet SIGKILLs the pod while a claimed job is still running: River sees the
+row still leased, the work is neither done nor released, and the worker's own
+diagnosis is the opaque
+`dependency_configuration_failed reason=queue_coverage_validation_failed` --
+which names the queue coverage check, not the grace period that actually caused
+it. That error is what makes this worth failing at render time instead of
+letting the operator find it in a crash-looping pod.
+
+Only groups that actually carry `metrics` are constrained; `has` needs a real
+list because reconciler/scheduler declare no `queues` key at all.
+*/}}
+{{- if has "metrics" ($group.queues | default (list)) }}
+{{- if lt (int $group.terminationGracePeriodSeconds) 7260 }}
+{{- fail (printf "goWorkers.groups[%s]: terminationGracePeriodSeconds=%v is below the 7260s floor required for the `metrics` queue (7200s job registry timeout + 60s finalization). It is passed straight to --shutdown-timeout, so a shorter value SIGKILLs a claimed metrics job mid-flight and surfaces as `dependency_configuration_failed reason=queue_coverage_validation_failed`." $group.name $group.terminationGracePeriodSeconds) }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

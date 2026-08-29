@@ -94,6 +94,9 @@ type LinearReferenceCatalogResult struct {
 	Ownership   int  `json:"ownership"`
 	Sprints     int  `json:"sprints"`
 	Complete    bool `json:"complete"`
+	// ProjectsWithoutKey is CHAOS-4530 telemetry: how many of Projects were
+	// written with a nil ProjectKey. See TeamCatalogResult.ProjectsWithoutKey.
+	ProjectsWithoutKey int `json:"projects_without_key"`
 }
 
 type LinearReferenceCatalogBatch struct {
@@ -382,10 +385,19 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				if teamID == "" {
 					continue
 				}
-				projectKey := optionalLinearString(team.Key)
+				// CHAOS-4530: ProjectKey stays nil for a REAL project's
+				// ownership row. team.Key here is the OWNING TEAM's key,
+				// never a per-project key -- Linear has no such concept the
+				// collector can populate yet, and stamping the team key here
+				// was the defect ("a team key is not a project key"): it
+				// made this row's project_key collide with every other
+				// project this team owns, and acr's projectOwnershipJoinSQL
+				// join is on project_key, so it never distinguished one real
+				// project from another anyway. ProjectID (the real UUID)
+				// remains the row's genuine, already-correct identity.
 				rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{
 					OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, ProjectID: project.ID,
-					ProjectKey: projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
+					ProjectKey: nil, Source: "native", IsPrimary: 1, Specificity: 100,
 					Priority: 10, ValidFrom: observedAt, UpdatedAt: observedAt,
 				})
 			}
@@ -394,19 +406,58 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		evidence.ProjectsComplete = true
 	}
 
-	// The Python producer emits a team-derived project catalog row for each
-	// discovered team, in addition to native Linear projects. This is the row
-	// space used by existing team/project attribution and must remain present.
+	// CHAOS-4530 ("a team key is not a project key"): the Python producer
+	// used to emit a team-derived PROJECT catalog row for each discovered
+	// team (id={org}:linear:{teamKey}, project_key=teamKey, name=team.Name)
+	// -- an un-typed, team-shaped row written into `projects` so CHAOS could
+	// "own" repos through project_keys=[team key]. acr's
+	// projectOwnershipJoinSQL only matches project facts through
+	// projects.project_key, and this synthetic row was the ONLY non-empty
+	// project_key ever written for Linear -- so every project fact resolved
+	// to "team CHAOS" and no real Linear project was ever reachable. CHAOS
+	// is a TEAM, not a project: this collector NEVER writes that row, in any
+	// form -- not active, not a soft-delete tombstone either.
+	//
+	// History (do not resurrect the tombstone approach): an earlier revision
+	// of this fix (still merged as #2010) wrote a TOMBSTONE version instead
+	// of simply omitting the write -- is_active=0, project_key=nil -- on the
+	// theory that ReplacingMergeTree's FINAL would then resolve to the
+	// retired version instead of any prior is_active=1 row. CF (acr owner),
+	// live on org 70d529e0, found that theory wrong on two counts: acr's
+	// identity resolution does not filter `projects.is_active` AT ALL (the
+	// tombstoned row still resolved through acr's key/id arm exactly like an
+	// active one), and `is_active=0` already legitimately marks two REAL
+	// completed Linear projects for an unrelated reason -- so it could never
+	// have been a safe, reader-recognizable "this is retired" signal for
+	// ANYONE, tombstone or not. The only fix that actually works is the row
+	// being physically ABSENT from `projects`. Already-synced orgs' stale
+	// rows (both the original is_active=1 shape and this fix's own
+	// short-lived is_active=0 tombstone shape) are retired ONCE, operator-
+	// invoked, not per-sync: RetireLinearPseudoProjectRows
+	// (linear_pseudo_project_cleanup.go), wired to `dev-health-workerctl
+	// providersync retire-linear-pseudo-projects`.
+	//
+	// The MATCHING team_project_ownership row below is intentionally KEPT.
+	// team_repo_ownership_derivation.go's linearTeamKeyProjectID (CHAOS-4458
+	// part (b), live on prod 5.6) reconstructs this exact
+	// "{org_id}:linear:{team_key}" identity and joins team_project_ownership
+	// on it DIRECTLY -- confirmed by reading loadTeamRepoOwnershipProjectLinks
+	// (team_repo_ownership_derivation_clickhouse.go): it selects only from
+	// team_project_ownership, never from `projects`. This is a documented,
+	// already-shipped contract (docs/contribute/architecture/team-attribution.md
+	// "Two Linear id spaces, one resolver" / "unchanged shape/writer
+	// intent"), and it is the reason prod's team_repo_ownership inferred
+	// rows went 0 -> 10 in the 5.6 readback -- the first non-zero measurement
+	// ever recorded there. Deleting this row too would silently zero that
+	// arm back out. ProjectKey stays teamKey here ON PURPOSE: this row does
+	// not claim to describe a project (there is no matching `projects` row
+	// for it any more), it is a team-ownership signal keyed by the
+	// reconstructed identity its one reader (linearTeamKeyProjectID) expects.
 	for _, team := range rows.Teams {
 		projectKey := team.ID
 		projectID := claim.OrgID + ":linear:" + projectKey
 		projectKeyPtr := optionalLinearString(projectKey)
 		teamID := team.ID
-		rows.Projects = append(rows.Projects, linearReferenceProjectRow{
-			ID: projectID, OrgID: claim.OrgID, Provider: "linear", ProjectKey: projectKeyPtr,
-			Name: team.Name, IsActive: 1,
-			UpdatedAt: normalizedAt, LastSynced: normalizedAt,
-		})
 		rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{
 			OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, ProjectID: projectID,
 			ProjectKey: projectKeyPtr, Source: "native", IsPrimary: 1, Specificity: 100,
@@ -418,9 +469,22 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	if err != nil {
 		return LinearReferenceCatalogBatch{}, err
 	}
+	// CHAOS-4530: rows.Projects holds only REAL native Linear projects now --
+	// no team-key-shaped pseudo-project row is ever appended here (see the
+	// comment above; the artifact is retired by a separate one-time
+	// operator cleanup, never written by this walk in any form). Every real
+	// project currently has a nil ProjectKey (Linear has no per-project key
+	// source yet), so this counts the full gap.
+	projectsWithoutKey := 0
+	for _, project := range rows.Projects {
+		if project.ProjectKey == nil {
+			projectsWithoutKey++
+		}
+	}
 	result := LinearReferenceCatalogResult{
 		Teams: len(rows.Teams), Members: len(rows.Members), Memberships: len(rows.Memberships),
 		Projects: len(rows.Projects), Ownership: len(rows.Ownership), Sprints: len(rows.Sprints), Complete: true,
+		ProjectsWithoutKey: projectsWithoutKey,
 	}
 	evidence.Records = result.Teams + result.Members + result.Memberships + result.Projects + result.Ownership + result.Sprints
 	// No claim, no lease window: this walk has no watermark concept (it was

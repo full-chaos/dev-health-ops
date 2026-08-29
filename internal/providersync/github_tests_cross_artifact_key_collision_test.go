@@ -438,3 +438,86 @@ func TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds(
 		parseAndCommit(t, fixture, 3)
 	})
 }
+
+// TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide pins CHAOS-4487
+// (local UI 2026-08-29 04:25 PT, unit 028a3088/aebe894c, sync_run a7b60282,
+// repo full-chaos/dev-health-ops, run_id=33248832747): a SINGLE artifact
+// whose JUnit report holds TWO SIBLING <testsuite> elements sharing the same
+// `name` attribute -- an ordinary shape when one artifact bundles multiple
+// report files or matrix legs that each emit a generically-named root suite
+// (e.g. two files both producing <testsuite name="pytest">).
+//
+// SuiteID is hashTestIdentifier(runID, artifactID, name, "")
+// (github_tests_reports.go, parseJUnitRows) -- scoped to run+artifact+name
+// only, with NO discriminator for a suite's position among siblings in the
+// same report. CHAOS-4190 scoped it to the artifact; CHAOS-4392 added
+// caseOccurrence to disambiguate duplicate case names WITHIN one suite
+// object -- but caseOccurrence is reset to a fresh map on every loop
+// iteration over `flat` (parseJUnitRows), one iteration per suite OBJECT.
+// Two suite objects that hash to the identical SuiteID therefore each start
+// their first case at occurrence=0, so their first-named case also collides
+// on CaseID = hashTestIdentifier(suite.SuiteID, name). Neither existing fix
+// scoped an id to a suite's identity distinct from its (run, artifact, name)
+// hash.
+//
+// This must fail red on this SHA (github_tests_reports.go still hashes
+// SuiteID from (runID, artifactID, name, "") with no per-suite-object
+// discriminator) and turn green once the producer disambiguates it -- e.g.
+// folding the suite's index within `flat`, or a running per-name occurrence
+// counter analogous to caseOccurrence, into the SuiteID hash.
+func TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide(t *testing.T) {
+	const fixture = `<testsuites>` +
+		`<testsuite name="pytest"><testcase name="test_health" classname="tests.test_api"/></testsuite>` +
+		`<testsuite name="pytest"><testcase name="test_health" classname="tests.test_worker"/></testsuite>` +
+		`</testsuites>`
+
+	// claim.OrgID, not a standalone literal, feeds parseGitHubTestsArtifact's
+	// orgID param -- matching TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds
+	// above, since validateGitHubTestsRow (github_tests_effects_clickhouse.go)
+	// requires every row's OrgID to equal claim.OrgID or WriteEffect fails
+	// closed with ErrInvalidScope -- a check this test's own fixture rows
+	// must satisfy same as production, unrelated to the CHAOS-4487 defect
+	// under test.
+	claim := nativeTestClaim("github", "cicd")
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"reports/junit.xml": fixture}),
+		"artifact-1", "7b9583ee-4d24-2be7-4d09-34f815bebdd7", "33248832747", claim.OrgID,
+		nil, nil, time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("parse of two same-named sibling suites in one artifact failed closed: %v", err)
+	}
+	if len(rows.Suites) != 2 || len(rows.Cases) != 2 {
+		t.Fatalf("suites=%+v cases=%+v, want 2 suite rows and 2 case rows retained", rows.Suites, rows.Cases)
+	}
+	if rows.Suites[0].SuiteID == rows.Suites[1].SuiteID {
+		t.Fatalf("CHAOS-4487: sibling suites %q and %q in ONE artifact share SuiteID %q -- "+
+			"hashTestIdentifier(runID, artifactID, name, \"\") has no per-suite-object discriminator",
+			rows.Suites[0].SuiteName, rows.Suites[1].SuiteName, rows.Suites[0].SuiteID)
+	}
+	if rows.Cases[0].CaseID == rows.Cases[1].CaseID {
+		t.Fatalf("CHAOS-4487: cases named %q in two sibling same-named suites share CaseID %q -- "+
+			"this is the exact 'duplicate natural key in test_case_results batch' terminal failure "+
+			"(sync_run a7b60282-4af1-58ad-a094-8dc8baab7a1f, run_id=33248832747)",
+			rows.Cases[0].CaseName, rows.Cases[0].CaseID)
+	}
+	if rows.DuplicateSuites != 1 {
+		t.Fatalf("DuplicateSuites=%d, want 1 (the telemetry input for dev_health_cicd_duplicate_test_suite_total)", rows.DuplicateSuites)
+	}
+
+	effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, rows.Cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchConn := &githubTestsDuplicateKeyConn{}
+	sink := TestOpsClickHouseEffects{
+		Conn:  batchConn,
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
+		t.Fatalf(
+			"CHAOS-4487: WriteEffect rejected the sibling-suite batch as a duplicate natural key, "+
+				"exactly the prod terminal failure: %v", err,
+		)
+	}
+}

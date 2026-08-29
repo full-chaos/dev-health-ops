@@ -30,6 +30,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
     "cmd/query-api",
+    "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -217,8 +218,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # canary's HTTP-level reachability test
     # (query_route_integration_test.go) is proved against a real Postgres
     # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
-    assert "32 package(s) discovered, 0 denylisted, 32 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 32 package(s)" in result.stdout
+    # CHAOS-4506 added cmd/query-api/internal/analytics (32 -> 33): the
+    # NaN-class live proof (nan_class_live_test.go) is proved against a
+    # real ClickHouse container -- the analytics package's first
+    # -tags integration file.
+    assert "33 package(s) discovered, 0 denylisted, 33 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 33 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -244,7 +249,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 32
+    assert len(flattened) == len(set(flattened)) == 33
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -802,6 +807,25 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # team_repo_ownership_derivation_integration_test.go (//go:build
     # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
     #
+    # CHAOS-4458 part (b) then added 6 more top-level tests in
+    # internal/providersync for the Linear id-space fix (Linear's
+    # team_project_ownership rows are keyed "{org_id}:linear:{team_key}"
+    # while a Linear work item's own project_id is a disjoint raw Linear
+    # Project UUID -- see team_repo_ownership_derivation.go's
+    # TeamRepoOwnershipWorkItem doc comment): 5 ordinary tests in
+    # team_repo_ownership_derivation_test.go
+    # (TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership,
+    # TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership,
+    # TestDirectProjectIDArmPreferredOverLinearTeamKeyArm,
+    # TestLinearTeamKeyArmNeverAppliesToNonLinearProviders,
+    # TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam --
+    # the last one pins a codex adversarial-review fix: the recorded
+    # resolution arm must not depend on ClickHouse scan order) and 1
+    # integration-tagged test in
+    # team_repo_ownership_derivation_integration_test.go
+    # (TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership).
+    # 1115 -> 1121 top-level; 126 -> 127 integration-tagged (this branch's delta).
+    #
     # CHAOS-4431 (Linear team-catalog native route) added 15 new top-level
     # tests in internal/providersync across its codex review rounds: 5
     # ordinary tests in linear_reference_catalog_test.go
@@ -820,8 +844,146 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites,
     # //go:build integration -- the sprints-fixture-extended ClickHouse
     # effects suite). 1115 -> 1130 top-level; 126 -> 127 integration-tagged.
-    assert len(expected_provider_tests) == 1130
-    assert len(expected_integration_tests) == 127
+    #
+    # CHAOS-4434 (GitHub team-catalog native collector) added 34 new
+    # top-level tests in internal/providersync, all new files: 10
+    # integration-tagged in github_team_catalog_collector_integration_test.go
+    # (roster preservation, sync_policy/membership-conflict guards, strict
+    # fail-closed), 1 ordinary in github_team_catalog_collector_test.go, 4
+    # integration-tagged in github_team_catalog_effects_integration_test.go
+    # (ClickHouse effects incl. team_repo_ownership), 4 ordinary live-Python
+    # oracle tests in github_team_catalog_generic_oracle_test.go, 8 ordinary
+    # in github_team_catalog_guards_test.go (the GitHub-native twin of
+    # CHAOS-4431's membership-conflict guard semantics), and 7 ordinary in
+    # github_team_catalog_route_test.go. 1130 -> 1164 top-level; 127 -> 141
+    # integration-tagged.
+    #
+    # CHAOS-4432 (GitLab team-catalog native collector) added 45 new
+    # top-level tests in internal/providersync, all new files: 3
+    # integration-tagged in gitlab_team_catalog_effects_integration_test.go
+    # (ClickHouse effects), 2 ordinary in
+    # gitlab_team_catalog_guards_fakeconn_test.go, 8 ordinary in
+    # gitlab_team_catalog_guards_test.go (the GitLab-native twin of
+    # CHAOS-4431/CHAOS-4434's membership-conflict guard semantics), 1
+    # ordinary each in gitlab_team_catalog_ownership_oracle_test.go and
+    # gitlab_team_catalog_project_oracle_test.go and
+    # gitlab_team_catalog_team_oracle_test.go (live-Python oracles), 3
+    # ordinary in gitlab_team_catalog_roster_preservation_scope_test.go, 23
+    # ordinary in gitlab_team_catalog_test.go, and 3 ordinary in
+    # gitlab_team_catalog_writeteams_fakeconn_test.go. A tenth new file,
+    # gitlab_team_catalog_live_manual_test.go, is gated `//go:build
+    # manuallive` (a manual, non-CI, live-provider-token check) rather than
+    # `integration` -- go list -tags=integration never includes it, so its 1
+    # test does NOT count toward either pin here. 1164 -> 1209 top-level;
+    # 141 -> 144 integration-tagged.
+    #
+    # CHAOS-4444 (team-level + identity-drift staged-review engine,
+    # replacing CHAOS-4431's plain-skip interim guards) added 12 new
+    # top-level tests in internal/providersync, both new files, neither
+    # `//go:build integration` (fake driver.Conn doubles, no real
+    # ClickHouse): 7 ordinary in team_drift_json_test.go (Python-json.dumps-
+    # parity pins for the canonical JSON encoder and change_id hash) and 5
+    # ordinary in team_drift_review_fakeconn_test.go (the shared team-level
+    # engine's auto-apply/stage/resolve/supersede paths). No new
+    # integration-tagged tests. 1209 -> 1221 top-level; 144 unchanged.
+    #
+    # CHAOS-4444 follow-up (team-lead ruling: add live Python oracle pairs
+    # for the drift-row outputs before the codex round) added 4 more
+    # ordinary top-level tests in a new file, team_drift_generic_oracle_test.go
+    # (also not `//go:build integration` -- these shell out to the live
+    # Python interpreter via the SAME python_generic_row_oracle.py harness
+    # every other oracle pair in this package uses, gated by
+    # DEV_HEALTH_LIVE_PYTHON_ORACLES, not by the `integration` build tag):
+    # TestTeamCatalogObservedRowMatchesLivePythonProducer,
+    # TestTeamCatalogChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftConflictDecisionMatchesLivePythonProducer -- pinning
+    # clickhouse_team_drift_projector.py's _observed_row/
+    # change_id_for_team_field and clickhouse_identity_drift.py's
+    # change_id_for_identity_membership/_conflict_for against the Go engine,
+    # live. 1221 -> 1225 top-level; 144 unchanged.
+    #
+    # CHAOS-4508 (sibling suite-object natural-key discriminator) added 3
+    # ordinary top-level tests, none `//go:build integration`:
+    # TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide (the red
+    # repro, cherry-picked from the CHAOS-4487 diagnosis lane and now
+    # green), TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged (pins that
+    # a non-colliding single suite's SuiteID hash is unchanged), and
+    # TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide (the
+    # GitLab-native twin). 1225 -> 1228 top-level; 144 unchanged
+    # (origin/main's delta from the shared 1225/144 base).
+    #
+    # CHAOS-4458 part (b) (this branch's delta from the SAME shared 1225/144
+    # base): 6 tests for the Linear id-space fix (5 ordinary +
+    # 1 integration-tagged) plus 2 more ordinary pinning tests from
+    # lane-4458b-live's compose live-proof
+    # (TestLinearTeamKeyOwnResolutionWithEmptyProjectID,
+    # TestLinearTeamKeyResolvesViaPRInheritanceIssueLink -- closing two
+    # fixture gaps the live proof found: no prior test used an actually-empty
+    # `project_id`, and none exercised the `issuePRLinks`/PR-inheritance path
+    # with a Linear donor). 1225 -> 1233 top-level; 144 -> 145
+    # integration-tagged (this branch's own delta, +8/+1).
+    #
+    # Merged total (this branch's +8/+1 delta applied on top of origin/main's
+    # independent +3/+0 delta from the same 1225/144 base): 1225 -> 1236
+    # top-level; 144 -> 145 integration-tagged.
+    #
+    # CHAOS-4530 ("a team key is not a project key") added 3 ordinary
+    # top-level tests in linear_reference_catalog_test.go (not `//go:build
+    # integration` -- in-memory GraphQL doer fixtures, no real ClickHouse):
+    # TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject (red-
+    # first proof that the synthetic {org}:linear:{teamKey} pseudo-project is
+    # never written ACTIVE to `projects`, only as a retiring tombstone),
+    # TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey
+    # (a real project's team_project_ownership row never carries the owning
+    # team's key as project_key), and
+    # TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader (the
+    # retained team-key-shaped ownership row stays byte-identical to what
+    # team_repo_ownership_derivation.go's linearTeamKeyProjectID reconstructs
+    # to look it up -- CHAOS-4458 part (b)'s reader). None is
+    # integration-tagged. 1236 -> 1239 top-level; 145 unchanged.
+    #
+    # CHAOS-4530 codex review round 2 (confirmed real: the per-response
+    # tombstone loop only revisits a team key present in the CURRENT Linear
+    # response, so a team deleted or re-keyed between syncs never gets its
+    # OLD pseudo-project identity retired) added 4 more ordinary top-level
+    # tests in a new file, linear_pseudo_project_retirement_test.go (not
+    # `//go:build integration` -- a fake driver.Conn double, no real
+    # ClickHouse, same convention as gitlab_team_catalog_guards_fakeconn_test.go):
+    # TestRetireOrphanedLinearPseudoProjectsRetiresOnlyTheDroppedTeam,
+    # TestRetireOrphanedLinearPseudoProjectsRetiresNothingWhenEveryTeamStillSeen,
+    # TestRetireOrphanedLinearPseudoProjectsPropagatesQueryFailure, and
+    # TestRetireOrphanedLinearPseudoProjectsRejectsInvalidInput -- pinning
+    # the new RetireOrphanedLinearPseudoProjects reconciliation helper's
+    # orphan-detection, non-regression (nothing retired when every team is
+    # still observed), fail-closed, and input-validation behavior. None is
+    # integration-tagged. 1239 -> 1243 top-level; 145 unchanged.
+    #
+    # CHAOS-4530 follow-up (CF/acr finding: an is_active=0 tombstone is not
+    # a signal acr's identity resolution recognizes -- see linear_reference_
+    # catalog_route.go's updated doc comment) REMOVED
+    # linear_pseudo_project_retirement_test.go's 4 tests (the now-deleted
+    # per-sync orphan-reconciliation helper) and ADDED
+    # linear_pseudo_project_cleanup_test.go's 7 tests for the one-time
+    # operator cleanup that replaced it (RetireLinearPseudoProjectRows):
+    # TestRetireLinearPseudoProjectRowsRejectsNilConn,
+    # TestRetireLinearPseudoProjectRowsDryRunFindsButNeverDeletes,
+    # TestRetireLinearPseudoProjectRowsRealRunDeletesAndReportsCounts,
+    # TestRetireLinearPseudoProjectRowsRealRunFindsNothingSkipsMutation,
+    # TestRetireLinearPseudoProjectRowsScopedByOrgAddsThePredicate,
+    # TestRetireLinearPseudoProjectRowsPropagatesQueryFailure,
+    # TestRetireLinearPseudoProjectRowsPropagatesDeleteFailureButStillReportsFoundRows.
+    # None is integration-tagged. Net +3 (-4/+7): 1243 -> 1246 top-level; 145
+    # unchanged.
+    #
+    # Codex review round 1 on the cleanup verb (P2, confirmed real) added 1
+    # more ordinary top-level test in linear_pseudo_project_cleanup_test.go:
+    # TestLinearPseudoProjectIdentityPredicateMatchesOwnOrgIDOnly, pinning
+    # the fix that ties the identity predicate to each row's OWN org_id
+    # (startsWith(id, concat(org_id, ':linear:'))) instead of a bare
+    # substring test anywhere in id. 1246 -> 1247 top-level; 145 unchanged.
+    assert len(expected_provider_tests) == 1247
+    assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -837,7 +999,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1130
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1247
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -881,7 +1043,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 31
+    assert len(selected_packages) == len(set(selected_packages)) == 32
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -898,7 +1060,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1130
+    assert len(selected_tests) == len(set(selected_tests)) == 1247
     assert set(selected_tests) == expected_tests
 
 

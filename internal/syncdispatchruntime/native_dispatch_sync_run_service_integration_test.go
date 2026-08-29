@@ -461,8 +461,8 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 	})
 }
 
-// TestDispatchRejectsANonCanonicalAtomicFamilyAliasAndRollsBackTheClaim
-// pins ValidateClaim's own wiring into the per-unit loop, and an important
+// TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasAndArmsFinalize pins
+// ValidateClaim's own wiring into the per-unit loop, and an important
 // empirical finding from trying to build the RouteReady-without-Plannable
 // fixture directly: github's work-item-labels dataset IS RouteReady-but-
 // not-Plannable in providersync's capability matrix (the whole atomic
@@ -471,12 +471,19 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 // but that combination is UNREACHABLE at the routability check in
 // practice: ValidateClaim (which runs FIRST, matching Python's own
 // validate-before-route order) already refuses any non-canonical atomic-
-// family alias outright, for every family currently declared. So this
-// fixture proves the EARLIER guard instead: a malformed persisted claim
-// aborts the whole pass -- the deferred tx.Rollback undoes claimUnits'
-// own claim along with it, leaving the unit exactly as it was, not
-// half-claimed.
-func TestDispatchRejectsANonCanonicalAtomicFamilyAliasAndRollsBackTheClaim(t *testing.T) {
+// family alias outright, for every family currently declared.
+//
+// CHAOS-4550: this used to prove a DIFFERENT, buggy guard -- a malformed
+// persisted claim aborting the WHOLE pass (the deferred tx.Rollback undid
+// claimUnits' own claim, leaving the unit exactly as it was, not
+// half-claimed). That is exactly the discard-storm class CHAOS-3990 exists
+// to prevent: aborting Dispatch() here means the SAME unit is reclaimed and
+// refused again next redispatch, forever (live: sync_run f02b38f3, 548+
+// delivery attempts / 17 days). This test now pins the fixed behavior: the
+// offending unit is terminalized (failed, with a durable reason) and
+// Dispatch proceeds to arm finalize, same as the sibling unroutable-unit
+// case below.
+func TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasAndArmsFinalize(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		seedDispatchRoute(t, ctx, pool)
 		markReferenceDiscoverySucceeded(t, ctx, pool)
@@ -490,17 +497,87 @@ VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000
 		}
 
 		service := newTestDispatchService(t, pool)
-		err := service.Dispatch(ctx, dispatchTestArgs())
-		if !errors.Is(err, ErrDispatchProviderUnitRoute) {
-			t.Fatalf("Dispatch: %v, want ErrDispatchProviderUnitRoute", err)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil (noop_finalize)", err)
 		}
 
-		var unitStatus string
-		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&unitStatus); err != nil {
+		var unitStatus, errorCategory string
+		if err := pool.QueryRow(ctx,
+			`SELECT status, result->>'error_category' FROM sync_run_units WHERE id=$1`, unitID,
+		).Scan(&unitStatus, &errorCategory); err != nil {
 			t.Fatal(err)
 		}
-		if unitStatus != syncRunUnitStatusPlanned {
-			t.Fatalf("unit status=%q, want unchanged (planned) -- the whole pass rolls back on a malformed claim, not just this unit", unitStatus)
+		if unitStatus != syncRunUnitStatusFailed {
+			t.Fatalf("unit status=%q, want failed (terminalized, not rolled back to planned)", unitStatus)
+		}
+		if errorCategory != invalidProviderFamilyClaimErrorCategory {
+			t.Fatalf("error_category=%q, want %q", errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+		var finalizeWakeups int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind=$2`,
+			discoveryTestRun, outboxKindFinalizeSyncRun).Scan(&finalizeWakeups); err != nil {
+			t.Fatal(err)
+		}
+		if finalizeWakeups != 1 {
+			t.Fatalf("got %d finalize wakeups, want 1 -- nothing left pending, so finalize must be armed", finalizeWakeups)
+		}
+	})
+}
+
+// TestDispatchTerminalizesAnAtomicCanonicalClaimMissingFamilyFlags
+// reproduces CHAOS-4550's live discard storm exactly: a persisted work-items
+// claim carrying ONLY its own family_dataset_work_items flag, missing the
+// four sibling family_dataset_* flags workitemcontract.FamilyDatasets()
+// requires for an ATOMIC canonical claim (work-item-labels, work-item-
+// projects, work-item-history, work-item-comments). This is the shape found
+// live on org 70d529e0 (sync_run f02b38f3-4018-4029-8fed-8aa8f0a0264d,
+// created 2026-08-12, predating the current 5-flag contract): a stale unit,
+// not a missing route. Before the fix, ValidateClaim's failure aborted the
+// WHOLE Dispatch pass and the unit reverted to planned; it must now be
+// terminalized like any other malformed claim.
+func TestDispatchTerminalizesAnAtomicCanonicalClaimMissingFamilyFlags(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000f5"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at)
+VALUES ($1,$2,$3,'linear','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+
+		service := newTestDispatchService(t, pool)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil (noop_finalize)", err)
+		}
+
+		var unitStatus, errorCategory string
+		if err := pool.QueryRow(ctx,
+			`SELECT status, result->>'error_category' FROM sync_run_units WHERE id=$1`, unitID,
+		).Scan(&unitStatus, &errorCategory); err != nil {
+			t.Fatal(err)
+		}
+		if unitStatus != syncRunUnitStatusFailed {
+			t.Fatalf("unit status=%q, want failed -- a stale claim missing sibling family flags must be terminalized, not re-planned forever", unitStatus)
+		}
+		if errorCategory != invalidProviderFamilyClaimErrorCategory {
+			t.Fatalf("error_category=%q, want %q", errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+
+		// The discard-storm regression check: a SECOND dispatch pass must
+		// find nothing left to claim for this unit (it is terminal), not
+		// reclaim and re-refuse it again.
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("second Dispatch: %v, want nil", err)
+		}
+		var statusAfterSecondPass string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&statusAfterSecondPass); err != nil {
+			t.Fatal(err)
+		}
+		if statusAfterSecondPass != syncRunUnitStatusFailed {
+			t.Fatalf("unit status after second Dispatch=%q, want failed (still terminal, never reclaimed)", statusAfterSecondPass)
 		}
 	})
 }

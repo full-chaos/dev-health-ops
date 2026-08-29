@@ -26,18 +26,21 @@ import (
 // permanent verdict about the run.
 var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unavailable")
 
-// ErrDispatchProviderUnitRoute ports WorkerJobRouteError for THIS
-// producer's remaining raise site verbatim: a claimed unit fails
+// ErrDispatchProviderUnitRoute is RETIRED (CHAOS-4550, 2026-08-29). It used
+// to port Python's WorkerJobRouteError for a claimed unit that fails
 // validate_provider_family_claim (a malformed persisted atomic-family
-// claim). Python's WorkerJobRouteError also covers a route-store failure
-// (resolve_worker_job_route / PROVIDER_UNIT_OUTBOX_ROUTES) -- Go does NOT
-// port that half. See the CHAOS-4175 ruling on Dispatch's doc comment below
-// for why: the domain role that runs this transaction has no grant on
-// worker_job_routes at all (verified, domain_authorization.go), so a
-// route-in-tx check here is not just unported, it is unreachable by
-// construction. This sentinel stays because the malformed-claim raise site
-// is still real and still uses it.
-var ErrDispatchProviderUnitRoute = errors.New("provider-unit route is unavailable")
+// claim): Dispatch `return`ed this sentinel straight out of the claim loop,
+// which -- because claimUnits' own claim runs in the SAME transaction --
+// aborted the entire pass on the deferred tx.Rollback and reclaimed the
+// identical unit next redispatch, forever (live discard storm: one stale
+// pre-CHAOS-4054 work-items claim, 548+ delivery attempts / 17 days).
+// Dispatch no longer returns it: a ValidateClaim failure now terminalizes
+// just the offending unit (invalidClaimUnit / terminalizeInvalidClaimUnits,
+// dispatch_denial.go), the same CHAOS-3990 idiom unroutableUnits already
+// uses, instead of failing the whole pass. Nothing in this package returns
+// this sentinel anymore; kept only as a comment marker, not a var, so a
+// stray external `errors.Is` match fails loudly instead of silently
+// matching an error path that no longer exists.
 
 // NativeDispatchSyncRunService is the native equivalent of bridge.Dispatch /
 // Python's dispatch_sync_run task -- CHAOS-4175 family 3, the last of the
@@ -328,11 +331,30 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 
 	riverQueued := 0
 	var unroutableUnits []budgetUnit
+	var invalidClaimUnits []invalidClaimUnit
 	for _, unit := range claimedUnits {
 		// Atomic provider families are admitted before transport selection,
 		// so a malformed claim can reach neither River nor a stranded state.
+		//
+		// CHAOS-4550 (route-unavailable discard storm, live 2026-08-29):
+		// this must NEVER abort the whole pass. claimUnits' own claim runs
+		// in THIS SAME transaction, so returning an error here rolls
+		// EVERYTHING back (the deferred tx.Rollback undoes the claim too) --
+		// the identical poisoned unit is reclaimed and refused again on the
+		// very next redispatch, forever, taking every OTHER unit in the run
+		// down with it each time (observed live: sync_run
+		// f02b38f3-4018-4029-8fed-8aa8f0a0264d, 548+ delivery attempts / 17
+		// days, one stale pre-CHAOS-4054 work-items claim missing its
+		// sibling family_dataset_* flags). Terminalize just this unit
+		// instead -- same CHAOS-3990 idiom the unroutableUnits branch below
+		// already uses, just with its own error_category so an operator can
+		// tell "claim was corrupt/stale" apart from "no route exists".
 		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
-			return ErrDispatchProviderUnitRoute
+			invalidClaimUnits = append(invalidClaimUnits, invalidClaimUnit{
+				unit:   unit,
+				reason: invalidClaimReason(unit.provider, unit.datasetKey, err),
+			})
+			continue
 		}
 		// Routability is decided per pair, not per run, and the capability
 		// matrix is its only source: a pair is executable when the matrix
@@ -366,6 +388,17 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// runtime to publish it to. Terminalize instead of leaving it
 		// wedged (CHAOS-3990).
 		unroutableUnits = append(unroutableUnits, unit)
+	}
+
+	if len(invalidClaimUnits) > 0 {
+		terminalizeNow := service.nowUTC()
+		terminalizedInvalid, err := terminalizeInvalidClaimUnits(ctx, tx, invalidClaimUnits, terminalizeNow)
+		if err != nil {
+			return err
+		}
+		service.logger.WarnContext(ctx, "dispatch_sync_run.invalid_claim_units_terminalized",
+			slog.String("sync_run_id", run.id), slog.Int("invalid_claim_units", terminalizedInvalid),
+			slog.String("error_category", invalidProviderFamilyClaimErrorCategory))
 	}
 
 	if len(unroutableUnits) > 0 {

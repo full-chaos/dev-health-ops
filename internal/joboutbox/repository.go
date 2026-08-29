@@ -64,7 +64,7 @@ func (repository *Repository) claimDueExcept(
 	}
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, `
@@ -101,22 +101,25 @@ func (repository *Repository) claimDueExcept(
 		WHERE outbox.id = candidates.id
 		RETURNING `+rowColumns, now.UTC(), limit, now.UTC().Add(leaseDuration), deferredKinds)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, classifyStrandError(err)
 	}
 	defer rows.Close()
 	claims := make([]Claim, 0, limit)
 	for rows.Next() {
 		row, scanErr := scanRow(rows)
 		if scanErr != nil {
+			// A decode/type-mismatch failure, never a statement-level pg
+			// error -- classifyStrandError would only ever see a nil-typed
+			// PgError here, so there is nothing to reclassify.
 			return nil, ErrUnavailable
 		}
 		claims = append(claims, Claim{Row: row})
 	}
 	if rows.Err() != nil {
-		return nil, ErrUnavailable
+		return nil, classifyStrandError(rows.Err())
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, ErrUnavailable
+		return nil, classifyStrandError(err)
 	}
 	sort.Slice(claims, func(left, right int) bool {
 		if claims[left].NextAttemptAt.Equal(claims[right].NextAttemptAt) {
@@ -141,7 +144,7 @@ func (repository *Repository) Dispatch(
 	}
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	row, err := scanRow(tx.QueryRow(ctx, `
@@ -154,7 +157,7 @@ func (repository *Repository) Dispatch(
 		return 0, ErrLeaseLost
 	}
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	if err := callFault(repository.faults.beforeInsert); err != nil {
 		return 0, err
@@ -177,7 +180,7 @@ func (repository *Repository) Dispatch(
 		WHERE id = $2 AND status = 'claimed' AND claim_token = $3
 			AND claim_expires_at > statement_timestamp()`, riverJobID, claim.ID, claim.ClaimToken)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	if command.RowsAffected() != 1 {
 		return 0, ErrLeaseLost
@@ -186,7 +189,7 @@ func (repository *Repository) Dispatch(
 		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	if err := callFault(repository.faults.afterCommit); err != nil {
 		return riverJobID, err
@@ -219,7 +222,7 @@ func (repository *Repository) recordFailure(
 		claim.ID, claim.ClaimToken, terminal, maxRelayAttempts,
 		nextAttemptAt.UTC(), code, detail)
 	if err != nil {
-		return ErrUnavailable
+		return classifyStrandError(err)
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -246,7 +249,7 @@ func (repository *Repository) releaseClaim(
 			AND claim_expires_at > statement_timestamp()`,
 		claim.ID, claim.ClaimToken, now.UTC())
 	if err != nil {
-		return ErrUnavailable
+		return classifyStrandError(err)
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -272,7 +275,7 @@ func (repository *Repository) DeleteTerminalBefore(
 	}
 	tx, err := repository.pool.Begin(ctx)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, `
@@ -310,7 +313,7 @@ func (repository *Repository) DeleteTerminalBefore(
 			)
 		  )`, before.UTC(), limit)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	deleted := command.RowsAffected()
 	if _, err := tx.Exec(ctx, `
@@ -330,10 +333,10 @@ func (repository *Repository) DeleteTerminalBefore(
 		DELETE FROM public.worker_job_completion_fences AS completion
 		USING expired
 		WHERE completion.completion_key = expired.completion_key`, before.UTC(), limit); err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, ErrUnavailable
+		return 0, classifyStrandError(err)
 	}
 	return deleted, nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -27062,9 +27063,9 @@ func (ec *executionContext) _AnalyticsResult_evidenceQualityDistribution(ctx con
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(map[string]any)
+	res := resTmp.(graphqljson.JSON)
 	fc.Result = res
-	return ec.marshalOJSON2map(ctx, field.Selections, res)
+	return ec.marshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityDistribution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -45354,9 +45355,9 @@ func (ec *executionContext) _EvidenceQualityStats_bandCounts(ctx context.Context
 		}
 		return graphql.Null
 	}
-	res := resTmp.(map[string]any)
+	res := resTmp.(graphqljson.JSON)
 	fc.Result = res
-	return ec.marshalNJSON2map(ctx, field.Selections, res)
+	return ec.marshalNJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceQualityStats_bandCounts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -60799,9 +60800,9 @@ func (ec *executionContext) _ReportRunType_provenanceRecords(ctx context.Context
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(map[string]any)
+	res := resTmp.(graphqljson.JSON)
 	fc.Result = res
-	return ec.marshalOJSON2map(ctx, field.Selections, res)
+	return ec.marshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ReportRunType_provenanceRecords(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -62439,9 +62440,9 @@ func (ec *executionContext) _SavedReportType_reportPlan(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(map[string]any)
+	res := resTmp.(graphqljson.JSON)
 	fc.Result = res
-	return ec.marshalNJSON2map(ctx, field.Selections, res)
+	return ec.marshalNJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SavedReportType_reportPlan(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -62565,9 +62566,9 @@ func (ec *executionContext) _SavedReportType_parameters(ctx context.Context, fie
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(map[string]any)
+	res := resTmp.(graphqljson.JSON)
 	fc.Result = res
-	return ec.marshalOJSON2map(ctx, field.Selections, res)
+	return ec.marshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SavedReportType_parameters(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -73197,7 +73198,7 @@ func (ec *executionContext) unmarshalInputCloneSavedReportInput(ctx context.Cont
 			it.NewName = data
 		case "parameterOverrides":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parameterOverrides"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
+			data, err := ec.unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73438,7 +73439,7 @@ func (ec *executionContext) unmarshalInputCreateSavedReportInput(ctx context.Con
 			it.Description = data
 		case "reportPlan":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reportPlan"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
+			data, err := ec.unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73452,7 +73453,7 @@ func (ec *executionContext) unmarshalInputCreateSavedReportInput(ctx context.Con
 			it.IsTemplate = data
 		case "parameters":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parameters"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
+			data, err := ec.unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74875,7 +74876,7 @@ func (ec *executionContext) unmarshalInputUpdateSavedReportInput(ctx context.Con
 			it.Description = data
 		case "reportPlan":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reportPlan"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
+			data, err := ec.unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74889,7 +74890,7 @@ func (ec *executionContext) unmarshalInputUpdateSavedReportInput(ctx context.Con
 			it.IsTemplate = data
 		case "parameters":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parameters"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
+			data, err := ec.unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -91641,25 +91642,20 @@ func (ec *executionContext) marshalNInt2ᚕintᚄ(ctx context.Context, sel ast.S
 	return ret
 }
 
-func (ec *executionContext) unmarshalNJSON2map(ctx context.Context, v any) (map[string]any, error) {
-	res, err := graphql.UnmarshalMap(v)
+func (ec *executionContext) unmarshalNJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx context.Context, v any) (graphqljson.JSON, error) {
+	var res graphqljson.JSON
+	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNJSON2map(ctx context.Context, sel ast.SelectionSet, v map[string]any) graphql.Marshaler {
+func (ec *executionContext) marshalNJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx context.Context, sel ast.SelectionSet, v graphqljson.JSON) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
 		}
 		return graphql.Null
 	}
-	res := graphql.MarshalMap(v)
-	if res == graphql.Null {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-	}
-	return res
+	return v
 }
 
 func (ec *executionContext) marshalNMaintainerShare2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphᚋmodelᚐMaintainerShare(ctx context.Context, sel ast.SelectionSet, v model.MaintainerShare) graphql.Marshaler {
@@ -94854,20 +94850,20 @@ func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.Sele
 	return res
 }
 
-func (ec *executionContext) unmarshalOJSON2map(ctx context.Context, v any) (map[string]any, error) {
+func (ec *executionContext) unmarshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx context.Context, v any) (graphqljson.JSON, error) {
 	if v == nil {
 		return nil, nil
 	}
-	res, err := graphql.UnmarshalMap(v)
+	var res graphqljson.JSON
+	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOJSON2map(ctx context.Context, sel ast.SelectionSet, v map[string]any) graphql.Marshaler {
+func (ec *executionContext) marshalOJSON2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqljsonᚐJSON(ctx context.Context, sel ast.SelectionSet, v graphqljson.JSON) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
-	res := graphql.MarshalMap(v)
-	return res
+	return v
 }
 
 func (ec *executionContext) marshalOMetricLineage2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphᚋmodelᚐMetricLineage(ctx context.Context, sel ast.SelectionSet, v *model.MetricLineage) graphql.Marshaler {

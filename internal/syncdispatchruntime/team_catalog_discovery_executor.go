@@ -201,8 +201,12 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			{"team_project_ownership", result.OwnershipWritten},
 			{"team_repo_ownership", result.RepoOwnershipWritten},
 			{"sprints", result.SprintsWritten},
+			{"projects_without_key", result.ProjectsWithoutKey},
 			{"teams_skipped_policy", result.TeamsSkippedPolicy},
 			{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
+			{"teams_staged_for_review", result.TeamsStagedForReview},
+			{"team_memberships_staged_for_review", result.MembershipsStagedForReview},
+			{"team_drift_changes_superseded", result.DriftChangesSuperseded},
 		} {
 			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
 		}
@@ -219,8 +223,12 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			"projects":               result.ProjectsWritten,
 			"team_project_ownership": result.OwnershipWritten,
 			"sprints":                result.SprintsWritten,
+			"projects_without_key":   result.ProjectsWithoutKey,
 			"teams_skipped_policy":   result.TeamsSkippedPolicy,
 			"team_memberships_skipped_manual_conflict": result.MembershipsSkippedManualConflict,
+			"teams_staged_for_review":                  result.TeamsStagedForReview,
+			"team_memberships_staged_for_review":       result.MembershipsStagedForReview,
+			"team_drift_changes_superseded":            result.DriftChangesSuperseded,
 		},
 	}, nil
 }

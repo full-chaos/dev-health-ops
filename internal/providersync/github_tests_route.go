@@ -451,6 +451,14 @@ func (handler GitHubTestsRouteHandler) Collect(
 					"repository", repo.FullName, "run", pipeline.RunID, "count", rows.DuplicateCases,
 				)
 			}
+			client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
+			if rows.DuplicateSuites > 0 {
+				slog.Info(
+					"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+					"repository", repo.FullName, "run", pipeline.RunID, "count", rows.DuplicateSuites,
+				)
+			}
 			suites = append(suites, rows.Suites...)
 			cases = append(cases, rows.Cases...)
 			coverage = append(coverage, rows.Coverage...)

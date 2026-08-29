@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -967,4 +968,143 @@ func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
 	if !strings.Contains(err.Error(), "ClickHouse readiness check failed") {
 		t.Fatalf("error = %v, want it to name the ClickHouse readiness check", err)
 	}
+}
+
+// fakeFlowMatrixCHClient is a minimal analytics.QueryClient double for
+// the CHAOS-4506 reachability test below. ExecuteFlowMatrix issues its
+// nodes and edges queries CONCURRENTLY (unlike hotspots's sequential
+// pair), so this fake dispatches by inspecting the statement text rather
+// than call order -- a call-order-keyed fake would be flaky under
+// concurrent dispatch. Not a substitute for the real-ClickHouse dual-run
+// proof (Python-side stage-2 test, not yet written for this operation).
+type fakeFlowMatrixCHClient struct {
+	mu sync.Mutex
+}
+
+func (c *fakeFlowMatrixCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// CI FAILURE FOUND LIVE (2026-08-29, go-storage-integration-shard-packages-2,
+	// PR #2009): both rows below were uint64(...), but queryNodes/queryEdges
+	// (flowmatrix.go) scan their value column into a plain float64 -- every
+	// flowMatrix value expression is wrapped in toFloat64(...) in the real SQL
+	// (round 3's fix, this file's own package doc explains why: ClickHouse
+	// returns UInt64 for SUM()-based measures and the driver does not convert),
+	// so the REAL client never hands queryNodes/queryEdges a uint64 for this
+	// column -- only this fake, gone stale relative to that fix, did. Panicked
+	// with "interface conversion: interface {} is uint64, not float64" inside
+	// fakeRows.Scan, only reachable via the `integration` build tag neither
+	// ci/local_validate.sh (Python-only stages) nor an untagged `go test` run
+	// exercises -- it survived every local check this lane ran and was caught
+	// only by CI's go-storage-integration-shard-packages jobs. Test-only fix:
+	// match what the real, already-fixed client actually returns.
+	if strings.Contains(statement, "AS source_dimension,") {
+		return &fakeRows{rows: [][]any{
+			{"TEAM", "TEAM", "team-a", "team-b", float64(2)},
+		}}, nil
+	}
+	return &fakeRows{rows: [][]any{
+		{"TEAM", "team-a", float64(7)},
+	}}, nil
+}
+
+func flowMatrixVariables() map[string]any {
+	return map[string]any{
+		"orgId": "org-1",
+		"batch": map[string]any{
+			"flowMatrix": map[string]any{
+				"dimension": "TEAM",
+				"measure":   "COUNT",
+				"dateRange": map[string]any{
+					"startDate": "2026-08-01",
+					"endDate":   "2026-08-31",
+				},
+				"maxNodes": 50,
+				"maxEdges": 200,
+			},
+		},
+	}
+}
+
+// TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4506's
+// extension of the same reachability contract (real Mux, real
+// PostgresSwitch, real gqlgen server, real principal.Verifier) to the
+// flowMatrix operation -- the ONLY analytics-touching document this PR
+// registers; see registeredFlowMatrixDocument's doc comment in
+// query_route.go for why INVESTMENT_BREAKDOWN_QUERY/INVESTMENT_FULL_QUERY
+// are deliberately NOT registered yet.
+func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest)
+	documentDigest := digestHex(registeredFlowMatrixDocument)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	t.Run("disabled_by_default", func(t *testing.T) {
+		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, flowMatrixVariables())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, flowMatrixVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "team-a") {
+			t.Fatalf("expected response to contain the fake row's node id with no errors, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("wrong_orgid_argument_is_rejected", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
+		vars := flowMatrixVariables()
+		vars["orgId"] = "org-2" // token authenticates org-1
+		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, token, vars)
+		if rec.Code != http.StatusOK {
+			// gqlgen returns 200 with a GraphQL-level error for a
+			// resolver error, not an HTTP error code -- the
+			// AUTHORIZATION_ERROR is IN the body, checked below.
+			t.Fatalf("expected 200 with a GraphQL error body, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "AUTHORIZATION_ERROR") {
+			t.Fatalf("expected an AUTHORIZATION_ERROR for a mismatched orgId argument, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
+		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, "", flowMatrixVariables())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no token: got %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("enabling_flowMatrix_does_not_enable_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "flowMatrix", "canary")
+		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("featureFlags should stay unreachable when only flowMatrix is canaried: got %d", rec.Code)
+		}
+	})
 }

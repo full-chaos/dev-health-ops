@@ -370,6 +370,36 @@ func TestReconcilerLoopNotAuthorizedStepFailurePreservesFatalPath(t *testing.T) 
 	}
 }
 
+// TestReconcilerLoopUpGaugeClearsOnASingleFailureBelowTheDegradeThreshold is
+// a codex review finding (round 4, P2): worker_outbox_reconciler_up was
+// cleared only once consecutiveFailures crossed the degrade threshold,
+// contradicting its own HELP text ("currently healthy") and the pre-
+// CHAOS-4429 behavior, where a single failure cleared it immediately. up is
+// deliberately unthresholded -- readyz (chris's 3-consecutive-failure
+// ruling) is the ONLY signal allowed to stay quiet through a lone blip.
+func TestReconcilerLoopUpGaugeClearsOnASingleFailureBelowTheDegradeThreshold(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	}), clock)
+	ctx := context.Background()
+	if err := loop.step(ctx, clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	loop.recordStepFailure(ctx, errors.New("one blip, nowhere near the degrade threshold"))
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_up 0\n") {
+		t.Fatalf("up gauge stayed healthy after a single failed step, below the degrade threshold:\n%s", metrics.String())
+	}
+	if strings.Contains(metrics.String(), "worker_outbox_reconciler_degraded 1\n") {
+		t.Fatalf("readiness/degraded flipped on a single failure -- it must stay below threshold while up clears:\n%s", metrics.String())
+	}
+}
+
 // TestReconcilerLoopExportsCHAOS4429Telemetry pins the new Prometheus
 // fragment: a lifetime failure counter that counts even absorbed blips below
 // the degrade threshold, and a degraded gauge that flips only once the

@@ -397,9 +397,14 @@ func (loop *ReconcilerLoop) recordStepFailure(ctx context.Context, err error) {
 	loop.consecutiveFailures++
 	consecutive := loop.consecutiveFailures
 	degraded := consecutive >= consecutiveStepFailureDegradeThreshold
-	if degraded {
-		loop.up = false
-	}
+	// CHAOS-4429 (codex review finding, round 4): worker_outbox_reconciler_up
+	// clears on EVERY failed step, not only once degraded -- matching its own
+	// HELP text ("currently healthy") and the pre-CHAOS-4429 behavior this
+	// gauge already had. readyz is the deliberately thresholded signal
+	// (chris's 3-consecutive-failure ruling exists so a lone blip does not
+	// flap the READINESS GATE); up is a plain, unthresholded "did the last
+	// step succeed" gauge, and the two must not share one flag.
+	loop.up = false
 	loop.mu.Unlock()
 	if degraded {
 		loop.ready.Store(false)

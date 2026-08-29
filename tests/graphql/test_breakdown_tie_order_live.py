@@ -84,7 +84,10 @@ from datetime import date, datetime, timezone
 import pytest
 
 from dev_health_ops.api.graphql.sql.compiler import BreakdownRequest, compile_breakdown
-from dev_health_ops.fixtures.world import _require_scratch_database
+from dev_health_ops.fixtures.world import (
+    _database_name_from_uri,
+    _require_scratch_database,
+)
 from dev_health_ops.metrics.schemas import InvestmentMetricsRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -118,8 +121,21 @@ def test_tied_rows_return_stable_order_and_set_across_repeated_calls() -> None:
     # Table-qualified to THIS scratch database only. A bare
     # `SYSTEM STOP MERGES` with no table would be cluster/host-wide across
     # every database on the shared ClickHouse container -- never do that.
-    db_name = CLICKHOUSE_URI.rsplit("/", 1)[-1]
-    qualified_table = f"{db_name}.investment_metrics_daily"
+    #
+    # codex review (CHAOS-4495 delta round): a naive `CLICKHOUSE_URI.rsplit
+    # ("/", 1)[-1]` includes any query string (e.g. a `?secure=true` TLS
+    # DSN, a supported ClickHouse URI shape elsewhere in this repo -- see
+    # ops/AGENTS.md's CH_HTTP_SCHEME=https note), producing invalid SQL
+    # like `SYSTEM STOP MERGES ci_local_validate?secure=true.investment_
+    # metrics_daily`. Reuse this repo's own canonical URI parser
+    # (`_database_name_from_uri`, already used by `_require_scratch_
+    # database` two lines above) instead of reimplementing it, and quote
+    # both identifiers with backticks (this repo's established convention
+    # for ClickHouse identifiers, e.g. the migrations under
+    # `migrations/clickhouse/`) so a database or table name containing a
+    # special character still parses as one identifier.
+    db_name = _database_name_from_uri(CLICKHOUSE_URI)
+    qualified_table = f"`{db_name}`.`investment_metrics_daily`"
 
     org_id = f"chaos-4495-tie-order-{uuid.uuid4()}"
     day = date(2026, 8, 15)

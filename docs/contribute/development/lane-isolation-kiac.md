@@ -192,6 +192,37 @@ export ACR_TRIAL_NODEPORT_BASE=30500        # one base per lane; +10 for the nex
 "$ACR_WT/deploy/local/trial-data.sh" dsn --env          # DSNs for host-side tools
 ```
 
+**Use the newest COMPLETE set, and check which one you got.** A "complete" set is a
+directory holding *both* a `postgres-all-*.sql.gz` and a `clickhouse-default-*.zip`.
+This is not hygiene — the older **20260817-192029** set is internally inconsistent
+and cannot produce a working lane (**CHAOS-4463**):
+
+| | `alembic_version` in the dump | `CREATE TABLE public.worker_instances` present |
+|---|---|---|
+| `20260817-192029` | **0104** | **no** |
+| `20260823-220102` | 0109 | yes |
+
+Revision **0104 is the one that creates `worker_instances`**
+(`alembic/versions/0104_add_worker_instances.py`). The 08-17 dump therefore records
+0104 as already applied while lacking the table that revision creates. On restore,
+alembic skips 0104, migrates 0105→0115, and the table is never created — so the
+lane reaches an apparently healthy `alembic_version 0115` and then fails several
+steps later at `go-worker-migrate` with
+`runtime grant posture gap role=domain gaps=["worker_instances: table does not exist"]`
+and 112 grants instead of 116. The same lane seeded from 20260823-220102 completes
+in 3 s.
+
+The general hazard is bigger than this one file and is tracked as **CHAOS-4467**:
+**alembic trusts `alembic_version` over the schema**, so *any* snapshot whose
+stamped revision overstates what the database actually contains restores into a
+state alembic then declines to repair — and nothing in the restore path notices.
+A post-restore assertion that the stamped revision's objects really exist would
+catch the whole class.
+
+Note also that older loose files can sit at the top level of `backups/` beside newer
+timestamped subdirectories, so a naive "newest dump" glob picks the wrong one — which
+is exactly the bug `lane.sh` had.
+
 NodePorts are **cluster**-scoped, not namespace-scoped, so every lane needs its
 own `ACR_TRIAL_NODEPORT_BASE`. The base must be a multiple of 10 inside
 30000–30990: each lane uses four consecutive ports, and the 10-port stride is
@@ -281,7 +312,7 @@ a quoted key reaches the provider as an invalid credential.
 | Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
 | Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
 | `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
-| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. Tracked as **CHAOS-4457** (local_validate remote-datastore mode). It is closer than it looks: the lock is already scoped to `CH_CONTAINER` (`LOCK_DIR=/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`), so a lane-scoped name gives the run its own lock, and the only docker-bound call is `ch_query()` (`ci/local_validate.sh:939`) doing the scratch `CREATE`/`DROP DATABASE` — every other ClickHouse access already goes over HTTP via the env-overridable `CH_HOST`/`CH_HTTP_PORT`. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once that one function has an HTTP path. |
+| ops `ci/local_validate.sh` full gate | **Supported** (CHAOS-4457). Run with `CH_TRANSPORT=http`, `CH_HOST`/`CH_HTTP_PORT` at the lane's ClickHouse (`CH_HTTP_SCHEME=https`, **443/8443 only** — see the TLS note below), and a **lane-scoped `CH_CONTAINER`** — that name is also the lock key (`LOCK_DIR=/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`), so the run does not contend with a Compose-stack gate. **TLS caveat:** a lane's ClickHouse published on a NodePort in 30000–30990 cannot use `CH_HTTP_SCHEME=https` — `migrate clickhouse status --check` hands the DSN straight to clickhouse-connect, which infers TLS from the **port** (443/8443) and not the `clickhouse+https` scheme, so it would reconnect in plaintext after CREATE and upgrade had already succeeded. The gate refuses that combination up front. Use plain `http` on the NodePort (what a local lane does), or map the endpoint to 443/8443. Same root as the credential restriction below; both lift when **CHAOS-4469** lands. For the same reason `CH_USER`/`CH_PASS` must contain only `A-Za-z0-9._~-` in **either** transport. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the lane's Postgres with the **asyncpg** dialect and at a **scratch** database: two opt-in outbox tests assume an empty `worker_job_outbox` and fail against a `backups/`-restored one carrying 32 `pending` rows. |
 | web Playwright e2e | The lane's own ops API and web. |
 | ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
 
@@ -294,8 +325,9 @@ a lane's seeded Postgres opts in a set of live-PG tests that normally skip, and
 two of them assume an **empty** `worker_job_outbox`: they seed one wakeup and
 claim it back with `limit=1`, which fails on a restored snapshot that already
 carries 32 `pending` rows. Use the asyncpg dialect (`postgresql+asyncpg://`, not
-the psycopg2 sync fallback) and expect fixture assumptions like this to surface
-— the skip path hides them entirely on the Compose stack.
+the psycopg2 sync fallback) and point it at a scratch database. Expect fixture
+assumptions like this to surface — the skip path hides them entirely on the
+Compose stack.
 
 ## Cost
 

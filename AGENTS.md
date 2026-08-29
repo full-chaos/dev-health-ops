@@ -125,14 +125,26 @@ cluster, they do not apply to you:
   0115 and 0109 simultaneously with both stacks healthy.
 - **Compose heads-up before a rebuild.** `helm upgrade` touches one namespace,
   so no cross-domain heads-up is needed.
-- **The host-wide `local_validate` lock — NOT YET.** This one is *not* exempt
-  today, and the difference matters. `ci/local_validate.sh`'s `main` calls
-  `acquire_lock` unconditionally (`ci/local_validate.sh:1408`), and its
-  ClickHouse provisioning still probes for the Compose Docker container
-  (`ci/local_validate.sh:901-940`). So a gate run pointed at a lane namespace
-  either still serializes behind the host lock or fails outright when Compose is
-  unavailable. **Keep taking the lock** until the script grows an explicit
-  remote-ClickHouse mode. Tracked as a follow-up on CHAOS-4428.
+- **The `local_validate` lock — scoped, not host-wide.** `LOCK_DIR` is
+  `/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`, so runs targeting
+  *different* ClickHouse instances never serialize against each other. A lane
+  passes a lane-scoped `CH_CONTAINER` and runs beside a Compose-stack gate by
+  construction. (An earlier draft of this section claimed lanes were exempt from
+  a host-wide lock, which was wrong; then claimed the mode did not exist, which
+  became wrong when it did. Both are corrected here — CHAOS-4457.)
+- **Running the gate against a lane's own datastores.** Set
+  `CH_TRANSPORT=http` with `CH_HOST`/`CH_HTTP_PORT` pointed at the lane's
+  ClickHouse (`CH_HTTP_SCHEME=https` for a TLS endpoint), and a lane-scoped
+  `CH_CONTAINER` as the lock key. `CH_HTTP_SCHEME` steers only this script's
+  own `curl` legs; the Python legs reach ClickHouse through
+  clickhouse-connect, which decides TLS from the **port** (443/8443) and
+  ignores the scheme in the DSN — so a TLS endpoint on any other port gets a
+  plaintext connection from those legs while `curl` speaks TLS, and the two
+  halves of one gate run disagree about the transport. Terminate TLS on
+  443/8443 for a lane, or keep the lane plaintext. Tracked in CHAOS-4469. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
+  lane's Postgres using the **asyncpg** dialect (`postgresql+asyncpg://`), and
+  at a **scratch** database — several opt-in tests assume an empty
+  `worker_job_outbox` and fail against a `backups/`-restored one.
 - **"Never write to the shared Postgres/ClickHouse."** Write freely inside your
   namespace; the blast radius stops at its boundary.
 

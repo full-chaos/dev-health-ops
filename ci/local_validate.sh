@@ -1769,17 +1769,6 @@ if [ "${1:-}" = "--lock-probe-exit-order" ]; then
   cleanup_delay="${2:?cleanup_delay required}"
   marker="${3:?marker path required}"
   # Companion to cleanup_scratch: the http transport's credential file must not
-# survive an interrupted run (codex R3). Safe to call when nothing is pending.
-# (CH_CURL_CONFIG is initialised up in the config block, not here -- an
-# initialiser at this point in the file would run at load time AFTER nothing,
-# but it reads as if it could clobber a live path.)
-cleanup_ch_curl_config() {
-  if [ -n "${CH_CURL_CONFIG:-}" ]; then
-    rm -f "${CH_CURL_CONFIG}"
-    CH_CURL_CONFIG=""
-  fi
-}
-
 cleanup_scratch() {
   cleanup_ch_curl_config
     sleep "${cleanup_delay}"

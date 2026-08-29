@@ -29,6 +29,8 @@ import (
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -65,6 +67,12 @@ type operatorRuntime struct {
 	// reuses it to construct a daily.PostgresPublisher without a second
 	// contracts/jobs/v1 load.
 	registry *jobruntime.Registry
+	// lookup is configureRuntime's own env accessor, kept for verbs that need
+	// a SECOND secret this binary is not otherwise wired for -- `providersync
+	// retire-linear-pseudo-projects` (CHAOS-4530 follow-up) resolves
+	// CLICKHOUSE_URI lazily, on dispatch, rather than making every workerctl
+	// invocation require a ClickHouse connection it does not otherwise need.
+	lookup platformsecrets.LookupEnv
 }
 
 type streamProfileStatus struct {
@@ -475,7 +483,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
 		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
-		registry: registry,
+		registry: registry, lookup: lookup,
 	}
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
@@ -569,6 +577,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchRoutes(ctx, runtime, args[1:], stdout, stderr)
 	case "job-routes":
 		return dispatchJobRoutes(ctx, runtime, args[1:], stdout, stderr)
+	case "providersync":
+		return dispatchProvidersync(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -1174,6 +1184,92 @@ func dispatchMetricsFinalizeRedrive(
 	return writeResult(stdout, stderr, map[string]any{
 		"finalize_redrive": outcome,
 		"dry_run":          *dryRun,
+	})
+}
+
+// dispatchProvidersync handles the `providersync` verb group.
+func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "retire-linear-pseudo-projects":
+		return dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, args[1:], stdout, stderr)
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+}
+
+// dispatchProvidersyncRetireLinearPseudoProjects handles `providersync
+// retire-linear-pseudo-projects` (CHAOS-4530 follow-up, CF/acr finding): a
+// ONE-TIME, operator-invoked cleanup that physically deletes every
+// {org_id}:linear:{team_key} pseudo-project row still present in `projects`
+// -- across every org, or one org with --org -- because CF found neither an
+// active row NOR CHAOS-4530's original is_active=0 tombstone shape is a
+// signal acr's identity resolution recognizes: the row must be GONE, not
+// soft-deleted. providersync.RetireLinearPseudoProjectRows does the actual
+// work; this dispatcher only resolves CLICKHOUSE_URI (lazily -- no other
+// workerctl verb needs a ClickHouse connection, so this is not required at
+// configureRuntime time) and wires --org/--dry-run, mirroring `metrics
+// partition-recompute`'s shape (quiet invalid_request on any malformed
+// input, --dry-run reports without writing).
+func dispatchProvidersyncRetireLinearPseudoProjects(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync retire-linear-pseudo-projects")
+	org := flags.String("org", "", "organization id (uuid) -- omit to run across every org")
+	dryRun := flags.Bool("dry-run", false, "report which pseudo-project rows would be deleted, across every org unless --org scopes it, without deleting anything")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	// Canonicalize, never pass the raw flag value onward: uuid.Parse accepts
+	// mixed/upper case, but ClickHouse's org_id comparison is case-sensitive
+	// string equality (codex review, 2026-08-29) -- an uppercase --org would
+	// otherwise silently match zero rows and report a "successful" no-op
+	// instead of the actual scoped org.
+	scopedOrg := ""
+	if *org != "" {
+		parsedOrg, err := uuid.Parse(*org)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		scopedOrg = parsedOrg.String()
+	}
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	authorizeResource := scopedOrg
+	if authorizeResource == "" {
+		authorizeResource = "*"
+	}
+	// Authorized BEFORE anything ClickHouse-related is even attempted (codex
+	// review, 2026-08-29, P1): this is a physically destructive mutation, and
+	// authentication alone (a live WORKER_OPERATOR_TOKEN) is not authorization
+	// -- a workers:read-only credential must never reach the delete. Every
+	// other mutation in this binary goes through runtime.service for exactly
+	// this reason; this is the same gate, just for an action with no other
+	// natural Service method (see AuthorizeProvidersyncCleanup's doc comment).
+	if err := runtime.service.AuthorizeProvidersyncCleanup(ctx, runtime.principal, authorizeResource); err != nil {
+		return writeServiceError(stderr, err)
+	}
+	if runtime.lookup == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	dsn, ok := resolveRequired("CLICKHOUSE_URI", runtime.lookup)
+	if !ok {
+		return writeError(stderr, "configuration_error")
+	}
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	defer func() { _ = conn.Close() }()
+	outcome, err := providersync.RetireLinearPseudoProjectRows(ctx, conn, scopedOrg, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"retire_linear_pseudo_projects": outcome,
 	})
 }
 

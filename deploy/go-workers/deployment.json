@@ -50,6 +50,7 @@
       "WORKER_DATABASE_MODE"
     ],
     "secret_env": [
+      "CLICKHOUSE_URI",
       "COORDINATOR_DATABASE_URI",
       "POSTGRES_URI",
       "WORKER_DATABASE_URI",

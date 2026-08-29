@@ -425,6 +425,15 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		"RIVER_QUEUE_DATABASE_ROLE",
 		"WORKER_DATABASE_MODE",
 	}) || !equalStrings(operator.SecretEnv, []string{
+		// CHAOS-4530 follow-up: `providersync retire-linear-pseudo-projects`
+		// is the first workerctl verb needing a ClickHouse connection --
+		// added here alongside the pre-existing four so the deployment
+		// contract actually describes the DSN the deployed operator
+		// container carries (codex review, 2026-08-29: the verb required
+		// CLICKHOUSE_URI in code before this manifest declared it, so a
+		// deployed invocation would fail closed with configuration_error
+		// before ever reaching ClickHouse).
+		"CLICKHOUSE_URI",
 		"COORDINATOR_DATABASE_URI",
 		"POSTGRES_URI",
 		"WORKER_DATABASE_URI",

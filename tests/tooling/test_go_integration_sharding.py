@@ -948,7 +948,31 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # orphan-detection, non-regression (nothing retired when every team is
     # still observed), fail-closed, and input-validation behavior. None is
     # integration-tagged. 1239 -> 1243 top-level; 145 unchanged.
-    assert len(expected_provider_tests) == 1243
+    #
+    # CHAOS-4530 follow-up (CF/acr finding: an is_active=0 tombstone is not
+    # a signal acr's identity resolution recognizes -- see linear_reference_
+    # catalog_route.go's updated doc comment) REMOVED
+    # linear_pseudo_project_retirement_test.go's 4 tests (the now-deleted
+    # per-sync orphan-reconciliation helper) and ADDED
+    # linear_pseudo_project_cleanup_test.go's 7 tests for the one-time
+    # operator cleanup that replaced it (RetireLinearPseudoProjectRows):
+    # TestRetireLinearPseudoProjectRowsRejectsNilConn,
+    # TestRetireLinearPseudoProjectRowsDryRunFindsButNeverDeletes,
+    # TestRetireLinearPseudoProjectRowsRealRunDeletesAndReportsCounts,
+    # TestRetireLinearPseudoProjectRowsRealRunFindsNothingSkipsMutation,
+    # TestRetireLinearPseudoProjectRowsScopedByOrgAddsThePredicate,
+    # TestRetireLinearPseudoProjectRowsPropagatesQueryFailure,
+    # TestRetireLinearPseudoProjectRowsPropagatesDeleteFailureButStillReportsFoundRows.
+    # None is integration-tagged. Net +3 (-4/+7): 1243 -> 1246 top-level; 145
+    # unchanged.
+    #
+    # Codex review round 1 on the cleanup verb (P2, confirmed real) added 1
+    # more ordinary top-level test in linear_pseudo_project_cleanup_test.go:
+    # TestLinearPseudoProjectIdentityPredicateMatchesOwnOrgIDOnly, pinning
+    # the fix that ties the identity predicate to each row's OWN org_id
+    # (startsWith(id, concat(org_id, ':linear:'))) instead of a bare
+    # substring test anywhere in id. 1246 -> 1247 top-level; 145 unchanged.
+    assert len(expected_provider_tests) == 1247
     assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
@@ -965,7 +989,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1243
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1247
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1026,7 +1050,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1243
+    assert len(selected_tests) == len(set(selected_tests)) == 1247
     assert set(selected_tests) == expected_tests
 
 

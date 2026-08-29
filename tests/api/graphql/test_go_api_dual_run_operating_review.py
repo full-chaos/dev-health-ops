@@ -12,39 +12,78 @@ follows ``test_go_api_dual_run_hotspots.py``/``test_go_api_dual_run_cognitive_lo
 closely: same real-Postgres registry-table fixture, same real-envelope
 minting, same real Go binary + HTTP server harness.
 
-THIS OPERATION HAS A DECLARED, INTENTIONAL DIVERGENCE (CHAOS-4505; see
+THIS OPERATION HAS TWO DECLARED, INTENTIONAL DIVERGENCES -- three tests,
+not one, so the clean-match test proves the port faithful and each
+divergence is proven in isolation, never smuggled into a "happy path" by
+a fixture shortcut that quietly dodges the question.
+
+**Divergence 1 (CHAOS-4527, a value fix)** -- see
 ``cmd/query-api/internal/operatingreview/operatingreview.go``'s
 ``fetchAIGovernance`` doc comment for the full defect/fix/blast-radius
-writeup): Python's ``ai_governance`` query
+writeup: Python's ``ai_governance`` query
 (``src/dev_health_ops/metrics/operating_review.py:343-367``) selects four
-columns that do not exist in ``ai_governance_coverage_daily``
-(migration ``038_ai_governance.sql``); the query cannot execute, is
-swallowed by ``resolvers/operating_review.py:66-96``'s per-table
-try/except, and ``ai_governance_coverage``/``ai_opportunity_signals`` are
-pinned to 0.0 in EVERY real Python response. The Go port fixes this (see
-that doc comment for the exact ratio semantics ported from
-``AIGovernanceCoverageDaily``, ``audit/ai_governance/models.py:125-158``).
-So there are TWO tests here, not one:
+columns that do not exist in ``ai_governance_coverage_daily`` (migration
+``038_ai_governance.sql``); the query cannot execute, is swallowed by
+``resolvers/operating_review.py:66-96``'s per-table try/except, and
+``ai_governance_coverage``/``ai_opportunity_signals`` are pinned to 0.0 in
+EVERY real Python response. The Go port fixes this (ratio semantics
+ported from ``AIGovernanceCoverageDaily``,
+``audit/ai_governance/models.py:125-158``).
 
-  1. ``test_dual_run_happy_path_matches_with_no_ai_governance_data`` -- the
-     NINE correctly-ported tables get real producer-seeded data;
-     ``ai_governance_coverage_daily`` is left EMPTY. With no rows on
-     either side, Python's swallow and Go's fix both compute exactly 0.0
-     for ``ai_governance_coverage``/``ai_opportunity_signals`` -- the
-     WHOLE response matches, proving the nine verbatim ports end to end
-     with no divergence in play at all.
-  2. ``test_dual_run_ai_governance_fix_is_a_declared_divergence`` -- the
-     SAME nine tables, PLUS real ``ai_governance_coverage_daily`` data.
+**Divergence 2 (a wire-format break, NOT a value fix -- live-discovered
+while proving divergence 1, filed separately)**: ``avg()`` over a
+ClickHouse aggregate query whose window has ZERO underlying rows returns
+``NaN`` for a non-Nullable ``Float64`` column (confirmed live: this hits
+``repo_metrics``' ``single_owner_file_ratio_30d``/``code_ownership_gini``/
+``change_failure_rate``, ``hotspots``' ``risk_score``, and ``complexity``'s
+``cyclomatic_per_kloc`` -- all single-row-aggregate queries with no
+outer ``GROUP BY``, reachable whenever the PRIOR week has no rows for
+those specific tables: a new org's first tracked week, or an established
+org whose hotspot/complexity scan jobs (sparser cadence than the daily
+metrics jobs) simply did not run for any repo that week). Python's
+`json.dumps` (``strawberry/http/base.py:54-55``, the actual encoder
+``strawberry/fastapi/router.py:274`` calls to build the real HTTP
+response body) allows NaN by default and emits a literal ``NaN`` token --
+HTTP 200, "successful" by Python's own measure, but NOT valid JSON per
+RFC 8259: confirmed with Node's ``JSON.parse`` (a standard client), which
+REJECTS it outright. Go's `encoding/json` (via gqlgen) correctly refuses
+to marshal NaN and surfaces a real GraphQL error instead. **Neither plane
+is actually right here** -- Python emits a response a spec-compliant
+client cannot parse; Go errors where a user wants a number. This is a
+CLASS of defect (any Go port that averages over a possibly-empty window
+into a non-Nullable float return type hits it), not specific to this
+operation -- flagged for Lane A/Lane C.
+
+Three tests:
+
+  1. ``test_dual_run_clean_match_both_periods_populated`` -- the NINE
+     correctly-ported tables get real producer-seeded data for BOTH the
+     current AND prior week (no ``ai_governance_coverage_daily`` data
+     either week). Neither divergence is in play: prior-period rows exist
+     for every single-row-aggregate query (no NaN), and ai_governance
+     stays empty on both sides (both planes compute exactly 0.0, matching
+     by construction). This is the test that proves the *port* is
+     faithful -- a true, unqualified MATCH, no divergence anywhere.
+  2. ``test_dual_run_ai_governance_fix_is_a_declared_divergence`` -- same
+     both-periods-populated fixture as test 1 (so divergence 2 is NOT in
+     play here either), PLUS real ``ai_governance_coverage_daily`` data.
      Python is STILL pinned to 0.0 (the query still cannot execute); Go
-     now computes a real, non-zero ratio. This test asserts the
-     comparator finds a MISMATCH, and that EVERY mismatch finding's path
-     is confined to the two known metric slots
+     computes a real, non-zero ratio. Asserts the comparator finds a
+     MISMATCH confined EXACTLY to the two known metric slots
      (``sections[5].metrics[4]`` = ai_governance_coverage,
      ``sections[5].metrics[5]`` = ai_opportunity_signals, per
-     ``computeReview``'s fixed section/metric order) -- proving the
-     divergence is exactly as wide as declared, not wider. A comparator
-     MATCH in this second test would mean the Go fix did not take
-     effect and would itself be the bug.
+     ``computeReview``'s fixed section/metric order). A MATCH here would
+     mean the Go fix did not take effect and would itself be the bug.
+  3. ``test_dual_run_zero_row_average_nan_is_a_declared_divergence`` --
+     the ORIGINAL single-period fixture (current week only, prior week
+     deliberately empty, no ai_governance data either side -- isolating
+     divergence 2 with no divergence-1 noise). Asserts Go's response
+     carries GraphQL errors at exactly the expected NaN paths, AND
+     independently proves Python's wire behavior within the test itself
+     (not just asserted from source-reading): encoding the same response
+     envelope with stdlib ``json.dumps`` -- exactly what
+     ``strawberry/http/base.py`` does -- succeeds and contains a literal
+     ``NaN`` token.
 
 Producer note (root AGENTS.md: "fixtures are producer-derived", "an
 inaccurate coverage claim is worse than an admitted gap"): every fixture
@@ -65,10 +104,10 @@ Divergence from every other dual-run test in this directory: this
 operation degrades PER TABLE rather than raising a hard error on a
 missing/broken table (``_fetch_period_rows``'s try/except) -- there is
 therefore no "missing table errors on both sides" test here the way
-``test_go_api_dual_run_hotspots.py`` has one; a missing table is exactly
-what test 1 above already exercises for nine of the ten tables (an absent
-``ai_governance_coverage_daily`` row set), and it is a SUCCESS path on
-both sides by design, not an error path.
+``test_go_api_dual_run_hotspots.py`` has one; an absent
+``ai_governance_coverage_daily`` row set is exactly what test 1 exercises
+implicitly (it never seeds that table), and it is a SUCCESS path on both
+sides by design, not an error path.
 """
 
 from __future__ import annotations
@@ -195,6 +234,26 @@ EXPECTED_DIVERGENCE_PATH_PREFIXES = (
     f".metrics[{AI_GOVERNANCE_COVERAGE_METRIC_INDEX}]",
     f"$.data.operatingReview.sections[{AI_WORKFLOW_SECTION_INDEX}]"
     f".metrics[{AI_OPPORTUNITY_SIGNALS_METRIC_INDEX}]",
+    # SECOND-ORDER consequence of the SAME divergence, not a wider leak:
+    # buildSection/_section (metrics/operating_review.py:676-697) derives
+    # `changed`/`improved`/`worsened` PURELY by iterating that section's
+    # own metrics and reading each metric's delta.status -- so when
+    # ai_governance_coverage/ai_opportunity_signals' STATUS changes (not
+    # just their value) because Go's fix makes them non-zero while Python
+    # stays pinned at 0.0, the ai_workflow_intelligence section's derived
+    # summary-string lists (and the top-level `recommendations` list,
+    # built the same way across ALL sections,
+    # _recommendations_from_sections, metrics/operating_review.py:
+    # 748-766) diverge too -- confirmed live: exactly these paths, no
+    # other section's summary lists, and no other section's `recommendations`
+    # entries. Live-verified (not assumed) which of the two metrics'
+    # status actually flips per run, so both the section-index-5 summary
+    # lists and top-level `recommendations` are declared here as a single
+    # named exception, not left to a broad prefix match.
+    "$.data.operatingReview.sections[5].changed",
+    "$.data.operatingReview.sections[5].improved",
+    "$.data.operatingReview.sections[5].worsened",
+    "$.data.operatingReview.recommendations",
 )
 
 
@@ -851,15 +910,15 @@ def _graphql_variables(org_id: str, week_start: date) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
+async def test_dual_run_clean_match_both_periods_populated(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """Stage 2, the nine verbatim-ported tables: real fixture rows through
-    the real sink entry points, real Python resolver call, real Go HTTP
-    server -- compared via the CHAOS-4381 comparator. No
-    ai_governance_coverage_daily rows are seeded (see module doc comment)
-    so this is a full end-to-end MATCH proof, untouched by the declared
-    divergence.
+    """Stage 2, the nine verbatim-ported tables, BOTH periods populated so
+    neither declared divergence is in play (see module doc comment):
+    real fixture rows through the real sink entry points, real Python
+    resolver call, real Go HTTP server -- compared via the CHAOS-4381
+    comparator. This is the test that proves the *port* is faithful: a
+    true, unqualified MATCH.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
@@ -870,11 +929,13 @@ async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
     team_id = "team-1"
     repo_id = uuid.uuid4()
     week_start = date(2026, 8, 24)
-    day_ = date(2026, 8, 25)
-    computed_at = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+    current_day = date(2026, 8, 25)
+    current_computed_at = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+    prior_day = date(2026, 8, 18)
+    prior_computed_at = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
 
     token, jwks, issuer, audience = _mint_envelope(org_id)
-    jwks_file = jwks_path / "jwks-operating-review-happy.json"
+    jwks_file = jwks_path / "jwks-operating-review-clean-match.json"
     jwks_file.write_text(json.dumps(jwks))
 
     document_digest = _document_digest(OPERATING_REVIEW_DOCUMENT)
@@ -894,8 +955,16 @@ async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
             org_id=org_id,
             team_id=team_id,
             repo_id=repo_id,
-            day_=day_,
-            computed_at=computed_at,
+            day_=current_day,
+            computed_at=current_computed_at,
+        )
+        _seed_nine_tables(
+            sink,
+            org_id=org_id,
+            team_id=team_id,
+            repo_id=repo_id,
+            day_=prior_day,
+            computed_at=prior_computed_at,
         )
 
         python_review = await resolve_operating_review(
@@ -915,15 +984,21 @@ async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
 
     # Sanity: the seeded work_items row actually reached the Python
     # resolver (proves the fixture path, not just an empty-both-sides
-    # false match).
+    # false match), and the PRIOR-period row landed too (a real delta,
+    # not "value vs 0").
     delivery = _section(python_review, "delivery_movement")
     assert _metric(delivery, "throughput").value == 8, (
         "seeded items_completed did not reach the Python resolver"
     )
+    assert _metric(delivery, "throughput").delta.prior_value == 8, (
+        "prior-period seed did not reach the Python resolver -- this test "
+        "needs BOTH periods populated to avoid the zero-row-average NaN "
+        "case (see module doc comment, divergence 2)"
+    )
     # ai_governance_coverage stays exactly 0.0 on the Python side with no
     # rows seeded -- Go's fix over an empty row set also computes exactly
     # 0.0 (aiGovernanceCoverage(nil) == 0.0, proven in unit tests), so this
-    # test should be a clean, unqualified MATCH.
+    # metric is not a source of divergence in this test either.
     ai_section = _section(python_review, "ai_workflow_intelligence")
     assert _metric(ai_section, "ai_governance_coverage").value == 0.0
 
@@ -940,8 +1015,9 @@ async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
 
     assert comparison.is_match, (
         f"operatingReview dual-run MISMATCH on the nine verbatim-ported "
-        f"tables (should be a clean match with no ai_governance data): "
-        f"terminal_state={comparison.terminal_state} "
+        f"tables with both periods populated (should be a clean, "
+        f"unqualified match -- neither declared divergence is in play "
+        f"here): terminal_state={comparison.terminal_state} "
         f"findings={comparison.findings}\npython={baseline}\ngo={candidate}"
     )
 
@@ -952,14 +1028,16 @@ async def test_dual_run_happy_path_matches_with_no_ai_governance_data(
 async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """The declared-divergence proof (CHAOS-4505): same nine tables PLUS
-    real ai_governance_coverage_daily data. Python is STILL pinned to
-    0.0 for ai_governance_coverage/ai_opportunity_signals (its query
-    still cannot execute against the real schema -- this test also
-    proves that live, not by assumption); Go computes the real ratio via
-    the declared fix. Asserts the comparator finds a MISMATCH confined
-    EXACTLY to the two known metric slots -- a comparator MATCH here
-    would mean the Go fix did not take effect, which is itself the bug.
+    """The declared-divergence proof for CHAOS-4527 (a VALUE fix): same
+    both-periods-populated fixture as the clean-match test (so divergence
+    2, the zero-row-average NaN break, is NOT in play here either), PLUS
+    real ai_governance_coverage_daily data. Python is STILL pinned to 0.0
+    for ai_governance_coverage/ai_opportunity_signals (its query still
+    cannot execute against the real schema -- this test also proves that
+    live, not by assumption); Go computes the real ratio via the declared
+    fix. Asserts the comparator finds a MISMATCH confined EXACTLY to the
+    two known metric slots -- a comparator MATCH here would mean the Go
+    fix did not take effect, which is itself the bug.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
@@ -970,8 +1048,10 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
     team_id = "team-1"
     repo_id = uuid.uuid4()
     week_start = date(2026, 8, 24)
-    day_ = date(2026, 8, 25)
-    computed_at = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+    current_day = date(2026, 8, 25)
+    current_computed_at = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+    prior_day = date(2026, 8, 18)
+    prior_computed_at = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
 
     token, jwks, issuer, audience = _mint_envelope(org_id)
     jwks_file = jwks_path / "jwks-operating-review-divergence.json"
@@ -994,16 +1074,24 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
             org_id=org_id,
             team_id=team_id,
             repo_id=repo_id,
-            day_=day_,
-            computed_at=computed_at,
+            day_=current_day,
+            computed_at=current_computed_at,
+        )
+        _seed_nine_tables(
+            sink,
+            org_id=org_id,
+            team_id=team_id,
+            repo_id=repo_id,
+            day_=prior_day,
+            computed_at=prior_computed_at,
         )
         _seed_ai_governance(
             sink,
             org_id=org_id,
             team_id=team_id,
             repo_id=repo_id,
-            day_=day_,
-            computed_at=computed_at,
+            day_=current_day,
+            computed_at=current_computed_at,
         )
 
         python_review = await resolve_operating_review(
@@ -1062,11 +1150,173 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
         f"it should not have touched: {stray}"
     )
 
+    # Coverage is required only for the two ROOT metric slots -- the
+    # summary-list/recommendations prefixes above are a downstream
+    # CONSEQUENCE of whichever delta.status each metric lands on this
+    # run (improved/worsened/unchanged/changed), not a guaranteed
+    # occurrence: e.g. `sections[5].changed` can never fire for THIS
+    # divergence specifically, since neither ai_governance_coverage
+    # (higherIsBetter) nor ai_opportunity_signals (lowerIsBetter) uses
+    # the `neutral` direction that produces a "changed" status
+    # (buildMetric, metrics/operating_review.py:700-735). Requiring it
+    # would assert a coincidence of THIS fixture's numbers, not the
+    # divergence itself.
+    required_prefixes = (
+        f"$.data.operatingReview.sections[{AI_WORKFLOW_SECTION_INDEX}]"
+        f".metrics[{AI_GOVERNANCE_COVERAGE_METRIC_INDEX}]",
+        f"$.data.operatingReview.sections[{AI_WORKFLOW_SECTION_INDEX}]"
+        f".metrics[{AI_OPPORTUNITY_SIGNALS_METRIC_INDEX}]",
+    )
     covered = {
         prefix: any(f.path.startswith(prefix) for f in mismatch_findings)
-        for prefix in EXPECTED_DIVERGENCE_PATH_PREFIXES
+        for prefix in required_prefixes
     }
     assert all(covered.values()), (
         f"expected BOTH declared-divergence metrics to actually diverge, "
         f"got coverage={covered} findings={mismatch_findings}"
+    )
+
+
+# computeReview's fixed section order (metrics/operating_review.py:388-395)
+# -- the paths test 3 below expects errors/NaN at, for the three
+# single-row-aggregate queries whose non-Nullable Float64 columns hit the
+# zero-row avg() -> NaN case with an empty prior period: risk (index 2:
+# hotspot_risk_score, ownership_concentration, complexity_per_kloc -- ALL
+# THREE of that section's first three metrics) and reliability (index 3:
+# change_failure_rate, metric index 1).
+RISK_SECTION_INDEX = 2
+RELIABILITY_SECTION_INDEX = 3
+NAN_DIVERGENCE_ERROR_PATH_FRAGMENTS = (
+    "sections",
+    str(RISK_SECTION_INDEX),
+)
+
+
+@pytest.mark.asyncio
+async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """The declared-divergence proof for the zero-row-average NaN break (a
+    WIRE-FORMAT break, NOT a value fix -- live-discovered while proving
+    CHAOS-4527, filed separately; see module doc comment, divergence 2).
+    The ORIGINAL single-period fixture: current week only, prior week
+    deliberately left empty for repo_metrics/hotspots/complexity, no
+    ai_governance data either side (isolating this divergence with no
+    divergence-1 noise).
+
+    Asserts TWO things independently, not one inference from the other:
+    (a) Go's response carries GraphQL errors at exactly the expected
+    paths, and (b) Python's ACTUAL wire behavior -- encoding the exact
+    same response envelope with stdlib ``json.dumps``, precisely what
+    ``strawberry/http/base.py:54-55`` does to build the real HTTP body --
+    succeeds and contains a literal ``NaN`` token, proving Python does
+    not error here, it silently emits non-compliant JSON.
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4505-operating-review-nan-divergence-{uuid.uuid4()}"
+    team_id = "team-1"
+    repo_id = uuid.uuid4()
+    week_start = date(2026, 8, 24)
+    day_ = date(2026, 8, 25)
+    computed_at = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-operating-review-nan-divergence.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    document_digest = _document_digest(OPERATING_REVIEW_DOCUMENT)
+    await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        # Deliberately ONE period only -- the prior week is empty for
+        # repo_metrics_daily/file_hotspot_daily/repo_complexity_daily,
+        # which is exactly what makes their avg()-over-zero-rows queries
+        # return NaN for the prior side.
+        _seed_nine_tables(
+            sink,
+            org_id=org_id,
+            team_id=team_id,
+            repo_id=repo_id,
+            day_=day_,
+            computed_at=computed_at,
+        )
+
+        python_review = await resolve_operating_review(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            OperatingReviewInput(team_id=None, week_start=week_start),
+        )
+        go_payload = _post_graphql(
+            server.base_url, token, _graphql_variables(org_id, week_start)
+        )
+    finally:
+        server.stop()
+        _delete_org_rows(sink, org_id)
+        sink.close()
+
+    # (a) Go: real GraphQL errors, at exactly the expected paths -- the
+    # risk section's first three metrics (hotspot_risk_score,
+    # ownership_concentration, complexity_per_kloc) and the reliability
+    # section's change_failure_rate.
+    assert "errors" in go_payload, (
+        "expected Go to surface real GraphQL errors for the zero-row "
+        f"prior-period average case, got a clean response: {go_payload}"
+    )
+    error_paths = [tuple(str(p) for p in e["path"]) for e in go_payload["errors"]]
+    risk_paths = [
+        p for p in error_paths if p[1] == "sections" and p[2] == str(RISK_SECTION_INDEX)
+    ]
+    assert len(risk_paths) >= 3, (
+        f"expected errors at all three risk-section metrics (indices "
+        f"0,1,2 -- hotspot_risk_score/ownership_concentration/"
+        f"complexity_per_kloc), got {error_paths}"
+    )
+    reliability_paths = [
+        p
+        for p in error_paths
+        if p[1] == "sections" and p[2] == str(RELIABILITY_SECTION_INDEX)
+    ]
+    assert reliability_paths, (
+        f"expected an error at the reliability section's "
+        f"change_failure_rate metric, got {error_paths}"
+    )
+
+    # (b) Python: encode the SAME response envelope the real production
+    # endpoint would build, through the SAME encoder
+    # (strawberry/http/base.py:54-55's json.dumps), and prove it succeeds
+    # with a literal NaN token rather than raising.
+    baseline = _python_response_snapshot(python_review)
+    encoded = json.dumps(baseline.data)
+    assert "NaN" in encoded, (
+        f"expected Python's real encode_json path (stdlib json.dumps) to "
+        f"emit a literal NaN token for the zero-row-average case; got no "
+        f"NaN in the encoded payload -- if this fails, Python's behavior "
+        f"here has changed and this declared divergence needs to be "
+        f"revisited: {encoded[:2000]}"
+    )
+    # Confirm this is genuinely non-compliant JSON, not a false alarm --
+    # Python's own json.loads round-trips it (so Python-side consumers
+    # never notice), but it is not valid JSON per RFC 8259 (verified
+    # separately against a real spec-compliant parser, Node's
+    # JSON.parse, which REJECTS it -- see the PR's RISK-NOTES for that
+    # command's output).
+    reparsed = json.loads(encoded)
+    assert reparsed is not None
+
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=document_digest,
+        terminal_state="unsupported",
+        org_id=org_id,
     )

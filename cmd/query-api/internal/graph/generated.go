@@ -16,6 +16,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -17291,9 +17292,9 @@ func (ec *executionContext) _AIAttributionOverviewResult_startDate(ctx context.C
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIAttributionOverviewResult_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -17335,9 +17336,9 @@ func (ec *executionContext) _AIAttributionOverviewResult_endDate(ctx context.Con
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIAttributionOverviewResult_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -17675,9 +17676,9 @@ func (ec *executionContext) _AIComparison_startDate(ctx context.Context, field g
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIComparison_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -17719,9 +17720,9 @@ func (ec *executionContext) _AIComparison_endDate(ctx context.Context, field gra
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIComparison_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -18790,9 +18791,9 @@ func (ec *executionContext) _AIGovernanceCoverageRow_day(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIGovernanceCoverageRow_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19356,9 +19357,9 @@ func (ec *executionContext) _AIGovernanceSummary_startDate(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIGovernanceSummary_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -19400,9 +19401,9 @@ func (ec *executionContext) _AIGovernanceSummary_endDate(ctx context.Context, fi
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIGovernanceSummary_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -21595,9 +21596,9 @@ func (ec *executionContext) _AIImpactSummary_startDate(ctx context.Context, fiel
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -21639,9 +21640,9 @@ func (ec *executionContext) _AIImpactSummary_endDate(ctx context.Context, field 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIImpactSummary_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23314,9 +23315,9 @@ func (ec *executionContext) _AIReviewLoadResult_startDate(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIReviewLoadResult_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -23358,9 +23359,9 @@ func (ec *executionContext) _AIReviewLoadResult_endDate(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIReviewLoadResult_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -24277,9 +24278,9 @@ func (ec *executionContext) _AIRiskBreakdownResult_startDate(ctx context.Context
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownResult_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -24321,9 +24322,9 @@ func (ec *executionContext) _AIRiskBreakdownResult_endDate(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AIRiskBreakdownResult_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -26438,9 +26439,9 @@ func (ec *executionContext) _AiAttributedPrsResult_startDate(ctx context.Context
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AiAttributedPrsResult_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -26482,9 +26483,9 @@ func (ec *executionContext) _AiAttributedPrsResult_endDate(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_AiAttributedPrsResult_endDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -28047,9 +28048,9 @@ func (ec *executionContext) _CapacityForecast_targetDate(ctx context.Context, fi
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CapacityForecast_targetDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -28088,9 +28089,9 @@ func (ec *executionContext) _CapacityForecast_p50Date(ctx context.Context, field
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CapacityForecast_p50Date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -28129,9 +28130,9 @@ func (ec *executionContext) _CapacityForecast_p85Date(ctx context.Context, field
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CapacityForecast_p85Date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -28170,9 +28171,9 @@ func (ec *executionContext) _CapacityForecast_p95Date(ctx context.Context, field
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CapacityForecast_p95Date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -29880,9 +29881,9 @@ func (ec *executionContext) _CognitiveLoadSignal_day(ctx context.Context, field 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CognitiveLoadSignal_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -30138,9 +30139,9 @@ func (ec *executionContext) _ComplexityPoint_date(ctx context.Context, field gra
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ComplexityPoint_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31034,9 +31035,9 @@ func (ec *executionContext) _CompoundingRiskPoint_day(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CompoundingRiskPoint_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -31987,9 +31988,9 @@ func (ec *executionContext) _CompoundingRiskTrendPoint_day(ctx context.Context, 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_CompoundingRiskTrendPoint_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -45485,9 +45486,9 @@ func (ec *executionContext) _EvidenceRef_windowStart(ctx context.Context, field 
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceRef_windowStart(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -45529,9 +45530,9 @@ func (ec *executionContext) _EvidenceRef_windowEnd(ctx context.Context, field gr
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceRef_windowEnd(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -45966,9 +45967,9 @@ func (ec *executionContext) _Experiment_startDate(ctx context.Context, field gra
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Experiment_startDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -46007,9 +46008,9 @@ func (ec *executionContext) _Experiment_stopDate(ctx context.Context, field grap
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(*time.Time)
+	res := resTmp.(*graphqldate.Date)
 	fc.Result = res
-	return ec.marshalODate2ᚖtimeᚐTime(ctx, field.Selections, res)
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Experiment_stopDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -50181,9 +50182,9 @@ func (ec *executionContext) _OperatingReview_weekStart(ctx context.Context, fiel
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_OperatingReview_weekStart(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -50225,9 +50226,9 @@ func (ec *executionContext) _OperatingReview_priorWeekStart(ctx context.Context,
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_OperatingReview_priorWeekStart(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -51750,9 +51751,9 @@ func (ec *executionContext) _ProductTelemetryDailyActiveUsersType_day(ctx contex
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ProductTelemetryDailyActiveUsersType_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -59629,9 +59630,9 @@ func (ec *executionContext) _Recommendation_windowStart(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Recommendation_windowStart(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -59673,9 +59674,9 @@ func (ec *executionContext) _Recommendation_windowEnd(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Recommendation_windowEnd(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -61103,9 +61104,9 @@ func (ec *executionContext) _ReviewEdgeRow_day(ctx context.Context, field graphq
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ReviewEdgeRow_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -66029,9 +66030,9 @@ func (ec *executionContext) _TestOpsRiskSparkPoint_ts(ctx context.Context, field
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TestOpsRiskSparkPoint_ts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -66117,9 +66118,9 @@ func (ec *executionContext) _TestOpsRiskTrendPoint_date(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TestOpsRiskTrendPoint_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -67709,9 +67710,9 @@ func (ec *executionContext) _TimeseriesBucket_date(ctx context.Context, field gr
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TimeseriesBucket_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -67979,9 +67980,9 @@ func (ec *executionContext) _TrendPoint_day(ctx context.Context, field graphql.C
 		}
 		return graphql.Null
 	}
-	res := resTmp.(time.Time)
+	res := resTmp.(graphqldate.Date)
 	fc.Result = res
-	return ec.marshalNDate2timeᚐTime(ctx, field.Selections, res)
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TrendPoint_day(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -72817,14 +72818,14 @@ func (ec *executionContext) unmarshalInputAIDateRangeInput(ctx context.Context, 
 		switch k {
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73072,14 +73073,14 @@ func (ec *executionContext) unmarshalInputCapacityForecastFilterInput(ctx contex
 			it.WorkScopeID = data
 		case "fromDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("fromDate"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.FromDate = data
 		case "toDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("toDate"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73141,7 +73142,7 @@ func (ec *executionContext) unmarshalInputCapacityForecastInput(ctx context.Cont
 			it.TargetItems = data
 		case "targetDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetDate"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73230,14 +73231,14 @@ func (ec *executionContext) unmarshalInputCognitiveLoadInput(ctx context.Context
 			it.OrgID = data
 		case "sinceDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sinceDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.SinceDate = data
 		case "untilDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("untilDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73361,7 +73362,7 @@ func (ec *executionContext) unmarshalInputCompoundingRiskFilterInput(ctx context
 		switch k {
 		case "day":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("day"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73492,14 +73493,14 @@ func (ec *executionContext) unmarshalInputDateRangeInput(ctx context.Context, ob
 		switch k {
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73657,14 +73658,14 @@ func (ec *executionContext) unmarshalInputDevEvidenceScopeInput(ctx context.Cont
 			it.PresetDays = data
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -73907,14 +73908,14 @@ func (ec *executionContext) unmarshalInputDevMetricScopeInput(ctx context.Contex
 			it.DirectScope = data
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74378,7 +74379,7 @@ func (ec *executionContext) unmarshalInputOperatingReviewInput(ctx context.Conte
 			it.TeamID = data
 		case "weekStart":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("weekStart"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74405,14 +74406,14 @@ func (ec *executionContext) unmarshalInputProductTelemetryDashboardInput(ctx con
 		switch k {
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74450,14 +74451,14 @@ func (ec *executionContext) unmarshalInputReviewEdgesInput(ctx context.Context, 
 			it.OrgID = data
 		case "sinceDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sinceDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.SinceDate = data
 		case "untilDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("untilDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74640,14 +74641,14 @@ func (ec *executionContext) unmarshalInputSecurityAlertFilterInput(ctx context.C
 			it.States = data
 		case "since":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("since"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Since = data
 		case "until":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("until"))
-			data, err := ec.unmarshalODate2ᚖtimeᚐTime(ctx, v)
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -74726,14 +74727,14 @@ func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, 
 		switch k {
 		case "startDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.StartDate = data
 		case "endDate":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endDate"))
-			data, err := ec.unmarshalNDate2timeᚐTime(ctx, v)
+			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -89504,19 +89505,14 @@ func (ec *executionContext) marshalNDataHealth2ᚖgithubᚗcomᚋfullᚑchaosᚋ
 	return ec._DataHealth(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNDate2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
-	res, err := graphql.UnmarshalTime(v)
+func (ec *executionContext) unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx context.Context, v any) (graphqldate.Date, error) {
+	var res graphqldate.Date
+	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNDate2timeᚐTime(ctx context.Context, sel ast.SelectionSet, v time.Time) graphql.Marshaler {
-	res := graphql.MarshalTime(v)
-	if res == graphql.Null {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-	}
-	return res
+func (ec *executionContext) marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx context.Context, sel ast.SelectionSet, v graphqldate.Date) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNDateRangeInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphᚋmodelᚐDateRangeInput(ctx context.Context, v any) (*model.DateRangeInput, error) {
@@ -94670,20 +94666,20 @@ func (ec *executionContext) marshalOCoverage2ᚖgithubᚗcomᚋfullᚑchaosᚋde
 	return ec._Coverage(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalODate2ᚖtimeᚐTime(ctx context.Context, v any) (*time.Time, error) {
+func (ec *executionContext) unmarshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx context.Context, v any) (*graphqldate.Date, error) {
 	if v == nil {
 		return nil, nil
 	}
-	res, err := graphql.UnmarshalTime(v)
-	return &res, graphql.ErrorOnPath(ctx, err)
+	var res = new(graphqldate.Date)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalODate2ᚖtimeᚐTime(ctx context.Context, sel ast.SelectionSet, v *time.Time) graphql.Marshaler {
+func (ec *executionContext) marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋcmdᚋqueryᚑapiᚋinternalᚋgraphqldateᚐDate(ctx context.Context, sel ast.SelectionSet, v *graphqldate.Date) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
-	res := graphql.MarshalTime(*v)
-	return res
+	return v
 }
 
 func (ec *executionContext) unmarshalODateTime2ᚖtimeᚐTime(ctx context.Context, v any) (*time.Time, error) {

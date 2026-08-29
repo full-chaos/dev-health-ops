@@ -50,6 +50,12 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 				v := row[i].(float64)
 				*ptr = &v
 			}
+		case *[]string:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				*ptr = row[i].([]string)
+			}
 		default:
 			return errors.New("cognitiveload test: unsupported scan destination")
 		}
@@ -177,7 +183,8 @@ func TestResolve_SingleTeamPath_ErrorPropagates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Path 2: org-wide (teamId unset) OR team+repo combined (both set)
+// Path 3: org-wide (teamId unset). repoId, when set without teamId,
+// narrows only user_metrics_daily -- see below.
 // ---------------------------------------------------------------------------
 
 func TestResolve_OrgWide_MergesOnUnionOfDays(t *testing.T) {
@@ -249,50 +256,216 @@ func TestResolve_OrgWide_RepoIdOnlyFiltersUserMetrics(t *testing.T) {
 	}
 }
 
-// TestResolve_TeamAndRepoCombined_UsesTheSameMergePath proves the
-// team+repo-combined case (both set) is NOT a third branch -- it falls
-// through to the identical org-wide two-query merge, with BOTH team_id
-// AND repo_id bound on the user-metrics query and ONLY team_id bound on
-// the team-metrics query. This is the feature-branch tip's ACTUAL
-// behavior (verified via `git merge-base --is-ancestor 8519cd2a8
-// origin/feature/chaos-4352-go-api`, which returns false): CHAOS-4406's
-// ownership-gated resolution exists only on origin/main as of this port,
-// not on the feature branch this port targets -- see this package's own
-// doc comment for the full finding.
-func TestResolve_TeamAndRepoCombined_UsesTheSameMergePath(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Path 2 (CHAOS-4406/CHAOS-4462): team+repo combined -- ownership-gated
+// ---------------------------------------------------------------------------
+
+// TestResolve_TeamAndRepoCombined_OwnershipResolves proves the current
+// (post-CHAOS-4462) behavior: both set resolves ownership FIRST via
+// team_repo_ownership, then filters both fetches by repo_id ALONE --
+// never team_id -- once ownership is confirmed. 4 queries: repo
+// candidates, ownership, user metrics, repo-scoped team metrics.
+func TestResolve_TeamAndRepoCombined_OwnershipResolves(t *testing.T) {
 	client := &fakeClient{
 		responses: []*fakeRowScanner{
-			{rows: nil},
-			{rows: nil},
+			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},                        // repo candidates
+			{rows: [][]any{{"repo-uuid-1", "team-a"}}},                            // ownership: native, owned by team-a
+			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}}, // user metrics
+			{rows: [][]any{{day("2026-08-20"), 0.25, 0.0}}},                       // repo-scoped team metrics
+		},
+		errs: []error{nil, nil, nil, nil},
+	}
+	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if client.calls != 4 {
+		t.Fatalf("calls = %d, want 4 (candidates, ownership, user metrics, repo-scoped team metrics)", client.calls)
+	}
+	if !strings.Contains(client.statements[0], "FROM repos FINAL") {
+		t.Errorf("expected first query to resolve repo candidates, got: %s", client.statements[0])
+	}
+	if !strings.Contains(client.statements[1], "team_repo_ownership") {
+		t.Errorf("expected second query to check ownership, got: %s", client.statements[1])
+	}
+	// The user-metrics query must be bound with the RESOLVED repo_id and
+	// must NOT bind team_id at all -- ownership already scopes every
+	// signal for this repo to the requesting team.
+	userNames := map[string]bool{}
+	for _, b := range client.bindings[2] {
+		userNames[b.Name] = true
+		if b.Name == "repo_id" && b.Value != "repo-uuid-1" {
+			t.Errorf("expected user-metrics repo_id = repo-uuid-1 (the resolved id, not the input slug), got %v", b.Value)
+		}
+	}
+	if userNames["team_id"] {
+		t.Error("user-metrics query must never bind team_id in the ownership-gated path")
+	}
+	if !userNames["repo_id"] {
+		t.Error("expected user-metrics query bound with repo_id")
+	}
+	if strings.Contains(client.statements[3], "{team_id:String}") {
+		t.Errorf("repo-scoped team-metrics query must never filter by team_id, got: %s", client.statements[3])
+	}
+	if result.TotalDays != 1 || len(result.Signals) != 1 {
+		t.Fatalf("expected 1 merged signal, got %+v", result)
+	}
+	sig := result.Signals[0]
+	if sig.PrInterruptionLoad != 4.0 {
+		t.Errorf("PrInterruptionLoad = %v, want 4.0", sig.PrInterruptionLoad)
+	}
+	if sig.AfterHoursCommitRatio == nil || *sig.AfterHoursCommitRatio != 0.25 {
+		t.Errorf("AfterHoursCommitRatio = %v, want 0.25", sig.AfterHoursCommitRatio)
+	}
+}
+
+// TestResolve_TeamAndRepoCombined_RepoDoesNotExist_ReturnsEmptyOneQuery
+// proves an unresolvable repoId short-circuits after the FIRST query --
+// an explicit empty result, never an error, never a second query.
+func TestResolve_TeamAndRepoCombined_RepoDoesNotExist_ReturnsEmptyOneQuery(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: nil}},
+		errs:      []error{nil},
+	}
+	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("no-such-repo"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("calls = %d, want 1 (short-circuit on no candidates)", client.calls)
+	}
+	if result.Signals == nil || len(result.Signals) != 0 || result.TotalDays != 0 {
+		t.Fatalf("expected an explicit non-nil empty result, got %+v", result)
+	}
+}
+
+// TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty
+// proves a repo that resolves NATIVELY to a DIFFERENT team is claimed and
+// NEVER re-checked against repo_patterns (a candidate resolved by native
+// ownership is removed from the "unresolved" set regardless of which team
+// it resolved to) -- only 2 queries, no pattern-fallback teams read, and
+// an explicit empty result rather than the wrong team's data.
+func TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},
+			{rows: [][]any{{"repo-uuid-1", "team-b"}}}, // owned by team-b, not team-a
 		},
 		errs: []error{nil, nil},
 	}
-	_, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
+	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if client.calls != 2 {
-		t.Fatalf("calls = %d, want 2 (the two-query merge, not a single team_cognitive_load_daily read)", client.calls)
+		t.Fatalf("calls = %d, want 2 (candidates, ownership -- a natively-resolved candidate is claimed, never pattern-fallback-checked)", client.calls)
 	}
-	if strings.Contains(client.statements[0], "team_cognitive_load_daily") {
-		t.Error("team+repo combined must not read team_cognitive_load_daily -- it has no repo_id dimension")
+	if result.Signals == nil || len(result.Signals) != 0 || result.TotalDays != 0 {
+		t.Fatalf("expected an explicit non-nil empty result (owned by team-b, not team-a), got %+v", result)
 	}
-	userNames := map[string]bool{}
-	for _, b := range client.bindings[0] {
-		userNames[b.Name] = true
+}
+
+// TestResolve_TeamAndRepoCombined_PatternFallbackResolves proves a repo
+// with NO native team_repo_ownership row at all still resolves via
+// teams.repo_patterns (the path GitLab/Jira/Linear auto-imports rely on
+// entirely, since none of them write team_repo_ownership).
+func TestResolve_TeamAndRepoCombined_PatternFallbackResolves(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},
+			{rows: nil}, // no native ownership row for this repo at all
+			{rows: [][]any{{"team-a", []string{"org/repo-a"}}}},
+			{rows: nil}, // user metrics
+			{rows: nil}, // repo-scoped team metrics
+		},
+		errs: []error{nil, nil, nil, nil, nil},
 	}
-	if !userNames["team_id"] || !userNames["repo_id"] {
-		t.Errorf("expected user-metrics query bound with BOTH team_id and repo_id, got %v", client.bindings[0])
+	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
 	}
-	teamNames := map[string]bool{}
-	for _, b := range client.bindings[1] {
-		teamNames[b.Name] = true
+	if client.calls != 5 {
+		t.Fatalf("calls = %d, want 5 (candidates, ownership, teams, user metrics, repo-scoped team metrics)", client.calls)
 	}
-	if !teamNames["team_id"] {
-		t.Errorf("expected team-metrics query bound with team_id, got %v", client.bindings[1])
+	if result.Signals == nil {
+		t.Fatal("expected a non-nil (possibly empty) signals slice")
 	}
-	if teamNames["repo_id"] {
-		t.Errorf("team-metrics query must never bind repo_id, got %v", client.bindings[1])
+}
+
+// TestResolveOwnedRepoID_DedupesToFirstRowPerResolvedRepoAndRespectsOrder
+// proves the Go port trusts ClickHouse's own ORDER BY entirely: it never
+// re-sorts, it only dedups to the FIRST row per resolved_repo_id (the
+// scripted response below simulates two rows already tied and ordered for
+// the same resolved_repo_id, as the real ORDER BY (is_primary DESC,
+// specificity DESC, updated_at DESC, team_id ASC) would produce) and then
+// returns the first resolved_repo_id (in ClickHouse's own ascending
+// resolved_repo_id order) whose canonical owner matches teamID.
+func TestResolveOwnedRepoID_DedupesToFirstRowPerResolvedRepoAndRespectsOrder(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{{"r1", "org/repo-a"}, {"r2", "org/repo-a"}}},
+			{rows: [][]any{
+				{"r1", "team-x"}, // r1's canonical (first-seen) owner: team-x
+				{"r1", "team-y"}, // a losing tie-break row for r1 -- must be ignored
+				{"r2", "team-a"}, // r2's canonical owner: team-a, the match
+			}},
+		},
+		errs: []error{nil, nil},
+	}
+	id, found, err := resolveOwnedRepoID(context.Background(), client, "org-1", "team-a", "org/repo-a")
+	if err != nil {
+		t.Fatalf("resolveOwnedRepoID: %v", err)
+	}
+	if !found || id != "r2" {
+		t.Fatalf("resolveOwnedRepoID = (%q, %v), want (\"r2\", true)", id, found)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// repoPatternResolver
+// ---------------------------------------------------------------------------
+
+func TestRepoPatternResolver_ExactMatchWinsOverPrefix(t *testing.T) {
+	resolver := newRepoPatternResolver([]patternTeam{
+		{id: "team-broad", repoPatterns: []string{"org/*"}},
+		{id: "team-exact", repoPatterns: []string{"org/repo-a"}},
+	})
+	teamID, ok := resolver.resolve("org/repo-a")
+	if !ok || teamID != "team-exact" {
+		t.Errorf("resolve(org/repo-a) = (%q, %v), want (team-exact, true)", teamID, ok)
+	}
+}
+
+func TestRepoPatternResolver_LongestPrefixWins(t *testing.T) {
+	resolver := newRepoPatternResolver([]patternTeam{
+		{id: "team-broad", repoPatterns: []string{"org/*"}},
+		{id: "team-narrow", repoPatterns: []string{"org/repo-*"}},
+	})
+	teamID, ok := resolver.resolve("org/repo-a")
+	if !ok || teamID != "team-narrow" {
+		t.Errorf("resolve(org/repo-a) = (%q, %v), want (team-narrow, true) -- longest prefix must win", teamID, ok)
+	}
+}
+
+func TestRepoPatternResolver_NoMatchReturnsFalse(t *testing.T) {
+	resolver := newRepoPatternResolver([]patternTeam{
+		{id: "team-a", repoPatterns: []string{"org/repo-a"}},
+	})
+	if _, ok := resolver.resolve("org/repo-z"); ok {
+		t.Error("expected no match for an unrelated repo")
+	}
+	if _, ok := resolver.resolve(""); ok {
+		t.Error("expected no match for an empty repo name")
+	}
+}
+
+func TestRepoPatternResolver_CaseInsensitive(t *testing.T) {
+	resolver := newRepoPatternResolver([]patternTeam{
+		{id: "team-a", repoPatterns: []string{"Org/Repo-A"}},
+	})
+	teamID, ok := resolver.resolve("org/repo-a")
+	if !ok || teamID != "team-a" {
+		t.Errorf("resolve should be case-insensitive, got (%q, %v)", teamID, ok)
 	}
 }
 

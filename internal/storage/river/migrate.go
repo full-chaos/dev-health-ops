@@ -468,6 +468,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// finalize transition would roll back the instant this table has
 		// an 'open' row for its run. See domainPosture()'s matching entry.
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_finalize_redrive_events') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_finalize_redrive_events TO " + domainRole + "; END IF; END $$",
+		// CHAOS-4459: the partition-recompute provenance ledger.
+		// INSERT-only -- see domainPosture()'s matching entry.
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partition_recompute_events') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.daily_metrics_partition_recompute_events TO " + domainRole + "; END IF; END $$",
 		// UPDATE is required by PostgreSQL for SELECT ... FOR UPDATE row
 		// locking; retention never updates conversation columns.
 		"DO $$ BEGIN IF to_regclass('public.dev_conversations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations TO " + domainRole + "; END IF; END $$",

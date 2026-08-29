@@ -74,6 +74,61 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     "incident_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_release_confidence": ("org_id", "repo_id", "day"),
     "testops_pipeline_stability": ("org_id", "repo_id", "day"),
+    # CHAOS-4459 (codex review, P1): file_metrics_daily's hotspot/churn
+    # readers (api/queries/heatmap.py) summed the raw table with no dedup at
+    # all -- a genuine gap, not just a missing registry entry (unlike the
+    # CHAOS-4246 batch above, whose readers already hand-rolled argMax).
+    # Natural key includes path: file_metrics_daily's own sorting key is
+    # (org_id, repo_id, day, path) (migration 027).
+    "file_metrics_daily": ("org_id", "repo_id", "day", "path"),
+    # CHAOS-4459 (codex review round 3): file_hotspot_daily is the
+    # file_risk_hotspots family's own output table, same append-only
+    # MergeTree shape and same partition-recompute exposure as
+    # file_metrics_daily above. Its hand-rolled readers (metrics/
+    # operating_review.py, metrics/loaders/ai_impact.py,
+    # recommendations/loader.py, api/graphql/resolvers/complexity.py) all
+    # already argMax-dedup correctly -- this registration is for the
+    # GENERIC report-registry path (reports/charts.py's
+    # dedup_from(definition.source_table), reports/metric_registry.py's
+    # file_hotspot_daily entry), which was reading it raw. Natural key
+    # matches migration 027's sorting key (org_id, repo_id, day, file_path).
+    "file_hotspot_daily": ("org_id", "repo_id", "day", "file_path"),
+    # CHAOS-4459 (codex review round 4, key CORRECTED in round 5): review_edges_daily
+    # is another generic-report-registry source_table (reports/metric_registry.py's
+    # review-load charts, sum(reviews_count)) with no dedup entry -- same
+    # gap class as file_metrics_daily/file_hotspot_daily above, surfaced by
+    # this ticket's own recompute verb re-executing every family in a
+    # partition, not just repo_user_commit (see
+    # internal/jobs/metrics/daily/partition_recompute.go's
+    # SupportedPartitionRecomputeFamilies doc comment).
+    #
+    # CORRECTION (codex review round 5, P1): the first version of this key
+    # omitted org_id, wrongly claiming the table has no such column --
+    # migration 024 (ADD COLUMN IF NOT EXISTS org_id ... DEFAULT 'default')
+    # added it to review_edges_daily (and commit_metrics below) after
+    # migration 004 originally created it without one. Two orgs syncing the
+    # same repo slug get the same deterministic repo_id; an org_id-less key
+    # would let LIMIT 1 BY pick ONE org's row before any org_id filter
+    # downstream ever runs, silently discarding the other org's review
+    # data for that repo/day. Natural key now matches migration 027's
+    # canonical sorting key exactly: (org_id, repo_id, reviewer, author, day).
+    "review_edges_daily": ("org_id", "repo_id", "reviewer", "author", "day"),
+    # CHAOS-4459 (self-audit against families.json's full write-table list,
+    # requested by team-lead after codex round 4; key CORRECTED in round 5):
+    # commit_metrics -- THIS TICKET'S OWN target table -- is a plain
+    # MergeTree source_table for reports/metric_registry.py's commit charts
+    # (commit_hash/files_changed/size_bucket/total_loc) and had no dedup
+    # key registered, same gap class as the tables above. A repeat
+    # partition-recompute of the same day (this PR's own integration test
+    # exercises exactly that) re-inserts the SAME
+    # (org_id, repo_id, day, author_email, commit_hash) rows under a fresh
+    # computed_at, doubling these charts' sums.
+    #
+    # CORRECTION (codex review round 5, P1): same org_id omission as
+    # review_edges_daily above, same migration-024 root cause -- fixed the
+    # same way. Natural key now matches migration 027's canonical sorting
+    # key exactly: (org_id, repo_id, day, author_email, commit_hash).
+    "commit_metrics": ("org_id", "repo_id", "day", "author_email", "commit_hash"),
 }
 
 

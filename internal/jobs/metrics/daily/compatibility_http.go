@@ -110,6 +110,23 @@ func classifyCompatibilityError(data []byte) error {
 	case "process_signaled":
 		return ErrCompatibilityProcessSignaled
 	case "resource_exhausted":
+		// codex review (CHAOS-4543 round 2): a multi-repo partition where an
+		// EARLIER repo already wrote before a LATER repo hits the
+		// deterministic guard is marked ambiguous by the Python bridge
+		// (_execute's safe_to_retry=False path -- progress_seen is true) --
+		// "state": "ambiguous" travels alongside "deterministic": true in
+		// that response. The stuck-ambiguous ledger row is the MORE severe
+		// condition: it refuses every future claim 409 until a human
+		// /repair call, exactly the CHAOS-4319 class the "ambiguous_refused"
+		// case below already defers to. Checked BEFORE Deterministic, for
+		// the same reason CHAOS-4319 established: applying the
+		// no-retry-on-a-known-guard optimization here would let River
+		// discard the job Permanent after one attempt while the ledger
+		// identity stays wedged, with no natural retry left to ever reach
+		// the failPartitionPermanently path that actually resolves it.
+		if body.Detail.State == "ambiguous" {
+			return ErrCompatibilityAmbiguousStuck
+		}
 		if body.Detail.Deterministic {
 			return ErrCompatibilityResourceExhaustedDeterministic
 		}

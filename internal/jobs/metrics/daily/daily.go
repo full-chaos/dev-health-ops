@@ -684,10 +684,20 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// this Permanent so River does not burn its whole attempt
 			// budget reproducing an identical, deterministic refusal 5
 			// times every cycle.
+			//
+			// codex review (round 2): Permanent must never be returned
+			// unless the durable release is CONFIRMED to have landed --
+			// mirrors the ambiguous_stuck branch's own established rule
+			// above. A failed write (lease already expired, a transient DB
+			// error) here would otherwise tell River to stop retrying a job
+			// that recorded nothing durable at all: the exact silent-loss
+			// shape CHAOS-4319 exists to close, reintroduced for this new
+			// no-retry optimization if left unguarded.
 			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic)
+				return retryCompatibilityError(err)
 			}
-			return retryCompatibilityError(err)
+			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonResourceExhausted)
 		}
 		if errors.Is(err, ErrCompatibilityResourceExhausted) {
 			// CHAOS-4543: same rationale as ErrCompatibilityProgressStalled

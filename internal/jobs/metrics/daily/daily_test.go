@@ -627,6 +627,45 @@ func TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry(t *testing.T) {
 	}
 }
 
+// TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable is
+// the codex-review red-first proof (CHAOS-4543 round 2), the deterministic
+// sibling of TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry above:
+// the deterministic branch's Permanent classification must NEVER fire unless
+// the durable release write is CONFIRMED to have landed -- mirrors
+// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable's existing
+// rule for the ambiguous_stuck branch. Before this fix, a failed write here
+// (lease already expired, a transient DB error) still returned Permanent,
+// telling River to stop retrying a job that recorded nothing durable at all
+// -- the exact silent-loss shape CHAOS-4319 exists to close, reintroduced by
+// this ticket's own no-retry optimization if left unguarded.
+func TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("deterministic resource_exhausted failure = %v, want retryable (write failed, must not go Permanent)", err)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
+	}
+}
+
 // TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding is
 // the CHAOS-4319 red-first proof. Before this ticket's fix, an
 // ambiguous_refused response whose ledger state is "ambiguous" was

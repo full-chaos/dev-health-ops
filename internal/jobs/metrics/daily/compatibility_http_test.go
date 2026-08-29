@@ -166,6 +166,22 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityResourceExhausted,
 		},
 		{
+			// codex review (CHAOS-4543 round 2): a multi-repo partition
+			// where an earlier repo already wrote before a later one hits
+			// the deterministic guard is marked ambiguous by the Python
+			// bridge (safe_to_retry=False -- progress_seen is true) --
+			// state=="ambiguous" must win over deterministic=true, exactly
+			// like it already does for the "ambiguous_refused" reason
+			// above. Before this fix, this case fell into the deterministic
+			// branch, marking the job Permanent after one attempt while the
+			// ledger identity stayed wedged ambiguous with no natural retry
+			// left to ever reach the failPartitionPermanently path.
+			name:       "resource-exhausted runner, deterministic guard, but ledger ambiguous, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous","reason":"resource_exhausted","deterministic":true}}`,
+			wantErr:    ErrCompatibilityAmbiguousStuck,
+		},
+		{
 			// CHAOS-4319: state=="ambiguous" means the ledger row can never
 			// move again without a human /repair call -- this is the stuck,
 			// permanent case, not a transient one worth retrying blindly.

@@ -796,8 +796,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # gating oracle), and 7 integration-tagged tests in
     # team_repo_ownership_derivation_integration_test.go (//go:build
     # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
-    assert len(expected_provider_tests) == 1115
-    assert len(expected_integration_tests) == 126
+    #
+    # CHAOS-4458 part (b) then added 6 more top-level tests in
+    # internal/providersync for the Linear id-space fix (Linear's
+    # team_project_ownership rows are keyed "{org_id}:linear:{team_key}"
+    # while a Linear work item's own project_id is a disjoint raw Linear
+    # Project UUID -- see team_repo_ownership_derivation.go's
+    # TeamRepoOwnershipWorkItem doc comment): 5 ordinary tests in
+    # team_repo_ownership_derivation_test.go
+    # (TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership,
+    # TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership,
+    # TestDirectProjectIDArmPreferredOverLinearTeamKeyArm,
+    # TestLinearTeamKeyArmNeverAppliesToNonLinearProviders,
+    # TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam --
+    # the last one pins a codex adversarial-review fix: the recorded
+    # resolution arm must not depend on ClickHouse scan order) and 1
+    # integration-tagged test in
+    # team_repo_ownership_derivation_integration_test.go
+    # (TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership).
+    # 1115 -> 1121 top-level; 126 -> 127 integration-tagged.
+    assert len(expected_provider_tests) == 1121
+    assert len(expected_integration_tests) == 127
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -813,7 +832,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1115
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1121
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -874,7 +893,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1115
+    assert len(selected_tests) == len(set(selected_tests)) == 1121
     assert set(selected_tests) == expected_tests
 
 

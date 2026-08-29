@@ -702,6 +702,12 @@ func domainPosture() RolePosture {
 			// ledger is append-only by construction, matching every other
 			// audit-trail table in this manifest.
 			{"daily_metrics_finalize_redrive_events", true, true, false},
+			// CHAOS-4459: the partition-recompute provenance ledger.
+			// INSERT-only (redriveOnePartitionsForRange's provenance row,
+			// partition_recompute.go) -- unlike the finalize-redrive ledger
+			// above, no code path ever updates a row after insert, so no
+			// UPDATE grant.
+			{"daily_metrics_partition_recompute_events", true, false, false},
 			{"dev_conversations", false, true, true},
 			{"dev_conversation_tombstones", true, false, false},
 			{"external_ingest_batch_payloads", false, false, true},

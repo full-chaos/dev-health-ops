@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
@@ -148,14 +149,22 @@ async def fetch_hotspot_risk(
     limit: int,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    # CHAOS-4459 (codex review, P1): file_metrics_daily is append-only --
+    # a redrive/recompute writes a SECOND (repo_id, day, path) row with a
+    # fresher computed_at, never replacing the first. Summing hotspot_score
+    # over the raw table therefore double-counts any day that was ever
+    # recomputed. dedup_from() collapses to the latest generation per
+    # (org_id, repo_id, day, path) BEFORE aggregating across days/weeks --
+    # the same shared helper every other legacy append-only daily table in
+    # this schema uses (clickhouse_dedup.py), now registered for
+    # file_metrics_daily too.
     top_query = f"""
         SELECT
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS total
-        FROM file_metrics_daily
+        FROM {dedup_from("file_metrics_daily")}
         INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
-        WHERE day >= %(start_day)s
-          AND day < %(end_day)s
+        WHERE day >= %(start_day)s AND day < %(end_day)s
           AND file_metrics_daily.org_id = %(org_id)s
           AND repos.org_id = %(org_id)s
         {scope_filter}
@@ -176,10 +185,9 @@ async def fetch_hotspot_risk(
             toStartOfWeek(day) AS week,
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS value
-        FROM file_metrics_daily
+        FROM {dedup_from("file_metrics_daily")}
         INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
-        WHERE day >= %(start_day)s
-          AND day < %(end_day)s
+        WHERE day >= %(start_day)s AND day < %(end_day)s
           AND concat(repos.repo, ':', path) IN %(files)s
           AND file_metrics_daily.org_id = %(org_id)s
           AND repos.org_id = %(org_id)s
@@ -208,6 +216,11 @@ async def fetch_hotspot_evidence(
     limit: int,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    # CHAOS-4459 (codex review, P1): dedup to one row per (org_id, repo_id,
+    # day, path) -- the latest generation by computed_at, via dedup_from()
+    # -- before returning evidence rows, matching fetch_hotspot_risk's own
+    # fix above. A raw SELECT here would show a redriven day TWICE, once per
+    # generation.
     query = f"""
         SELECT
             day,
@@ -217,7 +230,7 @@ async def fetch_hotspot_evidence(
             contributors,
             commits_count,
             hotspot_score
-        FROM file_metrics_daily
+        FROM {dedup_from("file_metrics_daily")}
         INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(week_start)s
           AND day < %(week_end)s

@@ -166,6 +166,31 @@ func stringsFromSummaryField(value any) []string {
 		}
 		return []string{text}
 	}
+	// CHAOS-4431 codex review (self-found while strengthening a test, not an
+	// original finding): a native collector's Discover() hands this summary
+	// straight to Verify in-process (VerifiedDiscoveryExecutor.Discover,
+	// verified_discovery_executor.go:43-51) -- no JSON round trip, unlike the
+	// bridge path, whose populate response arrives as a decoded map where
+	// every JSON array is []any. A native []string claim used to fail BOTH
+	// type assertions below and silently parse as empty, making readback
+	// verification a permanent no-op for every native provider regardless
+	// of what was actually written -- proven red by
+	// TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff
+	// once it asserted Verify actually rejects a missing claimed sprint id.
+	if strings, ok := value.([]string); ok {
+		unique := make(map[string]bool, len(strings))
+		for _, text := range strings {
+			if text != "" {
+				unique[text] = true
+			}
+		}
+		result := make([]string, 0, len(unique))
+		for text := range unique {
+			result = append(result, text)
+		}
+		sort.Strings(result)
+		return result
+	}
 	items, ok := value.([]any)
 	if !ok {
 		return nil

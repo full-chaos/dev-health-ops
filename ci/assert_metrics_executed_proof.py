@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from typing import TypedDict
@@ -169,7 +170,16 @@ def team_readback(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--clickhouse-uri", required=True)
+    # Defaults from the environment so a caller never has to put a
+    # credential-bearing DSN into argv, where any process listing can read it
+    # (CHAOS-4457). Mirrors `fixtures generate --sink`, which already resolves
+    # CLICKHOUSE_URI the same way. Still overridable on the command line for
+    # ad-hoc use against a throwaway store.
+    parser.add_argument(
+        "--clickhouse-uri",
+        default=os.getenv("CLICKHOUSE_URI"),
+        help="ClickHouse DSN. Env: CLICKHOUSE_URI (preferred — keeps the credential out of argv).",
+    )
     parser.add_argument("--org-id", required=True)
     parser.add_argument(
         "--run-start",
@@ -193,6 +203,14 @@ def main() -> int:
         "step summary).",
     )
     args = parser.parse_args()
+    # Defaulting from the environment must not become "silently None": with
+
+    # neither the flag nor CLICKHOUSE_URI set, this used to proceed and fail
+
+    # deep inside the sink with an unrelated-looking error.
+
+    if not args.clickhouse_uri:
+        parser.error("--clickhouse-uri or CLICKHOUSE_URI is required")
 
     # clickhouse_connect binds DateTime64(6) parameters from a real datetime
     # object, not a raw ISO8601 string -- a string with a "+00:00" offset

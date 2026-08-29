@@ -69,6 +69,49 @@ var appendOnlyDailyKeys = map[string][]string{
 	// (repo, metric_name, day) -- omitting it would collapse the 4 distinct
 	// DORA metrics for one repo/day into a single arbitrary row.
 	"dora_metrics_daily": {"org_id", "repo_id", "day", "metric_name"},
+	// CHAOS-4459 (codex review, rounds 2-3): registered in
+	// clickhouse_dedup.py's _APPEND_ONLY_DAILY_KEYS but missing here --
+	// this package's own bare avg()/sum() aggregate over
+	// metric_registry.json's file_metrics_daily/file_hotspot_daily entries
+	// was reading them raw, exactly the CHAOS-4246 gap this file exists to
+	// close. Natural keys mirror the Python registry exactly.
+	"file_metrics_daily": {"org_id", "repo_id", "day", "path"},
+	"file_hotspot_daily": {"org_id", "repo_id", "day", "file_path"},
+	// CHAOS-4459 (codex review round 4, key CORRECTED in round 5): review_edges_daily
+	// is a plain MergeTree source_table for metric_registry.json's
+	// review-load charts (sum(reviews_count)), and this recompute verb's
+	// own doc comment (partition_recompute.go's
+	// SupportedPartitionRecomputeFamilies) already admits every family in a
+	// partition -- not just repo_user_commit -- gets re-executed on a
+	// recompute, since there is no per-family publish scoping.
+	//
+	// CORRECTION (codex review round 5, P1): the first version of this key
+	// omitted org_id, wrongly claiming the table has no such column --
+	// migration 024 (ADD COLUMN IF NOT EXISTS org_id ... DEFAULT 'default')
+	// added it to review_edges_daily (and commit_metrics below) after
+	// migration 004 originally created it. Two orgs that sync the same
+	// repo slug get the same deterministic repo_id; an org_id-less key
+	// would let LIMIT 1 BY pick ONE org's row before any org_id filter
+	// downstream ever runs, silently discarding the other org's review
+	// data for that repo/day. Natural key now matches migration 027's
+	// canonical sorting key exactly: (org_id, repo_id, reviewer, author, day).
+	"review_edges_daily": {"org_id", "repo_id", "reviewer", "author", "day"},
+	// CHAOS-4459 (self-audit against families.json's full write-table list,
+	// requested by team-lead after codex round 4; key CORRECTED in round 5):
+	// commit_metrics -- THIS TICKET'S OWN target table -- is a plain
+	// MergeTree source_table for metric_registry.json's commit charts
+	// (Commit Hash/Files Changed/Size Bucket/Total LOC) and had no dedup
+	// key registered, same gap class as the tables above. A repeat
+	// partition-recompute of the same day (this PR's own integration test
+	// exercises exactly that) re-inserts the SAME
+	// (org_id, repo_id, day, author_email, commit_hash) rows under a fresh
+	// computed_at, doubling these charts' sums.
+	//
+	// CORRECTION (codex review round 5, P1): same org_id omission as
+	// review_edges_daily above, same migration-024 root cause -- fixed the
+	// same way. Natural key now matches migration 027's canonical sorting
+	// key exactly: (org_id, repo_id, day, author_email, commit_hash).
+	"commit_metrics": {"org_id", "repo_id", "day", "author_email", "commit_hash"},
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

@@ -128,11 +128,47 @@ cd "${ROOT}" || {
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${ROOT}/.uv-cache}"
 
 # --- Config (override via env). ----------------------------------------------------
+# CH_CONTAINER names the Compose container AND -- see LOCK_DIR below -- doubles
+# as the gate's lock key. That second role is why a cluster-isolated lane can
+# already run concurrently with a Compose-stack gate: pass a lane-scoped name
+# and the two runs take different locks (CHAOS-4457/CHAOS-4428).
 CH_CONTAINER="${CH_CONTAINER:-dev-health-clickhouse-1}"
 CH_USER="${CH_USER:-ch}"
 CH_PASS="${CH_PASS:-ch}"
 CH_HOST="${CH_HOST:-localhost}"
 CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
+# CH_TRANSPORT selects how the scratch CREATE/DROP DATABASE statements reach
+# ClickHouse (CHAOS-4457). "docker" (the default, unchanged) execs
+# clickhouse-client inside CH_CONTAINER; "http" POSTs to CH_HOST:CH_HTTP_PORT
+# instead, which is what a lane whose ClickHouse runs as a Kubernetes pod needs
+# -- there is no container on this host to exec into. Only ch_query() ever used
+# docker; every other ClickHouse access in this script already went over HTTP
+# through CH_HOST/CH_HTTP_PORT (see SCRATCH_URI below), so this one function is
+# the whole difference between the two modes.
+CH_TRANSPORT="${CH_TRANSPORT:-docker}"
+# Path of the in-flight curl credential file, so the EXIT trap can remove it
+# even if the gate is interrupted mid-request.
+CH_CURL_CONFIG=""
+# Endpoint scheme for the http transport. A TLS-only ClickHouse (the 443/8443
+# variants this repo's own connection parser already accepts) rejects plaintext,
+# so this must be settable rather than hardcoded (codex review round 2). It is
+# applied to BOTH the curl endpoint below and SCRATCH_URI, so the two can never
+# disagree about what they are talking to.
+CH_HTTP_SCHEME="${CH_HTTP_SCHEME:-http}"
+case "${CH_HTTP_SCHEME}" in
+  http | https) ;;
+  *)
+    printf 'CH_HTTP_SCHEME must be "http" or "https", got: %s\n' "${CH_HTTP_SCHEME}" >&2
+    exit 2
+    ;;
+esac
+case "${CH_TRANSPORT}" in
+  docker | http) ;;
+  *)
+    printf 'CH_TRANSPORT must be "docker" or "http", got: %s\n' "${CH_TRANSPORT}" >&2
+    exit 2
+    ;;
+esac
 
 # Deterministic, per-worktree scratch db name (collision fix — see the
 # CONCURRENCY CONTRACT header above). Hash the absolute worktree ROOT (stable
@@ -156,7 +192,137 @@ default_scratch_db() {
   printf 'ci_local_validate_%s' "${digest}"
 }
 SCRATCH_DB="${SCRATCH_DB:-$(default_scratch_db "${ROOT}")}"
-SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+# Userinfo is PERCENT-ENCODED before it goes into a URI (codex). Raw
+# interpolation broke three ways for a credential containing URI-reserved
+# characters: '/' or '?' or '#' silently truncates or re-parses the DSN, so
+# CREATE could succeed over curl (which sends the byte-exact header) while the
+# migration that parses this URI connected somewhere else or failed; and a raw
+# '/' in the password also defeats redact_uri(), which splits the authority at
+# its first '/', printing the credential it exists to hide (verified:
+# clickhouse://ch:sec/ret@host:8123/db redacts to itself). The repo's own
+# parser round-trips percent-encoded userinfo -- see
+# tests/metrics/test_clickhouse_connection.py, which encodes `secret/word` as
+# `secret%2Fword` and expects `secret/word` back.
+uri_encode() {
+  # Encode ONLY what actually breaks the authority parse or redact_uri:
+  # gen-delims :/?#[]@ , the escape character % itself, and whitespace/control.
+  # RFC 3986 sec 3.2.1 permits sub-delims !$&'()*+,;= raw in userinfo, and both
+  # urlsplit and clickhouse-connect take them literally.
+  #
+  # The first version encoded everything outside the UNRESERVED set, which
+  # forced the compatibility guard below to reject sub-delims too -- and that
+  # REGRESSED the default docker path: before this PR a CH_PASS like `sec!ret`
+  # went to clickhouse-client raw and into SCRATCH_URI raw, parsed correctly,
+  # and worked end to end. Encoding it broke it, then the guard refused it.
+  # Encode the smaller set and the regression disappears.
+  #
+  # NON-ASCII IS WRONG HERE, deliberately and visibly, and worse than it looks:
+  # ${string:index:1} yields a CHARACTER while ${#string} counts CHARACTERS, so
+  # a multi-byte character both mis-encodes AND shortens the loop. Measured:
+  # uri_encode "cafe<acute>" returns `caf%C3` -- the second UTF-8 byte is not
+  # emitted at all, so the value is silently TRUNCATED, not merely wrong. That
+  # is unreachable today because
+  # the guard below refuses non-ASCII outright, and it is pinned by a test so it
+  # cannot surface quietly later. When CHAOS-4469 lifts the guard, the fix is to
+  # iterate BYTES rather than characters -- run the whole loop under `LC_ALL=C`
+  # so both ${#string} and the substring operate on bytes -- not to widen this
+  # case statement.
+  local string="$1" index char
+  for (( index = 0; index < ${#string}; index++ )); do
+    char="${string:index:1}"
+    case "$char" in
+    [A-Za-z0-9._~!\$\&\'\(\)\*+,\;=-]) printf '%s' "$char" ;;
+    *) LC_ALL=C printf '%%%02X' "'$char" ;;
+    esac
+  done
+}
+# Two limits of the http transport, enforced HERE rather than discovered three
+# stages later (codex round 2). Both come from one root: `dev-hops migrate
+# clickhouse status --check` calls clickhouse_connect.get_client(dsn=...)
+# DIRECTLY (src/dev_health_ops/migrate.py:360,461) instead of going through a
+# repository parser, so it sees the raw DSN with none of the handling the rest
+# of the path applies.
+#
+#   1. clickhouse-connect infers TLS from the PORT (443/8443) and explicit
+#      options, not from a `clickhouse+https://` scheme. On a TLS endpoint
+#      published at any other port -- a Kubernetes NodePort, exactly the case
+#      this transport exists for -- status would reconnect in PLAINTEXT and the
+#      gate would fail after a successful CREATE and upgrade.
+#   2. clickhouse-connect's DSN parser does not percent-DECODE userinfo, so a
+#      credential we correctly encoded as `sec%2Fret` reaches it verbatim.
+#      curl and the upgrade authenticate as `sec/ret`; status then fails auth.
+#
+# Refusing up front, with the reason, beats failing deep after two stages have
+# already succeeded. Lifting either limit means routing migrate through the
+# repository parser -- an ops-side change to the migration path, out of scope
+# for this gate script.
+# The credential restriction is NOT transport-scoped (codex R3). Encoding now
+# applies to SCRATCH_URI in BOTH modes, so a docker-mode CH_PASS='sec!ret'
+# becomes sec%21ret, the upgrade decodes it, and status --check authenticates
+# with the literal encoded string -- failing AFTER create and migrate, in the
+# default configuration. The limitation belongs to the migrate path, so the
+# guard has to sit outside the transport check.
+# Refuse exactly what uri_encode ENCODES, no more. Anything encoded reaches
+# `migrate clickhouse status --check` still percent-encoded, because that path
+# hands the DSN straight to clickhouse-connect, which does not decode userinfo
+# (CHAOS-4469). Sub-delims are left raw by uri_encode, so they are fine here and
+# the default docker path keeps working exactly as it did before this PR.
+case "${CH_USER}${CH_PASS}" in
+*[!A-Za-z0-9._~!\$\&\'\(\)\*+,\;=-]*)
+  printf 'CH_USER/CH_PASS may not contain : / ? # [ ] @ %% whitespace or non-ASCII\n' >&2
+  printf '  `migrate clickhouse status --check` passes the DSN straight to\n' >&2
+  printf '  clickhouse-connect, which does not percent-decode userinfo, so an\n' >&2
+  printf '  encoded credential fails there even though CREATE and upgrade accept\n' >&2
+  printf '  it. Sub-delims !$&'"'"'()*+,;= are fine and are NOT encoded.\n' >&2
+  printf '  Tracked as CHAOS-4469.\n' >&2
+  exit 2
+  ;;
+esac
+if [ "${CH_TRANSPORT}" = "http" ]; then
+  if [ "${CH_HTTP_SCHEME}" = "https" ] \
+     && [ "${CH_HTTP_PORT}" != "443" ] && [ "${CH_HTTP_PORT}" != "8443" ]; then
+    printf 'CH_HTTP_SCHEME=https is only supported on port 443 or 8443 (got %s):\n' "${CH_HTTP_PORT}" >&2
+    printf '  clickhouse-connect infers TLS from the port, not the URI scheme, so\n' >&2
+    printf '  `migrate clickhouse status --check` would reconnect in plaintext.\n' >&2
+    printf '  Publish the endpoint on 443/8443 (or port-forward to one) until\n' >&2
+    printf '  CHAOS-4469 lands.\n' >&2
+    exit 2
+  fi
+fi
+CH_USER_ENC="$(uri_encode "${CH_USER}")"
+CH_PASS_ENC="$(uri_encode "${CH_PASS}")"
+# clickhouse+https:// is how clickhouse-connect is told to use TLS; the plain
+# clickhouse:// form stays byte-identical for the default http scheme and the
+# default ch/ch credentials (which contain nothing encodable), so no existing
+# caller changes.
+if [ "${CH_HTTP_SCHEME}" = "https" ]; then
+  SCRATCH_URI="clickhouse+https://${CH_USER_ENC}:${CH_PASS_ENC}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+else
+  SCRATCH_URI="clickhouse://${CH_USER_ENC}:${CH_PASS_ENC}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+fi
+# redact_uri strips userinfo from a DSN for DISPLAY only (codex R3 / team-lead
+# R4 ruling). SCRATCH_URI necessarily carries a create/drop-capable credential,
+# and in CH_TRANSPORT=http that is a REAL cluster password on a shared host --
+# printing it verbatim put it in every gate log and scrollback. Everything the
+# operator actually needs to see (scheme, host, port, scratch db) survives.
+redact_uri() {
+  # Strip userinfo up to the LAST '@' that precedes the authority's first '/'.
+  # A non-greedy [^/@]*@ is wrong: a password may itself contain '@' (real
+  # example: clickhouse://ch:p@w0rd@host/db), and stopping at the first one
+  # leaks the remainder as if it were the host. Verified against exactly that
+  # shape. Falls through unchanged when there is no userinfo.
+  local uri="$1" scheme rest authority
+  case "$uri" in
+  *://*) scheme="${uri%%://*}://" ; rest="${uri#*://}" ;;
+  *) printf '%s' "$uri"; return ;;
+  esac
+  authority="${rest%%/*}"
+  case "$authority" in
+  *@*) printf '%s%s' "$scheme" "${rest#*"${authority%@*}"@}" ;;
+  *) printf '%s%s' "$scheme" "$rest" ;;
+  esac
+}
+
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
 MYPY="${ROOT}/.venv/bin/mypy"
@@ -900,6 +1066,21 @@ CH_PROBE_DETAIL=""
 
 ch_probe_docker() {
   CH_PROBE_DETAIL=""
+  if [ "${CH_TRANSPORT}" = "http" ]; then
+    # No container to probe: reachability is the HTTP endpoint answering, and a
+    # dead endpoint surfaces as a loud non-zero ch_query below rather than a
+    # silent skip. The dev-hops check still applies -- the ClickHouse stages
+    # invoke that CLI whichever transport carries the scratch DDL.
+    if ! command -v curl >/dev/null 2>&1; then
+      CH_PROBE_DETAIL="curl not found on PATH, required by CH_TRANSPORT=http"
+      return 1
+    fi
+    if [ ! -x "${DEVHOPS}" ]; then
+      CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — see the CH_TRANSPORT=docker branch below for the install recipe, or run with SKIP_CLICKHOUSE=1"
+      return 4
+    fi
+    return 0
+  fi
   if ! command -v docker >/dev/null 2>&1; then
     CH_PROBE_DETAIL="docker CLI not found on PATH"
     return 1
@@ -936,11 +1117,83 @@ ch_probe_docker() {
 ch_query() {
   # Runs a query against the DEFAULT-connected client. The ONLY DDL we ever send
   # here is CREATE/DROP DATABASE for the scratch db — never table DDL in 'default'.
+  #
+  # Two transports, same statements (CHAOS-4457). The http one carries the
+  # credentials in headers rather than the URL so they never reach a proxy log
+  # or a `ps` listing, and --fail-with-body turns ClickHouse's own 4xx/5xx into
+  # a non-zero exit WITH its error text, so a failed CREATE/DROP is never
+  # mistaken for success (the docker path gets that from clickhouse-client).
+  if [ "${CH_TRANSPORT}" = "http" ]; then
+    # The credential goes in a private --config file, NEVER on the command
+    # line (codex review round 2). An earlier version passed it as
+    # `--header "X-ClickHouse-Key: ${CH_PASS}"` with a comment claiming that
+    # kept it out of `ps` -- it did not: curl argv IS visible in a process
+    # listing, and this gate runs on a shared host. The credential can CREATE
+    # and DROP databases. umask 077 before mktemp so the file is never
+    # world-readable even briefly, and it is removed on every return path.
+    #
+    # --noproxy '*' is also not optional: CH_HOST is a cluster-local NodePort
+    # or loopback address, and an ambient HTTP_PROXY/ALL_PROXY would otherwise
+    # route this request through the proxy -- failing against an otherwise
+    # reachable lane and, if the proxy is up, handing it the credential and the
+    # DDL body.
+    local cfg rc
+    cfg="$(umask 077; mktemp "${TMPDIR:-/tmp}/local-validate-ch-curl.XXXXXX")" || {
+      printf 'ch_query: could not create a private curl config file\n' >&2
+      return 2
+    }
+    # Registered for trap-time removal BEFORE anything is written to it (codex
+    # R3): a SIGTERM while curl is in flight never reaches the rm below, and
+    # this file holds a database password. cleanup_ch_curl_config() is called
+    # from the same EXIT path that drops the scratch database.
+    CH_CURL_CONFIG="${cfg}"
+    # curl's config parser reads `header = "..."` as a QUOTED string: it
+    # honours backslash escapes inside the quotes and ends the value at the
+    # closing quote. A password containing `"` would therefore be truncated
+    # (CH_PASS='sec"ret' sends `sec`) and a newline could inject a further
+    # directive. Escape backslash and double-quote, and refuse a credential
+    # containing a newline outright rather than silently sending a different
+    # one (codex R3).
+    case "${CH_USER}${CH_PASS}" in
+      *$'\n'* | *$'\r'*)
+        printf 'ch_query: CH_USER/CH_PASS must not contain newlines\n' >&2
+        rm -f "${cfg}"; CH_CURL_CONFIG=""
+        return 2
+        ;;
+    esac
+    local esc_user esc_pass
+    esc_user="$(printf '%s' "${CH_USER}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    esc_pass="$(printf '%s' "${CH_PASS}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    printf 'header = "X-ClickHouse-User: %s"\nheader = "X-ClickHouse-Key: %s"\n' \
+      "${esc_user}" "${esc_pass}" >"${cfg}"
+    curl --silent --show-error --fail-with-body --noproxy '*' \
+      --config "${cfg}" \
+      --max-time "${CH_HTTP_TIMEOUT_SECS:-30}" \
+      --data-binary "$1" \
+      "${CH_HTTP_SCHEME}://${CH_HOST}:${CH_HTTP_PORT}/"
+    rc=$?
+    rm -f "${cfg}"
+    CH_CURL_CONFIG=""
+    return "${rc}"
+  fi
   docker exec -i "${CH_CONTAINER}" clickhouse-client \
     --user "${CH_USER}" --password "${CH_PASS}" --query "$1"
 }
 
+# Companion to cleanup_scratch: the http transport's credential file must not
+# survive an interrupted run (codex R3). Safe to call when nothing is pending.
+# (CH_CURL_CONFIG is initialised up in the config block, not here -- an
+# initialiser at this point in the file would run at load time AFTER nothing,
+# but it reads as if it could clobber a live path.)
+cleanup_ch_curl_config() {
+  if [ -n "${CH_CURL_CONFIG:-}" ]; then
+    rm -f "${CH_CURL_CONFIG}"
+    CH_CURL_CONFIG=""
+  fi
+}
+
 cleanup_scratch() {
+  cleanup_ch_curl_config
   # trap handler: always drop the scratch db; never touches 'default'.
   if [ "${SCRATCH_CREATED:-0}" = "1" ]; then
     printf '\n>> cleanup: dropping scratch db %s\n' "${SCRATCH_DB}"
@@ -977,13 +1230,18 @@ ch_migrate() {
   # Apply THIS branch's migrations into the scratch db, then read-only verify.
   # Belt-and-suspenders: never let an edited SCRATCH_URI point migrations at 'default'.
   case "${SCRATCH_URI}" in
-  *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
-  printf '   migrating into scratch: %s\n' "${SCRATCH_URI}"
+  printf '   migrating into scratch: %s\n' "$(redact_uri "${SCRATCH_URI}")"
+  # PROXY_OFF here, not just on curl (codex): clickhouse-connect honours
+  # HTTP_PROXY/HTTPS_PROXY, so with an ambient proxy set and the lane endpoint
+  # absent from NO_PROXY these two would route the REAL Basic-auth credential
+  # through it -- or simply fail to reach the lane. Neutralising only the curl
+  # request left the actual migration exposed, which is the larger half.
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${DEVHOPS}" migrate clickhouse upgrade || return 1
+    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse upgrade || return 1
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${DEVHOPS}" migrate clickhouse status --check || return 1
+    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse status --check || return 1
   return 0
 }
 
@@ -1141,7 +1399,7 @@ ch_provision() {
   run_stage "ch-migrate (upgrade + status --check)" ch_migrate ch_migrate
   CH_READY=1
   export CLICKHOUSE_URI="${SCRATCH_URI}"
-  printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "${SCRATCH_URI} (scratch)"
+  printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "$(redact_uri "${SCRATCH_URI}") (scratch)"
 }
 
 # CH-marked tests (need production DDL) + the direct argMax live-exec proof.
@@ -1197,6 +1455,72 @@ METRICS_READBACK_REPO_NAME="${METRICS_READBACK_REPO_NAME:-ci-local-validate/metr
 # chris's 2026-08-25 ruling is that a metrics-family PR merges only with a
 # real ClickHouse readback in evidence, and host load does not change what
 # the PR touches.
+# _metrics_diff_relevant_check <newline-separated-changed-files>
+#
+# Pure function over an explicit argument (no git call): does the given
+# changed-file list touch a path this stage exists to guard? Split out of
+# metrics_readback_diff_relevant (CHAOS-4487) so a test can drive it
+# directly with an arbitrary payload, without faking git/merge-base state
+# -- see the `--metrics-diff-relevant-probe` harness hook below main() and
+# tests/tooling/test_local_validate_here_string_deadlock.py.
+#
+# CHAOS-4319 (why not `printf ... | grep -qE ...`): under this script's
+# `set -uo pipefail`, `grep -q` exits the instant it finds its first match
+# without draining the rest of stdin -- if the payload has more lines still
+# queued, the upstream `printf` gets SIGPIPE on its next write and exits
+# 141, and pipefail reports THAT as the pipeline's status instead of
+# grep's real (matching, 0) result. That bug is silent and
+# match-position-dependent: it only fires when the match is early enough
+# that printf is still writing when grep exits, which is exactly the
+# common case for a real PR's small file count -- this exact function
+# returned 141 (falsely "not relevant") against CHAOS-4319's own diff,
+# which very much touches internal/jobs/metrics/. A here-string was the
+# fix: it has no live producer process to SIGPIPE.
+#
+# CHAOS-4487 (why not the here-string either, `grep -qE ... <<<"$1"`): a
+# here-string is not free of forked-process risk either -- bash 5.3
+# implements `<<<` by forking a child that does the heredoc_write into a
+# pipe while the parent `wait4`s on it, and on this host that write blocks
+# forever once the payload crosses roughly 500-550 bytes (empirically
+# measured; see tests/tooling/test_local_validate_here_string_deadlock.py),
+# not the ~4000-byte figure a DIFFERENT here-document call site elsewhere
+# in this file documents for the same general class of bug (CHAOS-3362).
+# A real diff easily crosses 500 bytes (the incident that opened CHAOS-4487
+# hung on a 1279-byte / 28-file changed-files value), so the here-string
+# deadlocks in exactly the common case this function exists to handle
+# correctly, the same way the pipe form did for CHAOS-4319.
+#
+# The fix used by the argMax proof stage a few hundred lines up (search
+# ARGMAX_PROOF_TMPDIR) for this identical class of problem: remove the
+# forked process entirely. `printf` as a BUILTIN writes straight to a
+# redirected regular file -- no pipe, no fork, nothing that can block --
+# and `grep` then reads that file directly (a real file has no producer
+# to SIGPIPE, closing the CHAOS-4319 gap too). Same fix, applied here.
+_metrics_diff_relevant_check() {
+  local changed="$1"
+  local changed_file
+  changed_file="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-diff.XXXXXX")" || {
+    printf '   %s could not create a temp file for the metrics-diff relevance check -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" >&2
+    return 0
+  }
+  if ! printf '%s' "${changed}" >"${changed_file}"; then
+    printf '   %s could not write the metrics-diff relevance payload to %s -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" "${changed_file}" >&2
+    rm -f "${changed_file}"
+    return 0
+  fi
+  local rc
+  # Includes the oracle script and its synthetic-seeding path too (codex
+  # review, CHAOS-4266) -- a PR that only touches
+  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
+  # this one does, must not have this stage silently skip.
+  grep -qE \
+    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
+    "${changed_file}"
+  rc=$?
+  rm -f "${changed_file}"
+  return "${rc}"
+}
+
 metrics_readback_diff_relevant() {
   local base changed
   base="$(git -C "${ROOT}" merge-base origin/main HEAD 2>/dev/null || true)"
@@ -1207,31 +1531,12 @@ metrics_readback_diff_relevant() {
   if [ -z "${changed}" ]; then
     return 0 # diff failed, or genuinely empty (e.g. no commits yet) — run it.
   fi
-  # Includes the oracle script and its synthetic-seeding path too (codex
-  # review, CHAOS-4266) -- a PR that only touches
-  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
-  # this one does, must not have this stage silently skip.
-  #
-  # CHAOS-4319: a here-string, not `printf ... | grep -qE ...`. Under this
-  # script's `set -uo pipefail`, `grep -q` exits the instant it finds its
-  # first match without draining the rest of stdin -- if `changed` has more
-  # lines still queued, the upstream `printf` gets SIGPIPE on its next write
-  # and exits 141, and pipefail reports THAT as the pipeline's status
-  # instead of grep's real (matching, 0) result. The bug is silent and
-  # match-position-dependent: it only fires when the match is early enough
-  # in `changed` that printf is still writing when grep exits, which is
-  # exactly the common case for a real PR's small file count -- this exact
-  # function returned 141 (falsely "not relevant") against this ticket's
-  # own diff, which very much touches internal/jobs/metrics/. A here-string
-  # has no live producer process to SIGPIPE.
-  grep -qE \
-    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
-    <<<"${changed}"
+  _metrics_diff_relevant_check "${changed}"
 }
 
 metrics_readback() {
   case "${SCRATCH_URI}" in
-  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
 
   local run_start
@@ -1247,7 +1552,10 @@ metrics_readback() {
   OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" env -u POSTGRES_URI -u DATABASE_URI -u DATABASE_URL \
     "${DEVHOPS}" fixtures generate \
-    --sink "${SCRATCH_URI}" --db-type clickhouse \
+    `# --sink omitted deliberately: it defaults to os.getenv("CLICKHOUSE_URI")` \
+    `# (fixtures/runner.py:3113) and this invocation already exports that, so` \
+    `# passing it again only put the credential into argv where ps can read it.` \
+    --db-type clickhouse \
     --repo-name "${METRICS_READBACK_REPO_NAME}" \
     --provider synthetic \
     --days 7 --commits-per-day 3 --pr-count 5 \
@@ -1287,8 +1595,9 @@ metrics_readback() {
   # generate` above seeds real commit stats (--commits-per-day 3), which
   # `metrics daily` needs to compute it, but the CI job's synthetic
   # cicd/deployments/incidents/tests seeding never touches git data at all.
-  PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
-    --clickhouse-uri "${SCRATCH_URI}" \
+  # CLICKHOUSE_URI in the environment, not --clickhouse-uri in argv: same
+  # reason as --sink above. assert_metrics_executed_proof.py reads the env.
+  CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \
     --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots
@@ -1506,7 +1815,9 @@ if [ "${1:-}" = "--lock-probe-exit-order" ]; then
   hold_secs="${1:?hold_secs required}"
   cleanup_delay="${2:?cleanup_delay required}"
   marker="${3:?marker path required}"
-  cleanup_scratch() {
+  # Companion to cleanup_scratch: the http transport's credential file must not
+cleanup_scratch() {
+  cleanup_ch_curl_config
     sleep "${cleanup_delay}"
     : >"${marker}"
   }
@@ -1600,6 +1911,34 @@ if [ "${1:-}" = "--stage-manifest-mismatch-probe" ]; then
   verify_stage_manifest
   printf 'stage-manifest-mismatch-probe: no mismatch detected (unexpected)\n'
   exit 0
+fi
+
+# CHAOS-4457: lets a test drive ch_query() for real -- asserting which transport
+# it actually uses -- instead of grepping this file for a string, which would
+# pass against a script that still shelled out to docker at runtime. Same
+# argument-hook convention as --stage-manifest-mismatch-probe above.
+if [ "${1:-}" = "--ch-query-probe" ]; then
+  shift
+  ch_query "${1:?query required}"
+  exit $?
+fi
+
+# CHAOS-4487: lets a test drive _metrics_diff_relevant_check() directly with
+# an arbitrary payload, without faking git/merge-base state (metrics_read
+# back_diff_relevant, its only other caller, always resolves `changed` from a
+# real `git diff`). The payload is read from a FILE path, not argv: a test
+# proving the fix at ~500+ bytes must not itself be limited by shell argv
+# quoting/length behavior, which is exactly the kind of indirection that
+# would make the test's own harness suspect. Same argument-hook convention
+# as --stage-manifest-mismatch-probe / --ch-query-probe above. Never invoked
+# by main(); only by
+# tests/tooling/test_local_validate_here_string_deadlock.py.
+if [ "${1:-}" = "--metrics-diff-relevant-probe" ]; then
+  shift
+  changed_input_file="${1:?path to a file holding the changed-files payload is required}"
+  changed_payload="$(cat "${changed_input_file}")"
+  _metrics_diff_relevant_check "${changed_payload}"
+  exit $?
 fi
 
 main "$@"

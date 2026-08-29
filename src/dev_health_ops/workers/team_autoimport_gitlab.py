@@ -345,6 +345,41 @@ def _gitlab_group(
     ) or _first_string(sync_options, "group_path", "group", "owner")
 
 
+def _gitlab_team_row(
+    *,
+    org_id: str,
+    team_id: str,
+    name: str,
+    description: str | None,
+    project_keys: list[str],
+    native_team_key: str,
+    parent_team_id: str | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """Build the concrete team dimension row written by GitLab auto-import.
+
+    Extracted as its own pure per-item builder (mirroring team_autoimport_
+    linear.py's ``_linear_team_row``) so it is independently oracle-testable
+    against the Go port (CHAOS-4432) without needing a live provider
+    discovery walk.
+    """
+
+    return {
+        "id": team_id,
+        "name": name,
+        "description": description,
+        "members": [],
+        "project_keys": project_keys,
+        "repo_patterns": [],
+        "is_active": True,
+        "updated_at": now,
+        "org_id": org_id,
+        "provider": PROVIDER,
+        "native_team_key": native_team_key,
+        "parent_team_id": parent_team_id,
+    }
+
+
 def _team_rows(
     *, org_id: str, teams: Iterable[Any], now: datetime
 ) -> list[dict[str, Any]]:
@@ -354,20 +389,16 @@ def _team_rows(
         provider_team_id = str(getattr(team, "provider_team_id"))
         team_id = _team_id(provider_team_id)
         rows.append(
-            {
-                "id": team_id,
-                "name": str(getattr(team, "name", team_id)),
-                "description": getattr(team, "description", None),
-                "members": [],
-                "project_keys": _strings(associations.get("repo_patterns")),
-                "repo_patterns": [],
-                "is_active": True,
-                "updated_at": now,
-                "org_id": org_id,
-                "provider": PROVIDER,
-                "native_team_key": provider_team_id,
-                "parent_team_id": _parent_team_id(provider_team_id, associations),
-            }
+            _gitlab_team_row(
+                org_id=org_id,
+                team_id=team_id,
+                name=str(getattr(team, "name", team_id)),
+                description=getattr(team, "description", None),
+                project_keys=_strings(associations.get("repo_patterns")),
+                native_team_key=provider_team_id,
+                parent_team_id=_parent_team_id(provider_team_id, associations),
+                now=now,
+            )
         )
     return rows
 

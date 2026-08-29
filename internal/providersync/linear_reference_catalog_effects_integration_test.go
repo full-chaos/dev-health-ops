@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -113,6 +114,92 @@ func TestLinearReferenceCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	}
 }
 
+// TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites is the
+// red-first proof for CHAOS-4446 (filed by lane-4432, executed repro: a
+// second Linear sync wiped an admin's CHAOS-4321 manual roster override).
+// The Linear teams INSERT omitted manual_members entirely, so every write
+// reset it to the schema default ([]) -- this pins that a value set between
+// two native writes survives the second one, via the shared
+// PreserveExistingTeamManualMembers helper (team_manual_members.go).
+func TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	sink := LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}
+	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "linear-org-manual-members"
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	teamKey := "ENG"
+	teamID := "ENG"
+	teamUUID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)).String()
+	firstWrite, err := effectBatchFromValues(linearReferenceCatalogTeamsDestination, EffectReadbackRequired, []linearReferenceTeamRow{{
+		ID: teamID, TeamUUID: teamUUID, Name: "Engineering", Members: []string{"linear:alice@example.com"},
+		ProjectKeys: []string{teamKey}, RepoPatterns: []string{}, IsActive: 1, UpdatedAt: now,
+		OrgID: claim.OrgID, Provider: "linear", NativeTeamKey: &teamKey,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteEffect(ctx, claim, firstWrite); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if manualMembers := readLinearTeamManualMembers(t, ctx, conn, claim.OrgID, teamID); len(manualMembers) != 0 {
+		t.Fatalf("new team got non-empty manual_members: %v", manualMembers)
+	}
+
+	// Simulate the admin-override write path (CHAOS-4321): directly set
+	// manual_members for this team, the same way an operator's override
+	// lands outside the sync path.
+	// Deliberately a literal INSERT naming manual_members, independent of
+	// linearReferenceTeamsInsert -- this step must set up the precondition
+	// even if the production query under test does not yet carry the
+	// column forward (that is exactly the regression this test catches).
+	overrideBatch, err := conn.PrepareBatch(ctx, "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := overrideBatch.Append(
+		teamID, uuid.MustParse(teamUUID), "Engineering", (*string)(nil), []string{"linear:alice@example.com"},
+		[]string{"manually-added@example.com"}, []string{teamKey}, []string{}, uint8(1), now.Add(time.Second),
+		claim.OrgID, "linear", &teamKey, (*string)(nil),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := overrideBatch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	if manualMembers := readLinearTeamManualMembers(t, ctx, conn, claim.OrgID, teamID); len(manualMembers) != 1 || manualMembers[0] != "manually-added@example.com" {
+		t.Fatalf("override did not land: %v", manualMembers)
+	}
+
+	// A SECOND native sync of the same team, with no knowledge of the
+	// override, must not reset it.
+	secondWrite, err := effectBatchFromValues(linearReferenceCatalogTeamsDestination, EffectReadbackRequired, []linearReferenceTeamRow{{
+		ID: teamID, TeamUUID: teamUUID, Name: "Engineering", Members: []string{"linear:alice@example.com", "linear:bob@example.com"},
+		ProjectKeys: []string{teamKey}, RepoPatterns: []string{}, IsActive: 1, UpdatedAt: now.Add(2 * time.Second),
+		OrgID: claim.OrgID, Provider: "linear", NativeTeamKey: &teamKey,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.WriteEffect(ctx, claim, secondWrite); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	if manualMembers := readLinearTeamManualMembers(t, ctx, conn, claim.OrgID, teamID); len(manualMembers) != 1 || manualMembers[0] != "manually-added@example.com" {
+		t.Fatalf("second native write did not carry manual_members forward: %v", manualMembers)
+	}
+}
+
+func readLinearTeamManualMembers(t *testing.T, ctx context.Context, conn driver.Conn, orgID, teamID string) []string {
+	t.Helper()
+	row := conn.QueryRow(ctx, "SELECT manual_members FROM teams FINAL WHERE org_id = ? AND provider = 'linear' AND id = ?", orgID, teamID)
+	var manualMembers []string
+	if err := row.Scan(&manualMembers); err != nil {
+		t.Fatalf("read manual_members: %v", err)
+	}
+	return manualMembers
+}
+
 func TestLinearReferenceCatalogEffectsHonorLeaseBeforeWrite(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("linear", "work-items")
@@ -169,6 +256,11 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 			OrgID: claim.OrgID, Provider: "linear", TeamID: "ENG", ProjectID: "project-1",
 			ProjectKey: &projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
+		}},
+		Sprints: []linearSprintRow{{
+			OrgID: claim.OrgID, Provider: "linear", SprintID: "linear:cycle:1",
+			Name: linearReferenceStringPtr("Cycle 1"), State: linearReferenceStringPtr("active"),
+			NativeTeamKey: &teamKey, LastSynced: now,
 		}},
 	}
 }

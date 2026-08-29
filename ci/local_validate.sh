@@ -146,6 +146,9 @@ CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
 # through CH_HOST/CH_HTTP_PORT (see SCRATCH_URI below), so this one function is
 # the whole difference between the two modes.
 CH_TRANSPORT="${CH_TRANSPORT:-docker}"
+# Path of the in-flight curl credential file, so the EXIT trap can remove it
+# even if the gate is interrupted mid-request.
+CH_CURL_CONFIG=""
 # Endpoint scheme for the http transport. A TLS-only ClickHouse (the 443/8443
 # variants this repo's own connection parser already accepts) rejects plaintext,
 # so this must be settable rather than hardcoded (codex review round 2). It is
@@ -1016,8 +1019,30 @@ ch_query() {
       printf 'ch_query: could not create a private curl config file\n' >&2
       return 2
     }
+    # Registered for trap-time removal BEFORE anything is written to it (codex
+    # R3): a SIGTERM while curl is in flight never reaches the rm below, and
+    # this file holds a database password. cleanup_ch_curl_config() is called
+    # from the same EXIT path that drops the scratch database.
+    CH_CURL_CONFIG="${cfg}"
+    # curl's config parser reads `header = "..."` as a QUOTED string: it
+    # honours backslash escapes inside the quotes and ends the value at the
+    # closing quote. A password containing `"` would therefore be truncated
+    # (CH_PASS='sec"ret' sends `sec`) and a newline could inject a further
+    # directive. Escape backslash and double-quote, and refuse a credential
+    # containing a newline outright rather than silently sending a different
+    # one (codex R3).
+    case "${CH_USER}${CH_PASS}" in
+      *$'\n'* | *$'\r'*)
+        printf 'ch_query: CH_USER/CH_PASS must not contain newlines\n' >&2
+        rm -f "${cfg}"; CH_CURL_CONFIG=""
+        return 2
+        ;;
+    esac
+    local esc_user esc_pass
+    esc_user="$(printf '%s' "${CH_USER}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    esc_pass="$(printf '%s' "${CH_PASS}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
     printf 'header = "X-ClickHouse-User: %s"\nheader = "X-ClickHouse-Key: %s"\n' \
-      "${CH_USER}" "${CH_PASS}" >"${cfg}"
+      "${esc_user}" "${esc_pass}" >"${cfg}"
     curl --silent --show-error --fail-with-body --noproxy '*' \
       --config "${cfg}" \
       --max-time "${CH_HTTP_TIMEOUT_SECS:-30}" \
@@ -1025,13 +1050,27 @@ ch_query() {
       "${CH_HTTP_SCHEME}://${CH_HOST}:${CH_HTTP_PORT}/"
     rc=$?
     rm -f "${cfg}"
+    CH_CURL_CONFIG=""
     return "${rc}"
   fi
   docker exec -i "${CH_CONTAINER}" clickhouse-client \
     --user "${CH_USER}" --password "${CH_PASS}" --query "$1"
 }
 
+# Companion to cleanup_scratch: the http transport's credential file must not
+# survive an interrupted run (codex R3). Safe to call when nothing is pending.
+# (CH_CURL_CONFIG is initialised up in the config block, not here -- an
+# initialiser at this point in the file would run at load time AFTER nothing,
+# but it reads as if it could clobber a live path.)
+cleanup_ch_curl_config() {
+  if [ -n "${CH_CURL_CONFIG:-}" ]; then
+    rm -f "${CH_CURL_CONFIG}"
+    CH_CURL_CONFIG=""
+  fi
+}
+
 cleanup_scratch() {
+  cleanup_ch_curl_config
   # trap handler: always drop the scratch db; never touches 'default'.
   if [ "${SCRATCH_CREATED:-0}" = "1" ]; then
     printf '\n>> cleanup: dropping scratch db %s\n' "${SCRATCH_DB}"
@@ -1597,7 +1636,20 @@ if [ "${1:-}" = "--lock-probe-exit-order" ]; then
   hold_secs="${1:?hold_secs required}"
   cleanup_delay="${2:?cleanup_delay required}"
   marker="${3:?marker path required}"
-  cleanup_scratch() {
+  # Companion to cleanup_scratch: the http transport's credential file must not
+# survive an interrupted run (codex R3). Safe to call when nothing is pending.
+# (CH_CURL_CONFIG is initialised up in the config block, not here -- an
+# initialiser at this point in the file would run at load time AFTER nothing,
+# but it reads as if it could clobber a live path.)
+cleanup_ch_curl_config() {
+  if [ -n "${CH_CURL_CONFIG:-}" ]; then
+    rm -f "${CH_CURL_CONFIG}"
+    CH_CURL_CONFIG=""
+  fi
+}
+
+cleanup_scratch() {
+  cleanup_ch_curl_config
     sleep "${cleanup_delay}"
     : >"${marker}"
   }

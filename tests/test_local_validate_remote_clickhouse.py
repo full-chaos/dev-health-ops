@@ -91,6 +91,12 @@ def test_remote_clickhouse_transport_never_shells_out_to_docker(tmp_path: Path) 
         {
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
             "CH_TRANSPORT": "http",
+            # Pinned, not merely unset (codex R3): running the gate itself with
+            # CH_HTTP_SCHEME=https exports it into pytest, the probe would then
+            # record an https:// URL and this case's endpoint assertion would
+            # fail on every TLS remote-mode run. Same inherited-env family as
+            # the CH_TRANSPORT bug in the docker case below.
+            "CH_HTTP_SCHEME": "http",
             "CH_HOST": "192.0.2.10",
             "CH_HTTP_PORT": "30501",
             "CH_USER": "ch",
@@ -222,6 +228,7 @@ def test_credentials_travel_in_a_private_config_file(tmp_path: Path) -> None:
         {
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
             "CH_TRANSPORT": "http",
+            "CH_HTTP_SCHEME": "http",
             "CH_HOST": "192.0.2.10",
             "CH_HTTP_PORT": "30501",
             "CH_USER": "ch",

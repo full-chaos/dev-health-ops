@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -36,19 +37,54 @@ func unknownTableNames(text string) map[string]struct{} {
 	return names
 }
 
+// errorChainText concatenates err.Error() at EVERY level of the
+// errors.Unwrap() chain, not just the outermost message. Required
+// because dev-health-go/clickhouse's Client.Query wraps every driver
+// error as &operationError{operation, cause} whose OWN Error() method
+// returns only the fixed string "ClickHouse query failed" -- the real
+// driver message (the one carrying "UNKNOWN_TABLE"/"code: 60"/the
+// offending table name) lives in operationError.cause, reachable only
+// via Unwrap(), never via a plain err.Error() call on the wrapped
+// error. This port's own workgraph packages wrap AGAIN with
+// fmt.Errorf("workgraph: ...: %w", err) on top of that, so a real error
+// reaching isMissingMembershipTableError is at least two levels removed
+// from the driver's own text. Found by codex (2026-08-29, gpt-5.6-terra
+// xhigh round): the original single-level err.Error() call could never
+// match against the REAL client, only against this package's own test
+// fakes (which set Err()/return an error whose Error() already IS the
+// raw driver text) -- making the narrow degraded-path contract
+// (work_graph.py's documented "missing work_unit_membership during
+// rollout -> degraded empty result, not a hard error") unreachable in
+// production: any genuinely missing membership table would surface as
+// a hard GraphQL error instead.
+func errorChainText(err error) string {
+	var b strings.Builder
+	for err != nil {
+		if b.Len() > 0 {
+			b.WriteString(" | ")
+		}
+		b.WriteString(err.Error())
+		err = errors.Unwrap(err)
+	}
+	return b.String()
+}
+
 // isMissingMembershipTableError mirrors work_graph.py:854-877's
 // _is_missing_membership_table_error: true ONLY when a ClickHouse
 // missing-table (code 60) error names work_unit_membership OR
 // work_unit_membership_runs (or the scoped-runs table) as the unknown
 // table -- any other code-60 error (a different missing table, e.g.
-// work_graph_edges itself) is NOT swallowed. This port sniffs the error's
-// string text the same way Python does (there is no driver-specific typed
-// error surfaced through the QueryClient interface to inspect instead).
+// work_graph_edges itself) is NOT swallowed. This port sniffs the
+// error's string text the same way Python does (there is no
+// driver-specific typed error surfaced through the QueryClient
+// interface to inspect instead) -- see errorChainText's doc comment for
+// why that text must come from the FULL unwrap chain, not err.Error()
+// alone.
 func isMissingMembershipTableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	text := err.Error()
+	text := errorChainText(err)
 	isUnknownTable := strings.Contains(text, "UNKNOWN_TABLE") || strings.Contains(text, "code: 60")
 	if !isUnknownTable {
 		return false

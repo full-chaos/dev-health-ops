@@ -3,6 +3,7 @@ package workgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -235,6 +236,31 @@ func TestClampEdgesLimit(t *testing.T) {
 
 // --- isMissingMembershipTableError (work_graph.py:854-877) -----------------
 
+// chainWrapError mirrors dev-health-go/clickhouse's operationError shape
+// exactly for test purposes: Error() returns a FIXED generic string,
+// unrelated to cause's real text, and Unwrap() exposes cause -- so a
+// caller that reads only Error() sees nothing useful, and only a chain
+// walk (errorChainText) reaches the real message.
+type chainWrapError struct {
+	outer string
+	cause error
+}
+
+func (e *chainWrapError) Error() string { return e.outer }
+func (e *chainWrapError) Unwrap() error { return e.cause }
+
+func TestErrorChainText_WalksMultipleUnwrapLevels(t *testing.T) {
+	inner := errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ...")
+	wrapped := fmt.Errorf("workgraph: batch resolve membership: %w", &chainWrapError{outer: "ClickHouse query failed", cause: inner})
+	text := errorChainText(wrapped)
+	if !strings.Contains(text, "UNKNOWN_TABLE") && !strings.Contains(text, "code: 60") {
+		t.Fatalf("errorChainText did not surface the innermost cause's text: %q", text)
+	}
+	if !strings.Contains(text, "work_unit_membership") {
+		t.Fatalf("errorChainText did not surface the table name: %q", text)
+	}
+}
+
 func TestIsMissingMembershipTableError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -270,6 +296,26 @@ func TestIsMissingMembershipTableError(t *testing.T) {
 			"echoed SQL mentions membership table but identifier clause does not",
 			errors.New("code: 60, message: Unknown table expression identifier 'work_graph_edges' in scope SELECT ... FROM work_unit_membership AS m ..."),
 			false,
+		},
+		{
+			// THE CODEX-FOUND BUG (2026-08-29, gpt-5.6-terra xhigh round),
+			// regression-pinned here: dev-health-go/clickhouse's real
+			// Client.Query wraps every driver error as
+			// &operationError{operation, cause}, whose OWN Error() method
+			// returns ONLY "ClickHouse query failed" -- never the driver's
+			// real message. Every call site in this package wraps AGAIN
+			// with fmt.Errorf("workgraph: ...: %w", err). A single-level
+			// err.Error() call (this test's OWN earlier cases used flat
+			// errors.New() errors, which is exactly why they could not
+			// catch this) never sees the real text buried two levels down
+			// -- only a full errors.Unwrap() chain walk does.
+			"real client's two-level wrap (operationError + workgraph fmt.Errorf) -- must still classify",
+			fmt.Errorf("workgraph: batch resolve membership: %w",
+				&chainWrapError{
+					outer: "ClickHouse query failed",
+					cause: errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."),
+				}),
+			true,
 		},
 	}
 	for _, tc := range cases {

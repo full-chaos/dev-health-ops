@@ -376,6 +376,96 @@ func TestGitLabTeamCatalogNativeProjectCatalogIncompleteWhenSelectedSourceIsMiss
 	}
 }
 
+// newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects has 3 groups:
+// org (root), org/team-a, org/team-b. org's /projects succeeds; org/team-a's
+// /projects returns a hard HTTP failure; org/team-b's /projects would
+// succeed but must never be reached (the walk stops at the failure under
+// non-strict). Mirrors newGitLabTeamCatalogFakeServer's payload shapes.
+func newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t *testing.T) *gitlabTeamCatalogFakeServer {
+	t.Helper()
+	fake := &gitlabTeamCatalogFakeServer{}
+
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	projectPayload := func(id int, path, name string) map[string]any {
+		return map[string]any{
+			"id": id, "path_with_namespace": path, "name": name, "archived": false,
+			"web_url": "https://gitlab.example.com/" + path,
+		}
+	}
+
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.requests = append(fake.requests, r.URL.String())
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			writeGitLabTeamCatalogJSON(t, w, group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{
+				group(2, "org/team-a", "Team A"),
+				group(3, "org/team-b", "Team B"),
+			})
+		case "/api/v4/groups/org/projects":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{projectPayload(100, "org/root-svc", "root-svc")})
+		case "/api/v4/groups/org%2Fteam-a/projects":
+			http.Error(w, "simulated projects fetch failure", http.StatusInternalServerError)
+		case "/api/v4/groups/org%2Fteam-b/projects":
+			t.Error("org/team-b's /projects must never be reached -- the walk must stop at org/team-a's failure")
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{projectPayload(102, "org/team-b/svc", "svc")})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+// TestGitLabTeamCatalogRouteHandlerNonStrictGroupWalkKeepsPrefixOnProjectsFailure
+// is the non-strict partial-batch regression proof (team-lead ruling,
+// 2026-08-28): under non-strict, a per-group /projects fetch failure must
+// keep whatever earlier groups already collected (org's team row here), not
+// discard the whole walk. The walk stops at the failing group -- org/team-b
+// (after the failing org/team-a) must never even be requested.
+func TestGitLabTeamCatalogRouteHandlerNonStrictGroupWalkKeepsPrefixOnProjectsFailure(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a per-group fetch failure: %v", err)
+	}
+	if len(batch.Rows.Teams) != 1 || batch.Rows.Teams[0].ID != "gl:org" {
+		t.Fatalf("Rows.Teams = %+v, want only org's row (the already-collected prefix)", batch.Rows.Teams)
+	}
+	if !batch.Evidence.GroupWalkIncomplete {
+		t.Fatal("Evidence.GroupWalkIncomplete = false, want true")
+	}
+	if batch.Evidence.GroupsSkippedAfterFetchFailure != 2 {
+		t.Fatalf("GroupsSkippedAfterFetchFailure = %d, want 2 (org/team-a itself + org/team-b never reached)", batch.Evidence.GroupsSkippedAfterFetchFailure)
+	}
+}
+
+// TestGitLabTeamCatalogRouteHandlerStrictGroupWalkHardFailsOnProjectsFailure
+// proves the strict side is unchanged: a per-group /projects fetch failure
+// still aborts the whole call with an error under strict.
+func TestGitLabTeamCatalogRouteHandlerStrictGroupWalkHardFailsOnProjectsFailure(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingMidGroupProjects(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	_, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err == nil {
+		t.Fatal("expected an error under strict mode, got nil")
+	}
+}
+
 // newGitLabTeamCatalogFakeServerWithFailingRootMembers is
 // newGitLabTeamCatalogFakeServer with the root group's /members endpoint
 // returning a hard HTTP failure (500) instead of a member list -- team-a's

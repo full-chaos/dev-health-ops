@@ -52,6 +52,27 @@ type GitLabTeamCatalogEvidence struct {
 	// skipped and its roster is carried forward instead of aborting the
 	// whole run, matching GitHubTeamCatalogEvidence's identical field.
 	SkippedTeamMemberships int `json:"skipped_team_memberships"`
+	// GroupWalkIncomplete (team-lead ruling, 2026-08-28) is true when a
+	// per-group /projects fetch failed OUTRIGHT (a real request error, not
+	// a page-cap truncation -- that is Truncated's job) under non-strict:
+	// the walk stops at the failing group, but groups already collected
+	// before it are kept rather than discarded. A DELIBERATE Go-side
+	// improvement over Python (team_autoimport_gitlab.py's
+	// discover_gitlab call is a single unified walk with one outer
+	// try/except -- ANY failure inside it, non-strict, discards everything
+	// via _zero_summary; there is no partial-prefix concept in Python for
+	// this surface, unlike Linear's separately-phased teams/cycles/projects
+	// calls). Deliberately NOT folded into Result.Complete: unlike a
+	// pagination-cap truncation (which fails the whole write closed, see
+	// the collector adapter), this partial batch IS written -- it is
+	// surfaced via this field and GroupsSkippedAfterFetchFailure instead,
+	// the same interim discipline SkippedTeamMemberships uses pending a
+	// shared telemetry field.
+	GroupWalkIncomplete bool `json:"group_walk_incomplete,omitempty"`
+	// GroupsSkippedAfterFetchFailure counts the groups never reached
+	// because the walk stopped at a fetch failure (the failing group
+	// itself, plus every group after it in discovery order).
+	GroupsSkippedAfterFetchFailure int `json:"groups_skipped_after_fetch_failure,omitempty"`
 	// MissingSelectedSources (codex round 5, P2) lists the ref.SourceExternalIDs
 	// entries that were selected but never observed among the discovered
 	// projects -- mirrors team_autoimport_gitlab._gitlab_project_catalog_rows's
@@ -197,7 +218,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	seenOwnership := map[string]bool{}
 	seenMembership := map[string]bool{}
 
-	for _, group := range groups {
+	for groupIndex, group := range groups {
 		groupPathValue := providerRelativePath(client, "api", "v4", "groups", strings.TrimSpace(group.FullPath))
 		// codex review finding (round 4, P1): this per-group /projects
 		// fetch exists only to populate project_keys, which only the Teams
@@ -215,7 +236,21 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
 			})
 			if err != nil {
-				return GitLabTeamCatalogBatch{}, err
+				// team-lead ruling, 2026-08-28 (deliberate Go-side
+				// improvement over Python -- see GroupWalkIncomplete's doc
+				// comment): under strict, re-raise exactly as before. Under
+				// non-strict, stop the walk here but KEEP whatever earlier
+				// groups already built into rows -- do not discard the
+				// prefix. The failing group itself, and every group after
+				// it in discovery order, are never processed.
+				if ref.Strict {
+					return GitLabTeamCatalogBatch{}, err
+				}
+				evidence.GroupWalkIncomplete = true
+				evidence.GroupsSkippedAfterFetchFailure = len(groups) - groupIndex
+				slog.Default().WarnContext(ctx, "gitlab_team_catalog_group_walk_incomplete",
+					"org_id", ref.OrgID, "group", group.FullPath, "error", err)
+				break
 			}
 			evidence.Requests += projectPages.Pages
 			evidence.Pages += projectPages.Pages

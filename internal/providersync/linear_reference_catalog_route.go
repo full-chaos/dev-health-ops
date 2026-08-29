@@ -415,34 +415,28 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	// projects.project_key, and this synthetic row was the ONLY non-empty
 	// project_key ever written for Linear -- so every project fact resolved
 	// to "team CHAOS" and no real Linear project was ever reachable. CHAOS
-	// is a TEAM, not a project: this collector stops WRITING that row.
+	// is a TEAM, not a project: this collector NEVER writes that row, in any
+	// form -- not active, not a soft-delete tombstone either.
 	//
-	// `projects` is a ReplacingMergeTree keyed by (org_id, provider, id)
-	// (codex review, 2026-08-29, confirmed real): simply omitting the write
-	// leaves any ALREADY-SYNCED org's prior is_active=1/project_key=teamKey
-	// version as the `FINAL` result forever -- an org synced before this
-	// change keeps exposing "team CHAOS" as an active project indefinitely,
-	// not just until its next sync. So every run that still observes a team
-	// ALSO writes a TOMBSTONE version of the same identity: is_active=0 and
-	// project_key=nil, a strictly newer version (this call's normalizedAt)
-	// that ReplacingMergeTree's FINAL resolves to instead of the old
-	// is_active=1 row -- the exact soft-delete convention this same file
-	// already uses for trashed/archived native Linear projects
-	// (normalizeLinearReferenceProject's isActive=0 branch). This
-	// self-heals every already-synced org the next time its Linear team
-	// catalog runs, with no separate migration/cleanup step, and excludes
-	// the row from both `is_active=1`-filtered readers (e.g. ops's
-	// scope_catalog.py alias roster) and project_key-keyed joins (acr) by
-	// construction -- belt and suspenders.
-	for _, team := range rows.Teams {
-		tombstoneID := claim.OrgID + ":linear:" + team.ID
-		rows.Projects = append(rows.Projects, linearReferenceProjectRow{
-			ID: tombstoneID, OrgID: claim.OrgID, Provider: "linear", ProjectKey: nil,
-			Name: team.Name, IsActive: 0,
-			UpdatedAt: normalizedAt, LastSynced: normalizedAt,
-		})
-	}
-
+	// History (do not resurrect the tombstone approach): an earlier revision
+	// of this fix (still merged as #2010) wrote a TOMBSTONE version instead
+	// of simply omitting the write -- is_active=0, project_key=nil -- on the
+	// theory that ReplacingMergeTree's FINAL would then resolve to the
+	// retired version instead of any prior is_active=1 row. CF (acr owner),
+	// live on org 70d529e0, found that theory wrong on two counts: acr's
+	// identity resolution does not filter `projects.is_active` AT ALL (the
+	// tombstoned row still resolved through acr's key/id arm exactly like an
+	// active one), and `is_active=0` already legitimately marks two REAL
+	// completed Linear projects for an unrelated reason -- so it could never
+	// have been a safe, reader-recognizable "this is retired" signal for
+	// ANYONE, tombstone or not. The only fix that actually works is the row
+	// being physically ABSENT from `projects`. Already-synced orgs' stale
+	// rows (both the original is_active=1 shape and this fix's own
+	// short-lived is_active=0 tombstone shape) are retired ONCE, operator-
+	// invoked, not per-sync: RetireLinearPseudoProjectRows
+	// (linear_pseudo_project_cleanup.go), wired to `dev-health-workerctl
+	// providersync retire-linear-pseudo-projects`.
+	//
 	// The MATCHING team_project_ownership row below is intentionally KEPT.
 	// team_repo_ownership_derivation.go's linearTeamKeyProjectID (CHAOS-4458
 	// part (b), live on prod 5.6) reconstructs this exact
@@ -475,13 +469,15 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	if err != nil {
 		return LinearReferenceCatalogBatch{}, err
 	}
-	// Excludes the CHAOS-4530 tombstone rows (IsActive == 0) above -- those
-	// are retracted team-key identities, not real projects lacking a key,
-	// and counting them would inflate this gauge with rows that are neither
-	// new nor a "gap" to close.
+	// CHAOS-4530: rows.Projects holds only REAL native Linear projects now --
+	// no team-key-shaped pseudo-project row is ever appended here (see the
+	// comment above; the artifact is retired by a separate one-time
+	// operator cleanup, never written by this walk in any form). Every real
+	// project currently has a nil ProjectKey (Linear has no per-project key
+	// source yet), so this counts the full gap.
 	projectsWithoutKey := 0
 	for _, project := range rows.Projects {
-		if project.ProjectKey == nil && project.IsActive == 1 {
+		if project.ProjectKey == nil {
 			projectsWithoutKey++
 		}
 	}

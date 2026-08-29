@@ -764,6 +764,72 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 
 const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
 
+// TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest pins the
+// `providersync` verb group's dispatch shape: an unrecognized subcommand (or
+// none at all) is a quiet invalid_request, same as every other verb group.
+func TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest(t *testing.T) {
+	for _, args := range [][]string{{}, {"not-a-real-subcommand"}} {
+		var stdout, stderr bytes.Buffer
+		code := dispatchProvidersync(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+		if code != 1 || stderr.String() != invalidRequestJSON {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+}
+
+// TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsInvalidOrg pins
+// that a malformed --org (not empty, not a valid uuid) is rejected before
+// ever touching ClickHouse -- exercised with a nil runtime.lookup, so a
+// regression that moved this check after the ClickHouse dial would panic
+// this test instead of silently reordering the validation.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, []string{
+		"--org", "not-a-uuid",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsExtraArgs pins
+// the shared quietFlags contract: a stray positional argument is
+// invalid_request, not silently ignored.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsExtraArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, []string{
+		"unexpected-positional",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutLookup
+// pins that a runtime with no env accessor wired (runtime.lookup nil) fails
+// closed with operator_backend_unavailable rather than panicking or
+// silently proceeding without a ClickHouse DSN.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutLookup(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI
+// pins that a wired lookup with no CLICKHOUSE_URI configured is a
+// configuration_error, not a silent no-op or a different backend's DSN
+// reused by accident.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := &operatorRuntime{lookup: func(string) (string, bool) { return "", false }}
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 // TestDispatchMetricsDailyFinalizeRequiresReviewEvidence mirrors
 // TestDispatchMetricsDailyRedriveRequiresReviewEvidence for the CHAOS-4389
 // `metrics daily-finalize` command: no default, no generic hardcoded

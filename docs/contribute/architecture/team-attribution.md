@@ -1087,6 +1087,17 @@ Real Linear projects still have no genuine per-project key source, so `projects.
 ownership row's `project_key` both stay `NULL`/nil for them; making a real project's facts reachable by
 key is CHAOS-4521b's (acr-side) job, tracked separately and not blocked on this collector.
 
+An intermediate revision of this fix (also shipped as part of CHAOS-4530) briefly wrote a soft-delete
+TOMBSTONE version of the `projects` row (`is_active=0`, `project_key=nil`) instead of omitting the write
+outright, on the theory that a still-present but inactive row would read as retired. CF (acr owner)
+found that wrong: acr's identity resolution does not filter `projects.is_active` at all, and
+`is_active=0` already legitimately marks two REAL completed Linear projects for an unrelated reason, so
+it could never be a reader-recognizable "retired" signal for anyone. The collector now NEVER writes this
+identity to `projects`, active or tombstoned; already-synced orgs' stale rows (either shape) are retired
+by a separate, one-time operator action -- `dev-health-workerctl providersync
+retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
+`ALTER TABLE projects DELETE`, never a per-sync write.
+
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s

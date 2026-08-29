@@ -44,6 +44,27 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(uint32)
 		case *float64:
 			*ptr = row[i].(float64)
+		case **uint64:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(uint64)
+				*ptr = &v
+			}
+		case **uint32:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(uint32)
+				*ptr = &v
+			}
+		case **float64:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(float64)
+				*ptr = &v
+			}
 		default:
 			return errors.New("complexitytimeseries test: unsupported scan destination")
 		}
@@ -310,6 +331,36 @@ func TestResolve_RepoScope_NoRepoIDsUsesDefaultSubqueryLimit(t *testing.T) {
 	}
 }
 
+// TestResolve_RepoScope_NullMetricPropagatesAsNil is the regression test
+// for codex round-1 finding [P2] on PR #1992: the porting contract is
+// parity with Python's _nint/_nfloat None-check (a null ClickHouse
+// aggregate must produce a null GraphQL field), not parity with today's
+// schema -- even though every column here is non-nullable as of
+// migration 007_complexity_investment_issues.sql (see repoTimeseriesRow's
+// doc comment), the scan path must still propagate a nil correctly if a
+// column value is ever null.
+func TestResolve_RepoScope_NullMetricPropagatesAsNil(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{
+				{mustDay(t, "2026-08-01T00:00:00Z"), "repo-a", nil, nil, nil, nil, nil},
+			}},
+			{rows: [][]any{}},
+		},
+	}
+	result, err := Resolve(context.Background(), client, "org-1",
+		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	p := result.Points[0]
+	if p.LocTotal != nil || p.CyclomaticPerKloc != nil || p.CyclomaticTotal != nil ||
+		p.HighComplexityFunctions != nil || p.VeryHighComplexityFunctions != nil {
+		t.Fatalf("expected every metric field nil for a null-scanned row, got %+v", p)
+	}
+}
+
 // --- Resolve: FILE scope ---------------------------------------------------
 
 func TestResolve_FileScope_HappyPath(t *testing.T) {
@@ -363,6 +414,29 @@ func TestResolve_FileScope_LimitIsInterpolatedIntoQueryText(t *testing.T) {
 	}
 	if got := client.statements[0]; !contains(got, "LIMIT 7") {
 		t.Fatalf("query = %q, want it to contain a literal LIMIT 7", got)
+	}
+}
+
+// TestResolve_FileScope_NullMetricPropagatesAsNil is FILE scope's
+// counterpart to TestResolve_RepoScope_NullMetricPropagatesAsNil.
+func TestResolve_FileScope_NullMetricPropagatesAsNil(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{
+				{mustDay(t, "2026-08-01T00:00:00Z"), "repo-a", "src/main.go", nil, nil, nil, nil},
+			}},
+		},
+	}
+	result, err := Resolve(context.Background(), client, "org-1",
+		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
+		model.TimeGranularityDay, model.ComplexityScopeFile, nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	p := result.Points[0]
+	if p.CyclomaticTotal != nil || p.CyclomaticAvg != nil ||
+		p.HighComplexityFunctions != nil || p.VeryHighComplexityFunctions != nil {
+		t.Fatalf("expected every metric field nil for a null-scanned row, got %+v", p)
 	}
 }
 

@@ -158,13 +158,30 @@ const repoIDsFilter = `
 // repoTimeseriesRow is one row of _fetch_repo_timeseries's result set, in
 // SELECT column order.
 type repoTimeseriesRow struct {
-	day                         time.Time
-	repoID                      string
-	locTotal                    uint64
-	cyclomaticTotal             uint64
-	cyclomaticPerKloc           float64
-	highComplexityFunctions     uint64
-	veryHighComplexityFunctions uint64
+	day    time.Time
+	repoID string
+	// Aggregate metric columns are scanned into pointers, not plain
+	// values (codex review, PR #1992 round 1): the porting contract is
+	// parity with Python's _nint/_nfloat None-check on these fields
+	// (ComplexityPoint.locTotal etc are nullable GraphQL Int/Float), not
+	// parity with today's ClickHouse schema. Every column argMax'd here
+	// is currently declared NON-nullable (migration
+	// 007_complexity_investment_issues.sql: loc_total/cyclomatic_total
+	// UInt64, cyclomatic_per_kloc Float64, high/very_high_complexity_functions
+	// UInt64) and stays that way through every later migration that
+	// touches this table -- so these pointers are never actually nil
+	// today, verified by reading every migration that ALTERs
+	// repo_complexity_daily. Scanning into a pointer costs nothing when
+	// the column can't be null (ClickHouse-go's UInt64.ScanRow allocates
+	// and populates a **uint64 destination unconditionally for a
+	// non-nullable column, confirmed in lib/column/column_gen.go) and
+	// keeps this port correct without a Go-side change if the column
+	// ever becomes Nullable.
+	locTotal                    *uint64
+	cyclomaticTotal             *uint64
+	cyclomaticPerKloc           *float64
+	highComplexityFunctions     *uint64
+	veryHighComplexityFunctions *uint64
 }
 
 // fetchRepoTimeseries ports _fetch_repo_timeseries verbatim, including its
@@ -250,13 +267,16 @@ func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
 // fileTimeseriesRow is one row of _fetch_file_timeseries's result set, in
 // SELECT column order.
 type fileTimeseriesRow struct {
-	day                         time.Time
-	repoID                      string
-	filePath                    string
-	cyclomaticTotal             uint32
-	cyclomaticAvg               float64
-	highComplexityFunctions     uint32
-	veryHighComplexityFunctions uint32
+	day      time.Time
+	repoID   string
+	filePath string
+	// Same nullable-pointer contract-fidelity rationale as
+	// repoTimeseriesRow above, applied to file_complexity_snapshots's
+	// argMax'd columns (also all non-nullable today, same migration).
+	cyclomaticTotal             *uint32
+	cyclomaticAvg               *float64
+	highComplexityFunctions     *uint32
+	veryHighComplexityFunctions *uint32
 }
 
 // fetchFileTimeseries ports _fetch_file_timeseries verbatim. Unlike
@@ -366,6 +386,27 @@ func loadRepoLabels(ctx context.Context, client QueryClient, orgID string, repoI
 	return labels, nil
 }
 
+// intFromUint64 nil-safely converts a *uint64 (a scanned, possibly-null
+// ClickHouse aggregate) to the *int the GraphQL model expects, mirroring
+// Python's _nint helper's None-in-None-out contract exactly.
+func intFromUint64(v *uint64) *int {
+	if v == nil {
+		return nil
+	}
+	i := int(*v)
+	return &i
+}
+
+// intFromUint32 is intFromUint64's counterpart for the UInt32-typed
+// columns file_complexity_snapshots uses.
+func intFromUint32(v *uint32) *int {
+	if v == nil {
+		return nil
+	}
+	i := int(*v)
+	return &i
+}
+
 // distinctRepoIDs returns the distinct repo_id values seen in rows,
 // mirroring Python's `list({str(r["repo_id"]) for r in rows})` -- order is
 // irrelevant here, the result only ever feeds loadRepoLabels's IN filter.
@@ -411,10 +452,6 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 			return nil, err
 		}
 		for _, r := range rows {
-			cyclomaticTotal := int(r.cyclomaticTotal)
-			cyclomaticAvg := r.cyclomaticAvg
-			highComplexity := int(r.highComplexityFunctions)
-			veryHighComplexity := int(r.veryHighComplexityFunctions)
 			scopeID := fmt.Sprintf("%s/%s", r.repoID, r.filePath)
 			scopeName := r.filePath
 			if scopeName == "" {
@@ -424,10 +461,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 				Date:                        graphqldate.New(r.day),
 				ScopeID:                     scopeID,
 				ScopeName:                   scopeName,
-				CyclomaticTotal:             &cyclomaticTotal,
-				CyclomaticAvg:               &cyclomaticAvg,
-				HighComplexityFunctions:     &highComplexity,
-				VeryHighComplexityFunctions: &veryHighComplexity,
+				CyclomaticTotal:             intFromUint32(r.cyclomaticTotal),
+				CyclomaticAvg:               r.cyclomaticAvg,
+				HighComplexityFunctions:     intFromUint32(r.highComplexityFunctions),
+				VeryHighComplexityFunctions: intFromUint32(r.veryHighComplexityFunctions),
 			})
 		}
 	default: // REPO -- the schema/Python default and the only other valid value.
@@ -444,11 +481,6 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 			return nil, err
 		}
 		for _, r := range rows {
-			locTotal := int(r.locTotal)
-			cyclomaticPerKloc := r.cyclomaticPerKloc
-			cyclomaticTotal := int(r.cyclomaticTotal)
-			highComplexity := int(r.highComplexityFunctions)
-			veryHighComplexity := int(r.veryHighComplexityFunctions)
 			scopeName, ok := labels[r.repoID]
 			if !ok {
 				scopeName = r.repoID
@@ -457,11 +489,11 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 				Date:                        graphqldate.New(r.day),
 				ScopeID:                     r.repoID,
 				ScopeName:                   scopeName,
-				LocTotal:                    &locTotal,
-				CyclomaticPerKloc:           &cyclomaticPerKloc,
-				CyclomaticTotal:             &cyclomaticTotal,
-				HighComplexityFunctions:     &highComplexity,
-				VeryHighComplexityFunctions: &veryHighComplexity,
+				LocTotal:                    intFromUint64(r.locTotal),
+				CyclomaticPerKloc:           r.cyclomaticPerKloc,
+				CyclomaticTotal:             intFromUint64(r.cyclomaticTotal),
+				HighComplexityFunctions:     intFromUint64(r.highComplexityFunctions),
+				VeryHighComplexityFunctions: intFromUint64(r.veryHighComplexityFunctions),
 			})
 		}
 	}

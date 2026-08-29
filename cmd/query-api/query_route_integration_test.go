@@ -984,13 +984,27 @@ type fakeFlowMatrixCHClient struct {
 func (c *fakeFlowMatrixCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// CI FAILURE FOUND LIVE (2026-08-29, go-storage-integration-shard-packages-2,
+	// PR #2009): both rows below were uint64(...), but queryNodes/queryEdges
+	// (flowmatrix.go) scan their value column into a plain float64 -- every
+	// flowMatrix value expression is wrapped in toFloat64(...) in the real SQL
+	// (round 3's fix, this file's own package doc explains why: ClickHouse
+	// returns UInt64 for SUM()-based measures and the driver does not convert),
+	// so the REAL client never hands queryNodes/queryEdges a uint64 for this
+	// column -- only this fake, gone stale relative to that fix, did. Panicked
+	// with "interface conversion: interface {} is uint64, not float64" inside
+	// fakeRows.Scan, only reachable via the `integration` build tag neither
+	// ci/local_validate.sh (Python-only stages) nor an untagged `go test` run
+	// exercises -- it survived every local check this lane ran and was caught
+	// only by CI's go-storage-integration-shard-packages jobs. Test-only fix:
+	// match what the real, already-fixed client actually returns.
 	if strings.Contains(statement, "AS source_dimension,") {
 		return &fakeRows{rows: [][]any{
-			{"TEAM", "TEAM", "team-a", "team-b", uint64(2)},
+			{"TEAM", "TEAM", "team-a", "team-b", float64(2)},
 		}}, nil
 	}
 	return &fakeRows{rows: [][]any{
-		{"TEAM", "team-a", uint64(7)},
+		{"TEAM", "team-a", float64(7)},
 	}}, nil
 }
 

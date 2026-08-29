@@ -1168,8 +1168,52 @@ func errSwallow(ctx context.Context, table string, err error) {
 	if err == nil {
 		return
 	}
-	log.Printf("operatingreview: failed to fetch rows for %s: %v", table, err)
+	log.Printf("operatingreview: failed to fetch rows for %s: %v (cause: %s)", table, err, rootCause(err))
 	fetchSwallowedCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("table", table)))
+}
+
+// rootCause walks err's full errors.Unwrap() chain to its innermost cause
+// and returns that cause's OWN Error() text -- required because this
+// package's real QueryClient (github.com/full-chaos/dev-health-go/
+// clickhouse.Client) wraps every driver error as an unexported
+// operationError whose Error() method returns ONLY a fixed
+// "ClickHouse <operation> failed" string (clickhouse/client.go: `func (e
+// *operationError) Error() string { return "ClickHouse " + e.operation +
+// " failed" }`) -- it never includes the real driver message, even
+// though its Unwrap() DOES return the real cause. A plain %v/.Error() on
+// err (or on this package's own fmt.Errorf(...: %w, err) wrapper around
+// it, which embeds operationError's fixed string, not the cause) stops
+// at that fixed string. Confirmed live: without this, every one of the
+// ten tables' swallowed failures would log the byte-identical
+// "ClickHouse query failed" regardless of WHY it failed -- an
+// ai_governance UNKNOWN_IDENTIFIER, a genuinely missing table, a
+// connection timeout, and a query-syntax mistake would all be
+// indistinguishable in the log, which defeats the entire purpose of this
+// port's own per-table telemetry (the errSwallow doc comment two
+// sections up: "the swallow ships... made LOUD"). This is the exact
+// class of defect a sibling lane's codex round found in
+// isMissingMembershipTableError's single-level err.Error() substring
+// match -- a fake QueryClient whose Error() already returns raw driver
+// text cannot catch it; discardOnError's own test-verification discipline
+// (revert -> confirm red -> restore -> verify by content digest) is the
+// same standard this fix is held to (see this package's test file).
+//
+// Deliberately walks to the SINGLE innermost cause rather than joining
+// every level: each level's Error() (aside from operationError's) already
+// EMBEDS the next level's text via %w, so joining all levels would be
+// redundant/noisy; only operationError's fixed string actually discards
+// information, and only the innermost cause recovers it. The counter
+// (fetchSwallowedCounter, immediately below) deliberately does NOT carry
+// this text as a label -- unbounded-cardinality error strings belong in
+// logs, not metric labels.
+func rootCause(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err.Error()
+		}
+		err = next
+	}
 }
 
 // ---------------------------------------------------------------------------

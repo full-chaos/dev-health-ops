@@ -1,8 +1,12 @@
 package operatingreview
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -580,5 +584,84 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	}
 	if client.calls != 10 {
 		t.Fatalf("expected 10 calls (one full period), got %d", client.calls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rootCause -- chris's cross-lane finding, sourced from Lane A's codex
+// round: the REAL QueryClient (github.com/full-chaos/dev-health-go/
+// clickhouse.Client) wraps every driver error as an unexported
+// operationError whose Error() returns ONLY a fixed "ClickHouse
+// <operation> failed" string, discarding the real driver message even
+// though its Unwrap() still returns it. fakeOperationError below is a
+// deliberate MIRROR of that exact shape (same Error()/Unwrap() contract,
+// same "fixed string, real cause reachable only via Unwrap" behavior) --
+// a fake that just wraps with fmt.Errorf's own %w would trivially pass
+// here regardless of whether rootCause worked at all, since %w already
+// embeds the wrapped message in its own Error() text. This is the same
+// "pin the fix with a fake that mirrors the real shape" discipline
+// discardOnError's own tests already apply.
+// ---------------------------------------------------------------------------
+
+type fakeOperationError struct {
+	operation string
+	cause     error
+}
+
+func (e *fakeOperationError) Error() string { return "ClickHouse " + e.operation + " failed" }
+func (e *fakeOperationError) Unwrap() error { return e.cause }
+
+func TestRootCause_RecoversDetailLostByOperationErrorShapedWrapper(t *testing.T) {
+	driverErr := errors.New("Code: 47. DB::Exception: Unknown expression or function identifier `declaration_coverage`")
+	wrapped := &fakeOperationError{operation: "query", cause: driverErr}
+	// This package's own fetch functions wrap client errors one more
+	// level with fmt.Errorf("...: %w", err) -- reproduce that too, so
+	// this test exercises the SAME two-level chain errSwallow actually
+	// receives (fmt.Errorf wrapper -> fakeOperationError -> driver error).
+	doubleWrapped := fmt.Errorf("operatingreview: ai_governance query: %w", wrapped)
+
+	if got := wrapped.Error(); got != "ClickHouse query failed" {
+		t.Fatalf("sanity check failed: fakeOperationError.Error() = %q, want the fixed string (confirms the fake actually mirrors the real defect)", got)
+	}
+
+	got := rootCause(doubleWrapped)
+	if got != driverErr.Error() {
+		t.Errorf("rootCause(doubleWrapped) = %q, want the real driver message %q -- rootCause must walk PAST fakeOperationError's fixed-string Error(), not stop there", got, driverErr.Error())
+	}
+}
+
+func TestRootCause_NoWrapping_ReturnsErrorItself(t *testing.T) {
+	plain := errors.New("plain failure, no wrapping")
+	if got := rootCause(plain); got != plain.Error() {
+		t.Errorf("rootCause(plain) = %q, want %q", got, plain.Error())
+	}
+}
+
+func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
+	// End-to-end proof at the level errSwallow ACTUALLY runs at (not just
+	// rootCause in isolation): capture errSwallow's real log.Printf
+	// output for the exact chain shape production code produces, and
+	// assert the captured text carries the real driver detail -- not
+	// just the fixed "ClickHouse query failed" string every table would
+	// otherwise share regardless of cause.
+	var buf bytes.Buffer
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	}()
+
+	driverErr := errors.New("Code: 47. DB::Exception: Unknown expression or function identifier `declaration_coverage`")
+	wrapped := &fakeOperationError{operation: "query", cause: driverErr}
+	doubleWrapped := fmt.Errorf("operatingreview: ai_governance query: %w", wrapped)
+
+	errSwallow(context.Background(), "ai_governance", doubleWrapped)
+
+	logged := buf.String()
+	if !strings.Contains(logged, driverErr.Error()) {
+		t.Fatalf("errSwallow's logged output = %q, want it to contain the real driver message %q -- every table's failure would otherwise log as indistinguishable fixed-string text", logged, driverErr.Error())
 	}
 }

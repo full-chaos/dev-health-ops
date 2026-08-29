@@ -131,6 +131,20 @@ type teamRepoOwnershipProjectRef struct {
 // (the column reflects whatever was true AT SYNC TIME, not necessarily the
 // team catalog's current state) would mint phantom team_repo_ownership for a
 // team that no longer exists in this org.
+//
+// ID holds `teams.id`, not a separately-resolved `teams.native_team_key`
+// alias (codex review, round 3, P2 raised, verified NOT applicable to this
+// codebase: for every Linear team row EVER written -- the live Go writer,
+// `linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`
+// (`nativeTeamKey := teamKey; ... ID: teamKey, ..., NativeTeamKey: &nativeTeamKey`),
+// and the retired Python writer, `team_autoimport_linear.py`'s
+// `_linear_team_row` (`"id": team_id, ..., "native_team_key": team_id`) --
+// `id` and `native_team_key` are stamped from the exact same source value,
+// always. `resolveWorkItemTeamID` likewise returns `item.NativeTeamKey`
+// itself as the resolved team_id, never a separately-looked-up `teams.id` --
+// so validating against `id` here checks the identical value either writer
+// would have put in `native_team_key`, by construction, not by convention
+// that could silently drift.
 type TeamRepoOwnershipKnownTeam struct {
 	Provider string
 	ID       string
@@ -444,6 +458,35 @@ func resolveWorkItemTeamID(
 		return item.NativeTeamKey, TeamRepoOwnershipResolutionArmLinearTeamKey, true
 	}
 	return "", "", false
+}
+
+// hasResolvableLinearNativeTeamKey reports whether at least one Linear work
+// item in workItems carries a native_team_key that names a team currently in
+// knownTeams -- i.e. whether the linear_team_key arm could resolve ANYTHING
+// from this input set, independent of team_project_ownership. Used only by
+// Derive's readiness guard (CHAOS-4537 codex review, round 3, P1, confirmed
+// real): removing the projectLinks-empty early return unconditionally
+// (round 1's fix) reopened a retraction hazard for the case with no
+// Linear-native signal at all (a non-Linear org, or a Linear org whose work
+// items carry no NativeTeamKey) -- see team_repo_ownership_derivation_clickhouse.go's
+// Derive for the full reasoning. Pure, no I/O, exhaustively unit-testable
+// like every other function in this file.
+func hasResolvableLinearNativeTeamKey(workItems []TeamRepoOwnershipWorkItem, knownTeams []TeamRepoOwnershipKnownTeam) bool {
+	known := make(map[string]bool, len(knownTeams))
+	for _, team := range knownTeams {
+		if team.Provider == "linear" && team.ID != "" {
+			known[team.ID] = true
+		}
+	}
+	if len(known) == 0 {
+		return false
+	}
+	for _, item := range workItems {
+		if item.Provider == "linear" && item.NativeTeamKey != "" && known[item.NativeTeamKey] {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveProjectToTeam reduces a project's possibly-multiple ownership

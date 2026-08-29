@@ -123,19 +123,22 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	}
 	// CHAOS-4537: the early return that used to sit right after loading
 	// projectLinks (before workItems/dependencyEdges/issuePRLinks were even
-	// loaded) is GONE -- that guard assumed every resolution arm required a
-	// team_project_ownership row, which is no longer true: the
-	// linear_team_key arm now resolves straight from a Linear work item's
-	// own native_team_key column (see deriveTeamRepoOwnership's doc
-	// comment). An org with real, already-synced Linear work items but a
-	// team_project_ownership table that has not synced yet (a plausible
-	// ordering: work-items sync and team autoimport are independent
-	// per-config selections, CHAOS-4323) is NOT a first-sync gap for this
-	// arm, and the old projectLinks-only early return would have wrongly
-	// reported inputsReady=false and skipped resolution entirely.
+	// loaded) assumed every resolution arm required a team_project_ownership
+	// row, which is no longer true: the linear_team_key arm now resolves
+	// straight from a Linear work item's own native_team_key column (see
+	// deriveTeamRepoOwnership's doc comment). An org with real,
+	// already-synced Linear work items but a team_project_ownership table
+	// that has not synced yet (a plausible ordering: work-items sync and
+	// team autoimport are independent per-config selections, CHAOS-4323) is
+	// NOT a first-sync gap for this arm. This guard is NOT gone, though
+	// (round 1's fix unconditionally removed it; round 3's codex review
+	// caught that this reopened a retraction hazard for the case with no
+	// Linear-native signal -- see the guard reinstated below, after
+	// knownTeams loads): it now only skips when a Linear-native signal is
+	// actually present.
 	//
-	// The guard below (unchanged from before this ticket, codex review P1
-	// on this PR: keep it) is a DIFFERENT, still-necessary check: if
+	// The guard below (unchanged from before this ticket, codex review round
+	// 1 P1: keep it) is a DIFFERENT, still-necessary check: if
 	// workItems/dependencyEdges/issuePRLinks are ALL empty, nothing can be
 	// derived by ANY arm regardless of projectLinks' state -- proceeding
 	// anyway would treat a transient partial-sync snapshot (team_project_
@@ -150,17 +153,32 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 		return 0, 0, false, nil, nil
 	}
 
-	// CHAOS-4537 codex review P1: the linear_team_key arm validates a Linear
-	// work item's native_team_key against the org's CURRENT team catalog
-	// before trusting it -- see TeamRepoOwnershipKnownTeam's doc comment.
-	// Loading zero known teams is never itself a "not ready" signal (unlike
-	// the guard above): it just means that one arm resolves nothing this
-	// cycle, same as an org with no team_project_ownership rows leaves the
-	// project_id arm resolving nothing -- never a reason to report the whole
-	// evaluation as not-ready or to skip other providers' resolution.
+	// CHAOS-4537 codex review round 2 P1: the linear_team_key arm validates a
+	// Linear work item's native_team_key against the org's CURRENT team
+	// catalog before trusting it -- see TeamRepoOwnershipKnownTeam's doc
+	// comment. Loaded here (before the guard below, not after) because that
+	// guard now needs to know whether a Linear-native signal exists.
 	knownTeams, err := loadTeamRepoOwnershipKnownTeams(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, false, nil, err
+	}
+
+	// CHAOS-4537 codex review round 3 P1 (confirmed real): removing the
+	// projectLinks-only guard UNCONDITIONALLY (round 1's fix) reopened the
+	// exact retraction hazard round 1 closed, mirrored onto the opposite
+	// input combination. Consider team_project_ownership transiently empty
+	// (the gap this ticket targets) for a NON-Linear org (or a Linear org
+	// with no native_team_key signal): workItems/dependencyEdges/issuePRLinks
+	// are non-empty, so the guard above does not fire, but with
+	// projectLinks==nil neither arm can resolve anything (the project_id arm
+	// has no projectToTeam entries; the linear_team_key arm never applies to
+	// a non-Linear item) -- derived comes back empty, and the retraction
+	// diff below would then wipe every previously-derived row for the org,
+	// having nothing to protect them with. Only skip this guard (treat as
+	// ready despite projectLinks==0) when a Linear-native signal is actually
+	// present -- the one case removing the guard was meant to unblock.
+	if len(projectLinks) == 0 && !hasResolvableLinearNativeTeamKey(workItems, knownTeams) {
+		return 0, 0, false, nil, nil
 	}
 
 	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)

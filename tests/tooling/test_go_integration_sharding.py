@@ -1011,8 +1011,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # team_repo_ownership_derivation_integration_test.go:
     # TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey.
     # 1249 -> 1251 top-level; 147 -> 148 integration-tagged.
-    assert len(expected_provider_tests) == 1251
-    assert len(expected_integration_tests) == 148
+    #
+    # Codex review round 3 (final) on this PR found 2 more findings against
+    # round 2's own fix. (P1, confirmed real) the projectLinks-empty guard
+    # round 1 removed unconditionally reopened the identical retraction
+    # hazard round 1 itself fixed, mirrored onto the opposite input
+    # combination (team_project_ownership transiently empty for a
+    # NON-Linear org, or a Linear org with no native_team_key signal) --
+    # fixed with a new hasResolvableLinearNativeTeamKey helper and a
+    # conditional guard. (P2 raised, verified NOT applicable to this
+    # codebase: both the live Go writer and the retired Python writer stamp
+    # `teams.id` and `teams.native_team_key` from the exact same value,
+    # always -- executed-read proof, not asserted) native keys are not
+    # separately resolved to a canonical team id; documented instead of
+    # adding unreachable-case handling, plus a pinning test guarding the
+    # verified invariant against future drift. Added 3 new tests:
+    # TestHasResolvableLinearNativeTeamKey and
+    # TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey (both ordinary,
+    # team_repo_ownership_derivation_test.go), and
+    # TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg
+    # (`//go:build integration`, team_repo_ownership_derivation_integration_test.go).
+    # 1251 -> 1254 top-level; 148 -> 149 integration-tagged.
+    assert len(expected_provider_tests) == 1254
+    assert len(expected_integration_tests) == 149
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1028,7 +1049,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1251
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1254
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1089,7 +1110,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1251
+    assert len(selected_tests) == len(set(selected_tests)) == 1254
     assert set(selected_tests) == expected_tests
 
 

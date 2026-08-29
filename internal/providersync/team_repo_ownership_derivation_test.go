@@ -841,3 +841,75 @@ func TestLinearTeamKeyResolvesViaPRInheritanceIssueLink(t *testing.T) {
 		t.Fatalf("expected ResolutionArm=%q, got %q", TeamRepoOwnershipResolutionArmLinearTeamKey, got[0].ResolutionArm)
 	}
 }
+
+// TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey is the red-first
+// proof for TeamRepoOwnershipKnownTeam's doc comment (codex review, round 3,
+// P2 raised, verified NOT applicable to this codebase as things stand
+// today): resolveWorkItemTeamID validates a Linear work item's
+// native_team_key by checking `teams.id` (TeamRepoOwnershipKnownTeam.ID),
+// then returns NativeTeamKey itself as the resolved team_id -- never a
+// separately-looked-up `teams.id`. This is only safe because the live Go
+// writer stamps both columns from the exact same value, always. If a future
+// change to `normalizeLinearReferenceTeam` (linear_reference_catalog.go)
+// ever let `id` and `native_team_key` diverge for a Linear team, this
+// validation would silently start rejecting (or, worse, misattributing)
+// real teams -- this test exists so that divergence fails HERE, loudly, not
+// silently in production. Uses the existing chaos4530CollectReferenceCatalog
+// test harness (linear_reference_catalog_test.go) rather than duplicating
+// its mock GraphQL setup.
+func TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey(t *testing.T) {
+	batch := chaos4530CollectReferenceCatalog(t, true)
+	if len(batch.Rows.Teams) == 0 {
+		t.Fatal("expected at least one team row from the test harness")
+	}
+	for _, team := range batch.Rows.Teams {
+		if team.NativeTeamKey == nil {
+			t.Fatalf("team %q: NativeTeamKey is nil, expected it set to the team's own id", team.ID)
+		}
+		if team.ID != *team.NativeTeamKey {
+			t.Fatalf("team %q: id and native_team_key diverged (native_team_key=%q) -- TeamRepoOwnershipKnownTeam's validation-by-id is no longer equivalent to validating by native_team_key; see its doc comment", team.ID, *team.NativeTeamKey)
+		}
+	}
+}
+
+// TestHasResolvableLinearNativeTeamKey is hasResolvableLinearNativeTeamKey's
+// own direct proof (CHAOS-4537 codex review, round 3, P1, confirmed real):
+// Derive's readiness guard must correctly distinguish "a Linear-native
+// signal exists" from "it does not," across the shapes that matter --
+// non-Linear items, a Linear item whose key is unknown, an empty catalog,
+// and the genuine positive case.
+func TestHasResolvableLinearNativeTeamKey(t *testing.T) {
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+
+	cases := []struct {
+		name       string
+		workItems  []TeamRepoOwnershipWorkItem
+		knownTeams []TeamRepoOwnershipKnownTeam
+		want       bool
+	}{
+		{"no work items at all", nil, knownTeams, false},
+		{"non-Linear provider carrying a matching key never counts", []TeamRepoOwnershipWorkItem{
+			{WorkItemID: "gh:1", Provider: "github", NativeTeamKey: "CHAOS"},
+		}, knownTeams, false},
+		{"Linear item with an unknown key", []TeamRepoOwnershipWorkItem{
+			{WorkItemID: "linear:1", Provider: "linear", NativeTeamKey: "NOT-A-REAL-TEAM"},
+		}, knownTeams, false},
+		{"Linear item with a known key but empty knownTeams", []TeamRepoOwnershipWorkItem{
+			{WorkItemID: "linear:1", Provider: "linear", NativeTeamKey: "CHAOS"},
+		}, nil, false},
+		{"Linear item with empty NativeTeamKey", []TeamRepoOwnershipWorkItem{
+			{WorkItemID: "linear:1", Provider: "linear", NativeTeamKey: ""},
+		}, knownTeams, false},
+		{"genuine positive: Linear item with a validly-known key", []TeamRepoOwnershipWorkItem{
+			{WorkItemID: "linear:1", Provider: "linear", NativeTeamKey: "CHAOS"},
+		}, knownTeams, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hasResolvableLinearNativeTeamKey(tc.workItems, tc.knownTeams)
+			if got != tc.want {
+				t.Fatalf("hasResolvableLinearNativeTeamKey() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -1161,9 +1161,40 @@ Without validation, a stale, renamed, or garbage `native_team_key` would mint ph
 per-org collapse; this mirrors `github_work_items_derivation_context.go`'s `loadTeams`, the
 established convention for reading this table), and `resolveWorkItemTeamID`'s linear_team_key branch
 only trusts `NativeTeamKey` when it is a member of that set. Loading zero known teams is never itself
-an `inputsReady=false` signal (unlike the linkage-empty guard above) — it just means the arm resolves
-nothing that cycle, same as an org with no `team_project_ownership` rows leaves the `project_id` arm
-resolving nothing.
+an unconditional `inputsReady=false` signal on its own (unlike the linkage-empty guard above) — it just
+means the arm resolves nothing that cycle, same as an org with no `team_project_ownership` rows leaves
+the `project_id` arm resolving nothing. It DOES factor into the combined readiness guard the next
+paragraph describes, though — see there for why "zero known teams" alone is not sufficient reasoning.
+
+**Codex review, round 3 (final; P1, confirmed real): the `projectLinks`-empty guard's removal was too
+unconditional.** Round 1's fix removed that guard outright so the `linear_team_key` arm could resolve
+with zero `team_project_ownership` rows. Round 3 caught that this reopened the SAME retraction hazard
+round 1 itself had just fixed, mirrored onto the opposite input combination: `team_project_ownership`
+transiently empty (the exact gap this ticket targets) for a **non-Linear org, or a Linear org with no
+`native_team_key` signal at all**. In that case `workItems`/`dependencyEdges`/`issuePRLinks` are
+non-empty (the linkage-empty guard does not fire), but with `projectLinks` empty and no Linear-native
+signal, NEITHER arm can resolve anything — `derived` comes back empty, and the retraction diff would
+wipe every previously-derived row for the org. Fixed with a new pure helper,
+`hasResolvableLinearNativeTeamKey(workItems, knownTeams)` (true iff at least one Linear work item
+carries a `NativeTeamKey` that is a member of `knownTeams`): `Derive` now skips the `projectLinks`-empty
+guard (treats it as ready despite `len(projectLinks) == 0`) ONLY when that helper reports a genuine
+Linear-native signal is present — the one case the guard's removal was meant to unblock. This requires
+loading `knownTeams` BEFORE this guard runs, not after (its call site moved earlier in `Derive`).
+
+**Codex review, round 3 (final; P2 raised, verified NOT applicable to this codebase): native keys are
+not resolved to a separately-looked-up canonical team id.** `resolveWorkItemTeamID` validates
+`NativeTeamKey` against `TeamRepoOwnershipKnownTeam.ID` (`teams.id`) and then returns `NativeTeamKey`
+itself as the resolved `team_id` — never a distinct `teams.id` value looked up via an alias. Codex
+raised this as a P1 (a hypothetical `teams.id != teams.native_team_key` shape); executed-read
+verification (not assumed) found it is NOT reachable in this codebase: EVERY Linear team row ever
+written — the live Go writer, `linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`
+(`nativeTeamKey := teamKey; ...; ID: teamKey, ..., NativeTeamKey: &nativeTeamKey`), and the retired
+Python writer, `team_autoimport_linear.py`'s `_linear_team_row` (`"id": team_id, ...,
+"native_team_key": team_id`) — stamps both columns from the exact same source value, always. No
+alias-resolution machinery was added for a case that cannot occur; instead,
+`TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey` pins the invariant directly (reusing
+`linear_reference_catalog_test.go`'s existing `chaos4530CollectReferenceCatalog` harness) so a FUTURE
+change that lets the two columns diverge fails loudly here, not silently in production.
 
 The team-key-shaped `team_project_ownership` row itself is **still written** today
 (`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial

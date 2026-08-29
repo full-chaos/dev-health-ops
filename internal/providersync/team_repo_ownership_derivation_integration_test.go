@@ -358,6 +358,73 @@ func TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransi
 	}
 }
 
+// TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg
+// is codex review (round 3, P1, confirmed real) on this PR's OWN round-1
+// fix: round 1 correctly restored the linkage-empty guard (the sibling test
+// above), but round 1's OTHER change -- unconditionally removing the
+// projectLinks-empty guard so the linear_team_key arm could resolve without
+// any team_project_ownership rows -- reopened the identical retraction
+// hazard for the MIRROR input combination: team_project_ownership
+// transiently empty (the exact gap CHAOS-4537 targets), but for a
+// NON-Linear org (or a Linear org with no native_team_key signal). Here
+// work_items is non-empty (the linkage guard does not fire), but with
+// projectLinks empty and no Linear-native signal, NEITHER arm can resolve
+// anything -- derived comes back empty, and before this fix the retraction
+// diff would have wiped the pre-existing active row below. Deliberately
+// GitHub-shaped per AGENTS.md's provider-matrix rule, mirroring the sibling
+// test's own justification for doing the same.
+func TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-transient-tpo-gap-non-linear-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/github-repo"})
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org, simulating team autoimport not having synced
+	// yet while work-items sync already has (the OPPOSITE ordering from
+	// TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap
+	// above).
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/github-repo#1", "github", repoID, "proj-1", now)
+
+	// A pre-existing active inferred row, as if a PRIOR Derive() run (before
+	// the transient gap) had already resolved and written it.
+	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", "team-platform", repoID, "acme/github-repo",
+		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		now, nil, now,
+	); err != nil {
+		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send pre-existing team_repo_ownership row: %v", err)
+	}
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if inputsReady {
+		t.Fatal("expected inputsReady=false -- team_project_ownership is empty and no Linear-native signal exists, a transient tpo gap for a non-Linear org, not a genuine no-signal evaluation")
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows written during a transient team_project_ownership gap, got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted during a transient team_project_ownership gap -- retracting here would wipe real, previously-derived ownership, got %d", retracted)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/github-repo"]
+	if !ok || row.teamID != "team-platform" {
+		t.Fatalf("expected the pre-existing acme/github-repo -> team-platform row to survive untouched, got %+v", got)
+	}
+}
+
 // TestTeamRepoOwnershipDerivationNoProjectOwnershipIsNotAnError covers the
 // designed-empty case (§0.2): an org with zero team_project_ownership rows
 // (a GitHub-only org, or team auto-import never configured) derives zero

@@ -343,6 +343,39 @@ func TestGitLabTeamCatalogNativeProjectCatalogScopedBySourceExternalIDs(t *testi
 	}
 }
 
+// TestGitLabTeamCatalogNativeProjectCatalogIncompleteWhenSelectedSourceIsMissing
+// is the codex round-5 P2 regression proof: a selected source id that
+// discovery never returns at all (project deleted, access revoked, or
+// discovery's own pagination bound was hit before reaching it) must mark
+// the whole batch incomplete -- mirrors team_autoimport_gitlab.py's
+// missing_selected_source_ids -> native_projects_complete fold exactly.
+// Scoping to {"100", "999"} against newGitLabTeamCatalogFakeServer's
+// discovered ids {100, 101, 102}: "999" is selected but never discovered.
+func TestGitLabTeamCatalogNativeProjectCatalogIncompleteWhenSelectedSourceIsMissing(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServer(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", SourceExternalIDs: []string{"100", "999"}}
+	selections := TeamCatalogSelections{Projects: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if batch.Result.Complete {
+		t.Fatal("Result.Complete = true, want false (selected source id 999 was never discovered)")
+	}
+	if len(batch.Evidence.MissingSelectedSources) != 1 || batch.Evidence.MissingSelectedSources[0] != "999" {
+		t.Fatalf("MissingSelectedSources = %v, want [999]", batch.Evidence.MissingSelectedSources)
+	}
+	// The discovered-and-matched project ("100") must still be collected --
+	// a missing OTHER selected id must not also suppress what WAS found.
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != gitlabProjectCatalogID("org-1", "100") {
+		t.Fatalf("expected project 100 still collected, got rows=%+v", batch.Rows.Projects)
+	}
+}
+
 // newGitLabTeamCatalogFakeServerWithFailingRootMembers is
 // newGitLabTeamCatalogFakeServer with the root group's /members endpoint
 // returning a hard HTTP failure (500) instead of a member list -- team-a's

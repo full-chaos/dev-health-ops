@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,17 @@ type GitLabTeamCatalogEvidence struct {
 	// skipped and its roster is carried forward instead of aborting the
 	// whole run, matching GitHubTeamCatalogEvidence's identical field.
 	SkippedTeamMemberships int `json:"skipped_team_memberships"`
+	// MissingSelectedSources (codex round 5, P2) lists the ref.SourceExternalIDs
+	// entries that were selected but never observed among the discovered
+	// projects -- mirrors team_autoimport_gitlab._gitlab_project_catalog_rows's
+	// missing_selected_source_ids exactly (a selected source's project was
+	// deleted, access was revoked, or discovery's own pagination bound was
+	// hit before reaching it). A non-empty set here folds into
+	// GitLabTeamCatalogResult.Complete = false, the same fail-closed signal
+	// pagination truncation produces -- a partial catalog (missing a
+	// selected id) must never be recorded as a complete one, exactly like
+	// Python's native_projects_complete = not truncated and not missing.
+	MissingSelectedSources []string `json:"missing_selected_sources,omitempty"`
 }
 
 type GitLabTeamCatalogResult struct {
@@ -361,12 +373,15 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		if allProjectPages.PageBudgetExhausted {
 			evidence.Truncated = true
 		}
+		discoveredIDs := make(map[string]bool, len(allProjectPages.Items))
 		for _, raw := range allProjectPages.Items {
 			var project gitlabTeamCatalogProjectPayload
 			if err := json.Unmarshal(raw, &project); err != nil {
 				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
-			if len(sourceExternalIDs) > 0 && !sourceExternalIDs[strings.TrimSpace(project.ID.String())] {
+			nativeID := strings.TrimSpace(project.ID.String())
+			discoveredIDs[nativeID] = true
+			if len(sourceExternalIDs) > 0 && !sourceExternalIDs[nativeID] {
 				continue
 			}
 			row, ok := normalizeGitLabProjectCatalogRow(ref.OrgID, project, normalizedAt)
@@ -376,6 +391,23 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			rows.Projects = append(rows.Projects, row)
 		}
 		rows.Projects = dedupeGitLabProjectCatalogRows(rows.Projects)
+		// codex round 5, P2: a selected source id discovery never returned
+		// at all (deleted project, revoked access, or a pagination bound
+		// hit before reaching it) is a DIFFERENT gap from the filter above
+		// (which only narrows discovered -> selected) -- computed here so
+		// the batch is honest about it even though the (possibly partial)
+		// rows.Projects collected above still gets returned; the caller
+		// decides whether to write a partial view via Result.Complete.
+		if len(sourceExternalIDs) > 0 {
+			missing := make([]string, 0)
+			for id := range sourceExternalIDs {
+				if !discoveredIDs[id] {
+					missing = append(missing, id)
+				}
+			}
+			sort.Strings(missing)
+			evidence.MissingSelectedSources = missing
+		}
 	}
 
 	for _, row := range rows.Teams {
@@ -409,7 +441,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		TeamMembershipsImported: len(rows.Memberships), NativeProjectsImported: len(rows.Projects),
 		ProjectsImported: len(distinctGitLabOwnershipProjects(rows.Ownership)),
 		MembersImported:  len(distinctGitLabMembershipMembers(rows.Memberships)),
-		Complete:         !evidence.Truncated,
+		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
 	}
 	return GitLabTeamCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
 }

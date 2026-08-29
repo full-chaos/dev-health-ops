@@ -367,18 +367,52 @@ def _same_line_close(text: str, open_brace: int, line_end: int) -> int:
     function's own end: each `${` contributes a balanced +1/-1 pair that
     nets to zero, so only the function's OWN closing brace brings the
     depth back to 0.
+
+    Codex review round 5, P2: a raw depth count over EVERY `{`/`}`
+    character is still wrong the other direction -- a `}` sitting inside a
+    single- or double-quoted string, or after an unquoted `#` comment, on
+    the opening line has no matching `{` and would decrement the count to
+    0 too EARLY, truncating a genuinely multi-line function's body right
+    there. Any `<<<` the real body added AFTER that point would silently
+    never enter the closure. Tracks single/double-quote state (ignoring
+    `{`/`}` while inside either, matching bash's own quoting: no escaping
+    inside single quotes, backslash-escaping inside double quotes and in
+    bare code) and stops at an unquoted `#` (nothing after a real comment
+    marker is code), so only brace characters that are genuine shell
+    syntax count toward the depth.
     """
 
     depth = 1
     i = open_brace + 1
+    in_single = False
+    in_double = False
     while i < line_end:
         ch = text[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return i
+        if in_single:
+            if ch == "'":
+                in_single = False
+        elif in_double:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+        else:
+            if ch == "'":
+                in_single = True
+            elif ch == '"':
+                in_double = True
+            elif ch == "\\":
+                i += 2
+                continue
+            elif ch == "#":
+                break
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
         i += 1
     return -1
 
@@ -483,6 +517,40 @@ def _reachable_call_path_bodies(text: str, entry_point: str) -> dict[str, str]:
             if call_reference.search(body) and other_body:
                 frontier.add(other_name)
     return reachable
+
+
+def test_same_line_close_ignores_quoted_and_commented_braces() -> None:
+    """Codex review round 5, P2: a raw brace-depth count over EVERY `{`/`}`
+    character is wrong when a `}` on the opening line sits inside a
+    quoted string or after an unquoted `#` comment -- it has no matching
+    `{`, so a naive counter hits depth 0 too EARLY and truncates a
+    genuinely multi-line function's body right there. Anything the real
+    body adds after that point (including a future `<<<`) would then
+    silently never enter `_all_function_bodies`'s output, and so never
+    enter the reachable-call-path closure either.
+
+    Constructs three synthetic one-open-line function shapes, each with a
+    `}` on the opening line that has no matching `{` (inside a
+    double-quoted string, a single-quoted string, and a `#` comment) and
+    a REAL closing brace two lines down, past a `<<<` that must not be
+    missed. `_same_line_close` must return -1 for all three (correctly
+    recognizing "not actually closed on this line"), letting
+    `_all_function_bodies`'s multi-line fallback find the true body --
+    the one with the `<<<` in it.
+    """
+
+    cases = [
+        'foo() { echo "some } weird string"\n  cmd <<<"${x}"\n}\n',
+        "foo() { echo 'some } weird string'\n  cmd <<<\"${x}\"\n}\n",
+        'foo() { # a comment mentioning a } brace\n  cmd <<<"${x}"\n}\n',
+    ]
+    for text in cases:
+        open_brace = text.index("{")
+        line_end = text.index("\n")
+        assert _same_line_close(text, open_brace, line_end) == -1, (
+            f"_same_line_close treated a quoted/commented `}}` as a real"
+            f" same-line close in: {text!r}"
+        )
 
 
 def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> None:

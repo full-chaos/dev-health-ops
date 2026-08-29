@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -216,6 +217,41 @@ func gitlabExistingTeamRoster(
 	return existing, rows.Err()
 }
 
+// gitlabTeamsNeedingRosterPreservation returns the ids of the rows whose
+// write actually depends on gitlabExistingTeamRoster's read -- a row with
+// MembersAuthoritative=true carries its own confirmed roster in row.Members
+// and needs nothing from that read. Scoping the read (and any failure of
+// it) to only these rows is what stops a preservation-read failure for one
+// team from discarding every OTHER, self-sufficient team's write in the
+// same batch (codex review finding, mirrors GitHubTeamCatalogCollector's
+// identical CHAOS-4461-class fix).
+func gitlabTeamsNeedingRosterPreservation(rows []gitlabTeamCatalogTeamRow) []string {
+	ids := make([]string, 0)
+	for _, row := range rows {
+		if !row.MembersAuthoritative {
+			ids = append(ids, row.ID)
+		}
+	}
+	return ids
+}
+
+// gitlabTeamsSafeToWriteAfterRosterPreservationFailure filters rows down to
+// only those NOT dependent on an unconfirmed roster read -- used when
+// gitlabExistingTeamRoster's read fails for the rows gitlabTeamsNeeding
+// RosterPreservation identified. Every MembersAuthoritative=true row is
+// unaffected and still writes normally; every MembersAuthoritative=false
+// row is excluded from this write entirely rather than risk writing an
+// unconfirmed (possibly wrong) roster.
+func gitlabTeamsSafeToWriteAfterRosterPreservationFailure(rows []gitlabTeamCatalogTeamRow) []gitlabTeamCatalogTeamRow {
+	kept := make([]gitlabTeamCatalogTeamRow, 0, len(rows))
+	for _, row := range rows {
+		if row.MembersAuthoritative {
+			kept = append(kept, row)
+		}
+	}
+	return kept
+}
+
 func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, claim Claim, rows []gitlabTeamCatalogTeamRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -226,19 +262,34 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	}
 	// CHAOS-4321/CHAOS-4446: batched, one round trip for every touched team,
 	// shared with every native provider's teams writer (Linear included) so
-	// the carry-forward logic lives in exactly one place.
+	// the carry-forward logic lives in exactly one place. Every row needs
+	// its manual_members merged in (regardless of MembersAuthoritative), so
+	// a read failure here fails closed for the WHOLE batch -- there is no
+	// subset of rows this read is unnecessary for.
 	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
 		// Fail closed: a read failure must never fall through to writing an
 		// unconfirmed manual_members reset.
 		return err
 	}
-	existingRoster, err := gitlabExistingTeamRoster(ctx, sink.Conn, claim.OrgID, teamIDs)
-	if err != nil {
-		// Fail closed (team_autoimport_gitlab._existing_team_members): a
-		// read failure must never fall through to writing an unconfirmed
-		// empty roster either.
-		return err
+	// codex review finding (mirrors GitHubTeamCatalogCollector's CHAOS-4461-
+	// class fix): unlike manual_members above, gitlabExistingTeamRoster is
+	// only needed by MembersAuthoritative=false rows -- scope both the read
+	// and its failure to just those, so a preservation-read failure never
+	// discards every OTHER, self-sufficient team's write in the same batch.
+	rosterTeamIDs := gitlabTeamsNeedingRosterPreservation(rows)
+	var existingRoster map[string][]string
+	if len(rosterTeamIDs) > 0 {
+		var rosterErr error
+		existingRoster, rosterErr = gitlabExistingTeamRoster(ctx, sink.Conn, claim.OrgID, rosterTeamIDs)
+		if rosterErr != nil {
+			slog.Default().WarnContext(ctx, "gitlab_team_catalog_roster_preservation_failed",
+				"org_id", claim.OrgID, "team_ids", rosterTeamIDs, "error", rosterErr)
+			rows = gitlabTeamsSafeToWriteAfterRosterPreservationFailure(rows)
+			if len(rows) == 0 {
+				return nil
+			}
+		}
 	}
 	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
 	if err != nil {

@@ -214,9 +214,26 @@ def run_team_autoimport_strict(
     # team_autoimport_categories.resolve_import_categories -- absent it
     # defaults every category True (unrestricted), which is exactly the
     # pre-fix bug this closes.
+    #
+    # CHAOS-4437 (codex review): a caller's scope["sync_options"] is only a
+    # trustworthy CHAOS-4323 selection when the caller marks it canonical.
+    # reference_discovery._load_discovery_context sets
+    # sync_options_is_canonical=False when it had to fall back to
+    # Integration.config (no SyncConfiguration row exists) -- that dict is
+    # NOT an authoritative selection (it predates the category split and
+    # commonly has no auto_import_* keys at all), so treating it as one would
+    # flip "unrestricted" into "everything off" for that org. Callers that
+    # predate this flag (e.g. backfill's run_backfill_for_config, which
+    # always passes the real canonical SyncConfiguration.sync_options)
+    # default to canonical=True, preserving their existing behavior exactly.
     scope_sync_options = (scope or {}).get("sync_options")
+    sync_options_is_canonical = bool(
+        (scope or {}).get("sync_options_is_canonical", True)
+    )
     import_categories = import_categories_from_sync_options(
-        scope_sync_options if isinstance(scope_sync_options, Mapping) else None
+        scope_sync_options
+        if sync_options_is_canonical and isinstance(scope_sync_options, Mapping)
+        else None
     )
     for category, selected in import_categories.items():
         record_team_autoimport_reference_category_outcome(

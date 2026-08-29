@@ -704,6 +704,83 @@ def test_jira_populate_skips_one_boards_sprint_400_under_strict_reference_discov
     assert summary["reference_sprint_ids"] == ["501"]
 
 
+def test_jira_strict_reference_discovery_still_resolves_sprints_when_all_categories_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4437 (codex review, P1): an org with every CHAOS-4323 category
+    disabled must NOT skip sprint/cycle discovery under strict reference
+    discovery -- sprints are unconditional reference data (see
+    team_autoimport_categories.py's module docstring), needed to resolve
+    dispatch-blocking sprint keys regardless of the org's write-side
+    selection. Before this fix, the "no_categories_selected" early return
+    fired unconditionally and skipped sprint discovery too, even in strict
+    mode -- reachable only once run_team_autoimport_strict started threading
+    real selections (this same PR)."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(team_autoimport_jira, "JiraClient", _FakeSprintJiraClient)
+
+    sink = _fake_sink()
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={
+            "mode": "sync_reference_discovery",
+            "strict_reference_discovery": True,
+            "import_categories": {
+                "teams": False,
+                "projects": False,
+                "members": False,
+            },
+        },
+        sink=sink,
+    )
+
+    # Sprint discovery still ran and is still claimed for readback.
+    assert summary["sprints_imported"] == 1
+    assert summary["reference_sprint_ids"] == ["501"]
+    # But nothing writable was written -- the org's selection is honoured.
+    assert summary["teams_imported"] == 0
+    assert summary["reference_team_keys"] == []
+    assert summary["members_imported"] == 0
+    assert sink.teams == {}
+    assert sink.memberships == {}
+
+
 class _FakeForbiddenSprintJiraClient:
     """Board 81 answers 403 (a revoked/insufficiently-scoped credential),
     NOT the documented "no sprint support" 400. CHAOS-4357 round 2 (codex

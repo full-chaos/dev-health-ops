@@ -290,7 +290,16 @@ def populate(
     want_teams = categories["teams"] and capability.teams
     want_projects = categories["projects"] and capability.projects
     want_members = categories["members"] and capability.members
-    if not (want_teams or want_projects or want_members):
+    # CHAOS-4437 (codex review, P1): do NOT take this early exit in strict
+    # mode. Sprint/cycle discovery below is unconditional reference data
+    # (not gated on any category -- see team_autoimport_categories.py's
+    # module docstring), needed to resolve dispatch-blocking sprint keys
+    # even when an org has disabled every writable category. Returning here
+    # skipped that discovery entirely, silently leaving sprint references
+    # stale/missing while dispatch proceeded anyway. The best-effort
+    # (non-strict) path still short-circuits here to avoid a wasted API call
+    # when the user disabled everything.
+    if not strict and not (want_teams or want_projects or want_members):
         return {
             "status": "skipped",
             "reason": "no_categories_selected",

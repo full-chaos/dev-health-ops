@@ -282,6 +282,7 @@ def test_load_discovery_context_reads_canonical_sync_configuration_not_integrati
         "auto_import_projects": False,
         "auto_import_members": True,
     }
+    assert context["scope"]["sync_options_is_canonical"] is True
 
 
 def test_load_discovery_context_falls_back_to_integration_config_without_canonical_sync_configuration(
@@ -289,7 +290,13 @@ def test_load_discovery_context_falls_back_to_integration_config_without_canonic
 ) -> None:
     """When no SyncConfiguration row exists at all (legacy/edge case), the
     scope falls back to Integration.config exactly as before CHAOS-4437 --
-    org-lookup fallback (e.g. _github_org's "owner" read) keeps working."""
+    org-lookup fallback (e.g. _github_org's "owner" read) keeps working. It
+    is also marked non-canonical (codex review, P1): Integration.config is
+    NOT an authoritative CHAOS-4323 selection, so run_team_autoimport_strict
+    must fall back to "unrestricted" rather than reading auto_import_* keys
+    out of it -- a real SyncConfiguration.sync_options and a plain
+    Integration.config dict are shaped the same (both plain mappings) so
+    only this flag distinguishes them."""
     from dev_health_ops.workers import reference_discovery
 
     run, unit = _seed_unitized_run(db_session, provider="github")
@@ -301,6 +308,7 @@ def test_load_discovery_context_falls_back_to_integration_config_without_canonic
     context = reference_discovery._load_discovery_context(run.id)
 
     assert context["scope"]["sync_options"] == {"owner": "full-chaos"}
+    assert context["scope"]["sync_options_is_canonical"] is False
 
 
 def test_reference_discovery_all_categories_off_still_arms_dispatch(

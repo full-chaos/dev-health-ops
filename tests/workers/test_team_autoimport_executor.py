@@ -277,3 +277,84 @@ def test_run_team_autoimport_strict_records_per_category_telemetry(
     assert by_category["projects"]["outcome"] == "skipped_selection"
     assert by_category["members"]["outcome"] == "skipped_selection"
     assert all(row["provider"] == "gitlab" for row in recorded)
+
+
+def test_run_team_autoimport_strict_treats_non_canonical_sync_options_as_unrestricted(
+    monkeypatch,
+) -> None:
+    """CHAOS-4437 (codex review, P1): when a caller marks its sync_options as
+    NOT canonical (reference_discovery._load_discovery_context's fallback to
+    Integration.config when no SyncConfiguration row exists), the strict path
+    must NOT treat that dict as an authoritative selection -- doing so would
+    default every missing category to False and silently flip "unrestricted"
+    into "everything off" for orgs with no canonical sync config yet. This is
+    the regression codex caught: a real (non-None) sync_options dict passed
+    import_categories_from_sync_options's "authoritative" branch regardless
+    of where it came from."""
+    calls: list[dict[str, Any]] = []
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    team_autoimport.run_team_autoimport_strict(
+        provider="github",
+        org_id="org-1",
+        credentials={"token": "secret"},
+        scope={
+            # Integration.config-shaped: has "owner" but none of the three
+            # auto_import_* keys -- exactly what a pre-CHAOS-4323 or
+            # no-canonical-config integration looks like.
+            "sync_options": {"owner": "full-chaos"},
+            "sync_options_is_canonical": False,
+        },
+    )
+
+    assert calls[0]["scope"]["import_categories"] == {
+        "teams": True,
+        "projects": True,
+        "members": True,
+    }
+
+
+def test_run_team_autoimport_strict_trusts_sync_options_when_canonical_flag_absent(
+    monkeypatch,
+) -> None:
+    """Legacy callers (backfill's run_backfill_for_config) that predate the
+    sync_options_is_canonical flag always pass the real canonical
+    SyncConfiguration.sync_options under scope["sync_options"] -- omitting
+    the flag entirely must default to trusting it (canonical=True), not to
+    "unrestricted", or backfill's real selections would stop being honoured."""
+    calls: list[dict[str, Any]] = []
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    team_autoimport.run_team_autoimport_strict(
+        provider="github",
+        org_id="org-1",
+        credentials={"token": "secret"},
+        scope={
+            "sync_options": {
+                "auto_import_teams": False,
+                "auto_import_projects": False,
+                "auto_import_members": True,
+            }
+            # sync_options_is_canonical intentionally absent.
+        },
+    )
+
+    assert calls[0]["scope"]["import_categories"] == {
+        "teams": False,
+        "projects": False,
+        "members": True,
+    }

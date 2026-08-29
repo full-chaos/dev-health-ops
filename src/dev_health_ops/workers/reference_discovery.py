@@ -341,6 +341,17 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
                 source_external_ids[source_id] for source_id in source_ids
             ),
             "sync_options": sync_options,
+            # CHAOS-4437 (codex review): when no canonical SyncConfiguration
+            # exists, `sync_options` above falls back to Integration.config
+            # -- kept ONLY so _github_org's "owner" fallback still works --
+            # but that dict is NOT an authoritative CHAOS-4323 selection.
+            # import_categories_from_sync_options treats any non-None mapping
+            # as authoritative (missing categories default False), so without
+            # this flag a legacy/no-config integration would silently flip
+            # from "unrestricted" (the correct, pre-CHAOS-4437 behavior) to
+            # "everything off". run_team_autoimport_strict checks this before
+            # trusting sync_options for category resolution.
+            "sync_options_is_canonical": canonical_config is not None,
         }
         return {
             "provider": str(integration.provider).strip().lower(),

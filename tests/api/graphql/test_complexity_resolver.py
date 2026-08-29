@@ -723,6 +723,55 @@ async def test_hotspots_limit_is_clamped_to_max_hotspots_rows() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic tie-break (CHAOS-4472 / CHAOS-4369)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hotspots_order_by_has_deterministic_tie_break() -> None:
+    """``ORDER BY risk_score DESC NULLS LAST`` alone has no tie-breaker, so
+    ClickHouse does not guarantee a stable row order/set among rows with
+    equal ``risk_score`` -- particularly at a ``LIMIT`` boundary (see
+    ClickHouse's own ORDER BY docs: "If ... rows have the same value ... the
+    resulting order of such rows is undefined and may be non-deterministic").
+    Ties are common here (``risk_score`` is a composite of churn x
+    complexity x ownership concentration, and 0 is a frequent legitimate
+    value). A non-deterministic row set makes stage-2 dual-run parity proof
+    (the CHAOS-4381 comparator) meaningless -- comparing two
+    non-deterministic outputs never proves the Go and Python implementations
+    agree. Same class of defect as CHAOS-4421 (reviewEdges); this is its
+    hotspots counterpart, tracked as CHAOS-4472.
+
+    This is a red-first regression test: before the fix, the emitted SQL was
+    ``ORDER BY risk_score DESC NULLS LAST`` with no further key, so this
+    assertion failed (the tie-break columns were entirely absent from the
+    ORDER BY clause). The fix appends the resolver's own GROUP BY key --
+    ``repo_id, file_path`` -- which is already a total order over the
+    deduplicated row set (each combination of those two columns identifies
+    exactly one row after the argMax/GROUP BY dedup above), so no synthetic
+    tiebreaker column is introduced.
+    """
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    await resolve_hotspots(ctx, _hotspots_input())
+
+    query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "ORDER BY risk_score DESC NULLS LAST, repo_id, file_path" in query, (
+        "ORDER BY must carry a full deterministic tie-break key "
+        "(repo_id, file_path) after risk_score DESC NULLS LAST, "
+        "not just risk_score DESC NULLS LAST alone -- see CHAOS-4472."
+    )
+    # The tie-break key must appear strictly after the dedup GROUP BY (same
+    # ordering-of-clauses invariant CHAOS-4421's reviewEdges test pins) and
+    # strictly before LIMIT, so it actually governs which rows the cap keeps.
+    idx_group = query.index("GROUP BY repo_id, file_path")
+    idx_order = query.index("ORDER BY risk_score DESC NULLS LAST, repo_id, file_path")
+    idx_limit = query.index("LIMIT")
+    assert idx_group < idx_order < idx_limit
+
+
+# ---------------------------------------------------------------------------
 # Org-id gate
 # ---------------------------------------------------------------------------
 

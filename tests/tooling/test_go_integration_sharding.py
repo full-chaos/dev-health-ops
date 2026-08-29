@@ -796,8 +796,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # gating oracle), and 7 integration-tagged tests in
     # team_repo_ownership_derivation_integration_test.go (//go:build
     # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
-    assert len(expected_provider_tests) == 1115
-    assert len(expected_integration_tests) == 126
+    #
+    # CHAOS-4431 (Linear team-catalog native route) added 15 new top-level
+    # tests in internal/providersync across its codex review rounds: 5
+    # ordinary tests in linear_reference_catalog_test.go
+    # (TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows,
+    # TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows,
+    # TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall,
+    # TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships,
+    # TestLinearReferenceTeamRosterFromMembershipsScopesByTeam -- round 2/3's
+    # non-strict partial-prefix and roster-rebuild-after-guard fixes), 9
+    # ordinary tests in team_membership_conflict_guard_test.go
+    # (TestMembershipConflictsWithManualState* x8 + Test
+    # ApplyTeamMembershipConflictGuardCountsAndFiltersSkippedRows -- the #6
+    # guard's same-team-confirms/different-team-conflicts semantics, corrected
+    # twice across rounds 2-3), and 1 integration-tagged test in
+    # linear_reference_catalog_effects_integration_test.go
+    # (TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites,
+    # //go:build integration -- the sprints-fixture-extended ClickHouse
+    # effects suite). 1115 -> 1130 top-level; 126 -> 127 integration-tagged.
+    assert len(expected_provider_tests) == 1130
+    assert len(expected_integration_tests) == 127
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -813,7 +832,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1115
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1130
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -874,7 +893,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1115
+    assert len(selected_tests) == len(set(selected_tests)) == 1130
     assert set(selected_tests) == expected_tests
 
 

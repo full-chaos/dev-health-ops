@@ -367,6 +367,23 @@ type BudgetEstimateFailureObserver interface {
 	ObserveBudgetEstimateFailure(reason string) error
 }
 
+// TeamCatalogObserver is the narrow capability CHAOS-4431's native/bridge
+// team-catalog dispatch depends on to report what it did: generic runtime
+// middleware cannot infer which path a provider took (native collector vs
+// the Python bridge vs skipped for no CHAOS-4323 selection) or how many rows
+// a native collector actually wrote per destination table -- only the
+// dispatch implementation itself (TeamCatalogDiscoveryExecutor or
+// teamCatalogAutoimportBridge, both cmd/dev-health-worker/internal/syncdispatchruntime)
+// knows either.
+type TeamCatalogObserver interface {
+	// ObserveTeamCatalogDispatch records one dispatch decision: which path a
+	// (provider, entry point) pair took for one call.
+	ObserveTeamCatalogDispatch(provider string, entryPoint TeamCatalogEntryPoint, outcome TeamCatalogOutcome) error
+	// ObserveTeamCatalogRowsWritten records rows written to one destination
+	// table by a native collector. Only called on the native outcome.
+	ObserveTeamCatalogRowsWritten(provider string, table TeamCatalogTable, rowsWritten int) error
+}
+
 // RegisterRuntime validates the low-cardinality scrape-presence identity
 // before passing it to an Observer.
 func RegisterRuntime(ctx context.Context, observer Observer, info RuntimeInfo) error {

@@ -218,6 +218,128 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 	}
 }
 
+// TeamCatalogEntryPoint names which of the two Python team-autoimport call
+// sites CHAOS-4431's native/bridge dispatch decided for (they are NOT
+// equivalent -- see teamCatalogAutoimportBridge's doc comment,
+// cmd/dev-health-worker/team_catalog_clients.go): reference discovery
+// mirrors run_team_autoimport_strict (selection-blind), post_sync mirrors
+// run_team_autoimport (selection-gated).
+type TeamCatalogEntryPoint string
+
+const (
+	TeamCatalogEntryPointReferenceDiscovery TeamCatalogEntryPoint = "reference_discovery"
+	TeamCatalogEntryPointPostSync           TeamCatalogEntryPoint = "post_sync"
+)
+
+func teamCatalogEntryPoints() []TeamCatalogEntryPoint {
+	return []TeamCatalogEntryPoint{TeamCatalogEntryPointReferenceDiscovery, TeamCatalogEntryPointPostSync}
+}
+
+// TeamCatalogOutcome is the bounded dispatch result for one (provider,
+// entry point) call: "native" ran a registered Go collector and never
+// touched the Python bridge; "bridge" fell through to the existing Python
+// path unchanged (provider has no native collector, or provider resolution
+// failed); "skipped" is the post_sync-only case of a native provider whose
+// org has every CHAOS-4323 selection off -- nothing to import either way, so
+// neither the collector nor the bridge ran; "native_failed_nonfatal" is the
+// post_sync-only case of a native collector call that returned an error --
+// mirroring Python's non-strict run_team_autoimport, which catches every
+// populator exception and returns a zero summary rather than failing the
+// job (the strict reference-discovery seam never uses this value; it
+// propagates the error instead, same as run_team_autoimport_strict).
+type TeamCatalogOutcome string
+
+const (
+	TeamCatalogOutcomeNative               TeamCatalogOutcome = "native"
+	TeamCatalogOutcomeBridge               TeamCatalogOutcome = "bridge"
+	TeamCatalogOutcomeSkipped              TeamCatalogOutcome = "skipped"
+	TeamCatalogOutcomeNativeFailedNonfatal TeamCatalogOutcome = "native_failed_nonfatal"
+	// TeamCatalogOutcomeRosterPreservationFailed (team-lead ruling,
+	// 2026-08-28) names a successful collection call that nonetheless
+	// reported TeamCatalogResult.RosterPreservationFailed: the existing-
+	// manual_members pre-read (CHAOS-4446's PreserveExistingTeamManualMembers)
+	// failed and the collector chose to continue rather than hard-fail the
+	// whole write. No collector does this today -- Linear's always
+	// hard-fails instead, surfacing as native_failed_nonfatal/a propagated
+	// error -- but the outcome exists so a future collector's choice to
+	// soft-fail that one step is never silently indistinguishable from a
+	// clean run.
+	TeamCatalogOutcomeRosterPreservationFailed TeamCatalogOutcome = "roster_preservation_failed"
+)
+
+func teamCatalogOutcomes() []TeamCatalogOutcome {
+	return []TeamCatalogOutcome{
+		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
+		TeamCatalogOutcomeNativeFailedNonfatal, TeamCatalogOutcomeRosterPreservationFailed,
+	}
+}
+
+// TeamCatalogTable is the bounded destination-table set a native team-catalog
+// collector writes to (CHAOS-4431): the five reference-catalog tables plus
+// the `members` table the Linear collector writes alongside `teams`.
+type TeamCatalogTable string
+
+const (
+	TeamCatalogTableTeams                TeamCatalogTable = "teams"
+	TeamCatalogTableMembers              TeamCatalogTable = "members"
+	TeamCatalogTableTeamMemberships      TeamCatalogTable = "team_memberships"
+	TeamCatalogTableProjects             TeamCatalogTable = "projects"
+	TeamCatalogTableTeamProjectOwnership TeamCatalogTable = "team_project_ownership"
+	// TeamCatalogTableTeamRepoOwnership is GitHub's destination table --
+	// DISTINCT from TeamCatalogTableTeamProjectOwnership (team-lead ruling,
+	// 2026-08-28): TeamCatalogResult.OwnershipWritten and .RepoOwnershipWritten
+	// are separate fields specifically so GitHub's rows are never reported
+	// under Linear/GitLab's team_project_ownership label.
+	TeamCatalogTableTeamRepoOwnership TeamCatalogTable = "team_repo_ownership"
+	// TeamCatalogTableSprints is Linear's (CHAOS-4431 codex review P1) cycle-
+	// to-sprint reference discovery -- unconditional reference data, never
+	// gated on a CHAOS-4323 selection, reported separately from the other
+	// five tables so a dashboard can see sprints kept flowing even on a run
+	// where every writable category was off.
+	TeamCatalogTableSprints TeamCatalogTable = "sprints"
+	// TeamCatalogTableTeamsSkippedPolicy counts teams a call deliberately
+	// left untouched because their CHAOS-2622 sync_policy was not the
+	// auto-apply default (team-lead ruling, 2026-08-28, codex review
+	// findings #3/#6's fail-safe guard, pending the CHAOS-4444-class full
+	// drift-aware projector). Reported as a row count, not folded into
+	// TeamCatalogTableTeams's written count, so "skipped for policy" is never
+	// indistinguishable from "genuinely zero teams this run".
+	TeamCatalogTableTeamsSkippedPolicy TeamCatalogTable = "teams_skipped_policy"
+	// TeamCatalogTableMembershipsSkippedManualConflict counts
+	// team_memberships rows a call deliberately left unwritten because of an
+	// active manual membership or manual_attribution_fallbacks conflict
+	// (team-lead ruling, 2026-08-28, codex review finding #6's fail-safe
+	// guard, pending the CHAOS-4444-class full drift-aware projector).
+	TeamCatalogTableMembershipsSkippedManualConflict TeamCatalogTable = "team_memberships_skipped_manual_conflict"
+)
+
+func teamCatalogTables() []TeamCatalogTable {
+	return []TeamCatalogTable{
+		TeamCatalogTableTeams, TeamCatalogTableMembers, TeamCatalogTableTeamMemberships,
+		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
+		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
+	}
+}
+
+// teamCatalogProvider clamps to the same closed, known provider set
+// zeroUnitFinalizationProvider already uses, for the same cardinality
+// discipline -- an unrecognized value folds into "unknown" rather than
+// growing the label set without limit.
+func teamCatalogProvider(provider string) string {
+	return zeroUnitFinalizationProvider(provider)
+}
+
+type teamCatalogDispatchLabels struct {
+	Provider   string
+	EntryPoint TeamCatalogEntryPoint
+	Outcome    TeamCatalogOutcome
+}
+
+type teamCatalogRowsLabels struct {
+	Provider string
+	Table    TeamCatalogTable
+}
+
 // DailyMetricsNativeFamilyOutcome is the bounded durable outcome of one
 // native family compute attempt inside a metrics.daily partition (CHAOS-4276).
 // Computed means the executor wrote rows (possibly zero, a legitimate quiet
@@ -654,8 +776,13 @@ type MetricsCollector struct {
 	// teamMetricsDailyRepoCount above.
 	teamRepoOwnershipDerivation         map[TeamRepoOwnershipDerivationOutcome]uint64
 	teamRepoOwnershipDerivationRowCount *histogram
-	workGraphReleaseLost                uint64
-	remainingReleaseLost                uint64
+	// teamCatalogDispatch/teamCatalogRowsWritten (CHAOS-4431): per-call
+	// dispatch outcome for the native/bridge team-catalog split, and rows a
+	// native collector actually wrote per destination table.
+	teamCatalogDispatch    map[teamCatalogDispatchLabels]uint64
+	teamCatalogRowsWritten map[teamCatalogRowsLabels]uint64
+	workGraphReleaseLost   uint64
+	remainingReleaseLost   uint64
 	// remainingOpenDayZeroRow (CHAOS-4384), keyed by family (only "dora"
 	// today -- remainingMetricsOpenDayZeroRowFamilies). Counts a dora
 	// cross-trigger coverage check finding a 0-row succeeded partition for a
@@ -765,6 +892,7 @@ var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
+var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsOpenDayZeroRowObserver = (*MetricsCollector)(nil)
@@ -829,6 +957,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
+		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
+		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
 		coverageCacheInvalidationsEmitted:    make(map[string]uint64),
 		coverageCacheInvalidationsConsumed:   make(map[string]uint64),
@@ -1449,6 +1579,40 @@ func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivation(outcome Te
 	if outcome == TeamRepoOwnershipDerivationOutcomeRowsWritten {
 		collector.teamRepoOwnershipDerivationRowCount.observe(float64(rowCount))
 	}
+	return nil
+}
+
+// ObserveTeamCatalogDispatch records one dispatch decision for CHAOS-4431's
+// native/bridge team-catalog split.
+func (collector *MetricsCollector) ObserveTeamCatalogDispatch(provider string, entryPoint TeamCatalogEntryPoint, outcome TeamCatalogOutcome) error {
+	if !slices.Contains(teamCatalogEntryPoints(), entryPoint) {
+		return errors.New("team-catalog entry point is not registered")
+	}
+	if !slices.Contains(teamCatalogOutcomes(), outcome) {
+		return errors.New("team-catalog outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamCatalogDispatch[teamCatalogDispatchLabels{
+		Provider: teamCatalogProvider(provider), EntryPoint: entryPoint, Outcome: outcome,
+	}]++
+	return nil
+}
+
+// ObserveTeamCatalogRowsWritten records rows a native team-catalog collector
+// wrote to one destination table. Only called on the native outcome.
+func (collector *MetricsCollector) ObserveTeamCatalogRowsWritten(provider string, table TeamCatalogTable, rowsWritten int) error {
+	if !slices.Contains(teamCatalogTables(), table) {
+		return errors.New("team-catalog table is not registered")
+	}
+	if rowsWritten < 0 {
+		return errors.New("team-catalog rows written must not be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamCatalogRowsWritten[teamCatalogRowsLabels{
+		Provider: teamCatalogProvider(provider), Table: table,
+	}] += uint64(rowsWritten)
 	return nil
 }
 
@@ -2117,6 +2281,8 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
+	collector.writeTeamCatalogDispatch(&output)
+	collector.writeTeamCatalogRowsWritten(&output)
 	collector.writeWorkGraphLease(&output)
 	collector.writeRemainingMetricsLease(&output)
 	collector.writeReportDedupGuard(&output)
@@ -2321,6 +2487,51 @@ func (collector *MetricsCollector) writeZeroUnitFinalizations(output *strings.Bu
 		writeUintSample(output, "devhealth_sync_run_zero_unit_finalizations_total", []metricLabel{
 			{"provider", key.Provider}, {"reason", key.Reason},
 		}, collector.zeroUnitFinalizations[key])
+	}
+}
+
+func (collector *MetricsCollector) writeTeamCatalogDispatch(output *strings.Builder) {
+	writeMetadata(output, "dev_health_team_catalog_dispatch_total",
+		"CHAOS-4431 team/member/project reference-catalog dispatch decisions, by provider, entry point (reference_discovery|post_sync), and outcome (native|bridge|skipped).",
+		"counter")
+	keys := make([]teamCatalogDispatchLabels, 0, len(collector.teamCatalogDispatch))
+	for key := range collector.teamCatalogDispatch {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].Provider != keys[right].Provider {
+			return keys[left].Provider < keys[right].Provider
+		}
+		if keys[left].EntryPoint != keys[right].EntryPoint {
+			return keys[left].EntryPoint < keys[right].EntryPoint
+		}
+		return keys[left].Outcome < keys[right].Outcome
+	})
+	for _, key := range keys {
+		writeUintSample(output, "dev_health_team_catalog_dispatch_total", []metricLabel{
+			{"provider", key.Provider}, {"entry_point", string(key.EntryPoint)}, {"outcome", string(key.Outcome)},
+		}, collector.teamCatalogDispatch[key])
+	}
+}
+
+func (collector *MetricsCollector) writeTeamCatalogRowsWritten(output *strings.Builder) {
+	writeMetadata(output, "dev_health_team_catalog_rows_written_total",
+		"Rows a native CHAOS-4431 team-catalog collector wrote, by provider and destination table.",
+		"counter")
+	keys := make([]teamCatalogRowsLabels, 0, len(collector.teamCatalogRowsWritten))
+	for key := range collector.teamCatalogRowsWritten {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if keys[left].Provider != keys[right].Provider {
+			return keys[left].Provider < keys[right].Provider
+		}
+		return keys[left].Table < keys[right].Table
+	})
+	for _, key := range keys {
+		writeUintSample(output, "dev_health_team_catalog_rows_written_total", []metricLabel{
+			{"provider", key.Provider}, {"table", string(key.Table)},
+		}, collector.teamCatalogRowsWritten[key])
 	}
 }
 

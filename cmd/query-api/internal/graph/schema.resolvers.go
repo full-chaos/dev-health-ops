@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -292,7 +293,28 @@ func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.Co
 
 // Hotspots is the resolver for the hotspots field.
 func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput) (*model.HotspotsResult, error) {
-	panic(fmt.Errorf("not implemented: Hotspots - hotspots"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startHotspotsSpan(ctx)
+	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("hotspots: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // CognitiveLoad is the resolver for the cognitiveLoad field (CHAOS-4369

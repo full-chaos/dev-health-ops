@@ -161,6 +161,30 @@ const registeredComplexityTimeseriesDocument = `query ComplexityTimeseries($inpu
   }
 }`
 
+// registeredHotspotsDocument is CHAOS-4369 Wave 3's registered document
+// for the hotspots operation (the second of the two Wave 3 operations,
+// after complexityTimeseries) -- same "registered documents only"
+// contract, same "sourced from the real client file, not reconstructed"
+// discipline as registeredReviewEdgesDocument above. Copied byte-for-byte
+// from web/src/lib/graphql/queries.ts's HOTSPOTS_QUERY, operation name
+// "Hotspots", input variable named `$input` of type `HotspotsInput!`.
+const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
+  hotspots(input: $input) {
+    rows {
+      filePath
+      repoId
+      repoName
+      churnLoc30d
+      churnCommits30d
+      cyclomaticTotal
+      cyclomaticAvg
+      blameConcentration
+      riskScore
+      evidenceUrl
+    }
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -296,6 +320,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
 		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
 		"complexityTimeseries": digestHex(registeredComplexityTimeseriesDocument),
+		"hotspots":             digestHex(registeredHotspotsDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

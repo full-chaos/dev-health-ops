@@ -26,6 +26,8 @@ var (
 	cognitiveLoadOutcomeCounter        = mustCounter("devhealth_query_api_cognitive_load_outcome_total", "cognitiveLoad resolver outcomes, by result")
 	complexityTimeseriesCallCounter    = mustCounter("devhealth_query_api_complexity_timeseries_calls_total", "complexityTimeseries resolver invocations")
 	complexityTimeseriesOutcomeCounter = mustCounter("devhealth_query_api_complexity_timeseries_outcome_total", "complexityTimeseries resolver outcomes, by result")
+	hotspotsCallCounter                = mustCounter("devhealth_query_api_hotspots_calls_total", "hotspots resolver invocations")
+	hotspotsOutcomeCounter             = mustCounter("devhealth_query_api_hotspots_outcome_total", "hotspots resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -151,4 +153,29 @@ func startComplexityTimeseriesSpan(ctx context.Context) (context.Context, func(o
 // outcome vocabulary.
 func recordComplexityTimeseriesOutcome(outcome string) {
 	complexityTimeseriesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startHotspotsSpan is startFeatureFlagsSpan's counterpart for the
+// hotspots resolver (CHAOS-4369 Wave 3) -- same "count and start the
+// span before the ClickHouse query, finish only once real resolver work
+// completes" contract.
+func startHotspotsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	hotspotsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.hotspots")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "hotspots resolver error")
+		}
+		span.End()
+		recordHotspotsOutcome(outcome)
+	}
+}
+
+// recordHotspotsOutcome increments the outcome counter. outcome is one
+// of "ok" or "error" -- hotspots has no degraded-result path (unlike
+// featureFlags; see hotspots package's doc comment), so "degraded" is
+// not part of this operation's outcome vocabulary.
+func recordHotspotsOutcome(outcome string) {
+	hotspotsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

@@ -214,9 +214,13 @@ func linearReferenceCatalogDestination(destination string) bool {
 }
 
 func validateLinearReferenceTeamRow(claim Claim, row linearReferenceTeamRow) error {
+	// CHAOS-4530: this used to require row.ProjectKeys to contain row.ID
+	// (the team's own key) -- that invariant enforced the very defect this
+	// ticket fixes (a team key is not a project key). ProjectKeys is now
+	// legitimately empty for a team with no real per-project keys.
 	if claim.Provider != "linear" || row.Provider != "linear" || row.OrgID != claim.OrgID ||
 		strings.TrimSpace(row.ID) == "" || strings.TrimSpace(row.TeamUUID) == "" || row.UpdatedAt.IsZero() ||
-		!containsString(row.ProjectKeys, row.ID) || row.IsActive > 1 {
+		row.IsActive > 1 {
 		return ErrInvalidConfiguration
 	}
 	if _, err := uuid.Parse(row.TeamUUID); err != nil {

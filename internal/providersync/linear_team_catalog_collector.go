@@ -176,6 +176,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		}
 		result.ProjectsWritten = batch.Result.Projects
 		result.OwnershipWritten = batch.Result.Ownership
+		result.ProjectsWithoutKey = batch.Result.ProjectsWithoutKey
 	}
 	// Unconditional reference data -- see the function doc comment above.
 	if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Sprints); err != nil {

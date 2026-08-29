@@ -299,37 +299,44 @@ SETTINGS max_execution_time = {timeout:UInt64}
 `
 
 // flowMatrixRepoEnrichedSelect ports _FLOW_MATRIX_REPO_ENRICHED_CTE
-// (sql/templates.py:276-293) -- `wct FINAL` unchanged (CHAOS-4519's
-// separate fix, already merged on the feature tip, is what made
-// `a.team_id` resolve at all -- see BRIEF.md §4).
+// (sql/templates.py:276-293) -- `wct FINAL` unchanged.
 //
-// NOT VERBATIM, unlike the doc comment above previously claimed: BRIEF.md
-// §4's claim that this site "is what made `a.team_id` resolve here" was
-// never executed against a live engine -- it was inferred from reading
-// that the CTE projects `t.team_id`, without checking that a self-joined
-// duplicate of this SAME select (`... AS a INNER JOIN (...) AS b`, this
-// port's WITH-avoidance shape -- see flowMatrixTeamActivitySelect's doc
-// comment) can actually resolve an UNALIASED qualified column across the
-// two aliases. It cannot: ClickHouse 26.7's analyzer rejects `a.team_id`
-// with `UNKNOWN_IDENTIFIER: Maybe you meant: ['t.team_id']` -- the exact
-// CHAOS-4519 error shape recurring at a second site, isolated live via
-// `docker exec dev-health-clickhouse-1 clickhouse-client` with a minimal
-// two-row self-join repro (2026-08-29, CHAOS-4506 slot execution) before
-// this fix was written, confirmed by BOTH failing and by the identical
-// minimal repro succeeding once the column carries an explicit `AS`.
-// `flowMatrixTeamActivitySelect` above already does this correctly
-// (`t.team_id AS team_id`) for the TEAM dimension's self-join; this site
-// and flowMatrixWorkTypeEnrichedSelect below did not, because neither had
-// ever been executed. `t.team_id` and `wi.repo_id` below are now
-// explicitly aliased to match -- same column, same value, no semantic
-// change, purely what the analyzer requires to resolve `a.team_id` /
-// `a.repo_id` in flowMatrixRepoEdgesTemplate's self-join below.
+// ALIAS HISTORY, recorded because the first fix here was itself
+// incomplete and the same lesson applies to whoever edits this next:
+//
+// Round 1 (2026-08-29, CHAOS-4506 slot execution): BRIEF.md §4 had
+// claimed this site "is what made `a.team_id` resolve here" purely from
+// reading that the CTE projects `t.team_id` -- never executed against a
+// live engine. Isolated live via `docker exec dev-health-clickhouse-1
+// clickhouse-client` with a minimal two-row self-join repro: ClickHouse
+// 26.7's analyzer rejects `a.team_id` with `UNKNOWN_IDENTIFIER: Maybe
+// you meant: ['t.team_id']` when a select is duplicated into a self-join
+// (`... AS a INNER JOIN (...) AS b`, this port's WITH-avoidance shape --
+// see flowMatrixTeamActivitySelect's doc comment) and the referenced
+// column is projected unaliased. Fixed `t.team_id AS team_id` and
+// `wi.repo_id AS repo_id` only -- the two columns the live error named.
+//
+// Round 2 (2026-08-29, CHAOS-4519 fix on main, `3b4a1ea15`): that fix
+// was NARROWER than the bug. `flowMatrixRepoEdgesTemplate` below
+// qualifies FIVE columns across its self-join, not two -- `a.team_id`,
+// `a.day`, `a.org_id`, `a.repo_id`, and `uniqExact(a.work_item_id)` --
+// and `wct.day`/`wct.org_id`/`wct.work_item_id` were still unaliased.
+// The dual-run's own test 2 caught it: Python's side (fixed on main with
+// ALL FIVE columns aliased, run 2's red-on-baseline having gone red
+// again on `a.org_id` after the team_id-only fix, per the ticket's own
+// history) returned a real value; Go's side returned NO node at all --
+// a SWALLOWED failure (resolve.go's degrade-to-empty), not the declared
+// mismatch. Every projected column is now aliased, matching main's
+// `_FLOW_MATRIX_REPO_ENRICHED_CTE` exactly. Same columns, same values,
+// still zero semantic change -- purely what the analyzer needs to
+// resolve ANY qualified reference across a self-joined duplicate, not
+// just the ones a single failing query happened to name first.
 const flowMatrixRepoEnrichedSelect = `
     SELECT
-        wct.work_item_id,
+        wct.work_item_id AS work_item_id,
         t.team_id AS team_id,
-        wct.day,
-        wct.org_id,
+        wct.day AS day,
+        wct.org_id AS org_id,
         wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL
@@ -376,10 +383,10 @@ const flowMatrixRepoEnrichedSelect = `
 // verification method (see flowMatrixRepoEnrichedSelect's doc comment).
 const flowMatrixWorkTypeEnrichedSelect = `
     SELECT
-        wct.work_item_id,
-        wct.team_id,
-        wct.day,
-        wct.org_id,
+        wct.work_item_id AS work_item_id,
+        wct.team_id AS team_id,
+        wct.day AS day,
+        wct.org_id AS org_id,
         wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL

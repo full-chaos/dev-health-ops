@@ -77,6 +77,15 @@ var appendOnlyDailyKeys = map[string][]string{
 	// close. Natural keys mirror the Python registry exactly.
 	"file_metrics_daily": {"org_id", "repo_id", "day", "path"},
 	"file_hotspot_daily": {"org_id", "repo_id", "day", "file_path"},
+	// CHAOS-4459 (codex review round 4): review_edges_daily is a plain
+	// MergeTree source_table for metric_registry.json's review-load charts
+	// (sum(reviews_count)), and this recompute verb's own doc comment
+	// (partition_recompute.go's SupportedPartitionRecomputeFamilies) already
+	// admits every family in a partition -- not just repo_user_commit --
+	// gets re-executed on a recompute, since there is no per-family publish
+	// scoping. review_edges_daily has no org_id column (repo_id is the
+	// tenant boundary here); natural key mirrors clickhouse_dedup.py.
+	"review_edges_daily": {"repo_id", "reviewer", "author", "day"},
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

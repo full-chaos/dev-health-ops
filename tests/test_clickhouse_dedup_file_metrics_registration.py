@@ -61,3 +61,24 @@ def test_file_hotspot_daily_source_is_deduplicated_on_read() -> None:
     assert "computed_at DESC" in source
     for column in ("org_id", "repo_id", "day", "file_path"):
         assert column in source, f"file_hotspot_daily dedup key is missing {column}"
+
+
+def test_review_edges_daily_source_is_deduplicated_on_read() -> None:
+    # CHAOS-4459 (codex review round 4): review_edges_daily is another
+    # generic report-registry source_table (review-load charts,
+    # sum(reviews_count)) that partition-recompute's own doc comment admits
+    # gets re-executed on every recompute (every family in the partition,
+    # not just repo_user_commit) -- missing from the dedup registry, the
+    # exact same gap class as file_metrics_daily/file_hotspot_daily above.
+    source = dedup_from("review_edges_daily")
+    assert source != "review_edges_daily", (
+        "dedup_from('review_edges_daily') returned the RAW table name -- "
+        "the generic report-registry chart path (reports/charts.py) reads "
+        "it unguarded, doubling reviews_count for a redriven/recomputed day."
+    )
+    assert "LIMIT 1 BY" in source
+    assert "computed_at DESC" in source
+    # No org_id column on this table (migration 004); natural key matches
+    # its ORDER BY (repo_id, reviewer, author, day).
+    for column in ("repo_id", "reviewer", "author", "day"):
+        assert column in source, f"review_edges_daily dedup key is missing {column}"

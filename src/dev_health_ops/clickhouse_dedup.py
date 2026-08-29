@@ -93,6 +93,17 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     # file_hotspot_daily entry), which was reading it raw. Natural key
     # matches migration 027's sorting key (org_id, repo_id, day, file_path).
     "file_hotspot_daily": ("org_id", "repo_id", "day", "file_path"),
+    # CHAOS-4459 (codex review round 4): review_edges_daily is another
+    # generic-report-registry source_table (reports/metric_registry.py's
+    # review-load charts, sum(reviews_count)) with no dedup entry -- same
+    # gap class as file_metrics_daily/file_hotspot_daily above, surfaced by
+    # this ticket's own recompute verb re-executing every family in a
+    # partition, not just repo_user_commit (see
+    # internal/jobs/metrics/daily/partition_recompute.go's
+    # SupportedPartitionRecomputeFamilies doc comment). No org_id column on
+    # this table (migration 004) -- repo_id is the tenant boundary; natural
+    # key matches its ORDER BY (repo_id, reviewer, author, day).
+    "review_edges_daily": ("repo_id", "reviewer", "author", "day"),
 }
 
 

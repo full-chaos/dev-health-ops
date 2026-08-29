@@ -1977,7 +1977,10 @@ async def _read_bounded_process_stream(
 
 
 async def _read_bounded_stderr(
-    stream: asyncio.StreamReader, maximum_bytes: int
+    stream: asyncio.StreamReader,
+    maximum_bytes: int,
+    *,
+    live_log_context: str | None = None,
 ) -> bytes:
     """Drain the runner subprocess's stderr, keeping only the last
     ``maximum_bytes`` (truncating from the FRONT, not the back) rather than
@@ -1999,10 +2002,29 @@ async def _read_bounded_stderr(
     TestopsRowCapExceeded's table/org_id/max_rows/fetched detail, logged
     immediately before the process dies) -- observed directly against a
     real high-volume day during this ticket's own local repro.
+
+    ``live_log_context`` (codex review): before CHAOS-4543, stderr was
+    inherited (stderr=None), so an operator watching this container's own
+    log stream in real time (e.g. `docker logs -f`) could see a child's
+    diagnostics AS THEY HAPPENED -- including while it was still running or
+    hanging. Piping it instead means this function is now the ONLY reader,
+    so without this, nothing appears in the log until the whole run
+    finishes, and a genuinely hung child (the exact case an operator most
+    needs live output for) produces total silence until it is eventually
+    killed. When set, each chunk is logged via `logger.info` as it arrives
+    -- independent of, and in addition to, the bounded tail this function
+    still returns for _CompatibilityProcessFailure's message and the
+    post-exit summary log.
     """
     tail = b""
     truncated = False
     while chunk := await stream.read(64 * 1024):
+        if live_log_context is not None:
+            logger.info(
+                "metric compatibility process stderr chunk (%s): %s",
+                live_log_context,
+                chunk.decode("utf-8", errors="replace").rstrip(),
+            )
         tail += chunk
         if len(tail) > maximum_bytes:
             truncated = True
@@ -2330,7 +2352,14 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # an unrelated one), unlike stdout's bounded JSON protocol, where
     # exceeding the bound IS a real failure.
     stderr_task = asyncio.create_task(
-        _read_bounded_stderr(process.stderr, _MAX_COMPATIBILITY_STDERR_BYTES)
+        _read_bounded_stderr(
+            process.stderr,
+            _MAX_COMPATIBILITY_STDERR_BYTES,
+            live_log_context=(
+                f"run_id={execution.run_id} partition_id={execution.partition_id} "
+                f"operation={execution.operation}"
+            ),
+        )
     )
     peak_rss_holder = [0]
     rss_kill_holder = [False]

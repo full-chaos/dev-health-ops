@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import os
 import sys
 import uuid
@@ -164,6 +165,54 @@ async def test_read_bounded_stderr_returns_everything_under_the_bound_untouched(
     result = await worker_metrics._read_bounded_stderr(stream, maximum_bytes=4096)
     assert result == b"short diagnostic line"
     assert b"truncated" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_logs_each_chunk_live_when_context_given(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex review (CHAOS-4543 round 3): before this ticket, stderr was
+    inherited (stderr=None), so an operator watching this container's own
+    log stream in real time could see a child's diagnostics AS THEY
+    HAPPENED, including while it was still running or hanging. Piping it
+    instead (so a failure's message can embed a bounded tail) made this
+    function the ONLY reader -- without live logging, nothing would appear
+    until the whole run finished, and a genuinely hung child (the case an
+    operator most needs live output for) would produce total silence until
+    it was eventually killed. `live_log_context`, when given, must log each
+    chunk via `logger.info` AS IT ARRIVES, independent of the final bounded
+    tail this function still returns."""
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"first chunk of diagnostic output\n")
+    stream.feed_eof()
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        result = await worker_metrics._read_bounded_stderr(
+            stream, maximum_bytes=4096, live_log_context="run_id=test partition_id=test"
+        )
+    assert result == b"first chunk of diagnostic output\n"
+    live_records = [r for r in caplog.records if "stderr chunk" in r.message]
+    assert len(live_records) == 1, caplog.records
+    assert "run_id=test partition_id=test" in live_records[0].message
+    assert "first chunk of diagnostic output" in live_records[0].message
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_logs_nothing_live_without_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sibling of the test above: live_log_context=None (the default) must
+    not log anything -- callers that only want the bounded tail (e.g. the
+    focused unit tests above) must not pay for or produce log noise."""
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"some output\n")
+    stream.feed_eof()
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        await worker_metrics._read_bounded_stderr(stream, maximum_bytes=4096)
+    assert not any("stderr chunk" in r.message for r in caplog.records)
 
 
 def test_metric_process_payload_round_trips_only_durable_execution_fields() -> None:

@@ -103,8 +103,12 @@ func TestRetireLinearPseudoProjectRowsRealRunDeletesAndReportsCounts(t *testing.
 	if len(conn.execQueries) != 1 || !strings.Contains(conn.execQueries[0], "ALTER TABLE projects DELETE") {
 		t.Fatalf("expected exactly one ALTER TABLE DELETE, got: %v", conn.execQueries)
 	}
-	if strings.Contains(conn.execQueries[0], "org_id") {
-		t.Fatalf("unscoped call (orgID=\"\") must not add an org_id predicate: %s", conn.execQueries[0])
+	// "org_id" itself legitimately appears in the base predicate (it matches
+	// against each row's OWN org_id column, codex review P2) -- the scoping
+	// check is specifically about the bound {org_id:String} filter param an
+	// org-scoped call adds on top.
+	if strings.Contains(conn.execQueries[0], "{org_id:String}") {
+		t.Fatalf("unscoped call (orgID=\"\") must not add a bound org_id filter: %s", conn.execQueries[0])
 	}
 }
 
@@ -130,8 +134,8 @@ func TestRetireLinearPseudoProjectRowsScopedByOrgAddsThePredicate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(conn.execQueries) != 1 || !strings.Contains(conn.execQueries[0], "org_id") {
-		t.Fatalf("org-scoped call must add an org_id predicate to the mutation, got: %v", conn.execQueries)
+	if len(conn.execQueries) != 1 || !strings.Contains(conn.execQueries[0], "{org_id:String}") {
+		t.Fatalf("org-scoped call must add a bound org_id filter to the mutation, got: %v", conn.execQueries)
 	}
 }
 
@@ -160,5 +164,21 @@ func TestRetireLinearPseudoProjectRowsPropagatesDeleteFailureButStillReportsFoun
 	// but DeletedRows must stay 0 since the mutation did not actually land.
 	if len(outcome.Rows) != 1 || outcome.DeletedRows != 0 {
 		t.Fatalf("outcome=%+v", outcome)
+	}
+}
+
+// TestLinearPseudoProjectIdentityPredicateMatchesOwnOrgIDOnly is the
+// red-first proof for codex review P2: the identity predicate must tie the
+// ":linear:" marker to the ROW'S OWN org_id (a prefix match), never a bare
+// substring test anywhere in id -- a hypothetical row whose id merely
+// CONTAINS the marker without being shaped like its own org's pseudo-
+// project identity (e.g. carrying a DIFFERENT org's identity string) must
+// never match.
+func TestLinearPseudoProjectIdentityPredicateMatchesOwnOrgIDOnly(t *testing.T) {
+	if !strings.Contains(linearPseudoProjectIdentityPredicate, "startsWith(id, concat(org_id, ':linear:'))") {
+		t.Fatalf("predicate must be an own-org_id prefix match, got: %s", linearPseudoProjectIdentityPredicate)
+	}
+	if strings.Contains(linearPseudoProjectIdentityPredicate, "position(id") {
+		t.Fatalf("predicate must not be a bare substring test any more, got: %s", linearPseudoProjectIdentityPredicate)
 	}
 }

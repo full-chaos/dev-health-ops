@@ -805,11 +805,11 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsExtraArgs(t *testi
 	}
 }
 
-// TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutLookup
-// pins that a runtime with no env accessor wired (runtime.lookup nil) fails
-// closed with operator_backend_unavailable rather than panicking or
-// silently proceeding without a ClickHouse DSN.
-func TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutLookup(t *testing.T) {
+// TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutService
+// pins that a runtime with no joboperator.Service wired (runtime.service
+// nil) fails closed with operator_backend_unavailable rather than
+// panicking or silently proceeding to authorize/mutate anything.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutService(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
@@ -817,13 +817,32 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutLookup(
 	}
 }
 
+// TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsUnauthorizedCredential
+// is the red-first proof for codex review P1: a credential that
+// authenticates but is not authorized for this action (workers:read only)
+// must be rejected BEFORE anything ClickHouse-related is even attempted --
+// exercised with a lookup that would otherwise happily open a connection,
+// so a regression that reorders the authorize call after the ClickHouse
+// dial would make this test observe "operator_backend_unavailable" (dial
+// failure) instead of "unauthorized", not just silently pass.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsUnauthorizedCredential(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
+	runtime.lookup = func(string) (string, bool) { return "clickhouse://unreachable-host-for-this-test:9999/default", true }
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 // TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI
-// pins that a wired lookup with no CLICKHOUSE_URI configured is a
+// pins that an AUTHORIZED call with no CLICKHOUSE_URI configured is a
 // configuration_error, not a silent no-op or a different backend's DSN
 // reused by accident.
 func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	runtime := &operatorRuntime{lookup: func(string) (string, bool) { return "", false }}
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())

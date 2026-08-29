@@ -1222,10 +1222,35 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
+	// Canonicalize, never pass the raw flag value onward: uuid.Parse accepts
+	// mixed/upper case, but ClickHouse's org_id comparison is case-sensitive
+	// string equality (codex review, 2026-08-29) -- an uppercase --org would
+	// otherwise silently match zero rows and report a "successful" no-op
+	// instead of the actual scoped org.
+	scopedOrg := ""
 	if *org != "" {
-		if _, err := uuid.Parse(*org); err != nil {
+		parsedOrg, err := uuid.Parse(*org)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
+		scopedOrg = parsedOrg.String()
+	}
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	authorizeResource := scopedOrg
+	if authorizeResource == "" {
+		authorizeResource = "*"
+	}
+	// Authorized BEFORE anything ClickHouse-related is even attempted (codex
+	// review, 2026-08-29, P1): this is a physically destructive mutation, and
+	// authentication alone (a live WORKER_OPERATOR_TOKEN) is not authorization
+	// -- a workers:read-only credential must never reach the delete. Every
+	// other mutation in this binary goes through runtime.service for exactly
+	// this reason; this is the same gate, just for an action with no other
+	// natural Service method (see AuthorizeProvidersyncCleanup's doc comment).
+	if err := runtime.service.AuthorizeProvidersyncCleanup(ctx, runtime.principal, authorizeResource); err != nil {
+		return writeServiceError(stderr, err)
 	}
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -1239,7 +1264,7 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	defer func() { _ = conn.Close() }()
-	outcome, err := providersync.RetireLinearPseudoProjectRows(ctx, conn, *org, *dryRun)
+	outcome, err := providersync.RetireLinearPseudoProjectRows(ctx, conn, scopedOrg, *dryRun)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

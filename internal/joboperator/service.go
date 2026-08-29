@@ -52,6 +52,14 @@ const (
 	ActionInspectJobRoute  Action = "job_routes.inspect"
 	ActionApplyJobRoute    Action = "job_routes.apply_checked_in"
 	ActionRollbackJobRoute Action = "job_routes.rollback"
+	// ActionProvidersyncCleanup is CHAOS-4530 follow-up's `providersync
+	// retire-linear-pseudo-projects`: an operator-invoked, out-of-band
+	// ClickHouse mutation that does not go through this service's own
+	// job/route/queue backends, so it has no natural Action of its own
+	// otherwise. Not written to worker_operator_audits (no completeAudit
+	// call uses it), so it carries no database CHECK-constraint dependency
+	// the job-route Actions' shared-string comment above warns about.
+	ActionProvidersyncCleanup Action = "providersync.retire_linear_pseudo_projects"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -457,6 +465,22 @@ func (service *Service) Inspect(ctx context.Context, principal Principal, jobID 
 		return JobSummary{}, serviceError(CodeBackend, err)
 	}
 	return job, nil
+}
+
+// AuthorizeProvidersyncCleanup authorizes an operator-invoked, out-of-band
+// ClickHouse mutation that lives entirely outside this service's own
+// job/route/queue backends (CHAOS-4530 follow-up: `providersync
+// retire-linear-pseudo-projects`, a direct `ALTER TABLE ... DELETE`).
+// service.authorize's own default already requires workers:operate for any
+// Action other than ActionInspect/ActionInspectRoute (auth.go:206-208), so
+// this needs no authorizer change -- codex review, 2026-08-29: the caller
+// authenticated a valid credential but never invoked the authorizer at all
+// before running the delete, so a workers:read-only credential could
+// physically delete tenant rows. resourceID is the target scope the caller
+// is about to mutate ("*" for every org, or one org id) -- surfaced in the
+// authorizer's decision/denial the same way every other resourceID is.
+func (service *Service) AuthorizeProvidersyncCleanup(ctx context.Context, principal Principal, resourceID string) error {
+	return service.authorize(ctx, principal, ActionProvidersyncCleanup, "providersync_pseudo_project_cleanup", resourceID)
 }
 
 // Status authorizes the top-level runtime status view. Composition performs

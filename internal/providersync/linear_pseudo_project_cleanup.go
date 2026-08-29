@@ -31,13 +31,23 @@ import (
 // linear_reference_catalog_route.go's team-derived-project construction --
 // see that file's CollectReferenceCatalog doc comment for the full history).
 // team_key varies per org/team, so rather than enumerate every team key,
-// this matches the SHAPE: provider='linear' AND the id contains the literal
-// substring ":linear:". A real Linear project's id is always the raw
-// provider UUID (standard 8-4-4-4-12 hex, normalizeLinearReferenceProject),
-// which can never contain that substring -- confirmed org-agnostic and
-// team-key-agnostic, the same predicate handed to CF for their own
-// exclusion filter.
-const linearPseudoProjectIdentityPredicate = `provider = 'linear' AND position(id, ':linear:') > 0`
+// this matches the SHAPE: provider='linear' AND id starts with THIS ROW'S
+// OWN org_id followed by the literal ":linear:" marker. A real Linear
+// project's id is always the raw provider UUID (standard 8-4-4-4-12 hex,
+// normalizeLinearReferenceProject), which can never start with its own
+// org_id plus that marker -- confirmed org-agnostic and team-key-agnostic.
+//
+// Deliberately tied to the row's OWN org_id (startsWith(id,
+// concat(org_id, ':linear:'))), not a bare substring test anywhere in id
+// (codex review, 2026-08-29, P2): normalizeLinearReferenceProject and
+// linearEnsureProjectsRow accept any non-empty id from the wire, so a
+// substring-only check could in principle match a row whose id merely
+// CONTAINS ":linear:" without being shaped like ITS OWN org's pseudo-
+// project identity (e.g. a different org's identity string embedded
+// inside a differently-owned id) -- this predicate can only ever match a
+// row that reconstructs its own org_id as a literal prefix, which the
+// known producer's real project ids (raw UUIDs) can never do.
+const linearPseudoProjectIdentityPredicate = `provider = 'linear' AND startsWith(id, concat(org_id, ':linear:'))`
 
 const linearPseudoProjectCleanupSelectQuery = `SELECT org_id, id, name, is_active FROM projects FINAL WHERE ` + linearPseudoProjectIdentityPredicate
 

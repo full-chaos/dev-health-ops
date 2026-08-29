@@ -62,6 +62,39 @@ func (r *fakeRows) Scan(dest ...any) error {
 			*ptr = row[i].(uint32)
 		case *float64:
 			*ptr = row[i].(float64)
+		case **uint64:
+			// Codex review, PR #1992 round 2: complexitytimeseries.go's
+			// nullable-scan fix (round 1) scans its aggregate metric
+			// columns into **uint64/**uint32/**float64 destinations, but
+			// this shared fake previously had no matching case -- every
+			// metric silently stayed nil (Go's zero value for an
+			// unpopulated *uint64 struct field) while
+			// TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled
+			// kept passing because it only asserted the repo label, not
+			// any metric value. A nil row[i] here mirrors a real NULL
+			// column value; a non-nil one allocates and populates, same
+			// as ClickHouse-go's UInt64.ScanRow contract for a **uint64
+			// destination (lib/column/column_gen.go).
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(uint64)
+				*ptr = &v
+			}
+		case **uint32:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(uint32)
+				*ptr = &v
+			}
+		case **float64:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(float64)
+				*ptr = &v
+			}
 		}
 	}
 	return nil
@@ -612,8 +645,14 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
-			t.Fatalf("expected response to contain the fake row's repo label with no errors, got %s", rec.Body.String())
+		// Asserts an actual metric value (not just the repo label) --
+		// codex review, PR #1992 round 2: a metric-blind assertion here
+		// would not have caught fakeRows.Scan silently dropping every
+		// **uint64/**uint32/**float64-destined aggregate metric.
+		if strings.Contains(rec.Body.String(), `"errors"`) ||
+			!strings.Contains(rec.Body.String(), "org/repo-a") ||
+			!strings.Contains(rec.Body.String(), `"locTotal":1000`) {
+			t.Fatalf("expected response to contain the fake row's repo label and locTotal metric with no errors, got %s", rec.Body.String())
 		}
 	})
 
@@ -649,8 +688,10 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
 		}
-		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
-			t.Fatalf("expected a real complexityTimeseries result before rollback, got %s", rec.Body.String())
+		if strings.Contains(rec.Body.String(), `"errors"`) ||
+			!strings.Contains(rec.Body.String(), "org/repo-a") ||
+			!strings.Contains(rec.Body.String(), `"locTotal":1000`) {
+			t.Fatalf("expected a real complexityTimeseries result (incl. the locTotal metric) before rollback, got %s", rec.Body.String())
 		}
 		setRoutingMode(t, pool, documentDigest, "complexityTimeseries", "disabled")
 		if rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, token, complexityTimeseriesVariables()); rec.Code != http.StatusNotFound {

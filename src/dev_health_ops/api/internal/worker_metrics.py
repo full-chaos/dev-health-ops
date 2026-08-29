@@ -2044,15 +2044,34 @@ class _CompatibilityProcessFailure(RuntimeError):
     when the runner emitted zero progress lines before failing -- meaning no
     repository's families were written for this execution, so a retry cannot
     create partial/duplicate state and does not need a human to confirm it.
+
+    ``deterministic`` (CHAOS-4543) is true only when ``reason ==
+    "resource_exhausted"`` AND the runner classified the specific failure as
+    a KNOWN deterministic guard (today, only the testops loader's row-cap --
+    EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC), never a true memory kill that can
+    vary attempt to attempt. A bounded bool, not raw text: crosses the HTTP
+    boundary the same way ``reason``/``safe_to_retry`` already do, read by
+    ops/internal/jobs/metrics/daily/compatibility_http.go to classify the
+    Go-side job Permanent instead of Retryable.
     """
 
-    def __init__(self, message: str, *, reason: str, safe_to_retry: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        safe_to_retry: bool,
+        deterministic: bool = False,
+    ) -> None:
         super().__init__(message)
         self.reason = reason
         self.safe_to_retry = safe_to_retry
+        self.deterministic = deterministic
 
 
 _RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE = 2
+# CHAOS-4543: mirrors worker_metrics_runner.EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC.
+_RUNNER_RESOURCE_EXHAUSTED_DETERMINISTIC_EXIT_CODE = 3
 
 # CHAOS-4317 (codex round 3, P1): the errno values a spawn-time OSError must
 # carry to be reclassified as capacity_exhausted/retryable. EAGAIN is the
@@ -2427,6 +2446,31 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         elif isinstance(parsed, dict) and "outcome" in parsed:
             outcome_line = line
 
+    # CHAOS-4543: decode+log the child's captured stderr once, here, for
+    # EVERY exit including success -- codex review: stderr used to be
+    # inherited (stderr=None), so a successful run's own diagnostics (e.g.
+    # the cgroup/RLIMIT_AS backstop WARN in worker_metrics_runner.py) still
+    # streamed straight to this container's log in real time. Piping it
+    # instead (so a failure's message can embed it -- see below) means this
+    # process is now the ONLY thing that ever sees it; logging it
+    # unconditionally here, before the return_code branch, is what keeps
+    # that visibility rather than silently dropping it on the success path.
+    # `errors="replace"` because a signal-killed/OOM-adjacent child can
+    # truncate mid-multibyte-character; this is diagnostic text, never
+    # something a decode error should hide entirely.
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if stderr_text:
+        stderr_log = logger.error if return_code != 0 else logger.warning
+        stderr_log(
+            "metric compatibility process stderr (run_id=%s partition_id=%s "
+            "operation=%s return_code=%s): %s",
+            execution.run_id,
+            execution.partition_id,
+            execution.operation,
+            return_code,
+            stderr_text,
+        )
+
     if return_code == 0:
         DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason="success").inc()
         if input_error is not None:
@@ -2450,25 +2494,6 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 "metric compatibility process returned an invalid response"
             )
         return decoded["outcome"]
-
-    # CHAOS-4543: decode+log the child's captured stderr once, here, for
-    # every non-zero exit -- covers both branches below (the rss-watchdog
-    # kill already builds its own detailed message from real numbers; the
-    # exit-code branch further down previously had only a hardcoded generic
-    # string). `errors="replace"` because a signal-killed/OOM-adjacent child
-    # can truncate mid-multibyte-character; this is diagnostic text, never
-    # something a decode error should hide entirely.
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
-    if stderr_text:
-        logger.error(
-            "metric compatibility process stderr (run_id=%s partition_id=%s "
-            "operation=%s return_code=%s): %s",
-            execution.run_id,
-            execution.partition_id,
-            execution.operation,
-            return_code,
-            stderr_text,
-        )
 
     if rss_kill_holder[0]:
         # CHAOS-4361: this exit is OURS -- _poll_peak_rss_bytes observed real
@@ -2592,11 +2617,20 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         and execution.operation == "partition"
         and not progress_seen
     )
+    deterministic = False
     if return_code < 0:
         reason = "process_signaled"
         message = (
             f"metric compatibility process was terminated by signal {-return_code}"
         )
+    elif return_code == _RUNNER_RESOURCE_EXHAUSTED_DETERMINISTIC_EXIT_CODE:
+        # CHAOS-4543: a KNOWN deterministic guard (e.g. the testops loader's
+        # row cap) -- see _CompatibilityProcessFailure's docstring. Reason
+        # stays "resource_exhausted" (same River-visible classification as
+        # the non-deterministic case); only `deterministic` differs.
+        reason = "resource_exhausted"
+        deterministic = True
+        message = "metric compatibility process exceeded its memory bound"
     elif return_code == _RUNNER_RESOURCE_EXHAUSTED_EXIT_CODE:
         reason = "resource_exhausted"
         message = "metric compatibility process exceeded its memory bound"
@@ -2630,7 +2664,7 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         message = f"{message} -- {embedded}"
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason=reason).inc()
     raise _CompatibilityProcessFailure(
-        message, reason=reason, safe_to_retry=safe_to_retry
+        message, reason=reason, safe_to_retry=safe_to_retry, deterministic=deterministic
     )
 
 
@@ -2745,6 +2779,7 @@ async def _execute(
                     "execution_id": str(execution.id),
                     "state": "failed",
                     "reason": exc.reason,
+                    "deterministic": exc.deterministic,
                 },
             ) from exc
         await _mark_ambiguous(session, execution, f"{exc.reason}: {exc}")
@@ -2755,6 +2790,7 @@ async def _execute(
                 "execution_id": str(execution.id),
                 "state": "ambiguous",
                 "reason": exc.reason,
+                "deterministic": exc.deterministic,
             },
         ) from exc
     except Exception as exc:

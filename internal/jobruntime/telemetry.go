@@ -473,6 +473,15 @@ const (
 	DailyMetricsCompatRetryDecisionReleasedCapacityExhausted DailyMetricsCompatRetryDecision = "released_capacity_exhausted"
 	DailyMetricsCompatRetryDecisionReleasedResourceExhausted DailyMetricsCompatRetryDecision = "released_resource_exhausted"
 	DailyMetricsCompatRetryDecisionReleasedProcessSignaled   DailyMetricsCompatRetryDecision = "released_process_signaled"
+	// DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic
+	// (CHAOS-4543) is the subset of "released_resource_exhausted" the Go
+	// side ALSO knows is a known-deterministic guard (never the RSS
+	// watchdog) -- see ErrCompatibilityResourceExhaustedDeterministic's doc
+	// comment. Counted separately so the rate of wasted-attempt-budget
+	// discards (a deterministic guard that will keep refusing until an
+	// operator changes something) is distinguishable from ordinary
+	// transient resource pressure on this same shared counter.
+	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
@@ -482,6 +491,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 		DailyMetricsCompatRetryDecisionReleasedCapacityExhausted,
 		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
 		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
+		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
 	}
 }
 

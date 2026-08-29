@@ -546,6 +546,87 @@ func TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable(t *testi
 	}
 }
 
+// TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason
+// is the CHAOS-4543 red-first proof for the deterministic-guard distinction
+// (codex review / team-lead direction): a resource_exhausted kill the Python
+// bridge itself classified as deterministic (a known guard like
+// TestopsRowCapExceeded, never the RSS watchdog) must stop River retrying
+// (Permanent, not Retryable) since 5 attempts only reproduce the identical
+// refusal -- but the DURABLE failure_reason on the partition row stays the
+// same "resource_exhausted" string as the non-deterministic case, and the
+// partition still releases to plain 'failed' (never 'failed_permanent'),
+// since a future lower-volume day or a raised operator cap could still
+// succeed.
+func TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("deterministic resource_exhausted failure = %v, want permanent", err)
+	}
+	if !errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
+		t.Fatalf("failure = %v, want it to unwrap to ErrCompatibilityResourceExhaustedDeterministic", err)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != "resource_exhausted" {
+		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/resource_exhausted (SAME string as the non-deterministic case)", store.releasesWithReason, store.releaseReason)
+	}
+	if store.permanentFailures != 0 {
+		t.Fatalf("permanentFailures = %d, want 0 -- must release to plain 'failed' (releasePartitionWithReason), never 'failed_permanent'", store.permanentFailures)
+	}
+	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic {
+		t.Fatalf("observer decisions = %v, want exactly [released_resource_exhausted_deterministic]", observer.decisions)
+	}
+}
+
+// TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry is the codex-
+// review red-first proof (CHAOS-4543): releasePartitionWithReason's durable
+// write can itself fail (a transient DB error, or the lease already expired
+// out from under this attempt) -- releaseWithReasonErr injects exactly that.
+// Before this fix, the observeCompatRetry call was unconditional, so a
+// released_* telemetry decision fired even though the partition row was
+// never actually transitioned -- a telemetry/reality mismatch of the same
+// shape this ticket's own root-cause diagnosis had to work around
+// (failure_reason silently NULL despite a classified failure).
+func TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhausted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+	err = handler.Work(context.Background(), partitionExecution())
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("compatibility failure = %v, want retryable", err)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(observer.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
+	}
+}
+
 // TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding is
 // the CHAOS-4319 red-first proof. Before this ticket's fix, an
 // ambiguous_refused response whose ledger state is "ambiguous" was
@@ -909,6 +990,7 @@ type fakeStore struct {
 	permanentFailureErr           error
 	releasesWithReason            int
 	releaseReason                 string
+	releaseWithReasonErr          error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -959,7 +1041,7 @@ func (store *fakeStore) ReleasePartition(context.Context, PartitionClaim) error 
 func (store *fakeStore) ReleasePartitionWithReason(_ context.Context, _ PartitionClaim, reason string) error {
 	store.releasesWithReason++
 	store.releaseReason = reason
-	return nil
+	return store.releaseWithReasonErr
 }
 func (store *fakeStore) FailPartitionPermanently(_ context.Context, _ PartitionClaim, reason string) error {
 	store.permanentFailures++

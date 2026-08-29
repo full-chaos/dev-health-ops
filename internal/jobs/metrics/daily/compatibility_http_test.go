@@ -145,6 +145,27 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityResourceExhausted,
 		},
 		{
+			// CHAOS-4543: the falsifier for the deterministic sub-case --
+			// before classifyCompatibilityError read "deterministic", every
+			// resource_exhausted response (regardless of the bounded bool)
+			// mapped to the same always-retryable sentinel, so a known
+			// deterministic guard (e.g. TestopsRowCapExceeded) burned
+			// River's whole attempt budget reproducing an identical refusal.
+			name:       "resource-exhausted runner, deterministic guard, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted","deterministic":true}}`,
+			wantErr:    ErrCompatibilityResourceExhaustedDeterministic,
+		},
+		{
+			// Explicit deterministic=false must behave identically to the
+			// field being absent (the earlier "resource-exhausted runner on
+			// a 503" case) -- both map to the ordinary, retryable sentinel.
+			name:       "resource-exhausted runner, explicit non-deterministic, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted","deterministic":false}}`,
+			wantErr:    ErrCompatibilityResourceExhausted,
+		},
+		{
 			// CHAOS-4319: state=="ambiguous" means the ledger row can never
 			// move again without a human /repair call -- this is the stuck,
 			// permanent case, not a transient one worth retrying blindly.

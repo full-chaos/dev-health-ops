@@ -732,6 +732,86 @@ async def test_metric_compatibility_process_resource_exhausted_embeds_captured_s
     assert len(message) < 1024, len(message)
 
 
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_classifies_testops_row_cap_as_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4543 red-first proof (team-lead/codex direction): the runner
+    must classify a TestopsRowCapExceeded failure with the NEW
+    EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC exit code (3), not the generic
+    EXIT_RESOURCE_EXHAUSTED (2) every other MemoryError -- including the RSS
+    watchdog's own kill and a true last-gasp interpreter MemoryError, both of
+    which CAN legitimately vary attempt to attempt -- uses. The parent must
+    then surface `deterministic=True` on the raised
+    _CompatibilityProcessFailure, which crosses the HTTP boundary as a
+    bounded bool for ops/internal/jobs/metrics/daily/compatibility_http.go to
+    read (never raw text) and classify the Go-side job Permanent instead of
+    Retryable (5 retries on a deterministic guard only reproduce the
+    identical refusal).
+
+    Drives the REAL worker_metrics_runner module (not a synthetic stand-in)
+    with `_run_execution_direct` monkeypatched to raise TestopsRowCapExceeded
+    synchronously -- exercises main()'s actual except-clause ORDERING (the
+    deterministic branch must be checked before the generic
+    `except MemoryError:`, since TestopsRowCapExceeded IS a MemoryError
+    subclass and would otherwise be caught by the wrong branch first).
+    """
+    source = (
+        "import sys\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded\n"
+        "\n"
+        "def _boom(execution, on_progress=None):\n"
+        "    raise TestopsRowCapExceeded(\n"
+        "        table='test_case_results', org_id='x', max_rows=200000, fetched=200001\n"
+        "    )\n"
+        "\n"
+        "runner._run_execution_direct = _boom\n"
+        "sys.exit(runner.main())\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    assert excinfo.value.deterministic is True
+    assert excinfo.value.safe_to_retry is True  # zero progress emitted before the raise
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_generic_memory_error_is_not_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sibling of the test above: a plain MemoryError (NOT
+    TestopsRowCapExceeded, or any other class CHAOS-4543 knows is a
+    deterministic guard) must keep the ORIGINAL exit code and
+    `deterministic=False` -- this is the conservative fallback the ticket's
+    own scope commits to (team-lead: 'if you cannot distinguish it from a
+    real RSS kill at the Go boundary, say so and keep retryable')."""
+    source = (
+        "import sys\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "\n"
+        "def _boom(execution, on_progress=None):\n"
+        "    raise MemoryError('a generic, unclassified memory failure')\n"
+        "\n"
+        "runner._run_execution_direct = _boom\n"
+        "sys.exit(runner.main())\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    assert excinfo.value.deterministic is False
+
+
 # --------------------------------------------------------------------------
 # CHAOS-4264: per-repo streaming for the daily partition path.
 # --------------------------------------------------------------------------

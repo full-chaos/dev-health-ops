@@ -367,6 +367,10 @@ def test_go_worker_groups_are_disabled_future_topology() -> None:
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [
+            # CHAOS-4530: dev-health-workerctl providersync retire-linear-
+            # pseudo-projects reads ClickHouse directly (the operator CLI's
+            # first ClickHouse-touching verb), so it now requires the DSN too.
+            "CLICKHOUSE_URI",
             "COORDINATOR_DATABASE_URI",
             "POSTGRES_URI",
             "WORKER_DATABASE_URI",
@@ -2037,7 +2041,19 @@ def test_helm_bridge_url_override_follows_the_metrics_queue_not_the_group_name(
                                 "metrics": 2,
                             },
                             "replicas": 0,
-                            "terminationGracePeriodSeconds": 960,
+                            # 7260, not the 960 this fixture used to carry.
+                            # CHAOS-4428 added a render-time floor: any group
+                            # holding `metrics` needs >= 7260s, because the
+                            # value becomes --shutdown-timeout and a metrics
+                            # job's registry timeout is 7200s. This fixture is
+                            # a small illustration of why that guard exists --
+                            # moving `metrics` onto a group whose grace period
+                            # was sized for short jobs is exactly the mistake
+                            # it catches, and it was easy enough to make here
+                            # by accident. The assertion below is unchanged:
+                            # the override still has to follow the QUEUE and
+                            # not the group name.
+                            "terminationGracePeriodSeconds": 7260,
                             "resources": {
                                 "requests": {"cpu": "250m", "memory": "256Mi"},
                                 "limits": {"cpu": "1", "memory": "1Gi"},

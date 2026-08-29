@@ -145,6 +145,43 @@ func TestHTTPCompatibilityExecutorClassifiesBoundedFailureReasons(t *testing.T) 
 			wantErr:    ErrCompatibilityResourceExhausted,
 		},
 		{
+			// CHAOS-4543: the falsifier for the deterministic sub-case --
+			// before classifyCompatibilityError read "deterministic", every
+			// resource_exhausted response (regardless of the bounded bool)
+			// mapped to the same always-retryable sentinel, so a known
+			// deterministic guard (e.g. TestopsRowCapExceeded) burned
+			// River's whole attempt budget reproducing an identical refusal.
+			name:       "resource-exhausted runner, deterministic guard, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted","deterministic":true}}`,
+			wantErr:    ErrCompatibilityResourceExhaustedDeterministic,
+		},
+		{
+			// Explicit deterministic=false must behave identically to the
+			// field being absent (the earlier "resource-exhausted runner on
+			// a 503" case) -- both map to the ordinary, retryable sentinel.
+			name:       "resource-exhausted runner, explicit non-deterministic, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution failed before any output was produced","state":"failed","reason":"resource_exhausted","deterministic":false}}`,
+			wantErr:    ErrCompatibilityResourceExhausted,
+		},
+		{
+			// codex review (CHAOS-4543 round 2): a multi-repo partition
+			// where an earlier repo already wrote before a later one hits
+			// the deterministic guard is marked ambiguous by the Python
+			// bridge (safe_to_retry=False -- progress_seen is true) --
+			// state=="ambiguous" must win over deterministic=true, exactly
+			// like it already does for the "ambiguous_refused" reason
+			// above. Before this fix, this case fell into the deterministic
+			// branch, marking the job Permanent after one attempt while the
+			// ledger identity stayed wedged ambiguous with no natural retry
+			// left to ever reach the failPartitionPermanently path.
+			name:       "resource-exhausted runner, deterministic guard, but ledger ambiguous, on a 503",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"detail":{"message":"Metric execution outcome is ambiguous","state":"ambiguous","reason":"resource_exhausted","deterministic":true}}`,
+			wantErr:    ErrCompatibilityAmbiguousStuck,
+		},
+		{
 			// CHAOS-4319: state=="ambiguous" means the ledger row can never
 			// move again without a human /repair call -- this is the stuck,
 			// permanent case, not a transient one worth retrying blindly.

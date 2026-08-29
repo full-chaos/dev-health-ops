@@ -31,6 +31,18 @@ _MAX_INPUT_BYTES = 1024 * 1024
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_RESOURCE_EXHAUSTED = 2
+# CHAOS-4543: a KNOWN deterministic resource guard (today, only the testops
+# loader's row-cap -- TestopsRowCapExceeded, a fixed per-repo/day threshold
+# against data that does not change within a day once synced), distinct from
+# EXIT_RESOURCE_EXHAUSTED's generic bucket (a true interpreter-level
+# MemoryError, or the parent's own RSS-watchdog kill, both of which CAN
+# legitimately vary attempt to attempt under different concurrent load). The
+# parent maps this to a bounded "deterministic": true field across the HTTP
+# boundary (never raw text) so the Go side can stop retrying a refusal that
+# will reproduce identically 5 times before River discards the job anyway --
+# see ops/internal/jobs/metrics/daily/compatibility_http.go's
+# ErrCompatibilityResourceExhaustedDeterministic.
+EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC = 3
 
 _MEMORY_LIMIT_ENV_KEY = "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES"
 # CHAOS-4264 (codex R1): this must leave real headroom under the SMALLEST
@@ -203,6 +215,20 @@ def _apply_memory_limit() -> None:
         resource.setrlimit(rlimit, (min(limit, hard), hard))
 
 
+def _deterministic_resource_exhaustion_classes() -> tuple[type[BaseException], ...]:
+    """The closed set of exception classes CHAOS-4543 knows are a
+    deterministic resource guard, never a real attempt-to-attempt-variable
+    memory kill -- see EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC's module-level
+    comment. Lazily imported (matching this module's existing lazy-import
+    style for compute-path dependencies -- see main()'s own
+    _run_execution_direct call) so a success/generic-failure run never pays
+    for importing the loader module at all.
+    """
+    from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded
+
+    return (TestopsRowCapExceeded,)
+
+
 def _payload() -> object:
     encoded = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
     if len(encoded) > _MAX_INPUT_BYTES:
@@ -250,6 +276,26 @@ def main() -> int:
             )
         sys.stdout.write(_encode_outcome(outcome) + "\n")
         return EXIT_SUCCESS
+    except _deterministic_resource_exhaustion_classes():
+        # CHAOS-4543: caught BEFORE the generic `except MemoryError:` below
+        # (Python matches except clauses in source order; every class this
+        # returns is itself a MemoryError subclass, so this branch would
+        # never be reached if it came second). The specific diagnostic text
+        # (table/org_id/max_rows/fetched) was already logged by the raising
+        # module via `logger.error` before this exception ever reached here
+        # -- redirected to this process's real stderr the same way this
+        # print is, and captured/embedded by the parent
+        # (worker_metrics._run_compatibility_process_locked). Still no
+        # str(exc) here: consistent with the MemoryError branch below, this
+        # avoids allocating right at (or near) the process's own memory
+        # ceiling; the parent's stderr capture already has the real detail.
+        with contextlib.suppress(Exception):
+            print(
+                "metric compatibility process exceeded its memory bound "
+                "(deterministic guard)",
+                file=sys.stderr,
+            )
+        return EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC
     except MemoryError:
         # Do not build/print a traceback here: the process is already at its
         # memory ceiling, and traceback formatting itself allocates. A short

@@ -376,21 +376,10 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         [(unit.provider, unit.dataset_key) for unit in unit_rows],
         now=now,
     )
-    session.add(
-        SyncRunReferenceDiscovery(
-            org_id=integration.org_id,
-            sync_run_id=sync_run.id,
-            status="planned",
-            attempts=0,
-            available_at=now,
-        )
-    )
-    session.flush()
-    upsert_outbox_wakeup(
+    seed_reference_discovery_ledger(
         session,
-        sync_run_id=sync_run.id,
-        kind=OUTBOX_KIND_DISCOVERY,
-        available_at=now,
+        org_id=str(integration.org_id),
+        sync_run_id=str(sync_run.id),
         now=now,
     )
 
@@ -399,6 +388,106 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         total_units=len(unit_rows),
         unit_ids=tuple(str(unit.id) for unit in unit_rows),
     )
+
+
+def seed_reference_discovery_ledger(
+    session: Session, *, org_id: str, sync_run_id: str, now: datetime
+) -> None:
+    """Arm the reference-discovery ledger + outbox wakeup for a sync run.
+
+    Extracted from :func:`plan_sync_run` (CHAOS-4498) so this exact
+    seeding -- a ``SyncRunReferenceDiscovery`` row plus the
+    ``OUTBOX_KIND_DISCOVERY`` wakeup that ``NativeReferenceDiscoveryService``
+    (Go) claims and processes through ``TeamCatalogDiscoveryExecutor`` -- has
+    exactly one implementation. ``plan_sync_run`` calls this unconditionally
+    for every mode (backfill included); :func:`seed_reference_discovery_run`
+    below is the second, standalone caller for operator backfills that don't
+    go through the full unit-planning path.
+    """
+    session.add(
+        SyncRunReferenceDiscovery(
+            org_id=org_id,
+            sync_run_id=sync_run_id,
+            status="planned",
+            attempts=0,
+            available_at=now,
+        )
+    )
+    session.flush()
+    upsert_outbox_wakeup(
+        session,
+        sync_run_id=sync_run_id,
+        kind=OUTBOX_KIND_DISCOVERY,
+        available_at=now,
+        now=now,
+    )
+
+
+def seed_reference_discovery_run(
+    session: Session,
+    *,
+    integration_id: str,
+    org_id: str,
+    triggered_by: str,
+    mode: str = SyncRunMode.BACKFILL.value,
+) -> str:
+    """Create a minimal, zero-unit SyncRun anchor and arm its reference-
+    discovery ledger row (CHAOS-4498).
+
+    For a caller (the operator backfill tool) that needs strict reference
+    discovery -- routed through the SAME native-Go-collector-or-Python-
+    bridge seam (``TeamCatalogDiscoveryExecutor``) every sync-time dispatch
+    uses -- without planning a full unit set of its own (the legacy backfill
+    path fetches work items itself via ``run_work_items_sync_job``, not
+    through River units). The returned run has ``total_units=0``; the
+    existing zero-unit dispatch/finalize outbox chain (proven idempotent,
+    see lane-4431's 2026-08-29 close-out) carries it from PLANNED to a
+    terminal ``sync_runs.status`` on its own once reference discovery
+    stamps success -- no new Go or dispatch code needed. That terminal
+    status is ``FAILED``, not ``SUCCESS`` (live-verified, CHAOS-4502):
+    ``aggregateRunStatus``/``_aggregate_run_status`` treat any zero-unit
+    run as a loud failure by design (CHAOS-4159, "never a silent
+    success"), which this anchor collides with even though nothing
+    actually failed. Harmless to the caller -- the reference-discovery
+    ledger's own ``status``/``result`` are correct, and
+    ``run_backfill_for_config``'s return value reports the discovery
+    outcome, never this row's status -- but it does mean the anchor
+    shows up in failed-sync-run counts/dashboards until CHAOS-4502 gives
+    it its own terminal state.
+
+    Credentials are resolved and frozen exactly as :func:`plan_sync_run`
+    does (:func:`_resolve_credential_stamp`), because the Python-side
+    Fallback populate path (jira, or any future non-native provider) reads
+    them via ``resolve_run_auth`` off this same run row.
+    """
+    integration = _load_integration(session, integration_id, org_id)
+    credential_id, credential_fp, auth_source = _resolve_credential_stamp(
+        session, integration
+    )
+    now = datetime.now(timezone.utc)
+    sync_run = SyncRun(
+        org_id=integration.org_id,
+        integration_id=integration.id,
+        triggered_by=triggered_by,
+        mode=mode,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+        completed_units=0,
+        failed_units=0,
+        credential_id=credential_id,
+        credential_fingerprint=credential_fp,
+        auth_source=auth_source,
+        trace_parent=current_trace_parent(),
+    )
+    session.add(sync_run)
+    session.flush()
+    seed_reference_discovery_ledger(
+        session,
+        org_id=str(integration.org_id),
+        sync_run_id=str(sync_run.id),
+        now=now,
+    )
+    return str(sync_run.id)
 
 
 def _terminalize_pagerduty_disabled_plan(

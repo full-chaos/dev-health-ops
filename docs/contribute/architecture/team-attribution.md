@@ -378,6 +378,18 @@ means the ClickHouse `teams` dimension is empty.
 > through `work_graph_issue_pr` (§1.1's new PR-inheritance branch) that the original summary above
 > did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
 
+> **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
+> `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two
+> DISJOINT id spaces AT THE TIME OF DIAGNOSIS** (`"{org_id}:linear:{team_key}"` vs. the raw Linear
+> Project UUID). CHAOS-4431 (merged after this diagnosis) now ALSO writes `team_project_ownership`
+> rows keyed by the raw Linear Project UUID for every org this route has synced — the two id spaces
+> now co-exist rather than staying permanently disjoint; see the "Two Linear id spaces, one resolver"
+> callout in §1.1 for the full trace, the fix, and the post-CHAOS-4431 update.
+> Prod symptom (CHAOS-4458): `team_repo_ownership` derivation `outcome=no_signal`, 0 rows, every org
+> — the GitLab/Jira arms of this same join were unaffected (their ownership writers and work-item
+> normalizers agree on what `project_id` means), so this was a Linear-specific gap, not a general
+> failure of the CHAOS-4365 item 1b producer.
+
 > **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
 > real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
 > `metrics/job_compounding_risk.py` CLI job) resolves one team per repo for
@@ -551,9 +563,11 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > |---|---|---|---|
 > | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | jira always; github/gitlab/linear only when their native collector degrades (resolver/collector error, or no registered native collector) — see `teamCatalogAutoimportBridge` below |
 > | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **Yes, as of CHAOS-4437** — `run_team_autoimport_strict` now threads `import_categories` from the canonical `SyncConfiguration.sync_options` the same way the post-sync path does (`workers/team_autoimport_categories.py`'s module docstring). Dispatch-blocking sprint/cycle discovery (Jira, Linear) stays unconditional regardless of category selection — dispatch itself only checks the `SyncRunReferenceDiscovery.status` column, never CH team/sprint rows directly, so gating the team/project/member WRITE is safe. Also used by backfill. | jira always; github/gitlab/linear only when their native collector degrades, same fallback as above |
-> | Linear Go-native route — `internal/providersync` (CHAOS-4431, PR #1989) | `LinearTeamCatalogCollector` behind the SAME claim-free `TeamCatalogCollector` seam as github/gitlab below (`TeamCatalogDiscoveryExecutor` for reference-discovery, `teamCatalogAutoimportBridge` for post-sync) → `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` (GraphQL walk: teams, members, projects, cycles/sprints) → `LinearReferenceCatalogClickHouseEffects`, `source='native'` | **Yes**, plus two interim fail-safe guards ahead of the CHAOS-2622/CHAOS-4444 drift-aware projector: `applyTeamSyncPolicyGuard` (skip non-auto-apply `sync_policy` teams) and `applyTeamMembershipConflictGuard` (skip a membership conflicting with an active manual membership/fallback to a different team). Sprints/cycles stay unconditional, same rule as the bridge row above. | linear, when its native collector is reached (built + unit-tested on `team-catalog-native-dispatch`; **not yet merged to main** — main deploy-frozen) |
-> | GitHub Go-native route — `internal/providersync` (CHAOS-4434, PR #1984, stacked on #1989) | native via #1984 (`TeamCatalogCollector`, both guards — sync_policy + membership-conflict, same shapes as Linear's — plus `team_repo_ownership` via `provider_access`) | **Yes**, same two guards as Linear | github, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
-> | GitLab Go-native route — `internal/providersync` (CHAOS-4432, PR #1985, stacked on #1989) | `GitLabTeamCatalogCollector` (registered `Native["gitlab"]` + `case "gitlab":` in `ResolveClient`, same shape as Linear/GitHub) walks root/subgroups/per-group-projects/native-projects in `discover_gitlab`'s ONE unified walk → writes `teams`/`team_project_ownership`/`team_memberships` (`source='provider_access'`) + native `projects`, same tables Linear's native route uses. `applyGitLabTeamSyncPolicyGuard`/`gitlabMembershipConflictsWithManualState` mirror Linear's corrected any-other-team-differs guards. **Non-strict walk failure ≠ Linear's partial-prefix preservation**: Python's `_populate_async` has no inner per-stage catch (`team_discovery.py:225-278`), so a non-strict failure anywhere in the walk returns a clean `TeamCatalogResult{Skipped: true, SkipReason: "<stage>_fetch_failed"}` -- no writes, no partial rows -- reported as `TeamCatalogOutcomeSkipped`, never a silent zero-row "native" success. Strict re-raises unchanged. | **Yes** | gitlab, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
+> | Linear Go-native route — `internal/providersync` (CHAOS-4431, PR #1989) | `LinearTeamCatalogCollector` behind the SAME claim-free `TeamCatalogCollector` seam as github/gitlab below (`TeamCatalogDiscoveryExecutor` for reference-discovery, `teamCatalogAutoimportBridge` for post-sync) → `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` (GraphQL walk: teams, members, projects, cycles/sprints) → `LinearReferenceCatalogClickHouseEffects`, `source='native'` | **Yes**, plus the CHAOS-4444 drift-review engine (`team_drift_review.go`/`identity_drift_review.go`, shared by all three native routes): every observed team ALWAYS records a `team_provider_observations` row; `applyTeamSyncPolicyGuard` excludes a non-auto-apply-`sync_policy` team from the write and (policy 1 only — policy 2 stages nothing) diffs it against the persisted row, staging/superseding/resolving `team_drift_changes` rows; `applyTeamMembershipConflictGuard` excludes a membership conflicting with an active manual membership/fallback to a different team AND stages the conflict as an identity `team_drift_changes` row, resolving/superseding stale pending rows for members no longer observed. Sprints/cycles stay unconditional, same rule as the bridge row above. | linear, when its native collector is reached (built + unit-tested on `team-catalog-native-dispatch`; **not yet merged to main** — main deploy-frozen) |
+> | GitHub Go-native route — `internal/providersync` (CHAOS-4434, PR #1984, stacked on #1989) | native via #1984 (`TeamCatalogCollector`, both guards — sync_policy + membership-conflict, same shapes as Linear's, both now backed by the CHAOS-4444 staged-review engine — plus `team_repo_ownership` via `provider_access`) | **Yes**, same staged-review behavior as Linear | github, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
+> | GitLab Go-native route — `internal/providersync` (CHAOS-4432, PR #1985, stacked on #1989) | `GitLabTeamCatalogCollector` (registered `Native["gitlab"]` + `case "gitlab":` in `ResolveClient`, same shape as Linear/GitHub) walks root/subgroups/per-group-projects/native-projects in `discover_gitlab`'s ONE unified walk → writes `teams`/`team_project_ownership`/`team_memberships` (`source='provider_access'`) + native `projects`, same tables Linear's native route uses. `applyGitLabTeamSyncPolicyGuard`/`gitlabMembershipConflictsWithManualState` mirror Linear's corrected any-other-team-differs guards, both backed by the CHAOS-4444 staged-review engine. **Non-strict walk failure ≠ Linear's partial-prefix preservation**: Python's `_populate_async` has no inner per-stage catch (`team_discovery.py:225-278`), so a non-strict failure anywhere in the walk returns a clean `TeamCatalogResult{Skipped: true, SkipReason: "<stage>_fetch_failed"}` -- no writes, no partial rows -- reported as `TeamCatalogOutcomeSkipped`, never a silent zero-row "native" success. Strict re-raises unchanged. | **Yes** | gitlab, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
+>
+> **CHAOS-4444 (this ticket) closed the drift-review parity gap** the three rows above used to describe as "interim fail-safe guards ahead of the CHAOS-2622/CHAOS-4444 drift-aware projector" — that projector is now ported (`team_drift_review.go`, `identity_drift_review.go`), shared by all three native collectors via the same guard wrapper seam, canonical-JSON-encoding and change-id-hashing byte-parity with `clickhouse_team_drift_projector.py`/`clickhouse_identity_drift.py` proven by 4 live-python-oracle pairs (`team-catalog/drift/*`, `identity-drift/review/*`). Not yet ported: `resolve_missing_provider_changes` (no native call site ever passes it `True`, confirmed by reading every `team_autoimport_<provider>.py` call site — genuinely out of scope, not a gap).
 >
 > ```mermaid
 > flowchart LR
@@ -596,7 +610,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > fetch, fires on every sync (see §1.1's diagram for the resolution logic). Unlike every row in the
 > table above, this producer never calls `populate()` and is not gated by the three `sync_options`
 > flags: it derives from already-synced `team_project_ownership` (however THAT got populated -- any
-> row of the table above, or the dormant Linear-native route) joined against `work_items`/
+> row of the table above, or the Linear-native route, ACTIVE since CHAOS-4431, §1.1) joined against `work_items`/
 > `work_item_dependencies`/`work_graph_issue_pr`, so it runs for every provider combination, not just
 > GitHub. It also carries no prerequisite completion key against those OTHER producers (team-lead
 > ruling, codex adversarial-review finding #4, 2026-08-28): a brand-new org's first qualifying sync
@@ -982,12 +996,13 @@ flowchart TD
     SYNC -->|"GitHub only -- team_autoimport_github.py:139 (_repo_ownership_rows), source=provider_access"| TRO_direct["team_repo_ownership (direct)"]
     SYNC -->|"GitLab -- team_autoimport_gitlab.py:137 (_project_ownership_rows), source=provider_access"| TPO["team_project_ownership"]
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
-    LGN["Linear Go-native route (would bypass the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native<br/>NOT WIRED to any production caller today -- §0.4a"] -. designed, dormant .-> TPO
+    LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project)"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
-    TPO -->|"OR match: a DONOR's project_id, reached by walking<br/>work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
+    TPO -->|"OR (Linear only, CHAOS-4458 part b) match: work_items.native_team_key<br/>against the synthetic team-key-shaped row org_id:linear:team_key --<br/>fallback for a Linear item never assigned to any Project (project_id='')<br/>-- resolution arm 'linear_team_key', tried only when the project_id arm above does not resolve"| WI
+    TPO -->|"OR match: a DONOR's project_id/native_team_key (same two arms above),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
-    WI -->|"derive: resolve the team (own or donor project_id);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
     WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2, CHAOS-2416 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
     WI -. "work_item_id lookup" .-> WGIP
@@ -1005,6 +1020,92 @@ join `repos` once, by `repo_id`, to stamp `repo_full_name`/`provider` onto the r
 (`team_repo_ownership_derivation_clickhouse.go`). Attribution source 3 (`repo_ownership`,
 §0.1/§0.2) reads whichever `team_repo_ownership` row wins the `is_primary`/`specificity` tie-break
 for that repo — direct (`native`)/(`provider_access`) or derived (`inferred`) alike.
+
+**Two Linear id spaces, one resolver (CHAOS-4458 part (b)).** `team_project_ownership`'s Linear rows
+and `work_items.project_id` for a Linear item are written by two DIFFERENT normalizers that disagree
+on what `project_id` means:
+- `team_autoimport_linear.py`'s ownership writer stamps `project_id = "{org_id}:linear:{team_key}"`
+  (`_project_id(org_id, "linear", project_key)`, falling back to the team's own key —
+  `_team_id(team) = team.provider_team_id` — when the team has no explicit Linear Project
+  associations: `team_autoimport_linear.py:454-456,472,487`).
+- The Linear work-item normalizer stamps a Linear item's OWN `project_id` with the raw Linear
+  Project UUID — the SAME id space `projects.id` carries — which the writer's own docstring calls a
+  "SEPARATE id space" from the team-derived rows (`team_autoimport_linear.py:309-314`).
+
+At the time this was diagnosed, these two values never intersected for a Linear-only org: confirmed
+locally (org `70d529e0`, real synced data) at 0 of 3168 project-id-bearing Linear work items matching
+their org's ownership row, and on prod (org `c6a38355`, 2809 Linear ownership rows) at
+`outcome=no_signal`, 0 rows written. The fix (`resolveWorkItemProjectRef` in
+`team_repo_ownership_derivation.go`) tries the direct `project_id` match first (unchanged — covers
+every other provider today, and a future project-UUID-keyed Linear ownership row per CHAOS-4108's
+dual-arm precedent), and only when that does not resolve, for a Linear item carrying
+`work_items.native_team_key` (migration `050`, the raw `issue.team.key`), retries against the
+reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
+the own-resolution path and the dependency-donor walk (a bare GitHub PR's donor Linear issue resolves
+the same way) AND the PR-inheritance branch (`work_graph_issue_pr`-linked items, same resolver, same
+priority). Never guesses between the two arms: the moment one resolves, the other is not consulted,
+and a genuine ownership conflict on either identity is still dropped by the existing never-guess
+`assign()` rule. Which arm produced each run's rows is visible in
+`dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
+
+**Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's
+Linear native team-catalog collector (`linear_reference_catalog_route.go`) writes TWO ownership rows
+per synced Linear team, not one: a raw-Linear-Project-UUID-keyed row for each of the team's actual
+Linear Projects (`:386-390`, `ProjectID: project.ID`) AND the pre-existing synthetic
+`"{org_id}:linear:{team_key}"` row for backward compatibility (`:410-414`, unchanged shape/writer
+intent). So for any org this route has synced since CHAOS-4431 activated, `team_project_ownership`
+holds BOTH shapes simultaneously — the "never intersect" finding above describes the pre-CHAOS-4431
+state, not a permanent invariant. Practical consequence, confirmed live (lane-4458b-live, org
+`70d529e0`, 2026-08-29): a Linear work item that IS assigned to a real Linear Project now resolves
+via the direct `project_id` arm (first priority, unchanged); the `linear_team_key` arm remains the
+correct fallback for a Linear item that was never assigned to any Project (`project_id=""` —
+confirmed as the actual live-data shape, not merely an id-space mismatch) and reaches a repo no
+`project_id`-arm donor also reaches. On an org where every Linear-donor-reachable repo happens to
+ALSO be reachable via a `project_id`-arm donor (true of org `70d529e0` today — every repo the 264
+fallback-eligible items' 148 donors can reach is also reached by ≥152 of the 3,733 direct-match
+items), `assign()`'s existing `project_id > linear_team_key` priority means the fallback arm is
+correctly present and load-bearing for other data, but never the WINNING arm observed on THIS org's
+current topology — not a defect, a consequence of the two features interacting as designed.
+
+**CHAOS-4530 update: the team-key-shaped `projects` row is gone; the matching `team_project_ownership`
+row is not.** CHAOS is a Linear TEAM, not a project. Until CHAOS-4530, `linear_reference_catalog_route.go`
+wrote the `"{org_id}:linear:{team_key}"` identity to BOTH `projects` (an un-typed, team-shaped catalog
+row -- `id`/`project_key` = the team's own key, `name` = the team's display name) AND
+`team_project_ownership` (this section's `linear_team_key` fallback arm). Because
+`acr`'s `projectOwnershipJoinSQL` resolves a project's facts only through `projects.project_key`, and
+that synthetic row was the ONLY non-empty `project_key` this collector ever wrote for Linear, every
+project fact resolved to "team CHAOS" and no real Linear project was ever reachable (CHAOS-4530's own
+finding). CHAOS-4530 removed ONLY the `projects` write -- CHAOS is typed as a team again, nowhere in
+`projects`. The `team_project_ownership` write (formerly `:410-414`, now the loop right after the
+native-projects block) is UNCHANGED: this section's `linear_team_key` arm
+(`team_repo_ownership_derivation.go`'s `linearTeamKeyProjectID`) reads only `team_project_ownership`,
+never `projects`, so it is unaffected and remains the correct fallback described above. Also as of
+CHAOS-4530, a REAL project's `team_project_ownership` row (the `ProjectID: project.ID`-keyed row from
+the paragraph above) never carries the owning team's key as its `project_key` any more -- that value
+was always the TEAM's key, never a genuine per-project key, and stamping it there was the same defect.
+Real Linear projects still have no genuine per-project key source, so `projects.project_key` and this
+ownership row's `project_key` both stay `NULL`/nil for them; making a real project's facts reachable by
+key is CHAOS-4521b's (acr-side) job, tracked separately and not blocked on this collector.
+
+An intermediate revision of this fix (also shipped as part of CHAOS-4530) briefly wrote a soft-delete
+TOMBSTONE version of the `projects` row (`is_active=0`, `project_key=nil`) instead of omitting the write
+outright, on the theory that a still-present but inactive row would read as retired. CF (acr owner)
+found that wrong: acr's identity resolution does not filter `projects.is_active` at all, and
+`is_active=0` already legitimately marks two REAL completed Linear projects for an unrelated reason, so
+it could never be a reader-recognizable "retired" signal for anyone. The collector now NEVER writes this
+identity to `projects`, active or tombstoned; already-synced orgs' stale rows (either shape) are retired
+by a separate, one-time operator action -- `dev-health-workerctl providersync
+retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
+`ALTER TABLE projects DELETE`, never a per-sync write.
+
+**Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
+still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
+prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a
+tombstone row moments after the verb's `DELETE` reports success -- the row would then reappear.
+Run the cleanup only once the rollout of the collector fix is 100% complete (no old-revision pods
+left), and re-run it if that is in doubt: the verb is idempotent (its `SELECT` and `DELETE` share
+the identical predicate), so a clean second pass finds nothing and is a safe way to confirm no
+straggler wrote the row back.
 
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`

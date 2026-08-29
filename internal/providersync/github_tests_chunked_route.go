@@ -1064,6 +1064,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								"repository", cursor.Repo, "run", pipeline.RunID, "count", rows.DuplicateCases,
 							)
 						}
+						client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
+						if rows.DuplicateSuites > 0 {
+							slog.Info(
+								"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
+								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+								"repository", cursor.Repo, "run", pipeline.RunID, "count", rows.DuplicateSuites,
+							)
+						}
 						// Bound the run's committed report rows WITHOUT splitting
 						// an artifact. Rows are checked for fit BEFORE they are
 						// appended, so the aggregate cannot creep past the cap

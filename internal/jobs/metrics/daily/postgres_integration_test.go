@@ -880,6 +880,28 @@ func TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason(t *testing.T)
 			partitionID: "00000000-0000-4000-8000-000000000302",
 			orgID:       "00000000-0000-4000-8000-000000000309",
 		},
+		{
+			// CHAOS-4543: the runner's RSS watchdog / RLIMIT_AS backstop /
+			// loader row-cap guard's reason -- newly accepted by
+			// dailyMetricsPartitionFailureReasons; this proves the live
+			// schema's failure_reason column (String(64), no value-CHECK)
+			// accepts the new text alongside the status/failure_reason
+			// scope CHECK the other cases already exercise.
+			name:        "resource_exhausted",
+			reason:      "resource_exhausted",
+			runID:       "00000000-0000-4000-8000-000000000401",
+			partitionID: "00000000-0000-4000-8000-000000000402",
+			orgID:       "00000000-0000-4000-8000-000000000409",
+		},
+		{
+			// CHAOS-4543: sibling reason for an externally-signaled runner
+			// kill, same newly-accepted-vocabulary proof as above.
+			name:        "process_signaled",
+			reason:      "process_signaled",
+			runID:       "00000000-0000-4000-8000-000000000501",
+			partitionID: "00000000-0000-4000-8000-000000000502",
+			orgID:       "00000000-0000-4000-8000-000000000509",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1212,7 +1234,13 @@ func TestRedriveStrandedPartitionsReachesDispatchablePartitions(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,failure_reason,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'failed_permanent','ambiguous_refused',5,$3,$3)`, permanentPartition, runID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,1,'[]'::jsonb,'failed',5,$3,$3)`, plainFailedPartition, runID, now); err != nil {
+	// CHAOS-4543: failure_reason='resource_exhausted' (not NULL) here, on
+	// purpose -- proves RedriveStrandedPartitions's WHERE clause (status IN
+	// ('pending','failed'), no filter on failure_reason's value) reaches a
+	// partition that stranded via the resource_exhausted class this ticket
+	// added a releasePartitionWithReason branch for, exactly the same as it
+	// already reached the reason-less plain-failed shape this test predates.
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,failure_reason,attempt_count,created_at,updated_at) VALUES ($1,$2,1,'[]'::jsonb,'failed','resource_exhausted',5,$3,$3)`, plainFailedPartition, runID, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,2,'[]'::jsonb,'succeeded',1,$3,$3)`, succeededPartition, runID, now); err != nil {

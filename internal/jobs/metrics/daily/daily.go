@@ -106,6 +106,17 @@ func retryCompatibilityError(err error) error {
 	if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
 		return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonAmbiguousRefused)
 	}
+	if errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
+		// CHAOS-4543: see ErrCompatibilityResourceExhaustedDeterministic's
+		// doc comment -- a KNOWN deterministic guard (not a real,
+		// attempt-to-attempt-variable memory kill), so retrying 5 times
+		// before River discards the job only reproduces the identical
+		// refusal. Permanent stops after this one attempt; the Reason
+		// stays ReasonResourceExhausted (same River-visible classification
+		// as the non-deterministic case) -- only the retry BUDGET changes,
+		// not what the failure is called.
+		return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonResourceExhausted)
+	}
 	marked := jobruntime.Retryable(err)
 	switch {
 	case errors.Is(err, ErrCompatibilityProcessSignaled):
@@ -505,6 +516,19 @@ func (handler *PartitionHandler) SetCompatRetryObserver(observer jobruntime.Dail
 	handler.compatRetryObserver = observer
 }
 
+// observeCompatRetry is a nil-safe helper (CHAOS-4543) around
+// compatRetryObserver.ObserveDailyMetricsCompatRetry -- every
+// releasePartitionWithReason branch in Work calls this immediately after,
+// mirroring the ambiguous_stuck branch's own inline nil-check + call, so a
+// new released-with-reason decision can never be added to one without the
+// other (the risk this ticket's own root cause was: a branch existing with
+// no accompanying telemetry).
+func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMetricsCompatRetryDecision) {
+	if handler.compatRetryObserver != nil {
+		_ = handler.compatRetryObserver.ObserveDailyMetricsCompatRetry(decision)
+	}
+}
+
 // computeNativeFamilies runs every registered native family executor for one
 // partition and returns the names that succeeded, in the same sorted order
 // SetNativeFamilies stored -- deterministic so a failure in one family never
@@ -631,7 +655,9 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// partition row can tell a liveness kill apart from any other
 			// 'failed' outcome without cross-referencing River's attempt
 			// log or Sentry.
-			releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled")
+			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled") {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProgressStalled)
+			}
 			return retryCompatibilityError(err)
 		}
 		if errors.Is(err, ErrCompatibilityCapacityExhausted) {
@@ -642,7 +668,63 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// failure_reason attached so an operator reading the partition
 			// row can tell a pids-capacity refusal apart from any other
 			// 'failed' outcome without cross-referencing River's attempt log.
-			releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted")
+			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted") {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedCapacityExhausted)
+			}
+			return retryCompatibilityError(err)
+		}
+		if errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
+			// CHAOS-4543: checked BEFORE the generic resource_exhausted
+			// branch below -- a KNOWN deterministic guard (see
+			// ErrCompatibilityResourceExhaustedDeterministic's doc comment).
+			// Still releases with the SAME "resource_exhausted"
+			// failure_reason (ordinarily re-dispatchable 'failed', never
+			// 'failed_permanent' -- daily-redrive or a future lower-volume
+			// day can still succeed), but retryCompatibilityError marks
+			// this Permanent so River does not burn its whole attempt
+			// budget reproducing an identical, deterministic refusal 5
+			// times every cycle.
+			//
+			// codex review (round 2): Permanent must never be returned
+			// unless the durable release is CONFIRMED to have landed --
+			// mirrors the ambiguous_stuck branch's own established rule
+			// above. A failed write (lease already expired, a transient DB
+			// error) here would otherwise tell River to stop retrying a job
+			// that recorded nothing durable at all: the exact silent-loss
+			// shape CHAOS-4319 exists to close, reintroduced for this new
+			// no-retry optimization if left unguarded.
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic)
+				return retryCompatibilityError(err)
+			}
+			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonResourceExhausted)
+		}
+		if errors.Is(err, ErrCompatibilityResourceExhausted) {
+			// CHAOS-4543: same rationale as ErrCompatibilityProgressStalled
+			// above -- a resource_exhausted kill (the runner's RSS watchdog,
+			// its own RLIMIT_AS backstop, or a deliberate loader row-cap
+			// guard such as TestopsRowCapExceeded) is not a claim this row
+			// can never satisfy: a lower-volume day, a raised budget, or
+			// simply less concurrent load on a fresh attempt could all
+			// succeed later. Before this fix, this class fell through to the
+			// generic releasePartition path below with no failure_reason
+			// persisted -- a partition that strands this way (River
+			// eventually discards the job after its attempt budget) left an
+			// operator with a bare 'failed' row and no clue why, the exact
+			// CHAOS-4543 "raw text not captured" gap this ticket closes.
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted)
+			}
+			return retryCompatibilityError(err)
+		}
+		if errors.Is(err, ErrCompatibilityProcessSignaled) {
+			// CHAOS-4543: sibling of the resource_exhausted branch above -- a
+			// runner subprocess killed by an external signal (kernel OOM,
+			// SIGTERM) is the same non-terminal, retryable shape and hit the
+			// identical missing-branch gap.
+			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled") {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled)
+			}
 			return retryCompatibilityError(err)
 		}
 		releasePartition(handler.store, ctx, *claim)
@@ -788,10 +870,18 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 // means the row was not transitioned at all (e.g. the lease already expired
 // out from under this attempt), exactly releasePartition's existing
 // best-effort failure semantics, not a partial write missing only the reason.
-func releasePartitionWithReason(store Store, ctx context.Context, claim PartitionClaim, reason string) {
+//
+// Returns whether the durable write actually landed (codex review,
+// CHAOS-4543): callers that also observe a released_* telemetry decision
+// must gate that observation on this -- an unconditional observe would
+// report a durable disposition ("this reason was persisted") even when the
+// row was never transitioned at all, exactly the kind of telemetry/reality
+// mismatch this ticket's own diagnosis had to work around (failure_reason
+// silently NULL despite a classified failure).
+func releasePartitionWithReason(store Store, ctx context.Context, claim PartitionClaim, reason string) bool {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleasePartitionWithReason(releaseCtx, claim, reason)
+	return store.ReleasePartitionWithReason(releaseCtx, claim, reason) == nil
 }
 
 // failPartitionPermanently durably terminalizes a partition stuck ambiguous

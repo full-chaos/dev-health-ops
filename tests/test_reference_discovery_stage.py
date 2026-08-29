@@ -800,3 +800,270 @@ def test_reference_discovery_noop_for_non_capable_provider_arms_dispatch(
     assert ledger.completed_at is not None
     assert len(dispatch_outbox) == 1
     assert dispatch_outbox[0].status == OUTBOX_STATUS_PENDING
+
+
+def test_seed_reference_discovery_run_arms_ledger_and_outbox_like_plan_sync_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: seed_reference_discovery_run must arm the SAME
+    SyncRunReferenceDiscovery + OUTBOX_KIND_DISCOVERY row shape
+    plan_sync_run seeds unconditionally, off a zero-unit anchor SyncRun --
+    the exact row NativeReferenceDiscoveryService (Go) claims."""
+    from dev_health_ops.sync.planner import seed_reference_discovery_run
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="linear",
+        name="Linear integration",
+        config={},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+
+    sync_run_id = seed_reference_discovery_run(
+        db_session,
+        integration_id=str(integration.id),
+        org_id=org_id,
+        triggered_by="test",
+    )
+    db_session.flush()
+
+    run = db_session.get(SyncRun, uuid.UUID(sync_run_id))
+    assert run is not None
+    assert run.mode == SyncRunMode.BACKFILL.value
+    assert run.status == SyncRunStatus.PLANNED.value
+    assert run.total_units == 0
+
+    ledger = (
+        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
+    )
+    assert ledger.status == "planned"
+    assert ledger.attempts == 0
+
+    outbox = _outbox_rows(db_session, run, OUTBOX_KIND_DISCOVERY)
+    assert len(outbox) == 1
+    assert outbox[0].status == OUTBOX_STATUS_PENDING
+
+
+def test_await_reference_discovery_terminal_returns_success_with_result(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+
+    ledger.status = "success"
+    ledger.result = {"status": "success", "teams_imported": 1}
+    db_session.flush()
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {
+        "outcome": "success",
+        "sync_run_id": str(run.id),
+        "result": {"status": "success", "teams_imported": 1},
+    }
+
+
+def test_await_reference_discovery_terminal_returns_failed_with_reason(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    _patch_db_session(monkeypatch, db_session)
+
+    ledger.status = "failed"
+    ledger.error = "Reference discovery failed"
+    db_session.flush()
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {
+        "outcome": "failed",
+        "sync_run_id": str(run.id),
+        "reason": "Reference discovery failed",
+    }
+
+
+def test_await_reference_discovery_terminal_reports_not_claimed_past_lease_bound(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: a row stuck PLANNED past one full lease window (no
+    worker ever claimed it) reports not_claimed -- fails closed, never
+    falls back to calling the Python populator directly. The bound is the
+    Go service's own SYNC_REFERENCE_DISCOVERY_LEASE_SECONDS constant
+    (_discovery_lease_seconds), shrunk here so the test runs in
+    milliseconds, not an invented separate constant."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    _add_discovery(db_session, run)  # stays "planned" -- never claimed
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(reference_discovery, "_discovery_lease_seconds", lambda: 0.05)
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {"outcome": "not_claimed", "sync_run_id": str(run.id)}
+
+
+def test_await_reference_discovery_terminal_reports_timeout_running_past_lifetime_bound(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498: a row claimed (RUNNING) but never reaching terminal
+    within the Go service's own max-lifetime bound
+    (_max_discovery_lifetime_seconds) reports timeout_running, not a silent
+    fallback."""
+    from dev_health_ops.workers import reference_discovery
+
+    run, _unit = _seed_unitized_run(db_session)
+    ledger = _add_discovery(db_session, run)
+    ledger.status = "running"
+    ledger.lease_owner = str(uuid.uuid4())
+    ledger.lease_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        reference_discovery, "_max_discovery_lifetime_seconds", lambda: 0.05
+    )
+
+    outcome = reference_discovery.await_reference_discovery_terminal(
+        str(run.id), poll_interval=0.01
+    )
+
+    assert outcome == {"outcome": "timeout_running", "sync_run_id": str(run.id)}
+
+
+def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498 (codex review, P1): seed_reference_discovery_run creates a
+    deliberately zero-unit anchor SyncRun to arm strict discovery for an
+    operator backfill. _load_discovery_context used to gate credential
+    resolution on `if units:` -- correct when every caller was a
+    unit-planned sync run, wrong for a zero-unit anchor whose entire
+    purpose is to feed a strict populate() call that needs real
+    credentials. Red on the pre-fix gate: resolve_run_auth was never
+    called for a zero-unit run, so credentials silently stayed {}, and a
+    capable provider's strict populator (e.g. jira) would fail or no-op
+    on missing credentials."""
+    from dev_health_ops.workers import reference_discovery
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="jira",
+        name="Jira integration",
+        config={},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="operator_backfill",
+        mode=SyncRunMode.BACKFILL.value,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+        # seed_reference_discovery_run ALWAYS stamps a non-None auth_source
+        # via _resolve_credential_stamp, unconditionally, regardless of
+        # unit count -- that stamp is exactly the signal
+        # _load_discovery_context now uses (codex round 2, P1) to tell a
+        # backfill anchor apart from a genuine zero-unit planner run.
+        auth_source="environment",
+    )
+    db_session.add(run)
+    db_session.flush()
+    # No SyncRunUnit rows at all -- this run is a zero-unit anchor, exactly
+    # what seed_reference_discovery_run produces.
+    _patch_db_session(monkeypatch, db_session)
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve_run_auth(session, *, run, integration, provider, error_label):
+        calls.append({"run_id": str(run.id), "provider": provider})
+        return None, {"token": "resolved-for-zero-unit-run"}
+
+    monkeypatch.setattr(reference_discovery, "resolve_run_auth", _fake_resolve_run_auth)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert len(calls) == 1
+    assert calls[0]["provider"] == "jira"
+    assert context["credentials"] == {"token": "resolved-for-zero-unit-run"}
+
+
+def test_load_discovery_context_preserves_credential_free_zero_unit_planner_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498 (codex review round 2, P1): a genuine PLANNER-originated
+    zero-unit sync run (e.g. all sources/datasets disabled) deliberately
+    leaves run.auth_source NULL -- plan_sync_run only calls
+    _resolve_credential_stamp `if planned_units:`. Before this fix,
+    resolving credentials unconditionally made resolve_run_auth's
+    NULL-auth_source path raise for a credential-less PagerDuty
+    integration, breaking what used to be a clean non-import-capable
+    no-op (run_team_autoimport_strict's _provider_capability check never
+    got the chance to run). Distinguishing signal from a backfill anchor
+    (which DOES need credentials resolved, see the sibling test above):
+    run.auth_source is not None -- seed_reference_discovery_run always
+    stamps one, a genuine zero-unit planner run never does.
+
+    Red on the codex-round-1 fix (unconditional resolve_run_auth call):
+    resolve_run_auth would have been called and raised for this
+    credential-less pagerduty run."""
+    from dev_health_ops.workers import reference_discovery
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="pagerduty",
+        name="PagerDuty integration",
+        config={},
+        credential_id=None,
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="scheduler",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+        # Untouched: a real zero-unit plan_sync_run never calls
+        # _resolve_credential_stamp, so auth_source stays NULL.
+        auth_source=None,
+    )
+    db_session.add(run)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve_run_auth(session, *, run, integration, provider, error_label):
+        calls.append({"provider": provider})
+        raise ValueError(
+            "PagerDuty sync requires an active organization-scoped credential"
+        )
+
+    monkeypatch.setattr(reference_discovery, "resolve_run_auth", _fake_resolve_run_auth)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert calls == []
+    assert context["credentials"] == {}
+    assert context["provider"] == "pagerduty"

@@ -34,6 +34,13 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 	if err := collector.ObserveTeamCatalogDispatch("linear", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeRosterPreservationFailed); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4432 codex review finding: distinct from TeamCatalogOutcomeSkipped
+	// ("nothing selected, the collector never ran") -- this is "the
+	// collector WAS called and chose to report a clean skip", e.g.
+	// GitLab's non-strict walk-failure Python parity.
+	if err := collector.ObserveTeamCatalogDispatch("gitlab", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeCollectorSkipped); err != nil {
+		t.Fatal(err)
+	}
 	// An unrecognized provider clamps to "unknown" -- same cardinality
 	// discipline as zeroUnitFinalizationProvider.
 	if err := collector.ObserveTeamCatalogDispatch("bogus-provider", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeBridge); err != nil {
@@ -51,6 +58,7 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 		`dev_health_team_catalog_dispatch_total{provider="unknown",entry_point="post_sync",outcome="bridge"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="native_failed_nonfatal"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="roster_preservation_failed"} 1`,
+		`dev_health_team_catalog_dispatch_total{provider="gitlab",entry_point="post_sync",outcome="collector_skipped"} 1`,
 	} {
 		if !strings.Contains(text, want+"\n") {
 			t.Fatalf("missing exposition line %q:\n%s", want, text)
@@ -90,6 +98,40 @@ func TestObserveTeamCatalogRowsWrittenExposesCounter(t *testing.T) {
 		`dev_health_team_catalog_rows_written_total{provider="linear",table="teams"} 5`,
 		`dev_health_team_catalog_rows_written_total{provider="linear",table="team_project_ownership"} 807`,
 		`dev_health_team_catalog_rows_written_total{provider="github",table="team_repo_ownership"} 42`,
+	} {
+		if !strings.Contains(text, want+"\n") {
+			t.Fatalf("missing exposition line %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestObserveTeamCatalogRowsWrittenExposesDriftReviewCounters is CHAOS-4444's
+// own telemetry coverage, following the same
+// "assert the exact PrometheusText() line, not just Observe returns nil"
+// pattern -- proves the three new staged/superseded counters
+// (team_drift_review.go / identity_drift_review.go) actually surface, not
+// just that TeamCatalogResult carries the fields.
+func TestObserveTeamCatalogRowsWrittenExposesDriftReviewCounters(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableTeamsStagedForReview, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableMembershipsStagedForReview, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableDriftChangesSuperseded, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="teams_staged_for_review"} 2`,
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="team_memberships_staged_for_review"} 5`,
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="team_drift_changes_superseded"} 1`,
 	} {
 		if !strings.Contains(text, want+"\n") {
 			t.Fatalf("missing exposition line %q:\n%s", want, text)

@@ -22,18 +22,21 @@ type recordingDerivationRunner struct {
 	written     int
 	retracted   int
 	inputsReady bool
+	armCounts   map[string]int
 	err         error
 	calls       []string
 }
 
-func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, int, bool, error) {
+func (runner *recordingDerivationRunner) Derive(_ context.Context, orgID string) (int, int, bool, map[string]int, error) {
 	runner.calls = append(runner.calls, orgID)
-	return runner.written, runner.retracted, runner.inputsReady, runner.err
+	return runner.written, runner.retracted, runner.inputsReady, runner.armCounts, runner.err
 }
 
 type recordingDerivationObserver struct {
 	outcomes []jobruntime.TeamRepoOwnershipDerivationOutcome
 	written  []int
+	arms     []jobruntime.TeamRepoOwnershipResolutionArm
+	armCount []int
 }
 
 func (observer *recordingDerivationObserver) ObserveTeamRepoOwnershipDerivation(
@@ -41,6 +44,14 @@ func (observer *recordingDerivationObserver) ObserveTeamRepoOwnershipDerivation(
 ) error {
 	observer.outcomes = append(observer.outcomes, outcome)
 	observer.written = append(observer.written, written)
+	return nil
+}
+
+func (observer *recordingDerivationObserver) ObserveTeamRepoOwnershipDerivationResolutionArm(
+	arm jobruntime.TeamRepoOwnershipResolutionArm, count int,
+) error {
+	observer.arms = append(observer.arms, arm)
+	observer.armCount = append(observer.armCount, count)
 	return nil
 }
 
@@ -73,6 +84,40 @@ func TestTeamRepoOwnershipDerivationWorkerRecordsRowsWrittenOutcome(t *testing.T
 	}
 	if len(observer.written) != 1 || observer.written[0] != 3 {
 		t.Fatalf("observed written counts = %v, want [3]", observer.written)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationWorkerRecordsResolutionArmCounts pins
+// CHAOS-4458 part (b): the worker reports BOTH registered resolution arms
+// every run (even the one that produced 0 rows this run), so the
+// project_id vs linear_team_key series never silently goes missing instead
+// of reading as a present zero.
+func TestTeamRepoOwnershipDerivationWorkerRecordsResolutionArmCounts(t *testing.T) {
+	t.Parallel()
+	runner := &recordingDerivationRunner{
+		written:     2,
+		inputsReady: true,
+		armCounts:   map[string]int{"linear_team_key": 2},
+	}
+	observer := &recordingDerivationObserver{}
+	worker := &teamRepoOwnershipDerivationWorker{service: runner, observer: observer}
+	args := validTeamRepoOwnershipDerivationJobArgs()
+
+	if err := worker.Work(context.Background(), &river.Job[TeamRepoOwnershipDerivationJobArgs]{Args: args}); err != nil {
+		t.Fatalf("Work() error = %v, want nil", err)
+	}
+	if len(observer.arms) != 2 {
+		t.Fatalf("observed arms = %v, want 2 (both registered arms every run)", observer.arms)
+	}
+	counts := map[jobruntime.TeamRepoOwnershipResolutionArm]int{}
+	for i, arm := range observer.arms {
+		counts[arm] = observer.armCount[i]
+	}
+	if counts[jobruntime.TeamRepoOwnershipResolutionArmProjectID] != 0 {
+		t.Fatalf("project_id count = %d, want 0", counts[jobruntime.TeamRepoOwnershipResolutionArmProjectID])
+	}
+	if counts[jobruntime.TeamRepoOwnershipResolutionArmLinearTeamKey] != 2 {
+		t.Fatalf("linear_team_key count = %d, want 2", counts[jobruntime.TeamRepoOwnershipResolutionArmLinearTeamKey])
 	}
 }
 

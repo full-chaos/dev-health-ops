@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import os
 import sys
 import uuid
@@ -129,6 +130,99 @@ async def _assert_process_reaped(pid: int) -> None:
             return
         await asyncio.sleep(0.01)
     pytest.fail(f"metric compatibility process {pid} was not reaped")
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_keeps_the_tail_not_the_head() -> None:
+    """CHAOS-4543: _read_bounded_stderr must truncate from the FRONT,
+    keeping the LAST maximum_bytes -- the opposite of
+    _read_bounded_process_stream's ValueError-on-overflow, and the opposite
+    of a naive head-keeping bound, which this ticket's own local repro
+    proved silently discards the one line that explains a failure (the
+    verbose per-query INFO logging run_daily_metrics_job emits comes BEFORE
+    a guard like TestopsRowCapExceeded raises, so the useful content is
+    always at the tail)."""
+    # Deliberately non-periodic (a head-truncation and a tail-truncation of a
+    # periodic string can coincide byte-for-byte when the window aligns with
+    # the period -- caught in this ticket's own first draft of this test,
+    # which passed unchanged under a head-keeping mutation).
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"HEAD_MARKER_" + b"noise" * 20 + b"_TAIL_MARKER")
+    stream.feed_eof()
+    result, live_logged = await worker_metrics._read_bounded_stderr(
+        stream, maximum_bytes=20
+    )
+    assert result.endswith(b"_TAIL_MARKER")
+    assert b"HEAD_MARKER_" not in result
+    assert result.startswith(b"...(truncated)\n")
+    assert live_logged is False
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_returns_everything_under_the_bound_untouched() -> (
+    None
+):
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"short diagnostic line")
+    stream.feed_eof()
+    result, live_logged = await worker_metrics._read_bounded_stderr(
+        stream, maximum_bytes=4096
+    )
+    assert result == b"short diagnostic line"
+    assert b"truncated" not in result
+    assert live_logged is False
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_logs_each_chunk_live_when_context_given(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex review (CHAOS-4543 round 3): before this ticket, stderr was
+    inherited (stderr=None), so an operator watching this container's own
+    log stream in real time could see a child's diagnostics AS THEY
+    HAPPENED, including while it was still running or hanging. Piping it
+    instead (so a failure's message can embed a bounded tail) made this
+    function the ONLY reader -- without live logging, nothing would appear
+    until the whole run finished, and a genuinely hung child (the case an
+    operator most needs live output for) would produce total silence until
+    it was eventually killed. `live_log_context`, when given, must log each
+    chunk via `logger.info` AS IT ARRIVES, independent of the final bounded
+    tail this function still returns."""
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"first chunk of diagnostic output\n")
+    stream.feed_eof()
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        result, live_logged = await worker_metrics._read_bounded_stderr(
+            stream, maximum_bytes=4096, live_log_context="run_id=test partition_id=test"
+        )
+    assert result == b"first chunk of diagnostic output\n"
+    assert live_logged is True
+    live_records = [r for r in caplog.records if "stderr chunk" in r.message]
+    assert len(live_records) == 1, caplog.records
+    assert "run_id=test partition_id=test" in live_records[0].message
+    assert "first chunk of diagnostic output" in live_records[0].message
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_logs_nothing_live_without_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sibling of the test above: live_log_context=None (the default) must
+    not log anything -- callers that only want the bounded tail (e.g. the
+    focused unit tests above) must not pay for or produce log noise."""
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"some output\n")
+    stream.feed_eof()
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        _, live_logged = await worker_metrics._read_bounded_stderr(
+            stream, maximum_bytes=4096
+        )
+    assert live_logged is False
+    assert not any("stderr chunk" in r.message for r in caplog.records)
 
 
 def test_metric_process_payload_round_trips_only_durable_execution_fields() -> None:
@@ -640,6 +734,188 @@ async def test_metric_compatibility_process_generic_failure_with_no_progress_is_
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_failed"
     assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_resource_exhausted_embeds_captured_stderr_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4543 red-first proof (verified red against the pre-fix code via
+    a real local repro against org 70d529e0's dev-health-ops repo on a
+    high-volume day before this fix landed): the exit-code==2
+    (EXIT_RESOURCE_EXHAUSTED) branch used to build its
+    _CompatibilityProcessFailure message from a hardcoded static string
+    ("...exceeded its memory bound") regardless of what the runner
+    subprocess actually printed to stderr -- so a deliberate,
+    already-diagnostic guard failure (e.g. TestopsRowCapExceeded's
+    table/org_id/max_rows/fetched detail, logged via `logger.error` right
+    before the runner's own generic `except MemoryError:` print) never
+    survived into the message this process raises, and therefore never into
+    metric_compatibility_executions.failure_detail
+    (_mark_ambiguous/_mark_retry_authorized persist f"{reason}: {message}").
+
+    Drives a real subprocess that writes a large, distinct HEAD marker, then
+    >_MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES of filler (simulating the
+    verbose per-query INFO logging run_daily_metrics_job emits before a
+    failure), then one short TAIL marker, then exits 2 -- proving three
+    things at once: (1) the tail marker (the actually-useful diagnostic)
+    survives into the raised message, (2) the head marker (unhelpful noise
+    from long before the failure) does not, and (3) the whole message stays
+    small enough to survive metric_compatibility_executions.failure_detail's
+    own 1024-byte (head) truncation -- embedding the FULL captured stderr
+    instead of a second, smaller tail slice would have let that same
+    1024-byte cap discard the tail marker all over again (caught by this
+    ticket's own local repro before the second slice was added).
+    """
+    head_marker = "HEAD_ONLY_NOISE_MARKER_NEVER_SHOULD_SURVIVE"
+    tail_marker = "testops_row_cap_exceeded: table=test_case_results fetched=200001"
+    source = (
+        "import sys\n"
+        f"sys.stderr.write({head_marker!r} + chr(10))\n"
+        "sys.stderr.write('noise ' * 1000)\n"  # >> _MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES
+        f"sys.stderr.write({tail_marker!r} + chr(10))\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(2)\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    message = str(excinfo.value)
+    assert tail_marker in message, message
+    assert head_marker not in message, message
+    assert len(message) < 1024, len(message)
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_stderr_not_logged_twice_when_live_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex review (CHAOS-4543 round 3, P3): _run_compatibility_process_locked
+    always passes live_log_context to _read_bounded_stderr, so every child's
+    stderr was logged once live (INFO, per chunk) AND once more in full in
+    the post-exit summary (WARNING/ERROR) -- the same diagnostic text
+    appearing as two separate log records, which a text-matching alert can
+    read as two distinct failures. The post-exit summary must still carry
+    severity + correlation ids, but must not repeat text already streamed
+    live.
+    """
+    marker = "distinct_diagnostic_marker_should_appear_exactly_once"
+    source = (
+        "import sys\n"
+        f"sys.stderr.write({marker!r} + chr(10))\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(2)\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        with pytest.raises(worker_metrics._CompatibilityProcessFailure):
+            await worker_metrics._run_compatibility_process(_daily_execution())
+
+    marker_records = [r for r in caplog.records if marker in r.message]
+    assert len(marker_records) == 1, (
+        "expected the diagnostic text to appear in exactly one log record "
+        f"(live-streamed only), got {len(marker_records)}: {caplog.records}"
+    )
+    assert marker_records[0].levelno == logging.INFO
+
+    summary_records = [
+        r for r in caplog.records if "already streamed live" in r.message
+    ]
+    assert len(summary_records) == 1, caplog.records
+    assert summary_records[0].levelno == logging.ERROR
+    assert marker not in summary_records[0].message
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_classifies_testops_row_cap_as_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4543 red-first proof (team-lead/codex direction): the runner
+    must classify a TestopsRowCapExceeded failure with the NEW
+    EXIT_RESOURCE_EXHAUSTED_DETERMINISTIC exit code (3), not the generic
+    EXIT_RESOURCE_EXHAUSTED (2) every other MemoryError -- including the RSS
+    watchdog's own kill and a true last-gasp interpreter MemoryError, both of
+    which CAN legitimately vary attempt to attempt -- uses. The parent must
+    then surface `deterministic=True` on the raised
+    _CompatibilityProcessFailure, which crosses the HTTP boundary as a
+    bounded bool for ops/internal/jobs/metrics/daily/compatibility_http.go to
+    read (never raw text) and classify the Go-side job Permanent instead of
+    Retryable (5 retries on a deterministic guard only reproduce the
+    identical refusal).
+
+    Drives the REAL worker_metrics_runner module (not a synthetic stand-in)
+    with `_run_execution_direct` monkeypatched to raise TestopsRowCapExceeded
+    synchronously -- exercises main()'s actual except-clause ORDERING (the
+    deterministic branch must be checked before the generic
+    `except MemoryError:`, since TestopsRowCapExceeded IS a MemoryError
+    subclass and would otherwise be caught by the wrong branch first).
+    """
+    source = (
+        "import sys\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "from dev_health_ops.metrics.loaders.clickhouse import TestopsRowCapExceeded\n"
+        "\n"
+        "def _boom(execution, on_progress=None):\n"
+        "    raise TestopsRowCapExceeded(\n"
+        "        table='test_case_results', org_id='x', max_rows=200000, fetched=200001\n"
+        "    )\n"
+        "\n"
+        "runner._run_execution_direct = _boom\n"
+        "sys.exit(runner.main())\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    assert excinfo.value.deterministic is True
+    assert excinfo.value.safe_to_retry is True  # zero progress emitted before the raise
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_generic_memory_error_is_not_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sibling of the test above: a plain MemoryError (NOT
+    TestopsRowCapExceeded, or any other class CHAOS-4543 knows is a
+    deterministic guard) must keep the ORIGINAL exit code and
+    `deterministic=False` -- this is the conservative fallback the ticket's
+    own scope commits to (team-lead: 'if you cannot distinguish it from a
+    real RSS kill at the Go boundary, say so and keep retryable')."""
+    source = (
+        "import sys\n"
+        "from dev_health_ops.api.internal import worker_metrics_runner as runner\n"
+        "\n"
+        "def _boom(execution, on_progress=None):\n"
+        "    raise MemoryError('a generic, unclassified memory failure')\n"
+        "\n"
+        "runner._run_execution_direct = _boom\n"
+        "sys.exit(runner.main())\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    assert excinfo.value.deterministic is False
 
 
 # --------------------------------------------------------------------------

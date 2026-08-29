@@ -257,8 +257,8 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	}
 
 	projectToTeam := resolveProjectToTeam(links)
-	donorProjectID := buildDonorProjectIDResolver(byID, edges, projectToTeam)
-	ref := donorProjectID(decoded.SourceWorkItemID)
+	donorProjectID := buildDonorProjectIDResolver("org-1", byID, edges, projectToTeam)
+	ref, _ := donorProjectID(decoded.SourceWorkItemID)
 	row := teamRepoOwnershipDonorWalkOracleRow{}
 	if teamID, ok := projectToTeam[ref]; ok {
 		row.TeamID = &teamID

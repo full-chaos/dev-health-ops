@@ -421,6 +421,17 @@ func terminalRiverState(state rivertype.JobState) bool {
 // classifyStrandError separates a denied statement from an unavailable
 // database. Everything else stays ErrUnavailable, including a nil error on a
 // path that should not have reached here.
+//
+// CHAOS-4429 (codex review finding, round 4): also called from
+// repository.go. Before that fix, Repository's own methods returned bare
+// ErrUnavailable for every pg failure with no SQLSTATE check at all, so a
+// 42501 on the CORE outbox claim/dispatch path -- the actual mechanism this
+// ticket is about -- was indistinguishable from a transient blip. Once
+// ReconcilerLoop stopped treating every ErrUnavailable as fatal, that gap
+// went from "loud crash-loop either way" to "silently retried forever
+// behind one readyz gauge" for exactly the missing-grant class this
+// function exists to keep legible. The name predates that reuse; it is not
+// strand-specific behavior, only a strand-specific origin.
 func classifyStrandError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == insufficientPrivilege {

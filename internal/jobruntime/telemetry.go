@@ -218,6 +218,30 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 	}
 }
 
+// TeamRepoOwnershipResolutionArm identifies which identity resolved a
+// derived team_repo_ownership row (CHAOS-4458 part (b)): the pre-existing
+// direct project_id join (every provider), or the linear_team_key join added
+// because a Linear-only org's team_project_ownership rows are keyed
+// "{org_id}:linear:{team_key}" while work_items.project_id for a Linear item
+// carries the raw Linear Project UUID -- a disjoint id space by design
+// (providersync/team_repo_ownership_derivation.go's TeamRepoOwnershipWorkItem
+// doc comment has the full trace). Mirrors providersync's own
+// TeamRepoOwnershipResolutionArm* string constants as a distinct type here
+// since jobruntime must not import providersync.
+type TeamRepoOwnershipResolutionArm string
+
+const (
+	TeamRepoOwnershipResolutionArmProjectID     TeamRepoOwnershipResolutionArm = "project_id"
+	TeamRepoOwnershipResolutionArmLinearTeamKey TeamRepoOwnershipResolutionArm = "linear_team_key"
+)
+
+func teamRepoOwnershipResolutionArms() []TeamRepoOwnershipResolutionArm {
+	return []TeamRepoOwnershipResolutionArm{
+		TeamRepoOwnershipResolutionArmProjectID,
+		TeamRepoOwnershipResolutionArmLinearTeamKey,
+	}
+}
+
 // TeamCatalogEntryPoint names which of the two Python team-autoimport call
 // sites CHAOS-4431's native/bridge dispatch decided for (they are NOT
 // equivalent -- see teamCatalogAutoimportBridge's doc comment,
@@ -265,12 +289,27 @@ const (
 	// soft-fail that one step is never silently indistinguishable from a
 	// clean run.
 	TeamCatalogOutcomeRosterPreservationFailed TeamCatalogOutcome = "roster_preservation_failed"
+	// TeamCatalogOutcomeCollectorSkipped (codex review finding, CHAOS-4432,
+	// 2026-08-28) is DISTINCT from TeamCatalogOutcomeSkipped: that value
+	// means every CHAOS-4323 selection was off and neither the collector
+	// nor the bridge ever ran. This value means the collector itself WAS
+	// called, resolved credentials, attempted its walk, and then chose to
+	// report a clean, successful zero result (TeamCatalogResult.Skipped)
+	// rather than an error -- e.g. GitLab's non-strict walk-failure Python
+	// parity (a root/subgroups/per-group-projects/native-projects fetch
+	// failed). Conflating the two into one "skipped" outcome would make
+	// dev_health_team_catalog_dispatch_total unable to distinguish "this
+	// org has nothing configured, working as intended" from "this
+	// provider's fetch is failing and needs attention" -- exactly the
+	// signal an operator/alert needs.
+	TeamCatalogOutcomeCollectorSkipped TeamCatalogOutcome = "collector_skipped"
 )
 
 func teamCatalogOutcomes() []TeamCatalogOutcome {
 	return []TeamCatalogOutcome{
 		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
 		TeamCatalogOutcomeNativeFailedNonfatal, TeamCatalogOutcomeRosterPreservationFailed,
+		TeamCatalogOutcomeCollectorSkipped,
 	}
 }
 
@@ -311,6 +350,36 @@ const (
 	// (team-lead ruling, 2026-08-28, codex review finding #6's fail-safe
 	// guard, pending the CHAOS-4444-class full drift-aware projector).
 	TeamCatalogTableMembershipsSkippedManualConflict TeamCatalogTable = "team_memberships_skipped_manual_conflict"
+	// TeamCatalogTableTeamsStagedForReview counts distinct teams a call
+	// staged (or refreshed) at least one PENDING team_drift_changes row for
+	// (CHAOS-4444, the full clickhouse_team_drift_projector.py parity on
+	// top of TeamCatalogTableTeamsSkippedPolicy's plain-skip interim
+	// guard).
+	TeamCatalogTableTeamsStagedForReview TeamCatalogTable = "teams_staged_for_review"
+	// TeamCatalogTableMembershipsStagedForReview counts team_memberships
+	// rows a call staged (or refreshed) a PENDING identity-drift
+	// team_drift_changes row for (CHAOS-4444, the row-level counterpart to
+	// TeamCatalogTableTeamsStagedForReview, mirroring
+	// TeamCatalogTableMembershipsSkippedManualConflict's granularity).
+	TeamCatalogTableMembershipsStagedForReview TeamCatalogTable = "team_memberships_staged_for_review"
+	// TeamCatalogTableDriftChangesSuperseded counts team_drift_changes rows
+	// (team-level and identity-level combined) a call transitioned to
+	// STATUS_SUPERSEDED because a previously-pending diff was replaced by a
+	// newer, different diff this run (CHAOS-4444).
+	TeamCatalogTableDriftChangesSuperseded TeamCatalogTable = "team_drift_changes_superseded"
+	// TeamCatalogTableProjectsWithoutKey (CHAOS-4530, "a team key is not a
+	// project key") counts `projects` rows this call wrote with a nil
+	// project_key -- a qualified subset of TeamCatalogTableProjects's count,
+	// same pattern as TeamCatalogTableTeamsSkippedPolicy. Before CHAOS-4530
+	// this was invisible: the Linear collector stamped every project-catalog
+	// row's project_key with the owning TEAM's key, so project_key was never
+	// actually empty and nothing measured the gap. Now that a real Linear
+	// project's ownership/catalog rows deliberately carry no per-project key
+	// (Linear has no such concept yet), this makes the resulting "reachable
+	// by project_key" gap visible per run instead of requiring a live
+	// ClickHouse readback to notice it, and gives a signal for when a future
+	// genuine per-project key source should close it.
+	TeamCatalogTableProjectsWithoutKey TeamCatalogTable = "projects_without_key"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -318,6 +387,8 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableTeams, TeamCatalogTableMembers, TeamCatalogTableTeamMemberships,
 		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
 		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
+		TeamCatalogTableTeamsStagedForReview, TeamCatalogTableMembershipsStagedForReview, TeamCatalogTableDriftChangesSuperseded,
+		TeamCatalogTableProjectsWithoutKey,
 	}
 }
 
@@ -376,14 +447,52 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 // side (dev_health_metric_compat_retry_total) but is never emitted here,
 // since Go never observes that a retry was authorized -- only that one
 // eventually wasn't and had to be persisted as terminal.
+//
+// CHAOS-4543: the four "released_*" decisions below are the non-terminal
+// sibling of "persisted_failed" -- PartitionHandler.Work's
+// releasePartitionWithReason branches (progress_stalled, capacity_exhausted,
+// resource_exhausted, process_signaled) release the partition back to the
+// ordinarily re-dispatchable 'failed' status WITH a bounded failure_reason
+// attached, rather than terminalizing it. Before CHAOS-4543,
+// resource_exhausted and process_signaled had no branch at all here (see
+// PartitionHandler.Work) and were invisible on this counter exactly as they
+// were invisible in daily_metrics_partitions.failure_reason; progress_stalled
+// and capacity_exhausted had a durable failure_reason but never incremented
+// this counter either. All four now emit here, one bounded decision value
+// per reason, matching the SQL-visible failure_reason column's own
+// vocabulary -- an operator can go from a rate/volume signal on this counter
+// straight to the affected partitions via `SELECT * FROM
+// daily_metrics_partitions WHERE failure_reason = '<reason>'` (the ordinal
+// and repo_ids columns already carry the rest of the detail CHAOS-4543's own
+// diagnostic needed).
 type DailyMetricsCompatRetryDecision string
 
 const (
-	DailyMetricsCompatRetryDecisionPersistedFailed DailyMetricsCompatRetryDecision = "persisted_failed"
+	DailyMetricsCompatRetryDecisionPersistedFailed           DailyMetricsCompatRetryDecision = "persisted_failed"
+	DailyMetricsCompatRetryDecisionReleasedProgressStalled   DailyMetricsCompatRetryDecision = "released_progress_stalled"
+	DailyMetricsCompatRetryDecisionReleasedCapacityExhausted DailyMetricsCompatRetryDecision = "released_capacity_exhausted"
+	DailyMetricsCompatRetryDecisionReleasedResourceExhausted DailyMetricsCompatRetryDecision = "released_resource_exhausted"
+	DailyMetricsCompatRetryDecisionReleasedProcessSignaled   DailyMetricsCompatRetryDecision = "released_process_signaled"
+	// DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic
+	// (CHAOS-4543) is the subset of "released_resource_exhausted" the Go
+	// side ALSO knows is a known-deterministic guard (never the RSS
+	// watchdog) -- see ErrCompatibilityResourceExhaustedDeterministic's doc
+	// comment. Counted separately so the rate of wasted-attempt-budget
+	// discards (a deterministic guard that will keep refusing until an
+	// operator changes something) is distinguishable from ordinary
+	// transient resource pressure on this same shared counter.
+	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
-	return []DailyMetricsCompatRetryDecision{DailyMetricsCompatRetryDecisionPersistedFailed}
+	return []DailyMetricsCompatRetryDecision{
+		DailyMetricsCompatRetryDecisionPersistedFailed,
+		DailyMetricsCompatRetryDecisionReleasedProgressStalled,
+		DailyMetricsCompatRetryDecisionReleasedCapacityExhausted,
+		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
+		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
+		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
+	}
 }
 
 // dailyMetricsNativeFamilies is the closed, compile-time set of
@@ -776,6 +885,10 @@ type MetricsCollector struct {
 	// teamMetricsDailyRepoCount above.
 	teamRepoOwnershipDerivation         map[TeamRepoOwnershipDerivationOutcome]uint64
 	teamRepoOwnershipDerivationRowCount *histogram
+	// teamRepoOwnershipResolutionArm (CHAOS-4458 part (b)): per-arm counter
+	// of rows produced by each identity resolution -- see
+	// TeamRepoOwnershipResolutionArm's doc comment.
+	teamRepoOwnershipResolutionArm map[TeamRepoOwnershipResolutionArm]uint64
 	// teamCatalogDispatch/teamCatalogRowsWritten (CHAOS-4431): per-call
 	// dispatch outcome for the native/bridge team-catalog split, and rows a
 	// native collector actually wrote per destination table.
@@ -957,6 +1070,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
+		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
@@ -1579,6 +1693,27 @@ func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivation(outcome Te
 	if outcome == TeamRepoOwnershipDerivationOutcomeRowsWritten {
 		collector.teamRepoOwnershipDerivationRowCount.observe(float64(rowCount))
 	}
+	return nil
+}
+
+// ObserveTeamRepoOwnershipDerivationResolutionArm records, per
+// sync.team_repo_ownership_derivation run, how many written rows came from
+// each identity-resolution arm (CHAOS-4458 part (b)): the pre-existing
+// direct project_id join, or the linear_team_key join added because Linear's
+// team_project_ownership writer and its work-item normalizer disagree on
+// what project_id means (team-attribution.md §0.2). count must be >= 0 and
+// is called for every registered arm on every run (even 0) so both series
+// stay present regardless of which arm (if either) actually produced rows.
+func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivationResolutionArm(arm TeamRepoOwnershipResolutionArm, count int) error {
+	if !slices.Contains(teamRepoOwnershipResolutionArms(), arm) {
+		return errors.New("team-repo-ownership-derivation resolution arm is not registered")
+	}
+	if count < 0 {
+		return errors.New("team-repo-ownership-derivation resolution arm count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamRepoOwnershipResolutionArm[arm] += uint64(count)
 	return nil
 }
 
@@ -2710,13 +2845,14 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 }
 
 // writeDailyMetricsCompatRetry exposes the terminal ambiguous_refused
-// disposition counter (CHAOS-4319). The metric name and "decision" label are
+// disposition counter (CHAOS-4319) plus the CHAOS-4543 non-terminal
+// released-with-reason decisions. The metric name and "decision" label are
 // a deliberate cross-language contract with the Python bridge's
 // dev_health_metric_compat_retry_total (worker_metrics.py) -- see
-// DailyMetricsCompatRetryDecision for why this side only ever emits
-// "persisted_failed".
+// DailyMetricsCompatRetryDecision for the full bounded vocabulary this side
+// emits.
 func (collector *MetricsCollector) writeDailyMetricsCompatRetry(output *strings.Builder) {
-	writeMetadata(output, "dev_health_metric_compat_retry_total", "Terminal disposition of an ambiguous_refused metrics.daily compatibility-bridge execution, by worker_kind and bounded decision (CHAOS-4319).", "counter")
+	writeMetadata(output, "dev_health_metric_compat_retry_total", "Terminal or released-with-reason disposition of a metrics.daily compatibility-bridge execution, by worker_kind and bounded decision (CHAOS-4319, CHAOS-4543).", "counter")
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		writeUintSample(output, "dev_health_metric_compat_retry_total",
 			[]metricLabel{{"worker_kind", "daily"}, {"decision", string(decision)}}, collector.dailyMetricsCompatRetry[decision])
@@ -2759,6 +2895,11 @@ func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *stri
 	}
 	writeMetadata(output, "dev_health_team_repo_ownership_derivation_row_count", "Rows written by one sync.team_repo_ownership_derivation worker run, observed only on the rows_written outcome.", "histogram")
 	writeHistogram(output, "dev_health_team_repo_ownership_derivation_row_count", nil, collector.teamRepoOwnershipDerivationRowCount)
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total", "Rows produced per identity-resolution arm across sync.team_repo_ownership_derivation runs: project_id (pre-existing direct join) vs linear_team_key (CHAOS-4458 part (b) -- Linear's team_project_ownership writer keys rows \"{org_id}:linear:{team_key}\" while work_items.project_id for a Linear item is the raw Linear Project UUID, a disjoint id space).", "counter")
+	for _, arm := range teamRepoOwnershipResolutionArms() {
+		writeUintSample(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total",
+			[]metricLabel{{"arm", string(arm)}}, collector.teamRepoOwnershipResolutionArm[arm])
+	}
 }
 
 func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) {

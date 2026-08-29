@@ -20,6 +20,16 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "metrics-api" "context" $) | nindent 4 }}
 spec:
   replicas: {{ .Values.metricsApi.replicas }}
+  {{- /*
+  CHAOS-4428: never dip below the current serving capacity during a rollout.
+  Kubernetes' default is 25%/25%, which at replicas: 1 rounds maxUnavailable
+  DOWN to 0 and happens to behave -- but only by rounding. State it, so the
+  guarantee survives someone setting replicas: 4, where the default would take
+  one serving pod out before its replacement is ready.
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "metrics-api" "context" $) | nindent 6 }}

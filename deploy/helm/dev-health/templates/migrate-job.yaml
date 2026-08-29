@@ -115,19 +115,48 @@ spec:
           command:
             - sh
             - -c
-            - >-
-              if [ -z "${MIGRATION_DATABASE_URI:-}" ];
-              then unset MIGRATION_DATABASE_URI; fi;
-              if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ]
-              || [ "${MIGRATION_DATABASE_URI+x}" = x ]
-              || [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ];
-              then dev-hops migrate postgres
-              && if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ];
-              then dev-hops admin features seed;
-              elif [ "${MIGRATION_DATABASE_URI+x}" = x ];
-              then dev-hops --db "$MIGRATION_DATABASE_URI" admin features seed;
-              else dev-hops --db "$(cat "$MIGRATION_DATABASE_URI_FILE")" admin features seed; fi; fi
-              && dev-hops migrate clickhouse
+            - |
+              if [ -z "${MIGRATION_DATABASE_URI:-}" ]; then unset MIGRATION_DATABASE_URI; fi
+              MIGRATION_DB=""
+              MIGRATION_DB_SET=""
+              if [ "${MIGRATION_DATABASE_URI+x}" = x ]; then
+                MIGRATION_DB="$MIGRATION_DATABASE_URI"
+                MIGRATION_DB_SET=1
+              elif [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ]; then
+                MIGRATION_DB="$(cat "$MIGRATION_DATABASE_URI_FILE")"
+                MIGRATION_DB_SET=1
+              fi
+              ALEMBIC_DB_FLAG=""
+              {{- if .Values.migrations.hook.riverMigrate.enabled }}
+              # CHAOS-4428: the weight-10 river-migrate hook owns the River step,
+              # so this Job must not also run it. `dev-hops migrate postgres`
+              # invokes dev-health-worker-migrate itself whenever
+              # MIGRATION_DATABASE_URI is set (migrate.py::_run_river_upgrade),
+              # and at weight 0 that lands BEFORE the weight-5 provisioning hook
+              # has created the runtime logins River's preflight requires
+              # (internal/storage/river/migrate.go:142-186) -- on a fresh
+              # database it fails and Helm aborts the release. Compose keeps the
+              # two DSNs in separate variables (its `migrate` service never
+              # carries the River DSN; go-river-migrate reads
+              # GO_WORKER_MIGRATION_DATABASE_URI). Both Jobs here share one
+              # migration Secret, so the same separation is applied where
+              # Compose already applies it -- in this entrypoint.
+              if [ -n "$MIGRATION_DB_SET" ]; then ALEMBIC_DB_FLAG=1; fi
+              unset MIGRATION_DATABASE_URI MIGRATION_DATABASE_URI_FILE
+              {{- end }}
+              if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ] || [ -n "$MIGRATION_DB_SET" ]; then
+                if [ -n "$ALEMBIC_DB_FLAG" ]; then
+                  dev-hops --db "$MIGRATION_DB" migrate postgres
+                else
+                  dev-hops migrate postgres
+                fi \
+                  && if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ]; then
+                    dev-hops admin features seed
+                  else
+                    dev-hops --db "$MIGRATION_DB" admin features seed
+                  fi
+              fi \
+                && dev-hops migrate clickhouse
           envFrom:
             - configMapRef:
                 name: {{ include "dev-health.fullname" . }}-migrate-config
@@ -137,10 +166,33 @@ spec:
               {{- else }}
                 name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
               {{- end }}
-          {{- with .Values.migrations.hook.extraEnv }}
           env:
+            {{- /*
+            The fresh-database Celery->River route-table cutover. Without
+            DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1,
+            `_effective_postgres_upgrade_revision` applies the safe branch head
+            instead of `heads` and defers revision 0066
+            (migrate.py:216-231, gate at :176-177). Compose carries it on its
+            migrate service as an operator passthrough (compose.yml:198,
+            compose.production.yml:95) and the kustomize Job carries it as an
+            optional secretKeyRef (deploy/kubernetes/migrate-job.yaml:72-78);
+            the chart carried it nowhere, so a fresh install could not reach
+            that revision at all. Optional, so an install that never authorises
+            the cutover still renders.
+            */}}
+            - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.secrets.create }}
+                  name: {{ include "dev-health.fullname" . }}-migrate-secrets
+                  {{- else }}
+                  name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+                  {{- end }}
+                  key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+                  optional: true
+            {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}

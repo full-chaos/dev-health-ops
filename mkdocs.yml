@@ -250,6 +250,7 @@ nav:
           - Stable contracts: contribute/architecture/contracts.md
           - Team attribution: contribute/architecture/team-attribution.md
           - Go worker runtime: contribute/architecture/go-worker-runtime.md
+          - Go worker migration and drain lifecycle: contribute/architecture/go-worker-helm-lifecycle.md
           - Ask Dev v2 contracts: contribute/architecture/ask-dev-contracts-v2.md
           - Ask Dev subject preflight: contribute/architecture/ask-dev-subject-preflight.md
           - Ask Dev role readiness: contribute/architecture/ask-dev-role-readiness.md

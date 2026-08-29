@@ -274,8 +274,21 @@ application Secret while retaining selected Postgres/ClickHouse compatibility
 values for existing installations.
 */}}
 {{- define "dev-health.migrationSecretData" -}}
+{{- /*
+CHAOS-4428: when the weight-10 river-migrate hook owns the River step, this
+Secret -- which the weight-0 migrate Job envFroms -- must not carry
+MIGRATION_DATABASE_URI at all. `dev-hops migrate postgres` runs
+dev-health-worker-migrate whenever that variable is SET
+(migrate.py::_run_river_upgrade tests `is not None`, so an empty string is not
+enough to suppress it), and at weight 0 that preflight runs before the weight-5
+hook has created the roles it requires. Compose keeps the two DSNs in two
+different variables for the same reason; here the same DSN reaches Alembic
+under the POSTGRES_URI compatibility alias, which db.py::get_postgres_uri
+normalises to the async driver form.
+*/}}
+{{- $riverHookOwnsRiver := .Values.migrations.hook.riverMigrate.enabled }}
 {{- range $key, $value := .Values.migrations.hook.secretData }}
-{{- if $value }}
+{{- if and $value (not (and $riverHookOwnsRiver (eq $key "MIGRATION_DATABASE_URI"))) }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}
@@ -288,13 +301,29 @@ CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
 {{- $hasHookPostgresURI := index .Values.migrations.hook.secretData "POSTGRES_URI" }}
 {{- $hasHookDatabaseURI := index .Values.migrations.hook.secretData "DATABASE_URI" }}
 {{- $hasHookDatabase := or $hasDedicatedMigrationURI $hasHookPostgresURI $hasHookDatabaseURI }}
-{{- if and (not $hasHookDatabase) (index .Values.secrets.data "POSTGRES_URI") }}
+{{- if and $riverHookOwnsRiver $hasDedicatedMigrationURI (not $hasHookPostgresURI) (not $hasHookDatabaseURI) }}
+POSTGRES_URI: {{ $hasDedicatedMigrationURI | quote }}
+{{- else if and (not $hasHookDatabase) (index .Values.secrets.data "POSTGRES_URI") }}
 POSTGRES_URI: {{ index .Values.secrets.data "POSTGRES_URI" | quote }}
 {{- else if and (not $hasHookDatabase) (index .Values.secrets.data "DATABASE_URI") }}
 DATABASE_URI: {{ index .Values.secrets.data "DATABASE_URI" | quote }}
 {{- else if and (not $hasHookDatabase) .Values.postgresql.enabled }}
 POSTGRES_URI: {{ include "dev-health.postgresURI" . | quote }}
 {{- end }}
+{{- end }}
+
+{{/*
+The elevated DSN the weight-10 River hook runs against, resolved the same way
+the migration Secret resolves Alembic's: the dedicated URI, then the migration
+Secret's own compatibility aliases, then the application Secret's, then the
+bundled StatefulSet. Kept separate from migrationSecretData because the two
+consumers must see this value under DIFFERENT variable names -- which is the
+whole point of the split (see that helper's comment).
+*/}}
+{{- define "dev-health.riverMigrationDSN" -}}
+{{- $hook := .Values.migrations.hook.secretData }}
+{{- $dsn := or (index $hook "MIGRATION_DATABASE_URI") (index $hook "POSTGRES_URI") (index $hook "DATABASE_URI") (index .Values.secrets.data "POSTGRES_URI") (index .Values.secrets.data "DATABASE_URI") }}
+{{- if $dsn }}{{ $dsn }}{{- else if .Values.postgresql.enabled }}{{ include "dev-health.postgresURI" . }}{{- end }}
 {{- end }}
 
 {{/*

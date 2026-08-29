@@ -847,7 +847,33 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # `integration` -- go list -tags=integration never includes it, so its 1
     # test does NOT count toward either pin here. 1164 -> 1209 top-level;
     # 141 -> 144 integration-tagged.
-    assert len(expected_provider_tests) == 1209
+    #
+    # CHAOS-4444 (team-level + identity-drift staged-review engine,
+    # replacing CHAOS-4431's plain-skip interim guards) added 12 new
+    # top-level tests in internal/providersync, both new files, neither
+    # `//go:build integration` (fake driver.Conn doubles, no real
+    # ClickHouse): 7 ordinary in team_drift_json_test.go (Python-json.dumps-
+    # parity pins for the canonical JSON encoder and change_id hash) and 5
+    # ordinary in team_drift_review_fakeconn_test.go (the shared team-level
+    # engine's auto-apply/stage/resolve/supersede paths). No new
+    # integration-tagged tests. 1209 -> 1221 top-level; 144 unchanged.
+    #
+    # CHAOS-4444 follow-up (team-lead ruling: add live Python oracle pairs
+    # for the drift-row outputs before the codex round) added 4 more
+    # ordinary top-level tests in a new file, team_drift_generic_oracle_test.go
+    # (also not `//go:build integration` -- these shell out to the live
+    # Python interpreter via the SAME python_generic_row_oracle.py harness
+    # every other oracle pair in this package uses, gated by
+    # DEV_HEALTH_LIVE_PYTHON_ORACLES, not by the `integration` build tag):
+    # TestTeamCatalogObservedRowMatchesLivePythonProducer,
+    # TestTeamCatalogChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftConflictDecisionMatchesLivePythonProducer -- pinning
+    # clickhouse_team_drift_projector.py's _observed_row/
+    # change_id_for_team_field and clickhouse_identity_drift.py's
+    # change_id_for_identity_membership/_conflict_for against the Go engine,
+    # live. 1221 -> 1225 top-level; 144 unchanged.
+    assert len(expected_provider_tests) == 1225
     assert len(expected_integration_tests) == 144
     assert expected_integration_tests < expected_provider_tests
 
@@ -864,7 +890,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1209
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1225
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -925,7 +951,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1209
+    assert len(selected_tests) == len(set(selected_tests)) == 1225
     assert set(selected_tests) == expected_tests
 
 

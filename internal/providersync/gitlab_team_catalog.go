@@ -149,6 +149,18 @@ type GitLabTeamCatalogRows struct {
 	// fetch error is returned immediately instead -- this field stays
 	// empty in that path.
 	FailedMemberFetchTeamIDs []string `json:"-"`
+	// ObservedMembershipTeamIDs (CHAOS-4444) lists every team (by "gl:" id)
+	// whose /members fetch succeeded this call, independent of
+	// selections.Teams -- a team's OWN row in Teams above (and the
+	// MembersAuthoritative stamp the post-loop rebuild sets) only exists
+	// `if selections.Teams`, but a group's member fetch runs whenever
+	// selections.Members is true regardless, so deriving observed scopes
+	// from Teams/MembersAuthoritative undercounts to EMPTY whenever a run
+	// selects Members without Teams. This is the identity-drift review
+	// engine's observed_team_ids equivalent -- see
+	// reviewMembershipsForDrift's doc comment for why an unobserved scope
+	// must never have its stale pending changes resolved.
+	ObservedMembershipTeamIDs []string `json:"-"`
 }
 
 const (

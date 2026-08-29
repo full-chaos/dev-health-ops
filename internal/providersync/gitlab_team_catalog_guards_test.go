@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // This file pins GitLab's own fail-safe guard wrappers for CHAOS-4431 codex
@@ -119,23 +120,23 @@ func TestGitLabMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 // (team_sync_policy_guard.go) -- no DB round trip for an empty team slice,
 // so this is runnable without a real ClickHouse connection.
 func TestGitLabApplyTeamSyncPolicyGuardNoopsOnEmptyInput(t *testing.T) {
-	kept, skipped, err := applyGitLabTeamSyncPolicyGuard(context.Background(), nil, "org-1", nil)
+	kept, skipped, staged, superseded, err := applyGitLabTeamSyncPolicyGuard(context.Background(), nil, "org-1", nil, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error on empty input: %v", err)
 	}
-	if len(kept) != 0 || len(skipped) != 0 {
-		t.Fatalf("kept=%v skipped=%v, want both empty", kept, skipped)
+	if len(kept) != 0 || len(skipped) != 0 || staged != 0 || superseded != 0 {
+		t.Fatalf("kept=%v skipped=%v staged=%d superseded=%d, want all empty/zero", kept, skipped, staged, superseded)
 	}
 }
 
 // TestGitLabApplyTeamMembershipConflictGuardNoopsOnEmptyInput mirrors the
 // same zero-input short-circuit for the membership-conflict guard.
 func TestGitLabApplyTeamMembershipConflictGuardNoopsOnEmptyInput(t *testing.T) {
-	kept, skipped, err := applyGitLabTeamMembershipConflictGuard(context.Background(), nil, "org-1", "gitlab", nil)
+	kept, skipped, staged, superseded, err := applyGitLabTeamMembershipConflictGuard(context.Background(), nil, "org-1", "gitlab", nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error on empty input: %v", err)
 	}
-	if len(kept) != 0 || skipped != 0 {
-		t.Fatalf("kept=%v skipped=%d, want both empty/zero", kept, skipped)
+	if len(kept) != 0 || skipped != 0 || staged != 0 || superseded != 0 {
+		t.Fatalf("kept=%v skipped=%d staged=%d superseded=%d, want all empty/zero", kept, skipped, staged, superseded)
 	}
 }

@@ -218,6 +218,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			if ok {
 				rows.Memberships = append(rows.Memberships, memberships...)
 				evidence.MembersObserved += len(memberships)
+				rows.ObservedMembershipTeamIDs = append(rows.ObservedMembershipTeamIDs, githubTeamID(slug))
 			} else if collector.Strict {
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {

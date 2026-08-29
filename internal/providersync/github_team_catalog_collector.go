@@ -151,11 +151,19 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// contradiction the guard exists to prevent. Computed once, up front;
 	// both the roster rebuild and the memberships write below read from it.
 	var keptMemberships []githubMembershipRow
-	var membershipsSkippedManualConflict int
+	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
+		// CHAOS-4444 / codex review round 1, P2: rows.Teams is only ever
+		// populated `if wantTeams` (githubTeamCatalogRows.Teams's own doc
+		// comment), so deriving observed scopes from it undercounts to
+		// EMPTY whenever a run selects Members without Teams -- a Members-
+		// only run would then never resolve any stale pending identity
+		// change, since no scope would ever be "observed". Collect uses
+		// ObservedMembershipTeamIDs instead, populated whenever a team's
+		// member fetch succeeds, independent of wantTeams.
 		var err error
-		keptMemberships, membershipsSkippedManualConflict, err = applyGitHubTeamMembershipConflictGuard(
-			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships,
+		keptMemberships, membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded, err = applyGitHubTeamMembershipConflictGuard(
+			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, rows.ObservedMembershipTeamIDs, normalizedAt,
 		)
 		if err != nil {
 			return TeamCatalogResult{}, err
@@ -282,11 +290,13 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// drift-aware projector -- a team whose sync_policy is not the
 		// auto-apply default (0) is left completely untouched, not
 		// overwritten with this call's observed values.
-		keptTeams, skippedTeamIDs, err := applyGitHubTeamSyncPolicyGuard(ctx, adapter.Sink.Conn, ref.OrgID, rows.Teams)
+		keptTeams, skippedTeamIDs, teamsStagedForReview, teamsDriftSuperseded, err := applyGitHubTeamSyncPolicyGuard(ctx, adapter.Sink.Conn, ref.OrgID, rows.Teams, normalizedAt)
 		if err != nil {
 			return result, err
 		}
 		result.TeamsSkippedPolicy = len(skippedTeamIDs)
+		result.TeamsStagedForReview = teamsStagedForReview
+		driftChangesSuperseded += teamsDriftSuperseded
 		if len(keptTeams) > 0 {
 			if err := adapter.Sink.WriteTeams(ctx, ref.OrgID, keptTeams); err != nil {
 				return result, err
@@ -314,6 +324,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
+		result.MembershipsStagedForReview = membershipsStagedForReview
 		if len(keptMemberships) > 0 {
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, keptMemberships); err != nil {
 				return result, err
@@ -328,6 +339,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			// table this producer never touches.
 		}
 	}
+	result.DriftChangesSuperseded = driftChangesSuperseded
 	return result, nil
 }
 

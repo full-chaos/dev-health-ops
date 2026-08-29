@@ -122,6 +122,20 @@ _TEAM_AUTOIMPORT_GITHUB_SOURCE = _source(
 _TEAM_AUTOIMPORT_GITLAB_SOURCE = _source(
     "dev_health_ops/workers/team_autoimport_gitlab.py"
 )
+# CHAOS-4444: the drift-review engine's own pure decision functions, loaded
+# LIVE (not stubbed like clickhouse_team_drift_projector.py/
+# clickhouse_identity_drift.py are for the three _target_*_team_autoimport
+# configure functions above -- those exist to isolate a DIFFERENT, narrower
+# oracle boundary, the row builders, and stub this pair deliberately so
+# nothing outside that boundary runs). Both files import only stdlib plus a
+# TYPE_CHECKING-only ClickHouseStore reference (never evaluated at runtime),
+# so no additional stub beyond the four-package namespace chain is needed.
+_TEAM_DRIFT_PROJECTOR_SOURCE = _source(
+    "dev_health_ops/api/services/configuration/clickhouse_team_drift_projector.py"
+)
+_IDENTITY_DRIFT_SOURCE = _source(
+    "dev_health_ops/api/services/configuration/clickhouse_identity_drift.py"
+)
 _PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
 _PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
 
@@ -1126,6 +1140,48 @@ def _target_github_team_autoimport() -> None:
     )
 
 
+def _target_team_drift_projector() -> None:
+    """Load the live team-level drift-review engine (CHAOS-4444):
+    ``_observed_row``, ``change_id_for_team_field``, ``_canonical_json``,
+    ``_field_json`` -- clickhouse_team_drift_projector.py's own pure,
+    synchronous decision functions. Only the four-package namespace chain
+    is required: the module's only production import beyond stdlib is a
+    TYPE_CHECKING-only ``ClickHouseStore`` reference, never evaluated at
+    runtime, and the class methods this oracle never calls (project_many,
+    project_team, resolve_missing_provider_changes -- all async, all
+    store-driven) are simply never invoked, not stubbed away.
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+
+
+def _target_identity_drift() -> None:
+    """Load the live identity-drift membership-conflict engine (CHAOS-4444):
+    ``_conflict_for``, ``change_id_for_identity_membership``,
+    ``_canonical_json`` -- clickhouse_identity_drift.py's own pure functions.
+    This module has one real internal dependency,
+    clickhouse_team_drift_projector (it imports DECIDED_STATUSES/
+    STATUS_PENDING/STATUS_RESOLVED/STATUS_SUPERSEDED from it), loaded live
+    here for the same reason _target_team_drift_projector loads it directly
+    when requested on its own: both are dependency-free beyond stdlib, so
+    there is nothing to stub either way.
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+    _load_source_module(
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        _TEAM_DRIFT_PROJECTOR_SOURCE,
+    )
+
+
 def _target_gitlab_team_autoimport() -> None:
     """Load the live GitLab reference-catalog producer's pure boundaries.
 
@@ -1351,6 +1407,16 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.workers.team_autoimport_gitlab",
         _TEAM_AUTOIMPORT_GITLAB_SOURCE,
         _target_gitlab_team_autoimport,
+    ),
+    _TEAM_DRIFT_PROJECTOR_SOURCE: (
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        _TEAM_DRIFT_PROJECTOR_SOURCE,
+        _target_team_drift_projector,
+    ),
+    _IDENTITY_DRIFT_SOURCE: (
+        "dev_health_ops.api.services.configuration.clickhouse_identity_drift",
+        _IDENTITY_DRIFT_SOURCE,
+        _target_identity_drift,
     ),
     _IDENTITY_SOURCE: (
         "dev_health_ops.providers.identity",

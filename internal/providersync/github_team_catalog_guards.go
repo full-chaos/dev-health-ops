@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
@@ -66,60 +67,70 @@ func githubMembershipConflictsWithManualState(
 // safe to write and a count of how many were skipped (never folded into
 // MembershipsWritten, so "skipped for a real conflict" stays distinguishable
 // from "nothing to write this run" in telemetry -- mirrors
-// applyTeamMembershipConflictGuard exactly).
+// applyTeamMembershipConflictGuard exactly). CHAOS-4444: every skipped
+// (conflicting) row is now ALSO staged as a team_drift_changes row via the
+// shared reviewMembershipsForDrift engine (identity_drift_review.go), and a
+// stale pending row for a member this run observed but no longer sees
+// conflicting (or sees at all) is resolved/superseded. observedTeamIDs
+// names the teams whose member fetch succeeded this run (see
+// GitHubTeamCatalogCollector's rows.FailedMemberFetchTeamIDs).
 func applyGitHubTeamMembershipConflictGuard(
-	ctx context.Context, conn driver.Conn, orgID string, rows []githubMembershipRow,
-) ([]githubMembershipRow, int, error) {
-	if len(rows) == 0 {
-		return rows, 0, nil
+	ctx context.Context, conn driver.Conn, orgID string, rows []githubMembershipRow, observedTeamIDs []string, now time.Time,
+) ([]githubMembershipRow, int, int, int, error) {
+	if len(rows) == 0 && len(observedTeamIDs) == 0 {
+		return rows, 0, 0, 0, nil
 	}
 	manualTeamsByMember, err := resolveActiveManualMembershipTeams(ctx, conn, orgID, githubTeamCatalogProvider)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
 	}
 	fallbackTeamsByIdentity, err := resolveActiveMemberAttributionFallbackTeams(ctx, conn, orgID, githubTeamCatalogProvider)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, err
 	}
 	kept := make([]githubMembershipRow, 0, len(rows))
 	skipped := 0
-	for _, row := range rows {
+	conflictedIdx := make(map[int]struct{})
+	views := make([]teamDriftMembershipView, len(rows))
+	for index, row := range rows {
+		views[index] = githubMembershipRowToDriftView(row)
 		if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 			skipped++
+			conflictedIdx[index] = struct{}{}
 			continue
 		}
 		kept = append(kept, row)
 	}
-	return kept, skipped, nil
+	staged, superseded, err := reviewMembershipsForDrift(ctx, conn, orgID, githubTeamCatalogProvider, views, conflictedIdx, observedTeamIDs, now)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	return kept, skipped, staged, superseded, nil
 }
 
 // applyGitHubTeamSyncPolicyGuard is GitHub's wrapper over the shared
-// resolveTeamSyncPolicies (CHAOS-2622/CHAOS-4444-class fail-safe guard,
-// codex review finding #3): a team whose sync_policy is not the auto-apply
-// default (0) is left completely untouched by this write. Mirrors
+// reviewTeamRowsForDrift engine (team_drift_review.go, CHAOS-4444): a team
+// whose sync_policy is not the auto-apply default (0) is left completely
+// untouched by this write, and its diff against the currently-persisted row
+// is staged as a team_drift_changes row for review. Mirrors
 // applyTeamSyncPolicyGuard exactly, typed to githubTeamRow.
 func applyGitHubTeamSyncPolicyGuard(
-	ctx context.Context, conn driver.Conn, orgID string, teams []githubTeamRow,
-) ([]githubTeamRow, []string, error) {
+	ctx context.Context, conn driver.Conn, orgID string, teams []githubTeamRow, now time.Time,
+) ([]githubTeamRow, []string, int, int, error) {
 	if len(teams) == 0 {
-		return teams, nil, nil
+		return teams, nil, 0, 0, nil
 	}
-	teamIDs := make([]string, 0, len(teams))
-	for _, team := range teams {
-		teamIDs = append(teamIDs, team.ID)
+	views := make([]teamDriftTeamView, len(teams))
+	for index, team := range teams {
+		views[index] = githubTeamRowToDriftView(team)
 	}
-	policies, err := resolveTeamSyncPolicies(ctx, conn, orgID, teamIDs)
+	keptIdx, skipped, staged, superseded, err := reviewTeamRowsForDrift(ctx, conn, orgID, views, now)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, 0, err
 	}
-	kept := make([]githubTeamRow, 0, len(teams))
-	skipped := make([]string, 0)
-	for _, team := range teams {
-		if policies[team.ID] != teamAutoApplySyncPolicy {
-			skipped = append(skipped, team.ID)
-			continue
-		}
-		kept = append(kept, team)
+	kept := make([]githubTeamRow, 0, len(keptIdx))
+	for _, index := range keptIdx {
+		kept = append(kept, teams[index])
 	}
-	return kept, skipped, nil
+	return kept, skipped, staged, superseded, nil
 }

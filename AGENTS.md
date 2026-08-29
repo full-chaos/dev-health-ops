@@ -135,7 +135,13 @@ cluster, they do not apply to you:
 - **Running the gate against a lane's own datastores.** Set
   `CH_TRANSPORT=http` with `CH_HOST`/`CH_HTTP_PORT` pointed at the lane's
   ClickHouse (`CH_HTTP_SCHEME=https` for a TLS endpoint), and a lane-scoped
-  `CH_CONTAINER` as the lock key. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
+  `CH_CONTAINER` as the lock key. `CH_HTTP_SCHEME` steers only this script's
+  own `curl` legs; the Python legs reach ClickHouse through
+  clickhouse-connect, which decides TLS from the **port** (443/8443) and
+  ignores the scheme in the DSN — so a TLS endpoint on any other port gets a
+  plaintext connection from those legs while `curl` speaks TLS, and the two
+  halves of one gate run disagree about the transport. Terminate TLS on
+  443/8443 for a lane, or keep the lane plaintext. Tracked in CHAOS-4469. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
   lane's Postgres using the **asyncpg** dialect (`postgresql+asyncpg://`), and
   at a **scratch** database — several opt-in tests assume an empty
   `worker_job_outbox` and fail against a `backups/`-restored one.

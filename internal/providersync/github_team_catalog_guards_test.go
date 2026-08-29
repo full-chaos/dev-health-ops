@@ -5,47 +5,58 @@ import (
 	"testing"
 )
 
-// github_team_catalog_guards_test.go pins the CORRECTED semantics (team-lead
-// ruling, 2026-08-28) for the two fail-safe guards GitHub's collector still
-// needs -- membershipConflictsWithManualState (CHAOS-4431 codex review
-// finding #6) and the sync_policy guard (finding #3) -- BEFORE either
-// wrapper is implemented, so the behavior is pinned ahead of the integration
-// tests in github_team_catalog_collector_integration_test.go (which need a
-// real ClickHouse and only run in-slot). These are plain unit tests (no
-// build tag, no I/O): they are RED right now because
-// githubMembershipConflictsWithManualState and applyGitHubTeamSyncPolicyGuard
-// do not exist yet -- the whole package fails to compile under a plain
-// `go test ./internal/providersync/...`, which is the point: the next
-// rebase's implementation must satisfy these exact cases to go green.
-//
-// Corrected semantics (differs from Linear's PRE-fix behavior, which this
-// same ruling also corrects in 4431's next base): an exact (member_id,
-// team_id) match against active manual data is a CONFIRMATION (keep, do NOT
-// skip) -- the native write agrees with the manual pin. Only a manual pin to
-// a DIFFERENT team, or a member-scoped manual_attribution_fallbacks match
-// (team-agnostic), is a real conflict (skip).
+// github_team_catalog_guards_test.go pins the semantics (team-lead ruling,
+// 2026-08-28) for GitHub's own wrappers of the two fail-safe guards Linear
+// already has -- githubMembershipConflictsWithManualState (CHAOS-4431 codex
+// review finding #6, ROUND 2 corrected shape: member-scoped, not
+// pair-scoped -- see team_membership_conflict_guard.go's doc comment) and
+// applyGitHubTeamSyncPolicyGuard (finding #3). Plain unit tests: no build
+// tag, no I/O, no containers.
 
-func TestGitHubMembershipConflictsWithManualStateTreatsExactPairAsConfirmation(t *testing.T) {
+// TestGitHubMembershipConflictsWithManualStateConfirmsExactManualPair pins
+// the round-2 correction: a manual membership to the SAME team as this
+// native row is a CONFIRMATION, not a conflict.
+func TestGitHubMembershipConflictsWithManualStateConfirmsExactManualPair(t *testing.T) {
 	row := githubMembershipRow{MemberID: "github:octocat", TeamID: "gh:platform"}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "github:octocat", TeamID: "gh:platform"}: {},
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"github:octocat": {"gh:platform": {}},
 	}
-	if githubMembershipConflictsWithManualState(row, manualPairs, nil) {
-		t.Fatal("an exact (member_id, team_id) match against active manual data is a CONFIRMATION, " +
-			"not a conflict -- corrected CHAOS-4431 semantics, team-lead ruling 2026-08-28")
+	if githubMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("a manual membership to the SAME team is a confirmation, not a conflict")
 	}
 }
 
-func TestGitHubMembershipConflictsWithManualStateFlagsDifferentTeamPinAsConflict(t *testing.T) {
-	row := githubMembershipRow{MemberID: "github:octocat", TeamID: "gh:platform"}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "github:octocat", TeamID: "gh:other-team"}: {},
+// TestGitHubMembershipConflictsWithManualStateRejectsDifferentTeamManualPin
+// is the corrected positive case: octocat has an active manual pin to team
+// A, but GitHub now reports them on a DIFFERENT team B -- B's native row
+// must be rejected.
+func TestGitHubMembershipConflictsWithManualStateRejectsDifferentTeamManualPin(t *testing.T) {
+	row := githubMembershipRow{MemberID: "github:octocat", TeamID: "gh:other-team"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"github:octocat": {"gh:platform": {}},
 	}
-	if !githubMembershipConflictsWithManualState(row, manualPairs, nil) {
-		t.Fatal("a manual pin to a DIFFERENT team must block this team's native write")
+	if !githubMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("want conflict: member has an active manual pin to a DIFFERENT team than this native row")
 	}
 }
 
+// TestGitHubMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership
+// pins the negative case for the manual-membership source: a member with no
+// active manual membership at all is never flagged by this source.
+func TestGitHubMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership(t *testing.T) {
+	row := githubMembershipRow{MemberID: "github:monalisa", TeamID: "gh:platform"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"github:octocat": {"gh:platform": {}},
+	}
+	if githubMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("a member with no manual membership at all must not be flagged")
+	}
+}
+
+// TestGitHubMembershipConflictsWithManualStateFlagsMemberScopedFallbackAsConflict
+// pins the guard's second source: an active member-scoped
+// manual_attribution_fallbacks match blocks the write regardless of team --
+// unaffected by the round-2 correction, already team-agnostic.
 func TestGitHubMembershipConflictsWithManualStateFlagsMemberScopedFallbackAsConflict(t *testing.T) {
 	row := githubMembershipRow{
 		MemberID: "github:octocat", TeamID: "gh:platform",
@@ -54,22 +65,25 @@ func TestGitHubMembershipConflictsWithManualStateFlagsMemberScopedFallbackAsConf
 	fallbacks := map[string]struct{}{"octocat@example.com": {}}
 	if !githubMembershipConflictsWithManualState(row, nil, fallbacks) {
 		t.Fatal("an active member-scoped manual_attribution_fallbacks match must block the write, " +
-			"regardless of which team it names (fallbacks are member-scoped, not team-scoped)")
+			"regardless of which team it names")
 	}
 }
 
+// TestGitHubMembershipConflictsWithManualStateAllowsCleanRow is the fully
+// negative case: no manual membership for this member, no matching
+// fallback -- a genuinely clean native row must never be skipped.
 func TestGitHubMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	row := githubMembershipRow{
 		MemberID: "github:octocat", TeamID: "gh:platform",
 		RawEmail:       linearReferenceStringPtr("octocat@example.com"),
 		IdentityFacets: []string{"github:octocat", "octocat@example.com"},
 	}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "github:someone-else", TeamID: "gh:platform"}: {},
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"github:someone-else": {"gh:platform": {}},
 	}
 	fallbacks := map[string]struct{}{"unrelated@example.com": {}}
-	if githubMembershipConflictsWithManualState(row, manualPairs, fallbacks) {
-		t.Fatal("a clean row with no matching manual pair or fallback must not be skipped")
+	if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbacks) {
+		t.Fatal("a clean row with no matching manual membership or fallback must not be skipped")
 	}
 }
 

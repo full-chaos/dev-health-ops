@@ -212,6 +212,13 @@ steps later at `go-worker-migrate` with
 and 112 grants instead of 116. The same lane seeded from 20260823-220102 completes
 in 3 s.
 
+The general hazard is bigger than this one file and is tracked as **CHAOS-4467**:
+**alembic trusts `alembic_version` over the schema**, so *any* snapshot whose
+stamped revision overstates what the database actually contains restores into a
+state alembic then declines to repair — and nothing in the restore path notices.
+A post-restore assertion that the stamped revision's objects really exist would
+catch the whole class.
+
 Note also that older loose files can sit at the top level of `backups/` beside newer
 timestamped subdirectories, so a naive "newest dump" glob picks the wrong one — which
 is exactly the bug `lane.sh` had.

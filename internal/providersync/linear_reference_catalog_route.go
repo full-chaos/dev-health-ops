@@ -336,15 +336,30 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		)
 		evidence.Requests += projectPages
 		evidence.Pages += projectPages
-		if projectErr != nil || projectCap {
+		// CHAOS-4431 codex review round 3, P2: team_autoimport_linear.py:
+		// 605-623's except clause keeps whatever native_project_rows already
+		// accumulated and marks native_projects_complete=False, then STILL
+		// extends project_rows with that partial prefix and continues the
+		// function -- it never discards the whole call (if strict: raise is
+		// the only abort path). An earlier revision here aborted on ANY
+		// projects error regardless of strict, discarding teams/members/
+		// cycles already fetched along with it -- exactly the same bug class
+		// already fixed for cycles failures above, just missed here.
+		if (projectErr != nil || projectCap) && ref.Strict {
 			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, projectErr, projectCap)
 		}
-		evidence.ProjectsComplete = true
+		if projectErr == nil && !projectCap {
+			evidence.ProjectsComplete = true
+		}
 		evidence.Records += len(projectRaw)
+	projectNodes:
 		for _, raw := range projectRaw {
 			var payload linearReferenceProjectPayload
 			if err := json.Unmarshal(raw, &payload); err != nil {
-				return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
+				if ref.Strict {
+					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
+				}
+				break projectNodes
 			}
 			// CHAOS-4431 codex review P2: each native project is versioned at
 			// the moment THIS node was observed, not at walk start, so two
@@ -353,7 +368,10 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			observedAt := handler.observedAt()
 			project, normalizeErr := normalizeLinearReferenceProject(claim, payload, observedAt)
 			if normalizeErr != nil {
-				return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
+				if ref.Strict {
+					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
+				}
+				break projectNodes
 			}
 			rows.Projects = append(rows.Projects, project)
 			for _, team := range payload.Teams.Nodes {

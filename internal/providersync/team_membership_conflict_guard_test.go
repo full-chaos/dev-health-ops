@@ -33,6 +33,24 @@ func TestMembershipConflictsWithManualStateRejectsDifferentTeamManualPin(t *test
 	}
 }
 
+// TestMembershipConflictsWithManualStateRejectsWhenAnotherManualTeamExists
+// pins CHAOS-4431 codex review round 3, P2: clickhouse_identity_drift.py's
+// _conflict_for loop checks EVERY manual row for a member and conflicts on
+// the FIRST one whose team_id differs -- it does not stop once it finds ONE
+// row that happens to match the incoming team. A member with manual
+// memberships to BOTH the incoming team and another team is therefore still
+// a conflict. An earlier revision here only checked set membership of the
+// incoming team_id, which incorrectly treated this case as confirmed.
+func TestMembershipConflictsWithManualStateRejectsWhenAnotherManualTeamExists(t *testing.T) {
+	row := linearReferenceMembershipRow{MemberID: "linear:alice@example.com", TeamID: "ENG"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"ENG": {}, "OPS": {}},
+	}
+	if !membershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("want conflict: the member also has an active manual membership to a DIFFERENT team")
+	}
+}
+
 // TestMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership
 // pins the negative case for the manual-membership source specifically: a
 // member with NO active manual membership at all is never flagged by this
@@ -47,21 +65,40 @@ func TestMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership(t 
 	}
 }
 
-// TestMembershipConflictsWithManualStateSkipsMemberScopedFallback pins the
-// guard's second source: an active manual_attribution_fallbacks(scope_type=
-// 'member') row matching the member's identity (by provider id, email, or
-// any resolved facet) blocks the write REGARDLESS of team, mirroring
-// clickhouse_identity_drift.py's own fallback check (team-agnostic). This
-// source is unaffected by the round-2 correction -- it was already
-// team-agnostic.
-func TestMembershipConflictsWithManualStateSkipsMemberScopedFallback(t *testing.T) {
+// TestMembershipConflictsWithManualStateConfirmsSameTeamFallback pins CHAOS-
+// 4431 codex review round 3, P2: the member-scoped manual_attribution_
+// fallbacks source is NOT team-agnostic -- clickhouse_identity_drift.py's
+// _conflict_for fallback branch (lines 263-271) compares team_id with the
+// SAME same-team-confirms shape the manual-membership branch uses. An
+// earlier revision here dropped team_id from the fallback query entirely,
+// treating every matching fallback as a conflict even when it already
+// pointed at the incoming team.
+func TestMembershipConflictsWithManualStateConfirmsSameTeamFallback(t *testing.T) {
 	row := linearReferenceMembershipRow{
 		MemberID: "linear:alice@example.com", TeamID: "ENG",
 		RawEmail: linearReferenceStringPtr("Alice@Example.com"), // mixed case, must normalize-match
 	}
-	fallbacks := map[string]struct{}{"alice@example.com": {}}
-	if !membershipConflictsWithManualState(row, nil, fallbacks) {
-		t.Fatal("want conflict for a normalized-matching member-scoped fallback")
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"alice@example.com": {"ENG": {}},
+	}
+	if membershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("a member-scoped fallback already pointing at the incoming team is a confirmation, not a conflict")
+	}
+}
+
+// TestMembershipConflictsWithManualStateRejectsDifferentTeamFallback is the
+// fallback source's positive case: an active fallback pointing at a
+// DIFFERENT team than the incoming native row is a conflict.
+func TestMembershipConflictsWithManualStateRejectsDifferentTeamFallback(t *testing.T) {
+	row := linearReferenceMembershipRow{
+		MemberID: "linear:alice@example.com", TeamID: "ENG",
+		RawEmail: linearReferenceStringPtr("alice@example.com"),
+	}
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"alice@example.com": {"OPS": {}},
+	}
+	if !membershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("want conflict: the fallback points at a DIFFERENT team than this native row")
 	}
 }
 
@@ -75,8 +112,10 @@ func TestMembershipConflictsWithManualStateMatchesViaIdentityFacets(t *testing.T
 		TeamID:         "ENG",
 		IdentityFacets: []string{"linear:bob@example.com", "bob@example.com"},
 	}
-	fallbacks := map[string]struct{}{"bob@example.com": {}}
-	if !membershipConflictsWithManualState(row, nil, fallbacks) {
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"bob@example.com": {"OPS": {}},
+	}
+	if !membershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
 		t.Fatal("want conflict via an identity_facets match")
 	}
 }
@@ -93,8 +132,10 @@ func TestMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	manualTeamsByMember := map[string]map[string]struct{}{
 		"linear:alice@example.com": {"ENG": {}},
 	}
-	fallbacks := map[string]struct{}{"someone-else@example.com": {}}
-	if membershipConflictsWithManualState(row, manualTeamsByMember, fallbacks) {
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"someone-else@example.com": {"OPS": {}},
+	}
+	if membershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 		t.Fatal("a clean row with no matching manual conflict or fallback must not be skipped")
 	}
 }

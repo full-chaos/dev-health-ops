@@ -263,6 +263,13 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	}
 }
 
+// TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects pins
+// the STRICT (reference-discovery) behavior: a capped or malformed projects
+// response must hard-fail the whole call rather than risk writing a false
+// "no projects" claim. CHAOS-4431 codex review round 3, P2 split this from
+// the non-strict case -- see
+// TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows for the
+// complementary degrade-and-continue behavior post-sync dispatch needs.
 func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *testing.T) {
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "workspace"
@@ -290,8 +297,10 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			doer := &linearWorkItemsDoer{responses: testCase.responses}
+			ref := teamCatalogRefFromClaim(claim)
+			ref.Strict = true
 			batch, err := testCase.handler.CollectReferenceCatalog(
-				context.Background(), teamCatalogRefFromClaim(claim),
+				context.Background(), ref,
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
 				linearWorkItemsClient(t, doer),
 				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
@@ -300,6 +309,39 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 				t.Fatalf("batch=%+v err=%v", batch, err)
 			}
 		})
+	}
+}
+
+// TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows pins
+// CHAOS-4431 codex review round 3, P2: team_autoimport_linear.py:605-623's
+// except clause keeps teams/members already fetched and marks projects
+// incomplete on a non-strict failure -- it never discards the whole call.
+// An earlier revision here aborted unconditionally, discarding already-
+// fetched teams/members along with the projects error, the same bug class
+// already fixed for cycles failures in round 2.
+func TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"project-1","name":"Broken"}],"pageInfo":{}}}}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = false
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("non-strict projects failure must not abort the whole call, got err=%v", err)
+	}
+	if batch.Evidence.ProjectsComplete {
+		t.Fatal("projects must be marked incomplete after a non-strict malformed-page failure")
+	}
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Members) != 1 {
+		t.Fatalf("teams/members already fetched must survive a non-strict projects failure: teams=%+v members=%+v", batch.Rows.Teams, batch.Rows.Members)
 	}
 }
 

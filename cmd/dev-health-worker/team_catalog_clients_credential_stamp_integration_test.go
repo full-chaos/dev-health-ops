@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -139,5 +140,53 @@ func TestResolveTeamCatalogIntegrationFallsBackToLiveCredentialWhenUnstamped(t *
 	// comparison at all.
 	if gotFingerprint != "" {
 		t.Fatalf("stampedFingerprint=%q want empty for an unstamped run", gotFingerprint)
+	}
+}
+
+// TestResolveTeamCatalogIntegrationFailsClosedOnEnvironmentStampedAuth pins
+// CHAOS-4431 codex review round 3, P1: auth_source='environment' (planner.py
+// :490-523 -- Integration.credential_id was NULL at plan time, so the run
+// authenticates via environment-provided credentials) is STAMPED, not
+// unstamped -- sync_bootstrap.py:184-185's only branch point is whether
+// auth_source is None at all. An earlier revision here additionally gated on
+// credential_id being non-empty, which misclassified this case as unstamped
+// and fell through to the (here, equally NULL) mutable integrations.
+// credential_id, either failing with the generic ErrInvalidConfiguration or,
+// worse, silently using a DIFFERENT credential if one was later attached.
+// Go has no environment-credential resolution path, so the correct, honest
+// behavior is a DISTINCT fail-closed error, not either of those.
+func TestResolveTeamCatalogIntegrationFailsClosedOnEnvironmentStampedAuth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createTeamCatalogCredentialStampTables(t, ctx, pool)
+
+	const (
+		orgID         = "org-credential-environment"
+		integrationID = "00000000-0000-4000-8000-000000000021"
+		runID         = "00000000-0000-4000-8000-000000000022"
+	)
+	for _, statement := range []string{
+		// Integration.credential_id is NULL -- an environment-auth integration.
+		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + integrationID + `','` + orgID + `','linear')`,
+		`INSERT INTO sync_runs (id,org_id,integration_id,auth_source) VALUES ('` + runID + `','` + orgID + `','` + integrationID + `','environment')`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, _, _, err = resolveTeamCatalogIntegration(ctx, pool, orgID, runID, "linear")
+	if !errors.Is(err, errTeamCatalogEnvironmentAuthUnsupported) {
+		t.Fatalf("resolveTeamCatalogIntegration error=%v, want errTeamCatalogEnvironmentAuthUnsupported", err)
 	}
 }

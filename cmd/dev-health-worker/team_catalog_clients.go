@@ -56,6 +56,20 @@ var errTeamCatalogUnsupportedProvider = errors.New("team catalog provider has no
 // credential at all" apart from "credential content changed mid-run".
 var errTeamCatalogCredentialFingerprintMismatch = errors.New("team catalog credential fingerprint mismatch: stamped run auth no longer matches the resolved credential")
 
+// authSourceEnvironment mirrors Python's credentials/fingerprint.py
+// AUTH_SOURCE_ENVIRONMENT constant exactly -- the sync_runs.auth_source value
+// planner.py:490-523 stamps when Integration.credential_id was NULL at plan
+// time (the run authenticates via environment-provided credentials, not a
+// stored IntegrationCredential row).
+const authSourceEnvironment = "environment"
+
+// errTeamCatalogEnvironmentAuthUnsupported is CHAOS-4431 codex review round
+// 3's P1 fix: this Go resolver has no equivalent of sync_bootstrap.py's
+// _resolve_env_credentials, so an environment-stamped run fails closed here
+// with a distinct, honest error instead of silently falling through to a
+// mutable or empty credential_id.
+var errTeamCatalogEnvironmentAuthUnsupported = errors.New("team catalog native resolver does not support environment-stamped auth; route this provider's reference discovery through the bridge")
+
 // resolveTeamCatalogIntegration ports the exact join
 // native_reference_discovery.go's resolveAuthoritativeProvider already uses
 // (sync_runs JOIN integrations, fenced by org_id on both sides), extended to
@@ -111,8 +125,27 @@ WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id 
 	if queryErr != nil {
 		return "", "", "", queryErr
 	}
+	// CHAOS-4431 codex review round 3, P1: auth_source non-NULL means STAMPED
+	// regardless of whether credential_id is also NULL -- sync_bootstrap.py:
+	// 184-185's `if auth_source is None:` is the ONLY branch point; a NULL
+	// credential_id alongside a non-NULL auth_source is planner.py:490-523's
+	// environment-auth stamp (Integration.credential_id was NULL at plan
+	// time), not "unstamped". An earlier revision here used
+	// `stampedCredentialID != ""` as a second, incorrect gate, which made an
+	// environment-stamped run fall through to the mutable-credential branch
+	// -- wrong account risk if that mutable value is later set, or a hard
+	// failure if it never is.
+	if authSource != nil && *authSource == authSourceEnvironment {
+		// Go has no environment-credential resolution path (unlike
+		// sync_bootstrap.py's _resolve_env_credentials) -- fail closed with a
+		// distinct, honest error rather than silently using the wrong
+		// credential or crashing on an empty one. Strict callers propagate
+		// this (same as any other resolver error); the post-sync bridge
+		// already degrades ANY resolver error to a non-fatal zero result.
+		return "", "", "", fmt.Errorf("%w: integration=%s", errTeamCatalogEnvironmentAuthUnsupported, integrationID)
+	}
 	credentialID = liveCredentialID
-	stamped := authSource != nil && stampedCredentialID != ""
+	stamped := authSource != nil
 	if stamped {
 		credentialID = stampedCredentialID
 		stampedFingerprint = rawFingerprint

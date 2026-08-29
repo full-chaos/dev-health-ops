@@ -500,19 +500,25 @@ class TestFlowMatrixEnrichedCTEsExecuteLive:
         isolated_uri = parsed._replace(path=f"/{database}").geturl()
 
         admin = clickhouse_connect.get_client(dsn=clickhouse_uri)
-        admin.command(f"CREATE DATABASE `{database}`")
-
-        sink = ClickHouseMetricsSink(dsn=isolated_uri)
         try:
-            sink.ensure_schema()
-        finally:
-            sink.close()
+            admin.command(f"CREATE DATABASE `{database}`")
 
-        client = clickhouse_connect.get_client(dsn=isolated_uri)
-        try:
-            yield client
+            sink = ClickHouseMetricsSink(dsn=isolated_uri)
+            try:
+                sink.ensure_schema()
+            finally:
+                sink.close()
+
+            client = clickhouse_connect.get_client(dsn=isolated_uri)
+            try:
+                yield client
+            finally:
+                client.close()
         finally:
-            client.close()
+            # Unconditional cleanup (AGENTS.md CHAOS-4519 scratch-db safety
+            # rule): DROP DATABASE IF EXISTS is a no-op if CREATE DATABASE
+            # itself never ran, and still fires if ensure_schema() or the
+            # second client construction raises before the yield.
             admin.command(f"DROP DATABASE IF EXISTS `{database}`")
             admin.close()
 

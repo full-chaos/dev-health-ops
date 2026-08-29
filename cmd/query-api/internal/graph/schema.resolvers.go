@@ -11,6 +11,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
@@ -265,7 +266,28 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.
 func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error) {
-	panic(fmt.Errorf("not implemented: ComplexityTimeseries - complexityTimeseries"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startComplexityTimeseriesSpan(ctx)
+	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("complexityTimeseries: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // Hotspots is the resolver for the hotspots field.

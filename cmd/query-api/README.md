@@ -4,8 +4,8 @@ Go, read-only GraphQL analytics service. Part of the Go API epic
 (CHAOS-4352). Wave 0 (CHAOS-4366) built the proof infrastructure below;
 Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`;
 Wave 2 (CHAOS-4368) ported the second, `reviewEdges`; Wave 3 (CHAOS-4369)
-ports `cognitiveLoad` (this lane) alongside `complexityTimeseries` and
-`hotspots` (a sibling lane, same wave) — see
+ports `cognitiveLoad` (a sibling lane) alongside `complexityTimeseries` and
+`hotspots` (this lane, same wave) — see
 [`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
 [`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
@@ -42,13 +42,15 @@ port reproduces that "authorized org always wins" behavior exactly (see
 `/healthz`/`/readyz`). `/query` requests are gated by `routeswitch.Mux` +
 `PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
 `canary`/`primary` for the SPECIFIC operation being dispatched —
-featureFlags, reviewEdges, and cognitiveLoad each have their own row and
-are gated fully independently) and authenticated by `principal.Verifier`
+featureFlags, reviewEdges, cognitiveLoad, and complexityTimeseries each
+have their own row and are gated fully independently) and authenticated
+by `principal.Verifier`
 (effective-principal envelope, Bearer token). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
 `registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument` /
-`registeredCognitiveLoadDocument`, indexed by operation name via
-`newQueryHandler`'s `digestByOperation` map) — see those constants' doc
+`registeredCognitiveLoadDocument` / `registeredComplexityTimeseriesDocument`,
+indexed by operation name via `newQueryHandler`'s `digestByOperation`
+map) — see those constants' doc
 comments for the known gap (hand-registered single documents, not yet
 sourced from Wave 0's real web-operations inventory) and for the Wave-1
 codex-round-3 lesson every document is sourced from the real web client
@@ -59,8 +61,9 @@ request).
 Stage-2 local dual-run proof (real Python + real Go server, same
 producer-seeded scratch state, compared via the CHAOS-4381 comparator):
 `tests/api/graphql/test_go_api_dual_run_feature_flags.py`,
-`tests/api/graphql/test_go_api_dual_run_review_edges.py`, and
-`tests/api/graphql/test_go_api_dual_run_cognitive_load.py`.
+`tests/api/graphql/test_go_api_dual_run_review_edges.py`,
+`tests/api/graphql/test_go_api_dual_run_cognitive_load.py`, and
+`tests/api/graphql/test_go_api_dual_run_complexity_timeseries.py`.
 
 ## Wave 3: cognitiveLoad (CHAOS-4369)
 
@@ -112,6 +115,36 @@ GraphQL error on both sides, and this port does not invent one.
 Authorization mirrors `reviewEdges` exactly: the envelope's authorized org
 always wins over a mismatched `orgId` argument (`schema.resolvers.go`'s
 `CognitiveLoad` doc comment).
+
+## Wave 3: complexityTimeseries is live behind the switch
+
+`internal/complexitytimeseries` ports
+`dev_health_ops.api.graphql.resolvers.complexity.resolve_complexity_timeseries`
+verbatim: same two-table split by `scope` (`REPO` reads
+`repo_complexity_daily`, `FILE` reads `file_complexity_snapshots`), same
+`argMax(<col>, computed_expr)` latest-compute-pass selection where
+`computed_expr` is plain `computed_at` for `DAY` granularity or a
+`(day|as_of_day, computed_at)` tuple for `WEEK` granularity, same
+repo-scope default top-N-by-latest-complexity subquery when `repoIds` is
+empty, same two-stage limit clamp (`1..MAX_ROWS`, then further bounded by
+`MAX_TIMESERIES_POINTS / bucketCount`), and the same best-effort
+repo-label join (falls back to the repo id string when the `repos`
+catalog row is missing). Like `reviewEdges`, it has **no** missing-table
+degraded path — a ClickHouse error propagates as a real GraphQL error on
+both sides — and reproduces the same "authorized org always wins" GraphQL
+`orgId`-argument behavior.
+
+`sinceUtc`/`untilUtc` are the GraphQL `DateTime` scalar, still bound to
+the Wave-0 placeholder `graphql.Time` (see the "DateTime and JSON
+scalars" section below) — this is safe for `complexityTimeseries` and
+`hotspots` specifically because both operations use `DateTime` as INPUT
+only (never returned in a response): `graphql.Time`'s `UnmarshalTime`
+parses with `time.RFC3339Nano`, a strict superset of the
+`"YYYY-MM-DDT00:00:00Z"` shape web's `complexityWindowFromFilter` sends,
+so unmarshaling is correct even though the KNOWN INCORRECT `MarshalTime`
+formatting bug (`+00:00` vs `Z`) is never exercised by either
+operation's output. A later wave that returns a `DateTime`-typed field
+must still fix the scalar properly, not extend this exemption.
 
 ## The `Date` GraphQL scalar (fixed in Wave 2)
 
@@ -208,10 +241,10 @@ earlier "CI cannot build this" caveat.)
 
 ## What's NOT here yet (later waves / other lanes)
 
-- Any resolver besides `featureFlags`, `reviewEdges`, and `cognitiveLoad`
-  — every other field still panics with `"not implemented"`
-  (`complexityTimeseries`/`hotspots` are a sibling Wave-3 lane's scope, not
-  this PR's).
+- Any resolver besides `featureFlags`, `reviewEdges`, `cognitiveLoad`,
+  and `complexityTimeseries` — every other field still panics with
+  `"not implemented"` (`hotspots`, Wave 3's remaining operation, ships in
+  a follow-up PR).
 - The registered-document registry sourced from Wave 0's real
   web-operations inventory (deliverable 2) — every wave so far
   hand-registers its own canary document(s) instead (`query_route.go`).

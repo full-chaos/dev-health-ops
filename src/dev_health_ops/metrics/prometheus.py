@@ -161,6 +161,27 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_team_autoimport_reference_category_outcome_total",
+            "Per-provider, per-CHAOS-4323-category GATE outcome of strict "
+            "reference discovery, recorded before the populate() call runs "
+            "(CHAOS-4437): 'written' means the org selected that category "
+            "(teams/projects/members) so the gate let it through to the "
+            "populator -- NOT a confirmation the populator actually "
+            "persisted rows this run (see the populate summary's "
+            "*_imported counts, or DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_"
+            "PRESERVATION_FAILED_TOTAL, for that). 'skipped_selection' "
+            "means the org disabled it and reference discovery honoured "
+            "that selection instead of writing it unconditionally, which "
+            "IS a hard guarantee -- a skipped category is never written. "
+            "Before CHAOS-4437 this path always wrote every category "
+            "regardless of the org's sync-config selection; this counter "
+            "is the signal that the gate is active.",
+            ["provider", "category", "outcome"],
+        )
+    )
+
     # ---------------------------------------------------------------------------
     # ClickHouse metrics
     # ---------------------------------------------------------------------------
@@ -728,6 +749,7 @@ else:
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL = _noop_counter()
@@ -922,6 +944,28 @@ def record_team_autoimport_reference_subitem_skipped(
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL.labels(
         provider=provider,
         kind=kind,
+    ).inc()
+
+
+def record_team_autoimport_reference_category_outcome(
+    *, provider: str, category: str, outcome: str
+) -> None:
+    """Record whether strict reference discovery's GATE let one CHAOS-4323
+    category (teams/projects/members) through to the populator, or skipped
+    it because the org disabled it (CHAOS-4437).
+
+    Called once per category from ``run_team_autoimport_strict`` BEFORE the
+    populate() call, so ``outcome="written"`` reflects the gate's decision
+    (the org selected it) rather than confirmed persistence -- a selected
+    category that the populator fails to write (missing credentials, zero
+    rows, roster-preservation-read failure) still records "written" here.
+    ``outcome="skipped_selection"`` is the hard guarantee: that category is
+    never written when this fires.
+    """
+    DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL.labels(
+        provider=provider,
+        category=category,
+        outcome=outcome,
     ).inc()
 
 

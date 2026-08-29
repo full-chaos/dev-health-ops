@@ -6,6 +6,9 @@ import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
+from dev_health_ops.metrics.prometheus import (
+    record_team_autoimport_reference_category_outcome,
+)
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.team_autoimport_categories import (
@@ -200,8 +203,48 @@ def run_team_autoimport_strict(
             f"team auto-import populator is unavailable: {normalized_provider}"
         )
 
+    # CHAOS-4437: honour the org's CHAOS-4323 per-category selection the SAME
+    # way run_team_autoimport already does, instead of always importing every
+    # category. Reference discovery still runs (and still verifies via
+    # readback -- see reference_discovery._verify_reference_readback / the Go
+    # ReferenceReadbackVerifier) for dispatch-blocking key resolution, but it
+    # must not write teams/team_memberships/team_project_ownership rows for a
+    # category the org explicitly disabled just because this is the strict
+    # path. Each populator already reads scope["import_categories"] via
+    # team_autoimport_categories.resolve_import_categories -- absent it
+    # defaults every category True (unrestricted), which is exactly the
+    # pre-fix bug this closes.
+    #
+    # CHAOS-4437 (codex review): a caller's scope["sync_options"] is only a
+    # trustworthy CHAOS-4323 selection when the caller marks it canonical.
+    # reference_discovery._load_discovery_context sets
+    # sync_options_is_canonical=False when it had to fall back to
+    # Integration.config (no SyncConfiguration row exists) -- that dict is
+    # NOT an authoritative selection (it predates the category split and
+    # commonly has no auto_import_* keys at all), so treating it as one would
+    # flip "unrestricted" into "everything off" for that org. Callers that
+    # predate this flag (e.g. backfill's run_backfill_for_config, which
+    # always passes the real canonical SyncConfiguration.sync_options)
+    # default to canonical=True, preserving their existing behavior exactly.
+    scope_sync_options = (scope or {}).get("sync_options")
+    sync_options_is_canonical = bool(
+        (scope or {}).get("sync_options_is_canonical", True)
+    )
+    import_categories = import_categories_from_sync_options(
+        scope_sync_options
+        if sync_options_is_canonical and isinstance(scope_sync_options, Mapping)
+        else None
+    )
+    for category, selected in import_categories.items():
+        record_team_autoimport_reference_category_outcome(
+            provider=normalized_provider,
+            category=category,
+            outcome="written" if selected else "skipped_selection",
+        )
+
     populator_scope = dict(scope or {})
     populator_scope["strict_reference_discovery"] = True
+    populator_scope["import_categories"] = import_categories
     if analytics_db_url:
         populator_scope["analytics_db"] = analytics_db_url
     summary = populator(

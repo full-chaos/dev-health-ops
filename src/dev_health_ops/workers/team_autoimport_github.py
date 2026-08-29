@@ -202,9 +202,21 @@ async def _populate_async(
     if want_members:
         sink.write_team_memberships(membership_rows)
 
+    # CHAOS-4437: reference_team_keys feeds the readback verifier
+    # (reference_discovery._verify_reference_readback / Go
+    # ReferenceReadbackVerifier), which polls ClickHouse `teams` for exactly
+    # these native_team_key values and FAILS the whole reference-discovery
+    # run (blocking dispatch) if any are missing. Must only claim keys that
+    # were actually written this call -- claiming a discovered-but-skipped
+    # team here would make readback wait for a row that will never appear.
+    written_team_keys = (
+        [str(row["native_team_key"]) for row in team_rows]
+        if (want_teams and roster_write_safe)
+        else []
+    )
     return {
         "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
-        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        "reference_team_keys": written_team_keys,
         "reference_sprint_ids": [],
         "projects_imported": 0,
         "members_imported": len({row.member_id for row in membership_rows})

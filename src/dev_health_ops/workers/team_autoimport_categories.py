@@ -7,16 +7,26 @@ three independent booleans: ``auto_import_teams``, ``auto_import_projects``,
 true -> all three true, false -> all three false by
 ``alembic/versions/0112_split_auto_import_teams_into_three_categories.py``).
 
-Only the best-effort, user-facing path (``run_team_autoimport`` /
-``run_post_sync_team_autoimport``) honours the three flags. Strict reference
-discovery (``run_team_autoimport_strict``, used by backfill and by
-``workers/reference_discovery.py``) intentionally does NOT thread
-``import_categories`` into the populator scope: reference discovery exists to
-guarantee dispatch-blocking reference team/sprint keys resolve, not to reflect
-a user's ClickHouse-attribution preference, so it keeps importing everything
-it always has -- ``resolve_import_categories`` below defaults every category
-to ``True`` when ``import_categories`` is absent from scope for exactly that
-reason.
+CHAOS-4437: both the best-effort, user-facing path (``run_team_autoimport`` /
+``run_post_sync_team_autoimport``) AND strict reference discovery
+(``run_team_autoimport_strict``, used by backfill and by
+``workers/reference_discovery.py``) now honour the three flags -- writing
+teams/team_memberships/team_project_ownership rows for a category the org
+disabled was never the point of reference discovery, only a side effect of
+reusing the same ``populate()`` functions as the user-facing path (see
+CHAOS-4430's proof). What reference discovery genuinely needs unconditionally
+-- resolving dispatch-blocking reference team/sprint *keys* -- does NOT
+require those write-side rows: sprint/cycle discovery in the Jira and Linear
+populators is deliberately NOT gated on any category (see those modules'
+``populate()``), and dispatch itself (``dispatch_sync_run``) only checks the
+``SyncRunReferenceDiscovery`` ledger's ``status`` column, never CH team/sprint
+rows directly -- the readback verifier is a self-consistency check against
+whatever the populate summary claims, not an external requirement. So gating
+the WRITE on the org's selection is safe; only the always-on reference-data
+paths (sprints/cycles) must keep running regardless of category selection.
+``resolve_import_categories`` below still defaults every category to
+``True`` when ``import_categories`` is absent from scope, for callers that
+predate this split entirely.
 """
 
 from __future__ import annotations
@@ -64,11 +74,14 @@ def import_categories_from_sync_options(
 def resolve_import_categories(scope: Mapping[str, object]) -> dict[str, bool]:
     """Read the per-category selection a populator should honour from scope.
 
-    ``scope["import_categories"]`` is only ever set by ``run_team_autoimport``
-    (the non-strict, best-effort path). When it is absent -- strict reference
-    discovery, backfill, or any caller that predates this split -- every
-    category defaults to ``True`` so behavior is unchanged: full population,
-    exactly as before CHAOS-4323.
+    ``scope["import_categories"]`` is set by both ``run_team_autoimport``
+    (best-effort) and, since CHAOS-4437, ``run_team_autoimport_strict``
+    (called by reference discovery AND by backfill's
+    ``run_backfill_for_config``) -- every production caller now threads the
+    org's real selection into the populator. When it is absent -- a caller
+    that predates this split, or a direct test call -- every category
+    defaults to ``True`` (unrestricted), matching behavior from before
+    CHAOS-4323.
     """
 
     categories = scope.get("import_categories")

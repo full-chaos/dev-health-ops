@@ -290,7 +290,16 @@ def populate(
     want_teams = categories["teams"] and capability.teams
     want_projects = categories["projects"] and capability.projects
     want_members = categories["members"] and capability.members
-    if not (want_teams or want_projects or want_members):
+    # CHAOS-4437 (codex review, P1): do NOT take this early exit in strict
+    # mode. Sprint/cycle discovery below is unconditional reference data
+    # (not gated on any category -- see team_autoimport_categories.py's
+    # module docstring), needed to resolve dispatch-blocking sprint keys
+    # even when an org has disabled every writable category. Returning here
+    # skipped that discovery entirely, silently leaving sprint references
+    # stale/missing while dispatch proceeded anyway. The best-effort
+    # (non-strict) path still short-circuits here to avoid a wasted API call
+    # when the user disabled everything.
+    if not strict and not (want_teams or want_projects or want_members):
         return {
             "status": "skipped",
             "reason": "no_categories_selected",
@@ -687,7 +696,18 @@ def populate(
         "mode": scope.get("mode"),
         "teams_imported": len(team_rows) if (want_teams and roster_write_safe) else 0,
         "roster_preservation_failed": not roster_write_safe,
-        "reference_team_keys": [str(row["native_team_key"]) for row in team_rows],
+        # CHAOS-4437: only claim keys actually written this call -- the
+        # readback verifier polls ClickHouse for exactly these native_team_key
+        # values and fails the whole reference-discovery run (blocking
+        # dispatch) if a claimed-but-skipped team never lands. Sprints stay
+        # unconditional: sprint writes are already unconditional above
+        # (CHAOS-4323: "reference data, not a category"), so the claim always
+        # matches what was written.
+        "reference_team_keys": (
+            [str(row["native_team_key"]) for row in team_rows]
+            if (want_teams and roster_write_safe)
+            else []
+        ),
         "reference_sprint_ids": [str(row.sprint_id) for row in sprint_rows],
         "projects_imported": len(projects) if want_projects else 0,
         "members_imported": len(members) if want_members else 0,

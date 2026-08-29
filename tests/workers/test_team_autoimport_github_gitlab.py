@@ -172,6 +172,11 @@ def test_github_org_import_writes_provider_access_repo_grants_and_nested_specifi
     assert {row["id"] for row in sink.teams} == {"gh:platform", "gh:platform-api"}
     child_team = next(row for row in sink.teams if row["id"] == "gh:platform-api")
     assert child_team["parent_team_id"] == "gh:platform"
+    # CHAOS-4437: teams were actually written this call, so the readback
+    # verifier's claim must include them (the positive counterpart of
+    # test_github_org_import_honours_members_only_selection's empty-claim
+    # assertion).
+    assert set(summary["reference_team_keys"]) == {"platform", "platform-api"}
     assert {row.source for row in sink.repo_ownership} == {"provider_access"}
     parent_row = next(
         row for row in sink.repo_ownership if row.team_id == "gh:platform"
@@ -301,6 +306,11 @@ def test_github_org_import_honours_members_only_selection(
     assert sink.repo_ownership == []
     assert len(sink.memberships) == 1
     assert sink.memberships[0].member_id == "gh:platform-lead"
+    # CHAOS-4437: teams were discovered (used to compute repo_rows) but never
+    # written -- reference_team_keys must not claim them either, or the
+    # readback verifier would poll ClickHouse forever for a `teams` row that
+    # this call never wrote.
+    assert summary["reference_team_keys"] == []
 
 
 def test_github_org_import_preserves_existing_roster_when_members_off(

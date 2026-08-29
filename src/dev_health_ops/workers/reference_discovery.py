@@ -339,37 +339,41 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
         # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
         # discovery resolves the SAME auth as this run's units. NULL-stamped
         # (legacy/in-flight) runs fall back to integration.credential_id.
-        # CHAOS-4498 (codex review, P1): this used to be gated on `if units:`
-        # -- correct when every caller of this function was a unit-planned
-        # sync run, wrong now that seed_reference_discovery_run (backfill)
-        # creates a deliberately zero-unit anchor SyncRun purely to arm
-        # discovery. A zero-unit run still needs real credentials for the
-        # populate() call this context feeds -- omitting them here silently
-        # sent an empty credentials dict to a capable provider's strict
-        # populator. Resolving unconditionally is safe for every existing
-        # (unit-planned) caller too: resolve_run_auth reads only
-        # run/integration/provider, never `units`.
-        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
-        # discovery resolves the SAME auth as this run's units. NULL-stamped
-        # (legacy/in-flight) runs fall back to integration.credential_id.
-        # CHAOS-4498 (codex review, P1): this used to be gated on `if units:`
-        # -- correct when every caller of this function was a unit-planned
-        # sync run, wrong now that seed_reference_discovery_run (backfill)
-        # creates a deliberately zero-unit anchor SyncRun purely to arm
-        # discovery. A zero-unit run still needs real credentials for the
-        # populate() call this context feeds -- omitting them here silently
-        # sent an empty credentials dict to a capable provider's strict
-        # populator. Resolving unconditionally is safe for every existing
-        # (unit-planned) caller too: resolve_run_auth reads only
-        # run/integration/provider, never `units`.
-        _stamped_credential_id, resolved_credentials = resolve_run_auth(
-            session,
-            run=run,
-            integration=integration,
-            provider=integration.provider,
-            error_label=f"sync run: {run_uuid}",
-        )
-        credentials = dict(resolved_credentials)
+        #
+        # CHAOS-4498 (codex review round 1, P1): this used to be gated
+        # purely on `if units:` -- wrong for seed_reference_discovery_run's
+        # zero-unit backfill anchor, which DOES need real credentials for
+        # its populate() call. Resolving unconditionally on every run broke
+        # a DIFFERENT existing zero-unit case (codex round 2, P1): a
+        # planner-originated zero-unit run (all sources/datasets disabled)
+        # deliberately leaves `run.auth_source` NULL -- plan_sync_run only
+        # calls _resolve_credential_stamp `if planned_units:` -- and
+        # resolve_run_auth's NULL-auth_source path raises for a
+        # credential-less PagerDuty integration, breaking what used to be a
+        # clean non-import-capable no-op (run_team_autoimport_strict's
+        # _provider_capability check never got a chance to run).
+        #
+        # The correct signal is `run.auth_source is not None`, not `units`:
+        # seed_reference_discovery_run ALWAYS stamps a non-None auth_source
+        # (AUTH_SOURCE_ENVIRONMENT or AUTH_SOURCE_INTEGRATION_CREDENTIAL,
+        # via _resolve_credential_stamp, called unconditionally regardless
+        # of unit count -- and _resolve_credential_stamp itself already
+        # raises for a credential-less PagerDuty backfill target, matching
+        # this codebase's existing global invariant, which is correct), so
+        # `units or run.auth_source is not None` resolves credentials for
+        # every unit-planned run (unchanged) AND for a backfill anchor
+        # (fixed), while a genuine zero-unit, never-stamped planner run
+        # keeps its untouched no-op path (fixed back).
+        credentials: dict[str, Any] = {}
+        if units or run.auth_source is not None:
+            _stamped_credential_id, resolved_credentials = resolve_run_auth(
+                session,
+                run=run,
+                integration=integration,
+                provider=integration.provider,
+                error_label=f"sync run: {run_uuid}",
+            )
+            credentials = dict(resolved_credentials)
         source_ids = {unit.source_id for unit in units}
         sources = (
             session.query(IntegrationSource)

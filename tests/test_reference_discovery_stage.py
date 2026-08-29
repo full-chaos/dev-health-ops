@@ -977,6 +977,12 @@ def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
         mode=SyncRunMode.BACKFILL.value,
         status=SyncRunStatus.PLANNED.value,
         total_units=0,
+        # seed_reference_discovery_run ALWAYS stamps a non-None auth_source
+        # via _resolve_credential_stamp, unconditionally, regardless of
+        # unit count -- that stamp is exactly the signal
+        # _load_discovery_context now uses (codex round 2, P1) to tell a
+        # backfill anchor apart from a genuine zero-unit planner run.
+        auth_source="environment",
     )
     db_session.add(run)
     db_session.flush()
@@ -997,3 +1003,67 @@ def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
     assert len(calls) == 1
     assert calls[0]["provider"] == "jira"
     assert context["credentials"] == {"token": "resolved-for-zero-unit-run"}
+
+
+def test_load_discovery_context_preserves_credential_free_zero_unit_planner_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498 (codex review round 2, P1): a genuine PLANNER-originated
+    zero-unit sync run (e.g. all sources/datasets disabled) deliberately
+    leaves run.auth_source NULL -- plan_sync_run only calls
+    _resolve_credential_stamp `if planned_units:`. Before this fix,
+    resolving credentials unconditionally made resolve_run_auth's
+    NULL-auth_source path raise for a credential-less PagerDuty
+    integration, breaking what used to be a clean non-import-capable
+    no-op (run_team_autoimport_strict's _provider_capability check never
+    got the chance to run). Distinguishing signal from a backfill anchor
+    (which DOES need credentials resolved, see the sibling test above):
+    run.auth_source is not None -- seed_reference_discovery_run always
+    stamps one, a genuine zero-unit planner run never does.
+
+    Red on the codex-round-1 fix (unconditional resolve_run_auth call):
+    resolve_run_auth would have been called and raised for this
+    credential-less pagerduty run."""
+    from dev_health_ops.workers import reference_discovery
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="pagerduty",
+        name="PagerDuty integration",
+        config={},
+        credential_id=None,
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="scheduler",
+        mode=SyncRunMode.INCREMENTAL.value,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+        # Untouched: a real zero-unit plan_sync_run never calls
+        # _resolve_credential_stamp, so auth_source stays NULL.
+        auth_source=None,
+    )
+    db_session.add(run)
+    db_session.flush()
+    _patch_db_session(monkeypatch, db_session)
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve_run_auth(session, *, run, integration, provider, error_label):
+        calls.append({"provider": provider})
+        raise ValueError(
+            "PagerDuty sync requires an active organization-scoped credential"
+        )
+
+    monkeypatch.setattr(reference_discovery, "resolve_run_auth", _fake_resolve_run_auth)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert calls == []
+    assert context["credentials"] == {}
+    assert context["provider"] == "pagerduty"

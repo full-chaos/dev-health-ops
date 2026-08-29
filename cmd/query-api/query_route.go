@@ -185,6 +185,49 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
   }
 }`
 
+// registeredOperatingReviewDocument is CHAOS-4352 Wave 4 Lane B's
+// (CHAOS-4505) registered document for the operatingReview operation --
+// same "registered documents only" contract, same "sourced from the real
+// client file, not reconstructed" discipline as every document above.
+// Copied byte-for-byte from web/src/lib/graphql/queries.ts's
+// OPERATING_REVIEW_QUERY (queries.ts:394-425), operation name
+// "OperatingReview", TWO variables -- `$orgId` of type `String!` AND
+// `$input` of type `OperatingReviewInput!` -- unlike every other operation
+// registered in this file except featureFlags, matching the schema's
+// `operatingReview(orgId: String!, input: OperatingReviewInput!)` (the
+// $orgId variable is parsed by this route but never trusted for scoping;
+// see operatingreview package's doc comment's Authorization section).
+const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+        }
+      }
+    }
+    recommendations
+    recommendationsEmptyState
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -321,6 +364,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
 		"complexityTimeseries": digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":             digestHex(registeredHotspotsDocument),
+		"operatingReview":      digestHex(registeredOperatingReviewDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

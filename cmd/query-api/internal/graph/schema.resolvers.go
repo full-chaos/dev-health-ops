@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -240,9 +241,47 @@ func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, in
 	panic(fmt.Errorf("not implemented: ThroughputForecast - throughputForecast"))
 }
 
-// OperatingReview is the resolver for the operatingReview field.
+// OperatingReview is the resolver for the operatingReview field (CHAOS-4352
+// Wave 4 Lane B, CHAOS-4505). Ports
+// dev_health_ops.api.graphql.resolvers.operating_review.resolve_operating_review
+// via operatingreview.Resolve -- see that package's doc comment for the
+// full parity contract (ten-table dual-period fetch, per-table error
+// isolation, and the one declared Go-side fix + expected dual-run
+// divergence on ai_governance).
+//
+// The orgID parameter (from the schema's `operatingReview(orgId: String!,
+// input: ...)`) is deliberately UNUSED for scoping, matching Python's
+// ACTUAL behavior exactly: api/graphql/schema.py's operating_review field
+// accepts the same org_id argument and never passes it to
+// resolve_operating_review, which authorizes via require_org_id(context)
+// alone -- the same "authorized org always wins, a client-supplied orgId
+// is parsed but never trusted for scoping" behavior cognitiveload/
+// reviewedges/hotspots already document. This resolver reproduces that by
+// construction: it passes claims.OrgID, never orgID, to
+// operatingreview.Resolve.
 func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input model.OperatingReviewInput) (*model.OperatingReview, error) {
-	panic(fmt.Errorf("not implemented: OperatingReview - operatingReview"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startOperatingReviewSpan(ctx)
+	result, err := operatingreview.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.WeekStart)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("operatingReview: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // DataHealth is the resolver for the dataHealth field.

@@ -207,6 +207,27 @@ func (c *fakeHotspotsCHClient) Query(_ context.Context, _ string, _ []clickhouse
 	}}, nil
 }
 
+// fakeOperatingReviewCHClient is a minimal operatingreview.QueryClient
+// double for the CHAOS-4352 Wave 4 Lane B (CHAOS-4505) reachability test
+// below. operatingreview.Resolve issues exactly 20 queries per invocation
+// (10 tables x 2 periods) -- this fake returns an empty row set for every
+// call, which is enough to prove the HTTP-level reachability contract
+// this test exists for (a real, computed OperatingReview payload with
+// every metric "unchanged", since current == prior == all zero -- see
+// operatingReviewVariables' assertion for exactly which static string
+// that guarantees in the response body). It is NOT a substitute for the
+// real-ClickHouse dual-run proof (Python-side stage-2 test,
+// ops/tests/api/graphql/test_go_api_dual_run_operating_review.py), and
+// specifically does NOT exercise fetchAIGovernance's live-execution
+// requirement -- see that function's own doc comment for why the
+// Go-side fix must be proven against a REAL engine, not this fake.
+type fakeOperatingReviewCHClient struct{ calls int }
+
+func (c *fakeOperatingReviewCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.calls++
+	return &fakeRows{}, nil
+}
+
 func writeTestJWKS(t *testing.T, pub ed25519.PublicKey) string {
 	t.Helper()
 	doc := map[string]any{
@@ -816,6 +837,104 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 
 // TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol is the regression
 // proof for a real bug codex review found (2026-08-28): CLICKHOUSE_URI
+func operatingReviewVariables() map[string]any {
+	return map[string]any{
+		"orgId": "org-1",
+		"input": map[string]any{
+			"weekStart": "2026-08-24",
+		},
+	}
+}
+
+// TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled is CHAOS-4352
+// Wave 4 Lane B's (CHAOS-4505) extension of the same reachability
+// contract to operatingReview: real Mux, real PostgresSwitch reading a
+// real Postgres table, real gqlgen server, real principal.Verifier --
+// proving operatingReview's reachability is gated independently by its
+// OWN go_api_routing_state row. Unlike every other operation registered
+// in this file, operatingReview's registered document carries BOTH
+// `$orgId` and `$input` variables (matching featureFlags, not
+// hotspots/cognitiveLoad/complexityTimeseries/reviewEdges) -- see
+// registeredOperatingReviewDocument's own doc comment.
+func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest)
+	documentDigest := digestHex(registeredOperatingReviewDocument)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	t.Run("disabled_by_default", func(t *testing.T) {
+		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("no routing-state row: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("mode_canary_reachable_and_returns_data", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mode=canary: got %d, body=%s", rec.Code, rec.Body.String())
+		}
+		// The fake client returns zero rows for every one of the 20
+		// queries, so current == prior == all-zero for every metric --
+		// every buildMetric call hits the abs(delta)<0.000001 branch and
+		// returns "unchanged" REGARDLESS of direction (checked before the
+		// direction switch), so recommendations is empty and this static
+		// string is guaranteed present, proving a REAL computed payload
+		// came back, not just a 200.
+		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "No signals worsened this week.") {
+			t.Fatalf("expected a real operatingReview result with no errors, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("unregistered_document_is_unreachable_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
+		rec := postGraphQLWithVariables(t, handler, "query { __typename }", token, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unregistered document: got %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, "", operatingReviewVariables())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no token: got %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("enabling_operatingReview_does_not_enable_featureFlags", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
+		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, token)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("featureFlags should stay unreachable when only operatingReview is canaried: got %d", rec.Code)
+		}
+	})
+
+	t.Run("rollback_to_disabled_revokes_reachability_immediately", func(t *testing.T) {
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "canary")
+		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 before rollback, got %d", rec.Code)
+		}
+		setRoutingMode(t, pool, documentDigest, "operatingReview", "disabled")
+		if rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewVariables()); rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 immediately after rollback, got %d", rec.Code)
+		}
+	})
+}
+
 // resolves to a DIFFERENT port for a Go process (native wire protocol)
 // than for a Python process (HTTP) despite sharing the same env var name
 // across this repo's deployments (deploy/go-workers/README.md, "ClickHouse:

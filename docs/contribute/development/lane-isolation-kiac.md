@@ -97,10 +97,21 @@ by hand: `acr/deploy/local/lane.sh` composes the pieces that already exist —
 per-namespace datastores and the `@backups` restores — into one command.
 
 ```bash
-acr/deploy/local/lane.sh up <lane> [--backups <dir>] [--nodeport-base <n>]
-acr/deploy/local/lane.sh down <lane>
-acr/deploy/local/lane.sh status [<lane>]
+export OPS_WT=<path-to-your-ops-worktree>    # e.g. worktrees/ops/<branch>
+export ACR_WT=<path-to-your-acr-worktree>
+
+LANE_OPS_WT="$OPS_WT" "$ACR_WT/deploy/local/lane.sh" up <lane> [--backups <dir>] [--nodeport-base <n>]
+LANE_OPS_WT="$OPS_WT" "$ACR_WT/deploy/local/lane.sh" down <lane>
+LANE_OPS_WT="$OPS_WT" "$ACR_WT/deploy/local/lane.sh" status [<lane>]
 ```
+
+**Always invoke `lane.sh` as `$ACR_WT/deploy/local/lane.sh` and set
+`LANE_OPS_WT="$OPS_WT"`, never a plain `acr/deploy/local/lane.sh` run from the
+monorepo root.** `lane.sh` treats its own script directory as the ACR checkout
+and, when `LANE_OPS_WT` is unset, defaults to the shared `$MONO_ROOT/ops`
+checkout — so a feature lane invoked without both overrides would silently
+deploy **main's** charts and provisioning SQL instead of either worktree under
+review, producing a false validation pass.
 
 `up` is **idempotent**: every step checks whether it is already done, so a re-run
 repairs a partial lane rather than failing or duplicating work. Read the manual

@@ -282,3 +282,110 @@ func TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure(t *te
 		t.Fatalf("ops (healthy fetch, genuinely new team) got the wrong roster: roster=%+v", roster)
 	}
 }
+
+// TestGitHubTeamCatalogCollectorSkipsNativeMembershipConflictingWithManualPinToADifferentTeam
+// is a RED-FIRST proof (team-lead ruling, 2026-08-28): GitHub's collector has
+// no equivalent of Linear's CHAOS-4431 codex-review-finding-#6 fail-safe
+// membership-conflict guard (team_membership_conflict_guard.go) yet, so an
+// admin's manual pin of a member to one team is silently contradicted the
+// moment that same member also shows up in a DIFFERENT team's native GitHub
+// roster. This test is EXPECTED TO FAIL on the current tip -- the fix (a
+// GitHub-typed wrapper over the shared, provider-agnostic
+// resolveActiveManualMembershipPairs/resolveActiveMemberAttributionFallback
+// Identities resolvers, using the CORRECTED semantics 4431 is landing in its
+// next base: an exact (member_id, team_id) match is a CONFIRMATION, not a
+// conflict; only a manual pin to a DIFFERENT team is a conflict) lands on the
+// next rebase, at which point this goes green.
+func TestGitHubTeamCatalogCollectorSkipsNativeMembershipConflictingWithManualPinToADifferentTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "github-membership-conflict-org"
+	validFrom := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	// Ground truth: an admin manually pinned octocat to "gh:other-team", NOT
+	// "gh:platform" (the team the fixture doer below reports octocat as a
+	// native member of).
+	if err := conn.Exec(ctx, `INSERT INTO team_memberships
+		(org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", "gh:other-team", "github:octocat", "octocat", nil, []string{"github:octocat"},
+		"manual", uint8(1), uint16(0), int32(0), validFrom, nil, validFrom,
+	); err != nil {
+		t.Fatalf("seed manual membership: %v", err)
+	}
+
+	doer := githubTeamCatalogAdapterDoer(t) // team "platform", member "octocat"
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	client := githubTeamCatalogAdapterClient(t, doer)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	if _, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var conflictingNativeRows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM team_memberships FINAL
+		WHERE org_id = ? AND team_id = 'gh:platform' AND member_id = 'github:octocat'
+		AND source = 'native' AND (valid_to IS NULL OR valid_to > now())`, orgID,
+	).Scan(&conflictingNativeRows); err != nil {
+		t.Fatal(err)
+	}
+	if conflictingNativeRows != 0 {
+		t.Fatalf("a native membership conflicting with octocat's active manual pin to a DIFFERENT team must be "+
+			"skipped, not written -- got %d conflicting row(s)", conflictingNativeRows)
+	}
+}
+
+// TestGitHubTeamCatalogCollectorSkipsWritingATeamFlaggedForManualSyncPolicy is
+// a second RED-FIRST proof (team-lead ruling, 2026-08-28, codex review
+// finding #3): GitHub's collector has no equivalent of Linear's
+// applyTeamSyncPolicyGuard (team_sync_policy_guard.go) yet, so a team an
+// admin has flagged sync_policy != 0 (taken out of auto-apply, e.g. "flagged
+// for review" or "manual") gets silently overwritten by the next native sync
+// anyway. EXPECTED TO FAIL on the current tip; goes green once GitHub's own
+// wrapper over the shared, provider-agnostic resolveTeamSyncPolicies lands on
+// the next rebase.
+func TestGitHubTeamCatalogCollectorSkipsWritingATeamFlaggedForManualSyncPolicy(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "github-sync-policy-org"
+	updatedAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	// An admin flagged "gh:platform" out of auto-apply (sync_policy=1,
+	// "flagged for review") BEFORE this native run.
+	if err := conn.Exec(ctx, `INSERT INTO team_sync_policies
+		(org_id, team_id, sync_policy, managed_fields, updated_by, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		orgID, "gh:platform", uint8(1), []string{}, nil, updatedAt,
+	); err != nil {
+		t.Fatalf("seed team_sync_policies: %v", err)
+	}
+
+	doer := githubTeamCatalogAdapterDoer(t) // team "platform"
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	client := githubTeamCatalogAdapterClient(t, doer)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	if _, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// No prior `teams` row exists for this fresh org/team -- if the guard is
+	// missing (today), this native run creates one anyway.
+	var written uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM teams FINAL
+		WHERE org_id = ? AND id = 'gh:platform'`, orgID,
+	).Scan(&written); err != nil {
+		t.Fatal(err)
+	}
+	if written != 0 {
+		t.Fatalf("a team flagged sync_policy != 0 must be left completely untouched by this native run, "+
+			"got %d row(s)", written)
+	}
+}

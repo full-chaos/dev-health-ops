@@ -314,3 +314,108 @@ func TestResolve_FlowMatrix_FilteredSameDimensionCompileFailureIsFatal(t *testin
 		t.Fatal("expected the CHAOS-2487 filtered-same-dimension rejection to be fatal, not swallowed")
 	}
 }
+
+// TestResolve_FlowMatrixDegradation_IsReported pins the ONLY observable
+// a swallowed execute error has.
+//
+// resolveFlowMatrix mirrors analytics.py:959-961: it catches the execute
+// error and returns an empty FlowMatrixResult. The returned value is
+// therefore byte-identical whether the query failed or the org genuinely
+// has no flow -- so asserting on the RESULT cannot detect a regression
+// that drops the reporting. That indistinguishability is the defect
+// telemetry.go exists to close, which makes the report itself the thing
+// under test.
+//
+// It is also masked from above, the same double-layer shape found earlier
+// in this port: schema.resolvers.go's startAnalyticsSpan closes its span
+// with outcome "ok" for a degraded response (correctly -- Python returns
+// a success response too), so no resolver-level assertion can see this
+// either. It has to be tested here, at its own level.
+func TestResolve_FlowMatrixDegradation_IsReported(t *testing.T) {
+	// The fake error MUST model the real client's error shape, not a
+	// convenient one. dev-health-go/clickhouse wraps every driver
+	// failure as *operationError, whose Error() is the FIXED string
+	// "ClickHouse query failed" with the cause reachable only via
+	// Unwrap() (client.go:212-213). An errors.New("clickhouse exploded")
+	// fake -- which is what this test used first -- is KINDER than
+	// reality: its Error() carries the real text, so it would validate
+	// telemetry that records err.Error() alone, even though against the
+	// real client that records a constant string carrying no cause.
+	// The fake being easier than the dependency is what makes the test
+	// measure the fake. (Lane A's codex P1, same class.)
+	driverErr := errors.New("code: 60, message: Table default.work_item_cycle_times does not exist")
+	boom := &fakeOperationError{operation: "query", cause: driverErr}
+	client := &routingFakeClient{}
+	client.onErr("work_item_cycle_times", boom)
+
+	type report struct {
+		phase string
+		err   error
+	}
+	var got []report
+	orig := recordDegradation
+	recordDegradation = func(_ context.Context, phase string, err error) {
+		got = append(got, report{phase: phase, err: err})
+	}
+	t.Cleanup(func() { recordDegradation = orig })
+
+	fmUseInvestment := true
+	batch := model.AnalyticsRequestInput{
+		UseInvestment: boolPtr(true),
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension:     model.DimensionInputTeam,
+			Measure:       model.MeasureInputCount,
+			DateRange:     &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:      50,
+			MaxEdges:      200,
+			UseInvestment: &fmUseInvestment,
+		},
+	}
+
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	// Parity first: the swallow must still swallow.
+	if err != nil {
+		t.Fatalf("Resolve error = %v -- a failed flowMatrix execute must degrade, not propagate (analytics.py:959-961)", err)
+	}
+	if result.FlowMatrix == nil {
+		t.Fatal("expected a non-nil degraded FlowMatrixResult")
+	}
+	if len(result.FlowMatrix.Nodes) != 0 || len(result.FlowMatrix.Edges) != 0 {
+		t.Fatalf("expected the degraded result to be empty, got %d nodes / %d edges", len(result.FlowMatrix.Nodes), len(result.FlowMatrix.Edges))
+	}
+
+	// The part the result cannot show.
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 degradation report, got %d -- a swallowed failure that reports nothing is indistinguishable from an empty org", len(got))
+	}
+	if got[0].phase != "flowMatrix" {
+		t.Fatalf("degradation phase = %q, want %q", got[0].phase, "flowMatrix")
+	}
+	if !errors.Is(got[0].err, boom) {
+		t.Fatalf("degradation error = %v, want it to wrap %v -- the report must carry the cause Python's logger.error carried", got[0].err, boom)
+	}
+
+	// The whole point: the DRIVER's message must still be recoverable.
+	// err.Error() cannot carry it (fixed string), so anything that
+	// records only the message would lose the table name and code 60.
+	if !errors.Is(got[0].err, driverErr) {
+		t.Fatalf("degradation error does not unwrap to the driver cause -- telemetry would record only the fixed %q and distinguish nothing", boom.Error())
+	}
+	if strings.Contains(got[0].err.Error(), "code: 60") {
+		t.Fatal("fake is not modelling the real client: operationError.Error() must NOT leak the driver text, or this test proves nothing about the real one")
+	}
+	if cause := rootCause(got[0].err); !strings.Contains(cause.Error(), "code: 60") {
+		t.Fatalf("rootCause = %q, want it to recover the driver message telemetry needs", cause.Error())
+	}
+}
+
+// fakeOperationError mirrors dev-health-go/clickhouse's unexported
+// *operationError semantics exactly (client.go:207-213): a fixed
+// Error() string that omits the cause, plus Unwrap() to reach it.
+type fakeOperationError struct {
+	operation string
+	cause     error
+}
+
+func (e *fakeOperationError) Error() string { return "ClickHouse " + e.operation + " failed" }
+func (e *fakeOperationError) Unwrap() error { return e.cause }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
@@ -91,9 +92,65 @@ func (r *queryResolver) Catalog(ctx context.Context, orgID string, dimension *mo
 	panic(fmt.Errorf("not implemented: Catalog - catalog"))
 }
 
-// Analytics is the resolver for the analytics field.
+// Analytics is the resolver for the analytics field (CHAOS-4506,
+// non-investment path only -- see internal/analytics's package doc
+// comment for the full scope split).
+//
+// The two-branch org-id check below is COPIED IN SHAPE from
+// FeatureFlags above (schema.resolvers.go:146-164), not invented here --
+// `analytics` is not the first ported resolver to take a client-supplied
+// `orgId` argument (nine others already do: FeatureFlags plus the
+// Catalog/DevMetric/DevScopeSearch/etc. stubs), and FeatureFlags already
+// implements the reject-on-mismatch check Python's OrgIdAuthExtension
+// (extensions.py:109-169) performs for its non-superuser branch. Message
+// text is NOT copied -- FeatureFlags's mismatch string ("org_id is
+// required for all analytics queries") is itself a copy-paste artifact
+// that predates this field and is not fixed here (out of this PR's
+// scope; not propagated forward either).
+//
+// KNOWN GAP, pre-existing and epic-wide, not introduced here: Python's
+// OrgIdAuthExtension lets a verified superuser cross-org query by
+// rebinding context.org_id when the requested org differs
+// (extensions.py:159-168); Go's authctx.Claims carries no superuser or
+// impersonation state at all, and none of the nine other orgId-taking
+// resolvers have it either. This makes Go strictly MORE restrictive than
+// Python (a superuser cannot cross-org query analytics via this path
+// yet) -- a capability gap, not a vulnerability: nothing leaks, the
+// restrictive direction is the safe one to diverge in on an authz
+// boundary, and adding superuser support later is additive, never a
+// revert.
 func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error) {
-	panic(fmt.Errorf("not implemented: Analytics - analytics"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		return nil, &gqlerror.Error{
+			Message: "cannot query analytics for a different organization",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
+	spanCtx, finish := startAnalyticsSpan(ctx)
+	result, err := analytics.Resolve(spanCtx, r.ClickHouse, orgID, batch)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("analytics: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // ProductTelemetryDashboard is the resolver for the productTelemetryDashboard field.

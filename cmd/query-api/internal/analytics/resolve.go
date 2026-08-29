@@ -264,6 +264,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	nodes, edges, execErr := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
 	if execErr != nil {
 		// Swallow: analytics.py:654-656 logs and degrades to empty.
+		recordDegradation(ctx, "sankey", execErr)
 		nodes, edges = nil, nil
 	}
 

@@ -300,6 +300,51 @@ const registeredWorkGraphArtifactsDocument = `query WorkGraphArtifacts($orgId: S
   }
 }`
 
+// registeredFlowMatrixDocument is CHAOS-4506 Wave 4's registered document
+// for the flowMatrix operation, ONE of the three analytics-touching
+// documents in web/src/lib/graphql/queries.ts -- the ONLY one this PR
+// registers. Copied byte-for-byte from queries.ts:56-74's
+// FLOW_MATRIX_QUERY, operation name "FlowMatrix".
+//
+// The other two analytics documents, INVESTMENT_BREAKDOWN_QUERY
+// (queries.ts:9) and INVESTMENT_FULL_QUERY (queries.ts:222), are
+// DELIBERATELY NOT registered here -- both are investment-path-only in
+// live traffic (every real caller in investmentFetchers.ts/
+// hooks/useInvestment.ts sets useInvestment: true; useAnalytics.ts's
+// InvestmentBreakdown caller does too), and this PR's
+// internal/analytics port explicitly rejects useInvestment=true rather
+// than silently answering with non-investment numbers. Registering
+// either of those two documents before the investment-path follow-up
+// ticket lands would let real traffic reach that rejection in
+// production instead of staying on Python -- register them only once
+// that follow-up ships.
+//
+// FlowMatrix is safe to register precisely because it is NOT gated the
+// same way: compile_flow_matrix's TEAM/REPO/WORK_TYPE branch never reads
+// use_investment at all (Python source, compiler.py:495-518), and the
+// real live caller (web/src/lib/graphql/hooks/useChordFlow.ts) sends
+// useInvestment=true on every request for exactly those three
+// dimensions -- proven safe by
+// TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject
+// in internal/analytics, not assumed from the document text alone.
+const registeredFlowMatrixDocument = `query FlowMatrix($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    flowMatrix {
+      nodes {
+        id
+        label
+        dimension
+        value
+      }
+      edges {
+        source
+        target
+        value
+      }
+    }
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -440,6 +485,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphEdges":       digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":        digestHex(registeredWorkGraphFlowDocument),
 		"workGraphArtifacts":   digestHex(registeredWorkGraphArtifactsDocument),
+		"flowMatrix":           digestHex(registeredFlowMatrixDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

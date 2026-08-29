@@ -317,7 +317,17 @@ func normalizeLinearReferenceTeam(
 		ID:       teamKey,
 		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamKey)).String(),
 		Name:     linearFirstNonEmpty(payload.Name, teamKey), Description: payload.Description,
-		Members: members, ProjectKeys: []string{teamKey}, RepoPatterns: []string{}, IsActive: 1,
+		// ProjectKeys is deliberately left empty, not []string{teamKey}
+		// (CHAOS-4530: "a team key is not a project key"). A team's own key
+		// is not a project it owns; teams.project_keys is meant to hold the
+		// keys of the projects it actually owns, and Linear has no such
+		// per-project key concept the collector can populate today. Nothing
+		// downstream depends on this field containing the team's own key:
+		// Python's build_project_key_resolver already adds a team_id
+		// fallback entry independent of project_keys
+		// (providers/teams.py:206-232), so team-key lookups (e.g. the
+		// native_team_key attribution arm) resolve unchanged.
+		Members: members, ProjectKeys: []string{}, RepoPatterns: []string{}, IsActive: 1,
 		UpdatedAt: normalizedAt, OrgID: claim.OrgID, Provider: "linear",
 		NativeTeamKey: &nativeTeamKey,
 	}, nil

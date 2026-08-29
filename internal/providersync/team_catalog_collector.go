@@ -85,6 +85,16 @@ type TeamCatalogResult struct {
 	ProjectsWritten    int
 	// OwnershipWritten is team_project_ownership rows (Linear, GitLab).
 	OwnershipWritten int
+	// ProjectsWithoutKey (CHAOS-4530, "a team key is not a project key")
+	// counts, of ProjectsWritten, how many `projects` rows this call wrote
+	// with a nil project_key. Zero for a collector that never writes
+	// projects.project_key at all. Linear's collector no longer stamps the
+	// owning team's key onto a real project's catalog/ownership rows (that
+	// was the defect), and it has no genuine per-project key source yet, so
+	// every real Linear project it writes currently counts here -- this is
+	// the visible, per-run cost of that gap until a real per-project key
+	// exists to close it.
+	ProjectsWithoutKey int
 	// RepoOwnershipWritten is team_repo_ownership rows (GitHub) -- a
 	// DIFFERENT destination table from OwnershipWritten's
 	// team_project_ownership (team-lead ruling, 2026-08-28: the two must

@@ -1067,6 +1067,26 @@ items), `assign()`'s existing `project_id > linear_team_key` priority means the 
 correctly present and load-bearing for other data, but never the WINNING arm observed on THIS org's
 current topology — not a defect, a consequence of the two features interacting as designed.
 
+**CHAOS-4530 update: the team-key-shaped `projects` row is gone; the matching `team_project_ownership`
+row is not.** CHAOS is a Linear TEAM, not a project. Until CHAOS-4530, `linear_reference_catalog_route.go`
+wrote the `"{org_id}:linear:{team_key}"` identity to BOTH `projects` (an un-typed, team-shaped catalog
+row -- `id`/`project_key` = the team's own key, `name` = the team's display name) AND
+`team_project_ownership` (this section's `linear_team_key` fallback arm). Because
+`acr`'s `projectOwnershipJoinSQL` resolves a project's facts only through `projects.project_key`, and
+that synthetic row was the ONLY non-empty `project_key` this collector ever wrote for Linear, every
+project fact resolved to "team CHAOS" and no real Linear project was ever reachable (CHAOS-4530's own
+finding). CHAOS-4530 removed ONLY the `projects` write -- CHAOS is typed as a team again, nowhere in
+`projects`. The `team_project_ownership` write (formerly `:410-414`, now the loop right after the
+native-projects block) is UNCHANGED: this section's `linear_team_key` arm
+(`team_repo_ownership_derivation.go`'s `linearTeamKeyProjectID`) reads only `team_project_ownership`,
+never `projects`, so it is unaffected and remains the correct fallback described above. Also as of
+CHAOS-4530, a REAL project's `team_project_ownership` row (the `ProjectID: project.ID`-keyed row from
+the paragraph above) never carries the owning team's key as its `project_key` any more -- that value
+was always the TEAM's key, never a genuine per-project key, and stamping it there was the same defect.
+Real Linear projects still have no genuine per-project key source, so `projects.project_key` and this
+ownership row's `project_key` both stay `NULL`/nil for them; making a real project's facts reachable by
+key is CHAOS-4521b's (acr-side) job, tracked separately and not blocked on this collector.
+
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s

@@ -367,6 +367,19 @@ const (
 	// STATUS_SUPERSEDED because a previously-pending diff was replaced by a
 	// newer, different diff this run (CHAOS-4444).
 	TeamCatalogTableDriftChangesSuperseded TeamCatalogTable = "team_drift_changes_superseded"
+	// TeamCatalogTableProjectsWithoutKey (CHAOS-4530, "a team key is not a
+	// project key") counts `projects` rows this call wrote with a nil
+	// project_key -- a qualified subset of TeamCatalogTableProjects's count,
+	// same pattern as TeamCatalogTableTeamsSkippedPolicy. Before CHAOS-4530
+	// this was invisible: the Linear collector stamped every project-catalog
+	// row's project_key with the owning TEAM's key, so project_key was never
+	// actually empty and nothing measured the gap. Now that a real Linear
+	// project's ownership/catalog rows deliberately carry no per-project key
+	// (Linear has no such concept yet), this makes the resulting "reachable
+	// by project_key" gap visible per run instead of requiring a live
+	// ClickHouse readback to notice it, and gives a signal for when a future
+	// genuine per-project key source should close it.
+	TeamCatalogTableProjectsWithoutKey TeamCatalogTable = "projects_without_key"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -375,6 +388,7 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
 		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
 		TeamCatalogTableTeamsStagedForReview, TeamCatalogTableMembershipsStagedForReview, TeamCatalogTableDriftChangesSuperseded,
+		TeamCatalogTableProjectsWithoutKey,
 	}
 }
 

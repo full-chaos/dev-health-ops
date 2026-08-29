@@ -226,16 +226,55 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 		!batch.Evidence.TeamsComplete || !batch.Evidence.MembersComplete || !batch.Evidence.ProjectsComplete {
 		t.Fatalf("batch=%+v", batch)
 	}
+	// CHAOS-4530: the real Linear project is written to `projects` as
+	// before, PLUS a TOMBSTONE version of the team-derived pseudo-project
+	// (id={org}:linear:ENG) -- is_active=0, project_key=nil -- so
+	// ReplacingMergeTree FINAL retires any prior is_active=1 version an
+	// already-synced org still carries (codex review finding, 2026-08-29:
+	// omitting the write entirely leaves stale orgs exposing "team CHAOS"
+	// as an active project forever). So Projects is 2 (1 real + 1
+	// tombstone), and ProjectsWithoutKey excludes the tombstone (counts
+	// only real, active projects lacking a key) -- see below. The matching
+	// team_project_ownership row is still emitted (see the Ownership
+	// assertions below) -- CHAOS-4458 part (b)'s linearTeamKeyProjectID
+	// fallback arm still needs it -- so Ownership stays at 2.
 	if batch.Result.Teams != 1 || batch.Result.Members != 1 || batch.Result.Memberships != 1 ||
-		batch.Result.Projects != 2 || batch.Result.Ownership != 2 {
+		batch.Result.Projects != 2 || batch.Result.Ownership != 2 || batch.Result.ProjectsWithoutKey != 1 {
 		t.Fatalf("result=%+v", batch.Result)
 	}
 	if batch.Rows.Projects[0].State != "completed" || batch.Rows.Projects[0].IsActive != 1 ||
 		batch.Rows.Projects[0].LeadID == nil || *batch.Rows.Projects[0].LeadID != "user-1" {
 		t.Fatalf("projects=%+v", batch.Rows.Projects)
 	}
-	if len(batch.Rows.Projects[1].TeamIDs) != 0 || len(batch.Rows.Projects[1].TeamKeys) != 0 {
-		t.Fatalf("team-derived project diverged from Python row shape: %+v", batch.Rows.Projects[1])
+	pseudoProjectID := claim.OrgID + ":linear:ENG"
+	foundTombstone := false
+	for _, project := range batch.Rows.Projects {
+		if project.ID != pseudoProjectID {
+			continue
+		}
+		if project.IsActive != 0 || project.ProjectKey != nil {
+			t.Fatalf("CHAOS-4530: team-key-shaped pseudo-project must be a RETIRED tombstone (is_active=0, project_key=nil), not an active project: %+v", project)
+		}
+		foundTombstone = true
+	}
+	if !foundTombstone {
+		t.Fatalf("CHAOS-4530: expected a tombstone row retiring %q, found none: %+v", pseudoProjectID, batch.Rows.Projects)
+	}
+	var realOwnership, teamKeyOwnership *linearReferenceOwnershipRow
+	for index := range batch.Rows.Ownership {
+		row := &batch.Rows.Ownership[index]
+		switch row.ProjectID {
+		case "project-42":
+			realOwnership = row
+		case claim.OrgID + ":linear:ENG":
+			teamKeyOwnership = row
+		}
+	}
+	if realOwnership == nil || realOwnership.ProjectKey != nil {
+		t.Fatalf("CHAOS-4530: a real project's ownership row must never carry the owning team's key as ProjectKey: %+v", realOwnership)
+	}
+	if teamKeyOwnership == nil || teamKeyOwnership.ProjectKey == nil || *teamKeyOwnership.ProjectKey != "ENG" {
+		t.Fatalf("CHAOS-4458(b) linear_team_key arm regression: the team-key-shaped ownership row must survive CHAOS-4530 unchanged: %+v", teamKeyOwnership)
 	}
 	if batch.Rows.Members[0].MemberID != "linear:alice@example.com" || batch.Rows.Members[0].IsActive != 1 ||
 		len(batch.Rows.Memberships[0].IdentityFacets) != 2 ||
@@ -485,3 +524,113 @@ func TestLinearReferenceTeamRosterFromMembershipsScopesByTeam(t *testing.T) {
 }
 
 func linearReferenceStringPtr(value string) *string { return &value }
+
+// --- CHAOS-4530 "a team key is not a project key" -----------------------
+//
+// All three tests below use a synthetic org id and a synthetic Linear
+// project UUID shape ("11111111-...") -- never a real project id from the
+// 13-project verification list in the ticket. Acceptance is "any real
+// project", not a specific one.
+
+const chaos4530SyntheticOrgID = "org-4530-synthetic"
+const chaos4530SyntheticProjectID = "11111111-2222-3333-4444-555555555555"
+
+func chaos4530CollectReferenceCatalog(t *testing.T, selectProjects bool) LinearReferenceCatalogBatch {
+	t.Helper()
+	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = chaos4530SyntheticOrgID
+	claim.SourceExternalID = "workspace"
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"QA","name":"Quality","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"` + chaos4530SyntheticProjectID + `","name":"Synthetic Project","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+	}}
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), teamCatalogRefFromClaim(claim),
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: selectProjects}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("CollectReferenceCatalog: %v", err)
+	}
+	return batch
+}
+
+// TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject is the
+// red-first proof for CHAOS-4530 item (a): the collector must never write an
+// ACTIVE {org}:linear:{teamKey}-shaped row into `projects`, for ANY
+// selection combination (including Projects deselected, when the
+// pseudo-project used to be the ONLY project row written at all). A
+// RETIRED tombstone version of that identity (is_active=0, project_key=nil)
+// is expected and required (codex review, 2026-08-29): omitting the write
+// entirely would leave an already-synced org's prior is_active=1 version as
+// the ReplacingMergeTree FINAL result forever, never actually retiring it.
+func TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject(t *testing.T) {
+	for _, selectProjects := range []bool{true, false} {
+		batch := chaos4530CollectReferenceCatalog(t, selectProjects)
+		pseudoID := chaos4530SyntheticOrgID + ":linear:QA"
+		foundTombstone := false
+		for _, project := range batch.Rows.Projects {
+			if project.ID != pseudoID {
+				if project.ProjectKey != nil && *project.ProjectKey == "QA" {
+					t.Fatalf("selectProjects=%v: found a `projects` row keyed by the team's own key: %+v", selectProjects, project)
+				}
+				continue
+			}
+			if project.IsActive != 0 || project.ProjectKey != nil {
+				t.Fatalf("selectProjects=%v: team-key-shaped pseudo-project must be a RETIRED tombstone (is_active=0, project_key=nil), found active/keyed: %+v", selectProjects, project)
+			}
+			foundTombstone = true
+		}
+		if !foundTombstone {
+			t.Fatalf("selectProjects=%v: expected a tombstone row retiring %q, found none: %+v", selectProjects, pseudoID, batch.Rows.Projects)
+		}
+	}
+}
+
+// TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey is
+// the red-first proof for CHAOS-4530 item (b): a REAL project's ownership
+// row (ProjectID = the provider UUID, never the {org}:linear:{key} shape)
+// must never carry the owning team's key as ProjectKey.
+func TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey(t *testing.T) {
+	batch := chaos4530CollectReferenceCatalog(t, true)
+	found := false
+	for _, ownership := range batch.Rows.Ownership {
+		if ownership.ProjectID != chaos4530SyntheticProjectID {
+			continue
+		}
+		found = true
+		if ownership.ProjectKey != nil {
+			t.Fatalf("real project's ownership row carries a ProjectKey (must be nil, never the team key): %+v", ownership)
+		}
+	}
+	if !found {
+		t.Fatal("expected an ownership row for the synthetic real project, found none")
+	}
+}
+
+// TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader is the
+// red-first proof for CHAOS-4530 item (c) (reader enumeration pinned): the
+// team-key-shaped team_project_ownership row this collector still writes
+// (kept for CHAOS-4458 part (b)) must stay byte-identical to the identity
+// team_repo_ownership_derivation.go's linearTeamKeyProjectID reconstructs to
+// look it up. If a future edit changes either side without the other, this
+// fails instead of silently zeroing out the linear_team_key resolution arm
+// prod depends on (5.6 readback: team_repo_ownership inferred 0 -> 10).
+func TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader(t *testing.T) {
+	batch := chaos4530CollectReferenceCatalog(t, true)
+	wantProjectID := linearTeamKeyProjectID(chaos4530SyntheticOrgID, "QA")
+	var teamKeyRow *linearReferenceOwnershipRow
+	for index := range batch.Rows.Ownership {
+		if batch.Rows.Ownership[index].ProjectID == wantProjectID {
+			teamKeyRow = &batch.Rows.Ownership[index]
+		}
+	}
+	if teamKeyRow == nil {
+		t.Fatalf("no ownership row matches the reader's reconstructed identity %q -- CHAOS-4458(b)'s linear_team_key arm would silently find nothing; rows=%+v", wantProjectID, batch.Rows.Ownership)
+	}
+	if teamKeyRow.TeamID != "QA" || teamKeyRow.Source != "native" {
+		t.Fatalf("team-key-shaped ownership row shape changed: %+v", teamKeyRow)
+	}
+}

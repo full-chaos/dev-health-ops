@@ -517,6 +517,7 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 					{"team_project_ownership", result.OwnershipWritten},
 					{"team_repo_ownership", result.RepoOwnershipWritten},
 					{"sprints", result.SprintsWritten},
+					{"projects_without_key", result.ProjectsWithoutKey},
 					{"teams_skipped_policy", result.TeamsSkippedPolicy},
 					{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
 					{"teams_staged_for_review", result.TeamsStagedForReview},

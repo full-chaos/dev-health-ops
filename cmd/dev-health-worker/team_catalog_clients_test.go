@@ -165,8 +165,8 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 12 {
-		t.Fatalf("observer rows=%+v, want one call per destination table (CHAOS-4444 added 3: teams_staged_for_review, team_memberships_staged_for_review, team_drift_changes_superseded)", observer.rows)
+	if len(observer.rows) != 13 {
+		t.Fatalf("observer rows=%+v, want one call per destination table (CHAOS-4444 added 3: teams_staged_for_review, team_memberships_staged_for_review, team_drift_changes_superseded; CHAOS-4530 added 1: projects_without_key)", observer.rows)
 	}
 	foundRepoOwnershipRow := false
 	for _, row := range observer.rows {

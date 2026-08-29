@@ -81,28 +81,28 @@ type teamRepoOwnershipRepoInfo struct {
 // (providers/teams.py::load_team_repo_ownership_map,
 // native_status_change.py's _TEAM_REPOSITORIES_SQL -- both already filter
 // on valid_to) see it as expired on their very next query.
-func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error) {
+func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error) {
 	if service.Conn == nil || ctx == nil || orgID == "" {
-		return 0, 0, false, ErrTeamRepoOwnershipDerivationUnavailable
+		return 0, 0, false, nil, ErrTeamRepoOwnershipDerivationUnavailable
 	}
 	now := time.Now().UTC()
 
 	projectLinks, err := loadTeamRepoOwnershipProjectLinks(ctx, service.Conn, orgID, now)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(projectLinks) == 0 {
 		// No project ownership synced for this org yet -- nothing to derive,
 		// and no reason to touch work_items/repos at all.
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(repos) == 0 {
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
 	for id := range repos {
@@ -111,47 +111,57 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 
 	workItems, err := loadTeamRepoOwnershipWorkItems(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 
 	dependencyEdges, err := loadTeamRepoOwnershipDependencyEdges(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 
 	issuePRLinks, err := loadTeamRepoOwnershipIssuePRLinks(ctx, service.Conn, orgID, repoIDs)
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
 		// team_project_ownership and repos both exist, but not a single
 		// linkage row of any kind has synced yet -- also the first-sync gap,
 		// not a genuine no-signal evaluation.
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	}
 
-	derived := deriveTeamRepoOwnership(projectLinks, workItems, dependencyEdges, issuePRLinks)
+	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks)
+	// armCounts (CHAOS-4458 part (b)): how many of the rows actually WRITTEN
+	// below came from each resolution identity -- computed from derived, not
+	// from resolveWorkItemProjectRef call counts, so a conflicted/dropped
+	// repo (never written) never inflates either arm's count.
+	armCounts = map[string]int{}
+	for _, row := range derived {
+		if row.ResolutionArm != "" {
+			armCounts[row.ResolutionArm]++
+		}
+	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, true, err
+		return 0, 0, true, armCounts, err
 	}
 	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
-			return 0, 0, true, err
+			return 0, 0, true, armCounts, err
 		}
 	}
 
 	if len(derived) == 0 {
-		return 0, retracted, true, nil
+		return 0, retracted, true, armCounts, nil
 	}
 	written, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
 	if err != nil {
-		return 0, retracted, true, err
+		return 0, retracted, true, armCounts, err
 	}
-	return written, retracted, true, nil
+	return written, retracted, true, armCounts, nil
 }
 
 func loadTeamRepoOwnershipProjectLinks(
@@ -237,8 +247,14 @@ WHERE org_id = ?`,
 func loadTeamRepoOwnershipWorkItems(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]TeamRepoOwnershipWorkItem, error) {
+	// native_team_key (migration 050) alongside project_id -- CHAOS-4458
+	// part (b): a Linear work item's project_id is a raw Linear Project UUID,
+	// a SEPARATE id space from team_project_ownership's Linear rows (keyed
+	// "{org_id}:linear:{team_key}"); native_team_key carries the raw Linear
+	// team key (issue.team.key) that DOES match. Empty string (ClickHouse's
+	// column default, migration 050) for every non-Linear provider.
 	rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, repo_id, project_id
+SELECT work_item_id, provider, repo_id, project_id, native_team_key
 FROM work_items FINAL
 WHERE org_id = ?`,
 		orgID)
@@ -250,7 +266,7 @@ WHERE org_id = ?`,
 	for rows.Next() {
 		var item TeamRepoOwnershipWorkItem
 		var repoID uuid.UUID
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
 			return nil, err
 		}
 		if repoID != uuid.Nil {

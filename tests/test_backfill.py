@@ -111,6 +111,9 @@ def test_run_backfill_for_config_raises_when_config_missing(
         )
 
 
+_DEFAULT_TEST_CONFIG_ID = "66666666-6666-6666-6666-666666666666"
+
+
 class _FakeConfig:
     def __init__(
         self,
@@ -119,8 +122,17 @@ class _FakeConfig:
         sync_options: dict[str, object] | None = None,
         sync_targets: list[str] | None = None,
         integration_id: str | None = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        config_id: str = _DEFAULT_TEST_CONFIG_ID,
+        name: str = "test-config",
     ) -> None:
-        self.id = org_id
+        # id/name matter to the CHAOS-4498 config-context guard
+        # (canonical_sync_config_for_sync_run comparison) -- config_id
+        # defaults to _DEFAULT_TEST_CONFIG_ID, matching the sync_config_id
+        # every existing test passes to run_backfill_for_config, so the
+        # default identity check (resolved config is `config` itself)
+        # holds without every call site needing an update.
+        self.id = config_id
+        self.name = name
         self.org_id = org_id
         self.provider = provider
         self.sync_options = sync_options or {}
@@ -131,12 +143,20 @@ class _FakeConfig:
 _ARMED_SYNC_RUN_ID = "11111111-1111-1111-1111-111111111111"
 
 
+_TEST_DB_URL = "clickhouse://local"
+
+
+_UNSET = object()
+
+
 def _patch_session_with_config(
     monkeypatch: pytest.MonkeyPatch,
     config: object,
     *,
     seed_calls: list[dict[str, object]] | None = None,
     await_outcome: dict[str, object] | None = None,
+    worker_db_url: str = _TEST_DB_URL,
+    canonical_config: object = _UNSET,
 ) -> None:
     """Patch run_backfill_for_config's session lookup + the two CHAOS-4498
     seams (seed_reference_discovery_run, await_reference_discovery_terminal)
@@ -144,7 +164,26 @@ def _patch_session_with_config(
     run_team_autoimport_strict itself -- tests that need to prove it is
     unreachable spy on the REAL function instead (see
     test_backfill_never_calls_python_populator_directly below).
+
+    worker_db_url stands in for _get_db_url() (CHAOS-4498, codex review P2
+    sink guard) -- defaults to _TEST_DB_URL so callers passing
+    db_url=_TEST_DB_URL don't spuriously trip the mismatch guard; pass a
+    different value to test the guard itself.
+
+    canonical_config stands in for canonical_sync_config_for_sync_run's
+    return value (CHAOS-4498 config-context guard) -- defaults to `config`
+    itself (the happy path: the shared resolver picks the operator's own
+    config, no mismatch); pass a different object or None to test the
+    guard itself.
     """
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner._get_db_url", lambda: worker_db_url
+    )
+    resolved_canonical = config if canonical_config is _UNSET else canonical_config
+    monkeypatch.setattr(
+        "dev_health_ops.sync.trigger_routing.canonical_sync_config_for_sync_run",
+        lambda session, sync_run: resolved_canonical,
+    )
 
     class _Query:
         def filter(self, *args, **kwargs):
@@ -285,6 +324,153 @@ def test_run_backfill_degraded_ledger_outcome_blocks_writes_and_fails_closed(
     with pytest.raises(RuntimeError, match=outcome_name):
         run_backfill_for_config(
             db_url="clickhouse://local",
+            sync_config_id="66666666-6666-6666-6666-666666666666",
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+    assert writes == []
+
+
+class _FakeCanonicalConfig:
+    """Stands in for the parent SyncConfiguration
+    canonical_sync_config_for_sync_run would actually resolve, when it
+    differs from the operator's requested config."""
+
+    def __init__(self, config_id: str, name: str) -> None:
+        self.id = config_id
+        self.name = name
+
+
+def test_run_backfill_rejects_child_config_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CHAOS-4498 config-context guard (codex review P2 / CHAOS-4500),
+    case 1: --config-id points at a CHILD config (parent_id set). The
+    shared discovery resolver (canonical_sync_config_for_sync_run) only
+    ever picks a PARENT config for the integration, so it would silently
+    apply the parent's sync_options/category selection instead of the
+    child's -- must raise, naming the parent it would have used instead.
+    Red on the pre-fix code: no such guard existed, so this would have
+    silently armed discovery against the wrong config."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    child_config_id = "aaaabbbb-cccc-dddd-eeee-ffff00001111"
+    parent_config_id = "aaaabbbb-cccc-dddd-eeee-ffff00002222"
+    child_config = _FakeConfig(
+        config_org,
+        provider="linear",
+        config_id=child_config_id,
+        name="child-config",
+    )
+    parent_config = _FakeCanonicalConfig(parent_config_id, "parent-config")
+    _patch_session_with_config(
+        monkeypatch, child_config, canonical_config=parent_config
+    )
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    with pytest.raises(ValueError, match=parent_config_id):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id=child_config_id,
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+    assert writes == []
+
+
+def test_run_backfill_rejects_ambiguous_parent_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4498 config-context guard, case 2: the integration has
+    multiple parent SyncConfigurations, and the operator's --config-id is
+    not the one the shared resolver would pick (oldest by created_at).
+    Must raise, naming the OTHER parent config that would have been used."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    newer_parent_id = "bbbbcccc-dddd-eeee-ffff-000011112222"
+    older_parent_id = "bbbbcccc-dddd-eeee-ffff-000011113333"
+    requested_config = _FakeConfig(
+        config_org,
+        provider="linear",
+        config_id=newer_parent_id,
+        name="newer-parent",
+    )
+    other_parent = _FakeCanonicalConfig(older_parent_id, "older-parent")
+    _patch_session_with_config(
+        monkeypatch, requested_config, canonical_config=other_parent
+    )
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    with pytest.raises(ValueError, match=older_parent_id):
+        run_backfill_for_config(
+            db_url="clickhouse://local",
+            sync_config_id=newer_parent_id,
+            org_id=None,
+            since=date(2026, 1, 1),
+            before=date(2026, 1, 3),
+        )
+
+    assert writes == []
+
+
+def test_run_backfill_allows_canonical_config_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No false positive: when --config-id IS the config the shared
+    resolver would pick (the common case -- a single parent config per
+    integration), the guard does not fire."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(monkeypatch, _FakeConfig(config_org, provider="linear"))
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: None,
+    )
+
+    result = run_backfill_for_config(
+        db_url="clickhouse://local",
+        sync_config_id=_DEFAULT_TEST_CONFIG_ID,
+        org_id=None,
+        since=date(2026, 1, 1),
+        before=date(2026, 1, 3),
+    )
+
+    assert result["status"] == "success"
+
+
+def test_run_backfill_rejects_mismatched_analytics_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4498 (codex review, P2): reference discovery no longer takes
+    db_url -- it always writes to the worker's own configured ClickHouse
+    (native collectors) or _get_db_url() (Python Fallback), never to a
+    custom --analytics-db. Silently letting work items go to db_url while
+    team/member/ownership rows go elsewhere would split one backfill
+    across two databases. Red on the pre-fix code: no such guard existed,
+    so a mismatched --analytics-db would have silently split writes rather
+    than raising here, before ever arming reference discovery."""
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_session_with_config(
+        monkeypatch,
+        _FakeConfig(config_org, provider="linear"),
+        worker_db_url="clickhouse://worker-default",
+    )
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_work_items_sync_job",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    with pytest.raises(ValueError, match="differs from the worker's configured"):
+        run_backfill_for_config(
+            db_url="clickhouse://custom-analytics-db",
             sync_config_id="66666666-6666-6666-6666-666666666666",
             org_id=None,
             since=date(2026, 1, 1),

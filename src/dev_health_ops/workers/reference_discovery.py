@@ -336,19 +336,40 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
             .order_by(SyncRunUnit.id)
             .all()
         )
-        credentials: dict[str, Any] = {}
-        if units:
-            # Prefer the run-stamped credential frozen at plan time (CHAOS-2755)
-            # so discovery resolves the SAME auth as this run's units. NULL-stamped
-            # (legacy/in-flight) runs fall back to integration.credential_id.
-            _stamped_credential_id, resolved_credentials = resolve_run_auth(
-                session,
-                run=run,
-                integration=integration,
-                provider=integration.provider,
-                error_label=f"sync run: {run_uuid}",
-            )
-            credentials = dict(resolved_credentials)
+        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
+        # discovery resolves the SAME auth as this run's units. NULL-stamped
+        # (legacy/in-flight) runs fall back to integration.credential_id.
+        # CHAOS-4498 (codex review, P1): this used to be gated on `if units:`
+        # -- correct when every caller of this function was a unit-planned
+        # sync run, wrong now that seed_reference_discovery_run (backfill)
+        # creates a deliberately zero-unit anchor SyncRun purely to arm
+        # discovery. A zero-unit run still needs real credentials for the
+        # populate() call this context feeds -- omitting them here silently
+        # sent an empty credentials dict to a capable provider's strict
+        # populator. Resolving unconditionally is safe for every existing
+        # (unit-planned) caller too: resolve_run_auth reads only
+        # run/integration/provider, never `units`.
+        # Prefer the run-stamped credential frozen at plan time (CHAOS-2755) so
+        # discovery resolves the SAME auth as this run's units. NULL-stamped
+        # (legacy/in-flight) runs fall back to integration.credential_id.
+        # CHAOS-4498 (codex review, P1): this used to be gated on `if units:`
+        # -- correct when every caller of this function was a unit-planned
+        # sync run, wrong now that seed_reference_discovery_run (backfill)
+        # creates a deliberately zero-unit anchor SyncRun purely to arm
+        # discovery. A zero-unit run still needs real credentials for the
+        # populate() call this context feeds -- omitting them here silently
+        # sent an empty credentials dict to a capable provider's strict
+        # populator. Resolving unconditionally is safe for every existing
+        # (unit-planned) caller too: resolve_run_auth reads only
+        # run/integration/provider, never `units`.
+        _stamped_credential_id, resolved_credentials = resolve_run_auth(
+            session,
+            run=run,
+            integration=integration,
+            provider=integration.provider,
+            error_label=f"sync run: {run_uuid}",
+        )
+        credentials = dict(resolved_credentials)
         source_ids = {unit.source_id for unit in units}
         sources = (
             session.query(IntegrationSource)

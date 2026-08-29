@@ -943,3 +943,57 @@ def test_await_reference_discovery_terminal_reports_timeout_running_past_lifetim
     )
 
     assert outcome == {"outcome": "timeout_running", "sync_run_id": str(run.id)}
+
+
+def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-4498 (codex review, P1): seed_reference_discovery_run creates a
+    deliberately zero-unit anchor SyncRun to arm strict discovery for an
+    operator backfill. _load_discovery_context used to gate credential
+    resolution on `if units:` -- correct when every caller was a
+    unit-planned sync run, wrong for a zero-unit anchor whose entire
+    purpose is to feed a strict populate() call that needs real
+    credentials. Red on the pre-fix gate: resolve_run_auth was never
+    called for a zero-unit run, so credentials silently stayed {}, and a
+    capable provider's strict populator (e.g. jira) would fail or no-op
+    on missing credentials."""
+    from dev_health_ops.workers import reference_discovery
+
+    org_id = str(uuid.uuid4())
+    integration = Integration(
+        org_id=org_id,
+        provider="jira",
+        name="Jira integration",
+        config={},
+        is_active=True,
+    )
+    db_session.add(integration)
+    db_session.flush()
+    run = SyncRun(
+        org_id=org_id,
+        integration_id=integration.id,
+        triggered_by="operator_backfill",
+        mode=SyncRunMode.BACKFILL.value,
+        status=SyncRunStatus.PLANNED.value,
+        total_units=0,
+    )
+    db_session.add(run)
+    db_session.flush()
+    # No SyncRunUnit rows at all -- this run is a zero-unit anchor, exactly
+    # what seed_reference_discovery_run produces.
+    _patch_db_session(monkeypatch, db_session)
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve_run_auth(session, *, run, integration, provider, error_label):
+        calls.append({"run_id": str(run.id), "provider": provider})
+        return None, {"token": "resolved-for-zero-unit-run"}
+
+    monkeypatch.setattr(reference_discovery, "resolve_run_auth", _fake_resolve_run_auth)
+
+    context = reference_discovery._load_discovery_context(run.id)
+
+    assert len(calls) == 1
+    assert calls[0]["provider"] == "jira"
+    assert context["credentials"] == {"token": "resolved-for-zero-unit-run"}

@@ -14,7 +14,7 @@ from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.workers.reference_discovery import (
     await_reference_discovery_terminal,
 )
-from dev_health_ops.workers.task_utils import _jira_query_options
+from dev_health_ops.workers.task_utils import _get_db_url, _jira_query_options
 
 from .chunker import chunk_date_range
 
@@ -188,10 +188,71 @@ def run_backfill_for_config(
             str(config.integration_id) if config.integration_id is not None else None
         )
 
+        # CHAOS-4498 (codex review, P2 / CHAOS-4500): the shared discovery
+        # seam resolves CHAOS-4323 category selection via
+        # canonical_sync_config_for_sync_run, which reads the run's
+        # integration_id only -- it has no way to honour a specific
+        # --config-id, and SyncRun has no config-id column to give it one
+        # (tracked for a real fix by CHAOS-4500). Call the SAME production
+        # resolver here, before arming anything, and fail loud the moment
+        # it would not pick the operator's own config -- a child config
+        # (parent_id set) or a non-canonical/ambiguous parent both fall
+        # into this, naming exactly what would have been used instead of
+        # silently applying the wrong provider/category selection.
+        if integration_id is not None:
+            from dev_health_ops.sync.trigger_routing import (
+                canonical_sync_config_for_sync_run,
+            )
+
+            resolved_config = canonical_sync_config_for_sync_run(session, config)
+            if resolved_config is None or str(resolved_config.id) != str(config.id):
+                resolved_desc = (
+                    f"{resolved_config.id} ({resolved_config.name!r})"
+                    if resolved_config is not None
+                    else "no parent SyncConfiguration at all"
+                )
+                raise ValueError(
+                    "run_backfill_for_config: --config-id "
+                    f"{sync_config_id} ({config.name!r}) is not the config "
+                    "the shared reference-discovery resolver "
+                    "(canonical_sync_config_for_sync_run) would use for "
+                    f"integration {integration_id} -- it would resolve "
+                    f"{resolved_desc} instead. This is a child config "
+                    "(parent_id set) or one of several parent configs for "
+                    "this integration; the discovery seam has no way to "
+                    "honour --config-id specifically (CHAOS-4500). Point "
+                    "--config-id at the integration's sole/canonical "
+                    "parent SyncConfiguration, or resolve CHAOS-4500 first."
+                )
+
     if integration_id is None:
         raise ValueError(
             f"Sync configuration {sync_config_id} has no integration_id; "
             "cannot arm reference discovery (CHAOS-4498)"
+        )
+
+    # CHAOS-4498 (codex review, P2): reference discovery no longer takes
+    # db_url as a parameter -- it is armed through the shared ledger/outbox
+    # seam, and both the Go native collectors and the Python Fallback
+    # bridge (_get_db_url()) always write to their OWN configured
+    # ClickHouse, never to whatever URI this call was given. Before this
+    # change, an explicit --analytics-db was honoured end-to-end
+    # (threaded straight into run_team_autoimport_strict); now it silently
+    # would not be, splitting one backfill's writes across two databases
+    # (work items to db_url, team/member/ownership rows to the worker's
+    # default). Fail loud on a detectable mismatch rather than silently
+    # split -- carrying a custom sink through the shared dispatch seam is
+    # real follow-up work, not something to hack around here.
+    if db_url != _get_db_url():
+        raise ValueError(
+            "run_backfill_for_config: --analytics-db "
+            f"({db_url!r}) differs from the worker's configured ClickHouse "
+            f"({_get_db_url()!r}). Reference discovery (CHAOS-4498) always "
+            "writes team/member/ownership rows to the worker's own "
+            "ClickHouse, not to a custom analytics sink -- running this "
+            "backfill would split writes across two databases. Point "
+            "--analytics-db at the same ClickHouse the worker uses, or "
+            "unset it to use the default."
         )
 
     windows = chunk_date_range(since=since, before=before, chunk_days=chunk_days)

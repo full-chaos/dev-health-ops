@@ -8,29 +8,27 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// membershipConflictPair identifies one (member_id, team_id) attribution
-// edge -- the same key space team-attribution.md's drift projector and
-// clickhouse_identity_drift.py's _member_key use.
-type membershipConflictPair struct {
-	MemberID string
-	TeamID   string
-}
-
 const activeManualMembershipsQuery = `
 SELECT member_id, team_id
 FROM team_memberships FINAL
 WHERE org_id = {org_id:String} AND provider = {provider:String}
   AND source = 'manual' AND (valid_to IS NULL OR valid_to > now())`
 
-// resolveActiveManualMembershipPairs batch-reads every active manual
-// team_memberships row for this org+provider, mirroring
+// resolveActiveManualMembershipTeams batch-reads every active manual
+// team_memberships row for this org+provider, grouped by member_id into the
+// SET of team_ids that member has an active manual pin to, mirroring
 // clickhouse_identity_drift.py's _manual_memberships query (scoped to
 // source='manual', not-yet-expired). CHAOS-4431 codex review finding #6
 // (team-lead ruling 2026-08-28): an interim guard ahead of the full
 // CHAOS-2622/CHAOS-4444 drift-aware projector, not a replacement for it.
-func resolveActiveManualMembershipPairs(
+//
+// Grouped by member (not a flat (member,team) set) because the conflict
+// check ITSELF is member-scoped, not pair-scoped -- see
+// membershipConflictsWithManualState's doc comment for why (codex review
+// round 2, P1: an earlier revision of this file got this backwards).
+func resolveActiveManualMembershipTeams(
 	ctx context.Context, conn driver.Conn, orgID, provider string,
-) (map[membershipConflictPair]struct{}, error) {
+) (map[string]map[string]struct{}, error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" || strings.TrimSpace(provider) == "" {
 		return nil, ErrInvalidConfiguration
 	}
@@ -40,15 +38,20 @@ func resolveActiveManualMembershipPairs(
 		return nil, err
 	}
 	defer rows.Close()
-	pairs := make(map[membershipConflictPair]struct{})
+	byMember := make(map[string]map[string]struct{})
 	for rows.Next() {
 		var memberID, teamID string
 		if err := rows.Scan(&memberID, &teamID); err != nil {
 			return nil, err
 		}
-		pairs[membershipConflictPair{MemberID: memberID, TeamID: teamID}] = struct{}{}
+		teams, ok := byMember[memberID]
+		if !ok {
+			teams = make(map[string]struct{})
+			byMember[memberID] = teams
+		}
+		teams[teamID] = struct{}{}
 	}
-	return pairs, rows.Err()
+	return byMember, rows.Err()
 }
 
 const activeMemberAttributionFallbacksQuery = `
@@ -98,21 +101,34 @@ func normalizeMembershipIdentity(value string) string {
 }
 
 // membershipConflictsWithManualState reports whether a native membership row
-// must be skipped: either its exact (member_id, team_id) pair already has an
-// active MANUAL membership (writing the native row would not override a
-// manual pin -- the projector's job, not this guard's -- so skip it instead
-// of racing it), or the member's own identity (provider id, raw email, or
-// any resolved facet) has an active member-scoped manual_attribution_
-// fallbacks row, regardless of which team that fallback names (fallbacks are
-// member-scoped, not team-scoped, same as clickhouse_identity_drift.py's own
-// _conflict_for fallback branch).
+// must be skipped.
+//
+// CHAOS-4431 codex review round 2, P1: an earlier revision of this function
+// treated an exact (member_id, team_id) match against an active manual
+// membership as the conflict to skip. That is backwards --
+// clickhouse_identity_drift.py's _conflict_for treats a manual membership
+// for the SAME team as a CONFIRMATION (line 259: `if manual.team_id ==
+// team_id: continue` -- not a conflict at all) and only flags a manual
+// membership to a DIFFERENT team as the conflict: Linear says this member
+// is now on team B, but an active manual pin says team A, so writing B's
+// native row would contradict the pin. The correct check is therefore
+// member-scoped, not pair-scoped: if this member has ANY active manual
+// membership at all, and NONE of those manual team_ids is this row's own
+// team_id, skip it.
+//
+// The second source, member-scoped manual_attribution_fallbacks, is
+// unaffected by this correction: it was already team-agnostic (matches
+// clickhouse_identity_drift.py's own fallback branch, which never compares
+// team_id at all).
 func membershipConflictsWithManualState(
 	row linearReferenceMembershipRow,
-	manualPairs map[membershipConflictPair]struct{},
+	manualTeamsByMember map[string]map[string]struct{},
 	fallbackIdentities map[string]struct{},
 ) bool {
-	if _, conflict := manualPairs[membershipConflictPair{MemberID: row.MemberID, TeamID: row.TeamID}]; conflict {
-		return true
+	if manualTeams, hasManual := manualTeamsByMember[row.MemberID]; hasManual {
+		if _, confirmed := manualTeams[row.TeamID]; !confirmed {
+			return true
+		}
 	}
 	if len(fallbackIdentities) == 0 {
 		return false
@@ -147,7 +163,7 @@ func applyTeamMembershipConflictGuard(
 	if len(rows) == 0 {
 		return rows, 0, nil
 	}
-	manualPairs, err := resolveActiveManualMembershipPairs(ctx, conn, orgID, provider)
+	manualTeamsByMember, err := resolveActiveManualMembershipTeams(ctx, conn, orgID, provider)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -158,7 +174,7 @@ func applyTeamMembershipConflictGuard(
 	kept := make([]linearReferenceMembershipRow, 0, len(rows))
 	skipped := 0
 	for _, row := range rows {
-		if membershipConflictsWithManualState(row, manualPairs, fallbackIdentities) {
+		if membershipConflictsWithManualState(row, manualTeamsByMember, fallbackIdentities) {
 			skipped++
 			continue
 		}

@@ -53,8 +53,18 @@ type ProviderClientResolver interface {
 // Both values come from the SAME canonical sync_configurations row, read in
 // one round trip, never two separate queries for one Discover/TeamAutoImport
 // call.
+// strict distinguishes which Python early-exit default applies when NO
+// canonical sync_configurations row exists for this integration at all
+// (CHAOS-4431 codex review round 2, P2): reference_discovery.py:329-354 +
+// team_autoimport.py:206-237's sync_options_is_canonical flag make STRICT
+// discovery default to UNRESTRICTED (every category True) in that case --
+// added by a prior CHAOS-4437 codex review specifically so a legacy/no-
+// config integration keeps its pre-CHAOS-4323 "import everything" behavior
+// instead of silently going to "everything off" -- while non-strict post-
+// sync dispatch keeps its existing all-false default (matches
+// native_post_sync.go:567-577's OR-gate).
 type TeamCatalogSelectionsResolver interface {
-	ResolveSelections(ctx context.Context, orgID, runID, provider string) (selections providersync.TeamCatalogSelections, syncOptions map[string]any, err error)
+	ResolveSelections(ctx context.Context, orgID, runID, provider string, strict bool) (selections providersync.TeamCatalogSelections, syncOptions map[string]any, err error)
 }
 
 // SourceExternalIDsResolver reads this sync run's own provider-source
@@ -135,7 +145,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}
-	selections, syncOptions, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider)
+	selections, syncOptions, err := executor.Selections.ResolveSelections(ctx, orgID, runID, normalizedProvider, true)
 	if err != nil {
 		return nil, err
 	}

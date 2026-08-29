@@ -196,6 +196,9 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	}
 	evidence.TeamsComplete = true
 	evidence.Records += len(teamRaw)
+	// See the cycles-fetch block below (CHAOS-4431 codex review round 2, P1)
+	// for why this is tracked across loop iterations.
+	cyclesAbandoned := false
 	for _, raw := range teamRaw {
 		var payload linearReferenceCatalogTeamPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -277,20 +280,45 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		// selection, including when all three are off, because dispatch-
 		// blocking sprint keys must never go stale just because an org
 		// disabled every writable category.
-		cyclePayloads, cyclePages, cycleErr := collectLinearCycles(ctx, client, payload.ID)
-		evidence.Requests += cyclePages
-		evidence.Pages += cyclePages
-		if cycleErr != nil {
-			return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, cycleErr, false)
-		}
-		teamClaim := claim
-		teamClaim.SourceExternalID = team.ID
-		for _, cyclePayload := range cyclePayloads {
-			sprint, normalizeErr := normalizeLinearSprint(teamClaim, cyclePayload, normalizedAt)
-			if normalizeErr != nil {
-				return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, normalizeErr, false)
+		//
+		// CHAOS-4431 codex review round 2, P1: a cycles failure must NOT
+		// discard the teams/members/projects already fetched in non-strict
+		// (post-sync) mode -- team_autoimport_linear.py:636-639's outer
+		// except only zeroes sprint_rows on a non-strict failure ("if strict:
+		// raise; sprint_rows = []"), it never aborts the whole populate()
+		// call. Strict (reference-discovery) mode keeps propagating the
+		// error, matching Python's "if strict: raise" exactly. Once a cycles
+		// fetch has failed in non-strict mode, stop attempting further ones
+		// (cyclesAbandoned) and discard whatever partial rows.Sprints had
+		// already accumulated -- Python's except clause resets the WHOLE
+		// list, not just the failed team's, since one shared try wraps the
+		// entire per-team cycles loop there.
+		if !cyclesAbandoned {
+			cyclePayloads, cyclePages, cycleErr := collectLinearCycles(ctx, client, payload.ID)
+			evidence.Requests += cyclePages
+			evidence.Pages += cyclePages
+			if cycleErr != nil {
+				if ref.Strict {
+					return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, cycleErr, false)
+				}
+				cyclesAbandoned = true
+				rows.Sprints = nil
+			} else {
+				teamClaim := claim
+				teamClaim.SourceExternalID = team.ID
+				for _, cyclePayload := range cyclePayloads {
+					sprint, normalizeErr := normalizeLinearSprint(teamClaim, cyclePayload, normalizedAt)
+					if normalizeErr != nil {
+						if ref.Strict {
+							return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, normalizeErr, false)
+						}
+						cyclesAbandoned = true
+						rows.Sprints = nil
+						break
+					}
+					rows.Sprints = append(rows.Sprints, sprint)
+				}
 			}
-			rows.Sprints = append(rows.Sprints, sprint)
 		}
 	}
 	// No teams is still a complete, authoritative workspace snapshot. Set the

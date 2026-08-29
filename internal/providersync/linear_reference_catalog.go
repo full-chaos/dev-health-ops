@@ -351,6 +351,38 @@ func linearReferenceTeamRosterFacets(nodes []linearReferenceCatalogMemberPayload
 	return members
 }
 
+// linearReferenceTeamRosterFromMemberships rebuilds one team's `teams.
+// members` roster from a set of ALREADY-FILTERED membership rows (CHAOS-4431
+// codex review round 2, P1) -- mirrors Python's _apply_roster, which builds
+// team_rows[...]['members'] from memberships that already went through
+// split_memberships_for_review, not from the raw provider-observed roster.
+// Used by LinearTeamCatalogCollector after the membership-conflict guard
+// runs, so a membership the guard rejects can never still show up in
+// teams.members even though it was correctly kept out of team_memberships.
+func linearReferenceTeamRosterFromMemberships(teamID string, memberships []linearReferenceMembershipRow) []string {
+	roster := make([]string, 0)
+	for _, membership := range memberships {
+		if membership.TeamID != teamID {
+			continue
+		}
+		values := membership.IdentityFacets
+		if len(values) == 0 {
+			if membership.RawProviderUserID != nil {
+				values = append(values, *membership.RawProviderUserID)
+			}
+			if membership.RawEmail != nil {
+				values = append(values, *membership.RawEmail)
+			}
+		}
+		for _, value := range values {
+			if value != "" && !containsString(roster, value) {
+				roster = append(roster, value)
+			}
+		}
+	}
+	return roster
+}
+
 func normalizeLinearReferenceMember(
 	claim Claim,
 	teamID string,

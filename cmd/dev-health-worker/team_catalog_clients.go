@@ -198,7 +198,7 @@ type teamCatalogSelectionsResolver struct {
 }
 
 func (resolver teamCatalogSelectionsResolver) ResolveSelections(
-	ctx context.Context, orgID, runID, provider string,
+	ctx context.Context, orgID, runID, provider string, strict bool,
 ) (providersync.TeamCatalogSelections, map[string]any, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	integrationID, _, _, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
@@ -223,9 +223,21 @@ WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
 LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 	if errors.Is(queryErr, pgx.ErrNoRows) {
-		// No root sync_configurations row at all means every flag is
-		// unconfigured -- the OR-gate at native_post_sync.go:577 treats the
-		// identical case as "false" via COALESCE; this mirrors that exactly.
+		if strict {
+			// CHAOS-4431 codex review round 2, P2: no canonical
+			// sync_configurations row at all is NOT the same case as an
+			// existing row with every flag explicitly off. Strict reference
+			// discovery must default to UNRESTRICTED here
+			// (reference_discovery.py:329-354's sync_options_is_canonical
+			// flag + team_autoimport.py:206-237, itself a prior CHAOS-4437
+			// codex-review fix) so a legacy/no-config integration keeps
+			// importing everything, matching pre-CHAOS-4323 behavior,
+			// instead of silently going to "everything off".
+			return providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}, nil, nil
+		}
+		// Non-strict (post-sync): every flag unconfigured -- the OR-gate at
+		// native_post_sync.go:577 treats the identical case as "false" via
+		// COALESCE; this mirrors that exactly.
 		return providersync.TeamCatalogSelections{}, nil, nil
 	}
 	if queryErr != nil {
@@ -313,7 +325,7 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 			// retry storm exactly like an un-degraded collector error would.
 			// The strict reference-discovery seam (TeamCatalogDiscoveryExecutor)
 			// has no such decorator and keeps propagating every one of these.
-			selections, syncOptions, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider)
+			selections, syncOptions, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider, false)
 			if selectionsErr != nil {
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 				return nil

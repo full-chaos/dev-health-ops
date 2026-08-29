@@ -56,14 +56,47 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 	}
 	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: "linear"}}
 	result := TeamCatalogResult{}
+
+	// CHAOS-4431 codex review finding #6, ROUND 2 correction (P1): the
+	// membership-conflict guard must run BEFORE the team roster is written,
+	// not after -- team_autoimport_linear.py builds team_rows[...]['members']
+	// via _apply_roster(team_rows, memberships) using memberships that
+	// ALREADY went through split_memberships_for_review. Running the guard
+	// after the Teams write (as an earlier revision of this file did) lets a
+	// membership the guard rejects still show up in `teams.members`, a live
+	// attribution fallback source, silently reintroducing the exact
+	// contradiction the guard exists to prevent. So this is computed once,
+	// up front, and both blocks below read from its result.
+	var keptMemberships []linearReferenceMembershipRow
+	var membershipsSkippedManualConflict int
+	if selections.Members {
+		var err error
+		keptMemberships, membershipsSkippedManualConflict, err = applyTeamMembershipConflictGuard(
+			ctx, collector.Sink.Conn, ref.OrgID, "linear", batch.Rows.Memberships,
+		)
+		if err != nil {
+			return result, err
+		}
+	}
+
 	if selections.Teams {
 		teamRows := batch.Rows.Teams
-		// CHAOS-4431 codex review P1: a teams-only run (members deselected)
-		// must not overwrite `teams.members` with the page-1-only
-		// placeholder CollectReferenceCatalog left on the row -- preserve
-		// whatever roster is already persisted, exactly like Python's
-		// _existing_team_members path (team_autoimport_linear.py:685-707).
-		if !selections.Members && len(teamRows) > 0 {
+		if selections.Members {
+			// Rebuild each team's roster from the CONFLICT-FILTERED
+			// memberships, not the raw provider-observed roster
+			// CollectReferenceCatalog baked into the row -- see the doc
+			// comment above.
+			teamRows = append([]linearReferenceTeamRow(nil), teamRows...)
+			for index := range teamRows {
+				teamRows[index].Members = linearReferenceTeamRosterFromMemberships(teamRows[index].ID, keptMemberships)
+			}
+		} else if len(teamRows) > 0 {
+			// CHAOS-4431 codex review P1: a teams-only run (members
+			// deselected) must not overwrite `teams.members` with the
+			// page-1-only placeholder CollectReferenceCatalog left on the
+			// row -- preserve whatever roster is already persisted, exactly
+			// like Python's _existing_team_members path
+			// (team_autoimport_linear.py:685-707).
 			teamIDs := make([]string, 0, len(teamRows))
 			for _, team := range teamRows {
 				teamIDs = append(teamIDs, team.ID)
@@ -108,18 +141,14 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		}
 		// CHAOS-4431 codex review finding #6, team-lead ruling 2026-08-28:
 		// fail-safe guard ahead of the full CHAOS-2622/CHAOS-4444 drift-aware
-		// projector -- skip any membership row whose (member_id, team_id)
-		// already has an active manual membership, or whose member identity
+		// projector -- skip any membership row whose member has an active
+		// manual membership to a DIFFERENT team, or whose member identity
 		// has an active member-scoped manual_attribution_fallbacks row.
 		// Independent of the #3 sync_policy guard above: this gate applies
-		// even to policy-0 teams (team-attribution.md:793-797).
-		keptMemberships, skippedMemberships, err := applyTeamMembershipConflictGuard(
-			ctx, collector.Sink.Conn, ref.OrgID, "linear", batch.Rows.Memberships,
-		)
-		if err != nil {
-			return result, err
-		}
-		result.MembershipsSkippedManualConflict = skippedMemberships
+		// even to policy-0 teams (team-attribution.md:793-797). Computed
+		// above, before the Teams block, so the roster and the memberships
+		// table never disagree about which assignments are safe.
+		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if err != nil {
 			return result, err

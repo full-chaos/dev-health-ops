@@ -95,7 +95,7 @@ type fakeTeamCatalogSelectionsResolver struct {
 	err         error
 }
 
-func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string) (providersync.TeamCatalogSelections, map[string]any, error) {
+func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Context, string, string, string, bool) (providersync.TeamCatalogSelections, map[string]any, error) {
 	return resolver.selections, resolver.syncOptions, resolver.err
 }
 

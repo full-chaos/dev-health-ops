@@ -2,31 +2,48 @@ package providersync
 
 import "testing"
 
-// TestMembershipConflictsWithManualStateSkipsExactManualPair pins the
-// CHAOS-4431 codex review finding #6 fail-safe guard's first source (team-
-// lead ruling, 2026-08-28): a native membership row whose EXACT (member_id,
-// team_id) pair already has an active manual membership must be skipped.
-func TestMembershipConflictsWithManualStateSkipsExactManualPair(t *testing.T) {
+// TestMembershipConflictsWithManualStateConfirmsExactManualPair pins the
+// CHAOS-4431 codex review round 2 correction (P1): a native membership row
+// whose EXACT (member_id, team_id) matches an active manual membership is a
+// CONFIRMATION, not a conflict -- mirroring clickhouse_identity_drift.py's
+// _conflict_for (line 259: manual.team_id == team_id -> continue, not
+// flagged). Writing the native row alongside a manual pin to the SAME team
+// must proceed normally.
+func TestMembershipConflictsWithManualStateConfirmsExactManualPair(t *testing.T) {
 	row := linearReferenceMembershipRow{MemberID: "linear:alice@example.com", TeamID: "ENG"}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "linear:alice@example.com", TeamID: "ENG"}: {},
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"ENG": {}},
 	}
-	if !membershipConflictsWithManualState(row, manualPairs, nil) {
-		t.Fatal("want conflict for an exact manual (member_id, team_id) match")
+	if membershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("a manual membership to the SAME team is a confirmation, not a conflict")
 	}
 }
 
-// TestMembershipConflictsWithManualStateIgnoresOtherTeamsManualPairs proves
-// the guard is scoped to the EXACT pair, not "this member has any manual
-// membership anywhere" -- a manual pin to a DIFFERENT team must not block an
-// unrelated team's native write for the same member.
-func TestMembershipConflictsWithManualStateIgnoresOtherTeamsManualPairs(t *testing.T) {
-	row := linearReferenceMembershipRow{MemberID: "linear:alice@example.com", TeamID: "ENG"}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "linear:alice@example.com", TeamID: "OPS"}: {},
+// TestMembershipConflictsWithManualStateRejectsDifferentTeamManualPin is the
+// corrected positive case: a member with an active manual membership to team
+// A, but Linear now reports them on a DIFFERENT team B -- the native row for
+// B must be rejected, since writing it would contradict the manual pin.
+func TestMembershipConflictsWithManualStateRejectsDifferentTeamManualPin(t *testing.T) {
+	row := linearReferenceMembershipRow{MemberID: "linear:alice@example.com", TeamID: "OPS"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"ENG": {}},
 	}
-	if membershipConflictsWithManualState(row, manualPairs, nil) {
-		t.Fatal("a manual pin to a different team must not block this team's native write")
+	if !membershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("want conflict: member has an active manual pin to a DIFFERENT team than this native row")
+	}
+}
+
+// TestMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership
+// pins the negative case for the manual-membership source specifically: a
+// member with NO active manual membership at all is never flagged by this
+// source, regardless of which team the native row targets.
+func TestMembershipConflictsWithManualStateAllowsMemberWithNoManualMembership(t *testing.T) {
+	row := linearReferenceMembershipRow{MemberID: "linear:dave@example.com", TeamID: "ENG"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"ENG": {}},
+	}
+	if membershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("a member with no manual membership at all must not be flagged")
 	}
 }
 
@@ -34,7 +51,9 @@ func TestMembershipConflictsWithManualStateIgnoresOtherTeamsManualPairs(t *testi
 // guard's second source: an active manual_attribution_fallbacks(scope_type=
 // 'member') row matching the member's identity (by provider id, email, or
 // any resolved facet) blocks the write REGARDLESS of team, mirroring
-// clickhouse_identity_drift.py's own fallback check (team-agnostic).
+// clickhouse_identity_drift.py's own fallback check (team-agnostic). This
+// source is unaffected by the round-2 correction -- it was already
+// team-agnostic.
 func TestMembershipConflictsWithManualStateSkipsMemberScopedFallback(t *testing.T) {
 	row := linearReferenceMembershipRow{
 		MemberID: "linear:alice@example.com", TeamID: "ENG",
@@ -63,20 +82,20 @@ func TestMembershipConflictsWithManualStateMatchesViaIdentityFacets(t *testing.T
 }
 
 // TestMembershipConflictsWithManualStateAllowsCleanRow is the negative case:
-// no manual pair, no matching fallback -- a genuinely clean native row must
-// never be skipped.
+// no manual membership conflict, no matching fallback -- a genuinely clean
+// native row must never be skipped.
 func TestMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	row := linearReferenceMembershipRow{
 		MemberID: "linear:carol@example.com", TeamID: "ENG",
 		RawEmail:       linearReferenceStringPtr("carol@example.com"),
 		IdentityFacets: []string{"linear:carol@example.com", "carol@example.com"},
 	}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "linear:alice@example.com", TeamID: "ENG"}: {},
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"ENG": {}},
 	}
 	fallbacks := map[string]struct{}{"someone-else@example.com": {}}
-	if membershipConflictsWithManualState(row, manualPairs, fallbacks) {
-		t.Fatal("a clean row with no matching manual pair or fallback must not be skipped")
+	if membershipConflictsWithManualState(row, manualTeamsByMember, fallbacks) {
+		t.Fatal("a clean row with no matching manual conflict or fallback must not be skipped")
 	}
 }
 
@@ -89,16 +108,18 @@ func TestMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 // "nothing to write" in telemetry).
 func TestApplyTeamMembershipConflictGuardCountsAndFiltersSkippedRows(t *testing.T) {
 	rows := []linearReferenceMembershipRow{
+		// alice: manual pin to a DIFFERENT team (OPS) -> conflict, skip.
 		{MemberID: "linear:alice@example.com", TeamID: "ENG"},
+		// bob: no manual membership at all -> kept.
 		{MemberID: "linear:bob@example.com", TeamID: "ENG"},
 	}
-	manualPairs := map[membershipConflictPair]struct{}{
-		{MemberID: "linear:alice@example.com", TeamID: "ENG"}: {},
+	manualTeamsByMember := map[string]map[string]struct{}{
+		"linear:alice@example.com": {"OPS": {}},
 	}
 	kept := make([]linearReferenceMembershipRow, 0, len(rows))
 	skipped := 0
 	for _, row := range rows {
-		if membershipConflictsWithManualState(row, manualPairs, nil) {
+		if membershipConflictsWithManualState(row, manualTeamsByMember, nil) {
 			skipped++
 			continue
 		}

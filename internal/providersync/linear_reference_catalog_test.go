@@ -351,4 +351,95 @@ func TestLinearReferenceCatalogCountsMultiplePagesOnce(t *testing.T) {
 	}
 }
 
+// TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows pins CHAOS-
+// 4431 codex review round 2, P1: team_autoimport_linear.py:636-639's outer
+// except only zeroes sprint_rows on a non-strict cycles failure ("if strict:
+// raise; sprint_rows = []") -- it never discards teams/members/projects
+// already fetched. The cycles fetch here returns a GraphQL error response so
+// it fails with providerfoundation.ErrGraphQLResponse.
+func TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"errors":[{"message":"boom"}]}`,
+		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = false
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("non-strict cycles failure must not abort the whole call, got err=%v", err)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints must be discarded after a non-strict cycles failure, got=%+v", batch.Rows.Sprints)
+	}
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Members) != 1 {
+		t.Fatalf("teams/members already fetched must survive a non-strict cycles failure: teams=%+v members=%+v", batch.Rows.Teams, batch.Rows.Members)
+	}
+}
+
+// TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall is the
+// strict-mode complement: reference discovery must still propagate a cycles
+// failure as a hard error (Python's "if strict: raise"), never silently
+// degrade.
+func TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"errors":[{"message":"boom"}]}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = true
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err == nil || !errors.Is(err, providerfoundation.ErrGraphQLResponse) {
+		t.Fatalf("strict cycles failure must propagate as an error, got batch=%+v err=%v", batch, err)
+	}
+}
+
+// TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships
+// pins CHAOS-4431 codex review round 2, P1: the roster LinearTeamCatalog
+// Collector writes to `teams.members` must be built from the membership-
+// conflict guard's KEPT rows only. A member the guard rejected (e.g.
+// alice, who has an active manual pin to a different team) must never
+// appear in the roster even though she was one of the raw discovered
+// members -- mirroring Python's _apply_roster, which runs on memberships
+// AFTER split_memberships_for_review already filtered them.
+func TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships(t *testing.T) {
+	// Simulates: alice was discovered on ENG but the conflict guard rejected
+	// her (kept out of the memberships passed here); bob was kept.
+	keptMemberships := []linearReferenceMembershipRow{
+		{TeamID: "ENG", MemberID: "linear:bob@example.com", IdentityFacets: []string{"linear:bob@example.com", "bob@example.com"}},
+	}
+	roster := linearReferenceTeamRosterFromMemberships("ENG", keptMemberships)
+	if len(roster) != 2 || !containsString(roster, "linear:bob@example.com") || !containsString(roster, "bob@example.com") {
+		t.Fatalf("roster=%+v want bob's facets only", roster)
+	}
+	if containsString(roster, "linear:alice@example.com") || containsString(roster, "alice@example.com") {
+		t.Fatalf("roster=%+v must not contain a membership the conflict guard rejected", roster)
+	}
+}
+
+// TestLinearReferenceTeamRosterFromMembershipsScopesByTeam proves the
+// rebuild is per-team: a kept membership for a DIFFERENT team must not leak
+// into this team's roster.
+func TestLinearReferenceTeamRosterFromMembershipsScopesByTeam(t *testing.T) {
+	keptMemberships := []linearReferenceMembershipRow{
+		{TeamID: "OPS", MemberID: "linear:carol@example.com", IdentityFacets: []string{"linear:carol@example.com"}},
+	}
+	roster := linearReferenceTeamRosterFromMemberships("ENG", keptMemberships)
+	if len(roster) != 0 {
+		t.Fatalf("roster=%+v want empty -- the only kept membership is for a different team", roster)
+	}
+}
+
 func linearReferenceStringPtr(value string) *string { return &value }

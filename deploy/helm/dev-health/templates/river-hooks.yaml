@@ -139,7 +139,24 @@ spec:
             - /bin/sh
             - -ec
             - |
-              exec psql "$POSTGRES_URI" \
+              # The migration Secret carries exactly ONE Postgres DSN: setting
+              # MIGRATION_DATABASE_URI makes migrationSecretData omit
+              # POSTGRES_URI, so reading POSTGRES_URI alone hands psql an empty
+              # argument and it silently attempts a local socket connection.
+              # Select the migration DSN the same way the migrate Job does.
+              PROVISION_DSN="${MIGRATION_DATABASE_URI:-${POSTGRES_URI:-${DATABASE_URI:-}}}"
+              if [ -z "$PROVISION_DSN" ]; then
+                echo "provision-roles: the migration Secret carries no MIGRATION_DATABASE_URI, POSTGRES_URI or DATABASE_URI; this Job needs a DSN pointed DIRECTLY at PostgreSQL (5432), never at a transaction pooler" >&2
+                exit 1
+              fi
+              # libpq does not speak SQLAlchemy's driver-qualified schemes, and
+              # the chart's own bundled DSN is postgresql+asyncpg://.
+              case "$PROVISION_DSN" in
+                postgresql+*://*|postgres+*://*)
+                  PROVISION_DSN="postgresql://${PROVISION_DSN#*://}"
+                  ;;
+              esac
+              exec psql "$PROVISION_DSN" \
                 --set=ON_ERROR_STOP=1 \
                 --set=app_database="$APP_DATABASE" \
                 --set=domain_role="$RIVER_DOMAIN_DATABASE_ROLE" \

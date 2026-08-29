@@ -460,3 +460,92 @@ def test_migrate_job_still_runs_river_when_the_hook_is_off(tmp_path: Path) -> No
         "--db combined with MIGRATION_DATABASE_URI is rejected by "
         f"migrate.py::_run_upgrade: {argv!r}"
     )
+
+
+# --- the provisioning Job has to hand psql a DSN psql can consume -----------
+#
+# `psql "$POSTGRES_URI"` fails in both documented configurations. With only the
+# preferred MIGRATION_DATABASE_URI set, migrationSecretData omits POSTGRES_URI
+# entirely (_helpers.tpl: the three DSN keys are mutually exclusive), so the
+# argument expands to an empty string and psql silently attempts a LOCAL socket
+# connection as the container user. In bundled mode the value that does arrive
+# is `dev-health.postgresURI`, i.e. `postgresql+asyncpg://…` -- a SQLAlchemy
+# driver-qualified URL, which libpq rejects outright.
+
+
+def _run_provision_command(
+    job: dict, tmp_path: Path, **env: str
+) -> tuple[int, str, str]:
+    """Execute the provisioning Job's shell with a recording `psql` stub."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "psql.log"
+    stub = bin_dir / "psql"
+    stub.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$1" > "$PSQL_LOG"\nexit 0\n', encoding="utf-8"
+    )
+    stub.chmod(0o755)
+
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    command = container["command"]
+    assert command[:2] == ["/bin/sh", "-ec"], command
+    completed = subprocess.run(
+        ["/bin/sh", "-ec", command[2]],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PSQL_LOG": str(log),
+            "APP_DATABASE": "devhealth",
+            "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
+            "RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue",
+            "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
+            "RIVER_DOMAIN_DATABASE_PASSWORD": "d",
+            "RIVER_QUEUE_DATABASE_PASSWORD": "q",
+            "RIVER_COORDINATOR_DATABASE_PASSWORD": "c",
+            **env,
+        },
+    )
+    dsn = log.read_text(encoding="utf-8").strip() if log.exists() else ""
+    return completed.returncode, dsn, completed.stderr
+
+
+def _provision_job(tmp_path: Path) -> dict:
+    return _jobs_from_values(_values(river_migrate=True), tmp_path)[_PROVISION]
+
+
+def test_provisioning_uses_the_dedicated_migration_dsn(tmp_path: Path) -> None:
+    code, dsn, stderr = _run_provision_command(
+        _provision_job(tmp_path),
+        tmp_path,
+        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
+    )
+    assert code == 0, stderr
+    assert dsn == _MIGRATION_DSN, (
+        "with only the preferred MIGRATION_DATABASE_URI configured, psql got "
+        f"{dsn!r} -- an empty argument makes it attempt a local connection"
+    )
+
+
+def test_provisioning_normalises_the_bundled_sqlalchemy_scheme(
+    tmp_path: Path,
+) -> None:
+    """`dev-health.postgresURI` is a SQLAlchemy URL; libpq rejects it."""
+    code, dsn, stderr = _run_provision_command(
+        _provision_job(tmp_path),
+        tmp_path,
+        POSTGRES_URI="postgresql+asyncpg://postgres:postgres@db-postgresql:5432/devhealth",
+    )
+    assert code == 0, stderr
+    assert dsn == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
+        f"psql cannot consume a driver-qualified scheme: {dsn!r}"
+    )
+
+
+def test_provisioning_without_any_dsn_fails_loudly(tmp_path: Path) -> None:
+    """An empty DSN must stop the hook, not become a local-socket attempt."""
+    code, dsn, stderr = _run_provision_command(_provision_job(tmp_path), tmp_path)
+    assert code != 0, f"the Job connected to something with {dsn!r}"
+    assert "MIGRATION_DATABASE_URI" in stderr, (
+        f"the error must name the value the operator has to supply: {stderr!r}"
+    )

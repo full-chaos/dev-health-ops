@@ -93,6 +93,20 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	if !ref.Strict && !selections.Any() {
 		return TeamCatalogResult{}, nil
 	}
+	// codex review round 1, P1 (team-lead ruling 2026-08-28): GitHub has no
+	// unconditional reference surface and no "Projects" import concept at
+	// all -- with neither Teams nor Members selected (e.g. a strict call
+	// where only Projects ended up selected), there is nothing this
+	// collector can do. This must be checked BEFORE resolving credentials,
+	// the org name, or touching ClickHouse -- an earlier revision reached
+	// org-name resolution first and, under strict, hard-errored on a
+	// legitimately-disabled catalog instead of skipping it cleanly, exactly
+	// like Python's no_categories_selected early return
+	// (team_autoimport_github.py:81-82) does before ever touching
+	// credentials.
+	if !selections.Teams && !selections.Members {
+		return TeamCatalogResult{}, nil
+	}
 	if ref.validate() != nil || credential.Provider != "github" || client == nil || client.Provider != "github" {
 		return TeamCatalogResult{}, ErrInvalidConfiguration
 	}
@@ -114,9 +128,6 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// Non-strict (post-sync): a missing org is a skip (zero summary),
 		// never a hard error -- an org can have GitHub connected with no org
 		// name set yet.
-		return TeamCatalogResult{}, nil
-	}
-	if !selections.Teams && !selections.Members {
 		return TeamCatalogResult{}, nil
 	}
 
@@ -244,7 +255,15 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 
 	result := TeamCatalogResult{RosterPreservationFailed: rosterPreservationFailed}
-	if selections.Teams && !rosterPreservationFailed && len(rows.Teams) > 0 {
+	// codex review round 1, P2 (team-lead ruling 2026-08-28): rows.Teams was
+	// ALREADY filtered down to just the safe teams above (the roster-
+	// preservation-failed branch removes only the teams whose confirm-read
+	// failed); gating this write on rosterPreservationFailed too discarded
+	// every OTHER, healthy team's write for the whole run, contradicting the
+	// "every other team still writes normally" guarantee. The flag is still
+	// carried on result.RosterPreservationFailed for telemetry -- it just
+	// must not ALSO block the filtered rows from being written.
+	if selections.Teams && len(rows.Teams) > 0 {
 		// CHAOS-4431 codex review findings #3/#6, team-lead ruling
 		// 2026-08-28: fail-safe guard ahead of the full CHAOS-2622
 		// drift-aware projector -- a team whose sync_policy is not the

@@ -4,10 +4,13 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -280,6 +283,72 @@ func TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure(t *te
 	}
 	if len(roster["gh:ops"]) != 1 || roster["gh:ops"][0] != "github:monalisa" {
 		t.Fatalf("ops (healthy fetch, genuinely new team) got the wrong roster: roster=%+v", roster)
+	}
+}
+
+// rosterConfirmReadFailingConn wraps a real driver.Conn (a live testcontainer
+// ClickHouse) and deliberately fails ONLY the roster-preserve read
+// (`SELECT id, members FROM teams FINAL ...`, ExistingTeamMembers) --
+// everything else (PrepareBatch/Exec for WriteTeams, WriteMemberships,
+// the manual_members preserve-read, etc.) passes through to the real
+// connection untouched. This is how TestGitHubTeamCatalogCollectorWrites
+// HealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails forces
+// ExistingTeamMembers's ok=false branch deterministically -- a healthy real
+// ClickHouse connection has no organic way to produce that outcome.
+type rosterConfirmReadFailingConn struct {
+	chdriver.Conn
+}
+
+func (c rosterConfirmReadFailingConn) Query(ctx context.Context, query string, args ...any) (chdriver.Rows, error) {
+	if strings.Contains(query, "SELECT id, members FROM teams FINAL") {
+		return nil, errors.New("injected failure: roster confirm-read")
+	}
+	return c.Conn.Query(ctx, query, args...)
+}
+
+// TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails
+// is the RED-FIRST proof for codex round 1's P2 finding (team-lead ruling,
+// 2026-08-28): when one team's member fetch fails AND its roster
+// confirm-read (ExistingTeamMembers) ALSO fails, the collector must still
+// write every OTHER, healthy team -- not silently skip the entire `teams`
+// write for the whole run. EXPECTED TO FAIL on the pre-fix tip: the old
+// gate (`!rosterPreservationFailed`) blocked WriteTeams entirely the moment
+// ANY team's confirm-read failed, even though rows.Teams was already
+// correctly filtered down to just the safe teams by that point.
+func TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails(t *testing.T) {
+	ctx, realConn := newWorkItemEffectsConn(t)
+	conn := rosterConfirmReadFailingConn{Conn: realConn}
+	orgID := "github-adapter-org-roster-confirm-read-failure"
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Operations"}]`,
+		"/orgs/acme/teams/platform/repos":   `[]`,
+		"/orgs/acme/teams/ops/repos":        `[]`,
+		"/orgs/acme/teams/platform/members": `not json`, // platform's fetch fails
+		"/orgs/acme/teams/ops/members":      `[{"login":"monalisa"}]`,
+	}}
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	client := githubTeamCatalogAdapterClient(t, doer)
+
+	result, err := adapter.CollectTeamCatalog(
+		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
+		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.RosterPreservationFailed {
+		t.Fatal("want RosterPreservationFailed=true -- platform's roster confirm-read was injected to fail")
+	}
+	if result.TeamsWritten != 1 {
+		t.Fatalf("want ops (the healthy, unaffected team) still written despite platform's confirm-read "+
+			"failure -- result=%+v", result)
+	}
+	roster, ok := GitHubTeamCatalogClickHouseEffects{Conn: realConn}.ExistingTeamMembers(ctx, orgID, []string{"gh:ops"})
+	if !ok || len(roster["gh:ops"]) != 1 || roster["gh:ops"][0] != "github:monalisa" {
+		t.Fatalf("ops's row was not actually persisted: roster=%+v ok=%v", roster, ok)
 	}
 }
 

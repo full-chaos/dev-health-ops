@@ -53,19 +53,59 @@ func TestGitHubMembershipConflictsWithManualStateAllowsMemberWithNoManualMembers
 	}
 }
 
-// TestGitHubMembershipConflictsWithManualStateFlagsMemberScopedFallbackAsConflict
-// pins the guard's second source: an active member-scoped
-// manual_attribution_fallbacks match blocks the write regardless of team --
-// unaffected by the round-2 correction, already team-agnostic.
-func TestGitHubMembershipConflictsWithManualStateFlagsMemberScopedFallbackAsConflict(t *testing.T) {
+// TestGitHubMembershipConflictsWithManualStateConfirmsSameTeamFallback pins
+// round 3's correction (codex round 1 P2 on this collector, already fixed
+// upstream in e4bb50e74): a member-scoped manual_attribution_fallbacks row
+// for the SAME team as the incoming native row is a CONFIRMATION, not a
+// conflict -- fallbacks compare team_id exactly like manual memberships do,
+// they are NOT team-agnostic (an earlier revision of this file, and of
+// team_membership_conflict_guard.go, got this wrong).
+func TestGitHubMembershipConflictsWithManualStateConfirmsSameTeamFallback(t *testing.T) {
 	row := githubMembershipRow{
 		MemberID: "github:octocat", TeamID: "gh:platform",
 		RawEmail: linearReferenceStringPtr("Octocat@Example.com"), // mixed case, must normalize-match
 	}
-	fallbacks := map[string]struct{}{"octocat@example.com": {}}
-	if !githubMembershipConflictsWithManualState(row, nil, fallbacks) {
-		t.Fatal("an active member-scoped manual_attribution_fallbacks match must block the write, " +
-			"regardless of which team it names")
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"octocat@example.com": {"gh:platform": {}},
+	}
+	if githubMembershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("a member-scoped fallback for the SAME team is a confirmation, not a conflict")
+	}
+}
+
+// TestGitHubMembershipConflictsWithManualStateFlagsDifferentTeamFallbackAsConflict
+// is the fallback source's corrected positive case: an active fallback
+// naming a DIFFERENT team than the incoming native row blocks the write.
+func TestGitHubMembershipConflictsWithManualStateFlagsDifferentTeamFallbackAsConflict(t *testing.T) {
+	row := githubMembershipRow{
+		MemberID: "github:octocat", TeamID: "gh:platform",
+		RawEmail: linearReferenceStringPtr("octocat@example.com"),
+	}
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"octocat@example.com": {"gh:other-team": {}},
+	}
+	if !githubMembershipConflictsWithManualState(row, nil, fallbackTeamsByIdentity) {
+		t.Fatal("want conflict: fallback names a DIFFERENT team than this native row")
+	}
+}
+
+// TestGitHubMembershipConflictsWithManualStateFlagsConflictEvenWithASameTeamRowPresent
+// pins the multi-team case (round 3, P2): a member/identity with active rows
+// for BOTH the incoming team AND another team is STILL a conflict --
+// "the incoming team is confirmed somewhere in the set" is not sufficient on
+// its own. clickhouse_identity_drift.py's _conflict_for checks every
+// candidate row and conflicts on the first one that differs, it does not
+// stop once it finds one that matches.
+func TestGitHubMembershipConflictsWithManualStateFlagsConflictEvenWithASameTeamRowPresent(t *testing.T) {
+	row := githubMembershipRow{MemberID: "github:octocat", TeamID: "gh:platform"}
+	manualTeamsByMember := map[string]map[string]struct{}{
+		// octocat has an active manual pin to BOTH the incoming team
+		// (platform) and a different one (other-team).
+		"github:octocat": {"gh:platform": {}, "gh:other-team": {}},
+	}
+	if !githubMembershipConflictsWithManualState(row, manualTeamsByMember, nil) {
+		t.Fatal("want conflict: a same-team manual pin does not clear a DIFFERENT-team pin also present " +
+			"for this member")
 	}
 }
 
@@ -81,8 +121,10 @@ func TestGitHubMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 	manualTeamsByMember := map[string]map[string]struct{}{
 		"github:someone-else": {"gh:platform": {}},
 	}
-	fallbacks := map[string]struct{}{"unrelated@example.com": {}}
-	if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbacks) {
+	fallbackTeamsByIdentity := map[string]map[string]struct{}{
+		"unrelated@example.com": {"gh:platform": {}},
+	}
+	if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 		t.Fatal("a clean row with no matching manual membership or fallback must not be skipped")
 	}
 }

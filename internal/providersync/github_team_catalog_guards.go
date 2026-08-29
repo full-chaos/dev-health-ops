@@ -18,24 +18,25 @@ import (
 // are org_id/team_id/member_id string-keyed and already shared.
 
 // githubMembershipConflictsWithManualState reports whether a native
-// membership row must be skipped. CORRECTED (round 2) semantics, mirroring
-// membershipConflictsWithManualState exactly: member-scoped, not
-// pair-scoped -- if this member has ANY active manual membership at all, and
-// NONE of those manual team_ids is this row's own team_id, skip it (a
-// manual membership to the SAME team is a CONFIRMATION, not a conflict).
-// The second source, member-scoped manual_attribution_fallbacks, is
-// team-agnostic: an active match blocks the write regardless of team.
+// membership row must be skipped. Mirrors membershipConflictsWithManualState
+// exactly (round 3 corrected shape): both sources are member/identity-scoped
+// sets of team_ids, and BOTH share the same same-team-confirms /
+// different-team-conflicts rule (anyTeamDiffersFrom) -- a manual membership
+// or member-scoped manual_attribution_fallbacks row for the member's OWN
+// team is a CONFIRMATION; one naming any OTHER team is a conflict, even if
+// a same-team row also exists (every candidate row is checked, matching
+// clickhouse_identity_drift.py's _conflict_for loop exactly).
 func githubMembershipConflictsWithManualState(
 	row githubMembershipRow,
 	manualTeamsByMember map[string]map[string]struct{},
-	fallbackIdentities map[string]struct{},
+	fallbackTeamsByIdentity map[string]map[string]struct{},
 ) bool {
 	if manualTeams, hasManual := manualTeamsByMember[row.MemberID]; hasManual {
-		if _, confirmed := manualTeams[row.TeamID]; !confirmed {
+		if anyTeamDiffersFrom(manualTeams, row.TeamID) {
 			return true
 		}
 	}
-	if len(fallbackIdentities) == 0 {
+	if len(fallbackTeamsByIdentity) == 0 {
 		return false
 	}
 	candidates := make([]string, 0, len(row.IdentityFacets)+2)
@@ -47,8 +48,12 @@ func githubMembershipConflictsWithManualState(
 	}
 	candidates = append(candidates, row.IdentityFacets...)
 	for _, candidate := range candidates {
-		if normalized := normalizeMembershipIdentity(candidate); normalized != "" {
-			if _, conflict := fallbackIdentities[normalized]; conflict {
+		normalized := normalizeMembershipIdentity(candidate)
+		if normalized == "" {
+			continue
+		}
+		if fallbackTeams, hasFallback := fallbackTeamsByIdentity[normalized]; hasFallback {
+			if anyTeamDiffersFrom(fallbackTeams, row.TeamID) {
 				return true
 			}
 		}
@@ -72,14 +77,14 @@ func applyGitHubTeamMembershipConflictGuard(
 	if err != nil {
 		return nil, 0, err
 	}
-	fallbackIdentities, err := resolveActiveMemberAttributionFallbackIdentities(ctx, conn, orgID, githubTeamCatalogProvider)
+	fallbackTeamsByIdentity, err := resolveActiveMemberAttributionFallbackTeams(ctx, conn, orgID, githubTeamCatalogProvider)
 	if err != nil {
 		return nil, 0, err
 	}
 	kept := make([]githubMembershipRow, 0, len(rows))
 	skipped := 0
 	for _, row := range rows {
-		if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackIdentities) {
+		if githubMembershipConflictsWithManualState(row, manualTeamsByMember, fallbackTeamsByIdentity) {
 			skipped++
 			continue
 		}

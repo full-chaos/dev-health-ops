@@ -163,6 +163,92 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 	return terminalized, nil
 }
 
+// invalidProviderFamilyClaimErrorCategory marks a persisted claim
+// providerfamilycontract.ValidateClaim refuses: a malformed or stale
+// atomic-family SyncRunUnit (missing one or more sibling family_dataset_*
+// flags, or a non-canonical alias claimed directly instead of through its
+// family's canonical dataset). Distinct from featureDisabledErrorCategory
+// and unroutableReason's category so an operator reading
+// sync_run_units.error_category can tell "this org's feature is off" and
+// "no runtime owns this pair" apart from "this specific claim is
+// corrupt/stale and needs replanning, not redispatch" (CHAOS-4550).
+const invalidProviderFamilyClaimErrorCategory = "invalid_provider_family_claim"
+
+// invalidClaimUnit pairs one claimed unit that failed ValidateClaim with the
+// reason captured at the moment the error was observed. The reason is never
+// re-derived later from a group's first member: two units sharing a
+// (provider, dataset_key) pair can still fail ValidateClaim for different
+// underlying causes (one missing a sibling flag, another carrying a stray
+// cross-family flag), so each unit's own error is the one that gets
+// persisted for it.
+type invalidClaimUnit struct {
+	unit   budgetUnit
+	reason string
+}
+
+// invalidClaimReason names the specific defect ValidateClaim found, so an
+// operator reading sync_run_units.error/result does not have to re-derive it
+// from the provider-family policy tables by hand.
+func invalidClaimReason(provider, dataset string, claimErr error) string {
+	return fmt.Sprintf(
+		"provider-family claim for %s/%s is invalid (%s): a stale or malformed "+
+			"persisted claim that must be replanned, not redispatched",
+		provider, dataset, claimErr.Error(),
+	)
+}
+
+// terminalizeInvalidClaimUnits fails claimed units whose persisted
+// dataset_key/processor_flags fail providerfamilycontract.ValidateClaim
+// (CHAOS-4550): a claim this malformed can never become dispatchable by
+// itself being retried, so leaving it PLANNED/DISPATCHING re-poisons every
+// future dispatch pass for the whole run (the discard-storm class
+// CHAOS-3990's terminalizeUnroutableUnits already exists to prevent for the
+// no-route case -- this is the same idiom for the malformed-claim case).
+// Write-time CAS on status='dispatching' keeps a concurrent worker's
+// DISPATCHING -> RUNNING claim from being overwritten. Units are grouped by
+// their exact reason string (not just provider/dataset, since two units of
+// the same pair can fail for different reasons) so the durable per-unit
+// reason always names the specific defect, matching CHAOS-3990's own
+// "never a bare category with no reason attached" rule.
+func terminalizeInvalidClaimUnits(ctx context.Context, tx pgx.Tx, units []invalidClaimUnit, now time.Time) (int, error) {
+	if len(units) == 0 {
+		return 0, nil
+	}
+	unitIDsByReason := map[string][]string{}
+	for _, entry := range units {
+		unitIDsByReason[entry.reason] = append(unitIDsByReason[entry.reason], entry.unit.id)
+	}
+	reasons := make([]string, 0, len(unitIDsByReason))
+	for reason := range unitIDsByReason {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+
+	var terminalized int
+	for _, reason := range reasons {
+		unitIDs := unitIDsByReason[reason]
+		sort.Strings(unitIDs)
+		resultJSON, err := json.Marshal(map[string]any{
+			"error_category": invalidProviderFamilyClaimErrorCategory,
+			"reason":         reason,
+		})
+		if err != nil {
+			return terminalized, fmt.Errorf("marshal invalid-claim unit result: %w", err)
+		}
+		tag, err := tx.Exec(ctx, `
+UPDATE public.sync_run_units
+SET status = $2, available_at = NULL, error = $3, last_retry_reason = $4,
+    result = $5::json, lease_owner = NULL, lease_expires_at = NULL, updated_at = $6
+WHERE id = ANY($1::uuid[]) AND status = $7`,
+			unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, reason, resultJSON, now, syncRunUnitStatusDispatching)
+		if err != nil {
+			return terminalized, fmt.Errorf("terminalize invalid-claim units: %w", err)
+		}
+		terminalized += int(tag.RowsAffected())
+	}
+	return terminalized, nil
+}
+
 // armFinalizeSyncRunWakeup ports BOTH of dispatch_sync_run's own "get
 // finalize to run soon" call sites onto the ONE mechanism finalize_sync_run
 // actually runs through today, not their two different literal Python

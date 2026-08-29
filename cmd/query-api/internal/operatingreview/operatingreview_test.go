@@ -17,11 +17,23 @@ type fakeRowScanner struct {
 	rows   [][]any
 	cursor int
 	err    error
+	// failAfterRows, when > 0 and err != nil, lets Next() serve this many
+	// rows successfully before reporting the failure -- simulating a
+	// mid-stream driver error (some rows already Scan()'d, then Next()
+	// returns false and Err() is non-nil), the exact shape
+	// discardOnError exists for. Zero (the default) preserves the
+	// original "fail before any row" behavior every other fake usage in
+	// this file relies on.
+	failAfterRows int
 }
 
 func (f *fakeRowScanner) Next() bool {
 	if f.err != nil {
-		return false
+		limit := f.failAfterRows
+		if limit > len(f.rows) {
+			limit = len(f.rows)
+		}
+		return f.cursor < limit
 	}
 	return f.cursor < len(f.rows)
 }
@@ -511,5 +523,55 @@ func TestResolve_SwallowsOneTableFailure_DegradesOnlyThatSection(t *testing.T) {
 		if m.key == "throughput" && m.value != 0 {
 			t.Errorf("throughput = %v, want 0 (work_items table was swallowed, defaults to empty)", m.value)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// discardOnError -- codex review round 1 (PR #2008, P2): a fetcher can
+// Scan() rows successfully before the driver's iteration itself fails
+// mid-stream (rows.Next() -> false, rows.Err() -> non-nil, with rows
+// already appended). Verified against source before this fix (see
+// discardOnError's own doc comment for the Python-side reasoning); these
+// tests execute the actual failure shape, not just the helper in
+// isolation, since the earlier per-table-swallow test only covered a
+// query-level (zero-rows) failure.
+// ---------------------------------------------------------------------------
+
+func TestDiscardOnError(t *testing.T) {
+	if got := discardOnError([]int{1, 2, 3}, nil); len(got) != 3 {
+		t.Errorf("discardOnError(rows, nil) = %v, want the original 3 rows unchanged", got)
+	}
+	if got := discardOnError([]int{1, 2, 3}, errors.New("mid-stream failure")); got != nil {
+		t.Errorf("discardOnError(rows, err) = %v, want nil (partial rows discarded)", got)
+	}
+}
+
+func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	// Call 0 (work_items) yields ONE successfully-scanned row, THEN the
+	// driver reports an error -- rows.Next() returns false after that one
+	// row, rows.Err() is non-nil. Without discardOnError, fetchPeriodRows
+	// would keep that one partial row and compute a "plausible-looking"
+	// throughput/cycle-time from it; with the fix, the whole table is
+	// discarded, matching a query-level failure's effect exactly.
+	responses := emptyScanners(10)
+	responses[0] = &fakeRowScanner{
+		rows: [][]any{
+			{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0},
+		},
+		err:           errors.New("simulated mid-stream driver failure"),
+		failAfterRows: 1,
+	}
+	errs := make([]error, 10)
+	errs[0] = errors.New("simulated mid-stream driver failure")
+
+	client := &fakeClient{responses: responses, errs: errs}
+
+	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"))
+
+	if len(result.workItems) != 0 {
+		t.Fatalf("workItems = %d rows, want 0 -- the one successfully-scanned row before the mid-stream failure must be discarded, not kept", len(result.workItems))
+	}
+	if client.calls != 10 {
+		t.Fatalf("expected 10 calls (one full period), got %d", client.calls)
 	}
 }

@@ -289,6 +289,31 @@ func pluck[T any](rows []T, get func(T) *float64) []*float64 {
 
 func f(v float64) *float64 { return &v }
 
+// discardOnError drops a fetcher's PARTIAL result on a mid-stream failure --
+// codex review round 1 (PR #2008, P2), verified against source before this
+// fix: a fetchXxx function's loop can successfully Scan() one or more rows
+// via rows.Next() before the native driver's iteration itself fails, at
+// which point rows.Next() returns false and rows.Err() (returned as this
+// function's err) is non-nil -- but the ALREADY-APPENDED rows are still
+// sitting in the slice fetchPeriodRows was about to keep. Without this,
+// errSwallow's log-and-continue contract would compute "plausible-looking"
+// metrics from a table's INCOMPLETE data instead of treating the failure as
+// absent, same as a query-level failure already does (those return nil by
+// construction -- the `out` var is never assigned before the query error
+// path returns). Python has no equivalent partial-success state to
+// reproduce here: resolvers/operating_review.py:66-96's try/except wraps a
+// single `await query_dicts(...)` call whose underlying clickhouse-connect
+// query() either returns the FULL row list or raises -- there is no
+// mid-stream partial-rows-then-error shape on that side to match, so
+// discarding the partial slice here is the correct "same effective
+// contract" behavior, not a divergence from Python.
+func discardOnError[T any](rows []T, err error) []T {
+	if err != nil {
+		return nil
+	}
+	return rows
+}
+
 // ---------------------------------------------------------------------------
 // Row types + fetchers, one pair per table, in build_operating_review_queries'
 // own order (metrics/operating_review.py:122-368). Every SELECT below is a
@@ -1050,33 +1075,43 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 
 	workItems, err := fetchWorkItems(ctx, client, orgID, teamID, start, end)
 	errSwallow(ctx, "work_items", err)
+	workItems = discardOnError(workItems, err)
 
 	stateDurations, err := fetchStateDurations(ctx, client, orgID, teamID, start, end)
 	errSwallow(ctx, "state_durations", err)
+	stateDurations = discardOnError(stateDurations, err)
 
 	repoMetrics, err := fetchRepoMetrics(ctx, client, orgID, start, end)
 	errSwallow(ctx, "repo_metrics", err)
+	repoMetrics = discardOnError(repoMetrics, err)
 
 	hotspots, err := fetchHotspotsAgg(ctx, client, orgID, start, end)
 	errSwallow(ctx, "hotspots", err)
+	hotspots = discardOnError(hotspots, err)
 
 	complexity, err := fetchComplexityAgg(ctx, client, orgID, start, end)
 	errSwallow(ctx, "complexity", err)
+	complexity = discardOnError(complexity, err)
 
 	deployments, err := fetchDeploymentsAgg(ctx, client, orgID, start, end)
 	errSwallow(ctx, "deployments", err)
+	deployments = discardOnError(deployments, err)
 
 	incidents, err := fetchIncidentsAgg(ctx, client, orgID, start, end)
 	errSwallow(ctx, "incidents", err)
+	incidents = discardOnError(incidents, err)
 
 	investment, err := fetchInvestment(ctx, client, orgID, teamID, start, end)
 	errSwallow(ctx, "investment", err)
+	investment = discardOnError(investment, err)
 
 	aiImpact, err := fetchAIImpact(ctx, client, orgID, teamID, start, end)
 	errSwallow(ctx, "ai_impact", err)
+	aiImpact = discardOnError(aiImpact, err)
 
 	aiGovernance, err := fetchAIGovernance(ctx, client, orgID, teamID, start, end)
 	errSwallow(ctx, "ai_governance", err)
+	aiGovernance = discardOnError(aiGovernance, err)
 
 	return periodRows{
 		workItems:      workItems,

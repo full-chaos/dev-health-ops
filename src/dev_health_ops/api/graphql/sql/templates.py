@@ -52,7 +52,7 @@ WHERE {date_filter}
   AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY bucket, dimension_value
-ORDER BY bucket ASC, value DESC
+ORDER BY bucket ASC, value DESC, dimension_value ASC
 SETTINGS max_execution_time = %(timeout)s
 """
 
@@ -88,7 +88,7 @@ WHERE {date_filter}
   AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY dimension_value
-ORDER BY value DESC
+ORDER BY value DESC, dimension_value ASC
 LIMIT %(top_n)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -127,7 +127,7 @@ WHERE {date_filter}
   AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY node_id
-ORDER BY value DESC
+ORDER BY value DESC, node_id ASC
 LIMIT %(limit_per_dim)s
 """
         union_parts.append(part)
@@ -178,7 +178,7 @@ WHERE {date_filter}
   AND {source_col} IS NOT NULL
   AND {target_col} IS NOT NULL
 GROUP BY source, target
-ORDER BY value DESC
+ORDER BY value DESC, source ASC, target ASC
 LIMIT %(max_edges)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -213,7 +213,7 @@ SELECT
     uniqExact(work_item_id) AS value
 FROM team_activity
 GROUP BY node_id
-ORDER BY value DESC
+ORDER BY value DESC, node_id ASC
 LIMIT %(limit_per_dim)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -267,7 +267,7 @@ INNER JOIN team_activity AS b
   AND a.org_id = b.org_id
 WHERE a.team_id != b.team_id
 GROUP BY source, target
-ORDER BY value DESC
+ORDER BY value DESC, source ASC, target ASC
 LIMIT %(max_edges)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -329,7 +329,7 @@ WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wi.org_id = %(org_id)s
   AND wi.repo_id IS NOT NULL
 GROUP BY node_id
-ORDER BY value DESC
+ORDER BY value DESC, node_id ASC
 LIMIT %(limit_per_dim)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -376,7 +376,7 @@ WHERE a.team_id IS NOT NULL AND a.team_id != ''
   AND b.repo_id IS NOT NULL
   AND a.repo_id != b.repo_id
 GROUP BY source, target
-ORDER BY value DESC
+ORDER BY value DESC, source ASC, target ASC
 LIMIT %(max_edges)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -401,7 +401,7 @@ WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wi.org_id = %(org_id)s
   AND wi.type IS NOT NULL AND wi.type != ''
 GROUP BY node_id
-ORDER BY value DESC
+ORDER BY value DESC, node_id ASC
 LIMIT %(limit_per_dim)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -440,7 +440,7 @@ WHERE a.repo_id IS NOT NULL
   AND b.work_item_type IS NOT NULL AND b.work_item_type != ''
   AND a.work_item_type != b.work_item_type
 GROUP BY source, target
-ORDER BY value DESC
+ORDER BY value DESC, source ASC, target ASC
 LIMIT %(max_edges)s
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -471,7 +471,7 @@ WHERE {dim_col} IS NOT NULL
   AND toString({dim_col}) != ''
 {filter_clause}
 GROUP BY value
-ORDER BY count DESC
+ORDER BY count DESC, value ASC
 LIMIT %(limit)s
 SETTINGS max_execution_time = %(timeout)s
 """

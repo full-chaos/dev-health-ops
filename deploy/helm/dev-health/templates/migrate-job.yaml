@@ -166,10 +166,33 @@ spec:
               {{- else }}
                 name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
               {{- end }}
-          {{- with .Values.migrations.hook.extraEnv }}
           env:
+            {{- /*
+            The fresh-database Celery->River route-table cutover. Without
+            DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1,
+            `_effective_postgres_upgrade_revision` applies the safe branch head
+            instead of `heads` and defers revision 0066
+            (migrate.py:216-231, gate at :176-177). Compose carries it on its
+            migrate service as an operator passthrough (compose.yml:198,
+            compose.production.yml:95) and the kustomize Job carries it as an
+            optional secretKeyRef (deploy/kubernetes/migrate-job.yaml:72-78);
+            the chart carried it nowhere, so a fresh install could not reach
+            that revision at all. Optional, so an install that never authorises
+            the cutover still renders.
+            */}}
+            - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.secrets.create }}
+                  name: {{ include "dev-health.fullname" . }}-migrate-secrets
+                  {{- else }}
+                  name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+                  {{- end }}
+                  key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
+                  optional: true
+            {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}

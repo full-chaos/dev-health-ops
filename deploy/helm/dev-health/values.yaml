@@ -429,10 +429,19 @@ migrations:
     extraEnv: []
     # -- Dedicated secret values mounted only into the one-shot migration Job.
     #    Setting MIGRATION_DATABASE_URI activates the pinned River migration.
+    #    When riverMigrate.enabled=true the dedicated URI is delivered to the
+    #    weight-10 River Job instead, and reaches the weight-0 Alembic Job as
+    #    POSTGRES_URI -- `dev-hops migrate postgres` runs the River migrator
+    #    itself whenever MIGRATION_DATABASE_URI is set, which at weight 0 would
+    #    precede role provisioning.
     secretData:
       MIGRATION_DATABASE_URI: ""
       POSTGRES_URI: ""
       CLICKHOUSE_URI: ""
+      # -- Set to "1" to authorise the Celery->River route-table cutover
+      #    (revision 0066), which `dev-hops migrate postgres` otherwise defers.
+      #    Empty is the same operator passthrough Compose ships.
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ""
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""

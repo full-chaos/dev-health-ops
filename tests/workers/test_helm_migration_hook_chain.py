@@ -199,24 +199,98 @@ def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:
     assert "secretKeyRef" in env["RIVER_DOMAIN_DATABASE_PASSWORD"]["valueFrom"]
 
 
-def test_provisioning_without_a_password_secret_fails_the_render() -> None:
-    """Roles created with passwords the poolers do not share cannot connect."""
-    completed = subprocess.run(
-        [
-            "helm",
-            "template",
-            _RELEASE,
-            str(_CHART),
-            "--set",
-            "migrations.hook.provisionRoles.enabled=true",
-            "--set",
-            "goWorkers.pgbouncer.secret.create=false",
-            "--set",
-            "goWorkers.pgbouncer.secret.externalSecretName=someone-elses",
-        ],
-        capture_output=True,
-        text=True,
+# --- the password Secret has to exist while a pre-install hook runs ---------
+#
+# Helm creates a chart's regular resources AFTER its pre-install hooks, so on a
+# fresh install the PgBouncer Secret does not exist yet when the weight-5
+# provisioning Job starts: the pod stays in CreateContainerConfigError until the
+# release times out. This is the same problem migrate-job.yaml solves for its own
+# ConfigMap/Secret, and it is solved the same way -- the hook ships its own copy
+# when the chart owns the credentials, and references the external Secret
+# directly when it does not, because that one exists independently of the
+# release. Guarding on `create=true` instead rejected the only configuration
+# that actually worked.
+
+
+def test_provisioning_password_secret_is_available_to_the_hook(
+    tmp_path: Path,
+) -> None:
+    docs = _docs_from_values(_values(river_migrate=True), tmp_path)
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    env = {
+        item["name"]: item
+        for item in jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    referenced = env["RIVER_DOMAIN_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"][
+        "name"
+    ]
+
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+    assert referenced in secrets, (
+        f"the provisioning Job references Secret {referenced!r}, which the "
+        f"chart does not render at all: {sorted(secrets)}"
     )
+    secret = secrets[referenced]
+    for key in (
+        "RIVER_DOMAIN_DATABASE_PASSWORD",
+        "RIVER_QUEUE_DATABASE_PASSWORD",
+        "RIVER_COORDINATOR_DATABASE_PASSWORD",
+    ):
+        assert key in secret["stringData"], f"{referenced} omits {key}"
+
+    annotations = secret["metadata"].get("annotations", {})
+    events = annotations.get("helm.sh/hook", "").split(",")
+    assert "pre-install" in events, (
+        f"{referenced} is a regular resource, which Helm creates only AFTER "
+        "the pre-install hooks: the weight-5 provisioning Job would start "
+        f"against a Secret that does not exist yet ({annotations})"
+    )
+    weight = int(annotations.get("helm.sh/hook-weight", "0"))
+    assert weight < 5, (
+        f"{referenced} must be created before the Job that mounts it: {weight}"
+    )
+
+
+def test_provisioning_accepts_a_pre_created_external_secret(tmp_path: Path) -> None:
+    """`create=false` + an external Secret is a supported fresh-install path."""
+    values = _values(river_migrate=True) + textwrap.dedent("""
+        goWorkers:
+          pgbouncer:
+            secret:
+              create: false
+              externalSecretName: river-role-credentials
+        """)
+    docs = _docs_from_values(values, tmp_path)
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    env = {
+        item["name"]: item
+        for item in jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    for key in (
+        "RIVER_DOMAIN_DATABASE_PASSWORD",
+        "RIVER_QUEUE_DATABASE_PASSWORD",
+        "RIVER_COORDINATOR_DATABASE_PASSWORD",
+    ):
+        assert env[key]["valueFrom"]["secretKeyRef"]["name"] == (
+            "river-role-credentials"
+        ), f"{key} does not read the operator's own Secret"
+
+
+def test_provisioning_without_any_password_secret_fails_the_render(
+    tmp_path: Path,
+) -> None:
+    """Fail closed only when NEITHER Secret exists, not merely when the chart
+    does not own it. Roles created with passwords the poolers do not share
+    cannot connect, so the render must still refuse to guess."""
+    values = _values(river_migrate=True) + textwrap.dedent("""
+        goWorkers:
+          enabled: false
+          pgbouncer:
+            secret:
+              create: false
+              externalSecretName: ""
+        """)
+    completed = _render_values(values, tmp_path)
     assert completed.returncode != 0
     assert "RIVER_" in completed.stderr, (
         f"the error must name what the Secret has to carry: {completed.stderr}"
@@ -260,19 +334,33 @@ def _values(river_migrate: bool) -> str:
         """)
 
 
-def _jobs_from_values(values: str, tmp_path: Path) -> dict[str, dict]:
+def _render_values(values: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Render from a values FILE, never `--set` on a list index.
+
+    `--set goWorkers.groups[0].x=y` replaces the whole list element and drops
+    the sibling keys the templates dereference; the render then dies on a nil
+    pointer, which reads exactly like a guard firing.
+    """
     values_file = tmp_path / "values.yaml"
     values_file.write_text(values, encoding="utf-8")
-    completed = subprocess.run(
+    return subprocess.run(
         ["helm", "template", _RELEASE, str(_CHART), "-f", str(values_file)],
         capture_output=True,
         text=True,
     )
+
+
+def _docs_from_values(values: str, tmp_path: Path) -> list[dict]:
+    completed = _render_values(values, tmp_path)
     assert completed.returncode == 0, completed.stderr
+    return [doc for doc in yaml.safe_load_all(completed.stdout) if doc]
+
+
+def _jobs_from_values(values: str, tmp_path: Path) -> dict[str, dict]:
     return {
         doc["metadata"]["name"]: doc
-        for doc in yaml.safe_load_all(completed.stdout)
-        if doc and doc.get("kind") == "Job"
+        for doc in _docs_from_values(values, tmp_path)
+        if doc.get("kind") == "Job"
     }
 
 

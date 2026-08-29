@@ -50,8 +50,49 @@ upgrade. Prod opts in deliberately.
 {{- if .Values.migrations.hook.enabled }}
 {{- $hookEvents := .Values.migrations.hook.events }}
 {{- if .Values.migrations.hook.provisionRoles.enabled }}
-{{- if not .Values.goWorkers.pgbouncer.secret.create }}
-{{- fail "migrations.hook.provisionRoles.enabled=true requires goWorkers.pgbouncer.secret.create=true, or a pre-created Secret carrying the three RIVER_*_DATABASE_PASSWORD keys: the provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
+{{- $poolerSecret := .Values.goWorkers.pgbouncer.secret }}
+{{- if and (not $poolerSecret.create) (not $poolerSecret.externalSecretName) }}
+{{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the three RIVER_*_DATABASE_PASSWORD keys: either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
+{{- end }}
+{{- /*
+Which Secret this Job mounts, and why it is not simply the pooler Secret.
+
+Helm creates a chart's REGULAR resources after its pre-install hooks, so on a
+fresh install the chart-created pooler Secret does not exist yet when this
+weight-5 hook runs -- the pod sits in CreateContainerConfigError until the
+release times out. migrate-job.yaml has the same problem and solves it the same
+way, so this follows that convention rather than inventing a second one:
+
+  * chart-owned credentials (secret.create=true) -> ship a hook-scoped copy,
+    created at weight -5, ahead of this Job at 5.
+  * operator-owned credentials (secret.create=false + externalSecretName) ->
+    reference it directly. It exists independently of the release, which is
+    exactly what makes it the viable fresh-install path; the guard above used
+    to reject it.
+
+The copy is rendered from the same values as the pooler Secret, so the two
+cannot disagree about a password. It is also what lets provisioning run with
+goWorkers disabled, where go-pgbouncer.yaml renders no Secret at all.
+*/}}
+{{- $provisionSecretName := ternary (printf "%s-provision-roles-secrets" (include "dev-health.fullname" .)) (toString $poolerSecret.externalSecretName) $poolerSecret.create }}
+{{- if $poolerSecret.create }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $provisionSecretName }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "provision-roles" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
+  RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
+  RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
 {{- end }}
 ---
 apiVersion: batch/v1
@@ -90,9 +131,9 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
           {{- /*
-          Passwords arrive as env from the pooler Secret and are passed to psql
-          as --set values referencing those variables. They are never written
-          into this manifest and never appear in the Job's argv.
+          Passwords arrive as env from the Secret selected above and are
+          passed to psql as --set values referencing those variables. They are
+          never written into this manifest and never appear in the Job's argv.
           */}}
           command:
             - /bin/sh
@@ -120,17 +161,17 @@ spec:
             - name: RIVER_DOMAIN_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  name: {{ $provisionSecretName }}
                   key: RIVER_DOMAIN_DATABASE_PASSWORD
             - name: RIVER_QUEUE_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  name: {{ $provisionSecretName }}
                   key: RIVER_QUEUE_DATABASE_PASSWORD
             - name: RIVER_COORDINATOR_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  name: {{ $provisionSecretName }}
                   key: RIVER_COORDINATOR_DATABASE_PASSWORD
           envFrom:
             - secretRef:

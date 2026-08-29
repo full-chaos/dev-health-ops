@@ -254,3 +254,35 @@ func TestDuplicateTestSuiteCounterAggregatesByProviderDatasetOnly(t *testing.T) 
 		t.Fatalf("a zero-count call must not mint a series: %s", rendered)
 	}
 }
+
+// TestDuplicateNaturalKeyCounterRendersPerTable pins CHAOS-4557: an operator
+// must be able to tell WHICH ClickHouse destination a duplicate_natural_key
+// rejection hit without reading a log line that may not survive a worker
+// restart.
+func TestDuplicateNaturalKeyCounterRendersPerTable(t *testing.T) {
+	t.Parallel()
+	metrics := NewMetrics()
+	metrics.RecordDuplicateNaturalKeyCollision("github", "cicd", "test_case_results")
+	metrics.RecordDuplicateNaturalKeyCollision("github", "cicd", "test_case_results")
+	metrics.RecordDuplicateNaturalKeyCollision("github", "cicd", "ci_job_runs")
+	// An unrecognized table must collapse rather than mint a new series.
+	metrics.RecordDuplicateNaturalKeyCollision("github", "cicd", "some_new_table_nobody_registered")
+	var nilMetrics *Metrics
+	nilMetrics.RecordDuplicateNaturalKeyCollision("github", "cicd", "test_case_results")
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		`dev_health_cicd_duplicate_natural_key_total{provider="github",dataset="cicd",table="test_case_results"} 2`,
+		`dev_health_cicd_duplicate_natural_key_total{provider="github",dataset="cicd",table="ci_job_runs"} 1`,
+		`dev_health_cicd_duplicate_natural_key_total{provider="github",dataset="cicd",table="other"} 1`,
+		"# TYPE dev_health_cicd_duplicate_natural_key_total counter",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+}

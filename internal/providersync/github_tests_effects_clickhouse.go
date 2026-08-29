@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -299,12 +300,94 @@ var ErrDuplicateNaturalKey = fmt.Errorf("%w: duplicate natural key", ErrInvalidC
 // collided at all -- and nothing in the error said which. fields must be
 // passed as alternating name/value pairs in the same order recordGitHubTestsKey
 // was called with, so the message and the actual dedup key never drift apart.
+//
+// The returned error also carries a structured DuplicateNaturalKeyDetail
+// (CHAOS-4557): before this, the destination/fields only ever reached a
+// stdout log line via lifecycleErrorDetail's err.Error() -- lost the moment
+// the worker container restarted, with sync_run_units left holding nothing
+// but the bare "duplicate_natural_key" category. DuplicateNaturalKeyDetailFrom
+// lets a caller persist the same fields durably instead of re-deriving them
+// from prose.
 func duplicateNaturalKeyError(destination string, fields ...string) error {
 	pairs := make([]string, 0, len(fields)/2)
+	detailFields := make([]DuplicateNaturalKeyField, 0, len(fields)/2)
 	for index := 0; index+1 < len(fields); index += 2 {
-		pairs = append(pairs, fields[index]+"="+fields[index+1])
+		name, value := fields[index], fields[index+1]
+		pairs = append(pairs, name+"="+value)
+		detailFields = append(detailFields, DuplicateNaturalKeyField{Name: name, Value: value})
 	}
-	return fmt.Errorf("%w in %s batch (%s)", ErrDuplicateNaturalKey, destination, strings.Join(pairs, " "))
+	wrapped := fmt.Errorf("%w in %s batch (%s)", ErrDuplicateNaturalKey, destination, strings.Join(pairs, " "))
+	return &duplicateNaturalKeyErr{
+		error:  wrapped,
+		detail: DuplicateNaturalKeyDetail{Table: destination, Fields: detailFields},
+	}
+}
+
+// DuplicateNaturalKeyField is one ordered name/value pair from a colliding
+// natural key (e.g. run_id, suite_id, case_id), in the exact order
+// recordGitHubTestsKey was called with.
+type DuplicateNaturalKeyField struct {
+	Name  string
+	Value string
+}
+
+// DuplicateNaturalKeyDetail is the structured form of a recordGitHubTestsKey
+// rejection: which ClickHouse destination table refused the batch, and the
+// exact fields of the natural key that collided.
+type DuplicateNaturalKeyDetail struct {
+	Table  string
+	Fields []DuplicateNaturalKeyField
+}
+
+// duplicateNaturalKeyErr pairs the existing formatted error (unchanged
+// Error()/errors.Is behavior -- it still unwraps to ErrDuplicateNaturalKey and,
+// through that, ErrInvalidConfiguration) with the structured detail a caller
+// can extract via DuplicateNaturalKeyDetailFrom without parsing prose.
+type duplicateNaturalKeyErr struct {
+	error
+	detail DuplicateNaturalKeyDetail
+}
+
+func (e *duplicateNaturalKeyErr) Unwrap() error { return e.error }
+
+// duplicateNaturalKeyDetailMaxFields and duplicateNaturalKeyDetailMaxFieldLen
+// bound what DuplicateNaturalKeyDetailFrom ever returns. Every natural key
+// this file's recordGitHubTestsKey call sites build has at most 5 fields, each
+// a short id, hash, or UUID -- the bound is defensive against a future call
+// site growing the key, so persisting this detail can never carry an
+// unbounded payload into Postgres.
+const (
+	duplicateNaturalKeyDetailMaxFields   = 8
+	duplicateNaturalKeyDetailMaxFieldLen = 128
+)
+
+// DuplicateNaturalKeyDetailFrom extracts the destination table and colliding
+// natural-key fields from an error wrapping ErrDuplicateNaturalKey via
+// duplicateNaturalKeyError, bounded so the result is always safe to persist.
+// ok is false when err carries no such structured detail (a plain
+// ErrDuplicateNaturalKey built elsewhere, or an unrelated error).
+func DuplicateNaturalKeyDetailFrom(err error) (table string, fields []DuplicateNaturalKeyField, ok bool) {
+	var typed *duplicateNaturalKeyErr
+	if !errors.As(err, &typed) {
+		return "", nil, false
+	}
+	table = typed.detail.Table
+	if len(table) > duplicateNaturalKeyDetailMaxFieldLen {
+		table = table[:duplicateNaturalKeyDetailMaxFieldLen]
+	}
+	limit := len(typed.detail.Fields)
+	if limit > duplicateNaturalKeyDetailMaxFields {
+		limit = duplicateNaturalKeyDetailMaxFields
+	}
+	fields = make([]DuplicateNaturalKeyField, limit)
+	for index := 0; index < limit; index++ {
+		field := typed.detail.Fields[index]
+		if len(field.Value) > duplicateNaturalKeyDetailMaxFieldLen {
+			field.Value = field.Value[:duplicateNaturalKeyDetailMaxFieldLen]
+		}
+		fields[index] = field
+	}
+	return table, fields, true
 }
 
 func gitHubTestsUint32(value int64) (uint32, error) {

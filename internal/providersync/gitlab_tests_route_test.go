@@ -514,3 +514,40 @@ func TestGitLabNativeTestReportWithinSuiteDuplicateCaseNamesGetDistinctIDs(t *te
 		}, 3)
 	})
 }
+
+// TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide is the
+// GitLab-native twin of TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide
+// (CHAOS-4508): normalizeGitLabNativeTestReport hashed suiteID from
+// (runID, name, "") alone, so two SIBLING test_suite objects sharing a name
+// in the SAME test_report response collided exactly like the JUnit path did,
+// and their first same-named case then also collided on caseID since
+// caseOccurrence resets fresh per suite object.
+func TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide(t *testing.T) {
+	claim := nativeTestClaim("gitlab", "cicd")
+	report := gitLabTestsReportPayload{Suites: []gitLabTestsSuitePayload{
+		{Name: "pytest", Cases: []gitLabTestsCasePayload{{Name: "test_health", ClassName: "tests.test_api", Status: "success"}}},
+		{Name: "pytest", Cases: []gitLabTestsCasePayload{{Name: "test_health", ClassName: "tests.test_worker", Status: "success"}}},
+	}}
+	suites, cases, err := normalizeGitLabNativeTestReport(
+		claim, "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", report, nil, nil,
+		time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("normalize of two same-named sibling suites in one report failed closed: %v", err)
+	}
+	if len(suites) != 2 || len(cases) != 2 {
+		t.Fatalf("suites=%+v cases=%+v, want 2 suite rows and 2 case rows retained", suites, cases)
+	}
+	if suites[0].SuiteID == suites[1].SuiteID {
+		t.Fatalf("CHAOS-4508: sibling suites %q and %q in ONE report share SuiteID %q -- "+
+			"hashTestIdentifier(runID, name, \"\") has no per-suite-object discriminator",
+			suites[0].SuiteName, suites[1].SuiteName, suites[0].SuiteID)
+	}
+	if cases[0].CaseID == cases[1].CaseID {
+		t.Fatalf("CHAOS-4508: cases named %q in two sibling same-named suites share CaseID %q",
+			cases[0].CaseName, cases[0].CaseID)
+	}
+	if countDuplicateTestSuites(suites) != 1 {
+		t.Fatalf("countDuplicateTestSuites=%d, want 1", countDuplicateTestSuites(suites))
+	}
+}

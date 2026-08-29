@@ -189,6 +189,49 @@ async def test_gitlab_suites_carry_pipeline_timestamps() -> None:
     assert suites[0]["finished_at"] == finished
 
 
+@pytest.mark.asyncio
+async def test_gitlab_sibling_suites_same_name_get_distinct_ids() -> None:
+    """CHAOS-4508: two SIBLING test_suite objects sharing a name in one
+    test_report response hashed to the same suite_id (build_suite_id keyed
+    only on run_id/suite_name/environment), so their first same-named case
+    also collided on case_id -- the Python twin of
+    TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide (Go)."""
+    report = {
+        "test_suites": [
+            {
+                "name": "pytest",
+                "test_cases": [
+                    {
+                        "name": "test_health",
+                        "classname": "tests.test_api",
+                        "status": "success",
+                    }
+                ],
+            },
+            {
+                "name": "pytest",
+                "test_cases": [
+                    {
+                        "name": "test_health",
+                        "classname": "tests.test_worker",
+                        "status": "success",
+                    }
+                ],
+            },
+        ]
+    }
+    suites, cases = await process_gitlab_test_report(
+        repo_id=uuid4(), run_id="9001", report=report, org_id="org-1"
+    )
+    assert len(suites) == 2 and len(cases) == 2
+    assert suites[0]["suite_id"] != suites[1]["suite_id"], (
+        "CHAOS-4508: sibling suites sharing a name in one report collided on suite_id"
+    )
+    assert cases[0]["case_id"] != cases[1]["case_id"], (
+        "CHAOS-4508: cases named identically in two sibling same-named suites collided on case_id"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Classification + coverage coherence                                         #
 # --------------------------------------------------------------------------- #

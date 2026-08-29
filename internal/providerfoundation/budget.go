@@ -277,6 +277,7 @@ type Metrics struct {
 	unitFailed                     map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
+	duplicateTestSuite             map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -299,6 +300,7 @@ func NewMetrics() *Metrics {
 		unitFailed:                     map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
+		duplicateTestSuite:             map[string]uint64{},
 	}
 }
 
@@ -565,6 +567,25 @@ func (m *Metrics) RecordDuplicateTestCase(provider, dataset string, count int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.duplicateTestCase[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
+}
+
+// RecordDuplicateTestSuite counts sibling suite-OBJECT natural-key
+// collisions the cicd/tests route disambiguated with an ordinal suffix
+// instead of rejecting the whole batch (CHAOS-4508: two <testsuite> elements
+// sharing the same name in one artifact/report hashed to the same suite_id,
+// so their first same-named case also collided on case_id and
+// recordGitHubTestsKey rejected the batch with ErrDuplicateNaturalKey).
+//
+// repo is deliberately NOT a label here, matching RecordDuplicateTestCase's
+// house rule directly above -- find the repo in the caller's structured log
+// line, not this counter's labels.
+func (m *Metrics) RecordDuplicateTestSuite(provider, dataset string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.duplicateTestSuite[metricProvider(provider)+":"+MetricDatasetLabel(dataset)] += uint64(count)
 }
 
 // metricSnapshotDiscardReasonVocabulary is the closed set of reasons a prepared
@@ -1063,6 +1084,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_cicd_duplicate_test_case_total",
 		"Within-suite test-case natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestCase's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
 		m.duplicateTestCase,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_cicd_duplicate_test_suite_total",
+		"Sibling suite-object natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestSuite's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
+		m.duplicateTestSuite,
 	); err != nil {
 		return err
 	}

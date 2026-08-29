@@ -982,8 +982,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # early return used to gate on team_project_ownership alone before
     # loading work_items at all -- fixed in the same change). 1247 -> 1248
     # top-level; 145 -> 146 integration-tagged.
-    assert len(expected_provider_tests) == 1248
-    assert len(expected_integration_tests) == 146
+    #
+    # Codex review round 1 on this PR (P1, confirmed real) found the same
+    # change had removed a SEPARATE, still-necessary guard along with the
+    # one above: if work_items/dependencyEdges/issuePRLinks are all empty
+    # regardless of team_project_ownership's state (a transient partial-sync
+    # snapshot, the OPPOSITE ordering from the test above), proceeding
+    # anyway would retract every previously-derived row for the org. Fixed
+    # by restoring that guard (unchanged from before this ticket) while
+    # still removing only the projectLinks-only one. Added 1 more
+    # `//go:build integration` top-level test, deliberately GitHub-shaped
+    # per AGENTS.md's provider-matrix rule:
+    # TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap.
+    # 1248 -> 1249 top-level; 146 -> 147 integration-tagged.
+    assert len(expected_provider_tests) == 1249
+    assert len(expected_integration_tests) == 147
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -999,7 +1012,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1248
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1249
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1060,7 +1073,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1248
+    assert len(selected_tests) == len(set(selected_tests)) == 1249
     assert set(selected_tests) == expected_tests
 
 

@@ -1123,12 +1123,23 @@ above) is completely unaffected — still tried first, still the same `team_proj
 still outranks `linear_team_key` via `teamRepoOwnershipResolutionArmPriority` on a conflict. The
 mermaid diagram above reflects this: the `linear_team_key` edge no longer originates from `TPO`.
 
-One correctness fix rode along: `deriveTeamRepoOwnership` used to return early with zero rows
-whenever `team_project_ownership` produced no `project_id`-arm links at all
-(`len(projectToTeam) == 0`) — sound before CHAOS-4537, since every resolution path used to require a
-`projectToTeam` entry, but it would have silently zeroed the `linear_team_key` arm the moment an org
-had ownership signal ONLY through that arm. Removed; the function no longer short-circuits on an
-empty `team_project_ownership` result.
+Two correctness fixes rode along, both early-return short-circuits that assumed every resolution
+path required a `team_project_ownership` row — sound before CHAOS-4537, no longer true after.
+`deriveTeamRepoOwnership` used to return early with zero rows whenever `team_project_ownership`
+produced no `project_id`-arm links at all (`len(projectToTeam) == 0`); removed. One layer up, the
+ClickHouse-loading `Derive` had its OWN early return on `len(projectLinks) == 0`, *before even
+loading `work_items`* — also removed, so an org with real, already-synced Linear work items but a
+`team_project_ownership` table that has not synced yet no longer reports `inputsReady=false` and
+skips resolution.
+
+Codex review on the CHAOS-4537 PR (P1, confirmed real) caught that this removal was too broad: `Derive`
+has a SEPARATE guard — `len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0` —
+that protects every provider, not just Linear, from a different failure mode: if none of the linkage
+tables have synced yet REGARDLESS of `team_project_ownership`'s state (the opposite ordering — ownership
+synced, work-items not yet, a plausible transient partial-sync snapshot), proceeding anyway would read
+as a genuine `inputsReady=true`, `derived=[]` evaluation and retract every previously-derived row for
+the org. That guard is unchanged, still in place; only the `projectLinks`-only guard above it was
+removed.
 
 The team-key-shaped `team_project_ownership` row itself is **still written** today
 (`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial

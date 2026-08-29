@@ -121,23 +121,32 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
-	// CHAOS-4537: this used to be two separate early returns -- one right
-	// after loading projectLinks (before workItems/dependencyEdges/
-	// issuePRLinks were even loaded), one here -- both meaning "the
-	// first-sync gap: nothing has synced yet, not a genuine no-signal
-	// evaluation." That was sound when every resolution arm required a
-	// team_project_ownership row, but the linear_team_key arm now resolves
-	// straight from a Linear work item's own native_team_key column (see
-	// deriveTeamRepoOwnership's doc comment) -- an org with real,
-	// already-synced Linear work items but a team_project_ownership table
-	// that has not synced yet (a plausible ordering: work-items sync and
-	// team autoimport are independent per-config selections, CHAOS-4323) is
-	// NOT a first-sync gap for this arm, and the old projectLinks-only early
-	// return would have wrongly reported inputsReady=false and skipped
-	// resolution entirely. inputsReady is now false only when ALL FOUR
-	// already-synced input shapes are empty -- genuinely nothing to derive
-	// from, by any arm.
-	if len(projectLinks) == 0 && len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
+	// CHAOS-4537: the early return that used to sit right after loading
+	// projectLinks (before workItems/dependencyEdges/issuePRLinks were even
+	// loaded) is GONE -- that guard assumed every resolution arm required a
+	// team_project_ownership row, which is no longer true: the
+	// linear_team_key arm now resolves straight from a Linear work item's
+	// own native_team_key column (see deriveTeamRepoOwnership's doc
+	// comment). An org with real, already-synced Linear work items but a
+	// team_project_ownership table that has not synced yet (a plausible
+	// ordering: work-items sync and team autoimport are independent
+	// per-config selections, CHAOS-4323) is NOT a first-sync gap for this
+	// arm, and the old projectLinks-only early return would have wrongly
+	// reported inputsReady=false and skipped resolution entirely.
+	//
+	// The guard below (unchanged from before this ticket, codex review P1
+	// on this PR: keep it) is a DIFFERENT, still-necessary check: if
+	// workItems/dependencyEdges/issuePRLinks are ALL empty, nothing can be
+	// derived by ANY arm regardless of projectLinks' state -- proceeding
+	// anyway would treat a transient partial-sync snapshot (team_project_
+	// ownership synced, work-items not yet -- the OPPOSITE ordering from
+	// the paragraph above) as a genuine inputsReady=true, derived=[]
+	// evaluation, and RETRACT every previously-derived row for this org via
+	// diffTeamRepoOwnershipRetractions below. Removing only the
+	// projectLinks-only guard, not this one, is what makes the Linear-only
+	// case resolve while a transient linkage gap still reports
+	// inputsReady=false instead of wiping prior rows.
+	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
 		return 0, 0, false, nil, nil
 	}
 

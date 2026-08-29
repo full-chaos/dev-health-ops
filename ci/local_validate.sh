@@ -192,13 +192,39 @@ default_scratch_db() {
   printf 'ci_local_validate_%s' "${digest}"
 }
 SCRATCH_DB="${SCRATCH_DB:-$(default_scratch_db "${ROOT}")}"
+# Userinfo is PERCENT-ENCODED before it goes into a URI (codex). Raw
+# interpolation broke three ways for a credential containing URI-reserved
+# characters: '/' or '?' or '#' silently truncates or re-parses the DSN, so
+# CREATE could succeed over curl (which sends the byte-exact header) while the
+# migration that parses this URI connected somewhere else or failed; and a raw
+# '/' in the password also defeats redact_uri(), which splits the authority at
+# its first '/', printing the credential it exists to hide (verified:
+# clickhouse://ch:sec/ret@host:8123/db redacts to itself). The repo's own
+# parser round-trips percent-encoded userinfo -- see
+# tests/metrics/test_clickhouse_connection.py, which encodes `secret/word` as
+# `secret%2Fword` and expects `secret/word` back.
+uri_encode() {
+  # Encode everything outside the RFC 3986 unreserved set. LC_ALL=C so a byte
+  # is a byte; %02X so the output is canonical uppercase hex.
+  local string="$1" index char
+  for (( index = 0; index < ${#string}; index++ )); do
+    char="${string:index:1}"
+    case "$char" in
+    [A-Za-z0-9._~-]) printf '%s' "$char" ;;
+    *) LC_ALL=C printf '%%%02X' "'$char" ;;
+    esac
+  done
+}
+CH_USER_ENC="$(uri_encode "${CH_USER}")"
+CH_PASS_ENC="$(uri_encode "${CH_PASS}")"
 # clickhouse+https:// is how clickhouse-connect is told to use TLS; the plain
-# clickhouse:// form stays byte-identical for the default http scheme so no
-# existing caller changes.
+# clickhouse:// form stays byte-identical for the default http scheme and the
+# default ch/ch credentials (which contain nothing encodable), so no existing
+# caller changes.
 if [ "${CH_HTTP_SCHEME}" = "https" ]; then
-  SCRATCH_URI="clickhouse+https://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+  SCRATCH_URI="clickhouse+https://${CH_USER_ENC}:${CH_PASS_ENC}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
 else
-  SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+  SCRATCH_URI="clickhouse://${CH_USER_ENC}:${CH_PASS_ENC}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
 fi
 # redact_uri strips userinfo from a DSN for DISPLAY only (codex R3 / team-lead
 # R4 ruling). SCRATCH_URI necessarily carries a create/drop-capable credential,
@@ -1133,10 +1159,15 @@ ch_migrate() {
   *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
   printf '   migrating into scratch: %s\n' "$(redact_uri "${SCRATCH_URI}")"
+  # PROXY_OFF here, not just on curl (codex): clickhouse-connect honours
+  # HTTP_PROXY/HTTPS_PROXY, so with an ambient proxy set and the lane endpoint
+  # absent from NO_PROXY these two would route the REAL Basic-auth credential
+  # through it -- or simply fail to reach the lane. Neutralising only the curl
+  # request left the actual migration exposed, which is the larger half.
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${DEVHOPS}" migrate clickhouse upgrade || return 1
+    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse upgrade || return 1
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${DEVHOPS}" migrate clickhouse status --check || return 1
+    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse status --check || return 1
   return 0
 }
 

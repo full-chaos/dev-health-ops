@@ -553,6 +553,15 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	// would keep that one partial row and compute a "plausible-looking"
 	// throughput/cycle-time from it; with the fix, the whole table is
 	// discarded, matching a query-level failure's effect exactly.
+	// Deliberately no fakeClient.errs entry here (codex review round 2,
+	// PR #2008: setting errs[0] makes Query itself return (nil, err)
+	// immediately, short-circuiting BEFORE the scanner is ever touched --
+	// that only re-exercises the already-covered query-level failure
+	// path, the exact case discardOnError does not change the behavior
+	// of, and the test would keep passing even with discardOnError
+	// removed. The mid-stream case this test exists for is scanner-level:
+	// Query succeeds, then Next()/Err() fails partway through iteration --
+	// expressed by the scanner's own err/failAfterRows fields alone.
 	responses := emptyScanners(10)
 	responses[0] = &fakeRowScanner{
 		rows: [][]any{
@@ -561,10 +570,8 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 		err:           errors.New("simulated mid-stream driver failure"),
 		failAfterRows: 1,
 	}
-	errs := make([]error, 10)
-	errs[0] = errors.New("simulated mid-stream driver failure")
 
-	client := &fakeClient{responses: responses, errs: errs}
+	client := &fakeClient{responses: responses, errs: make([]error, 10)}
 
 	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"))
 

@@ -30,6 +30,12 @@ var (
 	hotspotsOutcomeCounter             = mustCounter("devhealth_query_api_hotspots_outcome_total", "hotspots resolver outcomes, by result")
 	operatingReviewCallCounter         = mustCounter("devhealth_query_api_operating_review_calls_total", "operatingReview resolver invocations")
 	operatingReviewOutcomeCounter      = mustCounter("devhealth_query_api_operating_review_outcome_total", "operatingReview resolver outcomes, by result")
+	workGraphEdgesCallCounter          = mustCounter("devhealth_query_api_work_graph_edges_calls_total", "workGraphEdges resolver invocations")
+	workGraphEdgesOutcomeCounter       = mustCounter("devhealth_query_api_work_graph_edges_outcome_total", "workGraphEdges resolver outcomes, by result")
+	workGraphFlowCallCounter           = mustCounter("devhealth_query_api_work_graph_flow_calls_total", "workGraphFlow resolver invocations")
+	workGraphFlowOutcomeCounter        = mustCounter("devhealth_query_api_work_graph_flow_outcome_total", "workGraphFlow resolver outcomes, by result")
+	workGraphArtifactsCallCounter      = mustCounter("devhealth_query_api_work_graph_artifacts_calls_total", "workGraphArtifacts resolver invocations")
+	workGraphArtifactsOutcomeCounter   = mustCounter("devhealth_query_api_work_graph_artifacts_outcome_total", "workGraphArtifacts resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -212,4 +218,74 @@ func startOperatingReviewSpan(ctx context.Context) (context.Context, func(outcom
 // failure (e.g. a nil client) does.
 func recordOperatingReviewOutcome(outcome string) {
 	operatingReviewOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startWorkGraphEdgesSpan is startFeatureFlagsSpan's counterpart for the
+// workGraphEdges resolver (CHAOS-4352 Wave 4 Lane A / CHAOS-4504). Unlike
+// reviewEdges/cognitiveLoad/complexityTimeseries/hotspots, workGraphEdges
+// DOES have a degraded-result path (MEMBERSHIP_NOT_MATERIALIZED, same as
+// featureFlags) -- callers check result.DegradedReason and call
+// finish("degraded") rather than finish("ok"), same as startFeatureFlagsSpan's
+// call site.
+func startWorkGraphEdgesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	workGraphEdgesCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.workGraphEdges")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "workGraphEdges resolver error")
+		}
+		span.End()
+		recordWorkGraphEdgesOutcome(outcome)
+	}
+}
+
+// recordWorkGraphEdgesOutcome increments the outcome counter. outcome is
+// one of "ok" (a real, non-degraded result), "degraded"
+// (MEMBERSHIP_NOT_MATERIALIZED), or "error".
+func recordWorkGraphEdgesOutcome(outcome string) {
+	workGraphEdgesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startWorkGraphFlowSpan is startWorkGraphEdgesSpan's counterpart for the
+// workGraphFlow resolver -- same degraded-result outcome vocabulary.
+func startWorkGraphFlowSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	workGraphFlowCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.workGraphFlow")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "workGraphFlow resolver error")
+		}
+		span.End()
+		recordWorkGraphFlowOutcome(outcome)
+	}
+}
+
+// recordWorkGraphFlowOutcome increments the outcome counter -- one of
+// "ok", "degraded", or "error".
+func recordWorkGraphFlowOutcome(outcome string) {
+	workGraphFlowOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startWorkGraphArtifactsSpan is startWorkGraphEdgesSpan's counterpart for
+// the workGraphArtifacts resolver -- same degraded-result outcome
+// vocabulary.
+func startWorkGraphArtifactsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	workGraphArtifactsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.workGraphArtifacts")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "workGraphArtifacts resolver error")
+		}
+		span.End()
+		recordWorkGraphArtifactsOutcome(outcome)
+	}
+}
+
+// recordWorkGraphArtifactsOutcome increments the outcome counter -- one of
+// "ok", "degraded", or "error".
+func recordWorkGraphArtifactsOutcome(outcome string) {
+	workGraphArtifactsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

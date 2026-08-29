@@ -447,14 +447,52 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 // side (dev_health_metric_compat_retry_total) but is never emitted here,
 // since Go never observes that a retry was authorized -- only that one
 // eventually wasn't and had to be persisted as terminal.
+//
+// CHAOS-4543: the four "released_*" decisions below are the non-terminal
+// sibling of "persisted_failed" -- PartitionHandler.Work's
+// releasePartitionWithReason branches (progress_stalled, capacity_exhausted,
+// resource_exhausted, process_signaled) release the partition back to the
+// ordinarily re-dispatchable 'failed' status WITH a bounded failure_reason
+// attached, rather than terminalizing it. Before CHAOS-4543,
+// resource_exhausted and process_signaled had no branch at all here (see
+// PartitionHandler.Work) and were invisible on this counter exactly as they
+// were invisible in daily_metrics_partitions.failure_reason; progress_stalled
+// and capacity_exhausted had a durable failure_reason but never incremented
+// this counter either. All four now emit here, one bounded decision value
+// per reason, matching the SQL-visible failure_reason column's own
+// vocabulary -- an operator can go from a rate/volume signal on this counter
+// straight to the affected partitions via `SELECT * FROM
+// daily_metrics_partitions WHERE failure_reason = '<reason>'` (the ordinal
+// and repo_ids columns already carry the rest of the detail CHAOS-4543's own
+// diagnostic needed).
 type DailyMetricsCompatRetryDecision string
 
 const (
-	DailyMetricsCompatRetryDecisionPersistedFailed DailyMetricsCompatRetryDecision = "persisted_failed"
+	DailyMetricsCompatRetryDecisionPersistedFailed           DailyMetricsCompatRetryDecision = "persisted_failed"
+	DailyMetricsCompatRetryDecisionReleasedProgressStalled   DailyMetricsCompatRetryDecision = "released_progress_stalled"
+	DailyMetricsCompatRetryDecisionReleasedCapacityExhausted DailyMetricsCompatRetryDecision = "released_capacity_exhausted"
+	DailyMetricsCompatRetryDecisionReleasedResourceExhausted DailyMetricsCompatRetryDecision = "released_resource_exhausted"
+	DailyMetricsCompatRetryDecisionReleasedProcessSignaled   DailyMetricsCompatRetryDecision = "released_process_signaled"
+	// DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic
+	// (CHAOS-4543) is the subset of "released_resource_exhausted" the Go
+	// side ALSO knows is a known-deterministic guard (never the RSS
+	// watchdog) -- see ErrCompatibilityResourceExhaustedDeterministic's doc
+	// comment. Counted separately so the rate of wasted-attempt-budget
+	// discards (a deterministic guard that will keep refusing until an
+	// operator changes something) is distinguishable from ordinary
+	// transient resource pressure on this same shared counter.
+	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
-	return []DailyMetricsCompatRetryDecision{DailyMetricsCompatRetryDecisionPersistedFailed}
+	return []DailyMetricsCompatRetryDecision{
+		DailyMetricsCompatRetryDecisionPersistedFailed,
+		DailyMetricsCompatRetryDecisionReleasedProgressStalled,
+		DailyMetricsCompatRetryDecisionReleasedCapacityExhausted,
+		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
+		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
+		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
+	}
 }
 
 // dailyMetricsNativeFamilies is the closed, compile-time set of
@@ -2807,13 +2845,14 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 }
 
 // writeDailyMetricsCompatRetry exposes the terminal ambiguous_refused
-// disposition counter (CHAOS-4319). The metric name and "decision" label are
+// disposition counter (CHAOS-4319) plus the CHAOS-4543 non-terminal
+// released-with-reason decisions. The metric name and "decision" label are
 // a deliberate cross-language contract with the Python bridge's
 // dev_health_metric_compat_retry_total (worker_metrics.py) -- see
-// DailyMetricsCompatRetryDecision for why this side only ever emits
-// "persisted_failed".
+// DailyMetricsCompatRetryDecision for the full bounded vocabulary this side
+// emits.
 func (collector *MetricsCollector) writeDailyMetricsCompatRetry(output *strings.Builder) {
-	writeMetadata(output, "dev_health_metric_compat_retry_total", "Terminal disposition of an ambiguous_refused metrics.daily compatibility-bridge execution, by worker_kind and bounded decision (CHAOS-4319).", "counter")
+	writeMetadata(output, "dev_health_metric_compat_retry_total", "Terminal or released-with-reason disposition of a metrics.daily compatibility-bridge execution, by worker_kind and bounded decision (CHAOS-4319, CHAOS-4543).", "counter")
 	for _, decision := range dailyMetricsCompatRetryDecisions() {
 		writeUintSample(output, "dev_health_metric_compat_retry_total",
 			[]metricLabel{{"worker_kind", "daily"}, {"decision", string(decision)}}, collector.dailyMetricsCompatRetry[decision])

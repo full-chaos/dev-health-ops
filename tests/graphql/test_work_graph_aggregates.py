@@ -317,11 +317,20 @@ class TestEdgeTypesFilter:
 #    candidate set is already bounded).
 # ---------------------------------------------------------------------------
 class TestEdgeListOrdering:
+    """CHAOS-4493: the deterministic ORDER BY now applies UNCONDITIONALLY, on
+    both the unfiltered and narrowing-filter paths — it used to be gated
+    behind a narrowing filter, leaving the unfiltered path with no ORDER BY
+    at all, so a LIMIT at a tie boundary had no total order and the
+    CHAOS-4381 stage-2 Go/Python comparator could never reach a stable match
+    verdict on that path. See `resolve_work_graph_edges`'s ORDER BY comment.
+    """
+
     @pytest.mark.asyncio
-    async def test_no_order_by_when_unfiltered(self, mock_context):
-        """Fully-unfiltered default overview must emit NO ORDER BY confidence so
-        ClickHouse keeps early-LIMIT termination (a global sort would read the
-        org's ENTIRE edge set before returning the first page)."""
+    async def test_order_by_when_unfiltered(self, mock_context):
+        """Fully-unfiltered default overview must ALSO carry the
+        deterministic ORDER BY confidence DESC, edge_id ASC — the table's own
+        sort key is (source_type, source_id, edge_type, target_type,
+        target_id), not confidence, so nothing else pins tie order here."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
@@ -330,13 +339,13 @@ class TestEdgeListOrdering:
             await resolve_work_graph_edges(mock_context)
 
             sql = mock_query.call_args_list[0][0][1]
-            assert "ORDER BY" not in sql
-            assert "LIMIT" in sql
+            assert "ORDER BY confidence DESC, edge_id ASC" in sql
+            assert sql.index("ORDER BY") < sql.index("LIMIT")
 
     @pytest.mark.asyncio
-    async def test_no_order_by_with_empty_filter_object(self, mock_context):
-        """An empty filters object (no narrowing field set) is still the hot
-        path — no ORDER BY."""
+    async def test_order_by_with_empty_filter_object(self, mock_context):
+        """An empty filters object (no narrowing field set) still gets the
+        deterministic ORDER BY — same hot path as the unfiltered case."""
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
             new_callable=AsyncMock,
@@ -345,7 +354,7 @@ class TestEdgeListOrdering:
             await resolve_work_graph_edges(mock_context, WorkGraphEdgeFilterInput())
 
             sql = mock_query.call_args_list[0][0][1]
-            assert "ORDER BY" not in sql
+            assert "ORDER BY confidence DESC, edge_id ASC" in sql
 
     @pytest.mark.asyncio
     async def test_order_by_when_edge_types_filter_active(self, mock_context):

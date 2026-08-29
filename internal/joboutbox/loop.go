@@ -157,6 +157,15 @@ type ReconcilerLoop struct {
 	stepFailures        uint64
 
 	errors chan error
+
+	// stepObserved is a test-only synchronization hook (codex review
+	// finding): production never sets it, and run's nil check is a no-op in
+	// that case. It fires once run has finished ALL bookkeeping for a tick
+	// (recordStepFailure or the success path, whichever ran) so a test can
+	// wait on it instead of racing run's own goroutine off a signal sent
+	// from inside the stepper -- the stepper returning is not the same
+	// instant as readiness/metrics reflecting that return.
+	stepObserved func()
 }
 
 // NewReconcilerLoop constructs a fail-closed lifecycle component. The
@@ -247,18 +256,50 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 				return
 			}
 			if err := loop.step(ctx, now); err != nil {
+				// A step in flight when Shutdown fires observes its own
+				// cancellation as a Relay.Step error (Shutdown sets stopping
+				// THEN cancels, matching syncreconciler.Loop's own
+				// isStopping/ctx.Err ordering) -- that is the process
+				// stopping on purpose, not an operational failure, and must
+				// never count against step_failures_total or the degrade
+				// streak (codex review finding).
+				if isContextError(err) && (ctx.Err() != nil || loop.isStopping()) {
+					return
+				}
 				loop.recordStepFailure(ctx, err)
+				if loop.stepObserved != nil {
+					loop.stepObserved()
+				}
 				continue
+			}
+			if loop.stepObserved != nil {
+				loop.stepObserved()
 			}
 		}
 	}
 }
 
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (loop *ReconcilerLoop) isStopping() bool {
+	loop.mu.Lock()
+	defer loop.mu.Unlock()
+	return loop.stopping
+}
+
 func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	result, err := loop.stepper.Step(ctx, now, loop.config.Limit)
-	if err != nil {
-		return err
-	}
+	// CHAOS-4429 (codex review finding): accumulate the committed result
+	// BEFORE branching on err. Relay.Step returns a non-zero StepResult
+	// alongside a non-nil error on most of its own mid-pass failure paths
+	// (a claim already delivered before a later claim's dispatch faults,
+	// say) -- those actions already committed to Postgres. Discarding the
+	// result here undercounts Prometheus and, now that a failing tick is
+	// retried forever instead of crashing the process on the first miss,
+	// would silently lose that evidence on every retry rather than just once
+	// before a crash-loop restart reset it anyway.
 	loop.mu.Lock()
 	loop.recovered += nonNegativeUint(result.Recovered)
 	loop.postRepairContractRejections += nonNegativeUint(result.PostRepairContractRejectionsRecovered)
@@ -272,15 +313,19 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.retried += nonNegativeUint(result.Retried)
 	loop.dead += nonNegativeUint(result.Dead)
 	loop.leaseLost += nonNegativeUint(result.LeaseLost)
-	loop.lastOK = now
-	loop.up = true
-	// CHAOS-4429: one success clears the streak immediately, matching
-	// stageTelemetry.recordSuccess -- a relay that recovers is never held
-	// degraded on readyz by a stale streak.
-	loop.consecutiveFailures = 0
+	if err == nil {
+		loop.lastOK = now
+		loop.up = true
+		// CHAOS-4429: one success clears the streak immediately, matching
+		// stageTelemetry.recordSuccess -- a relay that recovers is never held
+		// degraded on readyz by a stale streak.
+		loop.consecutiveFailures = 0
+	}
 	loop.mu.Unlock()
-	loop.ready.Store(true)
-	return nil
+	if err == nil {
+		loop.ready.Store(true)
+	}
+	return err
 }
 
 func nonNegativeUint(value int) uint64 {

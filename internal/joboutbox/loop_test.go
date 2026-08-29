@@ -167,21 +167,26 @@ func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *test
 func TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
 	failing := errors.New("database unavailable")
-	stepped := make(chan struct{}, 1)
-	// index 0 (Start's initial step) succeeds; 1-3 fail, crossing the
-	// 3-consecutive-failure threshold on the third; 4 succeeds again.
+	// index 0 (Start's initial step, run synchronously by Start itself) is
+	// consumed and complete by the time Start returns, so it needs no
+	// separate synchronization; 1-3 fail, crossing the 3-consecutive-failure
+	// threshold on the third; 4 succeeds again.
 	results := []error{nil, failing, failing, failing, nil}
 	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
 		err := results[0]
 		results = results[1:]
-		defer func() { stepped <- struct{}{} }()
 		return StepResult{}, err
 	}), clock)
+	// stepObserved (codex review finding) fires only once run has finished
+	// ALL bookkeeping for a tick -- recordStepFailure or the success path --
+	// so assertions right after it can never race that bookkeeping the way
+	// a signal sent from inside the stepper closure could.
+	observed := make(chan struct{}, 1)
+	loop.stepObserved = func() { observed <- struct{}{} }
 	openReconcilerReadiness(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	<-stepped // initial Start step (index 0, success)
 
 	clock.mu.Lock()
 	ticker := clock.ticker
@@ -192,7 +197,7 @@ func TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError(t *testing.
 	// readyz) and nothing may reach Errors().
 	for i := 0; i < 2; i++ {
 		ticker.ticks <- clock.Now().Add(time.Duration(i+1) * time.Second)
-		<-stepped
+		<-observed
 	}
 	select {
 	case err := <-loop.Errors():
@@ -207,7 +212,7 @@ func TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError(t *testing.
 	// Third consecutive failure crosses the threshold: readiness closes, but
 	// the process itself is never torn down.
 	ticker.ticks <- clock.Now().Add(3 * time.Second)
-	<-stepped
+	<-observed
 	select {
 	case err := <-loop.Errors():
 		t.Fatalf("Errors() fired on a periodic step failure -- CHAOS-4429: this must never be fatal: %v", err)
@@ -220,13 +225,92 @@ func TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError(t *testing.
 	// A subsequent success self-heals readiness immediately AND proves the
 	// polling goroutine survived every failure above.
 	ticker.ticks <- clock.Now().Add(4 * time.Second)
-	<-stepped
+	<-observed
 	if status := registry.Readiness(context.Background()); !status.Ready {
 		t.Fatalf("readiness did not self-heal after a successful step: %#v", status)
 	}
 
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcilerLoopStepPreservesCommittedResultOnFailure is a codex review
+// finding: Relay.Step returns a non-zero StepResult ALONGSIDE a non-nil
+// error on most of its own mid-pass failure paths (a claim already
+// dispatched before a later claim in the same pass faults, say) -- those
+// actions already committed to Postgres. step must count them even though
+// the pass as a whole failed; discarding them here would now lose that
+// evidence on every retry instead of just once before a pre-CHAOS-4429
+// crash-loop restart reset the counters anyway.
+func TestReconcilerLoopStepPreservesCommittedResultOnFailure(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	failing := errors.New("dispatch failed mid-pass")
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{Claimed: 3, Delivered: 2, Dead: 1}, failing
+	}), clock)
+	if err := loop.step(context.Background(), clock.Now()); !errors.Is(err, failing) {
+		t.Fatalf("step() error = %v, want %v", err, failing)
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"worker_outbox_reconciler_claimed_total 3",
+		"worker_outbox_reconciler_delivered_total 2",
+		"worker_outbox_reconciler_dead_total 1",
+	} {
+		if !strings.Contains(metrics.String(), want+"\n") {
+			t.Fatalf("metrics missing %q -- committed StepResult was discarded on a failed step:\n%s", want, metrics.String())
+		}
+	}
+}
+
+// TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure is a
+// codex review finding: Shutdown sets stopping THEN cancels the loop's
+// context (matching syncreconciler.Loop's own ordering), so a step in
+// flight at that moment sees its own shutdown as a Relay.Step error. That is
+// the process stopping on purpose, not an operational failure, and must
+// never increment step_failures_total or the degrade streak.
+func TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	entered := make(chan struct{}, 1)
+	calls := 0
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (StepResult, error) {
+		calls++
+		if calls == 1 {
+			return StepResult{}, nil
+		}
+		entered <- struct{}{}
+		<-ctx.Done()
+		return StepResult{}, ctx.Err()
+	}), clock)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-entered
+
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("Errors() fired on shutdown cancellation, not an operational failure: %v", err)
+	default:
+	}
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_step_failures_total 0\n") {
+		t.Fatalf("shutdown cancellation was counted as a step failure:\n%s", metrics.String())
 	}
 }
 

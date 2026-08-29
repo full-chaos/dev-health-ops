@@ -23,8 +23,10 @@ reintroduced.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -218,4 +220,155 @@ def test_provisioning_without_a_password_secret_fails_the_render() -> None:
     assert completed.returncode != 0
     assert "RIVER_" in completed.stderr, (
         f"the error must name what the Secret has to carry: {completed.stderr}"
+    )
+
+
+# --- the weight-0 migrate Job must not run the River step itself ------------
+#
+# `dev-hops migrate postgres` invokes `dev-health-worker-migrate` itself
+# whenever MIGRATION_DATABASE_URI (or _FILE) is set --
+# src/dev_health_ops/migrate.py::_run_river_upgrade returns 0 early only when
+# BOTH are absent. That implicit step runs inside the weight-0 Job, i.e. BEFORE
+# the weight-5 provisioning hook has created the runtime logins, and River's
+# preflight requires them to exist with rolcanlogin
+# (internal/storage/river/migrate.go:142-186). On a fresh database it therefore
+# fails and Helm aborts the release before provisioning ever runs.
+#
+# Compose keeps the two apart by never letting the two DSNs share a variable:
+# its `migrate` service reads MIGRATION_DATABASE_URI (compose.yml:196) and
+# unsets it when empty (compose.yml:187-188), while the River DSN reaches
+# go-river-migrate under a DIFFERENT name, GO_WORKER_MIGRATION_DATABASE_URI
+# (compose.go-workers.yml:156). The chart cannot split the variable that way --
+# both Jobs envFrom one migration Secret, and when secrets.create=false its
+# contents belong to the operator -- so it applies the same separation where
+# Compose already applies it, in the migrate entrypoint: hand the DSN to Alembic
+# as `--db` and take it out of the environment.
+
+_MIGRATION_DSN = "postgresql://migrator:pw@postgres:5432/devhealth"
+
+
+def _values(river_migrate: bool) -> str:
+    return textwrap.dedent(f"""
+        migrations:
+          hook:
+            provisionRoles: {{enabled: true}}
+            riverMigrate: {{enabled: {str(river_migrate).lower()}}}
+            secretData:
+              MIGRATION_DATABASE_URI: "{_MIGRATION_DSN}"
+              POSTGRES_URI: ""
+              CLICKHOUSE_URI: ""
+        """)
+
+
+def _jobs_from_values(values: str, tmp_path: Path) -> dict[str, dict]:
+    values_file = tmp_path / "values.yaml"
+    values_file.write_text(values, encoding="utf-8")
+    completed = subprocess.run(
+        ["helm", "template", _RELEASE, str(_CHART), "-f", str(values_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return {
+        doc["metadata"]["name"]: doc
+        for doc in yaml.safe_load_all(completed.stdout)
+        if doc and doc.get("kind") == "Job"
+    }
+
+
+def _run_migrate_command(job: dict, tmp_path: Path, **env: str) -> tuple[int, str]:
+    """Execute the migrate Job's shell with a recording `dev-hops` stub.
+
+    The defect is in shell logic, so a substring assertion on the rendered
+    command would pass against a script that still exports the variable. This
+    runs the real script and records, per invocation, both the argv and whether
+    MIGRATION_DATABASE_URI was still in the environment.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "dev-hops.log"
+    stub = bin_dir / "dev-hops"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'set -- "$@"\n'
+        'argv="$*"\n'
+        'if [ "${MIGRATION_DATABASE_URI+x}" = x ]; then seen=set; else seen=unset; fi\n'
+        'if [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ]; then'
+        " seenfile=set; else seenfile=unset; fi\n"
+        'printf "%s|%s|%s\\n" "$argv" "$seen" "$seenfile" >> "$DEV_HOPS_LOG"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    command = container["command"]
+    assert command[:2] == ["sh", "-c"], command
+    completed = subprocess.run(
+        ["sh", "-c", command[2]],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "DEV_HOPS_LOG": str(log),
+            **env,
+        },
+    )
+    return completed.returncode, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def _postgres_invocation(calls: str) -> tuple[str, str, str]:
+    for line in calls.splitlines():
+        argv, seen, seen_file = line.rsplit("|", 2)
+        if argv.endswith("migrate postgres"):
+            return argv, seen, seen_file
+    raise AssertionError(f"`migrate postgres` was never invoked: {calls!r}")
+
+
+def test_migrate_job_does_not_run_the_implicit_river_step(tmp_path: Path) -> None:
+    """With the River hook enabled, weight 0 must leave River to weight 10."""
+    jobs = _jobs_from_values(_values(river_migrate=True), tmp_path)
+    code, calls = _run_migrate_command(
+        jobs[_MIGRATE],
+        tmp_path,
+        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
+        POSTGRES_URI="",
+        DATABASE_URI="",
+    )
+    assert code == 0, calls
+    argv, seen, seen_file = _postgres_invocation(calls)
+    assert (seen, seen_file) == ("unset", "unset"), (
+        "`dev-hops migrate postgres` still sees MIGRATION_DATABASE_URI, so it "
+        "runs dev-health-worker-migrate at weight 0 -- before the weight-5 hook "
+        f"has created the roles its preflight requires: {calls!r}"
+    )
+    assert f"--db {_MIGRATION_DSN}" in argv, (
+        f"Alembic must still receive the elevated DSN, now explicitly: {argv!r}"
+    )
+
+
+def test_migrate_job_still_runs_river_when_the_hook_is_off(tmp_path: Path) -> None:
+    """The suppression is scoped to the hook taking the step over.
+
+    Without this, tightening the entrypoint to always unset the variable would
+    pass the test above while silently removing the River migration from every
+    deployment that has not opted into the new hook.
+    """
+    jobs = _jobs_from_values(_values(river_migrate=False), tmp_path)
+    code, calls = _run_migrate_command(
+        jobs[_MIGRATE],
+        tmp_path,
+        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
+        POSTGRES_URI="",
+        DATABASE_URI="",
+    )
+    assert code == 0, calls
+    argv, seen, _seen_file = _postgres_invocation(calls)
+    assert seen == "set", (
+        "with riverMigrate off nothing else applies the River schema, so the "
+        f"env-var opt-in must survive: {calls!r}"
+    )
+    assert "--db" not in argv, (
+        "--db combined with MIGRATION_DATABASE_URI is rejected by "
+        f"migrate.py::_run_upgrade: {argv!r}"
     )

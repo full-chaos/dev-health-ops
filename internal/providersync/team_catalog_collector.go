@@ -108,6 +108,32 @@ type TeamCatalogResult struct {
 	// step is never indistinguishable from a clean run in telemetry (see
 	// jobruntime.TeamCatalogOutcomeRosterPreservationFailed).
 	RosterPreservationFailed bool
+	// SprintsWritten/SprintIDs are Linear's (and, once 4434/4432 wire their
+	// own cycle equivalents, any provider's) unconditional sprint/cycle
+	// reference discovery -- never gated on TeamCatalogSelections, written
+	// whenever the collector runs at all (CHAOS-4431 codex review P1,
+	// team_autoimport_linear.py:575-576: "sprints/cycles ... reference
+	// data, not a category"). SprintIDs feeds the same ClickHouse readback
+	// claim Python's reference_sprint_ids already fed before this cutover.
+	SprintsWritten int
+	SprintIDs      []string
+	// TeamsSkippedPolicy counts teams this call deliberately left untouched
+	// in `teams` because their CHAOS-2622 sync_policy is not the auto-apply
+	// default (0) -- the fail-safe guard team-lead ruled for codex review
+	// findings #3/#6 (2026-08-28), pending the full drift-aware projector
+	// (CHAOS-4444 class). Zero for every org with no flagged-for-review or
+	// manual teams, which today is every org -- the guard is additive-safe.
+	TeamsSkippedPolicy int
+	// MembershipsSkippedManualConflict counts team_memberships rows this call
+	// deliberately left unwritten because the (member_id, team_id) pair
+	// already has an active manual membership, or the member has an active
+	// member-scoped manual_attribution_fallbacks row -- the fail-safe guard
+	// team-lead ruled for codex review finding #6 (2026-08-28), pending the
+	// full CHAOS-2622/CHAOS-4444 drift-aware projector. Unlike
+	// TeamsSkippedPolicy, this gate applies regardless of sync_policy: the
+	// membership conflict check is independent of team policy
+	// (team-attribution.md:793-797).
+	MembershipsSkippedManualConflict int
 }
 
 // TeamCatalogCollector is the shared, provider-neutral seam every native

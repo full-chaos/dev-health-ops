@@ -78,15 +78,19 @@ type SourceExternalIDsResolver interface {
 // seam VerifiedDiscoveryExecutor already wraps, so ClickHouse readback
 // verification covers native and bridge providers alike.
 //
-// When every selection is off, this returns success with NO
-// "reference_team_keys"/"reference_sprint_ids" keys at all (not empty
-// slices under those keys -- their absence), per lane-4437's executed
-// answer (native_dispatch_sync_run_service.go:242-253 gates unit dispatch
-// only on the discovery ledger reaching status=success; that status is
-// earned by ReferenceReadbackVerifier.Verify, clickhouse_readback.go:228-236,
-// which is a no-op -- and therefore trivially succeeds -- exactly when the
-// summary claims no keys at all). So an all-off native provider still lets
-// dispatch proceed, with zero ClickHouse writes and zero bridge calls.
+// When every CHAOS-4323 selection is off, a native provider still dispatches
+// (never blocks unit dispatch): teams/members/projects are not written, but
+// -- corrected after codex review of this PR found a second-order gap in the
+// original design here, independently converging with CHAOS-4437's Python
+// fix -- sprint/cycle reference discovery is UNCONDITIONAL in strict mode
+// (team_autoimport_linear.py:421's early exit only applies when NOT strict),
+// so this executor always reaches the collector and "reference_sprint_ids"
+// is populated from whatever cycles exist, even with every other category
+// off. ReferenceReadbackVerifier.Verify (clickhouse_readback.go:228-253)
+// checks each claimed key set independently by length, not by presence, so
+// an empty "reference_team_keys" alongside a non-empty "reference_sprint_ids"
+// still verifies correctly -- teams are vacuously satisfied, sprints are
+// checked for real.
 type TeamCatalogDiscoveryExecutor struct {
 	Native     map[string]providersync.TeamCatalogCollector
 	Fallback   DiscoveryExecutor
@@ -135,15 +139,18 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if err != nil {
 		return nil, err
 	}
-	if !selections.Any() {
-		// Nothing selected: no collector call, no bridge call, no CH writes.
-		// Deliberately omit reference_team_keys/reference_sprint_ids (not an
-		// empty slice under those keys -- their absence) so
-		// ReferenceReadbackVerifier.Verify no-ops and the discovery ledger
-		// still reaches status=success, letting unit dispatch proceed.
-		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeSkipped)
-		return map[string]any{"provider": normalizedProvider, "outcome": "skipped"}, nil
-	}
+	// Unlike the non-strict post-sync bridge (teamCatalogAutoimportBridge),
+	// this seam NEVER skips the collector call outright when every
+	// CHAOS-4323 selection is off. Sprints/cycles are unconditional
+	// reference data in Python's STRICT mode -- team_autoimport_linear.py:
+	// 421's early exit explicitly does not apply when strict, specifically
+	// so dispatch-blocking sprint keys are resolved even when an org
+	// disabled every writable category (CHAOS-4437 P1; codex review of
+	// this PR independently re-found the same gap in this executor before
+	// that Python fix's rationale was even known here). Ref.Strict is
+	// always true below, so the collector decides on its own whether to
+	// skip -- see LinearTeamCatalogCollector.CollectTeamCatalog's doc
+	// comment -- this function never special-cases "all off" itself.
 	credential, client, integrationID, err := executor.Clients.ResolveClient(ctx, orgID, runID, normalizedProvider)
 	if err != nil {
 		return nil, err
@@ -183,20 +190,27 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
 			{"team_project_ownership", result.OwnershipWritten},
 			{"team_repo_ownership", result.RepoOwnershipWritten},
+			{"sprints", result.SprintsWritten},
+			{"teams_skipped_policy", result.TeamsSkippedPolicy},
+			{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
 		} {
 			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
 		}
 	}
 	return map[string]any{
-		"provider":            normalizedProvider,
-		"outcome":             "native",
-		"reference_team_keys": result.TeamKeys,
+		"provider":             normalizedProvider,
+		"outcome":              "native",
+		"reference_team_keys":  result.TeamKeys,
+		"reference_sprint_ids": result.SprintIDs,
 		"rows_written": map[string]int{
 			"teams":                  result.TeamsWritten,
 			"members":                result.MembersWritten,
 			"team_memberships":       result.MembershipsWritten,
 			"projects":               result.ProjectsWritten,
 			"team_project_ownership": result.OwnershipWritten,
+			"sprints":                result.SprintsWritten,
+			"teams_skipped_policy":   result.TeamsSkippedPolicy,
+			"team_memberships_skipped_manual_conflict": result.MembershipsSkippedManualConflict,
 		},
 	}, nil
 }

@@ -291,12 +291,33 @@ const (
 	// are separate fields specifically so GitHub's rows are never reported
 	// under Linear/GitLab's team_project_ownership label.
 	TeamCatalogTableTeamRepoOwnership TeamCatalogTable = "team_repo_ownership"
+	// TeamCatalogTableSprints is Linear's (CHAOS-4431 codex review P1) cycle-
+	// to-sprint reference discovery -- unconditional reference data, never
+	// gated on a CHAOS-4323 selection, reported separately from the other
+	// five tables so a dashboard can see sprints kept flowing even on a run
+	// where every writable category was off.
+	TeamCatalogTableSprints TeamCatalogTable = "sprints"
+	// TeamCatalogTableTeamsSkippedPolicy counts teams a call deliberately
+	// left untouched because their CHAOS-2622 sync_policy was not the
+	// auto-apply default (team-lead ruling, 2026-08-28, codex review
+	// findings #3/#6's fail-safe guard, pending the CHAOS-4444-class full
+	// drift-aware projector). Reported as a row count, not folded into
+	// TeamCatalogTableTeams's written count, so "skipped for policy" is never
+	// indistinguishable from "genuinely zero teams this run".
+	TeamCatalogTableTeamsSkippedPolicy TeamCatalogTable = "teams_skipped_policy"
+	// TeamCatalogTableMembershipsSkippedManualConflict counts
+	// team_memberships rows a call deliberately left unwritten because of an
+	// active manual membership or manual_attribution_fallbacks conflict
+	// (team-lead ruling, 2026-08-28, codex review finding #6's fail-safe
+	// guard, pending the CHAOS-4444-class full drift-aware projector).
+	TeamCatalogTableMembershipsSkippedManualConflict TeamCatalogTable = "team_memberships_skipped_manual_conflict"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
 	return []TeamCatalogTable{
 		TeamCatalogTableTeams, TeamCatalogTableMembers, TeamCatalogTableTeamMemberships,
 		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
+		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
 	}
 }
 

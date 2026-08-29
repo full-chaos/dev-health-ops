@@ -165,7 +165,7 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 6 {
+	if len(observer.rows) != 9 {
 		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
 	}
 	foundRepoOwnershipRow := false

@@ -257,6 +257,11 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 			ProjectKey: &projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}},
+		Sprints: []linearSprintRow{{
+			OrgID: claim.OrgID, Provider: "linear", SprintID: "linear:cycle:1",
+			Name: linearReferenceStringPtr("Cycle 1"), State: linearReferenceStringPtr("active"),
+			NativeTeamKey: &teamKey, LastSynced: now,
+		}},
 	}
 }
 

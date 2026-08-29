@@ -102,7 +102,8 @@ func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 				testCase.client(client)
 			}
 			batch, err := (LinearReferenceCatalogRouteHandler{}).CollectReferenceCatalog(
-				context.Background(), testCase.ref, testCase.credential, client, observed,
+				context.Background(), testCase.ref, testCase.credential, client,
+				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, observed,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) || batch.Result.Complete || len(doer.requests) != 0 {
 				t.Fatalf("batch=%+v error=%v requests=%d", batch, err, len(doer.requests))
@@ -158,6 +159,7 @@ func TestLinearReferenceCatalogBuildsConcreteEffects(t *testing.T) {
 		Memberships: []linearReferenceMembershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", MemberID: "linear:alice@example.com", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
 		Projects:    []linearReferenceProjectRow{{OrgID: claim.OrgID, Provider: "linear", ID: "project-1", Name: "Platform", IsActive: 1, UpdatedAt: now, LastSynced: now}},
 		Ownership:   []linearReferenceOwnershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", ProjectID: "project-1", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
+		Sprints:     []linearSprintRow{{OrgID: claim.OrgID, Provider: "linear", SprintID: "linear:cycle:cycle-1", Name: linearReferenceStringPtr("Cycle 1"), State: linearReferenceStringPtr("active"), NativeTeamKey: linearReferenceStringPtr("ENG"), LastSynced: now}},
 	}
 	effects, err := BuildLinearReferenceCatalogEffects(rows)
 	if err != nil {
@@ -173,6 +175,7 @@ func TestLinearReferenceCatalogBuildsConcreteEffects(t *testing.T) {
 		linearReferenceCatalogMembershipsDestination,
 		linearReferenceCatalogProjectsDestination,
 		linearReferenceCatalogOwnershipDestination,
+		linearReferenceCatalogSprintsDestination,
 	}
 	for index, want := range wantDestinations {
 		if got := batches[index].Destination; got != want {
@@ -206,18 +209,20 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	observed := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","description":"Platform team","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true},{"id":"user-2","name":"Inactive","email":"inactive@example.com","active":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"projects":{"nodes":[{"id":"project-42","name":"Platform","description":"Platform project","status":{"id":"status-1","name":"Completed","type":"completed"},"trashed":false,"targetDate":"2026-09-30","archivedAt":null,"url":"https://linear.app/project-42","lead":{"id":"user-1","name":"Alice","email":"alice@example.com"},"teams":{"nodes":[{"id":"team-raw-1","key":"ENG"}]} }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), observed,
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, observed,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if batch.Failure != nil || !batch.Result.Complete ||
-		batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 ||
+		batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 ||
 		!batch.Evidence.TeamsComplete || !batch.Evidence.MembersComplete || !batch.Evidence.ProjectsComplete {
 		t.Fatalf("batch=%+v", batch)
 	}
@@ -246,7 +251,9 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	if err := json.NewDecoder(doer.requests[0].Body).Decode(&teamRequest); err != nil {
 		t.Fatal(err)
 	}
-	if err := json.NewDecoder(doer.requests[1].Body).Decode(&projectRequest); err != nil {
+	// requests[1] is the unconditional per-team cycles/sprint fetch (CHAOS-4431
+	// codex review P1) -- the projects request now lands at index 2.
+	if err := json.NewDecoder(doer.requests[2].Body).Decode(&projectRequest); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(teamRequest.Query, "members(first: 10)") ||
@@ -286,7 +293,8 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 			batch, err := testCase.handler.CollectReferenceCatalog(
 				context.Background(), teamCatalogRefFromClaim(claim),
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-				linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+				linearWorkItemsClient(t, doer),
+				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 			)
 			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Effects.Batches()[0].Destination != "" {
 				t.Fatalf("batch=%+v err=%v", batch, err)
@@ -301,15 +309,26 @@ func TestLinearReferenceCatalogPaginatesLargeTeamMemberships(t *testing.T) {
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":true,"endCursor":"members-1"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"team":{"members":{"nodes":[{"id":"user-2","name":"Bob","email":"bob@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
-	if err != nil || batch.Result.Members != 2 || batch.Evidence.Requests != 3 || !batch.Evidence.MembersComplete {
+	if err != nil || batch.Result.Members != 2 || batch.Evidence.Requests != 4 || !batch.Evidence.MembersComplete {
 		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	// CHAOS-4431 codex review P1: the team roster must reflect BOTH pages of
+	// members, not just the page-1 node returned alongside the teams query --
+	// a roster built from page 1 alone would silently truncate to Alice only
+	// (2 facets: "linear:alice@example.com" + "alice@example.com"), never
+	// reaching Bob's page-2 facets at all.
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Teams[0].Members) != 4 ||
+		!containsString(batch.Rows.Teams[0].Members, "linear:bob@example.com") {
+		t.Fatalf("roster truncated to page 1: teams=%+v", batch.Rows.Teams)
 	}
 }
 
@@ -324,7 +343,8 @@ func TestLinearReferenceCatalogCountsMultiplePagesOnce(t *testing.T) {
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil || batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 || !batch.Result.Complete {
 		t.Fatalf("batch=%+v err=%v", batch, err)

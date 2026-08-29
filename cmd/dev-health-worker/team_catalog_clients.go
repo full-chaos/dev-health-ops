@@ -48,6 +48,14 @@ WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id 
 // closed rather than hand a collector a nil/wrong client.
 var errTeamCatalogUnsupportedProvider = errors.New("team catalog provider has no native HTTP client builder")
 
+// errTeamCatalogCredentialFingerprintMismatch is the distinct, fail-closed
+// outcome CHAOS-4431 codex review P1 + team-lead ruling (2026-08-28) require:
+// a stamped run's credential_id resolved to DIFFERENT secret content than
+// what was witnessed at plan time -- never folded into the generic
+// providersync.ErrInvalidConfiguration, so a dashboard/alert can tell "no
+// credential at all" apart from "credential content changed mid-run".
+var errTeamCatalogCredentialFingerprintMismatch = errors.New("team catalog credential fingerprint mismatch: stamped run auth no longer matches the resolved credential")
+
 // resolveTeamCatalogIntegration ports the exact join
 // native_reference_discovery.go's resolveAuthoritativeProvider already uses
 // (sync_runs JOIN integrations, fenced by org_id on both sides), extended to
@@ -58,29 +66,61 @@ var errTeamCatalogUnsupportedProvider = errors.New("team catalog provider has no
 // resolving "the" credential for (org, provider) instead of this run's own
 // integration would be ambiguous. Pinning credential_id from here means
 // CredentialResolver.Resolve below needs no separate disambiguation.
+//
+// CHAOS-4431 codex review P1: which credential_id -- the run's own FROZEN
+// stamp (sync_runs.credential_id, CHAOS-2755) or the live, mutable
+// integrations.credential_id -- now follows resolve_run_auth's exact branch
+// (sync_bootstrap.py:163-216): a run stamped at plan time (auth_source NOT
+// NULL) uses ITS OWN credential_id, so a credential rotated mid-run cannot
+// change which account this run's native discovery authenticates against,
+// same as the claimed units the rest of this run already dispatched. A NULL
+// auth_source (legacy/in-flight-at-deploy run) falls back to the mutable
+// integrations.credential_id exactly like Python's own fallback branch.
+// Deliberately NOT replicated: _verify_stamped_fingerprint's drift warning/
+// strict-raise (a stamped credential's content changing mid-run) -- this
+// function fails closed the same way a fingerprint check would if the
+// stamped id no longer resolves to a live credential (CredentialResolver.
+// Resolve errors), just without the explicit mismatch diagnostic. Noted in
+// this PR's RISK-NOTES as a bounded, deliberate scope cut.
+// stampedFingerprint is empty whenever resolve_run_auth's
+// _verify_stamped_fingerprint would be a no-op: an unstamped run (auth_source
+// NULL) or a stamped run that simply never recorded a fingerprint. A
+// non-empty return means the caller MUST verify it once the credential is
+// decrypted (ResolveClient below) -- resolveTeamCatalogIntegration itself
+// never sees decrypted credential content, so it cannot compute the witness.
 func resolveTeamCatalogIntegration(
 	ctx context.Context, pool *pgxpool.Pool, orgID, runID, provider string,
-) (integrationID, credentialID string, err error) {
+) (integrationID, credentialID, stampedFingerprint string, err error) {
 	if pool == nil || orgID == "" || runID == "" || provider == "" {
-		return "", "", providersync.ErrInvalidConfiguration
+		return "", "", "", providersync.ErrInvalidConfiguration
 	}
+	var authSource *string
+	var stampedCredentialID, liveCredentialID, rawFingerprint string
 	queryErr := pool.QueryRow(ctx, `
-SELECT integrations.id::text, COALESCE(integrations.credential_id::text, '')
+SELECT integrations.id::text, COALESCE(integrations.credential_id::text, ''),
+       sync_runs.auth_source, COALESCE(sync_runs.credential_id::text, ''),
+       COALESCE(sync_runs.credential_fingerprint, '')
 FROM public.sync_runs
 JOIN public.integrations ON integrations.id = sync_runs.integration_id
 WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id = $2
   AND lower(trim(integrations.provider)) = $3`,
-		runID, orgID, provider).Scan(&integrationID, &credentialID)
+		runID, orgID, provider).Scan(&integrationID, &liveCredentialID, &authSource, &stampedCredentialID, &rawFingerprint)
 	if errors.Is(queryErr, pgx.ErrNoRows) {
-		return "", "", providersync.ErrInvalidConfiguration
+		return "", "", "", providersync.ErrInvalidConfiguration
 	}
 	if queryErr != nil {
-		return "", "", queryErr
+		return "", "", "", queryErr
+	}
+	credentialID = liveCredentialID
+	stamped := authSource != nil && stampedCredentialID != ""
+	if stamped {
+		credentialID = stampedCredentialID
+		stampedFingerprint = rawFingerprint
 	}
 	if credentialID == "" {
-		return "", "", providersync.ErrInvalidConfiguration
+		return "", "", "", providersync.ErrInvalidConfiguration
 	}
-	return integrationID, credentialID, nil
+	return integrationID, credentialID, stampedFingerprint, nil
 }
 
 // teamCatalogClientResolver implements syncdispatchruntime.ProviderClientResolver
@@ -107,7 +147,7 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	ctx context.Context, orgID, runID, provider string,
 ) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	integrationID, credentialID, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
+	integrationID, credentialID, stampedFingerprint, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
 	if err != nil {
 		return providerfoundation.Credential{}, nil, "", err
 	}
@@ -120,6 +160,23 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	})
 	if err != nil {
 		return providerfoundation.Credential{}, nil, "", err
+	}
+	// CHAOS-4431 codex review P1 (team-lead ruling, 2026-08-28: "not accepted
+	// as a cut... it is the whole point of CHAOS-2755"): a stamped run's
+	// frozen credential_id resolving to DIFFERENT secret content than what
+	// was stamped at plan time -- an in-place secret edit, not a credential_
+	// id repoint (that case is what the stamped credential_id itself already
+	// defeats) -- must fail closed with its own distinct error, mirroring
+	// _verify_stamped_fingerprint's strict branch (sync_bootstrap.py:123-160).
+	// Deliberately always strict here (no SYNC_RUN_AUTH_STRICT warn-and-
+	// continue escape hatch): this seam has no retry path that re-resolves a
+	// fresh credential the way a claimed provider-unit's next attempt does,
+	// so silently continuing on a mismatched witness has no later chance to
+	// self-correct.
+	if stampedFingerprint != "" {
+		if computed := providerfoundation.CredentialFingerprint(credential, credentialID, integrationID); computed != stampedFingerprint {
+			return providerfoundation.Credential{}, nil, "", fmt.Errorf("%w: integration=%s", errTeamCatalogCredentialFingerprintMismatch, integrationID)
+		}
 	}
 	switch provider {
 	case "linear":
@@ -144,7 +201,7 @@ func (resolver teamCatalogSelectionsResolver) ResolveSelections(
 	ctx context.Context, orgID, runID, provider string,
 ) (providersync.TeamCatalogSelections, map[string]any, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	integrationID, _, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
+	integrationID, _, _, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
 	if err != nil {
 		return providersync.TeamCatalogSelections{}, nil, err
 	}
@@ -309,6 +366,9 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 					{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
 					{"team_project_ownership", result.OwnershipWritten},
 					{"team_repo_ownership", result.RepoOwnershipWritten},
+					{"sprints", result.SprintsWritten},
+					{"teams_skipped_policy", result.TeamsSkippedPolicy},
+					{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
 				} {
 					_ = bridge.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
 				}

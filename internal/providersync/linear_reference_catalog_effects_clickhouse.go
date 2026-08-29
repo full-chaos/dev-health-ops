@@ -89,6 +89,17 @@ func (sink LinearReferenceCatalogClickHouseEffects) WriteEffect(ctx context.Cont
 			}
 		}
 		return sink.writeOwnership(ctx, rows)
+	case linearReferenceCatalogSprintsDestination:
+		rows, err := decodeEffectRows[linearSprintRow](effect)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if err := validateLinearSprint(row, claim); err != nil {
+				return err
+			}
+		}
+		return sink.writeSprints(ctx, rows)
 	default:
 		return ErrInvalidConfiguration
 	}
@@ -157,6 +168,17 @@ func (sink LinearReferenceCatalogClickHouseEffects) InspectEffect(ctx context.Co
 			}
 		}
 		return sink.inspectOwnership(ctx, claim, expected)
+	case linearReferenceCatalogSprintsDestination:
+		expected, err := decodeEffectRows[linearSprintRow](effect)
+		if err != nil {
+			return EffectConflict, err
+		}
+		for _, row := range expected {
+			if err := validateLinearSprint(row, claim); err != nil {
+				return EffectConflict, err
+			}
+		}
+		return sink.inspectSprints(ctx, claim, expected)
 	default:
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -184,7 +206,7 @@ func linearReferenceCatalogDestination(destination string) bool {
 	switch destination {
 	case linearReferenceCatalogTeamsDestination, linearReferenceCatalogMembersDestination,
 		linearReferenceCatalogMembershipsDestination, linearReferenceCatalogProjectsDestination,
-		linearReferenceCatalogOwnershipDestination:
+		linearReferenceCatalogOwnershipDestination, linearReferenceCatalogSprintsDestination:
 		return true
 	default:
 		return false
@@ -349,6 +371,73 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeOwnership(ctx context.C
 		return err
 	}
 	return batch.Send()
+}
+
+// writeSprints shares the `sprints` table and its INSERT column list with
+// GitHubSprintsClickHouseAdapter (gitHubSprintsInsert,
+// github_work_items_direct_effects_clickhouse.go) rather than duplicating
+// them: linearSprintRow is a type alias for githubSprintRow, so the same
+// columns and row shape apply unchanged. A dedicated method (not a call
+// through that adapter's own WriteGitHubWorkItemEffect) because this sink's
+// WriteEffect takes a (Claim, EffectBatch) pair, not that adapter's
+// (GitHubWorkItemEffectIdentity, EffectBatch) shape.
+func (sink LinearReferenceCatalogClickHouseEffects) writeSprints(ctx context.Context, rows []linearSprintRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubSprintsInsert)
+	if err != nil {
+		return err
+	}
+	defer batch.Abort()
+	for _, row := range rows {
+		if err := batch.Append(row.Provider, row.SprintID, row.NativeTeamKey, row.Name, row.State, row.StartedAt, row.EndedAt, row.CompletedAt, row.LastSynced, row.OrgID); err != nil {
+			return err
+		}
+	}
+	if err := sink.Lease.Assert(ctx); err != nil {
+		return err
+	}
+	return batch.Send()
+}
+
+func (sink LinearReferenceCatalogClickHouseEffects) inspectSprints(ctx context.Context, claim Claim, expected []linearSprintRow) (EffectInspection, error) {
+	return inspectLinearReferenceRows(expected, func(row linearSprintRow) (EffectInspection, error) {
+		result, err := sink.Conn.Query(ctx, gitHubSprintsSelect, claim.OrgID, "linear", row.SprintID)
+		if err != nil {
+			return EffectConflict, err
+		}
+		defer result.Close()
+		var actual linearSprintRow
+		found := 0
+		for result.Next() {
+			if err := result.Scan(&actual.Provider, &actual.SprintID, &actual.NativeTeamKey, &actual.Name, &actual.State, &actual.StartedAt, &actual.EndedAt, &actual.CompletedAt, &actual.LastSynced, &actual.OrgID); err != nil {
+				return EffectConflict, err
+			}
+			found++
+		}
+		if err := result.Err(); err != nil {
+			return EffectConflict, err
+		}
+		if found == 0 {
+			return EffectAbsent, nil
+		}
+		if found != 1 || !equalLinearReferenceSprint(row, actual) {
+			return EffectConflict, nil
+		}
+		return EffectExact, nil
+	})
+}
+
+func equalLinearReferenceSprint(expected, actual linearSprintRow) bool {
+	return expected.Provider == actual.Provider && expected.SprintID == actual.SprintID &&
+		reflect.DeepEqual(expected.NativeTeamKey, actual.NativeTeamKey) &&
+		reflect.DeepEqual(expected.Name, actual.Name) &&
+		reflect.DeepEqual(expected.State, actual.State) &&
+		reflect.DeepEqual(expected.StartedAt, actual.StartedAt) &&
+		reflect.DeepEqual(expected.EndedAt, actual.EndedAt) &&
+		reflect.DeepEqual(expected.CompletedAt, actual.CompletedAt) &&
+		expected.LastSynced.Equal(actual.LastSynced) && expected.OrgID == actual.OrgID
 }
 
 func (sink LinearReferenceCatalogClickHouseEffects) inspectTeams(ctx context.Context, claim Claim, expected []linearReferenceTeamRow) (EffectInspection, error) {

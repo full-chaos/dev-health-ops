@@ -92,6 +92,7 @@ type LinearReferenceCatalogResult struct {
 	Memberships int  `json:"memberships"`
 	Projects    int  `json:"projects"`
 	Ownership   int  `json:"ownership"`
+	Sprints     int  `json:"sprints"`
 	Complete    bool `json:"complete"`
 }
 
@@ -110,6 +111,23 @@ type LinearReferenceCatalogBatch struct {
 type LinearReferenceCatalogRouteHandler struct {
 	PerPage  int
 	MaxPages int
+	// Now overrides the clock used to stamp NATIVE PROJECT rows only (CHAOS-
+	// 4431 codex review P2). Python timestamps each native project at its own
+	// observation boundary (team_autoimport_linear.py:590-602), deliberately
+	// NOT at walk start, so that two overlapping discovery runs for the same
+	// org order a ReplacingMergeTree row by when a project was actually SEEN
+	// rather than by which run started first. Team/member/team-derived-
+	// project rows are not observed independently of the walk (no per-node
+	// network fetch happens for them), so they keep using the caller's single
+	// normalizedAt, matching Python. Nil uses time.Now.
+	Now func() time.Time
+}
+
+func (handler LinearReferenceCatalogRouteHandler) observedAt() time.Time {
+	if handler.Now != nil {
+		return handler.Now().UTC().Truncate(time.Millisecond)
+	}
+	return time.Now().UTC().Truncate(time.Millisecond)
 }
 
 func (handler LinearReferenceCatalogRouteHandler) limits() (int, int, error) {
@@ -141,6 +159,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	ref TeamCatalogReference,
 	credential providerfoundation.Credential,
 	client *providerfoundation.HTTPClient,
+	selections TeamCatalogSelections,
 	normalizedAt time.Time,
 ) (LinearReferenceCatalogBatch, error) {
 	if ctx == nil || ref.validate() != nil || credential.Provider != "linear" ||
@@ -159,8 +178,13 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	rows := LinearReferenceCatalogRows{
 		Teams: make([]linearReferenceTeamRow, 0), Members: make([]linearReferenceMemberRow, 0),
 		Memberships: make([]linearReferenceMembershipRow, 0), Projects: make([]linearReferenceProjectRow, 0),
-		Ownership: make([]linearReferenceOwnershipRow, 0),
+		Ownership: make([]linearReferenceOwnershipRow, 0), Sprints: make([]linearSprintRow, 0),
 	}
+	// Teams are always fetched regardless of selections.Teams: cycles/sprints
+	// below are unconditional reference data keyed per team (CHAOS-4431 codex
+	// review P1, matching team_autoimport_linear.py:451's unconditional
+	// discover_linear call), and the selection only gates whether the TEAM
+	// ROW itself gets written later (LinearTeamCatalogCollector).
 	teamRaw, pages, capReached, collectErr := collectLinearReferenceConnection(
 		ctx, client, linearReferenceCatalogTeamsQuery, linearReferenceConnectionTeams,
 		linearReferenceConnectionVariables{First: perPage}, perPage, maxPages,
@@ -181,96 +205,147 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if normalizeErr != nil {
 			return linearReferenceCatalogFailureBatch(evidence, "teams", evidence.Pages, evidence.Records, normalizeErr, false)
 		}
-		rows.Teams = append(rows.Teams, team)
-		memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
-		membersComplete := !payload.Members.PageInfo.HasNextPage
-		if payload.Members.PageInfo.HasNextPage {
-			extra, memberPages, memberCap, memberErr := collectLinearReferenceConnection(
-				ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
-				linearReferenceConnectionVariables{TeamID: payload.ID}, linearReferenceCatalogMemberPageSize, maxPages,
-			)
-			evidence.Requests += memberPages
-			evidence.Pages += memberPages
-			if memberErr != nil || memberCap {
-				return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, memberCap)
-			}
-			membersComplete = true
-			for _, memberRaw := range extra {
-				var memberPayload linearReferenceCatalogMemberPayload
-				if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
-					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, err, false)
+		// Members.Nodes (page 1, free with the teams query above) and any
+		// extra pages below are only fetched/normalized when Members is
+		// selected (CHAOS-4431 codex review P1): a deselected member fetch
+		// must cost nothing and its absence must never abort an enabled
+		// teams/projects import. When deselected, the team row keeps
+		// normalizeLinearReferenceTeam's page-1 roster as a harmless
+		// placeholder -- LinearTeamCatalogCollector overwrites it with the
+		// team's PRESERVED existing roster before writing, exactly like
+		// Python's _existing_team_members path, so this placeholder is never
+		// actually persisted.
+		if selections.Members {
+			memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
+			membersComplete := !payload.Members.PageInfo.HasNextPage
+			if payload.Members.PageInfo.HasNextPage {
+				extra, memberPages, memberCap, memberErr := collectLinearReferenceConnection(
+					ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
+					linearReferenceConnectionVariables{TeamID: payload.ID}, linearReferenceCatalogMemberPageSize, maxPages,
+				)
+				evidence.Requests += memberPages
+				evidence.Pages += memberPages
+				if memberErr != nil || memberCap {
+					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, memberCap)
 				}
-				memberNodes = append(memberNodes, memberPayload)
+				membersComplete = true
+				for _, memberRaw := range extra {
+					var memberPayload linearReferenceCatalogMemberPayload
+					if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
+						return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, err, false)
+					}
+					memberNodes = append(memberNodes, memberPayload)
+				}
 			}
-		}
-		if !membersComplete {
-			return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, ErrPaginationCapExceeded, true)
-		}
-		for _, memberPayload := range memberNodes {
-			if memberPayload.Active != nil && !*memberPayload.Active {
-				continue
+			if !membersComplete {
+				return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, ErrPaginationCapExceeded, true)
 			}
-			member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, normalizedAt)
-			if memberErr != nil {
-				// Python skips members without an email and provider id. A node
-				// with either field absent is not an authoritative identity row.
-				if errors.Is(memberErr, ErrInvalidConfiguration) &&
-					strings.TrimSpace(memberPayload.ID) == "" && strings.TrimSpace(memberPayload.Email) == "" {
+			// CHAOS-4431 codex review P1: rebuild the roster from the
+			// COMPLETE, post-pagination memberNodes set, not the page-1-only
+			// value normalizeLinearReferenceTeam provisionally set above --
+			// otherwise any team with more than 10 members gets a `teams.
+			// members` silently truncated to its first page forever.
+			team.Members = linearReferenceTeamRosterFacets(memberNodes)
+			for _, memberPayload := range memberNodes {
+				if memberPayload.Active != nil && !*memberPayload.Active {
 					continue
 				}
-				return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, false)
+				member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, normalizedAt)
+				if memberErr != nil {
+					// Python skips members without an email and provider id. A node
+					// with either field absent is not an authoritative identity row.
+					if errors.Is(memberErr, ErrInvalidConfiguration) &&
+						strings.TrimSpace(memberPayload.ID) == "" && strings.TrimSpace(memberPayload.Email) == "" {
+						continue
+					}
+					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, false)
+				}
+				rows.Members = append(rows.Members, member)
+				rows.Memberships = append(rows.Memberships, membership)
 			}
-			rows.Members = append(rows.Members, member)
-			rows.Memberships = append(rows.Memberships, membership)
+			evidence.MembersComplete = evidence.MembersComplete && membersComplete
+			if len(rows.Teams) == 0 {
+				evidence.MembersComplete = membersComplete
+			}
 		}
-		evidence.MembersComplete = evidence.MembersComplete && membersComplete
-		if len(rows.Teams) == 1 {
-			evidence.MembersComplete = membersComplete
+		rows.Teams = append(rows.Teams, team)
+
+		// Cycles/sprints are unconditional reference data (CHAOS-4431 codex
+		// review P1, team_autoimport_linear.py:575-576,624-635: "sprints/
+		// cycles below stay unconditional -- reference data, not a
+		// category"): fetched per team regardless of every CHAOS-4323
+		// selection, including when all three are off, because dispatch-
+		// blocking sprint keys must never go stale just because an org
+		// disabled every writable category.
+		cyclePayloads, cyclePages, cycleErr := collectLinearCycles(ctx, client, payload.ID)
+		evidence.Requests += cyclePages
+		evidence.Pages += cyclePages
+		if cycleErr != nil {
+			return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, cycleErr, false)
+		}
+		teamClaim := claim
+		teamClaim.SourceExternalID = team.ID
+		for _, cyclePayload := range cyclePayloads {
+			sprint, normalizeErr := normalizeLinearSprint(teamClaim, cyclePayload, normalizedAt)
+			if normalizeErr != nil {
+				return linearReferenceCatalogFailureBatch(evidence, "sprints", evidence.Pages, evidence.Records, normalizeErr, false)
+			}
+			rows.Sprints = append(rows.Sprints, sprint)
 		}
 	}
 	// No teams is still a complete, authoritative workspace snapshot. Set the
 	// member bit after the loop so an empty workspace is not reported as an
-	// unmeasured path.
-	if len(teamRaw) == 0 {
+	// unmeasured path. Vacuously complete when Members was never selected --
+	// nothing was attempted, so nothing can be incomplete.
+	if len(teamRaw) == 0 || !selections.Members {
 		evidence.MembersComplete = true
 	}
 
-	projectRaw, projectPages, projectCap, projectErr := collectLinearReferenceConnection(
-		ctx, client, linearReferenceCatalogProjectsQuery, linearReferenceConnectionProjects,
-		linearReferenceConnectionVariables{First: perPage, IncludeArchived: true}, perPage, maxPages,
-	)
-	evidence.Requests += projectPages
-	evidence.Pages += projectPages
-	if projectErr != nil || projectCap {
-		return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, projectErr, projectCap)
-	}
-	evidence.ProjectsComplete = true
-	evidence.Records += len(projectRaw)
-	for _, raw := range projectRaw {
-		var payload linearReferenceProjectPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
+	if selections.Projects {
+		projectRaw, projectPages, projectCap, projectErr := collectLinearReferenceConnection(
+			ctx, client, linearReferenceCatalogProjectsQuery, linearReferenceConnectionProjects,
+			linearReferenceConnectionVariables{First: perPage, IncludeArchived: true}, perPage, maxPages,
+		)
+		evidence.Requests += projectPages
+		evidence.Pages += projectPages
+		if projectErr != nil || projectCap {
+			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, projectErr, projectCap)
 		}
-		project, normalizeErr := normalizeLinearReferenceProject(claim, payload, normalizedAt)
-		if normalizeErr != nil {
-			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
-		}
-		rows.Projects = append(rows.Projects, project)
-		for _, team := range payload.Teams.Nodes {
-			teamID := strings.TrimSpace(team.Key)
-			if teamID == "" {
-				teamID = strings.TrimSpace(team.ID)
+		evidence.ProjectsComplete = true
+		evidence.Records += len(projectRaw)
+		for _, raw := range projectRaw {
+			var payload linearReferenceProjectPayload
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
 			}
-			if teamID == "" {
-				continue
+			// CHAOS-4431 codex review P2: each native project is versioned at
+			// the moment THIS node was observed, not at walk start, so two
+			// overlapping discovery runs order by what they saw rather than
+			// by which run started first (team_autoimport_linear.py:590-602).
+			observedAt := handler.observedAt()
+			project, normalizeErr := normalizeLinearReferenceProject(claim, payload, observedAt)
+			if normalizeErr != nil {
+				return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
 			}
-			projectKey := optionalLinearString(team.Key)
-			rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{
-				OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, ProjectID: project.ID,
-				ProjectKey: projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
-				Priority: 10, ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
-			})
+			rows.Projects = append(rows.Projects, project)
+			for _, team := range payload.Teams.Nodes {
+				teamID := strings.TrimSpace(team.Key)
+				if teamID == "" {
+					teamID = strings.TrimSpace(team.ID)
+				}
+				if teamID == "" {
+					continue
+				}
+				projectKey := optionalLinearString(team.Key)
+				rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{
+					OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, ProjectID: project.ID,
+					ProjectKey: projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
+					Priority: 10, ValidFrom: observedAt, UpdatedAt: observedAt,
+				})
+			}
 		}
+	} else {
+		evidence.ProjectsComplete = true
 	}
 
 	// The Python producer emits a team-derived project catalog row for each
@@ -299,9 +374,9 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	}
 	result := LinearReferenceCatalogResult{
 		Teams: len(rows.Teams), Members: len(rows.Members), Memberships: len(rows.Memberships),
-		Projects: len(rows.Projects), Ownership: len(rows.Ownership), Complete: true,
+		Projects: len(rows.Projects), Ownership: len(rows.Ownership), Sprints: len(rows.Sprints), Complete: true,
 	}
-	evidence.Records = result.Teams + result.Members + result.Memberships + result.Projects + result.Ownership
+	evidence.Records = result.Teams + result.Members + result.Memberships + result.Projects + result.Ownership + result.Sprints
 	// No claim, no lease window: this walk has no watermark concept (it was
 	// never load-bearing here -- CollectReferenceCatalog filters nothing by
 	// SinceAt/BeforeAt, it always walks the whole catalog).
@@ -497,7 +572,31 @@ func dedupeLinearReferenceCatalogRows(rows LinearReferenceCatalogRows) LinearRef
 	rows.Memberships = dedupeLinearReferenceMemberships(rows.Memberships)
 	rows.Projects = dedupeLinearReferenceProjects(rows.Projects)
 	rows.Ownership = dedupeLinearReferenceOwnership(rows.Ownership)
+	rows.Sprints = dedupeLinearReferenceSprints(rows.Sprints)
 	return rows
+}
+
+// dedupeLinearReferenceSprints collapses by SprintID -- a team's cycle can
+// legitimately recur across teams sharing a cycle is not possible in Linear,
+// but defensive dedup matches every other dimension's contract here and
+// guards a future shared-cycle workspace shape without re-reviewing this
+// file. Last write wins, same as every other dedupe* helper in this file.
+func dedupeLinearReferenceSprints(rows []linearSprintRow) []linearSprintRow {
+	result := make([]linearSprintRow, 0, len(rows))
+	for _, row := range rows {
+		found := false
+		for index := range result {
+			if result[index].Provider == row.Provider && result[index].SprintID == row.SprintID {
+				result[index] = row
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, row)
+		}
+	}
+	return result
 }
 
 func dedupeLinearReferenceTeams(rows []linearReferenceTeamRow) []linearReferenceTeamRow {

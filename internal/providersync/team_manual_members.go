@@ -60,3 +60,50 @@ func PreserveExistingTeamManualMembers(
 	}
 	return existing, rows.Err()
 }
+
+// teamMembersRosterPreserveQuery is PreserveExistingTeamManualMembers's query
+// over the `members` column instead of `manual_members`.
+const teamMembersRosterPreserveQuery = "SELECT id, members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// PreserveExistingTeamMembersRoster batch-reads the current `members` roster
+// for every team a caller is about to write to `teams`, for a collector that
+// is writing the team row (selections.Teams is on) but did NOT fetch members
+// this call (selections.Members is off). CHAOS-4431 codex review P1: Python's
+// team_autoimport_linear.py:685-707 preserves the existing roster in exactly
+// this situation -- a teams-only run must never overwrite `teams.members`
+// with an empty or page-1-only roster just because it never asked Linear for
+// members this call. Deliberately a SEPARATE function from
+// PreserveExistingTeamManualMembers (not a second column on the same query)
+// so that function's existing shared contract -- GitHub/GitLab's own
+// collectors already call it -- never changes shape for this narrower, much
+// less frequently hit case.
+//
+// Same missing-row/query-failure contract as PreserveExistingTeamManualMembers:
+// a team with no existing row has no map entry (caller defaults to empty,
+// correct for a genuinely new team); a query error MUST abort the write.
+func PreserveExistingTeamMembersRoster(
+	ctx context.Context, conn driver.Conn, orgID string, teamIDs []string,
+) (map[string][]string, error) {
+	if conn == nil || strings.TrimSpace(orgID) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	if len(teamIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := conn.Query(ctx, teamMembersRosterPreserveQuery,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("team_ids", teamIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	existing := make(map[string][]string, len(teamIDs))
+	for rows.Next() {
+		var id string
+		var members []string
+		if err := rows.Scan(&id, &members); err != nil {
+			return nil, err
+		}
+		existing[id] = members
+	}
+	return existing, rows.Err()
+}

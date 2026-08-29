@@ -155,7 +155,7 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 6 {
+	if len(observer.rows) != 9 {
 		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
 	}
 	foundTeamsRow, foundRepoOwnershipRow := false, false
@@ -201,15 +201,17 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 }
 
 // TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff
-// pins lane-4437's executed key-resolution answer (relayed by team-lead,
-// 2026-08-28): with every CHAOS-4323 selection off, the native path must
-// call neither the collector nor the bridge, and its summary must carry NO
-// "reference_team_keys"/"reference_sprint_ids" key at all (their absence,
-// not an empty slice) -- ReferenceReadbackVerifier.Verify is a no-op
-// exactly in that case (clickhouse_readback.go:228-236), so the discovery
-// ledger still reaches status=success and unit dispatch still proceeds
-// (native_dispatch_sync_run_service.go:242-253), with zero ClickHouse
-// writes and zero bridge calls.
+// pins the CORRECTED behavior (CHAOS-4431 codex review, converging with
+// CHAOS-4437's Python fix independently found by the same review, team-lead
+// ruling 2026-08-28): with every CHAOS-4323 selection off, this STRICT-mode
+// seam still calls the native collector (never the bridge) -- unlike
+// Python's non-strict early exit (team_autoimport_linear.py:421), strict
+// mode's sprint/cycle discovery is unconditional reference data, so it must
+// never be skipped just because every writable category is off. Only
+// teams/members/projects stay at zero. The discovery ledger still reaches
+// status=success and unit dispatch still proceeds regardless: with no teams
+// selected, "reference_team_keys" is vacuously satisfied (empty), and
+// ReferenceReadbackVerifier.Verify checks "reference_sprint_ids" for real.
 // TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure pins the
 // team-lead ruling (2026-08-28): a collector that returns success but flags
 // TeamCatalogResult.RosterPreservationFailed must record the dedicated
@@ -238,7 +240,9 @@ func TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure(t *testing
 }
 
 func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t *testing.T) {
-	collector := &fakeTeamCatalogCollector{}
+	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
+		SprintsWritten: 2, SprintIDs: []string{"linear:cycle:1", "linear:cycle:2"},
+	}}
 	fallback := &fakeTeamCatalogFallbackExecutor{}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
@@ -252,47 +256,65 @@ func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t 
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if collector.gotRef.OrgID != "" {
-		t.Fatalf("collector was called despite every selection being off: %+v", collector.gotRef)
+	// The collector IS called -- strict mode's sprint/cycle discovery is
+	// unconditional reference data, never gated on selections.
+	if collector.gotRef.OrgID != testOrg {
+		t.Fatalf("collector was not called despite strict mode: %+v", collector.gotRef)
+	}
+	if collector.gotSelections.Any() {
+		t.Fatalf("resolver selections leaked as non-empty: %+v", collector.gotSelections)
 	}
 	if fallback.gotProvider != "" {
-		t.Fatalf("bridge was called despite every selection being off: %+v", fallback)
+		t.Fatalf("bridge was called despite a registered native collector: %+v", fallback)
 	}
-	if _, present := summary["reference_team_keys"]; present {
-		t.Fatalf("summary must omit reference_team_keys entirely, got=%#v", summary)
+	teamKeys, ok := summary["reference_team_keys"].([]string)
+	if !ok || len(teamKeys) != 0 {
+		t.Fatalf("summary reference_team_keys=%#v, want an empty slice (teams never selected)", summary["reference_team_keys"])
 	}
-	if _, present := summary["reference_sprint_ids"]; present {
-		t.Fatalf("summary must omit reference_sprint_ids entirely, got=%#v", summary)
+	sprintIDs, ok := summary["reference_sprint_ids"].([]string)
+	if !ok || len(sprintIDs) != 2 {
+		t.Fatalf("summary reference_sprint_ids=%#v, want the 2 sprints the (unconditional) collector call reported", summary["reference_sprint_ids"])
 	}
-	if summary["provider"] != "linear" {
+	if summary["provider"] != "linear" || summary["outcome"] != "native" {
 		t.Fatalf("summary=%#v", summary)
 	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
-		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeSkipped,
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeNative,
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 0 {
-		t.Fatalf("observer rows=%+v, want none", observer.rows)
+	foundSprintsRow := false
+	for _, row := range observer.rows {
+		if row.table == jobruntime.TeamCatalogTableSprints {
+			foundSprintsRow = true
+			if row.count != 2 {
+				t.Fatalf("sprints row count=%d want=2", row.count)
+			}
+		} else if row.count != 0 {
+			t.Fatalf("non-sprints table reported a nonzero count with every selection off: %+v", row)
+		}
+	}
+	if !foundSprintsRow {
+		t.Fatalf("no sprints row observed: %+v", observer.rows)
 	}
 
-	// Prove the no-op claim directly against the real verifier, not just by
-	// asserting the summary's shape: a reviewer should not have to trust
-	// that "absent key" is what ReferenceReadbackVerifier.Verify actually
-	// treats as vacuous success.
+	// Prove the readback claim directly against the real verifier: teams are
+	// vacuously satisfied (empty, never checked), sprints are checked for
+	// real against whatever the checker reports missing.
 	verifier, err := NewReferenceReadbackVerifier(&alwaysMissingReadbackChecker{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifier.Verify(context.Background(), testOrg, "linear", summary); err != nil {
-		t.Fatalf("Verify should no-op on a summary with no claimed keys, got: %v", err)
+	if err := verifier.Verify(context.Background(), testOrg, "linear", summary); err == nil {
+		t.Fatalf("Verify should fail: 2 claimed sprint ids are reported missing by the checker")
 	}
 }
 
 // alwaysMissingReadbackChecker would fail any non-vacuous Verify call by
 // reporting every expected key as missing -- used to prove
 // TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff's
-// summary really does short-circuit Verify before it ever queries ClickHouse.
+// sprint claim really is checked for real, not short-circuited the way the
+// (now vacuous) team-keys claim is.
 type alwaysMissingReadbackChecker struct{}
 
 func (*alwaysMissingReadbackChecker) MissingTeamKeys(_ context.Context, _, _ string, expected []string) ([]string, error) {

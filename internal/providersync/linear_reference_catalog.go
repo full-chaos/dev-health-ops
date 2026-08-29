@@ -181,15 +181,23 @@ type LinearReferenceCatalogRows struct {
 	Memberships []linearReferenceMembershipRow `json:"memberships"`
 	Projects    []linearReferenceProjectRow    `json:"projects"`
 	Ownership   []linearReferenceOwnershipRow  `json:"ownership"`
+	// Sprints is Linear's cycle-to-sprint reference discovery (CHAOS-4431
+	// codex review P1). Unlike the other four dimensions, it is NEVER gated
+	// by a CHAOS-4323 selection -- team_autoimport_linear.py:575-576 treats
+	// it as unconditional reference data ("not a category"), collected and
+	// written whenever this walk runs at all, strict or not, regardless of
+	// which of teams/members/projects are selected.
+	Sprints []linearSprintRow `json:"sprints"`
 }
 
 const (
-	linearReferenceCatalogDestinationCount       = 5
+	linearReferenceCatalogDestinationCount       = 6
 	linearReferenceCatalogTeamsDestination       = "linear_reference_teams"
 	linearReferenceCatalogMembersDestination     = "linear_reference_members"
 	linearReferenceCatalogMembershipsDestination = "linear_reference_memberships"
 	linearReferenceCatalogProjectsDestination    = "linear_reference_projects"
 	linearReferenceCatalogOwnershipDestination   = "linear_reference_ownership"
+	linearReferenceCatalogSprintsDestination     = "linear_reference_sprints"
 )
 
 type LinearReferenceCatalogEffects struct {
@@ -198,10 +206,11 @@ type LinearReferenceCatalogEffects struct {
 	Memberships EffectBatch
 	Projects    EffectBatch
 	Ownership   EffectBatch
+	Sprints     EffectBatch
 }
 
 func (effects LinearReferenceCatalogEffects) Batches() []EffectBatch {
-	return []EffectBatch{effects.Teams, effects.Members, effects.Memberships, effects.Projects, effects.Ownership}
+	return []EffectBatch{effects.Teams, effects.Members, effects.Memberships, effects.Projects, effects.Ownership, effects.Sprints}
 }
 
 func BuildLinearReferenceCatalogEffects(rows LinearReferenceCatalogRows) (LinearReferenceCatalogEffects, error) {
@@ -225,9 +234,13 @@ func BuildLinearReferenceCatalogEffects(rows LinearReferenceCatalogRows) (Linear
 	if err != nil {
 		return LinearReferenceCatalogEffects{}, err
 	}
+	sprints, err := effectBatchFromValues(linearReferenceCatalogSprintsDestination, EffectReadbackRequired, rows.Sprints)
+	if err != nil {
+		return LinearReferenceCatalogEffects{}, err
+	}
 	return LinearReferenceCatalogEffects{
 		Teams: teams, Members: members, Memberships: memberships,
-		Projects: projects, Ownership: ownership,
+		Projects: projects, Ownership: ownership, Sprints: sprints,
 	}, nil
 }
 
@@ -291,8 +304,37 @@ func normalizeLinearReferenceTeam(
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	teamKey := strings.TrimSpace(payload.Key)
 	nativeTeamKey := teamKey
-	members := make([]string, 0, len(payload.Members.Nodes))
-	for _, member := range payload.Members.Nodes {
+	// Page-1 only (members(first:10)). CHAOS-4431 codex review P1: a team
+	// with more than 10 members must have its roster rebuilt from the FULL
+	// paginated member set once CollectReferenceCatalog finishes fetching
+	// every page -- see linearReferenceTeamRosterFacets, which the route
+	// calls again with the complete memberNodes list before this team row
+	// is appended to the returned batch. This page-1 roster is only ever
+	// the value actually used for a team that turns out to have <=10
+	// members (no extra page fetched at all).
+	members := linearReferenceTeamRosterFacets(payload.Members.Nodes)
+	return linearReferenceTeamRow{
+		ID:       teamKey,
+		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamKey)).String(),
+		Name:     linearFirstNonEmpty(payload.Name, teamKey), Description: payload.Description,
+		Members: members, ProjectKeys: []string{teamKey}, RepoPatterns: []string{}, IsActive: 1,
+		UpdatedAt: normalizedAt, OrgID: claim.OrgID, Provider: "linear",
+		NativeTeamKey: &nativeTeamKey,
+	}, nil
+}
+
+// linearReferenceTeamRosterFacets builds the `teams.members` roster facet
+// list from a set of member nodes. Called twice per team in the CHAOS-4431
+// native path: once against page-1 only (normalizeLinearReferenceTeam's
+// provisional value, used verbatim when a team turns out to have <=10
+// members) and once against the complete, post-pagination memberNodes list
+// (CollectReferenceCatalog, overwriting the provisional roster for any team
+// that needed extra pages) -- codex review P1: a roster built from page 1
+// alone silently truncates any team with more than 10 members even though
+// the members/team_memberships TABLES already get the full paginated set.
+func linearReferenceTeamRosterFacets(nodes []linearReferenceCatalogMemberPayload) []string {
+	members := make([]string, 0, len(nodes))
+	for _, member := range nodes {
 		if member.Active != nil && !*member.Active {
 			continue
 		}
@@ -306,14 +348,7 @@ func normalizeLinearReferenceTeam(
 			}
 		}
 	}
-	return linearReferenceTeamRow{
-		ID:       teamKey,
-		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamKey)).String(),
-		Name:     linearFirstNonEmpty(payload.Name, teamKey), Description: payload.Description,
-		Members: members, ProjectKeys: []string{teamKey}, RepoPatterns: []string{}, IsActive: 1,
-		UpdatedAt: normalizedAt, OrgID: claim.OrgID, Provider: "linear",
-		NativeTeamKey: &nativeTeamKey,
-	}, nil
+	return members
 }
 
 func normalizeLinearReferenceMember(
@@ -348,14 +383,14 @@ func normalizeLinearReferenceMember(
 	email := optionalLinearString(payload.Email)
 	facets := linearReferenceMembershipFacets(identity, payload.Email)
 	return linearReferenceMemberRow{
-			OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
-			ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
-		}, linearReferenceMembershipRow{
-			OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, MemberID: memberID,
-			RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
-			Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
-			ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
-		}, memberID, nil
+		OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
+		ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
+	}, linearReferenceMembershipRow{
+		OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, MemberID: memberID,
+		RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
+		Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
+		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
+	}, memberID, nil
 }
 
 func linearMemberID(identity string) string {

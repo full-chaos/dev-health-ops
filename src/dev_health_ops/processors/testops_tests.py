@@ -30,8 +30,27 @@ def _hash_identifier(*parts: str | None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def build_suite_id(run_id: str, suite_name: str, environment: str | None) -> str:
-    return _hash_identifier(run_id, suite_name, environment)
+def build_suite_id(
+    run_id: str, suite_name: str, environment: str | None, occurrence: int = 0
+) -> str:
+    """Deterministic suite_id: hash(run_id + suite_name + environment[ + occurrence]).
+
+    ``occurrence`` disambiguates two SIBLING suite objects sharing a name
+    within the same report (CHAOS-4508 -- the GitLab-native twin of the Go
+    cicd/tests route hit this in prod as ``duplicate natural key in
+    test_case_results batch``, since two sibling <testsuite>/test_suite
+    objects with the identical name hashed to the same suite_id, and their
+    first same-named case then also collided on case_id). It is folded into
+    the hash ONLY when non-zero -- matching build_case_id's own occurrence
+    fold immediately below, and hashing the already-computed digest rather
+    than joining a third raw part for the identical reason documented there
+    -- so the first (and every non-colliding) suite keeps the exact
+    suite_id it always has.
+    """
+    base = _hash_identifier(run_id, suite_name, environment)
+    if occurrence:
+        return _hash_identifier(base, str(occurrence))
+    return base
 
 
 def build_case_id(suite_id: str, case_name: str, occurrence: int = 0) -> str:
@@ -201,8 +220,15 @@ def _build_rows_from_parsed(
     suite_rows: list[TestSuiteResultRow] = []
     case_rows: list[TestCaseResultRow] = []
 
+    # suite_occurrence disambiguates sibling suite objects sharing a name
+    # across the WHOLE parsed_suites list (CHAOS-4508), the Python twin of
+    # parseJUnitRows'/normalizeGitLabNativeTestReport's identical Go fix --
+    # see build_suite_id's docstring.
+    suite_occurrence: dict[str, int] = {}
     for suite in parsed_suites:
-        suite_id = build_suite_id(run_id, suite.suite_name, environment)
+        occurrence = suite_occurrence.get(suite.suite_name, 0)
+        suite_occurrence[suite.suite_name] = occurrence + 1
+        suite_id = build_suite_id(run_id, suite.suite_name, environment, occurrence)
         service_id = attribute_service_from_path(
             _suite_file_path(suite),
             service_path_prefixes,

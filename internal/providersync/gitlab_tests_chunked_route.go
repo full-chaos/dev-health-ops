@@ -571,6 +571,14 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 							"repository", cursor.Repo, "run", runID, "count", duplicates,
 						)
 					}
+					if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
+						client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, duplicates)
+						slog.Info(
+							"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", cursor.Repo, "run", runID, "count", duplicates,
+						)
+					}
 					suites, cases = reportSuites, reportCases
 				}
 				jobPage, jobErr := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{

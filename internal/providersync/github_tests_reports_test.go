@@ -216,14 +216,14 @@ func TestGitHubTestsArtifactEnforcesReportCountCap(t *testing.T) {
 func TestGitHubTestsJUnitParserRejectsDTDAndTruncatesStack(t *testing.T) {
 	_, _, err := parseJUnitRows(
 		[]byte(`<!DOCTYPE testsuite><testsuite name="x"><testcase name="x"/></testsuite>`),
-		"artifact-1", "repo", "run", "org", nil, nil, time.Now(),
+		"artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{},
 	)
 	if err == nil {
 		t.Fatal("entity-bearing document was accepted")
 	}
 	large := strings.Repeat("x", 5000)
 	body := []byte(`<testsuite name="x"><testcase name="x"><failure>` + large + `</failure></testcase></testsuite>`)
-	_, cases, err := parseJUnitRows(body, "artifact-1", "repo", "run", "org", nil, nil, time.Now())
+	_, cases, err := parseJUnitRows(body, "artifact-1", "repo", "run", "org", nil, nil, time.Now(), map[string]int{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,6 +356,38 @@ func TestGitHubTestsArtifactSkipsPythonOverRatioMember(t *testing.T) {
 	}
 	if len(rows.Suites) != 0 || rows.Skipped != 0 {
 		t.Fatalf("over-ratio member did not match Python skip semantics: %+v", rows)
+	}
+}
+
+// TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged pins CHAOS-4508's
+// backward-compatibility requirement: the sibling-suite occurrence ordinal
+// (parseJUnitRows' suiteOccurrence) is folded into SuiteID ONLY when the
+// occurrence is non-zero, so the first (and, for the ordinary non-colliding
+// case, only) suite with a given name in an artifact keeps the EXACT SuiteID
+// hashTestIdentifier(runID, artifactID, name, "") always produced. Existing
+// prod rows are keyed on this hash; a value pinned independently of this
+// package's own hashTestIdentifier call would have caught a regression this
+// test's own use of the same function cannot.
+func TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged(t *testing.T) {
+	const wantSuiteID = "6e3b66deaf029d0da0ab40ce810ad27c1826db89af2f639095d435b39b27cbdf"
+	const fixture = `<testsuite name="solo"><testcase name="case"/></testsuite>`
+	rows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{"reports/junit.xml": fixture}),
+		"artifact-pin", "repo", "run-pin", "org", nil, nil, time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Suites) != 1 {
+		t.Fatalf("suites=%+v, want exactly 1", rows.Suites)
+	}
+	if rows.Suites[0].SuiteID != wantSuiteID {
+		t.Fatalf("SuiteID=%q, want pinned %q -- CHAOS-4508's occurrence ordinal must not fold into "+
+			"a single, non-colliding suite's hash and shift the id existing prod rows are keyed on",
+			rows.Suites[0].SuiteID, wantSuiteID)
+	}
+	if rows.DuplicateSuites != 0 {
+		t.Fatalf("DuplicateSuites=%d, want 0 for a non-colliding single suite", rows.DuplicateSuites)
 	}
 }
 

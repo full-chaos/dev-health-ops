@@ -873,7 +873,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # change_id_for_team_field and clickhouse_identity_drift.py's
     # change_id_for_identity_membership/_conflict_for against the Go engine,
     # live. 1221 -> 1225 top-level; 144 unchanged.
-    assert len(expected_provider_tests) == 1225
+    #
+    # CHAOS-4508 (sibling suite-object natural-key discriminator) added 3
+    # ordinary top-level tests, none `//go:build integration`:
+    # TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide (the red
+    # repro, cherry-picked from the CHAOS-4487 diagnosis lane and now
+    # green), TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged (pins that
+    # a non-colliding single suite's SuiteID hash is unchanged), and
+    # TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide (the
+    # GitLab-native twin). 1225 -> 1228 top-level; 144 unchanged.
+    assert len(expected_provider_tests) == 1228
     assert len(expected_integration_tests) == 144
     assert expected_integration_tests < expected_provider_tests
 
@@ -890,7 +899,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1225
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1228
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -951,7 +960,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1225
+    assert len(selected_tests) == len(set(selected_tests)) == 1228
     assert set(selected_tests) == expected_tests
 
 

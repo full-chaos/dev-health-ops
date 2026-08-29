@@ -471,9 +471,17 @@ func TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide(t *testing.T) {
 		`<testsuite name="pytest"><testcase name="test_health" classname="tests.test_worker"/></testsuite>` +
 		`</testsuites>`
 
+	// claim.OrgID, not a standalone literal, feeds parseGitHubTestsArtifact's
+	// orgID param -- matching TestGitHubTestsWithinSuiteDuplicateCaseNamesGetDistinctIDsAndWriteSucceeds
+	// above, since validateGitHubTestsRow (github_tests_effects_clickhouse.go)
+	// requires every row's OrgID to equal claim.OrgID or WriteEffect fails
+	// closed with ErrInvalidScope -- a check this test's own fixture rows
+	// must satisfy same as production, unrelated to the CHAOS-4487 defect
+	// under test.
+	claim := nativeTestClaim("github", "cicd")
 	rows, err := parseGitHubTestsArtifact(
 		githubTestsZip(t, map[string]string{"reports/junit.xml": fixture}),
-		"artifact-1", "7b9583ee-4d24-2be7-4d09-34f815bebdd7", "33248832747", "70d529e0-3c06-4597-8480-794fd02328b6",
+		"artifact-1", "7b9583ee-4d24-2be7-4d09-34f815bebdd7", "33248832747", claim.OrgID,
 		nil, nil, time.Date(2026, 8, 29, 11, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -493,8 +501,10 @@ func TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide(t *testing.T) {
 			"(sync_run a7b60282-4af1-58ad-a094-8dc8baab7a1f, run_id=33248832747)",
 			rows.Cases[0].CaseName, rows.Cases[0].CaseID)
 	}
+	if rows.DuplicateSuites != 1 {
+		t.Fatalf("DuplicateSuites=%d, want 1 (the telemetry input for dev_health_cicd_duplicate_test_suite_total)", rows.DuplicateSuites)
+	}
 
-	claim := nativeTestClaim("github", "cicd")
 	effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, rows.Cases)
 	if err != nil {
 		t.Fatal(err)

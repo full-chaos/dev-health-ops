@@ -38,6 +38,20 @@ printf 'ch_query_rc=%%s\n' "$?"
 """
 
 
+def _argv_tokens(recorded: str) -> list[str]:
+    """The curl stub's recorded argv, split into whole arguments.
+
+    Tests assert the endpoint by EXACT token, never by substring. A substring
+    check (`"https://host:8443/" in argv`) also passes on
+    `https://host:8443/@evil.example.com`, where the real authority is the
+    attacker's -- the URL only *starts* with the string being matched. CodeQL
+    flags that shape as incomplete URL sanitization and is right to: the same
+    assertion in non-test code would be an origin check that can be walked past.
+    Splitting on whitespace is exact because the stub records "$*".
+    """
+    return recorded.split()
+
+
 def _stub_bin(tmp_path: Path) -> Path:
     """A PATH where `docker` records any invocation and `curl` fakes a 200."""
     bindir = tmp_path / "bin"
@@ -119,7 +133,7 @@ def test_remote_clickhouse_transport_never_shells_out_to_docker(tmp_path: Path) 
         f"\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
     argv = curl_log.read_text(encoding="utf-8")
-    assert "http://192.0.2.10:30501/" in argv, f"wrong endpoint: {argv}"
+    assert "http://192.0.2.10:30501/" in _argv_tokens(argv), f"wrong endpoint: {argv}"
     assert "SELECT 1" in argv, f"query body missing: {argv}"
     assert "--noproxy" in argv, (
         "the ClickHouse POST must bypass ambient proxies: a credential "
@@ -264,6 +278,6 @@ def test_https_scheme_is_honoured(tmp_path: Path) -> None:
 
     assert curl_log.exists(), "curl was not invoked"
     argv = curl_log.read_text(encoding="utf-8")
-    assert "https://clickhouse.example.com:8443/" in argv, (
+    assert "https://clickhouse.example.com:8443/" in _argv_tokens(argv), (
         f"CH_HTTP_SCHEME=https must reach a TLS endpoint: {argv}"
     )

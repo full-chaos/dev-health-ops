@@ -1047,8 +1047,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # team_repo_ownership_derivation_integration_test.go:
     # TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg.
     # 1254 -> 1255 top-level; 149 -> 150 integration-tagged.
-    assert len(expected_provider_tests) == 1255
-    assert len(expected_integration_tests) == 150
+    #
+    # CHAOS-4557 (duplicate_natural_key detail never survived a worker
+    # restart -- only the bare category reached sync_run_units). Added 2 new
+    # ordinary top-level tests in
+    # github_tests_cross_artifact_key_collision_test.go:
+    # TestDuplicateNaturalKeyDetailFromExtractsTableAndFields and
+    # TestDuplicateNaturalKeyDetailFromIsBounded, and 1 new
+    # `//go:build integration` top-level test in
+    # repository_postgres_metrics_integration_test.go:
+    # TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey.
+    # 1255 -> 1258 top-level; 150 -> 151 integration-tagged.
+    assert len(expected_provider_tests) == 1258
+    assert len(expected_integration_tests) == 151
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1064,7 +1075,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1255
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1258
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1125,7 +1136,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1255
+    assert len(selected_tests) == len(set(selected_tests)) == 1258
     assert set(selected_tests) == expected_tests
 
 

@@ -326,6 +326,23 @@ const (
 	// (team-lead ruling, 2026-08-28, codex review finding #6's fail-safe
 	// guard, pending the CHAOS-4444-class full drift-aware projector).
 	TeamCatalogTableMembershipsSkippedManualConflict TeamCatalogTable = "team_memberships_skipped_manual_conflict"
+	// TeamCatalogTableTeamsStagedForReview counts distinct teams a call
+	// staged (or refreshed) at least one PENDING team_drift_changes row for
+	// (CHAOS-4444, the full clickhouse_team_drift_projector.py parity on
+	// top of TeamCatalogTableTeamsSkippedPolicy's plain-skip interim
+	// guard).
+	TeamCatalogTableTeamsStagedForReview TeamCatalogTable = "teams_staged_for_review"
+	// TeamCatalogTableMembershipsStagedForReview counts team_memberships
+	// rows a call staged (or refreshed) a PENDING identity-drift
+	// team_drift_changes row for (CHAOS-4444, the row-level counterpart to
+	// TeamCatalogTableTeamsStagedForReview, mirroring
+	// TeamCatalogTableMembershipsSkippedManualConflict's granularity).
+	TeamCatalogTableMembershipsStagedForReview TeamCatalogTable = "team_memberships_staged_for_review"
+	// TeamCatalogTableDriftChangesSuperseded counts team_drift_changes rows
+	// (team-level and identity-level combined) a call transitioned to
+	// STATUS_SUPERSEDED because a previously-pending diff was replaced by a
+	// newer, different diff this run (CHAOS-4444).
+	TeamCatalogTableDriftChangesSuperseded TeamCatalogTable = "team_drift_changes_superseded"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -333,6 +350,7 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableTeams, TeamCatalogTableMembers, TeamCatalogTableTeamMemberships,
 		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
 		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
+		TeamCatalogTableTeamsStagedForReview, TeamCatalogTableMembershipsStagedForReview, TeamCatalogTableDriftChangesSuperseded,
 	}
 }
 

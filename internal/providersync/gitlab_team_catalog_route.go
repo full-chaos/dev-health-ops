@@ -579,14 +579,22 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	// it was correctly kept out of `team_memberships`. Computed once, up
 	// front, so both blocks below read from its result.
 	var keptMemberships []gitlabTeamCatalogMembershipRow
-	var membershipsSkippedManualConflict int
-	if selections.Members && len(batch.Rows.Memberships) > 0 {
-		var guardErr error
-		keptMemberships, membershipsSkippedManualConflict, guardErr = applyGitLabTeamMembershipConflictGuard(
-			ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, batch.Rows.Memberships,
-		)
-		if guardErr != nil {
-			return result, guardErr
+	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
+	if selections.Members {
+		observedTeamIDs := make([]string, 0, len(batch.Rows.Teams))
+		for _, team := range batch.Rows.Teams {
+			if team.MembersAuthoritative {
+				observedTeamIDs = append(observedTeamIDs, team.ID)
+			}
+		}
+		if len(batch.Rows.Memberships) > 0 || len(observedTeamIDs) > 0 {
+			var guardErr error
+			keptMemberships, membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded, guardErr = applyGitLabTeamMembershipConflictGuard(
+				ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, batch.Rows.Memberships, observedTeamIDs, normalizedAt,
+			)
+			if guardErr != nil {
+				return result, guardErr
+			}
 		}
 	}
 
@@ -614,11 +622,13 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// 2026-08-28 (extended to GitLab): a team whose sync_policy is not
 		// the auto-apply default (0) is left completely untouched by this
 		// write, not overwritten with this call's observed values.
-		keptTeams, skippedTeamIDs, guardErr := applyGitLabTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows)
+		keptTeams, skippedTeamIDs, teamsStagedForReview, teamsDriftSuperseded, guardErr := applyGitLabTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows, normalizedAt)
 		if guardErr != nil {
 			return result, guardErr
 		}
 		result.TeamsSkippedPolicy = len(skippedTeamIDs)
+		result.TeamsStagedForReview = teamsStagedForReview
+		driftChangesSuperseded += teamsDriftSuperseded
 		teamsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogTeamsDestination, EffectReadbackRequired, keptTeams)
 		if effectErr != nil {
 			return result, effectErr
@@ -634,6 +644,17 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			}
 		}
 	}
+	if selections.Members {
+		// CHAOS-4444: set independent of batch.Effects.Memberships's
+		// nil-ness below -- the staging/stale-resolution pass
+		// (reviewMembershipsForDrift) can produce real counts even on a
+		// run with zero freshly-observed membership rows (e.g. every
+		// member removed from every team this org has, which resolves
+		// stale pending changes but writes no membership effect at all).
+		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
+		result.MembershipsStagedForReview = membershipsStagedForReview
+	}
+	result.DriftChangesSuperseded = driftChangesSuperseded
 	if selections.Members && batch.Effects.Memberships != nil {
 		// CHAOS-4431 codex review finding #6, team-lead ruling 2026-08-28
 		// (extended to GitLab): write the CONFLICT-FILTERED memberships,
@@ -641,7 +662,6 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// memberships table never disagree about which assignments are
 		// safe. Independent of the #3 sync_policy guard above: this gate
 		// applies even to policy-0 teams (team-attribution.md:793-797).
-		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if effectErr != nil {
 			return result, effectErr

@@ -134,6 +134,33 @@ type TeamCatalogResult struct {
 	// membership conflict check is independent of team policy
 	// (team-attribution.md:793-797).
 	MembershipsSkippedManualConflict int
+	// TeamsStagedForReview (CHAOS-4444) counts distinct teams for which this
+	// call staged (or refreshed the last_seen_at of) at least one PENDING
+	// team_drift_changes row -- the full clickhouse_team_drift_projector.py
+	// parity this ticket adds on top of TeamsSkippedPolicy's plain-skip
+	// interim guard. A team counted in TeamsSkippedPolicy is not
+	// necessarily counted here too: a flagged-for-review team whose
+	// observed values exactly match what is already persisted has nothing
+	// to stage.
+	TeamsStagedForReview int
+	// MembershipsStagedForReview (CHAOS-4444) counts membership rows for
+	// which this call staged (or refreshed) a PENDING identity-drift
+	// team_drift_changes row -- the row-level counterpart to
+	// TeamsStagedForReview, mirroring MembershipsSkippedManualConflict's
+	// row-level granularity. Always <= MembershipsSkippedManualConflict: a
+	// conflicting row whose change is already approved/dismissed is
+	// excluded from the write but not re-staged.
+	MembershipsStagedForReview int
+	// DriftChangesSuperseded (CHAOS-4444) counts team_drift_changes rows
+	// (both entity_type='team' field-level changes and
+	// entity_type='identity' membership changes) this call transitioned to
+	// STATUS_SUPERSEDED because a previously-pending diff for the same
+	// field/member was replaced by a newer, different diff this run.
+	// Deliberately does not also expose a "resolved" counter -- team-lead
+	// ruling 2026-08-28 scoped telemetry to staged/superseded only; RESOLVED
+	// transitions still happen (a team back on auto-apply, or a conflict
+	// that cleared) but are not separately counted.
+	DriftChangesSuperseded int
 	// Skipped (team-lead ruling, 2026-08-28, GitLab's non-strict walk-
 	// failure Python-parity fix -- CHAOS-4432) is true when a collector's
 	// non-strict run hit a failure severe enough that it made NO writes at

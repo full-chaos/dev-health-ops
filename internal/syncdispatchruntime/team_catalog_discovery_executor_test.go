@@ -155,8 +155,8 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 9 {
-		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
+	if len(observer.rows) != 12 {
+		t.Fatalf("observer rows=%+v, want one call per destination table (CHAOS-4444 added 3: teams_staged_for_review, team_memberships_staged_for_review, team_drift_changes_superseded)", observer.rows)
 	}
 	foundTeamsRow, foundRepoOwnershipRow := false, false
 	for _, row := range observer.rows {

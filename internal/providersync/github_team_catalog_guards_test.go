@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // github_team_catalog_guards_test.go pins the semantics (team-lead ruling,
@@ -135,11 +136,11 @@ func TestGitHubMembershipConflictsWithManualStateAllowsCleanRow(t *testing.T) {
 // here by passing a nil conn: a version that queried unconditionally would
 // nil-pointer-dereference/panic instead of returning cleanly.
 func TestApplyGitHubTeamSyncPolicyGuardShortCircuitsOnEmptyTeams(t *testing.T) {
-	kept, skipped, err := applyGitHubTeamSyncPolicyGuard(context.Background(), nil, "org-1", nil)
+	kept, skipped, staged, superseded, err := applyGitHubTeamSyncPolicyGuard(context.Background(), nil, "org-1", nil, time.Now())
 	if err != nil {
 		t.Fatalf("empty input must short-circuit before ever touching conn: err=%v", err)
 	}
-	if len(kept) != 0 || len(skipped) != 0 {
-		t.Fatalf("kept=%+v skipped=%+v want both empty", kept, skipped)
+	if len(kept) != 0 || len(skipped) != 0 || staged != 0 || superseded != 0 {
+		t.Fatalf("kept=%+v skipped=%+v staged=%d superseded=%d want all empty/zero", kept, skipped, staged, superseded)
 	}
 }

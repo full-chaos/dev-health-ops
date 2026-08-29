@@ -151,11 +151,12 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// contradiction the guard exists to prevent. Computed once, up front;
 	// both the roster rebuild and the memberships write below read from it.
 	var keptMemberships []githubMembershipRow
-	var membershipsSkippedManualConflict int
+	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
+		observedTeamIDs := githubObservedMemberFetchTeamIDs(rows.Teams, rows.FailedMemberFetchTeamIDs)
 		var err error
-		keptMemberships, membershipsSkippedManualConflict, err = applyGitHubTeamMembershipConflictGuard(
-			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships,
+		keptMemberships, membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded, err = applyGitHubTeamMembershipConflictGuard(
+			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, observedTeamIDs, normalizedAt,
 		)
 		if err != nil {
 			return TeamCatalogResult{}, err
@@ -282,11 +283,13 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// drift-aware projector -- a team whose sync_policy is not the
 		// auto-apply default (0) is left completely untouched, not
 		// overwritten with this call's observed values.
-		keptTeams, skippedTeamIDs, err := applyGitHubTeamSyncPolicyGuard(ctx, adapter.Sink.Conn, ref.OrgID, rows.Teams)
+		keptTeams, skippedTeamIDs, teamsStagedForReview, teamsDriftSuperseded, err := applyGitHubTeamSyncPolicyGuard(ctx, adapter.Sink.Conn, ref.OrgID, rows.Teams, normalizedAt)
 		if err != nil {
 			return result, err
 		}
 		result.TeamsSkippedPolicy = len(skippedTeamIDs)
+		result.TeamsStagedForReview = teamsStagedForReview
+		driftChangesSuperseded += teamsDriftSuperseded
 		if len(keptTeams) > 0 {
 			if err := adapter.Sink.WriteTeams(ctx, ref.OrgID, keptTeams); err != nil {
 				return result, err
@@ -314,6 +317,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
+		result.MembershipsStagedForReview = membershipsStagedForReview
 		if len(keptMemberships) > 0 {
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, keptMemberships); err != nil {
 				return result, err
@@ -328,7 +332,29 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			// table this producer never touches.
 		}
 	}
+	result.DriftChangesSuperseded = driftChangesSuperseded
 	return result, nil
+}
+
+// githubObservedMemberFetchTeamIDs is CHAOS-4444's observed_team_ids
+// equivalent for GitHub: every team whose member fetch was attempted this
+// run and did NOT fail (rows.FailedMemberFetchTeamIDs -- CHAOS-4461's
+// per-team soft-fail tracking), matching Python's own
+// observed_team_ids.add((PROVIDER, team_id)) which only runs after a
+// successful discover_members_github call for that team.
+func githubObservedMemberFetchTeamIDs(teams []githubTeamRow, failed []string) []string {
+	failedSet := make(map[string]struct{}, len(failed))
+	for _, id := range failed {
+		failedSet[id] = struct{}{}
+	}
+	observed := make([]string, 0, len(teams))
+	for _, team := range teams {
+		if _, isFailed := failedSet[team.ID]; isFailed {
+			continue
+		}
+		observed = append(observed, team.ID)
+	}
+	return observed
 }
 
 var _ TeamCatalogCollector = GitHubTeamCatalogCollector{}

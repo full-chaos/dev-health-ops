@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -47,45 +48,46 @@ func resolveTeamSyncPolicies(
 	return policies, rows.Err()
 }
 
-// applyTeamSyncPolicyGuard is the CHAOS-4444-class fail-safe guard team-lead
+// applyTeamSyncPolicyGuard was the CHAOS-4444-class fail-safe guard team-lead
 // ruled for CHAOS-4431's codex review findings #3 (drift projector bypass)
-// and #6 (membership conflict review bypass), 2026-08-28: until the full
-// CHAOS-2622 drift-aware projector is ported to this native collector path,
-// a team whose sync_policy is NOT the auto-apply default (0) must be left
-// completely untouched by this write -- no managed-field overwrite, no
-// silent clobber of a flagged-for-review (1) or manual (2) team.
+// and #6 (membership conflict review bypass), 2026-08-28: a team whose
+// sync_policy is NOT the auto-apply default (0) must be left completely
+// untouched by this write -- no managed-field overwrite, no silent clobber
+// of a flagged-for-review (1) or manual (2) team. CHAOS-4444 replaces the
+// plain-skip interim behavior with the full clickhouse_team_drift_
+// projector.py parity: a skipped team's diff against the currently-
+// persisted row is now staged as a team_drift_changes row for review,
+// via the shared reviewTeamRowsForDrift engine (team_drift_review.go).
 //
 // Scoped deliberately narrow: it filters ONLY the `teams` table rows. Team-
 // attribution.md:791-797 treats the membership conflict gate (versus a
 // manual membership or manual_attribution_fallbacks) as independent of a
 // team's sync_policy -- it can fire for a policy-0 team too -- so this guard
 // does not, and is not meant to, cover finding #6's membership-conflict
-// gap. Returns the filtered team rows plus the native_team_key of every team
-// this call skipped, for telemetry and for excluding those keys from the
-// readback verifier's claim (a skipped team was never written, so claiming
-// it would fail the readback for a team this call deliberately left alone).
+// gap (see team_membership_conflict_guard.go / identity_drift_review.go).
+// Returns the filtered team rows, the native_team_key of every team this
+// call skipped (for telemetry and for excluding those keys from the
+// readback verifier's claim -- a skipped team was never written, so
+// claiming it would fail the readback for a team this call deliberately
+// left alone), how many distinct teams staged/refreshed a pending review
+// row, and how many existing pending rows were superseded.
 func applyTeamSyncPolicyGuard(
-	ctx context.Context, conn driver.Conn, orgID string, teams []linearReferenceTeamRow,
-) ([]linearReferenceTeamRow, []string, error) {
+	ctx context.Context, conn driver.Conn, orgID string, teams []linearReferenceTeamRow, now time.Time,
+) ([]linearReferenceTeamRow, []string, int, int, error) {
 	if len(teams) == 0 {
-		return teams, nil, nil
+		return teams, nil, 0, 0, nil
 	}
-	teamIDs := make([]string, 0, len(teams))
-	for _, team := range teams {
-		teamIDs = append(teamIDs, team.ID)
+	views := make([]teamDriftTeamView, len(teams))
+	for index, team := range teams {
+		views[index] = linearTeamRowToDriftView(team)
 	}
-	policies, err := resolveTeamSyncPolicies(ctx, conn, orgID, teamIDs)
+	keptIdx, skipped, staged, superseded, err := reviewTeamRowsForDrift(ctx, conn, orgID, views, now)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, 0, err
 	}
-	kept := make([]linearReferenceTeamRow, 0, len(teams))
-	skipped := make([]string, 0)
-	for _, team := range teams {
-		if policies[team.ID] != teamAutoApplySyncPolicy {
-			skipped = append(skipped, team.ID)
-			continue
-		}
-		kept = append(kept, team)
+	kept := make([]linearReferenceTeamRow, 0, len(keptIdx))
+	for _, index := range keptIdx {
+		kept = append(kept, teams[index])
 	}
-	return kept, skipped, nil
+	return kept, skipped, staged, superseded, nil
 }

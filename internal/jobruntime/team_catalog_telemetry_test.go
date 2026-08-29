@@ -105,6 +105,40 @@ func TestObserveTeamCatalogRowsWrittenExposesCounter(t *testing.T) {
 	}
 }
 
+// TestObserveTeamCatalogRowsWrittenExposesDriftReviewCounters is CHAOS-4444's
+// own telemetry coverage, following the same
+// "assert the exact PrometheusText() line, not just Observe returns nil"
+// pattern -- proves the three new staged/superseded counters
+// (team_drift_review.go / identity_drift_review.go) actually surface, not
+// just that TeamCatalogResult carries the fields.
+func TestObserveTeamCatalogRowsWrittenExposesDriftReviewCounters(t *testing.T) {
+	t.Parallel()
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableTeamsStagedForReview, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableMembershipsStagedForReview, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.ObserveTeamCatalogRowsWritten("gitlab", TeamCatalogTableDriftChangesSuperseded, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	text := collector.PrometheusText()
+	for _, want := range []string{
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="teams_staged_for_review"} 2`,
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="team_memberships_staged_for_review"} 5`,
+		`dev_health_team_catalog_rows_written_total{provider="gitlab",table="team_drift_changes_superseded"} 1`,
+	} {
+		if !strings.Contains(text, want+"\n") {
+			t.Fatalf("missing exposition line %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestObserveTeamCatalogDispatchRejectsUnregisteredValues pins the closed
 // entry-point/outcome enum guard, same convention as every other bounded
 // outcome in this package.

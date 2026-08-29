@@ -68,11 +68,15 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 	// contradiction the guard exists to prevent. So this is computed once,
 	// up front, and both blocks below read from its result.
 	var keptMemberships []linearReferenceMembershipRow
-	var membershipsSkippedManualConflict int
+	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
+		observedTeamIDs := make([]string, 0, len(batch.Rows.Teams))
+		for _, team := range batch.Rows.Teams {
+			observedTeamIDs = append(observedTeamIDs, team.ID)
+		}
 		var err error
-		keptMemberships, membershipsSkippedManualConflict, err = applyTeamMembershipConflictGuard(
-			ctx, collector.Sink.Conn, ref.OrgID, "linear", batch.Rows.Memberships,
+		keptMemberships, membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded, err = applyTeamMembershipConflictGuard(
+			ctx, collector.Sink.Conn, ref.OrgID, "linear", batch.Rows.Memberships, observedTeamIDs, normalizedAt,
 		)
 		if err != nil {
 			return result, err
@@ -115,11 +119,13 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// drift-aware projector -- a team whose sync_policy is not the
 		// auto-apply default (0) is left completely untouched, not
 		// overwritten with this call's observed values.
-		keptTeams, skippedTeamIDs, err := applyTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows)
+		keptTeams, skippedTeamIDs, teamsStagedForReview, teamsDriftSuperseded, err := applyTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows, normalizedAt)
 		if err != nil {
 			return result, err
 		}
 		result.TeamsSkippedPolicy = len(skippedTeamIDs)
+		result.TeamsStagedForReview = teamsStagedForReview
+		driftChangesSuperseded += teamsDriftSuperseded
 		teamsEffect, err := effectBatchFromValues(linearReferenceCatalogTeamsDestination, EffectReadbackRequired, keptTeams)
 		if err != nil {
 			return result, err
@@ -149,6 +155,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// above, before the Teams block, so the roster and the memberships
 		// table never disagree about which assignments are safe.
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
+		result.MembershipsStagedForReview = membershipsStagedForReview
 		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if err != nil {
 			return result, err
@@ -159,6 +166,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		result.MembersWritten = batch.Result.Members
 		result.MembershipsWritten = len(keptMemberships)
 	}
+	result.DriftChangesSuperseded = driftChangesSuperseded
 	if selections.Projects {
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Projects); err != nil {
 			return result, err

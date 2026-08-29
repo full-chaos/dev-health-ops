@@ -415,14 +415,14 @@ func normalizeLinearReferenceMember(
 	email := optionalLinearString(payload.Email)
 	facets := linearReferenceMembershipFacets(identity, payload.Email)
 	return linearReferenceMemberRow{
-		OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
-		ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
-	}, linearReferenceMembershipRow{
-		OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, MemberID: memberID,
-		RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
-		Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
-		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
-	}, memberID, nil
+			OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
+			ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
+		}, linearReferenceMembershipRow{
+			OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, MemberID: memberID,
+			RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
+			Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
+			ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
+		}, memberID, nil
 }
 
 func linearMemberID(identity string) string {

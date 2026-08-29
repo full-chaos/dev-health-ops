@@ -151,8 +151,8 @@ LIMIT {limit_per_dim:UInt32}
 	nodesSQL := fmt.Sprintf("\n%s\nSETTINGS max_execution_time = {timeout:UInt64}\n", strings.Join(unionParts, " UNION ALL "))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		{Name: "start_date", Value: req.StartDate.Time()},
-		{Name: "end_date", Value: req.EndDate.Time()},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "limit_per_dim", Value: limitPerDim},
 		{Name: "timeout", Value: timeoutSeconds},
 	}
@@ -194,8 +194,8 @@ SETTINGS max_execution_time = {timeout:UInt64}
 
 		edgeBindings := []clickhouse.Binding{
 			{Name: "org_id", Value: orgID},
-			{Name: "start_date", Value: req.StartDate.Time()},
-			{Name: "end_date", Value: req.EndDate.Time()},
+			{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+			{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 			{Name: "max_edges", Value: maxEdgesPerPair},
 			{Name: "timeout", Value: timeoutSeconds},
 		}

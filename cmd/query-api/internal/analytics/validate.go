@@ -7,7 +7,10 @@
 // resolve_analytics's doc comment below).
 package analytics
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // ValidationError mirrors Python's api/graphql/errors.py ValidationError --
 // a distinguishable error type carrying which input field was rejected, so
@@ -24,6 +27,34 @@ func (e *ValidationError) Error() string { return e.Message }
 
 func newValidationError(field string, value any, format string, args ...any) error {
 	return &ValidationError{Message: fmt.Sprintf(format, args...), Field: field, Value: value}
+}
+
+// dateBindingValue formats a time.Time as a bare "YYYY-MM-DD" string for
+// binding into a {name:Date}-typed native ClickHouse parameter.
+//
+// REQUIRED, not cosmetic: dev-health-go v0.4.0's clickHouseParameter
+// (clickhouse/bindings.go) formats every time.Time value with
+// `.UTC().Format("2006-01-02 15:04:05.000")` regardless of the
+// placeholder's declared type -- there is no Date-vs-DateTime awareness
+// in the client at all. A {start_date:Date} placeholder bound to a raw
+// time.Time therefore ALWAYS fails live with "Value ... cannot be parsed
+// as Date ... only 10 of 23 bytes was parsed", a defect isolated by
+// executing the flowMatrix query for real (2026-08-29, CHAOS-4506 slot):
+// TEAM's dual-run test failed with an EMPTY Go result and no GraphQL
+// error (resolve.go's swallow-to-empty), and only printing the swallowed
+// error's full Unwrap() chain surfaced the real ClickHouse exception --
+// `analytics: flowMatrix nodes: query: ClickHouse query failed` alone
+// gives no hint the cause is a date-formatting bug, not a missing
+// column or a broken query. hotspots.go's dateFromInput established the
+// correct pattern for this exact class already (a different package,
+// same client library, same constraint); this is that pattern's home in
+// the analytics package, shared across breakdown/flowMatrix/sankey/
+// timeseries's identical start_date/end_date bindings, all six of which
+// carried this same bug -- none had ever been executed against a live
+// ClickHouse before this fix.
+func dateBindingValue(t time.Time) string {
+	year, month, day := t.Date()
+	return fmt.Sprintf("%04d-%02d-%02d", year, int(month), day)
 }
 
 // Dimension is the Go port of sql/validate.py's Dimension enum -- the

@@ -233,8 +233,8 @@ SETTINGS max_execution_time = {timeout:UInt64}
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		{Name: "start_date", Value: req.StartDate.Time()},
-		{Name: "end_date", Value: req.EndDate.Time()},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "timeout", Value: timeoutSeconds},
 	}
 	bindings = append(bindings, fc.bindings...)

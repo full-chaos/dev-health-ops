@@ -298,6 +298,7 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.
+		recordDegradation(ctx, "flowMatrix", execErr)
 		nodes, edges = nil, nil
 	}
 

@@ -194,14 +194,27 @@ export ACR_TRIAL_NODEPORT_BASE=30500        # one base per lane; +10 for the nex
 
 **Use the newest COMPLETE set, and check which one you got.** A "complete" set is a
 directory holding *both* a `postgres-all-*.sql.gz` and a `clickhouse-default-*.zip`.
-This is not hygiene — a lane seeded from the older **20260817-192029** set fails
-three steps later at `go-worker-migrate` with
-`runtime grant posture gap role=domain gaps=["worker_instances: table does not exist"]`,
-while the same lane seeded from `20260823-220102` completes in 3 s. The mechanism
-is not isolated (neither dump contains that table); tracked as **CHAOS-4463**.
-Note that older loose files can sit at the top level of `backups/` beside newer
-timestamped subdirectories, so a naive "newest dump" glob picks the wrong one —
-which is exactly the bug `lane.sh` had.
+This is not hygiene — the older **20260817-192029** set is internally inconsistent
+and cannot produce a working lane (**CHAOS-4463**):
+
+| | `alembic_version` in the dump | `CREATE TABLE public.worker_instances` present |
+|---|---|---|
+| `20260817-192029` | **0104** | **no** |
+| `20260823-220102` | 0109 | yes |
+
+Revision **0104 is the one that creates `worker_instances`**
+(`alembic/versions/0104_add_worker_instances.py`). The 08-17 dump therefore records
+0104 as already applied while lacking the table that revision creates. On restore,
+alembic skips 0104, migrates 0105→0115, and the table is never created — so the
+lane reaches an apparently healthy `alembic_version 0115` and then fails several
+steps later at `go-worker-migrate` with
+`runtime grant posture gap role=domain gaps=["worker_instances: table does not exist"]`
+and 112 grants instead of 116. The same lane seeded from 20260823-220102 completes
+in 3 s.
+
+Note also that older loose files can sit at the top level of `backups/` beside newer
+timestamped subdirectories, so a naive "newest dump" glob picks the wrong one — which
+is exactly the bug `lane.sh` had.
 
 NodePorts are **cluster**-scoped, not namespace-scoped, so every lane needs its
 own `ACR_TRIAL_NODEPORT_BASE`. The base must be a multiple of 10 inside

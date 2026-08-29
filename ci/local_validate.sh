@@ -128,11 +128,31 @@ cd "${ROOT}" || {
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${ROOT}/.uv-cache}"
 
 # --- Config (override via env). ----------------------------------------------------
+# CH_CONTAINER names the Compose container AND -- see LOCK_DIR below -- doubles
+# as the gate's lock key. That second role is why a cluster-isolated lane can
+# already run concurrently with a Compose-stack gate: pass a lane-scoped name
+# and the two runs take different locks (CHAOS-4457/CHAOS-4428).
 CH_CONTAINER="${CH_CONTAINER:-dev-health-clickhouse-1}"
 CH_USER="${CH_USER:-ch}"
 CH_PASS="${CH_PASS:-ch}"
 CH_HOST="${CH_HOST:-localhost}"
 CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
+# CH_TRANSPORT selects how the scratch CREATE/DROP DATABASE statements reach
+# ClickHouse (CHAOS-4457). "docker" (the default, unchanged) execs
+# clickhouse-client inside CH_CONTAINER; "http" POSTs to CH_HOST:CH_HTTP_PORT
+# instead, which is what a lane whose ClickHouse runs as a Kubernetes pod needs
+# -- there is no container on this host to exec into. Only ch_query() ever used
+# docker; every other ClickHouse access in this script already went over HTTP
+# through CH_HOST/CH_HTTP_PORT (see SCRATCH_URI below), so this one function is
+# the whole difference between the two modes.
+CH_TRANSPORT="${CH_TRANSPORT:-docker}"
+case "${CH_TRANSPORT}" in
+  docker | http) ;;
+  *)
+    printf 'CH_TRANSPORT must be "docker" or "http", got: %s\n' "${CH_TRANSPORT}" >&2
+    exit 2
+    ;;
+esac
 
 # Deterministic, per-worktree scratch db name (collision fix — see the
 # CONCURRENCY CONTRACT header above). Hash the absolute worktree ROOT (stable
@@ -900,6 +920,21 @@ CH_PROBE_DETAIL=""
 
 ch_probe_docker() {
   CH_PROBE_DETAIL=""
+  if [ "${CH_TRANSPORT}" = "http" ]; then
+    # No container to probe: reachability is the HTTP endpoint answering, and a
+    # dead endpoint surfaces as a loud non-zero ch_query below rather than a
+    # silent skip. The dev-hops check still applies -- the ClickHouse stages
+    # invoke that CLI whichever transport carries the scratch DDL.
+    if ! command -v curl >/dev/null 2>&1; then
+      CH_PROBE_DETAIL="curl not found on PATH, required by CH_TRANSPORT=http"
+      return 1
+    fi
+    if [ ! -x "${DEVHOPS}" ]; then
+      CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — see the CH_TRANSPORT=docker branch below for the install recipe, or run with SKIP_CLICKHOUSE=1"
+      return 4
+    fi
+    return 0
+  fi
   if ! command -v docker >/dev/null 2>&1; then
     CH_PROBE_DETAIL="docker CLI not found on PATH"
     return 1
@@ -936,6 +971,21 @@ ch_probe_docker() {
 ch_query() {
   # Runs a query against the DEFAULT-connected client. The ONLY DDL we ever send
   # here is CREATE/DROP DATABASE for the scratch db — never table DDL in 'default'.
+  #
+  # Two transports, same statements (CHAOS-4457). The http one carries the
+  # credentials in headers rather than the URL so they never reach a proxy log
+  # or a `ps` listing, and --fail-with-body turns ClickHouse's own 4xx/5xx into
+  # a non-zero exit WITH its error text, so a failed CREATE/DROP is never
+  # mistaken for success (the docker path gets that from clickhouse-client).
+  if [ "${CH_TRANSPORT}" = "http" ]; then
+    curl --silent --show-error --fail-with-body \
+      --max-time "${CH_HTTP_TIMEOUT_SECS:-30}" \
+      --header "X-ClickHouse-User: ${CH_USER}" \
+      --header "X-ClickHouse-Key: ${CH_PASS}" \
+      --data-binary "$1" \
+      "http://${CH_HOST}:${CH_HTTP_PORT}/"
+    return $?
+  fi
   docker exec -i "${CH_CONTAINER}" clickhouse-client \
     --user "${CH_USER}" --password "${CH_PASS}" --query "$1"
 }
@@ -1600,6 +1650,16 @@ if [ "${1:-}" = "--stage-manifest-mismatch-probe" ]; then
   verify_stage_manifest
   printf 'stage-manifest-mismatch-probe: no mismatch detected (unexpected)\n'
   exit 0
+fi
+
+# CHAOS-4457: lets a test drive ch_query() for real -- asserting which transport
+# it actually uses -- instead of grepping this file for a string, which would
+# pass against a script that still shelled out to docker at runtime. Same
+# argument-hook convention as --stage-manifest-mismatch-probe above.
+if [ "${1:-}" = "--ch-query-probe" ]; then
+  shift
+  ch_query "${1:?query required}"
+  exit $?
 fi
 
 main "$@"

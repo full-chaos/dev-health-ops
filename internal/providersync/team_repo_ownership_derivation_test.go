@@ -650,3 +650,90 @@ func TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam(t *te
 		}
 	}
 }
+
+// TestLinearTeamKeyOwnResolutionWithEmptyProjectID closes a fixture gap found
+// during the compose live-proof (lane-4458b-live, 2026-08-29, org
+// 70d529e0): every prior fixture for the own-resolution arm gives the Linear
+// item a NON-EMPTY but non-matching project_id (a raw Linear Project UUID
+// that just isn't in the catalog, e.g. TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership
+// above). Real synced data on org 70d529e0 shows 264 Linear work items with
+// `native_team_key` set and `project_id` = the EMPTY STRING (never a project
+// association at all, not merely an unmatched one) -- ClickHouse's
+// column-default shape for a Linear issue that was never assigned to a
+// Project. resolveWorkItemProjectRef's `if item.ProjectID != ""` guard means
+// this should be structurally equivalent to the non-matching-UUID case (both
+// skip the direct-match branch and fall to the native_team_key fallback),
+// but the live proof found ZERO linear_team_key arm hits despite this
+// exact input shape being present and donor-linked -- so this pins the
+// EXACT empty-string shape explicitly rather than relying on that equivalence
+// as an unverified assumption.
+func TestLinearTeamKeyOwnResolutionWithEmptyProjectID(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{Provider: "linear", ProjectID: "org-1:linear:CHAOS", TeamID: "team-chaos", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{
+			WorkItemID:    "linear:CHAOS-3392",
+			Provider:      "linear",
+			RepoID:        "repo-a",
+			ProjectID:     "", // exact live-data shape: never assigned to a Project, not just unmatched
+			NativeTeamKey: "CHAOS",
+		},
+	}
+
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+
+	if len(got) != 1 || got[0].TeamID != "team-chaos" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-chaos via native_team_key own resolution with an EMPTY project_id, got %+v", got)
+	}
+	if got[0].ResolutionArm != TeamRepoOwnershipResolutionArmLinearTeamKey {
+		t.Fatalf("expected ResolutionArm=%q, got %q", TeamRepoOwnershipResolutionArmLinearTeamKey, got[0].ResolutionArm)
+	}
+}
+
+// TestLinearTeamKeyResolvesViaPRInheritanceIssueLink closes a second fixture
+// gap found during the same live-proof: every prior donor-walk fixture
+// (TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership et al.) wires the
+// donor through `dependencyEdges` (work_item_dependencies), but the
+// ACTUAL live data path for these 264 items is exclusively via
+// `issuePRLinks` (work_graph_issue_pr) -- the PR-inheritance loop
+// (deriveTeamRepoOwnership's second loop), which no existing test exercised
+// with a Linear donor at all (every existing issuePRLinks-bearing fixture,
+// where any exist, predates this fix). This is the identical closure
+// (donorProjectID) used by both loops, so it is expected to behave the same
+// as the dependency-edge donor walk -- this test exists to STOP relying on
+// that expectation and instead pin it directly, since it is the one
+// real-world code path this fix's tier-1 suite never touched.
+func TestLinearTeamKeyResolvesViaPRInheritanceIssueLink(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{Provider: "linear", ProjectID: "org-1:linear:CHAOS", TeamID: "team-chaos", IsPrimary: true},
+	}
+	// The Linear issue itself: no repo of its own (RepoID empty, matching
+	// Linear items' real repo_id=00000000-... zero UUID), never assigned to
+	// a Project (ProjectID empty), native_team_key set -- exactly org
+	// 70d529e0's 264 fallback-eligible items' shape.
+	workItems := []TeamRepoOwnershipWorkItem{
+		{
+			WorkItemID:    "linear:CHAOS-3392",
+			Provider:      "linear",
+			RepoID:        "",
+			ProjectID:     "",
+			NativeTeamKey: "CHAOS",
+		},
+	}
+	// work_graph_issue_pr: this Linear issue is mentioned by a PR in repo-a.
+	// No work_item_dependencies edge exists at all -- the PR-inheritance
+	// loop must resolve this on its own via donorProjectID(link.WorkItemID).
+	issuePRLinks := []TeamRepoOwnershipIssuePRLink{
+		{WorkItemID: "linear:CHAOS-3392", RepoID: "repo-a", PRNumber: 42},
+	}
+
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks)
+
+	if len(got) != 1 || got[0].TeamID != "team-chaos" || got[0].RepoID != "repo-a" {
+		t.Fatalf("expected repo-a -> team-chaos via PR-inheritance native_team_key resolution, got %+v", got)
+	}
+	if got[0].ResolutionArm != TeamRepoOwnershipResolutionArmLinearTeamKey {
+		t.Fatalf("expected ResolutionArm=%q, got %q", TeamRepoOwnershipResolutionArmLinearTeamKey, got[0].ResolutionArm)
+	}
+}

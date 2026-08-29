@@ -131,35 +131,31 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	}
 
 	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks)
-	// armCounts (CHAOS-4458 part (b)): how many of the rows actually WRITTEN
-	// below came from each resolution identity -- computed from derived, not
-	// from resolveWorkItemProjectRef call counts, so a conflicted/dropped
-	// repo (never written) never inflates either arm's count.
-	armCounts = map[string]int{}
-	for _, row := range derived {
-		if row.ResolutionArm != "" {
-			armCounts[row.ResolutionArm]++
-		}
-	}
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
-		return 0, 0, true, armCounts, err
+		return 0, 0, true, nil, err
 	}
 	toRetract := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
-			return 0, 0, true, armCounts, err
+			return 0, 0, true, nil, err
 		}
 	}
 
 	if len(derived) == 0 {
-		return 0, retracted, true, armCounts, nil
+		return 0, retracted, true, nil, nil
 	}
-	written, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
+	// armCounts (CHAOS-4458 part (b)) is computed by writeTeamRepoOwnershipRows
+	// itself from the rows it actually COMMITS, not from `derived` up front
+	// (codex adversarial review, 2026-08-29, confirmed finding): a derived
+	// candidate can still be dropped (unresolvable repo_id) or the whole
+	// batch can fail before Send() -- counting from `derived` would report a
+	// linear_team_key/project_id row that was never actually written.
+	written, armCounts, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
 	if err != nil {
-		return 0, retracted, true, armCounts, err
+		return 0, retracted, true, nil, err
 	}
 	return written, retracted, true, armCounts, nil
 }
@@ -482,6 +478,16 @@ const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provid
 // under concurrent sync) is skipped rather than written with a blank
 // repo_full_name, which would collide this table's ORDER BY key across
 // unrelated repos owned by the same team.
+//
+// armCounts (CHAOS-4458 part (b)) is tallied from the SAME rows that make it
+// into the batch, and is only meaningful once Send() has actually succeeded
+// -- an error return (from Append or Send) always pairs with a nil armCounts,
+// mirroring the existing written=0-on-error contract, so a caller can never
+// export a resolution-arm count for a row that was not actually committed
+// (codex adversarial review, 2026-08-29, confirmed finding: counting
+// pre-write candidates let the metric report rows that were skipped for a
+// missing repo snapshot, or never committed at all because the whole batch
+// failed).
 func writeTeamRepoOwnershipRows(
 	ctx context.Context,
 	conn driver.Conn,
@@ -489,12 +495,13 @@ func writeTeamRepoOwnershipRows(
 	now time.Time,
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
-) (int, error) {
+) (int, map[string]int, error) {
 	batch, err := conn.PrepareBatch(ctx, teamRepoOwnershipInsert)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	written := 0
+	armCounts := map[string]int{}
 	for _, row := range derived {
 		repoID, err := uuid.Parse(row.RepoID)
 		if err != nil || repoID == uuid.Nil {
@@ -532,15 +539,18 @@ func writeTeamRepoOwnershipRows(
 			nil,
 			now,
 		); err != nil {
-			return written, err
+			return written, nil, err
 		}
 		written++
+		if row.ResolutionArm != "" {
+			armCounts[row.ResolutionArm]++
+		}
 	}
 	if written == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if err := batch.Send(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return written, nil
+	return written, armCounts, nil
 }

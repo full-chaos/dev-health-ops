@@ -610,3 +610,43 @@ func TestLinearTeamKeyArmNeverAppliesToNonLinearProviders(t *testing.T) {
 		t.Fatalf("expected 0 rows -- a non-linear provider must never resolve via the linear_team_key arm, got %+v", got)
 	}
 }
+
+// TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam is
+// the codex adversarial-review fix (2026-08-29, confirmed finding):
+// loadTeamRepoOwnershipWorkItems has no ORDER BY, so ClickHouse may return
+// work_items in a different order across otherwise-identical runs. Before
+// this fix, the FIRST work item assign() happened to visit "won" the
+// recorded ResolutionArm even when a second item resolving the SAME repo to
+// the SAME team via a DIFFERENT arm was also present -- an unordered-scan
+// artifact that could make the telemetry flicker between project_id and
+// linear_team_key for byte-identical ClickHouse snapshots. The arm must be
+// a deterministic function of the candidate SET, not of scan order: here
+// two work items resolve "repo-a" to "team-chaos" via different arms, and
+// the higher-priority project_id arm must always win regardless of which
+// literal slice order they're passed in.
+func TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{Provider: "linear", ProjectID: "proj-1", TeamID: "team-chaos", IsPrimary: true},
+		{Provider: "linear", ProjectID: "org-1:linear:CHAOS", TeamID: "team-chaos", IsPrimary: true},
+	}
+	// Item A resolves repo-a -> team-chaos via the direct project_id arm.
+	itemA := TeamRepoOwnershipWorkItem{WorkItemID: "linear:CHAOS-1", Provider: "linear", RepoID: "repo-a", ProjectID: "proj-1"}
+	// Item B is a SEPARATE PR (also repo-a) that only resolves via the
+	// linear_team_key arm.
+	itemB := TeamRepoOwnershipWorkItem{
+		WorkItemID: "ghpr:acme/repo-a#2", Provider: "linear", RepoID: "repo-a",
+		ProjectID: "22222222-2222-4222-8222-222222222222", NativeTeamKey: "CHAOS",
+	}
+
+	forward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemA, itemB}, nil, nil)
+	backward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemB, itemA}, nil, nil)
+
+	for _, got := range [][]DerivedTeamRepoOwnershipRow{forward, backward} {
+		if len(got) != 1 || got[0].TeamID != "team-chaos" || got[0].RepoID != "repo-a" {
+			t.Fatalf("expected exactly repo-a -> team-chaos, got %+v", got)
+		}
+		if got[0].ResolutionArm != TeamRepoOwnershipResolutionArmProjectID {
+			t.Fatalf("expected the higher-priority project_id arm regardless of scan order, got %q", got[0].ResolutionArm)
+		}
+	}
+}

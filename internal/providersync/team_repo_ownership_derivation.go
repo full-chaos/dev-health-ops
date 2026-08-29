@@ -207,6 +207,27 @@ const (
 	TeamRepoOwnershipResolutionArmLinearTeamKey = "linear_team_key"
 )
 
+// teamRepoOwnershipResolutionArmPriority ranks the two arms so
+// deriveTeamRepoOwnership's assign() can pick a deterministic winner when
+// the SAME (repo, team) pair is reachable via both -- e.g. one work item
+// resolves its own project_id directly while another, unrelated work item
+// donating to the same repo only resolves via native_team_key. project_id
+// outranks linear_team_key (the direct join is authoritative; the
+// team-key-shaped fallback only exists because Linear's ownership writer
+// and work-item normalizer disagree on project_id, per
+// TeamRepoOwnershipWorkItem's doc comment) -- an unrecognized/empty arm
+// ranks lowest so it is always replaced once any real arm is seen.
+func teamRepoOwnershipResolutionArmPriority(arm string) int {
+	switch arm {
+	case TeamRepoOwnershipResolutionArmProjectID:
+		return 2
+	case TeamRepoOwnershipResolutionArmLinearTeamKey:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // linearTeamKeyProjectID reconstructs the SAME project_id string
 // team_autoimport_linear.py's ownership writer stamps for a team with no
 // explicit Linear Project associations: `_project_id(org_id, "linear",
@@ -271,6 +292,18 @@ func deriveTeamRepoOwnership(
 		if existing, ok := repoToTeam[repoID]; ok {
 			if existing != teamID {
 				conflicted[repoID] = true
+				return
+			}
+			// Same repo, same team, resolved again via a (possibly
+			// different) arm: keep whichever arm ranks higher by
+			// teamRepoOwnershipResolutionArmPriority, deterministically,
+			// rather than whichever candidate this loop happened to visit
+			// first. loadTeamRepoOwnershipWorkItems has no ORDER BY, so an
+			// unqualified first-wins policy let the recorded arm flicker
+			// between identical runs over the same ClickHouse snapshot
+			// (codex adversarial review, 2026-08-29, confirmed finding).
+			if teamRepoOwnershipResolutionArmPriority(arm) > teamRepoOwnershipResolutionArmPriority(repoArm[repoID]) {
+				repoArm[repoID] = arm
 			}
 			return
 		}

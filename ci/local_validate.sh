@@ -146,6 +146,19 @@ CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
 # through CH_HOST/CH_HTTP_PORT (see SCRATCH_URI below), so this one function is
 # the whole difference between the two modes.
 CH_TRANSPORT="${CH_TRANSPORT:-docker}"
+# Endpoint scheme for the http transport. A TLS-only ClickHouse (the 443/8443
+# variants this repo's own connection parser already accepts) rejects plaintext,
+# so this must be settable rather than hardcoded (codex review round 2). It is
+# applied to BOTH the curl endpoint below and SCRATCH_URI, so the two can never
+# disagree about what they are talking to.
+CH_HTTP_SCHEME="${CH_HTTP_SCHEME:-http}"
+case "${CH_HTTP_SCHEME}" in
+  http | https) ;;
+  *)
+    printf 'CH_HTTP_SCHEME must be "http" or "https", got: %s\n' "${CH_HTTP_SCHEME}" >&2
+    exit 2
+    ;;
+esac
 case "${CH_TRANSPORT}" in
   docker | http) ;;
   *)
@@ -176,7 +189,14 @@ default_scratch_db() {
   printf 'ci_local_validate_%s' "${digest}"
 }
 SCRATCH_DB="${SCRATCH_DB:-$(default_scratch_db "${ROOT}")}"
-SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+# clickhouse+https:// is how clickhouse-connect is told to use TLS; the plain
+# clickhouse:// form stays byte-identical for the default http scheme so no
+# existing caller changes.
+if [ "${CH_HTTP_SCHEME}" = "https" ]; then
+  SCRATCH_URI="clickhouse+https://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+else
+  SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
+fi
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
 MYPY="${ROOT}/.venv/bin/mypy"
@@ -978,19 +998,34 @@ ch_query() {
   # a non-zero exit WITH its error text, so a failed CREATE/DROP is never
   # mistaken for success (the docker path gets that from clickhouse-client).
   if [ "${CH_TRANSPORT}" = "http" ]; then
-    # --noproxy '*' is not optional (codex review): CH_HOST is a cluster-local
-    # NodePort or loopback address, and an ambient HTTP_PROXY/ALL_PROXY would
-    # otherwise route this request through the proxy -- which fails against an
-    # otherwise reachable lane AND, if the proxy is up, hands it the
-    # X-ClickHouse-Key header and the DDL body. Never send a credential to a
-    # proxy the operator did not intend to involve.
+    # The credential goes in a private --config file, NEVER on the command
+    # line (codex review round 2). An earlier version passed it as
+    # `--header "X-ClickHouse-Key: ${CH_PASS}"` with a comment claiming that
+    # kept it out of `ps` -- it did not: curl argv IS visible in a process
+    # listing, and this gate runs on a shared host. The credential can CREATE
+    # and DROP databases. umask 077 before mktemp so the file is never
+    # world-readable even briefly, and it is removed on every return path.
+    #
+    # --noproxy '*' is also not optional: CH_HOST is a cluster-local NodePort
+    # or loopback address, and an ambient HTTP_PROXY/ALL_PROXY would otherwise
+    # route this request through the proxy -- failing against an otherwise
+    # reachable lane and, if the proxy is up, handing it the credential and the
+    # DDL body.
+    local cfg rc
+    cfg="$(umask 077; mktemp "${TMPDIR:-/tmp}/local-validate-ch-curl.XXXXXX")" || {
+      printf 'ch_query: could not create a private curl config file\n' >&2
+      return 2
+    }
+    printf 'header = "X-ClickHouse-User: %s"\nheader = "X-ClickHouse-Key: %s"\n' \
+      "${CH_USER}" "${CH_PASS}" >"${cfg}"
     curl --silent --show-error --fail-with-body --noproxy '*' \
+      --config "${cfg}" \
       --max-time "${CH_HTTP_TIMEOUT_SECS:-30}" \
-      --header "X-ClickHouse-User: ${CH_USER}" \
-      --header "X-ClickHouse-Key: ${CH_PASS}" \
       --data-binary "$1" \
-      "http://${CH_HOST}:${CH_HTTP_PORT}/"
-    return $?
+      "${CH_HTTP_SCHEME}://${CH_HOST}:${CH_HTTP_PORT}/"
+    rc=$?
+    rm -f "${cfg}"
+    return "${rc}"
   fi
   docker exec -i "${CH_CONTAINER}" clickhouse-client \
     --user "${CH_USER}" --password "${CH_PASS}" --query "$1"

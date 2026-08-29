@@ -114,12 +114,23 @@ def test_remote_clickhouse_transport_never_shells_out_to_docker(tmp_path: Path) 
     )
     argv = curl_log.read_text(encoding="utf-8")
     assert "http://192.0.2.10:30501/" in argv, f"wrong endpoint: {argv}"
-    assert "X-ClickHouse-User: ch" in argv, f"user header missing: {argv}"
-    assert "X-ClickHouse-Key: secret" in argv, f"key header missing: {argv}"
     assert "SELECT 1" in argv, f"query body missing: {argv}"
     assert "--noproxy" in argv, (
-        "the ClickHouse POST must bypass ambient proxies: a credential header "
+        "the ClickHouse POST must bypass ambient proxies: a credential "
         f"must never be handed to an unintended proxy. argv: {argv}"
+    )
+
+    # The credential must NOT be on the command line. This gate runs on a
+    # shared host and curl argv is visible in `ps`; the password can CREATE and
+    # DROP databases. An earlier version passed it as --header and a comment
+    # wrongly claimed that hid it (codex review round 2). Credentials travel in
+    # a private --config file instead.
+    assert "secret" not in argv, (
+        "the ClickHouse password appeared in curl's command line, where any "
+        f"process listing can read it: {argv}"
+    )
+    assert "--config" in argv, (
+        f"credentials must be passed through a private --config file: {argv}"
     )
     assert "ch_query_rc=0" in result.stdout, (
         f"ch_query reported failure: {result.stdout} {result.stderr}"
@@ -172,4 +183,80 @@ def test_lock_key_is_scoped_to_ch_container_not_the_host() -> None:
     ), (
         "LOCK_DIR must stay scoped to CH_CONTAINER so isolated lanes do not "
         f"serialize on one host-wide lock; found: {lock_lines}"
+    )
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+def test_credentials_travel_in_a_private_config_file(tmp_path: Path) -> None:
+    """The headers must still be SENT -- just not via argv.
+
+    Asserting only "the password is not in argv" would pass against a version
+    that stopped authenticating at all, so this captures the --config file curl
+    was handed and checks both headers are in it, with owner-only permissions.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    captured = tmp_path / "captured-config"
+    curl = bindir / "curl"
+    # Copy whatever --config names, plus its octal mode, before curl exits.
+    curl.write_text(
+        "#!/bin/sh\n"
+        "prev=''\n"
+        'for a in "$@"; do\n'
+        "  if [ \"$prev\" = '--config' ]; then\n"
+        f'    cat "$a" > "{captured}"\n'
+        f'    ls -l "$a" | cut -c1-10 >> "{captured}"\n'
+        "  fi\n"
+        '  prev="$a"\n'
+        "done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    docker = bindir / "docker"
+    docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    docker.chmod(0o755)
+
+    _run(
+        _DRIVER % _GATE,
+        {
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+            "CH_TRANSPORT": "http",
+            "CH_HOST": "192.0.2.10",
+            "CH_HTTP_PORT": "30501",
+            "CH_USER": "ch",
+            "CH_PASS": "secret",
+        },
+    )
+
+    assert captured.exists(), "curl was never handed a --config file"
+    body = captured.read_text(encoding="utf-8")
+    assert 'header = "X-ClickHouse-User: ch"' in body, body
+    assert 'header = "X-ClickHouse-Key: secret"' in body, body
+    assert "-rw-------" in body, f"the credential file must be owner-only: {body}"
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+def test_https_scheme_is_honoured(tmp_path: Path) -> None:
+    """A TLS-only ClickHouse must be reachable, not hardcoded to plaintext."""
+    bindir = _stub_bin(tmp_path)
+    curl_log = tmp_path / "curl-argv"
+
+    _run(
+        _DRIVER % _GATE,
+        {
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+            "CH_TRANSPORT": "http",
+            "CH_HTTP_SCHEME": "https",
+            "CH_HOST": "clickhouse.example.com",
+            "CH_HTTP_PORT": "8443",
+            "CH_USER": "ch",
+            "CH_PASS": "secret",
+        },
+    )
+
+    assert curl_log.exists(), "curl was not invoked"
+    argv = curl_log.read_text(encoding="utf-8")
+    assert "https://clickhouse.example.com:8443/" in argv, (
+        f"CH_HTTP_SCHEME=https must reach a TLS endpoint: {argv}"
     )

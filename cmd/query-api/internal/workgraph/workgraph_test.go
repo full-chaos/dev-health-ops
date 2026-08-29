@@ -421,7 +421,7 @@ func TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse(t *testing.T) {
 		"argMax(repo_id, last_synced)",
 		"argMax(provider, last_synced)",
 		"argMax(provenance, last_synced)",
-		"argMax(confidence, last_synced)",
+		"toFloat64(argMax(confidence, last_synced))",
 		"argMax(evidence, last_synced)",
 		"any(edge_id)",
 		"GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id",

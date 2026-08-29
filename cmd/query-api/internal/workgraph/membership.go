@@ -123,15 +123,26 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	}
 	bindings = addMembershipScopeBindings(bindings, scope)
 
+	// INNER JOIN (%s) AS latest_run, NOT a leading `WITH latest_run AS
+	// (...)` CTE: this codebase's clickhouse.Client rejects any statement
+	// whose FIRST TOKEN is not literally "SELECT"
+	// (dev-health-go/clickhouse/client.go's validateReadOnlyStatement) as
+	// an unsafe statement -- a `WITH ...` prefix trips that check even
+	// though the statement is pure SELECT. Found LIVE by this port's own
+	// dual-run proof, not by inspection: a fake-based unit test cannot
+	// catch a client-side statement-shape guard, only a real client call
+	// can. Same inlined-subquery shape scope.go's
+	// themeMembershipExistsClause/dependencyThemeMembershipExistsClause
+	// already use for the identical latest-run subquery, for the same
+	// reason.
 	query := fmt.Sprintf(`
-            WITH latest_run AS (%s)
             SELECT
                 m.node_type AS node_type,
                 m.node_id AS node_id,
                 m.category_kind AS category_kind,
                 m.category AS category
             FROM work_unit_membership AS m
-            INNER JOIN latest_run ON 1 = 1
+            INNER JOIN (%s) AS latest_run ON 1 = 1
             %s
             WHERE m.org_id = {org_id:String}
               AND m.node_type IN {node_types:Array(String)}

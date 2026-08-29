@@ -82,6 +82,20 @@ func (r edgeRow) identity() identityKey {
 // are identity columns, stable across duplicate versions of one edge, so
 // filtering on them before the GROUP BY is exact (a duplicate version can
 // never change which identity group a row belongs to).
+// toFloat64(argMax(confidence, ...)): work_graph_edges.confidence is
+// Float32 (migration 014_work_graph.sql), and argMax() preserves its
+// input's ClickHouse type -- the native Go driver refuses to scan a
+// Float32 result column into *float64 outright ("converting Float32 to
+// *float64 is unsupported. try using *float32"), found LIVE by this
+// port's own dual-run proof (test_go_api_dual_run_work_graph.py) the
+// first time this query actually ran against a real ClickHouse -- a
+// fake-based unit test cannot catch a driver-level type mismatch, only
+// an executed query against the real schema can. Cast at the query,
+// scan into float64 (edgeRow.confidence's Go type, matching
+// model.WorkGraphEdgeResult.Confidence), never widen the Go struct field
+// to float32 -- every sibling operation in this codebase (hotspots,
+// cognitiveload, complexitytimeseries) already standardizes on float64
+// for score-shaped fields.
 func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
 	where := buildWorkGraphWhere(orgID, scope, true)
 	query := fmt.Sprintf(`
@@ -95,7 +109,7 @@ func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string,
             ifNull(toString(argMax(repo_id, last_synced)), '') AS repo_id,
             ifNull(argMax(provider, last_synced), '') AS provider,
             argMax(provenance, last_synced) AS provenance,
-            argMax(confidence, last_synced) AS confidence,
+            toFloat64(argMax(confidence, last_synced)) AS confidence,
             argMax(evidence, last_synced) AS evidence
         FROM work_graph_edges
         %s

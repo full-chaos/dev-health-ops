@@ -216,8 +216,17 @@ uri_encode() {
   # and worked end to end. Encoding it broke it, then the guard refused it.
   # Encode the smaller set and the regression disappears.
   #
-  # Non-ASCII is deliberately NOT handled correctly here -- see the note in the
-  # guard below.
+  # NON-ASCII IS WRONG HERE, deliberately and visibly, and worse than it looks:
+  # ${string:index:1} yields a CHARACTER while ${#string} counts CHARACTERS, so
+  # a multi-byte character both mis-encodes AND shortens the loop. Measured:
+  # uri_encode "cafe<acute>" returns `caf%C3` -- the second UTF-8 byte is not
+  # emitted at all, so the value is silently TRUNCATED, not merely wrong. That
+  # is unreachable today because
+  # the guard below refuses non-ASCII outright, and it is pinned by a test so it
+  # cannot surface quietly later. When CHAOS-4469 lifts the guard, the fix is to
+  # iterate BYTES rather than characters -- run the whole loop under `LC_ALL=C`
+  # so both ${#string} and the substring operate on bytes -- not to widen this
+  # case statement.
   local string="$1" index char
   for (( index = 0; index < ${#string}; index++ )); do
     char="${string:index:1}"

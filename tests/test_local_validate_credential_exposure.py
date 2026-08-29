@@ -317,3 +317,34 @@ def test_supported_http_combinations_are_not_refused(tmp_path: Path) -> None:
         combined = result.stdout + result.stderr
         assert "only supported on port" not in combined, (env, combined)
         assert "may not contain" not in combined, (env, combined)
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+def test_non_ascii_credentials_are_refused_rather_than_mis_encoded(
+    tmp_path: Path,
+) -> None:
+    """Pin a known-wrong encoder path behind the guard that hides it.
+
+    `uri_encode` walks CHARACTERS while `${#string}` counts CHARACTERS, so a
+    multi-byte character both mis-encodes and shortens the loop: measured,
+    `uri_encode "caf\u00e9"` returns `caf%C3` — the second UTF-8 byte is never
+    emitted, so the credential is silently TRUNCATED rather than merely encoded
+    oddly. Unreachable today because the guard refuses non-ASCII first, which is
+    precisely why it would sit unnoticed. This test exists so that the day the
+    guard is lifted (CHAOS-4469) the latent bug fails loudly here instead of
+    corrupting a password.
+    """
+    result = _run_gate({"PATH": _stub_path(tmp_path), "CH_PASS": "caf\u00e9"})
+    combined = result.stdout + result.stderr
+    assert "may not contain" in combined, (
+        "non-ASCII must be refused while uri_encode still emits code points "
+        f"rather than UTF-8 bytes: {combined}"
+    )
+    # And the encoder is still broken, on purpose, until CHAOS-4469. Asserting
+    # the exact observed output rather than a vague "is wrong": if it ever
+    # becomes caf%C3%A9 the encoder was fixed, and the guard's non-ASCII clause
+    # and this assertion should be deleted together.
+    assert _uri_encode("caf\u00e9") == "caf%C3", (
+        "expected the known-truncating output; if this changed, uri_encode was "
+        "fixed — remove the guard's non-ASCII clause and this assertion"
+    )

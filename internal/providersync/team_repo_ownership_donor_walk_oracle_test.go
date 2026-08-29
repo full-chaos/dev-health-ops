@@ -264,7 +264,9 @@ func buildTeamRepoOwnershipDonorWalkOracleRow(
 	// NativeTeamKey field in this oracle's input shape at all), so this
 	// change is a pure simplification here: the extra projectToTeam[ref]
 	// re-lookup this test used to need is gone.
-	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam)
+	// CHAOS-4537 codex review P1 added a knownLinearTeamKeys param; nil here
+	// since no oracle case in this file exercises the Linear-only arm.
+	donorTeamID := buildDonorTeamIDResolver(byID, edges, projectToTeam, nil)
 	teamID, _ := donorTeamID(decoded.SourceWorkItemID)
 	row := teamRepoOwnershipDonorWalkOracleRow{}
 	if teamID != "" {

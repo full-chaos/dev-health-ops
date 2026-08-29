@@ -36,7 +36,7 @@ func TestDeriveTeamRepoOwnershipRedBeforeThisProducerExisted(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#42", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("expected 1 derived row, got %d: %+v", len(got), got)
@@ -57,7 +57,7 @@ func TestOwnProjectIDPath(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via own project_id, got %+v", got)
@@ -83,7 +83,7 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via dependency-donor walk, got %+v", got)
@@ -116,7 +116,7 @@ func TestNonResolvingOwnProjectIDFallsBackToDonorWalk(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via donor walk despite non-resolving own project_id, got %+v", got)
@@ -139,7 +139,7 @@ func TestBlockingRelationshipTypeNeverInherits(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected no inheritance through a blocking relationship, got %+v", got)
@@ -165,7 +165,7 @@ func TestLatestEdgeByLastSyncedWinsPerPair(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by", LastSynced: newer},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected the newer blocked_by edge to supersede the older relates_to edge, got %+v", got)
@@ -188,7 +188,7 @@ func TestExtkeyDependencyTargetResolvesCrossProvider(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via extkey resolution, got %+v", got)
@@ -211,7 +211,7 @@ func TestAmbiguousExtkeyDependencyTargetIsNeverGuessed(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected no inheritance through an ambiguous cross-provider key, got %+v", got)
@@ -237,7 +237,7 @@ func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	// "linear:PLAT-9" < "linear:ZETA-1" lexicographically -> team-platform wins.
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
@@ -271,7 +271,7 @@ func TestUnownedDonorNeverSuppressesAnOwnedDonor(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:ZETA-1", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via the owned donor, unowned donor must never suppress it, got %+v", got)
@@ -300,7 +300,7 @@ func TestPRInheritanceViaIssuePRLink(t *testing.T) {
 		{WorkItemID: "linear:PLAT-9", RepoID: "repo-b", PRNumber: 42},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-b" {
 		t.Fatalf("expected repo-b -> team-platform via work_graph_issue_pr, got %+v", got)
@@ -320,7 +320,7 @@ func TestConflictingTeamsForTheSameRepoAreNeverGuessed(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#2", RepoID: "repo-a", ProjectID: "proj-2"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected no rows for a repo claimed by two teams, got %+v", got)
@@ -343,7 +343,7 @@ func TestNonPrimaryProjectOwnershipStillResolvesGitLabShaped(t *testing.T) {
 		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via a lone non-primary candidate, got %+v", got)
@@ -363,7 +363,7 @@ func TestPrimaryClaimBeatsHigherSpecificityNonPrimaryClaim(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" {
 		t.Fatalf("expected the primary claim to win regardless of specificity, got %+v", got)
@@ -383,7 +383,7 @@ func TestTiedTopRankBetweenDifferentTeamsIsNeverGuessed(t *testing.T) {
 		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected no rows for a genuine tie between two teams, got %+v", got)
@@ -403,7 +403,7 @@ func TestDuplicateGenerationOfTheSameTeamsClaimIsNotAFalseTie(t *testing.T) {
 		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" {
 		t.Fatalf("expected repeated claims from the SAME team to resolve, not tie against themselves, got %+v", got)
@@ -418,7 +418,7 @@ func TestRepoWithNoOwnershipSignalContributesNoRow(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-unowned"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, nil)
 
 	if len(got) != 0 {
 		t.Fatalf("expected no rows, got %+v", got)
@@ -438,7 +438,7 @@ func TestMultipleReposForTheSameTeamAllResolve(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-b#1", RepoID: "repo-b", ProjectID: "proj-1"},
 	}
 
-	got := sortedDerivedRows(deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil))
+	got := sortedDerivedRows(deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil))
 
 	if len(got) != 2 {
 		t.Fatalf("expected 2 rows (repo-a, repo-b), got %+v", got)
@@ -464,7 +464,7 @@ func TestDerivedRowsUseTheInferredSpecificityConstant(t *testing.T) {
 		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
 	if len(got) != 1 || got[0].Specificity != teamRepoOwnershipInferredSpecificity {
 		t.Fatalf("expected specificity=%d, got %+v", teamRepoOwnershipInferredSpecificity, got)
@@ -520,13 +520,45 @@ func TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership(t *testing.T) {
 		},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	// CHAOS-4537 codex review P1: knownTeams is the org's current team
+	// catalog -- "CHAOS" must be present for the arm to trust NativeTeamKey.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via native_team_key own resolution, got %+v", got)
 	}
 	if got[0].ResolutionArm != TeamRepoOwnershipResolutionArmLinearTeamKey {
 		t.Fatalf("expected ResolutionArm=%q, got %q", TeamRepoOwnershipResolutionArmLinearTeamKey, got[0].ResolutionArm)
+	}
+}
+
+// TestLinearTeamKeyArmRejectsUnknownNativeTeamKey is the codex review
+// (round 2, P1, confirmed real) fix's own core proof: a Linear work item's
+// native_team_key must name a team CURRENTLY in the org's team catalog
+// (knownTeams) -- see TeamRepoOwnershipKnownTeam's doc comment for the
+// established, cross-language precedent this mirrors
+// (compute_work_items.py's `_native_team_candidate`; this repo's own Go port,
+// github_work_items_derivation_context.go's `nativeTeamCandidate`). Same
+// exact fixture as TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership
+// below EXCEPT knownTeams is empty -- "CHAOS" is not a validly-known team --
+// so the arm must resolve nothing, not mint phantom ownership for a stale,
+// renamed, or garbage key.
+func TestLinearTeamKeyArmRejectsUnknownNativeTeamKey(t *testing.T) {
+	workItems := []TeamRepoOwnershipWorkItem{
+		{
+			WorkItemID:    "linear:CHAOS-1",
+			Provider:      "linear",
+			RepoID:        "repo-a",
+			ProjectID:     "11111111-1111-4111-8111-111111111111",
+			NativeTeamKey: "CHAOS",
+		},
+	}
+
+	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, nil)
+
+	if len(got) != 0 {
+		t.Fatalf("expected 0 rows -- native_team_key names a team absent from knownTeams, never guessed, got %+v", got)
 	}
 }
 
@@ -559,7 +591,10 @@ func TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:CHAOS-1", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil)
+	// CHAOS-4537 codex review P1: knownTeams is the org's current team
+	// catalog -- "CHAOS" must be present for the donor's arm to resolve.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, knownTeams)
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via the donor walk's native_team_key resolution, got %+v", got)
@@ -603,7 +638,11 @@ func TestDirectProjectIDArmPreferredOverLinearTeamKeyArm(t *testing.T) {
 		},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	// CHAOS-4537 codex review P1: "CHAOS" IS a validly-known team here --
+	// proves the direct project_id arm wins on priority, not merely because
+	// the fallback arm's key validation happened to reject it.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
 
 	if len(got) != 1 || got[0].TeamID != "team-direct" {
 		t.Fatalf("expected repo-a -> team-direct via the direct project_id arm, got %+v", got)
@@ -636,7 +675,11 @@ func TestLinearTeamKeyArmNeverAppliesToNonLinearProviders(t *testing.T) {
 		},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	// CHAOS-4537 codex review P1: "CHAOS" IS a validly-known team here --
+	// proves the provider=="linear" gate blocks this regardless of key
+	// validity, not merely because the key itself would fail validation.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
 
 	if len(got) != 0 {
 		t.Fatalf("expected 0 rows -- a non-linear provider must never resolve via the linear_team_key arm, got %+v", got)
@@ -679,8 +722,11 @@ func TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam(t *te
 		ProjectID: "22222222-2222-4222-8222-222222222222", NativeTeamKey: "CHAOS",
 	}
 
-	forward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemA, itemB}, nil, nil)
-	backward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemB, itemA}, nil, nil)
+	// CHAOS-4537 codex review P1: knownTeams is the org's current team
+	// catalog -- "CHAOS" must be present for item B's arm to resolve.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	forward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemA, itemB}, nil, nil, knownTeams)
+	backward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemB, itemA}, nil, nil, knownTeams)
 
 	for _, got := range [][]DerivedTeamRepoOwnershipRow{forward, backward} {
 		if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
@@ -728,7 +774,10 @@ func TestLinearTeamKeyOwnResolutionWithEmptyProjectID(t *testing.T) {
 		},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil)
+	// CHAOS-4537 codex review P1: knownTeams is the org's current team
+	// catalog -- "CHAOS" must be present for the arm to resolve.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via native_team_key own resolution with an EMPTY project_id, got %+v", got)
@@ -780,7 +829,10 @@ func TestLinearTeamKeyResolvesViaPRInheritanceIssueLink(t *testing.T) {
 		{WorkItemID: "linear:CHAOS-3392", RepoID: "repo-a", PRNumber: 42},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks)
+	// CHAOS-4537 codex review P1: knownTeams is the org's current team
+	// catalog -- "CHAOS" must be present for the arm to resolve.
+	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, knownTeams)
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via PR-inheritance native_team_key resolution, got %+v", got)

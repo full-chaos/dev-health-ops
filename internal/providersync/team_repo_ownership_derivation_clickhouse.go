@@ -150,7 +150,20 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 		return 0, 0, false, nil, nil
 	}
 
-	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks)
+	// CHAOS-4537 codex review P1: the linear_team_key arm validates a Linear
+	// work item's native_team_key against the org's CURRENT team catalog
+	// before trusting it -- see TeamRepoOwnershipKnownTeam's doc comment.
+	// Loading zero known teams is never itself a "not ready" signal (unlike
+	// the guard above): it just means that one arm resolves nothing this
+	// cycle, same as an org with no team_project_ownership rows leaves the
+	// project_id arm resolving nothing -- never a reason to report the whole
+	// evaluation as not-ready or to skip other providers' resolution.
+	knownTeams, err := loadTeamRepoOwnershipKnownTeams(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, false, nil, err
+	}
+
+	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
@@ -289,6 +302,45 @@ WHERE org_id = ?`,
 			item.RepoID = repoID.String()
 		}
 		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// loadTeamRepoOwnershipKnownTeams loads this org's CURRENT team catalog
+// (CHAOS-4537 codex review, round 2, P1) -- deriveTeamRepoOwnership's
+// linear_team_key arm uses this to validate a Linear work item's
+// native_team_key before trusting it as a resolved team_id, exactly like
+// every other native-team resolution in this codebase (see
+// TeamRepoOwnershipKnownTeam's doc comment). GROUP BY + argMax on `is_active`
+// mirrors github_work_items_derivation_context.go's loadTeams -- the
+// established convention for reading `teams` here, since its
+// ReplacingMergeTree ORDER BY is `(id)` alone (no org_id), so a plain `FINAL`
+// filtered only by a WHERE clause is not itself a safe per-org collapse.
+// Scoped to provider='linear' since that is the only provider this
+// validation set is used for.
+func loadTeamRepoOwnershipKnownTeams(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]TeamRepoOwnershipKnownTeam, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, id, argMax(is_active, (updated_at, last_synced, is_active)) AS is_active
+FROM teams
+WHERE org_id = ? AND provider = 'linear'
+GROUP BY provider, id`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TeamRepoOwnershipKnownTeam
+	for rows.Next() {
+		var provider, id string
+		var isActive uint8
+		if err := rows.Scan(&provider, &id, &isActive); err != nil {
+			return nil, err
+		}
+		if isActive != 0 {
+			out = append(out, TeamRepoOwnershipKnownTeam{Provider: provider, ID: id})
+		}
 	}
 	return out, rows.Err()
 }

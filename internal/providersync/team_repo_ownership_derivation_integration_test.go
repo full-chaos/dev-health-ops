@@ -151,6 +151,9 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// CHAOS-4537 codex review P1: "CHAOS" must be a validly-known team
+	// (teams row) for the linear_team_key arm to trust NativeTeamKey.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", orgID+":linear:CHAOS", "team-WRONG-decoy", true, now)
 	// The Linear issue's OWN project_id is a raw Linear Project UUID -- never
 	// matches the ownership row above -- but native_team_key ("CHAOS") is now
@@ -212,6 +215,11 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipA
 
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// CHAOS-4537 codex review P1: "CHAOS" must be a validly-known team
+	// (teams row) for the linear_team_key arm to trust NativeTeamKey -- a
+	// SEPARATE table from team_project_ownership, which this test's premise
+	// (zero rows, any provider) is specifically about and stays true below.
+	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
 	// No seedTeamProjectOwnership call at all -- team_project_ownership has
 	// zero rows for this org, of any provider.
 	seedWorkItemWithNativeTeamKey(
@@ -241,6 +249,43 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipA
 	if !ok || row.teamID != "CHAOS" {
 		t.Fatalf("expected acme/linear-repo -> CHAOS via native_team_key with zero team_project_ownership rows, got %+v", got)
 	}
+}
+
+// TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey is codex review
+// (round 2, P1, confirmed real) fix's own red-first proof against the real
+// ClickHouse read path: identical fixture to the sibling test above EXCEPT
+// no seedLinearTeam call at all -- "CHAOS" never appears in `teams` for this
+// org. The linear_team_key arm must resolve nothing rather than mint phantom
+// ownership for a native_team_key that names no team currently in the org's
+// catalog -- see TeamRepoOwnershipKnownTeam's doc comment.
+func TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-linear-team-key-unknown-team-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// No seedLinearTeam call -- "CHAOS" is not a known team for this org.
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		"", "CHAOS", now,
+	)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, _, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("expected 0 rows written -- native_team_key names a team absent from this org's catalog, never guessed, got %d", written)
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted, got %d", retracted)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 0 {
+		t.Fatalf("expected armCounts[linear_team_key] = 0, got %d (%+v)", got, armCounts)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
 }
 
 // TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap
@@ -607,6 +652,30 @@ func seedTeamRepoOwnershipRepos(t *testing.T, ctx context.Context, conn driver.C
 	}
 	if err := batch.Send(); err != nil {
 		t.Fatalf("send repos batch: %v", err)
+	}
+}
+
+// seedLinearTeam inserts a `teams` row for a Linear team (CHAOS-4537 codex
+// review, round 2, P1): loadTeamRepoOwnershipKnownTeams reads this table to
+// validate a Linear work item's native_team_key before the linear_team_key
+// arm trusts it -- see TeamRepoOwnershipKnownTeam's doc comment. Column
+// order/shape mirrors linearReferenceTeamsInsert
+// (linear_reference_catalog_effects_clickhouse.go).
+func seedLinearTeam(t *testing.T, ctx context.Context, conn driver.Conn, orgID, teamKey string, now time.Time) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`)
+	if err != nil {
+		t.Fatalf("prepare teams batch: %v", err)
+	}
+	if err := batch.Append(
+		teamKey, uuid.New(), teamKey, (*string)(nil),
+		[]string{}, []string{}, []string{}, []string{},
+		uint8(1), now, orgID, "linear", &teamKey, (*string)(nil),
+	); err != nil {
+		t.Fatalf("append teams row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send teams batch: %v", err)
 	}
 }
 

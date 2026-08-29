@@ -114,6 +114,28 @@ type teamRepoOwnershipProjectRef struct {
 	ProjectID string
 }
 
+// TeamRepoOwnershipKnownTeam is one already-synced teams row for this org
+// (CHAOS-4537 codex review, round 2, P1, confirmed real): the linear_team_key
+// arm must validate a Linear work item's native_team_key against the org's
+// CURRENT team catalog before trusting it as a resolved team_id, exactly like
+// every other native-team resolution in this codebase -- the established
+// contract this arm had silently diverged from. Mirrors
+// compute_work_items.py's `_native_team_candidate`/`build_project_key_resolver`
+// (docs/contribute/architecture/team-attribution.md's "native_team" row,
+// rank 0: "WorkItem.native_team_key -> teams") and this repo's own Go port,
+// github_work_items_derivation_context.go's `nativeTeamCandidate`/
+// `projectKeyTeams`, which build the identical "is this key currently a
+// team's own id (or one of its project_keys)" membership set from `teams`
+// before trusting a native_team_key column. Without this check, a stale,
+// renamed, or garbage native_team_key value on an already-synced work item
+// (the column reflects whatever was true AT SYNC TIME, not necessarily the
+// team catalog's current state) would mint phantom team_repo_ownership for a
+// team that no longer exists in this org.
+type TeamRepoOwnershipKnownTeam struct {
+	Provider string
+	ID       string
+}
+
 // TeamRepoOwnershipWorkItem is one already-synced work_items row for this
 // org (any provider). RepoID is empty for a tracker item with no repo
 // context (e.g. a plain Jira story); ProjectID is empty for a repo-bearing
@@ -293,8 +315,18 @@ func deriveTeamRepoOwnership(
 	workItems []TeamRepoOwnershipWorkItem,
 	dependencyEdges []TeamRepoOwnershipDependencyEdge,
 	issuePRLinks []TeamRepoOwnershipIssuePRLink,
+	knownTeams []TeamRepoOwnershipKnownTeam,
 ) []DerivedTeamRepoOwnershipRow {
 	projectToTeam := resolveProjectToTeam(projectLinks)
+	// CHAOS-4537 codex review P1: the linear_team_key arm below only trusts
+	// a native_team_key value that names a team CURRENTLY in this set --
+	// see TeamRepoOwnershipKnownTeam's doc comment.
+	knownLinearTeamKeys := make(map[string]bool, len(knownTeams))
+	for _, team := range knownTeams {
+		if team.Provider == "linear" && team.ID != "" {
+			knownLinearTeamKeys[team.ID] = true
+		}
+	}
 	// CHAOS-4537: no early return on len(projectToTeam) == 0 any more -- the
 	// linear_team_key arm below resolves straight from a Linear work item's
 	// own NativeTeamKey field and needs no team_project_ownership row at all,
@@ -310,7 +342,7 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
-	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam)
+	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys)
 
 	repoToTeam := map[string]string{}
 	repoArm := map[string]string{}
@@ -385,15 +417,22 @@ func deriveTeamRepoOwnership(
 // provider today, and for a future project-UUID-keyed Linear ownership row
 // -- see TeamRepoOwnershipWorkItem's doc comment on FIX SHAPE case (2));
 // only if that does not resolve, and only for a Linear work item carrying a
-// native_team_key, fall back to NativeTeamKey AS the resolved team_id
-// directly -- no team_project_ownership lookup for this arm any more (see
+// native_team_key that names a team CURRENTLY in knownLinearTeamKeys, fall
+// back to NativeTeamKey AS the resolved team_id directly -- no
+// team_project_ownership lookup for this arm any more (see
 // TeamRepoOwnershipWorkItem's doc comment for why that indirection was safe
 // to remove: the ownership writer's team-key-shaped row always stamped
-// team_id to this exact same value). Never guesses between the two arms:
-// the moment either resolves, the other is not consulted.
+// team_id to this exact same value). The knownLinearTeamKeys check (CHAOS-4537
+// codex review, round 2, P1) is NOT optional: without it, a stale, renamed,
+// or garbage native_team_key value would mint phantom team_repo_ownership
+// for a team that no longer exists -- see TeamRepoOwnershipKnownTeam's doc
+// comment for the established, cross-language precedent this mirrors. Never
+// guesses between the two arms: the moment either resolves, the other is not
+// consulted.
 func resolveWorkItemTeamID(
 	item TeamRepoOwnershipWorkItem,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
+	knownLinearTeamKeys map[string]bool,
 ) (string, string, bool) {
 	if item.ProjectID != "" {
 		ref := teamRepoOwnershipProjectRef{Provider: item.Provider, ProjectID: item.ProjectID}
@@ -401,7 +440,7 @@ func resolveWorkItemTeamID(
 			return teamID, TeamRepoOwnershipResolutionArmProjectID, true
 		}
 	}
-	if item.Provider == "linear" && item.NativeTeamKey != "" {
+	if item.Provider == "linear" && item.NativeTeamKey != "" && knownLinearTeamKeys[item.NativeTeamKey] {
 		return item.NativeTeamKey, TeamRepoOwnershipResolutionArmLinearTeamKey, true
 	}
 	return "", "", false
@@ -494,6 +533,7 @@ func buildDonorTeamIDResolver(
 	byID map[string]TeamRepoOwnershipWorkItem,
 	edges []TeamRepoOwnershipDependencyEdge,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
+	knownLinearTeamKeys map[string]bool,
 ) func(workItemID string) (string, string) {
 	keyIndex := buildIssueKeyIndex(byID)
 
@@ -539,7 +579,7 @@ func buildDonorTeamIDResolver(
 		if !ok {
 			continue
 		}
-		teamID, arm, resolves := resolveWorkItemTeamID(donor, projectToTeam)
+		teamID, arm, resolves := resolveWorkItemTeamID(donor, projectToTeam, knownLinearTeamKeys)
 		if !resolves {
 			continue
 		}
@@ -557,7 +597,7 @@ func buildDonorTeamIDResolver(
 
 	return func(workItemID string) (string, string) {
 		if item, ok := byID[workItemID]; ok {
-			if teamID, arm, resolves := resolveWorkItemTeamID(item, projectToTeam); resolves {
+			if teamID, arm, resolves := resolveWorkItemTeamID(item, projectToTeam, knownLinearTeamKeys); resolves {
 				return teamID, arm
 			}
 		}

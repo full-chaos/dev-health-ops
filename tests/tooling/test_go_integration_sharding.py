@@ -995,8 +995,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # per AGENTS.md's provider-matrix rule:
     # TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap.
     # 1248 -> 1249 top-level; 146 -> 147 integration-tagged.
-    assert len(expected_provider_tests) == 1249
-    assert len(expected_integration_tests) == 147
+    #
+    # Codex review round 2 on this PR (P1, confirmed real) found
+    # resolveWorkItemTeamID's linear_team_key arm unconditionally trusted a
+    # Linear work item's native_team_key with no validation against the org's
+    # CURRENT team catalog -- diverging from the established "native_team"
+    # resolution contract every other native-team lookup in this codebase
+    # follows (compute_work_items.py's _native_team_candidate;
+    # github_work_items_derivation_context.go's nativeTeamCandidate). Fixed
+    # by adding a knownTeams input (loaded from `teams`) and validating
+    # NativeTeamKey against it before trusting the value. Added 1 new
+    # ordinary top-level test in team_repo_ownership_derivation_test.go:
+    # TestLinearTeamKeyArmRejectsUnknownNativeTeamKey, and 1 new
+    # `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey.
+    # 1249 -> 1251 top-level; 147 -> 148 integration-tagged.
+    assert len(expected_provider_tests) == 1251
+    assert len(expected_integration_tests) == 148
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1012,7 +1028,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1249
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1251
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1073,7 +1089,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1249
+    assert len(selected_tests) == len(set(selected_tests)) == 1251
     assert set(selected_tests) == expected_tests
 
 

@@ -998,7 +998,7 @@ flowchart TD
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
     LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id directly -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
     TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
     WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
@@ -1112,7 +1112,8 @@ CHAOS-4530 deliberately KEPT the team-key-shaped `team_project_ownership` row (t
 (as it was then named) still reconstructed the `"{org_id}:linear:{team_key}"` identity and looked it
 up there. CHAOS-4537 removed that indirection: the renamed `resolveWorkItemTeamID`
 (`team_repo_ownership_derivation.go`) trusts a Linear work item's own `work_items.native_team_key`
-column **as the resolved `team_id` directly** — no `teamRepoOwnershipProjectRef` construction, no
+column **as the resolved `team_id` directly, once validated against the org's current team catalog**
+(see the codex round 2 paragraph below) — no `teamRepoOwnershipProjectRef` construction, no
 `team_project_ownership` lookup, for this arm. This was always a safe, value-preserving change: the
 ownership writer's team-key-shaped row's `team_id` column was always stamped to the team's own key
 (`linear_reference_catalog_route.go`'s "The MATCHING team_project_ownership row below" block,
@@ -1140,6 +1141,29 @@ synced, work-items not yet, a plausible transient partial-sync snapshot), procee
 as a genuine `inputsReady=true`, `derived=[]` evaluation and retract every previously-derived row for
 the org. That guard is unchanged, still in place; only the `projectLinks`-only guard above it was
 removed.
+
+**Codex review, round 2 (P1, confirmed real): `native_team_key` must be validated against the org's
+CURRENT team catalog, never trusted unconditionally.** The first version of this redirect trusted
+`item.NativeTeamKey` straight through with no check at all — a divergence from the established
+"native_team" resolution contract every OTHER native-team lookup in this codebase follows: this
+section's own §0.2 table (rank 0, `native_team`: `WorkItem.native_team_key -> teams`),
+`compute_work_items.py`'s `_native_team_candidate`/`build_project_key_resolver`, and this repo's own
+Go port for GitHub work items, `github_work_items_derivation_context.go`'s
+`nativeTeamCandidate`/`projectKeyTeams` — all validate a native-team-key column against a resolver
+built from the org's CURRENT `teams` rows before trusting it, precisely because `work_items` reflects
+whatever was true AT SYNC TIME, not necessarily the team catalog's current state (a team can be
+renamed or deleted in Linear without every work item that once carried its old key being re-synced).
+Without validation, a stale, renamed, or garbage `native_team_key` would mint phantom
+`team_repo_ownership` for a team that no longer exists. Fixed: `deriveTeamRepoOwnership` now takes a
+`knownTeams []TeamRepoOwnershipKnownTeam` parameter (loaded by
+`loadTeamRepoOwnershipKnownTeams`, `GROUP BY provider, id` + `argMax` on `is_active` — `teams`'
+`ReplacingMergeTree` `ORDER BY` is `(id)` alone, no `org_id`, so a plain `FINAL` is not itself a safe
+per-org collapse; this mirrors `github_work_items_derivation_context.go`'s `loadTeams`, the
+established convention for reading this table), and `resolveWorkItemTeamID`'s linear_team_key branch
+only trusts `NativeTeamKey` when it is a member of that set. Loading zero known teams is never itself
+an `inputsReady=false` signal (unlike the linkage-empty guard above) — it just means the arm resolves
+nothing that cycle, same as an org with no `team_project_ownership` rows leaves the `project_id` arm
+resolving nothing.
 
 The team-key-shaped `team_project_ownership` row itself is **still written** today
 (`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial

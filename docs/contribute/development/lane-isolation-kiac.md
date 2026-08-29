@@ -192,6 +192,17 @@ export ACR_TRIAL_NODEPORT_BASE=30500        # one base per lane; +10 for the nex
 "$ACR_WT/deploy/local/trial-data.sh" dsn --env          # DSNs for host-side tools
 ```
 
+**Use the newest COMPLETE set, and check which one you got.** A "complete" set is a
+directory holding *both* a `postgres-all-*.sql.gz` and a `clickhouse-default-*.zip`.
+This is not hygiene — a lane seeded from the older **20260817-192029** set fails
+three steps later at `go-worker-migrate` with
+`runtime grant posture gap role=domain gaps=["worker_instances: table does not exist"]`,
+while the same lane seeded from `20260823-220102` completes in 3 s. The mechanism
+is not isolated (neither dump contains that table); tracked as **CHAOS-4463**.
+Note that older loose files can sit at the top level of `backups/` beside newer
+timestamped subdirectories, so a naive "newest dump" glob picks the wrong one —
+which is exactly the bug `lane.sh` had.
+
 NodePorts are **cluster**-scoped, not namespace-scoped, so every lane needs its
 own `ACR_TRIAL_NODEPORT_BASE`. The base must be a multiple of 10 inside
 30000–30990: each lane uses four consecutive ports, and the 10-port stride is

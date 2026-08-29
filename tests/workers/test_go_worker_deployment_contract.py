@@ -367,6 +367,10 @@ def test_go_worker_groups_are_disabled_future_topology() -> None:
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [
+            # CHAOS-4530: dev-health-workerctl providersync retire-linear-
+            # pseudo-projects reads ClickHouse directly (the operator CLI's
+            # first ClickHouse-touching verb), so it now requires the DSN too.
+            "CLICKHOUSE_URI",
             "COORDINATOR_DATABASE_URI",
             "POSTGRES_URI",
             "WORKER_DATABASE_URI",

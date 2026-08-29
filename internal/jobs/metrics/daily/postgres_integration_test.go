@@ -1043,7 +1043,7 @@ func createDailyTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
 CREATE TABLE daily_metrics_runs (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation varchar(64) NOT NULL,
+ id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation text NOT NULL,
  status varchar(16) NOT NULL, finalization_status varchar(16) NOT NULL, finalization_claim_token uuid NULL,
  finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,

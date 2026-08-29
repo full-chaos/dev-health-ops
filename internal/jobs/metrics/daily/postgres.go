@@ -944,7 +944,26 @@ WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); e
 		return ErrUnavailable
 	}
 	if incomplete == 0 {
-		if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
+		// CHAOS-4459 (codex review, P1): a run RedrivePartitionsForRange reset
+		// already consumed the ordinary "metrics.daily_finalize:"+run.ID
+		// outbox key once, the first time this run finalized, before it was
+		// ever reset. PublishFinalizeTx's insert would be a silent
+		// ON-CONFLICT-DO-NOTHING no-op here, leaving the run stuck
+		// status='running' forever -- the exact CHAOS-4389 stranding shape,
+		// self-inflicted. Detect a recompute-reset run by its generation
+		// prefix and publish under a fresh redrive-scoped key instead, via
+		// an optional capability (a type assertion, not a Publisher
+		// interface change) so every existing Publisher fake/implementer is
+		// unaffected.
+		if nonce, ok := recomputeNonce(run.Generation); ok {
+			redrivePublisher, canRedrive := publisher.(redriveFinalizePublisher)
+			if !canRedrive {
+				return ErrUnavailable
+			}
+			if err := redrivePublisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
+				return ErrUnavailable
+			}
+		} else if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
 			return ErrUnavailable
 		}
 	}

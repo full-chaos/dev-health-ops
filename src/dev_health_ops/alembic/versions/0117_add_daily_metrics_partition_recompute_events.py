@@ -46,6 +46,21 @@ column is ever updated after insert. ``actor`` is a closed, bounded set
 (today just ``'partition-recompute'``) rather than free text, matching
 0116's own ``actor`` column; ``reason`` carries the operator's own
 ``--review-evidence`` text verbatim.
+
+Also widens ``daily_metrics_runs.generation`` from ``varchar(64)`` to
+``text`` (codex review, P2, on PR #1990). The reset this ticket's verb
+performs needs a genuinely fresh compatibility-bridge execution-ledger
+identity (``uuid5(run_id, family, generation, scope_digest)``), which means
+``generation`` itself must change -- but Python's
+``_LATEST_DAILY_METRICS_RUN_SQL`` (``workers/recommendations_tasks.py``)
+finds a day's AUTHORITATIVE run by ``generation LIKE
+'fixed-schedule:daily_metrics_fanout:%'``, a classification prefix a fresh
+value must still match. ``PostgresStore.redriveOnePartitionsForRange``
+therefore APPENDS rather than replaces:
+``<original generation>#recompute:<nonce>``. The widest original value
+(the fan-out prefix, ~57 bytes) plus the appended suffix (``#recompute:`` +
+a 36-byte UUID) does not fit ``varchar(64)`` -- confirmed by direct
+arithmetic, not assumed.
 """
 
 from __future__ import annotations
@@ -117,7 +132,28 @@ def upgrade() -> None:
     )
     op.create_index("ix_dpre_run_id", _TABLE, ["run_id"])
 
+    # See the module doc comment (codex review, P2): a partition-recompute
+    # reset appends "#recompute:<nonce>" to the run's existing generation
+    # rather than replacing it, so classification prefixes
+    # (_LATEST_DAILY_METRICS_RUN_SQL's `LIKE 'fixed-schedule:...'`) keep
+    # matching. The widest original value plus that suffix does not fit
+    # varchar(64).
+    op.alter_column(
+        "daily_metrics_runs",
+        "generation",
+        type_=sa.Text(),
+        existing_type=sa.String(length=64),
+        existing_nullable=False,
+    )
+
 
 def downgrade() -> None:
+    op.alter_column(
+        "daily_metrics_runs",
+        "generation",
+        type_=sa.String(length=64),
+        existing_type=sa.Text(),
+        existing_nullable=False,
+    )
     op.drop_index("ix_dpre_run_id", table_name=_TABLE)
     op.drop_table(_TABLE)

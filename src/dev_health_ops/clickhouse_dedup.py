@@ -74,6 +74,13 @@ _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {
     "incident_metrics_daily": ("org_id", "repo_id", "day"),
     "testops_release_confidence": ("org_id", "repo_id", "day"),
     "testops_pipeline_stability": ("org_id", "repo_id", "day"),
+    # CHAOS-4459 (codex review, P1): file_metrics_daily's hotspot/churn
+    # readers (api/queries/heatmap.py) summed the raw table with no dedup at
+    # all -- a genuine gap, not just a missing registry entry (unlike the
+    # CHAOS-4246 batch above, whose readers already hand-rolled argMax).
+    # Natural key includes path: file_metrics_daily's own sorting key is
+    # (org_id, repo_id, day, path) (migration 027).
+    "file_metrics_daily": ("org_id", "repo_id", "day", "path"),
 }
 
 

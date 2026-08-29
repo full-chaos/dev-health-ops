@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,7 +39,8 @@ func TestRedrivePartitionsForRangeResetsAndRedrivesAnAlreadySucceededDay(t *test
 	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
 	if _, err := pool.Exec(ctx, `
 UPDATE daily_metrics_runs
-SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1,
+    generation = 'fixed-schedule:daily_metrics_fanout:2026-08-20T01:00:00Z'
 WHERE id = $2::uuid`, now, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +112,17 @@ FROM daily_metrics_partition_recompute_events WHERE run_id = $1::uuid`, runID).
 	if generationAfterReset == originalGeneration {
 		t.Fatalf("generation after reset = %q, want a value different from the original %q", generationAfterReset, originalGeneration)
 	}
+	// CHAOS-4459 (codex review, P2): the reset must APPEND, not replace --
+	// the fixed-schedule classification prefix _LATEST_DAILY_METRICS_RUN_SQL
+	// keys off (workers/recommendations_tasks.py) must still match, or the
+	// recommendations readiness gate sees no authoritative row at all while
+	// this recompute is in flight.
+	if !strings.HasPrefix(generationAfterReset, "fixed-schedule:daily_metrics_fanout:") {
+		t.Fatalf("generation after reset = %q, want it to still start with the fan-out classification prefix", generationAfterReset)
+	}
+	if !strings.HasPrefix(generationAfterReset, originalGeneration+recomputeGenerationMarker) {
+		t.Fatalf("generation after reset = %q, want it to extend the original %q with %q", generationAfterReset, originalGeneration, recomputeGenerationMarker)
+	}
 
 	var redriveOutboxCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_partition' AND dedupe_key = $1`,
@@ -140,6 +153,33 @@ FROM daily_metrics_partition_recompute_events WHERE run_id = $1::uuid`, runID).
 	if partitionStatus != "succeeded" {
 		t.Fatalf("partition status after CompletePartition = %q, want succeeded", partitionStatus)
 	}
+
+	// CHAOS-4459 (codex review, P1): CompletePartition must publish finalize
+	// under a FRESH redrive-scoped key here, not the run's original
+	// "metrics.daily_finalize:"+runID key -- that key was already consumed
+	// the first time this run finalized (before the reset), so an ordinary
+	// PublishFinalizeTx insert would be a silent outbox no-op, leaving the
+	// run stuck status='running' forever. Assert the fresh outbox row
+	// actually landed before simulating the worker's own claim (which reads
+	// daily_metrics_runs.finalization_status directly and would not, on its
+	// own, prove the outbox side ever got a job to dispatch in production).
+	var finalizeRedriveOutboxCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_finalize' AND dedupe_key = $1`,
+		"metrics.daily_finalize:redrive:"+runID+":part-nonce-1").Scan(&finalizeRedriveOutboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if finalizeRedriveOutboxCount != 1 {
+		t.Fatalf("redrive finalize outbox rows after CompletePartition = %d, want 1 (fresh key, not the original permanently-deduped one)", finalizeRedriveOutboxCount)
+	}
+	var originalFinalizeOutboxCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind = 'metrics.daily_finalize' AND dedupe_key = $1`,
+		"metrics.daily_finalize:"+runID).Scan(&originalFinalizeOutboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if originalFinalizeOutboxCount != 0 {
+		t.Fatalf("original (pre-reset) finalize outbox rows = %d, want 0 (CompletePartition must not fall back to the permanently-deduped key for a recompute-reset run)", originalFinalizeOutboxCount)
+	}
+
 	// CompletePartition only completes the partition and publishes the
 	// finalize job -- daily_metrics_runs.status reaches 'succeeded' only
 	// once finalize itself completes (CompleteFinalize). Simulate that here
@@ -167,6 +207,54 @@ FROM daily_metrics_partition_recompute_events WHERE run_id = $1::uuid`, runID).
 	}
 	if provenanceRowCount != 2 {
 		t.Fatalf("provenance rows after 2 invocations = %d, want 2 (append-only)", provenanceRowCount)
+	}
+}
+
+// TestRedrivePartitionsForRangeRefusesANonFanoutSucceededRun proves the
+// codex review P1 fix: a day whose only succeeded run is a post-sync
+// generation (a partial, sync-scoped repo set, not the org's full set) is
+// refused -- reported skipped_ineligible -- rather than silently redriven,
+// which would report the whole day "redriven" while leaving every repo
+// outside that sync's scope still wrong.
+func TestRedrivePartitionsForRangeRefusesANonFanoutSucceededRun(t *testing.T) {
+	ctx := context.Background()
+	pool, store, publisher := newFinalizeRedriveTestStack(t)
+
+	const (
+		orgID       = "00000000-0000-4000-8000-000000003501"
+		runID       = "00000000-0000-4000-8000-000000003502"
+		partitionID = "00000000-0000-4000-8000-000000003503"
+	)
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	targetDay := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	// insertFinalizeTestRun's own default generation is 'post-sync:finalize-gap'
+	// -- left as-is, simulating a succeeded post-sync run with no fan-out
+	// run for the same day.
+	insertFinalizeTestRun(t, ctx, pool, runID, orgID, targetDay, now)
+	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := store.RedrivePartitionsForRange(ctx, publisher, orgID, targetDay, targetDay, "part-nonce-6", "repo_user_commit", testPartitionRecomputeReason, false)
+	if err != nil {
+		t.Fatalf("RedrivePartitionsForRange: %v", err)
+	}
+	if len(outcome.Days) != 1 || outcome.Days[0].Outcome != "skipped_ineligible" || outcome.Days[0].RunID != "" {
+		t.Fatalf("outcome = %#v, want skipped_ineligible with no run id for a post-sync-only succeeded day", outcome)
+	}
+	assertFinalizeTestRunStatus(t, ctx, pool, runID, "succeeded")
+	var provenanceRowCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM daily_metrics_partition_recompute_events WHERE run_id = $1::uuid`, runID).
+		Scan(&provenanceRowCount); err != nil {
+		t.Fatal(err)
+	}
+	if provenanceRowCount != 0 {
+		t.Fatalf("provenance rows for a refused non-fan-out run = %d, want 0", provenanceRowCount)
 	}
 }
 
@@ -261,7 +349,8 @@ func TestRedrivePartitionsForRangeDryRunWritesNothing(t *testing.T) {
 	insertFinalizeTestPartition(t, ctx, pool, partitionID, runID, 0, "succeeded", now)
 	if _, err := pool.Exec(ctx, `
 UPDATE daily_metrics_runs
-SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1,
+    generation = 'fixed-schedule:daily_metrics_fanout:2026-08-20T01:00:00Z'
 WHERE id = $2::uuid`, now, runID); err != nil {
 		t.Fatal(err)
 	}

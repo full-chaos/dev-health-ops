@@ -347,22 +347,59 @@ def test_probe_harness_hook_is_reachable_and_documented() -> None:
 _FUNCTION_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
 
 
+def _same_line_close(text: str, open_brace: int, line_end: int) -> int:
+    """If the function whose `{` is at `open_brace` also closes on that
+    SAME line (a `name() { ...; }` one-liner, e.g. `c_red`), return the
+    index of that closing `}`; otherwise -1.
+
+    Codex review round 4, P2: the original version of `_all_function_bodies`
+    only ever looked for an unindented `\\n}\\n`, so a one-line helper --
+    this script already has several, e.g. `c_red() { printf ...; }` -- has
+    no such sequence and was silently DROPPED from `bodies` entirely,
+    never entering the reachable-call-path closure below even when a
+    reachable function genuinely calls it (as `_metrics_diff_relevant_check`
+    calls `c_red` for its own WARN messages). A future refactor moving the
+    vulnerable `<<<` into a one-line helper would pass this guard clean.
+
+    Uses a brace-DEPTH count rather than a bare rightmost/leftmost `}`
+    search, so a `${...}` parameter expansion on the same line (whose `}`
+    would otherwise look like a false close) is not mistaken for the
+    function's own end: each `${` contributes a balanced +1/-1 pair that
+    nets to zero, so only the function's OWN closing brace brings the
+    depth back to 0.
+    """
+
+    depth = 1
+    i = open_brace + 1
+    while i < line_end:
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
 def _all_function_bodies(text: str) -> dict[str, str]:
     """Every top-level-indented `name() { ... }` function in the script, as
     {name: body}. Used to compute a real reachable-call-path closure below,
     not a hand-picked pair of function names.
 
-    Bounds each function's closing `\\n}\\n` search to end at the START of
-    the NEXT `^name() {`-shaped match (or EOF for the last one), and skips
-    (rather than crashes on) any match with no unindented close in that
-    span. This file has exactly one such case: a nested `cleanup_scratch()
-    {` REDEFINITION inside the `--lock-probe-exit-order` test-only harness
-    block, whose closing brace is indented to match its enclosing `if`
-    (`  }`, not `}`) because it is a local override for that one probe, not
-    a real top-level helper. Skipping it is correct, not a hack: it plays
-    no part in `metrics_readback_diff_relevant`'s reachable call path, and
-    bounding the search keeps a skip from ever swallowing a LATER real
-    function's body by accident.
+    Tries a same-line close first (`_same_line_close`, for one-line helpers
+    like `c_red`), then falls back to bounding the closing `\\n}\\n` search
+    to end at the START of the NEXT `^name() {`-shaped match (or EOF for
+    the last one), and skips (rather than crashes on) any match with
+    neither. This file has exactly one such skipped case: a nested
+    `cleanup_scratch() {` REDEFINITION inside the `--lock-probe-exit-order`
+    test-only harness block, whose closing brace is indented to match its
+    enclosing `if` (`  }`, not `}`) because it is a local override for
+    that one probe, not a real top-level helper. Skipping it is correct,
+    not a hack: it plays no part in `metrics_readback_diff_relevant`'s
+    reachable call path, and bounding the multi-line search keeps a skip
+    from ever swallowing a LATER real function's body by accident.
     """
 
     matches = list(_FUNCTION_DEF.finditer(text))
@@ -371,9 +408,17 @@ def _all_function_bodies(text: str) -> dict[str, str]:
         name = match.group(1)
         start = match.start()
         bound = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        end = text.find("\n}\n", start, bound)
-        if end == -1:
-            continue
+        open_brace = match.end() - 1
+        line_end = text.find("\n", start, bound)
+        if line_end == -1:
+            line_end = bound
+        same_line_close = _same_line_close(text, open_brace, line_end)
+        if same_line_close != -1:
+            end = same_line_close + 1
+        else:
+            end = text.find("\n}\n", start, bound)
+            if end == -1:
+                continue
         bodies[name] = text[start:end]
     return bodies
 
@@ -469,20 +514,41 @@ def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> Non
     reachable from `metrics_readback_diff_relevant` and scans all of them,
     so a future third (or fourth, or fifth) helper is covered automatically
     the moment it is called from this path, with no test edit required.
+
+    Codex review round 4, P2: the round-3 closure had a concrete blind
+    spot for ONE-LINE shell functions -- `_all_function_bodies` could only
+    find a multi-line `\n}\n` close, so a one-liner like `c_red() { printf
+    ...; }` was silently dropped from the closure entirely, even though
+    `_metrics_diff_relevant_check` genuinely calls it (`"$(c_red 'WARN:')"`,
+    twice, for its own error messages). A future refactor moving the
+    vulnerable `<<<` into a one-line helper would have passed this guard
+    clean. `_same_line_close` fixes this with a brace-depth count, so
+    `c_red` (and any other one-line helper reachable from this path) is
+    now genuinely present in the closure below -- asserted explicitly, not
+    just assumed.
     """
 
     text = SCRIPT.read_text(encoding="utf-8")
     reachable = _reachable_call_path_bodies(text, "metrics_readback_diff_relevant")
 
-    # Sanity check on the closure itself: it must have actually found BOTH
-    # functions this fix touches, or the closure computation is broken and
-    # everything below would vacuously pass by scanning too little.
+    # Sanity check on the closure itself: it must have actually found
+    # these functions, or the closure computation is broken and everything
+    # below would vacuously pass by scanning too little.
     assert "metrics_readback_diff_relevant" in reachable
     assert "_metrics_diff_relevant_check" in reachable, (
         "the reachable-call-path closure from metrics_readback_diff_relevant"
         " did not find _metrics_diff_relevant_check -- either the call was"
         " removed, or the closure computation in this test needs fixing;"
         " either way this test cannot currently verify the real fix"
+    )
+    assert "c_red" in reachable, (
+        "the reachable-call-path closure did not find c_red -- it is a"
+        " genuine one-line function (`c_red() { printf ...; }`) that"
+        " _metrics_diff_relevant_check calls directly. If this assertion"
+        " fails, _all_function_bodies has regressed to silently dropping"
+        " one-line helpers again (codex review round 4, P2), and the <<<"
+        " scan below is once more running on an incomplete closure"
+        " without any visible sign of it"
     )
 
     for name, body in sorted(reachable.items()):

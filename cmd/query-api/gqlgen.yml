@@ -32,14 +32,22 @@ resolver:
 omit_slice_element_pointers: true
 
 # Custom scalars: the canonical SDL declares three (`scalar Date`,
-# `scalar DateTime`, `scalar JSON`). Mapped to gqlgen's built-in
-# marshalers as a Wave-0 placeholder (nothing here is mounted -- see the
-# package doc comment above), but two are KNOWN INCORRECT, not just
-# unverified, and must be replaced with custom marshalers before any
-# resolver returning these types is ported (codex review, 2026-08-27):
-#   - `Date`: graphql.Time's RFC3339Nano parser rejects a canonical date
-#     value like "2026-08-27" (no time component), and its marshaler
-#     emits a full timestamp, not a date.
+# `scalar DateTime`, `scalar JSON`).
+#
+# `Date` (CHAOS-4368 Wave 2, `reviewEdges` -- `sinceDate`/`untilDate`/`day`
+# are all `Date`-typed): FIXED in this PR, bound to
+# `internal/graphqldate.Date`, a real custom marshaler -- see that
+# package's doc comment for why graphql.Time (the Wave-0 placeholder) was
+# KNOWN INCORRECT for this scalar specifically (RFC3339Nano parser rejects
+# a bare "2026-08-27"; marshaler emitted a full timestamp, not a date) and
+# what confirms "YYYY-MM-DD" as the actual Python wire format
+# (Strawberry's built-in Date scalar, `date.isoformat()`).
+#
+# `DateTime` and `JSON` are UNCHANGED, still Wave-0 placeholders, and are
+# STILL KNOWN INCORRECT for the same reasons as before (codex review,
+# 2026-08-27) -- `reviewEdges` uses neither, so this port does not need to
+# fix them; a later wave that ports a resolver returning either must do so
+# there:
 #   - `DateTime`: graphql.Time's marshaler can format Python's UTC
 #     isoformat() `+00:00` offset as Go's `Z` instead -- a client-visible
 #     serialization difference the comparator (CHAOS-4381 rule 2/3) would
@@ -56,7 +64,7 @@ models:
       - github.com/99designs/gqlgen/graphql.Time
   Date:
     model:
-      - github.com/99designs/gqlgen/graphql.Time
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate.Date
   JSON:
     model:
       - github.com/99designs/gqlgen/graphql.Map

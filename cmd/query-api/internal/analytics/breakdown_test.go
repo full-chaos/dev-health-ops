@@ -178,3 +178,31 @@ func TestExecuteBreakdown_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 		t.Fatalf("expected nil items on mid-stream failure, got %d partial items: %+v", len(result.Items), result.Items)
 	}
 }
+
+// TestExecuteBreakdownRaw_MidStreamFailureDiscardsPartialRows tests
+// executeBreakdownRaw DIRECTLY, not through ExecuteBreakdown --
+// ExecuteBreakdown has its OWN unconditional discard on error ("return
+// model.BreakdownResult{}, err"), which masks a regression in
+// executeBreakdownRaw's own guard from any test that only goes through
+// ExecuteBreakdown (empirically confirmed the same way as the
+// queryNodes/queryEdges gap in flowmatrix_test.go).
+func TestExecuteBreakdownRaw_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeSingleClient{
+		response: &fakeRowScanner{
+			rows: [][]any{
+				{"repo-a", 10.0},
+				{"repo-b", 5.0},
+			},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	q := compiledQuery{sql: "SELECT ..."}
+	rows, err := executeBreakdownRaw(context.Background(), client, q)
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if rows != nil {
+		t.Fatalf("expected nil rows on mid-stream failure, got %d partial rows: %+v", len(rows), rows)
+	}
+}

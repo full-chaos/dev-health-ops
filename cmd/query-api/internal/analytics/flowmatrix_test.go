@@ -471,3 +471,48 @@ func TestExecuteFlowMatrix_MidStreamEdgesFailureDiscardsPartialRows(t *testing.T
 		t.Fatalf("expected nil edges on mid-stream failure, got %d partial rows: %+v", len(edges), edges)
 	}
 }
+
+// TestQueryNodes_MidStreamFailureDiscardsPartialRows tests queryNodes
+// DIRECTLY, not through ExecuteFlowMatrix -- ExecuteFlowMatrix has its
+// OWN unconditional discard on nodesErr/edgesErr ("return nil, nil,
+// err"), which masks a regression in queryNodes' own guard from any test
+// that only goes through ExecuteFlowMatrix (empirically confirmed: with
+// queryNodes' guard removed, the ExecuteFlowMatrix-level test still
+// passed, because the outer function discards regardless of what
+// queryNodes returns). This test exercises the actual scanning function,
+// closing that gap.
+func TestQueryNodes_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeClient{
+		nodesResponse: &fakeRowScanner{
+			rows:     [][]any{{"TEAM", "team-a", uint64(7)}, {"TEAM", "team-b", uint64(3)}},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	q := compiledQuery{sql: flowMatrixTeamNodesTemplate}
+	nodes, err := queryNodes(context.Background(), client, q)
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if nodes != nil {
+		t.Fatalf("expected nil nodes on mid-stream failure, got %d partial rows: %+v", len(nodes), nodes)
+	}
+}
+
+func TestQueryEdges_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeClient{
+		edgesResponse: &fakeRowScanner{
+			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", uint64(2)}, {"TEAM", "TEAM", "team-b", "team-c", uint64(1)}},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	q := compiledQuery{sql: flowMatrixTeamEdgesTemplate}
+	edges, err := queryEdges(context.Background(), client, q)
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if edges != nil {
+		t.Fatalf("expected nil edges on mid-stream failure, got %d partial rows: %+v", len(edges), edges)
+	}
+}

@@ -19,15 +19,29 @@ type fakeSingleClient struct {
 	err       error
 	statement string
 	bindings  []clickhouse.Binding
+	calls     int
 }
 
 func (f *fakeSingleClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	f.statement = statement
 	f.bindings = bindings
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.response, nil
+	if f.response == nil {
+		return nil, errors.New("fakeSingleClient: no response configured")
+	}
+	// Return a FRESH scanner each call, not the same stateful pointer --
+	// fakeRowScanner's cursor advances during iteration and never resets,
+	// so a caller that issues more than one query against this fake (e.g.
+	// ResolveAnalyticsRepoFilters, which queries the repos table once per
+	// filter field) would silently see an already-exhausted scanner on
+	// its second call and read zero rows -- a fake-only artifact a real
+	// ClickHouse connection would never produce (this exact bug was
+	// caught by TestResolveAnalyticsRepoFilters_RewritesRepoScopeAndWhatRepos
+	// failing under `go test -race ./...`, not assumed).
+	return &fakeRowScanner{rows: f.response.rows, err: f.response.err, errAfter: f.response.errAfter}, nil
 }
 
 func TestCompileTimeseries_RejectsInvestment(t *testing.T) {

@@ -78,10 +78,27 @@ def test_review_edges_daily_source_is_deduplicated_on_read() -> None:
     )
     assert "LIMIT 1 BY" in source
     assert "computed_at DESC" in source
-    # No org_id column on this table (migration 004); natural key matches
-    # its ORDER BY (repo_id, reviewer, author, day).
-    for column in ("repo_id", "reviewer", "author", "day"):
+    # Natural key matches migration 027's canonical sorting key (org_id,
+    # repo_id, reviewer, author, day) -- migration 024 added org_id to this
+    # table after 004 originally created it without one.
+    for column in ("org_id", "repo_id", "reviewer", "author", "day"):
         assert column in source, f"review_edges_daily dedup key is missing {column}"
+
+
+def test_review_edges_daily_dedup_key_includes_org_id() -> None:
+    # CHAOS-4459 (codex review round 5, P1): the first version of this key
+    # omitted org_id, wrongly claiming the table has no such column. Two
+    # orgs syncing the same repo slug share a deterministic repo_id; an
+    # org_id-less key lets LIMIT 1 BY pick ONE org's row before any org_id
+    # filter downstream ever runs, silently discarding the other org's
+    # review data for that repo/day. Dedicated regression test, separate
+    # from the general dedup-is-present assertion above.
+    source = dedup_from("review_edges_daily")
+    assert "org_id" in source, (
+        "review_edges_daily's dedup key is missing org_id -- two "
+        "organizations syncing the same repo would collapse into one "
+        "organization's row before any tenant filter applies."
+    )
 
 
 def test_commit_metrics_source_is_deduplicated_on_read() -> None:
@@ -99,7 +116,24 @@ def test_commit_metrics_source_is_deduplicated_on_read() -> None:
     )
     assert "LIMIT 1 BY" in source
     assert "computed_at DESC" in source
-    # Natural key matches migration 001's ORDER BY (repo_id, day,
-    # author_email, commit_hash).
-    for column in ("repo_id", "day", "author_email", "commit_hash"):
+    # Natural key matches migration 027's canonical sorting key (org_id,
+    # repo_id, day, author_email, commit_hash) -- migration 024 added
+    # org_id to this table after 001 originally created it without one.
+    for column in ("org_id", "repo_id", "day", "author_email", "commit_hash"):
         assert column in source, f"commit_metrics dedup key is missing {column}"
+
+
+def test_commit_metrics_dedup_key_includes_org_id() -> None:
+    # CHAOS-4459 (codex review round 5, P1): same org_id omission as
+    # review_edges_daily above, same migration-024 root cause. Two orgs
+    # syncing the same repo slug share a deterministic repo_id; an
+    # org_id-less key lets LIMIT 1 BY pick ONE org's commits before any
+    # org_id filter downstream ever runs, silently discarding the other
+    # org's commit history for that repo/day -- directly undermining this
+    # ticket's own repair goal for a shared-repo org.
+    source = dedup_from("commit_metrics")
+    assert "org_id" in source, (
+        "commit_metrics's dedup key is missing org_id -- two organizations "
+        "syncing the same repo would collapse into one organization's "
+        "commits before any tenant filter applies."
+    )

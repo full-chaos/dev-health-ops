@@ -149,10 +149,13 @@ async def test_read_bounded_stderr_keeps_the_tail_not_the_head() -> None:
     stream = asyncio.StreamReader()
     stream.feed_data(b"HEAD_MARKER_" + b"noise" * 20 + b"_TAIL_MARKER")
     stream.feed_eof()
-    result = await worker_metrics._read_bounded_stderr(stream, maximum_bytes=20)
+    result, live_logged = await worker_metrics._read_bounded_stderr(
+        stream, maximum_bytes=20
+    )
     assert result.endswith(b"_TAIL_MARKER")
     assert b"HEAD_MARKER_" not in result
     assert result.startswith(b"...(truncated)\n")
+    assert live_logged is False
 
 
 @pytest.mark.asyncio
@@ -162,9 +165,12 @@ async def test_read_bounded_stderr_returns_everything_under_the_bound_untouched(
     stream = asyncio.StreamReader()
     stream.feed_data(b"short diagnostic line")
     stream.feed_eof()
-    result = await worker_metrics._read_bounded_stderr(stream, maximum_bytes=4096)
+    result, live_logged = await worker_metrics._read_bounded_stderr(
+        stream, maximum_bytes=4096
+    )
     assert result == b"short diagnostic line"
     assert b"truncated" not in result
+    assert live_logged is False
 
 
 @pytest.mark.asyncio
@@ -188,10 +194,11 @@ async def test_read_bounded_stderr_logs_each_chunk_live_when_context_given(
     with caplog.at_level(
         logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
     ):
-        result = await worker_metrics._read_bounded_stderr(
+        result, live_logged = await worker_metrics._read_bounded_stderr(
             stream, maximum_bytes=4096, live_log_context="run_id=test partition_id=test"
         )
     assert result == b"first chunk of diagnostic output\n"
+    assert live_logged is True
     live_records = [r for r in caplog.records if "stderr chunk" in r.message]
     assert len(live_records) == 1, caplog.records
     assert "run_id=test partition_id=test" in live_records[0].message
@@ -211,7 +218,10 @@ async def test_read_bounded_stderr_logs_nothing_live_without_context(
     with caplog.at_level(
         logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
     ):
-        await worker_metrics._read_bounded_stderr(stream, maximum_bytes=4096)
+        _, live_logged = await worker_metrics._read_bounded_stderr(
+            stream, maximum_bytes=4096
+        )
+    assert live_logged is False
     assert not any("stderr chunk" in r.message for r in caplog.records)
 
 
@@ -779,6 +789,53 @@ async def test_metric_compatibility_process_resource_exhausted_embeds_captured_s
     assert tail_marker in message, message
     assert head_marker not in message, message
     assert len(message) < 1024, len(message)
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_stderr_not_logged_twice_when_live_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Codex review (CHAOS-4543 round 3, P3): _run_compatibility_process_locked
+    always passes live_log_context to _read_bounded_stderr, so every child's
+    stderr was logged once live (INFO, per chunk) AND once more in full in
+    the post-exit summary (WARNING/ERROR) -- the same diagnostic text
+    appearing as two separate log records, which a text-matching alert can
+    read as two distinct failures. The post-exit summary must still carry
+    severity + correlation ids, but must not repeat text already streamed
+    live.
+    """
+    marker = "distinct_diagnostic_marker_should_appear_exactly_once"
+    source = (
+        "import sys\n"
+        f"sys.stderr.write({marker!r} + chr(10))\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(2)\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with caplog.at_level(
+        logging.INFO, logger="dev_health_ops.api.internal.worker_metrics"
+    ):
+        with pytest.raises(worker_metrics._CompatibilityProcessFailure):
+            await worker_metrics._run_compatibility_process(_daily_execution())
+
+    marker_records = [r for r in caplog.records if marker in r.message]
+    assert len(marker_records) == 1, (
+        "expected the diagnostic text to appear in exactly one log record "
+        f"(live-streamed only), got {len(marker_records)}: {caplog.records}"
+    )
+    assert marker_records[0].levelno == logging.INFO
+
+    summary_records = [
+        r for r in caplog.records if "already streamed live" in r.message
+    ]
+    assert len(summary_records) == 1, caplog.records
+    assert summary_records[0].levelno == logging.ERROR
+    assert marker not in summary_records[0].message
 
 
 @pytest.mark.asyncio

@@ -1981,7 +1981,7 @@ async def _read_bounded_stderr(
     maximum_bytes: int,
     *,
     live_log_context: str | None = None,
-) -> bytes:
+) -> tuple[bytes, bool]:
     """Drain the runner subprocess's stderr, keeping only the last
     ``maximum_bytes`` (truncating from the FRONT, not the back) rather than
     raising.
@@ -2015,11 +2015,22 @@ async def _read_bounded_stderr(
     -- independent of, and in addition to, the bounded tail this function
     still returns for _CompatibilityProcessFailure's message and the
     post-exit summary log.
+
+    Returns ``(tail, live_logged)``. ``live_logged`` is True when at least
+    one chunk was emitted live via `logger.info` (codex round-3 P3): the
+    caller's post-exit summary log must not re-embed the SAME full text a
+    second time at WARNING/ERROR once it has already been streamed live --
+    that would double-count the one diagnostic as two log records, which
+    can read as two separate failures to a text-matching alert. The caller
+    still logs a severity-correct, correlation-id-bearing line either way;
+    only the redundant full-text repeat is skipped.
     """
     tail = b""
     truncated = False
+    live_logged = False
     while chunk := await stream.read(64 * 1024):
         if live_log_context is not None:
+            live_logged = True
             logger.info(
                 "metric compatibility process stderr chunk (%s): %s",
                 live_log_context,
@@ -2031,7 +2042,7 @@ async def _read_bounded_stderr(
             tail = tail[-maximum_bytes:]
     if truncated:
         tail = b"...(truncated)\n" + tail
-    return tail
+    return tail, live_logged
 
 
 async def _terminate_compatibility_process(
@@ -2396,7 +2407,7 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             input_error = exc
         finally:
             process.stdin.close()
-        stdout, stderr, return_code = await asyncio.gather(
+        stdout, (stderr, stderr_live_logged), return_code = await asyncio.gather(
             stdout_task, stderr_task, process.wait()
         )
     except BaseException:
@@ -2487,18 +2498,39 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # `errors="replace"` because a signal-killed/OOM-adjacent child can
     # truncate mid-multibyte-character; this is diagnostic text, never
     # something a decode error should hide entirely.
+    #
+    # codex round-3 P3: when the same content was already streamed live
+    # (see _read_bounded_stderr's live_logged), re-embedding the full text
+    # here too means a text-matching alert sees the ONE diagnostic as TWO
+    # log records (an INFO chunk, then this WARNING/ERROR). This process is
+    # the only call site and always passes live_log_context, so
+    # stderr_live_logged is True whenever there was any stderr at all --
+    # log a severity-correct, correlation-id-bearing summary line either
+    # way, but only repeat the full text when it was NOT already live.
     stderr_text = stderr.decode("utf-8", errors="replace").strip()
     if stderr_text:
         stderr_log = logger.error if return_code != 0 else logger.warning
-        stderr_log(
-            "metric compatibility process stderr (run_id=%s partition_id=%s "
-            "operation=%s return_code=%s): %s",
-            execution.run_id,
-            execution.partition_id,
-            execution.operation,
-            return_code,
-            stderr_text,
-        )
+        if stderr_live_logged:
+            stderr_log(
+                "metric compatibility process stderr already streamed live "
+                "(run_id=%s partition_id=%s operation=%s return_code=%s, "
+                "%d bytes)",
+                execution.run_id,
+                execution.partition_id,
+                execution.operation,
+                return_code,
+                len(stderr_text),
+            )
+        else:
+            stderr_log(
+                "metric compatibility process stderr (run_id=%s partition_id=%s "
+                "operation=%s return_code=%s): %s",
+                execution.run_id,
+                execution.partition_id,
+                execution.operation,
+                return_code,
+                stderr_text,
+            )
 
     if return_code == 0:
         DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason="success").inc()

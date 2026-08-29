@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	featureFlagsCallCounter    = mustCounter("devhealth_query_api_feature_flags_calls_total", "featureFlags resolver invocations")
-	featureFlagsOutcomeCounter = mustCounter("devhealth_query_api_feature_flags_outcome_total", "featureFlags resolver outcomes, by result")
-	reviewEdgesCallCounter     = mustCounter("devhealth_query_api_review_edges_calls_total", "reviewEdges resolver invocations")
-	reviewEdgesOutcomeCounter  = mustCounter("devhealth_query_api_review_edges_outcome_total", "reviewEdges resolver outcomes, by result")
-
-	cognitiveLoadCallCounter    = mustCounter("devhealth_query_api_cognitive_load_calls_total", "cognitiveLoad resolver invocations")
-	cognitiveLoadOutcomeCounter = mustCounter("devhealth_query_api_cognitive_load_outcome_total", "cognitiveLoad resolver outcomes, by result")
+	featureFlagsCallCounter            = mustCounter("devhealth_query_api_feature_flags_calls_total", "featureFlags resolver invocations")
+	featureFlagsOutcomeCounter         = mustCounter("devhealth_query_api_feature_flags_outcome_total", "featureFlags resolver outcomes, by result")
+	reviewEdgesCallCounter             = mustCounter("devhealth_query_api_review_edges_calls_total", "reviewEdges resolver invocations")
+	reviewEdgesOutcomeCounter          = mustCounter("devhealth_query_api_review_edges_outcome_total", "reviewEdges resolver outcomes, by result")
+	cognitiveLoadCallCounter           = mustCounter("devhealth_query_api_cognitive_load_calls_total", "cognitiveLoad resolver invocations")
+	cognitiveLoadOutcomeCounter        = mustCounter("devhealth_query_api_cognitive_load_outcome_total", "cognitiveLoad resolver outcomes, by result")
+	complexityTimeseriesCallCounter    = mustCounter("devhealth_query_api_complexity_timeseries_calls_total", "complexityTimeseries resolver invocations")
+	complexityTimeseriesOutcomeCounter = mustCounter("devhealth_query_api_complexity_timeseries_outcome_total", "complexityTimeseries resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -124,4 +125,30 @@ func startCognitiveLoadSpan(ctx context.Context) (context.Context, func(outcome 
 // this operation's outcome vocabulary.
 func recordCognitiveLoadOutcome(outcome string) {
 	cognitiveLoadOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startComplexityTimeseriesSpan is startFeatureFlagsSpan's counterpart for
+// the complexityTimeseries resolver (CHAOS-4369 Wave 3) -- same "count and
+// start the span before the ClickHouse query, finish only once real
+// resolver work completes" contract.
+func startComplexityTimeseriesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	complexityTimeseriesCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.complexityTimeseries")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "complexityTimeseries resolver error")
+		}
+		span.End()
+		recordComplexityTimeseriesOutcome(outcome)
+	}
+}
+
+// recordComplexityTimeseriesOutcome increments the outcome counter.
+// outcome is one of "ok" or "error" -- complexityTimeseries has no
+// degraded-result path (unlike featureFlags; see complexitytimeseries
+// package's doc comment), so "degraded" is not part of this operation's
+// outcome vocabulary.
+func recordComplexityTimeseriesOutcome(outcome string) {
+	complexityTimeseriesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

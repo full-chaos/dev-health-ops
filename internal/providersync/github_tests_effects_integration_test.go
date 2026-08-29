@@ -133,7 +133,7 @@ func TestGitHubTestsJUnitMillisecondTimestampsReadBackExact(t *testing.T) {
 	claim := nativeTestClaim("github", "tests")
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 123000000, time.UTC)
 	body := []byte(`<testsuite name="precision" timestamp="2026-08-03T11:00:00.123456789Z" time="0.0009"><testcase name="case"/></testsuite>`)
-	suites, _, err := parseJUnitRows(body, "artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "precision", claim.OrgID, nil, nil, normalizedAt)
+	suites, _, err := parseJUnitRows(body, "artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "precision", claim.OrgID, nil, nil, normalizedAt, map[string]int{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -390,6 +390,43 @@ migrations:
     # -- Explicit local/evaluation-only acknowledgement for post-install with
     #    the chart's bundled PostgreSQL. Requires postgresql.enabled=true.
     localBundledPostgres: false
+    # -- CHAOS-4428: the two migration steps that were previously run by hand.
+    #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
+    #    creates the three runtime logins, riverMigrate (10) applies the River
+    #    schema AND the full grant posture, then re-checks it. Both default to
+    #    false so an existing deployment is unchanged on upgrade.
+    #    Both run on pre-install AND pre-upgrade: provisioning has been
+    #    bootstrap-only since CHAOS-4261 and cannot revoke what riverMigrate
+    #    grants, and riverMigrate re-applies the full posture on every run even
+    #    with zero pending migrations. Verified on production deploy 5.5:
+    #    116 grants -> 119 -> 119 across three passes, no revoke.
+    provisionRoles:
+      enabled: false
+    riverMigrate:
+      # -- OFF is not "River never happens". With the hook off there are two
+      #    paths, and which one you are on depends on secretData below:
+      #      * MIGRATION_DATABASE_URI set -> `dev-hops migrate postgres` runs
+      #        dev-health-worker-migrate ITSELF inside the weight-0 Job. That is
+      #        what Compose's migrate service does, and it is safe only where
+      #        the runtime roles already exist -- an upgrade, never a fresh
+      #        install, where the preflight fails before provisioning runs.
+      #      * no MIGRATION_DATABASE_URI -> the weight-0 Job is Alembic plus the
+      #        ClickHouse migrator only, and NOTHING applies the River schema.
+      #        The operator runs dev-health-worker-migrate out of band.
+      #    Turning this ON moves the step to its own weight-10 Job, after role
+      #    provisioning, which is the only ordering a fresh install survives.
+      enabled: false
+      # -- Image carrying `dev-health-worker-migrate`. EMPTY MEANS THE OPS
+      #    RUNTIME IMAGE, which is where that binary actually lives
+      #    (docker/Dockerfile:87 installs it into /usr/local/bin in the
+      #    `runner` target) and is exactly what Compose's go-river-migrate
+      #    builds and runs. There is no separate published migrator image:
+      #    naming one here made tests/tooling/test_go_image_publishing.py fail
+      #    with "deployment renderers name Go images that CI never publishes",
+      #    which is that guard doing its job. Override only if you genuinely
+      #    publish a dedicated migrator image.
+      image: ""
+      pullPolicy: ""
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:
@@ -404,10 +441,19 @@ migrations:
     extraEnv: []
     # -- Dedicated secret values mounted only into the one-shot migration Job.
     #    Setting MIGRATION_DATABASE_URI activates the pinned River migration.
+    #    When riverMigrate.enabled=true the dedicated URI is delivered to the
+    #    weight-10 River Job instead, and reaches the weight-0 Alembic Job as
+    #    POSTGRES_URI -- `dev-hops migrate postgres` runs the River migrator
+    #    itself whenever MIGRATION_DATABASE_URI is set, which at weight 0 would
+    #    precede role provisioning.
     secretData:
       MIGRATION_DATABASE_URI: ""
       POSTGRES_URI: ""
       CLICKHOUSE_URI: ""
+      # -- Set to "1" to authorise the Celery->River route-table cutover
+      #    (revision 0066), which `dev-hops migrate postgres` otherwise defers.
+      #    Empty is the same operator passthrough Compose ships.
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ""
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""

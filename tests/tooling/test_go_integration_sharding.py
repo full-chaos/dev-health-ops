@@ -891,22 +891,33 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # clickhouse_team_drift_projector.py's _observed_row/
     # change_id_for_team_field and clickhouse_identity_drift.py's
     # change_id_for_identity_membership/_conflict_for against the Go engine,
-    # live. 1221 -> 1225 top-level; 144 unchanged (origin/main's delta from the
-    # same 1115/126 base as CHAOS-4458 part (b) above).
+    # live. 1221 -> 1225 top-level; 144 unchanged.
     #
-    # Merged total (this branch's +6/+1 delta applied on top of origin/main's
-    # independent +110/+18 delta from the same 1115/126 base): 1225 -> 1231
-    # top-level; 144 -> 145 integration-tagged.
+    # CHAOS-4508 (sibling suite-object natural-key discriminator) added 3
+    # ordinary top-level tests, none `//go:build integration`:
+    # TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide (the red
+    # repro, cherry-picked from the CHAOS-4487 diagnosis lane and now
+    # green), TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged (pins that
+    # a non-colliding single suite's SuiteID hash is unchanged), and
+    # TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide (the
+    # GitLab-native twin). 1225 -> 1228 top-level; 144 unchanged
+    # (origin/main's delta from the shared 1225/144 base).
     #
-    # lane-4458b-live's compose live-proof (2026-08-29) added 2 more ordinary
-    # top-level tests to team_repo_ownership_derivation_test.go
+    # CHAOS-4458 part (b) (this branch's delta from the SAME shared 1225/144
+    # base): 6 tests for the Linear id-space fix (5 ordinary +
+    # 1 integration-tagged) plus 2 more ordinary pinning tests from
+    # lane-4458b-live's compose live-proof
     # (TestLinearTeamKeyOwnResolutionWithEmptyProjectID,
     # TestLinearTeamKeyResolvesViaPRInheritanceIssueLink -- closing two
     # fixture gaps the live proof found: no prior test used an actually-empty
     # `project_id`, and none exercised the `issuePRLinks`/PR-inheritance path
-    # with a Linear donor). Neither is `-tags=integration`. 1231 -> 1233
-    # top-level; 145 unchanged.
-    assert len(expected_provider_tests) == 1233
+    # with a Linear donor). 1225 -> 1233 top-level; 144 -> 145
+    # integration-tagged (this branch's own delta, +8/+1).
+    #
+    # Merged total (this branch's +8/+1 delta applied on top of origin/main's
+    # independent +3/+0 delta from the same 1225/144 base): 1225 -> 1236
+    # top-level; 144 -> 145 integration-tagged.
+    assert len(expected_provider_tests) == 1236
     assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
@@ -923,7 +934,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1233
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1236
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -984,7 +995,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1233
+    assert len(selected_tests) == len(set(selected_tests)) == 1236
     assert set(selected_tests) == expected_tests
 
 

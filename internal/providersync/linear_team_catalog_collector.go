@@ -168,7 +168,32 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
 	if selections.Projects {
-		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Projects); err != nil {
+		// CHAOS-4530 codex review round 2: CollectReferenceCatalog's own
+		// tombstone loop only retires a team-key-shaped pseudo-project for a
+		// team key present in THIS call's Linear response -- a team deleted
+		// or re-keyed since the last sync drops out of every future
+		// response and is never revisited. Reconcile against every
+		// still-active pseudo-project this collector previously wrote for
+		// the org and retire any whose team key this call did not observe,
+		// before preparing the Projects write.
+		currentTeamKeys := make([]string, 0, len(batch.Rows.Teams))
+		for _, team := range batch.Rows.Teams {
+			currentTeamKeys = append(currentTeamKeys, team.ID)
+		}
+		orphanedTombstones, err := RetireOrphanedLinearPseudoProjects(ctx, collector.Sink.Conn, ref.OrgID, currentTeamKeys, normalizedAt)
+		if err != nil {
+			return result, err
+		}
+		projectsEffect := batch.Effects.Projects
+		if len(orphanedTombstones) > 0 {
+			projectRows := append(append([]linearReferenceProjectRow(nil), batch.Rows.Projects...), orphanedTombstones...)
+			projectsEffect, err = effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, projectRows)
+			if err != nil {
+				return result, err
+			}
+			batch.Result.Projects += len(orphanedTombstones)
+		}
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, projectsEffect); err != nil {
 			return result, err
 		}
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Ownership); err != nil {

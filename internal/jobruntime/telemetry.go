@@ -265,12 +265,27 @@ const (
 	// soft-fail that one step is never silently indistinguishable from a
 	// clean run.
 	TeamCatalogOutcomeRosterPreservationFailed TeamCatalogOutcome = "roster_preservation_failed"
+	// TeamCatalogOutcomeCollectorSkipped (codex review finding, CHAOS-4432,
+	// 2026-08-28) is DISTINCT from TeamCatalogOutcomeSkipped: that value
+	// means every CHAOS-4323 selection was off and neither the collector
+	// nor the bridge ever ran. This value means the collector itself WAS
+	// called, resolved credentials, attempted its walk, and then chose to
+	// report a clean, successful zero result (TeamCatalogResult.Skipped)
+	// rather than an error -- e.g. GitLab's non-strict walk-failure Python
+	// parity (a root/subgroups/per-group-projects/native-projects fetch
+	// failed). Conflating the two into one "skipped" outcome would make
+	// dev_health_team_catalog_dispatch_total unable to distinguish "this
+	// org has nothing configured, working as intended" from "this
+	// provider's fetch is failing and needs attention" -- exactly the
+	// signal an operator/alert needs.
+	TeamCatalogOutcomeCollectorSkipped TeamCatalogOutcome = "collector_skipped"
 )
 
 func teamCatalogOutcomes() []TeamCatalogOutcome {
 	return []TeamCatalogOutcome{
 		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
 		TeamCatalogOutcomeNativeFailedNonfatal, TeamCatalogOutcomeRosterPreservationFailed,
+		TeamCatalogOutcomeCollectorSkipped,
 	}
 }
 

@@ -34,6 +34,13 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 	if err := collector.ObserveTeamCatalogDispatch("linear", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeRosterPreservationFailed); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4432 codex review finding: distinct from TeamCatalogOutcomeSkipped
+	// ("nothing selected, the collector never ran") -- this is "the
+	// collector WAS called and chose to report a clean skip", e.g.
+	// GitLab's non-strict walk-failure Python parity.
+	if err := collector.ObserveTeamCatalogDispatch("gitlab", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeCollectorSkipped); err != nil {
+		t.Fatal(err)
+	}
 	// An unrecognized provider clamps to "unknown" -- same cardinality
 	// discipline as zeroUnitFinalizationProvider.
 	if err := collector.ObserveTeamCatalogDispatch("bogus-provider", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeBridge); err != nil {
@@ -51,6 +58,7 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 		`dev_health_team_catalog_dispatch_total{provider="unknown",entry_point="post_sync",outcome="bridge"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="native_failed_nonfatal"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="roster_preservation_failed"} 1`,
+		`dev_health_team_catalog_dispatch_total{provider="gitlab",entry_point="post_sync",outcome="collector_skipped"} 1`,
 	} {
 		if !strings.Contains(text, want+"\n") {
 			t.Fatalf("missing exposition line %q:\n%s", want, text)

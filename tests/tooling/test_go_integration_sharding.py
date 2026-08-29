@@ -828,8 +828,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4431's membership-conflict guard semantics), and 7 ordinary in
     # github_team_catalog_route_test.go. 1130 -> 1164 top-level; 127 -> 141
     # integration-tagged.
-    assert len(expected_provider_tests) == 1164
-    assert len(expected_integration_tests) == 141
+    #
+    # CHAOS-4432 (GitLab team-catalog native collector) added 45 new
+    # top-level tests in internal/providersync, all new files: 3
+    # integration-tagged in gitlab_team_catalog_effects_integration_test.go
+    # (ClickHouse effects), 2 ordinary in
+    # gitlab_team_catalog_guards_fakeconn_test.go, 8 ordinary in
+    # gitlab_team_catalog_guards_test.go (the GitLab-native twin of
+    # CHAOS-4431/CHAOS-4434's membership-conflict guard semantics), 1
+    # ordinary each in gitlab_team_catalog_ownership_oracle_test.go and
+    # gitlab_team_catalog_project_oracle_test.go and
+    # gitlab_team_catalog_team_oracle_test.go (live-Python oracles), 3
+    # ordinary in gitlab_team_catalog_roster_preservation_scope_test.go, 23
+    # ordinary in gitlab_team_catalog_test.go, and 3 ordinary in
+    # gitlab_team_catalog_writeteams_fakeconn_test.go. A tenth new file,
+    # gitlab_team_catalog_live_manual_test.go, is gated `//go:build
+    # manuallive` (a manual, non-CI, live-provider-token check) rather than
+    # `integration` -- go list -tags=integration never includes it, so its 1
+    # test does NOT count toward either pin here. 1164 -> 1209 top-level;
+    # 141 -> 144 integration-tagged.
+    assert len(expected_provider_tests) == 1209
+    assert len(expected_integration_tests) == 144
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -845,7 +864,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1164
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1209
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -906,7 +925,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1164
+    assert len(selected_tests) == len(set(selected_tests)) == 1209
     assert set(selected_tests) == expected_tests
 
 

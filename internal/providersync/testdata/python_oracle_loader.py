@@ -119,6 +119,9 @@ _TEAM_AUTOIMPORT_LINEAR_SOURCE = _source(
 _TEAM_AUTOIMPORT_GITHUB_SOURCE = _source(
     "dev_health_ops/workers/team_autoimport_github.py"
 )
+_TEAM_AUTOIMPORT_GITLAB_SOURCE = _source(
+    "dev_health_ops/workers/team_autoimport_gitlab.py"
+)
 _PROVIDERS_BASE_SOURCE = _source("dev_health_ops/providers/base.py")
 _PROVIDERS_UTILS_SOURCE = _source("dev_health_ops/providers/utils.py")
 
@@ -1123,6 +1126,100 @@ def _target_github_team_autoimport() -> None:
     )
 
 
+def _target_gitlab_team_autoimport() -> None:
+    """Load the live GitLab reference-catalog producer's pure boundaries.
+
+    Mirrors _target_linear_team_autoimport exactly: team_autoimport_gitlab
+    owns the real team/ownership/project row construction but imports the
+    application sink and discovery services at module load. Those
+    collaborators are fixed stubs here because the oracle invokes only pure
+    per-item row builders (_gitlab_team_row, _project_ownership_rows,
+    _gitlab_project_catalog_rows) -- the value-producing normalizer itself
+    remains the checked-in production source.
+    """
+    for name in (
+        "dev_health_ops.api",
+        "dev_health_ops.api.services",
+        "dev_health_ops.api.services.configuration",
+    ):
+        _install_package(name)
+    _install_module("sqlalchemy", {})
+    _install_package("sqlalchemy.ext")
+    _install_module(
+        "sqlalchemy.ext.asyncio", {"AsyncSession": type("AsyncSession", (), {})}
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_identity_drift",
+        {"split_memberships_for_review": _unsupported_dependency},
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.clickhouse_team_drift_projector",
+        {
+            "project_provider_team_rows": _unsupported_dependency,
+            "project_team_rows_with_store": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_discovery",
+        {
+            "GitLabDiscoveredProject": type("GitLabDiscoveredProject", (), {}),
+            "TeamDiscoveryService": type("TeamDiscoveryService", (), {}),
+        },
+    )
+    _install_module(
+        "dev_health_ops.api.services.configuration.team_membership",
+        {"TeamMembershipService": type("TeamMembershipService", (), {})},
+    )
+    _load_source_module("dev_health_ops.metrics.schemas", _METRICS_SCHEMAS_SOURCE)
+    _install_module(
+        "dev_health_ops.metrics.sinks.clickhouse",
+        {"ClickHouseMetricsSink": type("ClickHouseMetricsSink", (), {})},
+    )
+    _install_module(
+        "dev_health_ops.storage.clickhouse",
+        {"ClickHouseStore": type("ClickHouseStore", (), {})},
+    )
+    _load_source_module("dev_health_ops.models.work_items", _WORK_ITEMS_MODEL_SOURCE)
+    _install_module(
+        "dev_health_ops.providers.identity",
+        {
+            "load_identity_resolver": _unsupported_dependency,
+            # team_autoimport_gitlab.py additionally imports the TYPE
+            # (Linear's own port only imports load_identity_resolver) as a
+            # _membership_rows parameter annotation -- a stub class is
+            # sufficient since the oracle's narrow targets never construct
+            # or call it.
+            "IdentityResolver": type("IdentityResolver", (), {}),
+        },
+    )
+    # CHAOS-4323: team_autoimport_gitlab.py's capability clamp and category
+    # gate are pure scope/provider-name lookups, never invoked by the
+    # oracle's narrow targets -- stubbed, not loaded, like their Linear
+    # neighbors above.
+    _install_module(
+        "dev_health_ops.providers.team_capabilities",
+        {
+            "auto_import_capabilities": _unsupported_dependency,
+            "team_provider_capabilities": _unsupported_dependency,
+        },
+    )
+    _install_module(
+        "dev_health_ops.workers.team_autoimport_categories",
+        {"resolve_import_categories": _unsupported_dependency},
+    )
+    # CHAOS-4323 round-3 follow-up: the roster-preservation-failure counter
+    # is recorded only on the fail-closed branch, never reached by the
+    # oracle's narrow targets -- stubbed like its Linear neighbor above.
+    _install_module(
+        "dev_health_ops.metrics.prometheus",
+        {
+            "record_team_autoimport_roster_preservation_failed": (
+                _unsupported_dependency
+            )
+        },
+    )
+
+
 def _target_identity() -> None:
     """Load the real providers.identity module for the CHAOS-4434 facets
     oracle. identity.py's only production dependency is WorkItemProvider,
@@ -1249,6 +1346,11 @@ ALLOWED_MODULES: dict[Path, tuple[str, Path, Callable[[], None]]] = {
         "dev_health_ops.workers.team_autoimport_github",
         _TEAM_AUTOIMPORT_GITHUB_SOURCE,
         _target_github_team_autoimport,
+    ),
+    _TEAM_AUTOIMPORT_GITLAB_SOURCE: (
+        "dev_health_ops.workers.team_autoimport_gitlab",
+        _TEAM_AUTOIMPORT_GITLAB_SOURCE,
+        _target_gitlab_team_autoimport,
     ),
     _IDENTITY_SOURCE: (
         "dev_health_ops.providers.identity",

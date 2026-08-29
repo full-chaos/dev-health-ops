@@ -258,6 +258,9 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	case "github":
 		client, err := providerfoundation.NewGitHubClient(credential, resolver.doer, resolver.retry, lease)
 		return credential, client, integrationID, err
+	case "gitlab":
+		client, err := providerfoundation.NewGitLabClient(credential, resolver.doer, resolver.retry, lease)
+		return credential, client, integrationID, err
 	default:
 		return providerfoundation.Credential{}, nil, "", errTeamCatalogUnsupportedProvider
 	}
@@ -471,6 +474,26 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 				// The failure is still visible via the dedicated nonfatal
 				// outcome, not silently dropped.
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+				return nil
+			}
+			if result.Skipped {
+				// CHAOS-4432 (team-lead ruling, 2026-08-28): a collector
+				// that made NO writes and is reporting a clean, successful
+				// zero result (Python parity for a non-strict walk
+				// failure) must record a dedicated skipped outcome, not
+				// "native" -- a zero-row success must never be silently
+				// indistinguishable from a real, healthy zero-row run.
+				// TeamCatalogOutcomeCollectorSkipped (codex review finding,
+				// distinct from TeamCatalogOutcomeSkipped above, which
+				// means "nothing selected, the collector never ran" --
+				// this means the collector WAS called and chose to skip):
+				// conflating the two would make dev_health_team_catalog_
+				// dispatch_total unable to tell "nothing configured" apart
+				// from "this provider's fetch is failing". result.
+				// SkipReason (e.g. "group_projects_fetch_failed") is not
+				// yet a metric label, but is warn-logged by the collector
+				// itself at the point of failure.
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeCollectorSkipped)
 				return nil
 			}
 			if result.RosterPreservationFailed {

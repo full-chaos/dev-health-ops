@@ -448,16 +448,41 @@ func mkEdge(id string) edgeRow {
 	}
 }
 
+// mkEdgeConfidence is mkEdge with an explicit confidence -- needed by
+// TestSpliceDependencyEdges_NoResort so the seeded rows are NOT all tied
+// at confidence 0 (mkEdge's default). A mutation test caught this the
+// hard way (orchestrator 08-29 mutation-kill round): the original
+// NoResort test used plain mkEdge for every row, so a "re-sort the
+// merged slice by confidence DESC" regression was a no-op stable sort
+// over all-equal keys and left the test GREEN -- a mask, not a proof.
+// Real dependency-derived rows always carry confidence=1.0
+// (work_graph.py:1076 / edges.go's queryDependencyEdges), strictly
+// HIGHER than any real primary row's confidence, so that is the ratio
+// this helper mirrors: primary rows below 1.0, dependency rows at 1.0.
+func mkEdgeConfidence(id string, confidence float64) edgeRow {
+	e := mkEdge(id)
+	e.confidence = confidence
+	return e
+}
+
 func TestSpliceDependencyEdges_NoResort(t *testing.T) {
 	// Primary rows are already ORDER BY confidence DESC, edge_id ASC --
-	// simulate a primary set where the SECOND dependency row would sort
-	// BEFORE the first one under a naive re-sort by confidence (all equal
-	// here) but must NOT be reordered: dependency rows must appear in
-	// THEIR OWN query order (last_synced DESC, edge_id ASC), appended
-	// after every primary row, never interleaved and never re-sorted as a
-	// whole.
-	primary := []edgeRow{mkEdge("p1"), mkEdge("p2")}
-	dependency := []edgeRow{mkEdge("d2"), mkEdge("d1")} // deliberately NOT edge_id-sorted
+	// p1/p2 carry LOWER confidence than the dependency rows (which mirror
+	// queryDependencyEdges's real constant confidence=1.0), the SAME
+	// order-discriminating shape
+	// test_dual_run_edges_edge_type_filtered_splice_matches uses in the
+	// live dual-run proof. This is deliberate, not incidental: a "re-sort
+	// the merged slice by confidence DESC" regression would place the
+	// confidence=1.0 dependency rows FIRST, visibly reordering the
+	// result -- confirmed by an executed mutation kill (sort.SliceStable
+	// by confidence inserted into spliceDependencyEdges; this test went
+	// RED; restored, verified by diff+sha256, re-ran GREEN). An earlier
+	// version of this test used equal-confidence rows throughout
+	// (mkEdge's default 0 for every row) and STAYED GREEN under that same
+	// mutation -- a stable sort over all-equal keys is a no-op, so the
+	// mutation was invisible to it. That version is what this replaces.
+	primary := []edgeRow{mkEdgeConfidence("p1", 0.9), mkEdgeConfidence("p2", 0.1)}
+	dependency := []edgeRow{mkEdgeConfidence("d2", 1.0), mkEdgeConfidence("d1", 1.0)} // deliberately NOT edge_id-sorted, confidence=1.0 like the real dependency query
 
 	got := spliceDependencyEdges(primary, dependency, 10)
 	want := []string{"p1", "p2", "d2", "d1"}
@@ -466,7 +491,7 @@ func TestSpliceDependencyEdges_NoResort(t *testing.T) {
 	}
 	for i, id := range want {
 		if got[i].edgeID != id {
-			t.Fatalf("position %d: got edgeID=%q, want %q (splice must preserve each query's own order, never re-sort)", i, got[i].edgeID, id)
+			t.Fatalf("position %d: got edgeID=%q, want %q (splice must preserve each query's own order, never re-sort -- a re-sort-by-confidence regression would put d2/d1 FIRST since they carry confidence=1.0 > p1's 0.9 and p2's 0.1)", i, got[i].edgeID, id)
 		}
 	}
 }

@@ -379,9 +379,12 @@ means the ClickHouse `teams` dimension is empty.
 > did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
 
 > **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
-> `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item are two
-> DISJOINT id spaces by design** (`"{org_id}:linear:{team_key}"` vs. the raw Linear Project UUID —
-> see the "Two Linear id spaces, one resolver" callout in §1.1 for the full trace and the fix).
+> `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two
+> DISJOINT id spaces AT THE TIME OF DIAGNOSIS** (`"{org_id}:linear:{team_key}"` vs. the raw Linear
+> Project UUID). CHAOS-4431 (merged after this diagnosis) now ALSO writes `team_project_ownership`
+> rows keyed by the raw Linear Project UUID for every org this route has synced — the two id spaces
+> now co-exist rather than staying permanently disjoint; see the "Two Linear id spaces, one resolver"
+> callout in §1.1 for the full trace, the fix, and the post-CHAOS-4431 update.
 > Prod symptom (CHAOS-4458): `team_repo_ownership` derivation `outcome=no_signal`, 0 rows, every org
 > — the GitLab/Jira arms of this same join were unaffected (their ownership writers and work-item
 > normalizers agree on what `project_id` means), so this was a Linear-specific gap, not a general
@@ -607,7 +610,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > fetch, fires on every sync (see §1.1's diagram for the resolution logic). Unlike every row in the
 > table above, this producer never calls `populate()` and is not gated by the three `sync_options`
 > flags: it derives from already-synced `team_project_ownership` (however THAT got populated -- any
-> row of the table above, or the dormant Linear-native route) joined against `work_items`/
+> row of the table above, or the Linear-native route, ACTIVE since CHAOS-4431, §1.1) joined against `work_items`/
 > `work_item_dependencies`/`work_graph_issue_pr`, so it runs for every provider combination, not just
 > GitHub. It also carries no prerequisite completion key against those OTHER producers (team-lead
 > ruling, codex adversarial-review finding #4, 2026-08-28): a brand-new org's first qualifying sync
@@ -993,10 +996,10 @@ flowchart TD
     SYNC -->|"GitHub only -- team_autoimport_github.py:139 (_repo_ownership_rows), source=provider_access"| TRO_direct["team_repo_ownership (direct)"]
     SYNC -->|"GitLab -- team_autoimport_gitlab.py:137 (_project_ownership_rows), source=provider_access"| TPO["team_project_ownership"]
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
-    LGN["Linear Go-native route (would bypass the Python populate() path)<br/>internal/providersync/linear_reference_catalog_effects_clickhouse.go:26<br/>writeOwnership() -&gt; team_project_ownership, source=native<br/>NOT WIRED to any production caller today -- §0.4a"] -. designed, dormant .-> TPO
+    LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and any future project-UUID-keyed<br/>Linear ownership row, §0.2/CHAOS-4108) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
-    TPO -->|"OR (Linear only, CHAOS-4458 part b) match: work_items.native_team_key<br/>against a team-key-shaped row keyed org_id:linear:team_key --<br/>Linear's OWN project_id is a DISJOINT id space (raw Linear Project UUID, §0.2)<br/>-- resolution arm 'linear_team_key', tried only when the project_id arm above does not resolve"| WI
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
+    TPO -->|"OR (Linear only, CHAOS-4458 part b) match: work_items.native_team_key<br/>against the synthetic team-key-shaped row org_id:linear:team_key --<br/>fallback for a Linear item never assigned to any Project (project_id='')<br/>-- resolution arm 'linear_team_key', tried only when the project_id arm above does not resolve"| WI
     TPO -->|"OR match: a DONOR's project_id/native_team_key (same two arms above),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
     WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
@@ -1029,20 +1032,40 @@ on what `project_id` means:
   Project UUID — the SAME id space `projects.id` carries — which the writer's own docstring calls a
   "SEPARATE id space" from the team-derived rows (`team_autoimport_linear.py:309-314`).
 
-These two values never intersect for a Linear-only org: confirmed locally (org `70d529e0`, real
-synced data) at 0 of 3168 project-id-bearing Linear work items matching their org's ownership row,
-and on prod (org `c6a38355`, 2809 Linear ownership rows) at `outcome=no_signal`, 0 rows written. The
-fix (`resolveWorkItemProjectRef` in `team_repo_ownership_derivation.go`) tries the direct
-`project_id` match first (unchanged — covers every other provider today, and a future
-project-UUID-keyed Linear ownership row per CHAOS-4108's dual-arm precedent), and only when that
-does not resolve, for a Linear item carrying `work_items.native_team_key` (migration `050`, the raw
-`issue.team.key`), retries against the reconstructed team-key-shaped identity
-`"{org_id}:linear:{native_team_key}"`. Applied identically to the own-resolution path and the
-dependency-donor walk (a bare GitHub PR's donor Linear issue resolves the same way). Never guesses
-between the two arms: the moment one resolves, the other is not consulted, and a genuine ownership
-conflict on either identity is still dropped by the existing never-guess `assign()` rule. Which arm
-produced each run's rows is visible in
+At the time this was diagnosed, these two values never intersected for a Linear-only org: confirmed
+locally (org `70d529e0`, real synced data) at 0 of 3168 project-id-bearing Linear work items matching
+their org's ownership row, and on prod (org `c6a38355`, 2809 Linear ownership rows) at
+`outcome=no_signal`, 0 rows written. The fix (`resolveWorkItemProjectRef` in
+`team_repo_ownership_derivation.go`) tries the direct `project_id` match first (unchanged — covers
+every other provider today, and a future project-UUID-keyed Linear ownership row per CHAOS-4108's
+dual-arm precedent), and only when that does not resolve, for a Linear item carrying
+`work_items.native_team_key` (migration `050`, the raw `issue.team.key`), retries against the
+reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
+the own-resolution path and the dependency-donor walk (a bare GitHub PR's donor Linear issue resolves
+the same way) AND the PR-inheritance branch (`work_graph_issue_pr`-linked items, same resolver, same
+priority). Never guesses between the two arms: the moment one resolves, the other is not consulted,
+and a genuine ownership conflict on either identity is still dropped by the existing never-guess
+`assign()` rule. Which arm produced each run's rows is visible in
 `dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
+
+**Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's
+Linear native team-catalog collector (`linear_reference_catalog_route.go`) writes TWO ownership rows
+per synced Linear team, not one: a raw-Linear-Project-UUID-keyed row for each of the team's actual
+Linear Projects (`:386-390`, `ProjectID: project.ID`) AND the pre-existing synthetic
+`"{org_id}:linear:{team_key}"` row for backward compatibility (`:410-414`, unchanged shape/writer
+intent). So for any org this route has synced since CHAOS-4431 activated, `team_project_ownership`
+holds BOTH shapes simultaneously — the "never intersect" finding above describes the pre-CHAOS-4431
+state, not a permanent invariant. Practical consequence, confirmed live (lane-4458b-live, org
+`70d529e0`, 2026-08-29): a Linear work item that IS assigned to a real Linear Project now resolves
+via the direct `project_id` arm (first priority, unchanged); the `linear_team_key` arm remains the
+correct fallback for a Linear item that was never assigned to any Project (`project_id=""` —
+confirmed as the actual live-data shape, not merely an id-space mismatch) and reaches a repo no
+`project_id`-arm donor also reaches. On an org where every Linear-donor-reachable repo happens to
+ALSO be reachable via a `project_id`-arm donor (true of org `70d529e0` today — every repo the 264
+fallback-eligible items' 148 donors can reach is also reached by ≥152 of the 3,733 direct-match
+items), `assign()`'s existing `project_id > linear_team_key` priority means the fallback arm is
+correctly present and load-bearing for other data, but never the WINNING arm observed on THIS org's
+current topology — not a defect, a consequence of the two features interacting as designed.
 
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`

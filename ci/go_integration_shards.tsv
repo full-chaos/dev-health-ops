@@ -21,6 +21,7 @@ cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
 cmd/query-api	15
+cmd/query-api/internal/analytics	3
 cmd/query-api/internal/routeswitch	5
 internal/cacheinvalidation	2
 internal/externalrecompute	15

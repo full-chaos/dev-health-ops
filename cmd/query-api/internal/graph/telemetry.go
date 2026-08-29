@@ -36,6 +36,8 @@ var (
 	workGraphFlowOutcomeCounter        = mustCounter("devhealth_query_api_work_graph_flow_outcome_total", "workGraphFlow resolver outcomes, by result")
 	workGraphArtifactsCallCounter      = mustCounter("devhealth_query_api_work_graph_artifacts_calls_total", "workGraphArtifacts resolver invocations")
 	workGraphArtifactsOutcomeCounter   = mustCounter("devhealth_query_api_work_graph_artifacts_outcome_total", "workGraphArtifacts resolver outcomes, by result")
+	analyticsCallCounter               = mustCounter("devhealth_query_api_analytics_calls_total", "analytics resolver invocations")
+	analyticsOutcomeCounter            = mustCounter("devhealth_query_api_analytics_outcome_total", "analytics resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -288,4 +290,34 @@ func startWorkGraphArtifactsSpan(ctx context.Context) (context.Context, func(out
 // "ok", "degraded", or "error".
 func recordWorkGraphArtifactsOutcome(outcome string) {
 	workGraphArtifactsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startAnalyticsSpan is startFeatureFlagsSpan's counterpart for the
+// analytics operation (CHAOS-4506). Only "ok"/"error" are recorded HERE
+// -- this is the resolver-level verdict (did Resolve return an error at
+// all), which is a coarser signal than the sankey/flowMatrix swallow
+// events internal/analytics/telemetry.go records at their own finer
+// granularity (a batch that swallows a sankey execution failure but
+// otherwise succeeds still reports "ok" here, with the swallow itself
+// visible via the analytics-package-level counter instead -- the two are
+// deliberately not merged into one vocabulary, see that file's doc
+// comment for why).
+func startAnalyticsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	analyticsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.analytics")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "analytics resolver error")
+		}
+		span.End()
+		recordAnalyticsOutcome(outcome)
+	}
+}
+
+// recordAnalyticsOutcome increments the outcome counter. outcome is one
+// of "ok" or "error" -- see startAnalyticsSpan's doc comment for why
+// "degraded" is not part of this vocabulary.
+func recordAnalyticsOutcome(outcome string) {
+	analyticsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

@@ -998,9 +998,8 @@ flowchart TD
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
     LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)"]
-    TPO -->|"OR (Linear only, CHAOS-4458 part b) match: work_items.native_team_key<br/>against the synthetic team-key-shaped row org_id:linear:team_key --<br/>fallback for a Linear item never assigned to any Project (project_id='')<br/>-- resolution arm 'linear_team_key', tried only when the project_id arm above does not resolve"| WI
-    TPO -->|"OR match: a DONOR's project_id/native_team_key (same two arms above),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id directly -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
     WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
@@ -1107,10 +1106,44 @@ left), and re-run it if that is in doubt: the verb is idempotent (its `SELECT` a
 the identical predicate), so a clean second pass finds nothing and is a safe way to confirm no
 straggler wrote the row back.
 
+**CHAOS-4537 update: the `linear_team_key` arm no longer reads `team_project_ownership` at all.**
+CHAOS-4530 deliberately KEPT the team-key-shaped `team_project_ownership` row (the paragraph above,
+"the matching `team_project_ownership` row is not") because `resolveWorkItemProjectRef`
+(as it was then named) still reconstructed the `"{org_id}:linear:{team_key}"` identity and looked it
+up there. CHAOS-4537 removed that indirection: the renamed `resolveWorkItemTeamID`
+(`team_repo_ownership_derivation.go`) trusts a Linear work item's own `work_items.native_team_key`
+column **as the resolved `team_id` directly** — no `teamRepoOwnershipProjectRef` construction, no
+`team_project_ownership` lookup, for this arm. This was always a safe, value-preserving change: the
+ownership writer's team-key-shaped row's `team_id` column was always stamped to the team's own key
+(`linear_reference_catalog_route.go`'s "The MATCHING team_project_ownership row below" block,
+`teamID := team.ID` where `team.ID` is itself the team key —
+`linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`), the exact same string
+`work_items.native_team_key` already carries. The `project_id` arm (this section's main narrative,
+above) is completely unaffected — still tried first, still the same `team_project_ownership` lookup,
+still outranks `linear_team_key` via `teamRepoOwnershipResolutionArmPriority` on a conflict. The
+mermaid diagram above reflects this: the `linear_team_key` edge no longer originates from `TPO`.
+
+One correctness fix rode along: `deriveTeamRepoOwnership` used to return early with zero rows
+whenever `team_project_ownership` produced no `project_id`-arm links at all
+(`len(projectToTeam) == 0`) — sound before CHAOS-4537, since every resolution path used to require a
+`projectToTeam` entry, but it would have silently zeroed the `linear_team_key` arm the moment an org
+had ownership signal ONLY through that arm. Removed; the function no longer short-circuits on an
+empty `team_project_ownership` result.
+
+The team-key-shaped `team_project_ownership` row itself is **still written** today
+(`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial
+from this reader's point of view, kept only as a still-open fast-follow: once this redirect is proven
+live, the collector can stop writing it entirely, closing the last trace of the
+`"{org_id}:linear:{team_key}"` identity out of this schema. `linearTeamKeyProjectID` (still present in
+`team_repo_ownership_derivation.go`) is kept only so `linear_reference_catalog_test.go`'s
+`TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader` can still name that row's shape by
+construction — it has no other caller.
+
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s
-`buildDonorProjectIDResolver`) reuses these exact rules rather than a looser first-donor walk:
+`buildDonorTeamIDResolver`, renamed from `buildDonorProjectIDResolver` by CHAOS-4537) reuses these
+exact rules rather than a looser first-donor walk:
 - only **inheritance-safe** relationship types transfer a team
   (`relates_to`, `relates`, `duplicates`, `external_issue_key`); blocking links
   (`blocks` / `blocked_by`) routinely span teams and are ignored;

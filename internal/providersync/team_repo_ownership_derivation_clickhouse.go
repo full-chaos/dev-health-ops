@@ -91,17 +91,15 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
-	if len(projectLinks) == 0 {
-		// No project ownership synced for this org yet -- nothing to derive,
-		// and no reason to touch work_items/repos at all.
-		return 0, 0, false, nil, nil
-	}
 
 	repos, err := loadTeamRepoOwnershipRepos(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
 	if len(repos) == 0 {
+		// No repos synced for this org yet -- nothing derivable can attach to
+		// a repo regardless of which arm would otherwise resolve a team, so
+		// this gate is unaffected by CHAOS-4537 and stays first.
 		return 0, 0, false, nil, nil
 	}
 	repoIDs := make([]uuid.UUID, 0, len(repos))
@@ -123,10 +121,23 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
-	if len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
-		// team_project_ownership and repos both exist, but not a single
-		// linkage row of any kind has synced yet -- also the first-sync gap,
-		// not a genuine no-signal evaluation.
+	// CHAOS-4537: this used to be two separate early returns -- one right
+	// after loading projectLinks (before workItems/dependencyEdges/
+	// issuePRLinks were even loaded), one here -- both meaning "the
+	// first-sync gap: nothing has synced yet, not a genuine no-signal
+	// evaluation." That was sound when every resolution arm required a
+	// team_project_ownership row, but the linear_team_key arm now resolves
+	// straight from a Linear work item's own native_team_key column (see
+	// deriveTeamRepoOwnership's doc comment) -- an org with real,
+	// already-synced Linear work items but a team_project_ownership table
+	// that has not synced yet (a plausible ordering: work-items sync and
+	// team autoimport are independent per-config selections, CHAOS-4323) is
+	// NOT a first-sync gap for this arm, and the old projectLinks-only early
+	// return would have wrongly reported inputsReady=false and skipped
+	// resolution entirely. inputsReady is now false only when ALL FOUR
+	// already-synced input shapes are empty -- genuinely nothing to derive
+	// from, by any arm.
+	if len(projectLinks) == 0 && len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0 {
 		return 0, 0, false, nil, nil
 	}
 

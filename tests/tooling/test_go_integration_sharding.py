@@ -972,8 +972,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the fix that ties the identity predicate to each row's OWN org_id
     # (startsWith(id, concat(org_id, ':linear:'))) instead of a bare
     # substring test anywhere in id. 1246 -> 1247 top-level; 145 unchanged.
-    assert len(expected_provider_tests) == 1247
-    assert len(expected_integration_tests) == 145
+    #
+    # CHAOS-4537 added 1 new `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll,
+    # the ClickHouse-loading Derive() method's own red-first proof for the
+    # ticket's redirect: a Linear work item with native_team_key resolves
+    # even when team_project_ownership has zero rows for the org (Derive's
+    # early return used to gate on team_project_ownership alone before
+    # loading work_items at all -- fixed in the same change). 1247 -> 1248
+    # top-level; 145 -> 146 integration-tagged.
+    assert len(expected_provider_tests) == 1248
+    assert len(expected_integration_tests) == 146
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -989,7 +999,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1247
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1248
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1050,7 +1060,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1247
+    assert len(selected_tests) == len(set(selected_tests)) == 1248
     assert set(selected_tests) == expected_tests
 
 

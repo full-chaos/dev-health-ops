@@ -130,13 +130,20 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 // (team_autoimport_linear.py's default-project-key path, when a team has no
 // explicit Linear Project associations), while the Linear work item's OWN
 // project_id is the raw Linear Project UUID -- a disjoint id space (see
-// TeamRepoOwnershipWorkItem's doc comment). Before this fix this derived
+// TeamRepoOwnershipWorkItem's doc comment). Before CHAOS-4458b this derived
 // ZERO rows for a Linear-only org (confirmed locally on org 70d529e0: 0 of
 // 3168 project-id-bearing Linear work items matched their org's ownership
 // row). Exercises BOTH the own-resolution path (the Linear issue itself) and
 // the donor walk (a bare GitHub PR with no project_id of its own, linked via
 // a relates_to edge), and asserts the resolution-arm tally the worker's
 // telemetry now reports.
+//
+// CHAOS-4537 rewrite: the seeded team_project_ownership row for this
+// identity is now a DECOY, pointed at a WRONG team -- resolveWorkItemTeamID
+// no longer looks it up at all for the linear_team_key arm, and the resolved
+// team_id is the raw NativeTeamKey value ("CHAOS") directly, proven against
+// the real ClickHouse read path (loadTeamRepoOwnershipProjectLinks still
+// loads that decoy row; the assertion below proves it is never consulted).
 func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := "chaos-4458b-item1b-linear-team-key-org"
@@ -144,14 +151,15 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
-	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", orgID+":linear:CHAOS", "team-chaos", true, now)
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", orgID+":linear:CHAOS", "team-WRONG-decoy", true, now)
 	// The Linear issue's OWN project_id is a raw Linear Project UUID -- never
-	// matches the ownership row above -- but native_team_key ("CHAOS") does.
+	// matches the ownership row above -- but native_team_key ("CHAOS") is now
+	// the resolved team_id directly, no ownership row needed at all.
 	seedWorkItemWithNativeTeamKey(
 		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", uuid.Nil,
 		"11111111-1111-4111-8111-111111111111", "CHAOS", now,
 	)
-	// A bare GitHub PR: no project_id of its own, reaches team-chaos only
+	// A bare GitHub PR: no project_id of its own, reaches "CHAOS" only
 	// through the dependency-donor walk onto the Linear issue above.
 	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "github", repoID, "", now)
 	seedWorkItemDependency(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "linear:CHAOS-1", "relates_to", now)
@@ -180,8 +188,58 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 	}
 	got := readTeamRepoOwnership(t, ctx, conn, orgID)
 	row, ok := got["acme/linear-repo"]
-	if !ok || row.teamID != "team-chaos" {
-		t.Fatalf("expected acme/linear-repo -> team-chaos, got %+v", got)
+	if !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected acme/linear-repo -> CHAOS (the raw native_team_key, not the decoy ownership row's team-WRONG-decoy), got %+v", got)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll
+// is CHAOS-4537's own red-first proof for the ClickHouse-loading Derive
+// method (not just the pure deriveTeamRepoOwnership function already covered
+// above): an org with a real, already-synced Linear work item carrying
+// native_team_key, but ZERO team_project_ownership rows of ANY kind -- the
+// plausible real-world ordering where work-items sync and team autoimport
+// are independent per-config selections (CHAOS-4323) and the latter simply
+// has not run yet for this org. Before this fix, Derive's own early return
+// on `len(projectLinks) == 0` bailed out before even loading work_items,
+// reporting inputsReady=false and deriving nothing -- silently zeroing the
+// linear_team_key arm for exactly the org shape CHAOS-4537 was built to
+// stop depending on team_project_ownership for.
+func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-4537-linear-team-key-no-tpo-org"
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
+	// No seedTeamProjectOwnership call at all -- team_project_ownership has
+	// zero rows for this org, of any provider.
+	seedWorkItemWithNativeTeamKey(
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		"", "CHAOS", now,
+	)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	written, retracted, inputsReady, armCounts, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if !inputsReady {
+		t.Fatal("expected inputsReady=true -- a real, already-synced Linear work item with native_team_key is genuine input, even with zero team_project_ownership rows")
+	}
+	if retracted != 0 {
+		t.Fatalf("expected 0 rows retracted, got %d", retracted)
+	}
+	if written != 1 {
+		t.Fatalf("expected 1 row written via native_team_key alone, got %d", written)
+	}
+	if got := armCounts[TeamRepoOwnershipResolutionArmLinearTeamKey]; got != 1 {
+		t.Fatalf("expected armCounts[linear_team_key] = 1, got %d (%+v)", got, armCounts)
+	}
+	got := readTeamRepoOwnership(t, ctx, conn, orgID)
+	row, ok := got["acme/linear-repo"]
+	if !ok || row.teamID != "CHAOS" {
+		t.Fatalf("expected acme/linear-repo -> CHAOS via native_team_key with zero team_project_ownership rows, got %+v", got)
 	}
 }
 

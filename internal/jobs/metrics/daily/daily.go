@@ -505,6 +505,19 @@ func (handler *PartitionHandler) SetCompatRetryObserver(observer jobruntime.Dail
 	handler.compatRetryObserver = observer
 }
 
+// observeCompatRetry is a nil-safe helper (CHAOS-4543) around
+// compatRetryObserver.ObserveDailyMetricsCompatRetry -- every
+// releasePartitionWithReason branch in Work calls this immediately after,
+// mirroring the ambiguous_stuck branch's own inline nil-check + call, so a
+// new released-with-reason decision can never be added to one without the
+// other (the risk this ticket's own root cause was: a branch existing with
+// no accompanying telemetry).
+func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMetricsCompatRetryDecision) {
+	if handler.compatRetryObserver != nil {
+		_ = handler.compatRetryObserver.ObserveDailyMetricsCompatRetry(decision)
+	}
+}
+
 // computeNativeFamilies runs every registered native family executor for one
 // partition and returns the names that succeeded, in the same sorted order
 // SetNativeFamilies stored -- deterministic so a failure in one family never
@@ -632,6 +645,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// 'failed' outcome without cross-referencing River's attempt
 			// log or Sentry.
 			releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled")
+			handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProgressStalled)
 			return retryCompatibilityError(err)
 		}
 		if errors.Is(err, ErrCompatibilityCapacityExhausted) {
@@ -643,6 +657,33 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// row can tell a pids-capacity refusal apart from any other
 			// 'failed' outcome without cross-referencing River's attempt log.
 			releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted")
+			handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedCapacityExhausted)
+			return retryCompatibilityError(err)
+		}
+		if errors.Is(err, ErrCompatibilityResourceExhausted) {
+			// CHAOS-4543: same rationale as ErrCompatibilityProgressStalled
+			// above -- a resource_exhausted kill (the runner's RSS watchdog,
+			// its own RLIMIT_AS backstop, or a deliberate loader row-cap
+			// guard such as TestopsRowCapExceeded) is not a claim this row
+			// can never satisfy: a lower-volume day, a raised budget, or
+			// simply less concurrent load on a fresh attempt could all
+			// succeed later. Before this fix, this class fell through to the
+			// generic releasePartition path below with no failure_reason
+			// persisted -- a partition that strands this way (River
+			// eventually discards the job after its attempt budget) left an
+			// operator with a bare 'failed' row and no clue why, the exact
+			// CHAOS-4543 "raw text not captured" gap this ticket closes.
+			releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted")
+			handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted)
+			return retryCompatibilityError(err)
+		}
+		if errors.Is(err, ErrCompatibilityProcessSignaled) {
+			// CHAOS-4543: sibling of the resource_exhausted branch above -- a
+			// runner subprocess killed by an external signal (kernel OOM,
+			// SIGTERM) is the same non-terminal, retryable shape and hit the
+			// identical missing-branch gap.
+			releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled")
+			handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled)
 			return retryCompatibilityError(err)
 		}
 		releasePartition(handler.store, ctx, *claim)

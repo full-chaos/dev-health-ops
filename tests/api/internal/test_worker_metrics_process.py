@@ -131,6 +131,41 @@ async def _assert_process_reaped(pid: int) -> None:
     pytest.fail(f"metric compatibility process {pid} was not reaped")
 
 
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_keeps_the_tail_not_the_head() -> None:
+    """CHAOS-4543: _read_bounded_stderr must truncate from the FRONT,
+    keeping the LAST maximum_bytes -- the opposite of
+    _read_bounded_process_stream's ValueError-on-overflow, and the opposite
+    of a naive head-keeping bound, which this ticket's own local repro
+    proved silently discards the one line that explains a failure (the
+    verbose per-query INFO logging run_daily_metrics_job emits comes BEFORE
+    a guard like TestopsRowCapExceeded raises, so the useful content is
+    always at the tail)."""
+    # Deliberately non-periodic (a head-truncation and a tail-truncation of a
+    # periodic string can coincide byte-for-byte when the window aligns with
+    # the period -- caught in this ticket's own first draft of this test,
+    # which passed unchanged under a head-keeping mutation).
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"HEAD_MARKER_" + b"noise" * 20 + b"_TAIL_MARKER")
+    stream.feed_eof()
+    result = await worker_metrics._read_bounded_stderr(stream, maximum_bytes=20)
+    assert result.endswith(b"_TAIL_MARKER")
+    assert b"HEAD_MARKER_" not in result
+    assert result.startswith(b"...(truncated)\n")
+
+
+@pytest.mark.asyncio
+async def test_read_bounded_stderr_returns_everything_under_the_bound_untouched() -> (
+    None
+):
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"short diagnostic line")
+    stream.feed_eof()
+    result = await worker_metrics._read_bounded_stderr(stream, maximum_bytes=4096)
+    assert result == b"short diagnostic line"
+    assert b"truncated" not in result
+
+
 def test_metric_process_payload_round_trips_only_durable_execution_fields() -> None:
     execution = _execution()
     payload = worker_metrics._execution_process_payload(execution)
@@ -640,6 +675,61 @@ async def test_metric_compatibility_process_generic_failure_with_no_progress_is_
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_failed"
     assert excinfo.value.safe_to_retry is True
+
+
+@pytest.mark.asyncio
+async def test_metric_compatibility_process_resource_exhausted_embeds_captured_stderr_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4543 red-first proof (verified red against the pre-fix code via
+    a real local repro against org 70d529e0's dev-health-ops repo on a
+    high-volume day before this fix landed): the exit-code==2
+    (EXIT_RESOURCE_EXHAUSTED) branch used to build its
+    _CompatibilityProcessFailure message from a hardcoded static string
+    ("...exceeded its memory bound") regardless of what the runner
+    subprocess actually printed to stderr -- so a deliberate,
+    already-diagnostic guard failure (e.g. TestopsRowCapExceeded's
+    table/org_id/max_rows/fetched detail, logged via `logger.error` right
+    before the runner's own generic `except MemoryError:` print) never
+    survived into the message this process raises, and therefore never into
+    metric_compatibility_executions.failure_detail
+    (_mark_ambiguous/_mark_retry_authorized persist f"{reason}: {message}").
+
+    Drives a real subprocess that writes a large, distinct HEAD marker, then
+    >_MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES of filler (simulating the
+    verbose per-query INFO logging run_daily_metrics_job emits before a
+    failure), then one short TAIL marker, then exits 2 -- proving three
+    things at once: (1) the tail marker (the actually-useful diagnostic)
+    survives into the raised message, (2) the head marker (unhelpful noise
+    from long before the failure) does not, and (3) the whole message stays
+    small enough to survive metric_compatibility_executions.failure_detail's
+    own 1024-byte (head) truncation -- embedding the FULL captured stderr
+    instead of a second, smaller tail slice would have let that same
+    1024-byte cap discard the tail marker all over again (caught by this
+    ticket's own local repro before the second slice was added).
+    """
+    head_marker = "HEAD_ONLY_NOISE_MARKER_NEVER_SHOULD_SURVIVE"
+    tail_marker = "testops_row_cap_exceeded: table=test_case_results fetched=200001"
+    source = (
+        "import sys\n"
+        f"sys.stderr.write({head_marker!r} + chr(10))\n"
+        "sys.stderr.write('noise ' * 1000)\n"  # >> _MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES
+        f"sys.stderr.write({tail_marker!r} + chr(10))\n"
+        "sys.stderr.flush()\n"
+        "raise SystemExit(2)\n"
+    )
+    monkeypatch.setattr(
+        worker_metrics,
+        "_COMPATIBILITY_RUNNER_COMMAND",
+        _runner_command(source),
+    )
+    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
+        await worker_metrics._run_compatibility_process(_daily_execution())
+    assert excinfo.value.reason == "resource_exhausted"
+    message = str(excinfo.value)
+    assert tail_marker in message, message
+    assert head_marker not in message, message
+    assert len(message) < 1024, len(message)
 
 
 # --------------------------------------------------------------------------

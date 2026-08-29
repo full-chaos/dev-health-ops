@@ -12,6 +12,7 @@ import contextlib
 import errno
 import hashlib
 import json
+import logging
 import math
 import os
 import signal
@@ -59,11 +60,32 @@ from dev_health_ops.metrics.remaining_scope_contract import (
     parse_scope,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/internal/worker", include_in_schema=False)
 
 _EXECUTION_NAMESPACE = uuid.UUID("e6678cc4-a4e9-55c5-9354-9c6202a1834e")
 _MAX_EVIDENCE_BYTES = 4096
 _MAX_COMPATIBILITY_PROCESS_BYTES = 1024 * 1024
+# CHAOS-4543: bounds how much of the runner subprocess's stderr this process
+# captures at all -- generous, since the FULL capture is what `logger.error`
+# below logs (container-log/SigNoz visibility, no downstream size
+# constraint). Well under _MAX_COMPATIBILITY_PROCESS_BYTES: stderr is
+# diagnostic text, not the bounded stdout JSON protocol.
+_MAX_COMPATIBILITY_STDERR_BYTES = 8 * 1024
+# CHAOS-4543: bounds how much of the CAPTURED stderr gets threaded into
+# _CompatibilityProcessFailure's message, which _mark_ambiguous/
+# _mark_retry_authorized persist as f"{reason}: {message}"[:1024] into
+# metric_compatibility_executions.failure_detail -- a HEAD truncation. Since
+# the informative content sits at the END of a tail-captured stderr (see
+# _read_bounded_stderr's own docstring), embedding the full
+# _MAX_COMPATIBILITY_STDERR_BYTES capture would itself get head-truncated
+# away by that 1024-byte ledger cap, silently discarding exactly what this
+# ticket exists to preserve (verified against a real repro: an 8 KiB
+# embedded message left the useful tail past byte 1024, invisible in the
+# ledger). This is deliberately smaller than the ledger's own 1024 bytes to
+# leave room for the fixed "{reason}: {message} -- " prefix ahead of it.
+_MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES = 700
 _PROCESS_TERMINATION_TIMEOUT_SECONDS = 1.0
 _DISCONNECT_POLL_SECONDS = 0.1
 _COMPATIBILITY_RUNNER_COMMAND = (
@@ -1954,6 +1976,42 @@ async def _read_bounded_process_stream(
     return b"".join(chunks)
 
 
+async def _read_bounded_stderr(
+    stream: asyncio.StreamReader, maximum_bytes: int
+) -> bytes:
+    """Drain the runner subprocess's stderr, keeping only the last
+    ``maximum_bytes`` (truncating from the FRONT, not the back) rather than
+    raising.
+
+    CHAOS-4543: stderr is best-effort diagnostic text threaded into
+    _CompatibilityProcessFailure's message, never something whose own size
+    can turn into a DIFFERENT failure than the one actually classified (that
+    is why this is not just _read_bounded_process_stream at a smaller bound
+    -- that function's ValueError-on-overflow is correct for the bounded
+    JSON protocol on stdout, wrong for advisory stderr). Continues draining
+    past the bound (discarding the OLDEST bytes, not the newest) so a chatty
+    child's write() never blocks on a full pipe once this task decides it
+    has read enough to log -- but more importantly, keeps a TAIL window:
+    the run_daily_metrics_job compute path logs one INFO line per ClickHouse
+    query it issues (verbose, front-loaded) BEFORE anything fails, so a
+    head-truncated bound reliably captures only that startup chatter and
+    discards the one line that actually explains the failure (e.g.
+    TestopsRowCapExceeded's table/org_id/max_rows/fetched detail, logged
+    immediately before the process dies) -- observed directly against a
+    real high-volume day during this ticket's own local repro.
+    """
+    tail = b""
+    truncated = False
+    while chunk := await stream.read(64 * 1024):
+        tail += chunk
+        if len(tail) > maximum_bytes:
+            truncated = True
+            tail = tail[-maximum_bytes:]
+    if truncated:
+        tail = b"...(truncated)\n" + tail
+    return tail
+
+
 async def _terminate_compatibility_process(
     process: asyncio.subprocess.Process,
 ) -> None:
@@ -2179,9 +2237,21 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             *_COMPATIBILITY_RUNNER_COMMAND,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            # The child reserves stdout for the bounded JSON protocol and
-            # inherits stderr so compatibility diagnostics stay visible.
-            stderr=None,
+            # The child reserves stdout for the bounded JSON protocol.
+            # CHAOS-4543: stderr used to be inherited (stderr=None) so
+            # compatibility diagnostics stayed visible in this container's
+            # own log stream -- but that meant this process could never READ
+            # what the child printed, so a failure's message here was always
+            # one of a handful of hardcoded static strings regardless of how
+            # specific the child's own stderr was (e.g. TestopsRowCapExceeded's
+            # table/org_id/max_rows/fetched detail never survived past the
+            # child's own log line). Piped instead, bounded-read below, and
+            # re-logged via `logger` so container-log visibility is
+            # unchanged -- but now also threaded into the
+            # _CompatibilityProcessFailure message these branches raise,
+            # which _mark_ambiguous/_mark_retry_authorized persist into
+            # metric_compatibility_executions.failure_detail.
+            stderr=asyncio.subprocess.PIPE,
             start_new_session=os.name == "posix",
         )
     except OSError as exc:
@@ -2201,7 +2271,7 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             reason="capacity_exhausted",
             safe_to_retry=True,
         ) from exc
-    if process.stdin is None or process.stdout is None:
+    if process.stdin is None or process.stdout is None or process.stderr is None:
         await _terminate_compatibility_process(process)
         raise RuntimeError("metric compatibility process pipes are unavailable")
     started_at = _monotonic()
@@ -2229,6 +2299,19 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 else None
             ),
         )
+    )
+    # CHAOS-4543: draining stderr (not just reading it after exit) avoids the
+    # same full-pipe-buffer hang stdout's own concurrent read already avoids
+    # -- a chatty child (e.g. a full traceback on the generic except-Exception
+    # path) could otherwise block on write() forever with nobody reading.
+    # Uses its own truncate-not-raise helper (_read_bounded_stderr), not
+    # _read_bounded_process_stream: stderr is best-effort diagnostic text --
+    # exceeding its bound must never itself become the failure (raising
+    # ValueError here would replace the real classified failure below with
+    # an unrelated one), unlike stdout's bounded JSON protocol, where
+    # exceeding the bound IS a real failure.
+    stderr_task = asyncio.create_task(
+        _read_bounded_stderr(process.stderr, _MAX_COMPATIBILITY_STDERR_BYTES)
     )
     peak_rss_holder = [0]
     rss_kill_holder = [False]
@@ -2265,14 +2348,18 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             input_error = exc
         finally:
             process.stdin.close()
-        stdout, return_code = await asyncio.gather(stdout_task, process.wait())
+        stdout, stderr, return_code = await asyncio.gather(
+            stdout_task, stderr_task, process.wait()
+        )
     except BaseException:
         await _terminate_compatibility_process(process)
         raise
     finally:
         if not stdout_task.done():
             stdout_task.cancel()
-        await asyncio.gather(stdout_task, return_exceptions=True)
+        if not stderr_task.done():
+            stderr_task.cancel()
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         if not rss_task.done():
             rss_task.cancel()
         if stall_task is not None and not stall_task.done():
@@ -2363,6 +2450,25 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
                 "metric compatibility process returned an invalid response"
             )
         return decoded["outcome"]
+
+    # CHAOS-4543: decode+log the child's captured stderr once, here, for
+    # every non-zero exit -- covers both branches below (the rss-watchdog
+    # kill already builds its own detailed message from real numbers; the
+    # exit-code branch further down previously had only a hardcoded generic
+    # string). `errors="replace"` because a signal-killed/OOM-adjacent child
+    # can truncate mid-multibyte-character; this is diagnostic text, never
+    # something a decode error should hide entirely.
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if stderr_text:
+        logger.error(
+            "metric compatibility process stderr (run_id=%s partition_id=%s "
+            "operation=%s return_code=%s): %s",
+            execution.run_id,
+            execution.partition_id,
+            execution.operation,
+            return_code,
+            stderr_text,
+        )
 
     if rss_kill_holder[0]:
         # CHAOS-4361: this exit is OURS -- _poll_peak_rss_bytes observed real
@@ -2497,6 +2603,31 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     else:
         reason = "process_failed"
         message = "metric compatibility process failed"
+    # CHAOS-4543: append the child's own captured stderr (already logged in
+    # full above) to the classified message when there is any -- a signaled
+    # process (kernel OOM, SIGTERM) or a true last-gasp interpreter
+    # MemoryError may legitimately have written nothing before dying, in
+    # which case the bare classified message above is exactly as informative
+    # as before this ticket. But a deliberate guard raised with plenty of
+    # headroom (e.g. TestopsRowCapExceeded's table/org_id/max_rows/fetched
+    # detail) always DOES print something, and that detail previously never
+    # survived past the runner's own generic `except MemoryError:` handler --
+    # this is what closes that gap end to end into
+    # metric_compatibility_executions.failure_detail (via
+    # _mark_ambiguous/_mark_retry_authorized, which persist
+    # f"{reason}: {message}"[:1024]).
+    #
+    # Sliced to _MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES (smaller than the
+    # full logged capture) and to its OWN tail again here -- the informative
+    # content is at the end of an already-tail-captured stderr, and the
+    # ledger's[:1024] truncation is head-only, so embedding the full 8 KiB
+    # capture would let that same 1024-byte cap discard exactly the part
+    # this fix exists to preserve (verified against a real repro).
+    if stderr_text:
+        embedded = stderr_text[-_MAX_COMPATIBILITY_STDERR_MESSAGE_BYTES:]
+        if len(embedded) < len(stderr_text):
+            embedded = "...(truncated)\n" + embedded
+        message = f"{message} -- {embedded}"
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(reason=reason).inc()
     raise _CompatibilityProcessFailure(
         message, reason=reason, safe_to_retry=safe_to_retry

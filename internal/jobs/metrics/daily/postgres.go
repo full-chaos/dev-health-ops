@@ -1057,6 +1057,13 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	"ambiguous_refused":  {},
 	"progress_stalled":   {},
 	"capacity_exhausted": {},
+	// CHAOS-4543: resource_exhausted (the runner's RSS watchdog, RLIMIT_AS
+	// backstop, or a loader row-cap guard) and process_signaled (an external
+	// kill) are both non-terminal, retryable classes -- ReleasePartitionWithReason
+	// now persists them alongside the three reasons above instead of silently
+	// dropping the reason on the generic releasePartition path.
+	"resource_exhausted": {},
+	"process_signaled":   {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

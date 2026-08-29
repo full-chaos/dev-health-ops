@@ -12,7 +12,8 @@ import "github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags
 // CHAOS-4367 Wave 1's featureFlags resolver is the first field to use it.
 // reviewedges.QueryClient (CHAOS-4368 Wave 2), cognitiveload.QueryClient,
 // complexitytimeseries.QueryClient, and hotspots.QueryClient (CHAOS-4369
-// Wave 3) each have an identical single-method shape, so ClickHouse
+// Wave 3), and operatingreview.QueryClient (CHAOS-4352 Wave 4 Lane B,
+// CHAOS-4505) each have an identical single-method shape, so ClickHouse
 // satisfies them too without a second field or a wrapper -- Go's
 // interface-to-interface assignability only requires a matching method
 // set, not a shared declared type.

@@ -95,7 +95,7 @@ func main() {
 		}
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
-		log.Print("query-api: /query route mounted (featureFlags, reviewEdges, cognitiveLoad)")
+		log.Print("query-api: /query route mounted (featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, hotspots, operatingReview)")
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
 	}

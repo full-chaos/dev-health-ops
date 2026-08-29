@@ -407,6 +407,58 @@ func TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict(t *test
 	}
 }
 
+// TestGitLabTeamCatalogRouteHandlerMembersOnlyRunSkipsUnrelatedProjectsFetch
+// is the codex round-4 P1 regression proof: a Members-only run has no use
+// for project_keys (only Teams and Projects selections consume them), so it
+// must never issue -- and can never be truncation-poisoned by -- the
+// per-group /projects fetch. Before this fix, that fetch ran unconditionally
+// every group regardless of selection, so ANY failure or page-cap truncation
+// on it (an unrelated surface) would abort a Members-only run and discard
+// otherwise-valid member rows via the finding-#4 fail-closed guard.
+func TestGitLabTeamCatalogRouteHandlerMembersOnlyRunSkipsUnrelatedProjectsFetch(t *testing.T) {
+	var projectRequests int
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			_ = json.NewEncoder(w).Encode(group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/api/v4/groups/org/projects":
+			projectRequests++
+			http.Error(w, "must not be called for a Members-only run", http.StatusInternalServerError)
+		case "/api/v4/groups/org/members":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"username": "root-owner"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := gitlabTeamCatalogTestClient(t, server.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if projectRequests != 0 {
+		t.Fatalf("Members-only run must never call the per-group /projects endpoint, got %d requests", projectRequests)
+	}
+	if !batch.Result.Complete {
+		t.Fatal("Result.Complete = false, want true (no truncation possible in a Members-only run)")
+	}
+	if len(batch.Rows.Memberships) != 1 {
+		t.Fatalf("memberships = %d, want 1", len(batch.Rows.Memberships))
+	}
+}
+
 // TestGitLabTeamCatalogRouteHandlerReRaisesMemberFetchFailureUnderStrict
 // proves the strict (reference-discovery) side of the same ruling: a
 // group's /members fetch failure must still abort the whole walk with an

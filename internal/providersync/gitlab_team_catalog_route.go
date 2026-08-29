@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -186,28 +187,41 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 	for _, group := range groups {
 		groupPathValue := providerRelativePath(client, "api", "v4", "groups", strings.TrimSpace(group.FullPath))
-		projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
-		})
-		if err != nil {
-			return GitLabTeamCatalogBatch{}, err
-		}
-		evidence.Requests += projectPages.Pages
-		evidence.Pages += projectPages.Pages
-		if projectPages.PageBudgetExhausted {
-			evidence.Truncated = true
-		}
-		projectKeys := make([]string, 0, len(projectPages.Items))
-		for _, raw := range projectPages.Items {
-			var project gitlabTeamCatalogProjectPayload
-			if err := json.Unmarshal(raw, &project); err != nil {
-				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+		// codex review finding (round 4, P1): this per-group /projects
+		// fetch exists only to populate project_keys, which only the Teams
+		// row (repo_patterns/project_keys) and the Projects/ownership rows
+		// actually consume -- gate it on those two selections so a
+		// Members-only run never issues (or can be truncation-poisoned by)
+		// a fetch it has no use for. Previously unconditional: a
+		// Members-only run's project page-cap truncation on THIS
+		// unrelated surface would still trip the whole-run fail-closed
+		// guard added for finding #4 above and discard otherwise valid
+		// member rows.
+		var projectKeys []string
+		if selections.Teams || selections.Projects {
+			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
+			})
+			if err != nil {
+				return GitLabTeamCatalogBatch{}, err
 			}
-			path := strings.TrimSpace(project.PathWithNamespace)
-			if path == "" {
-				continue
+			evidence.Requests += projectPages.Pages
+			evidence.Pages += projectPages.Pages
+			if projectPages.PageBudgetExhausted {
+				evidence.Truncated = true
 			}
-			projectKeys = append(projectKeys, path)
+			projectKeys = make([]string, 0, len(projectPages.Items))
+			for _, raw := range projectPages.Items {
+				var project gitlabTeamCatalogProjectPayload
+				if err := json.Unmarshal(raw, &project); err != nil {
+					return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+				}
+				path := strings.TrimSpace(project.PathWithNamespace)
+				if path == "" {
+					continue
+				}
+				projectKeys = append(projectKeys, path)
+			}
 		}
 
 		if selections.Teams {
@@ -246,6 +260,16 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				}
 				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, teamID)
 				evidence.SkippedTeamMemberships++
+				// codex review finding (round 4, P2): TeamCatalogResult (the
+				// shared interface) has no field for a partial/degraded
+				// outcome, so a caller reading only that struct cannot tell
+				// this run's roster for teamID was carried forward rather
+				// than freshly observed. A structured log line is the
+				// interim signal -- same discipline GitHub's identical
+				// CHAOS-4461 fix uses ("pending a shared telemetry field"),
+				// not a new interface field of its own.
+				slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_fetch_failed",
+					"org_id", ref.OrgID, "team_id", teamID, "error", memberErr)
 			} else {
 				evidence.Requests += memberPages.Pages
 				evidence.Pages += memberPages.Pages

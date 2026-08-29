@@ -978,7 +978,13 @@ ch_query() {
   # a non-zero exit WITH its error text, so a failed CREATE/DROP is never
   # mistaken for success (the docker path gets that from clickhouse-client).
   if [ "${CH_TRANSPORT}" = "http" ]; then
-    curl --silent --show-error --fail-with-body \
+    # --noproxy '*' is not optional (codex review): CH_HOST is a cluster-local
+    # NodePort or loopback address, and an ambient HTTP_PROXY/ALL_PROXY would
+    # otherwise route this request through the proxy -- which fails against an
+    # otherwise reachable lane AND, if the proxy is up, hands it the
+    # X-ClickHouse-Key header and the DDL body. Never send a credential to a
+    # proxy the operator did not intend to involve.
+    curl --silent --show-error --fail-with-body --noproxy '*' \
       --max-time "${CH_HTTP_TIMEOUT_SECS:-30}" \
       --header "X-ClickHouse-User: ${CH_USER}" \
       --header "X-ClickHouse-Key: ${CH_PASS}" \

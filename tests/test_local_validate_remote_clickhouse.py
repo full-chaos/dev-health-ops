@@ -51,18 +51,32 @@ def _stub_bin(tmp_path: Path) -> Path:
     )
     docker.chmod(0o755)
 
+    # The curl stub records argv AND stdin, so the test can assert what was
+    # actually sent -- a stub that swallowed everything would let a ch_query()
+    # that became a no-op, or hit the wrong endpoint, pass the docker-absence
+    # check silently (codex review; the same false-pass family that already
+    # bit this file once).
+    curl_log = tmp_path / "curl-argv"
     curl = bindir / "curl"
-    curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    curl.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{curl_log}"\nexit 0\n',
+        encoding="utf-8",
+    )
     curl.chmod(0o755)
     return bindir
 
 
-def _run(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: str, env: dict[str, str], *, unset: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
+    merged = {**os.environ, **env}
+    for name in unset:
+        merged.pop(name, None)
     return subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
         text=True,
-        env={**os.environ, **env},
+        env=merged,
         cwd=_ROOT,
     )
 
@@ -91,6 +105,26 @@ def test_remote_clickhouse_transport_never_shells_out_to_docker(tmp_path: Path) 
         + f"\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
+    # Negative alone is not enough: a ch_query() that did nothing would also
+    # leave no docker marker. Assert what was actually sent.
+    curl_log = tmp_path / "curl-argv"
+    assert curl_log.exists(), (
+        "ch_query did not invoke curl under CH_TRANSPORT=http -- it did nothing"
+        f"\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    argv = curl_log.read_text(encoding="utf-8")
+    assert "http://192.0.2.10:30501/" in argv, f"wrong endpoint: {argv}"
+    assert "X-ClickHouse-User: ch" in argv, f"user header missing: {argv}"
+    assert "X-ClickHouse-Key: secret" in argv, f"key header missing: {argv}"
+    assert "SELECT 1" in argv, f"query body missing: {argv}"
+    assert "--noproxy" in argv, (
+        "the ClickHouse POST must bypass ambient proxies: a credential header "
+        f"must never be handed to an unintended proxy. argv: {argv}"
+    )
+    assert "ch_query_rc=0" in result.stdout, (
+        f"ch_query reported failure: {result.stdout} {result.stderr}"
+    )
+
 
 @pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
 def test_docker_transport_remains_the_default(tmp_path: Path) -> None:
@@ -98,12 +132,18 @@ def test_docker_transport_remains_the_default(tmp_path: Path) -> None:
     bindir = _stub_bin(tmp_path)
     marker = tmp_path / "docker-was-called"
 
+    # CH_TRANSPORT must be REMOVED, not merely left unset in this dict: when
+    # the gate itself runs in remote mode (`CH_TRANSPORT=http bash
+    # ci/local_validate.sh`) that export reaches pytest and would be inherited
+    # here, so this test would drive the http path, find no docker marker and
+    # fail on every remote-mode gate run (codex review).
     _run(
         _DRIVER % _GATE,
         {
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
             "CH_CONTAINER": "dev-health-clickhouse-1",
         },
+        unset=("CH_TRANSPORT",),
     )
 
     assert marker.exists(), (

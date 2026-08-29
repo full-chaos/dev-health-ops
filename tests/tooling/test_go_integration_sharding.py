@@ -917,7 +917,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # Merged total (this branch's +8/+1 delta applied on top of origin/main's
     # independent +3/+0 delta from the same 1225/144 base): 1225 -> 1236
     # top-level; 144 -> 145 integration-tagged.
-    assert len(expected_provider_tests) == 1236
+    #
+    # CHAOS-4530 ("a team key is not a project key") added 3 ordinary
+    # top-level tests in linear_reference_catalog_test.go (not `//go:build
+    # integration` -- in-memory GraphQL doer fixtures, no real ClickHouse):
+    # TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject (red-
+    # first proof that the synthetic {org}:linear:{teamKey} pseudo-project is
+    # never written ACTIVE to `projects`, only as a retiring tombstone),
+    # TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey
+    # (a real project's team_project_ownership row never carries the owning
+    # team's key as project_key), and
+    # TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader (the
+    # retained team-key-shaped ownership row stays byte-identical to what
+    # team_repo_ownership_derivation.go's linearTeamKeyProjectID reconstructs
+    # to look it up -- CHAOS-4458 part (b)'s reader). None is
+    # integration-tagged. 1236 -> 1239 top-level; 145 unchanged.
+    assert len(expected_provider_tests) == 1239
     assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
@@ -934,7 +949,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1236
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1239
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -995,7 +1010,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1236
+    assert len(selected_tests) == len(set(selected_tests)) == 1239
     assert set(selected_tests) == expected_tests
 
 

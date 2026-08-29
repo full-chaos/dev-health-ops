@@ -226,25 +226,39 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 		!batch.Evidence.TeamsComplete || !batch.Evidence.MembersComplete || !batch.Evidence.ProjectsComplete {
 		t.Fatalf("batch=%+v", batch)
 	}
-	// CHAOS-4530: only the ONE real Linear project is written to `projects`
-	// -- the team-derived pseudo-project (id={org}:linear:ENG,
-	// project_key=ENG, name="Engineering") is gone. The matching
+	// CHAOS-4530: the real Linear project is written to `projects` as
+	// before, PLUS a TOMBSTONE version of the team-derived pseudo-project
+	// (id={org}:linear:ENG) -- is_active=0, project_key=nil -- so
+	// ReplacingMergeTree FINAL retires any prior is_active=1 version an
+	// already-synced org still carries (codex review finding, 2026-08-29:
+	// omitting the write entirely leaves stale orgs exposing "team CHAOS"
+	// as an active project forever). So Projects is 2 (1 real + 1
+	// tombstone), and ProjectsWithoutKey excludes the tombstone (counts
+	// only real, active projects lacking a key) -- see below. The matching
 	// team_project_ownership row is still emitted (see the Ownership
 	// assertions below) -- CHAOS-4458 part (b)'s linearTeamKeyProjectID
-	// fallback arm still needs it -- so Ownership stays at 2 while Projects
-	// drops to 1.
+	// fallback arm still needs it -- so Ownership stays at 2.
 	if batch.Result.Teams != 1 || batch.Result.Members != 1 || batch.Result.Memberships != 1 ||
-		batch.Result.Projects != 1 || batch.Result.Ownership != 2 {
+		batch.Result.Projects != 2 || batch.Result.Ownership != 2 || batch.Result.ProjectsWithoutKey != 1 {
 		t.Fatalf("result=%+v", batch.Result)
 	}
 	if batch.Rows.Projects[0].State != "completed" || batch.Rows.Projects[0].IsActive != 1 ||
 		batch.Rows.Projects[0].LeadID == nil || *batch.Rows.Projects[0].LeadID != "user-1" {
 		t.Fatalf("projects=%+v", batch.Rows.Projects)
 	}
+	pseudoProjectID := claim.OrgID + ":linear:ENG"
+	foundTombstone := false
 	for _, project := range batch.Rows.Projects {
-		if project.ID == claim.OrgID+":linear:ENG" {
-			t.Fatalf("CHAOS-4530: team-key-shaped pseudo-project must never be written to `projects`: %+v", project)
+		if project.ID != pseudoProjectID {
+			continue
 		}
+		if project.IsActive != 0 || project.ProjectKey != nil {
+			t.Fatalf("CHAOS-4530: team-key-shaped pseudo-project must be a RETIRED tombstone (is_active=0, project_key=nil), not an active project: %+v", project)
+		}
+		foundTombstone = true
+	}
+	if !foundTombstone {
+		t.Fatalf("CHAOS-4530: expected a tombstone row retiring %q, found none: %+v", pseudoProjectID, batch.Rows.Projects)
 	}
 	var realOwnership, teamKeyOwnership *linearReferenceOwnershipRow
 	for index := range batch.Rows.Ownership {
@@ -544,21 +558,33 @@ func chaos4530CollectReferenceCatalog(t *testing.T, selectProjects bool) LinearR
 }
 
 // TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject is the
-// red-first proof for CHAOS-4530 item (a): the collector must never write a
-// {org}:linear:{teamKey}-shaped row into `projects`, for ANY selection
-// combination (including Projects deselected, when the pseudo-project used
-// to be the ONLY project row written at all).
+// red-first proof for CHAOS-4530 item (a): the collector must never write an
+// ACTIVE {org}:linear:{teamKey}-shaped row into `projects`, for ANY
+// selection combination (including Projects deselected, when the
+// pseudo-project used to be the ONLY project row written at all). A
+// RETIRED tombstone version of that identity (is_active=0, project_key=nil)
+// is expected and required (codex review, 2026-08-29): omitting the write
+// entirely would leave an already-synced org's prior is_active=1 version as
+// the ReplacingMergeTree FINAL result forever, never actually retiring it.
 func TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject(t *testing.T) {
 	for _, selectProjects := range []bool{true, false} {
 		batch := chaos4530CollectReferenceCatalog(t, selectProjects)
 		pseudoID := chaos4530SyntheticOrgID + ":linear:QA"
+		foundTombstone := false
 		for _, project := range batch.Rows.Projects {
-			if project.ID == pseudoID {
-				t.Fatalf("selectProjects=%v: found team-key-shaped pseudo-project in `projects`: %+v", selectProjects, project)
+			if project.ID != pseudoID {
+				if project.ProjectKey != nil && *project.ProjectKey == "QA" {
+					t.Fatalf("selectProjects=%v: found a `projects` row keyed by the team's own key: %+v", selectProjects, project)
+				}
+				continue
 			}
-			if project.ProjectKey != nil && *project.ProjectKey == "QA" {
-				t.Fatalf("selectProjects=%v: found a `projects` row keyed by the team's own key: %+v", selectProjects, project)
+			if project.IsActive != 0 || project.ProjectKey != nil {
+				t.Fatalf("selectProjects=%v: team-key-shaped pseudo-project must be a RETIRED tombstone (is_active=0, project_key=nil), found active/keyed: %+v", selectProjects, project)
 			}
+			foundTombstone = true
+		}
+		if !foundTombstone {
+			t.Fatalf("selectProjects=%v: expected a tombstone row retiring %q, found none: %+v", selectProjects, pseudoID, batch.Rows.Projects)
 		}
 	}
 }

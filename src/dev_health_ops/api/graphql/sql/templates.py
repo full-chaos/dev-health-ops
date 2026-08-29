@@ -512,7 +512,7 @@ LEFT JOIN (
       AND toString(team_id) != ''
     GROUP BY team_id
 ) AS activity ON activity.team_id = t.id
-ORDER BY count DESC, t.name ASC
+ORDER BY count DESC, t.name ASC, t.id ASC
 LIMIT %(limit)s
 SETTINGS max_execution_time = %(timeout)s
 """

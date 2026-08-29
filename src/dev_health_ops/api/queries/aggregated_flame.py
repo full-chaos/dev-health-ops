@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
+
 from .client import query_dicts
 from .investment import PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
 
@@ -102,12 +104,17 @@ async def fetch_code_hotspots(
 
     where_clause = " AND ".join(filters)
 
+    # CHAOS-4459 (codex review round 2): file_metrics_daily is append-only --
+    # a redrive/recompute writes a second (repo_id, day, path) row with a
+    # fresher computed_at, never replacing the first. dedup_from() collapses
+    # to the latest generation per key before summing churn, same fix as
+    # api/queries/heatmap.py's readers.
     query = f"""
         SELECT
             toString(repo_id) AS repo_id,
             path AS file_path,
             sum(churn) AS total_churn
-        FROM file_metrics_daily
+        FROM {dedup_from("file_metrics_daily")}
         WHERE {where_clause}
         GROUP BY repo_id, path
         HAVING total_churn >= %(min_churn)s

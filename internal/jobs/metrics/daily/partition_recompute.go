@@ -67,6 +67,26 @@ func recomputeNonce(generation string) (string, bool) {
 	return nonce, true
 }
 
+// baseGeneration strips a trailing "#recompute:<nonce>" marker, if present,
+// returning the original producer-classified value underneath (codex
+// review round 2, P2). A day recomputed more than once must REPLACE its
+// marker rather than accumulate a new one on top of the last: (1) an
+// unbounded suffix chain would eventually overflow even the widened text
+// column in practice, and (2) every eligibility check in this file
+// (isScheduledFanoutGeneration, which itself bounds its input to 64 bytes
+// for ordinary new-run validation elsewhere in this package) must judge
+// the run by its BASE classification, not by whatever the last recompute
+// pass happened to append -- checking the raw composited string against
+// that 64-byte-bounded helper would reject every second-and-later
+// recompute of the same day outright, even though the run is still
+// genuinely the org-wide fan-out run underneath.
+func baseGeneration(generation string) string {
+	if base, _, found := strings.Cut(generation, recomputeGenerationMarker); found {
+		return base
+	}
+	return generation
+}
+
 // redriveFinalizePublisher is the optional capability CompletePartition
 // uses to publish a fresh-key finalize job for a run RedrivePartitionsForRange
 // reset (CHAOS-4459). Deliberately a narrow type assertion against the
@@ -292,8 +312,15 @@ FOR UPDATE OF run`, runID).Scan(
 	// row lock, matching the candidate scan's own fan-out-only restriction
 	// (codex review, P1) -- a non-fan-out generation must never reach the
 	// reset below even if something upstream let it through.
+	//
+	// Checked against baseGeneration(priorGeneration), not priorGeneration
+	// directly (codex review round 2, P2): a day already recomputed once
+	// carries a "<base>#recompute:<nonce>" generation, which
+	// isScheduledFanoutGeneration's own 64-byte bound (shared with ordinary
+	// new-run validation elsewhere in this package) would otherwise reject
+	// outright, permanently blocking any SECOND recompute of the same day.
 	if status != "succeeded" || !hasPartitions || !allPartitionsSucceeded ||
-		!isScheduledFanoutGeneration(priorGeneration) {
+		!isScheduledFanoutGeneration(baseGeneration(priorGeneration)) {
 		return false, nil
 	}
 
@@ -311,10 +338,14 @@ FOR UPDATE OF run`, runID).Scan(
 	// so an unchanged generation would make a redriven attempt land on the
 	// SAME identity and get silently skipped rather than actually
 	// recomputing. run_id itself is unchanged: only the generation VALUE
-	// this run is stored under moves. Appended (recomputeGenerationMarker's
-	// own doc comment), not replaced: preserves the fixed-schedule
-	// classification prefix _LATEST_DAILY_METRICS_RUN_SQL keys off.
-	newGeneration := priorGeneration + recomputeGenerationMarker + nonce
+	// this run is stored under moves. Appended to the BASE classification
+	// (recomputeGenerationMarker's own doc comment), never accumulated on
+	// top of a prior recompute's own marker (codex review round 2, P2) --
+	// a second-or-later recompute REPLACES the previous "#recompute:..."
+	// suffix rather than growing the string further, keeping the value's
+	// length constant regardless of how many times a day is recomputed and
+	// keeping baseGeneration() a single strip, not a loop.
+	newGeneration := baseGeneration(priorGeneration) + recomputeGenerationMarker + nonce
 	run.Generation = newGeneration
 
 	// Provenance FIRST (CHAOS-4405 precedent, team-lead's approval

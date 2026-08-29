@@ -208,6 +208,40 @@ FROM daily_metrics_partition_recompute_events WHERE run_id = $1::uuid`, runID).
 	if provenanceRowCount != 2 {
 		t.Fatalf("provenance rows after 2 invocations = %d, want 2 (append-only)", provenanceRowCount)
 	}
+
+	// CHAOS-4459 (codex review round 2, P2): the second pass's own
+	// generation must REPLACE the first pass's "#recompute:part-nonce-1"
+	// marker with "#recompute:part-nonce-2", not accumulate on top of it
+	// -- and must still start with the fan-out classification prefix, or
+	// this run becomes permanently ineligible for a third recompute (and
+	// invisible to the recommendations readiness gate) the moment it is
+	// recomputed twice.
+	var generationAfterSecondReset string
+	if err := pool.QueryRow(ctx, `SELECT generation FROM daily_metrics_runs WHERE id = $1::uuid`, runID).
+		Scan(&generationAfterSecondReset); err != nil {
+		t.Fatal(err)
+	}
+	wantSecondGeneration := originalGeneration + recomputeGenerationMarker + "part-nonce-2"
+	if generationAfterSecondReset != wantSecondGeneration {
+		t.Fatalf("generation after second reset = %q, want %q (replace, not accumulate, the recompute marker)", generationAfterSecondReset, wantSecondGeneration)
+	}
+	if !strings.HasPrefix(generationAfterSecondReset, "fixed-schedule:daily_metrics_fanout:") {
+		t.Fatalf("generation after second reset = %q, want it to still start with the fan-out classification prefix", generationAfterSecondReset)
+	}
+
+	// The second provenance row's prior_generation must be the FIRST
+	// pass's composited value (already >64 bytes) -- proving
+	// prior_generation's own widened column actually accepted it.
+	var secondPriorGeneration string
+	if err := pool.QueryRow(ctx, `
+SELECT prior_generation FROM daily_metrics_partition_recompute_events
+WHERE run_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, runID).
+		Scan(&secondPriorGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if secondPriorGeneration != generationAfterReset {
+		t.Fatalf("second provenance row's prior_generation = %q, want the first pass's composited generation %q", secondPriorGeneration, generationAfterReset)
+	}
 }
 
 // TestRedrivePartitionsForRangeRefusesANonFanoutSucceededRun proves the

@@ -98,12 +98,16 @@ def upgrade() -> None:
         # family in the partition").
         sa.Column("family", sa.String(length=64), nullable=False),
         # The run's own columns, captured BEFORE the reset this row
-        # records. daily_metrics_runs.status is varchar(16), generation is
-        # varchar(64) -- see CHAOS-4043 (ops/AGENTS.md) for why a
-        # mismatched column width here would silently defeat this table's
-        # whole purpose at parse time against the real schema.
+        # records. daily_metrics_runs.status is varchar(16) -- see
+        # CHAOS-4043 (ops/AGENTS.md) for why a mismatched column width here
+        # would silently defeat this table's whole purpose at parse time
+        # against the real schema. prior_generation is `text`, matching
+        # daily_metrics_runs.generation's own widened type below: a day
+        # recomputed more than once captures the PREVIOUS pass's own
+        # "<base>#recompute:<nonce>" value as this pass's prior_generation,
+        # which already exceeds 64 bytes (codex review round 2, P2).
         sa.Column("prior_status", sa.String(length=16), nullable=False),
-        sa.Column("prior_generation", sa.String(length=64), nullable=False),
+        sa.Column("prior_generation", sa.Text(), nullable=False),
         sa.Column("actor", sa.String(length=32), nullable=False),
         # The operator's own --review-evidence text, verbatim.
         sa.Column("reason", sa.Text(), nullable=False),
@@ -148,12 +152,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "daily_metrics_runs",
-        "generation",
-        type_=sa.String(length=64),
-        existing_type=sa.Text(),
-        existing_nullable=False,
-    )
+    # Deliberately does NOT narrow daily_metrics_runs.generation back to
+    # varchar(64) (codex review round 2, P1): once the partition-recompute
+    # verb has actually run against this database, live rows carry a
+    # "<original>#recompute:<nonce>" value that already exceeds 64 bytes --
+    # narrowing the column would fail outright with "value too long for
+    # type character varying(64)" before it ever reached dropping this
+    # migration's own table, blocking rollback in exactly the environment
+    # (post-use) where a downgrade is most likely to be run. A widened
+    # text column is a strict superset of varchar(64) for every existing
+    # reader (none of them assumes a fixed width -- see this ticket's own
+    # PR body for the full Go/Python audit), so leaving it widened is safe
+    # and forward-compatible; only this migration's own new table is
+    # reverted.
     op.drop_index("ix_dpre_run_id", table_name=_TABLE)
     op.drop_table(_TABLE)

@@ -1096,7 +1096,7 @@ CREATE TABLE daily_metrics_finalize_redrive_events (
 );
 CREATE TABLE daily_metrics_partition_recompute_events (
  id uuid PRIMARY KEY, run_id uuid NOT NULL, org_id uuid NOT NULL, target_day date NOT NULL,
- family varchar(64) NOT NULL, prior_status varchar(16) NOT NULL, prior_generation varchar(64) NOT NULL,
+ family varchar(64) NOT NULL, prior_status varchar(16) NOT NULL, prior_generation text NOT NULL,
  actor varchar(32) NOT NULL, reason text NOT NULL, nonce varchar(64) NOT NULL,
  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CONSTRAINT ck_dpre_actor CHECK (actor IN ('partition-recompute')),

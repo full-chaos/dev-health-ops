@@ -154,3 +154,27 @@ func TestExecuteBreakdown_QueryErrorPropagates(t *testing.T) {
 		t.Fatal("expected error to propagate")
 	}
 }
+
+// TestExecuteBreakdown_MidStreamFailureDiscardsPartialRows is the
+// PARTIAL-ROW CLASS regression guard (BRIEF.md; found live in Lane B's
+// fetchPeriodRows).
+func TestExecuteBreakdown_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeSingleClient{
+		response: &fakeRowScanner{
+			rows: [][]any{
+				{"repo-a", 10.0},
+				{"repo-b", 5.0},
+			},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	q := compiledQuery{sql: "SELECT ..."}
+	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if result.Items != nil {
+		t.Fatalf("expected nil items on mid-stream failure, got %d partial items: %+v", len(result.Items), result.Items)
+	}
+}

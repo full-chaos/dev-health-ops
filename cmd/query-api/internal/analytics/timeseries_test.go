@@ -161,3 +161,28 @@ func TestExecuteTimeseries_GroupsByDimensionValue(t *testing.T) {
 		t.Fatalf("unexpected results[1]: %+v", results[1])
 	}
 }
+
+// TestExecuteTimeseries_MidStreamFailureDiscardsPartialRows is the
+// PARTIAL-ROW CLASS regression guard (BRIEF.md; found live in Lane B's
+// fetchPeriodRows -- a scanner that Scan()s some rows successfully and
+// THEN fails must not leave those rows feeding the caller).
+func TestExecuteTimeseries_MidStreamFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeSingleClient{
+		response: &fakeRowScanner{
+			rows: [][]any{
+				{mustDate(t, "2026-01-01"), "repo-a", 1.0},
+				{mustDate(t, "2026-01-02"), "repo-a", 2.0},
+			},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	q := compiledQuery{sql: "SELECT ..."}
+	results, err := ExecuteTimeseries(context.Background(), client, q, "REPO", "COUNT")
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if results != nil {
+		t.Fatalf("expected nil results on mid-stream failure, got %d partial results: %+v", len(results), results)
+	}
+}

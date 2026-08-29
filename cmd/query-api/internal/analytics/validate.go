@@ -91,6 +91,47 @@ const (
 // table the compiler ever selects FROM has a scalar per-row author
 // identity column, so AUTHOR is not a valid GROUP BY/breakdown dimension
 // -- only usable via who.developers / scope.level=developer filtering.
+//
+// KNOWN GAP, established by reading the upstream path, not assumed
+// (chris/orchestrator ruling on CHAOS-4538): a WORK_TYPE request whose
+// resolved `useInvestment` is `false` is structurally invalid --
+// `investment_metrics_daily` (this function's non-investment source,
+// see nonInvestmentSourceAndDateFilter) has no `work_item_type` column
+// at all (`_get_context_params`'s own comment, compiler.py:147-150), yet
+// this function's non-investment branch below still maps
+// DimensionWorkType -> "work_item_type" unconditionally, faithfully
+// mirroring Python's OWN unguarded mapping (validate.py:65). NOTHING
+// upstream of this function -- not validate_sankey_path, not
+// _get_context_params, not compile_sankey/compile_timeseries/
+// compile_breakdown -- rejects this combination on either side; it
+// reaches ClickHouse and fails there with an unknown-identifier error.
+// That is a LOUD failure on both planes (a real SQL error, not a
+// silent wrong answer), so this port intentionally does NOT invent a
+// cleaner rejection Python doesn't have -- doing so would make Go
+// diverge from Python's actual (ugly, but not silent) runtime
+// behavior for this combination, which is worse for dual-run parity
+// than matching Python's own gap. THEME/SUBCATEGORY are NOT affected
+// the same way: their non-investment mappings (investment_area/
+// project_stream) ARE real columns on investment_metrics_daily, so an
+// explicit useInvestment=false for those dimensions is a legitimate,
+// different-semantics, successfully-executing query -- not a defect.
+//
+// The trap this matters for: `force_investment` in Python's
+// `_get_context_params` wins whenever it is not None -- INCLUDING an
+// explicit `False` -- so a client-sent `useInvestment: false` on a
+// WORK_TYPE-dimensioned sankey/flowMatrix-AUTHOR-THEME-SUBCATEGORY
+// request bypasses the dimension-based auto-routing
+// (`investment_dims = {THEME, SUBCATEGORY, WORK_TYPE}`) that would
+// otherwise have caught it. resolve_analytics's own use_investment
+// resolution differs by operation: timeseries/breakdown always coerce
+// via `bool(batch.use_investment)` (analytics.py:554, never leaves
+// force_investment as None), while sankey/flowMatrix preserve `None`
+// when both the per-item and batch flags are unset
+// (`sk_req.use_investment if ... is not None else batch.use_investment`,
+// analytics.py) -- meaning ONLY sankey/flowMatrix's auto-route can ever
+// actually fire; timeseries/breakdown's force_investment is always a
+// concrete bool and therefore NEVER auto-routes, so their WORK_TYPE gap
+// is reachable through an unset OR explicit-false useInvestment alike.
 func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if dim == DimensionAuthor {
 		return "", newValidationError("dimension", string(dim),

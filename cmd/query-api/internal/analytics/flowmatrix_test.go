@@ -15,18 +15,27 @@ import (
 
 // --- fakes ---------------------------------------------------------------
 
-// fakeRowScanner is one scripted response.
+// fakeRowScanner is one scripted response. errAfter lets a test express a
+// MID-STREAM failure -- some rows Scan() successfully, THEN iteration
+// fails -- distinct from a pre-failed scanner that yields zero rows
+// before the first Next(). The two are NOT interchangeable as a test of
+// "does the caller discard a partial slice on error": a pre-failed
+// scanner (errAfter=0, the default) passes whether or not the caller has
+// the CHAOS-4534-sibling partial-row bug (Lane B's finding, this
+// package's BRIEF.md "PARTIAL-ROW CLASS" section) -- only errAfter>0
+// actually distinguishes correct code from buggy code.
 type fakeRowScanner struct {
-	rows   [][]any
-	cursor int
-	err    error
+	rows     [][]any
+	cursor   int
+	err      error
+	errAfter int
 }
 
 func (f *fakeRowScanner) Next() bool {
 	if f == nil {
 		return false
 	}
-	if f.err != nil {
+	if f.err != nil && f.cursor >= f.errAfter {
 		return false
 	}
 	return f.cursor < len(f.rows)
@@ -412,5 +421,53 @@ func TestExecuteFlowMatrix_EdgesErrorPropagates(t *testing.T) {
 	}
 	if !client.nodesCalled {
 		t.Fatal("nodes query should still have been issued despite the edges error")
+	}
+}
+
+// TestExecuteFlowMatrix_MidStreamNodesFailureDiscardsPartialRows is the
+// PARTIAL-ROW CLASS regression guard (BRIEF.md, found live in Lane B's
+// fetchPeriodRows): a scanner that yields ONE row successfully and THEN
+// fails must not leave that row feeding the caller -- ExecuteFlowMatrix
+// must return nil/empty, never a 1-row slice that looks like a complete,
+// merely-small result.
+func TestExecuteFlowMatrix_MidStreamNodesFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeClient{
+		nodesResponse: &fakeRowScanner{
+			rows:     [][]any{{"TEAM", "team-a", uint64(7)}, {"TEAM", "team-b", uint64(3)}},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1, // first row scans fine, second Next() call fails
+		},
+		edgesResponse: &fakeRowScanner{},
+	}
+	nodesQ := compiledQuery{sql: flowMatrixTeamNodesTemplate}
+	edgesQ := compiledQuery{sql: flowMatrixTeamEdgesTemplate}
+
+	nodes, _, err := ExecuteFlowMatrix(context.Background(), client, nodesQ, edgesQ)
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if nodes != nil {
+		t.Fatalf("expected nil nodes on mid-stream failure, got %d partial rows: %+v", len(nodes), nodes)
+	}
+}
+
+func TestExecuteFlowMatrix_MidStreamEdgesFailureDiscardsPartialRows(t *testing.T) {
+	client := &fakeClient{
+		nodesResponse: &fakeRowScanner{},
+		edgesResponse: &fakeRowScanner{
+			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", uint64(2)}, {"TEAM", "TEAM", "team-b", "team-c", uint64(1)}},
+			err:      errors.New("mid-stream failure"),
+			errAfter: 1,
+		},
+	}
+	nodesQ := compiledQuery{sql: flowMatrixTeamNodesTemplate}
+	edgesQ := compiledQuery{sql: flowMatrixTeamEdgesTemplate}
+
+	_, edges, err := ExecuteFlowMatrix(context.Background(), client, nodesQ, edgesQ)
+	if err == nil {
+		t.Fatal("expected mid-stream failure to surface as an error")
+	}
+	if edges != nil {
+		t.Fatalf("expected nil edges on mid-stream failure, got %d partial rows: %+v", len(edges), edges)
 	}
 }

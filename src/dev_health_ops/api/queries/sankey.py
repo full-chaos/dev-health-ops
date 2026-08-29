@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
@@ -142,13 +143,19 @@ async def fetch_hotspot_rows(
     limit: int,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    # CHAOS-4459 (codex review round 2): file_metrics_daily is append-only --
+    # a redrive/recompute writes a second (repo_id, day, path) row with a
+    # fresher computed_at, never replacing the first. dedup_from() collapses
+    # to the latest generation per key before summing churn -- all three
+    # readers of the table below (the two quantile CTEs and the main
+    # query), same fix as api/queries/heatmap.py's readers.
     query = f"""
         WITH
             (
                 SELECT quantileExact(0.7)(churn) FROM (
                     SELECT
                         sum(metrics.churn) AS churn
-                    FROM file_metrics_daily AS metrics
+                    FROM {dedup_from("file_metrics_daily AS metrics")}
                     INNER JOIN repos AS r ON r.id = metrics.repo_id
                     WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s
                         AND metrics.org_id = %(org_id)s
@@ -160,7 +167,7 @@ async def fetch_hotspot_rows(
                 SELECT quantileExact(0.3)(churn) FROM (
                     SELECT
                         sum(metrics.churn) AS churn
-                    FROM file_metrics_daily AS metrics
+                    FROM {dedup_from("file_metrics_daily AS metrics")}
                     INNER JOIN repos AS r ON r.id = metrics.repo_id
                     WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s
                         AND metrics.org_id = %(org_id)s
@@ -184,7 +191,7 @@ async def fetch_hotspot_rows(
                 'feature'
             ) AS change_type,
             sum(metrics.churn) AS churn
-        FROM file_metrics_daily AS metrics
+        FROM {dedup_from("file_metrics_daily AS metrics")}
         INNER JOIN repos AS r
             ON r.id = metrics.repo_id
         WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s

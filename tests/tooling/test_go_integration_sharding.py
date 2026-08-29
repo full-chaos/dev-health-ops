@@ -796,8 +796,85 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # gating oracle), and 7 integration-tagged tests in
     # team_repo_ownership_derivation_integration_test.go (//go:build
     # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
-    assert len(expected_provider_tests) == 1115
-    assert len(expected_integration_tests) == 126
+    #
+    # CHAOS-4431 (Linear team-catalog native route) added 15 new top-level
+    # tests in internal/providersync across its codex review rounds: 5
+    # ordinary tests in linear_reference_catalog_test.go
+    # (TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows,
+    # TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows,
+    # TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall,
+    # TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships,
+    # TestLinearReferenceTeamRosterFromMembershipsScopesByTeam -- round 2/3's
+    # non-strict partial-prefix and roster-rebuild-after-guard fixes), 9
+    # ordinary tests in team_membership_conflict_guard_test.go
+    # (TestMembershipConflictsWithManualState* x8 + Test
+    # ApplyTeamMembershipConflictGuardCountsAndFiltersSkippedRows -- the #6
+    # guard's same-team-confirms/different-team-conflicts semantics, corrected
+    # twice across rounds 2-3), and 1 integration-tagged test in
+    # linear_reference_catalog_effects_integration_test.go
+    # (TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites,
+    # //go:build integration -- the sprints-fixture-extended ClickHouse
+    # effects suite). 1115 -> 1130 top-level; 126 -> 127 integration-tagged.
+    #
+    # CHAOS-4434 (GitHub team-catalog native collector) added 34 new
+    # top-level tests in internal/providersync, all new files: 10
+    # integration-tagged in github_team_catalog_collector_integration_test.go
+    # (roster preservation, sync_policy/membership-conflict guards, strict
+    # fail-closed), 1 ordinary in github_team_catalog_collector_test.go, 4
+    # integration-tagged in github_team_catalog_effects_integration_test.go
+    # (ClickHouse effects incl. team_repo_ownership), 4 ordinary live-Python
+    # oracle tests in github_team_catalog_generic_oracle_test.go, 8 ordinary
+    # in github_team_catalog_guards_test.go (the GitHub-native twin of
+    # CHAOS-4431's membership-conflict guard semantics), and 7 ordinary in
+    # github_team_catalog_route_test.go. 1130 -> 1164 top-level; 127 -> 141
+    # integration-tagged.
+    #
+    # CHAOS-4432 (GitLab team-catalog native collector) added 45 new
+    # top-level tests in internal/providersync, all new files: 3
+    # integration-tagged in gitlab_team_catalog_effects_integration_test.go
+    # (ClickHouse effects), 2 ordinary in
+    # gitlab_team_catalog_guards_fakeconn_test.go, 8 ordinary in
+    # gitlab_team_catalog_guards_test.go (the GitLab-native twin of
+    # CHAOS-4431/CHAOS-4434's membership-conflict guard semantics), 1
+    # ordinary each in gitlab_team_catalog_ownership_oracle_test.go and
+    # gitlab_team_catalog_project_oracle_test.go and
+    # gitlab_team_catalog_team_oracle_test.go (live-Python oracles), 3
+    # ordinary in gitlab_team_catalog_roster_preservation_scope_test.go, 23
+    # ordinary in gitlab_team_catalog_test.go, and 3 ordinary in
+    # gitlab_team_catalog_writeteams_fakeconn_test.go. A tenth new file,
+    # gitlab_team_catalog_live_manual_test.go, is gated `//go:build
+    # manuallive` (a manual, non-CI, live-provider-token check) rather than
+    # `integration` -- go list -tags=integration never includes it, so its 1
+    # test does NOT count toward either pin here. 1164 -> 1209 top-level;
+    # 141 -> 144 integration-tagged.
+    #
+    # CHAOS-4444 (team-level + identity-drift staged-review engine,
+    # replacing CHAOS-4431's plain-skip interim guards) added 12 new
+    # top-level tests in internal/providersync, both new files, neither
+    # `//go:build integration` (fake driver.Conn doubles, no real
+    # ClickHouse): 7 ordinary in team_drift_json_test.go (Python-json.dumps-
+    # parity pins for the canonical JSON encoder and change_id hash) and 5
+    # ordinary in team_drift_review_fakeconn_test.go (the shared team-level
+    # engine's auto-apply/stage/resolve/supersede paths). No new
+    # integration-tagged tests. 1209 -> 1221 top-level; 144 unchanged.
+    #
+    # CHAOS-4444 follow-up (team-lead ruling: add live Python oracle pairs
+    # for the drift-row outputs before the codex round) added 4 more
+    # ordinary top-level tests in a new file, team_drift_generic_oracle_test.go
+    # (also not `//go:build integration` -- these shell out to the live
+    # Python interpreter via the SAME python_generic_row_oracle.py harness
+    # every other oracle pair in this package uses, gated by
+    # DEV_HEALTH_LIVE_PYTHON_ORACLES, not by the `integration` build tag):
+    # TestTeamCatalogObservedRowMatchesLivePythonProducer,
+    # TestTeamCatalogChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftChangeIDMatchesLivePythonProducer,
+    # TestIdentityDriftConflictDecisionMatchesLivePythonProducer -- pinning
+    # clickhouse_team_drift_projector.py's _observed_row/
+    # change_id_for_team_field and clickhouse_identity_drift.py's
+    # change_id_for_identity_membership/_conflict_for against the Go engine,
+    # live. 1221 -> 1225 top-level; 144 unchanged.
+    assert len(expected_provider_tests) == 1225
+    assert len(expected_integration_tests) == 144
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -813,7 +890,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1115
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1225
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -874,7 +951,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1115
+    assert len(selected_tests) == len(set(selected_tests)) == 1225
     assert set(selected_tests) == expected_tests
 
 

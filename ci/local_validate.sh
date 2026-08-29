@@ -1455,6 +1455,72 @@ METRICS_READBACK_REPO_NAME="${METRICS_READBACK_REPO_NAME:-ci-local-validate/metr
 # chris's 2026-08-25 ruling is that a metrics-family PR merges only with a
 # real ClickHouse readback in evidence, and host load does not change what
 # the PR touches.
+# _metrics_diff_relevant_check <newline-separated-changed-files>
+#
+# Pure function over an explicit argument (no git call): does the given
+# changed-file list touch a path this stage exists to guard? Split out of
+# metrics_readback_diff_relevant (CHAOS-4487) so a test can drive it
+# directly with an arbitrary payload, without faking git/merge-base state
+# -- see the `--metrics-diff-relevant-probe` harness hook below main() and
+# tests/tooling/test_local_validate_here_string_deadlock.py.
+#
+# CHAOS-4319 (why not `printf ... | grep -qE ...`): under this script's
+# `set -uo pipefail`, `grep -q` exits the instant it finds its first match
+# without draining the rest of stdin -- if the payload has more lines still
+# queued, the upstream `printf` gets SIGPIPE on its next write and exits
+# 141, and pipefail reports THAT as the pipeline's status instead of
+# grep's real (matching, 0) result. That bug is silent and
+# match-position-dependent: it only fires when the match is early enough
+# that printf is still writing when grep exits, which is exactly the
+# common case for a real PR's small file count -- this exact function
+# returned 141 (falsely "not relevant") against CHAOS-4319's own diff,
+# which very much touches internal/jobs/metrics/. A here-string was the
+# fix: it has no live producer process to SIGPIPE.
+#
+# CHAOS-4487 (why not the here-string either, `grep -qE ... <<<"$1"`): a
+# here-string is not free of forked-process risk either -- bash 5.3
+# implements `<<<` by forking a child that does the heredoc_write into a
+# pipe while the parent `wait4`s on it, and on this host that write blocks
+# forever once the payload crosses roughly 500-550 bytes (empirically
+# measured; see tests/tooling/test_local_validate_here_string_deadlock.py),
+# not the ~4000-byte figure a DIFFERENT here-document call site elsewhere
+# in this file documents for the same general class of bug (CHAOS-3362).
+# A real diff easily crosses 500 bytes (the incident that opened CHAOS-4487
+# hung on a 1279-byte / 28-file changed-files value), so the here-string
+# deadlocks in exactly the common case this function exists to handle
+# correctly, the same way the pipe form did for CHAOS-4319.
+#
+# The fix used by the argMax proof stage a few hundred lines up (search
+# ARGMAX_PROOF_TMPDIR) for this identical class of problem: remove the
+# forked process entirely. `printf` as a BUILTIN writes straight to a
+# redirected regular file -- no pipe, no fork, nothing that can block --
+# and `grep` then reads that file directly (a real file has no producer
+# to SIGPIPE, closing the CHAOS-4319 gap too). Same fix, applied here.
+_metrics_diff_relevant_check() {
+  local changed="$1"
+  local changed_file
+  changed_file="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-diff.XXXXXX")" || {
+    printf '   %s could not create a temp file for the metrics-diff relevance check -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" >&2
+    return 0
+  }
+  if ! printf '%s' "${changed}" >"${changed_file}"; then
+    printf '   %s could not write the metrics-diff relevance payload to %s -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" "${changed_file}" >&2
+    rm -f "${changed_file}"
+    return 0
+  fi
+  local rc
+  # Includes the oracle script and its synthetic-seeding path too (codex
+  # review, CHAOS-4266) -- a PR that only touches
+  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
+  # this one does, must not have this stage silently skip.
+  grep -qE \
+    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
+    "${changed_file}"
+  rc=$?
+  rm -f "${changed_file}"
+  return "${rc}"
+}
+
 metrics_readback_diff_relevant() {
   local base changed
   base="$(git -C "${ROOT}" merge-base origin/main HEAD 2>/dev/null || true)"
@@ -1465,26 +1531,7 @@ metrics_readback_diff_relevant() {
   if [ -z "${changed}" ]; then
     return 0 # diff failed, or genuinely empty (e.g. no commits yet) — run it.
   fi
-  # Includes the oracle script and its synthetic-seeding path too (codex
-  # review, CHAOS-4266) -- a PR that only touches
-  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
-  # this one does, must not have this stage silently skip.
-  #
-  # CHAOS-4319: a here-string, not `printf ... | grep -qE ...`. Under this
-  # script's `set -uo pipefail`, `grep -q` exits the instant it finds its
-  # first match without draining the rest of stdin -- if `changed` has more
-  # lines still queued, the upstream `printf` gets SIGPIPE on its next write
-  # and exits 141, and pipefail reports THAT as the pipeline's status
-  # instead of grep's real (matching, 0) result. The bug is silent and
-  # match-position-dependent: it only fires when the match is early enough
-  # in `changed` that printf is still writing when grep exits, which is
-  # exactly the common case for a real PR's small file count -- this exact
-  # function returned 141 (falsely "not relevant") against this ticket's
-  # own diff, which very much touches internal/jobs/metrics/. A here-string
-  # has no live producer process to SIGPIPE.
-  grep -qE \
-    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
-    <<<"${changed}"
+  _metrics_diff_relevant_check "${changed}"
 }
 
 metrics_readback() {
@@ -1873,6 +1920,24 @@ fi
 if [ "${1:-}" = "--ch-query-probe" ]; then
   shift
   ch_query "${1:?query required}"
+  exit $?
+fi
+
+# CHAOS-4487: lets a test drive _metrics_diff_relevant_check() directly with
+# an arbitrary payload, without faking git/merge-base state (metrics_read
+# back_diff_relevant, its only other caller, always resolves `changed` from a
+# real `git diff`). The payload is read from a FILE path, not argv: a test
+# proving the fix at ~500+ bytes must not itself be limited by shell argv
+# quoting/length behavior, which is exactly the kind of indirection that
+# would make the test's own harness suspect. Same argument-hook convention
+# as --stage-manifest-mismatch-probe / --ch-query-probe above. Never invoked
+# by main(); only by
+# tests/tooling/test_local_validate_here_string_deadlock.py.
+if [ "${1:-}" = "--metrics-diff-relevant-probe" ]; then
+  shift
+  changed_input_file="${1:?path to a file holding the changed-files payload is required}"
+  changed_payload="$(cat "${changed_input_file}")"
+  _metrics_diff_relevant_check "${changed_payload}"
   exit $?
 fi
 

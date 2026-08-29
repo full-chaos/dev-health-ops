@@ -79,14 +79,15 @@ const postSyncGenerationPrefix = "post-sync:"
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool                    *pgxpool.Pool
-	lease                   time.Duration
-	now                     func() time.Time
-	leaseObserver           jobruntime.DailyMetricsLeaseObserver
-	discoveryObserver       jobruntime.DailyMetricsDiscoveryObserver
-	redriveObserver         jobruntime.DailyMetricsRedriveObserver
-	finalizeSweepObserver   jobruntime.DailyMetricsFinalizeSweepObserver
-	finalizeRedriveObserver jobruntime.DailyMetricsFinalizeRedriveObserver
+	pool                       *pgxpool.Pool
+	lease                      time.Duration
+	now                        func() time.Time
+	leaseObserver              jobruntime.DailyMetricsLeaseObserver
+	discoveryObserver          jobruntime.DailyMetricsDiscoveryObserver
+	redriveObserver            jobruntime.DailyMetricsRedriveObserver
+	finalizeSweepObserver      jobruntime.DailyMetricsFinalizeSweepObserver
+	finalizeRedriveObserver    jobruntime.DailyMetricsFinalizeRedriveObserver
+	partitionRecomputeObserver jobruntime.DailyMetricsPartitionRecomputeObserver
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -137,6 +138,23 @@ func (store *PostgresStore) SetFinalizeRedriveObserver(observer jobruntime.Daily
 func (store *PostgresStore) observeFinalizeRedrive(outcome string, count int) {
 	if store.finalizeRedriveObserver != nil && count > 0 {
 		_ = store.finalizeRedriveObserver.ObserveDailyMetricsFinalizeRedrive(outcome, count)
+	}
+}
+
+// SetPartitionRecomputeObserver wires the optional CHAOS-4459 historical
+// partition-recompute telemetry observer. Telemetry must never gate durable
+// state: a nil or never-set observer makes observePartitionRecompute a
+// silent no-op, matching finalizeRedriveObserver's discipline.
+func (store *PostgresStore) SetPartitionRecomputeObserver(observer jobruntime.DailyMetricsPartitionRecomputeObserver) {
+	if store == nil {
+		return
+	}
+	store.partitionRecomputeObserver = observer
+}
+
+func (store *PostgresStore) observePartitionRecompute(family, outcome string, count int) {
+	if store.partitionRecomputeObserver != nil && count > 0 {
+		_ = store.partitionRecomputeObserver.ObserveDailyMetricsPartitionRecompute(family, outcome, count)
 	}
 }
 
@@ -926,7 +944,26 @@ WHERE run_id = $1::uuid AND status <> 'succeeded'`, run.ID).Scan(&incomplete); e
 		return ErrUnavailable
 	}
 	if incomplete == 0 {
-		if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
+		// CHAOS-4459 (codex review, P1): a run RedrivePartitionsForRange reset
+		// already consumed the ordinary "metrics.daily_finalize:"+run.ID
+		// outbox key once, the first time this run finalized, before it was
+		// ever reset. PublishFinalizeTx's insert would be a silent
+		// ON-CONFLICT-DO-NOTHING no-op here, leaving the run stuck
+		// status='running' forever -- the exact CHAOS-4389 stranding shape,
+		// self-inflicted. Detect a recompute-reset run by its generation
+		// prefix and publish under a fresh redrive-scoped key instead, via
+		// an optional capability (a type assertion, not a Publisher
+		// interface change) so every existing Publisher fake/implementer is
+		// unaffected.
+		if nonce, ok := recomputeNonce(run.Generation); ok {
+			redrivePublisher, canRedrive := publisher.(redriveFinalizePublisher)
+			if !canRedrive {
+				return ErrUnavailable
+			}
+			if err := redrivePublisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
+				return ErrUnavailable
+			}
+		} else if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
 			return ErrUnavailable
 		}
 	}

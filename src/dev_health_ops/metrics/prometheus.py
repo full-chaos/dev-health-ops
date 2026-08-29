@@ -161,6 +161,24 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    DEV_HEALTH_BACKFILL_REFERENCE_DISCOVERY_OUTCOME_TOTAL = (
+        _prometheus_client_module.Counter(
+            "dev_health_backfill_reference_discovery_outcome_total",
+            "Outcome of an operator backfill's reference-discovery ledger "
+            "wait (CHAOS-4498): the backfill runner arms the same "
+            "sync_run_reference_discoveries ledger + outbox row sync-time "
+            "dispatch uses and polls it to a terminal state instead of "
+            "calling run_team_autoimport_strict directly. 'success'/"
+            "'failed' are the ledger's own terminal outcomes; "
+            "'not_claimed' means no worker ever took the lease within one "
+            "lease window; 'timeout_running' means it was claimed but "
+            "never reached terminal within the service's own max "
+            "lifetime bound. Every non-success outcome is a hard failure "
+            "-- there is no silent fallback to the direct Python call.",
+            ["provider", "outcome"],
+        )
+    )
+
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL = (
         _prometheus_client_module.Counter(
             "dev_health_team_autoimport_reference_category_outcome_total",
@@ -750,6 +768,7 @@ else:
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL = _noop_counter()
+    DEV_HEALTH_BACKFILL_REFERENCE_DISCOVERY_OUTCOME_TOTAL = _noop_counter()
     CLICKHOUSE_QUERY_DURATION_SECONDS = _noop_histogram()
     CLICKHOUSE_QUERIES_TOTAL = _noop_counter()
     CLICKHOUSE_ORG_SCOPE_ROWS_FILTERED_TOTAL = _noop_counter()
@@ -965,6 +984,21 @@ def record_team_autoimport_reference_category_outcome(
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_CATEGORY_OUTCOME_TOTAL.labels(
         provider=provider,
         category=category,
+        outcome=outcome,
+    ).inc()
+
+
+def record_backfill_reference_discovery_outcome(*, provider: str, outcome: str) -> None:
+    """Record the operator backfill tool's reference-discovery ledger-wait
+    outcome (CHAOS-4498): success/failed/not_claimed/timeout_running. Called
+    once per backfill invocation from
+    ``backfill.runner._run_strict_reference_discovery_for_backfill`` after
+    ``await_reference_discovery_terminal`` returns -- this is the only
+    signal that a backfill's discovery step degraded (not_claimed /
+    timeout_running) rather than genuinely failing (failed) or succeeding.
+    """
+    DEV_HEALTH_BACKFILL_REFERENCE_DISCOVERY_OUTCOME_TOTAL.labels(
+        provider=provider,
         outcome=outcome,
     ).inc()
 

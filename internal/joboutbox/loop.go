@@ -103,22 +103,29 @@ const consecutiveStepFailureDegradeThreshold = 3
 // successful empty step is a valid database/connectivity proof and opens its
 // required readiness dependency.
 //
-// CHAOS-4429: a periodic step failure is NO LONGER fatal to the process.
-// Before this fix, ANY single Relay.Step error -- a transient Postgres blip
-// indistinguishable in kind from the ones syncreconciler.MutationPipeline's
-// stages already absorb -- was reported through Errors() and, via
-// lifecycle.Runtime, treated as fatal to the WHOLE reconciler binary: it took
-// down the materializer, kernel, and lease-repair stages along with the
-// relay, even though CHAOS-4239 had already fixed exactly this defect shape
-// one component over. Every error Relay.Step can return is one of its own
-// package's bounded, already-classified sentinels (ErrUnavailable,
-// ErrLeaseLost, ErrInvalidConfiguration) -- never an arbitrary/unclassified
-// failure -- so absorbing all of them here, the same way the mutation
-// pipeline absorbs its own stage errors, is safe: log + count + reflect on
-// readyz after consecutiveStepFailureDegradeThreshold consecutive misses,
-// keep ticking, self-heal the instant one step succeeds. The process staying
-// up with the relay degraded is strictly better than the outbox-reconciler-
-// loop crash-looping the entire container on a blip that clears on its own.
+// CHAOS-4429: a periodic step failure is NO LONGER unconditionally fatal to
+// the process. Before this fix, ANY single Relay.Step error -- a transient
+// Postgres blip indistinguishable in kind from the ones
+// syncreconciler.MutationPipeline's stages already absorb -- was reported
+// through Errors() and, via lifecycle.Runtime, treated as fatal to the WHOLE
+// reconciler binary: it took down the materializer, kernel, and lease-repair
+// stages along with the relay, even though CHAOS-4239 had already fixed
+// exactly this defect shape one component over.
+//
+// Retry-safe sentinels (ErrUnavailable, ErrLeaseLost, ErrInvalidConfiguration
+// -- a database blip, a benign claim race, and an effectively-unreachable
+// wiring guard respectively) are absorbed the same way the mutation pipeline
+// absorbs its own stage errors: log + count + reflect on readyz after
+// consecutiveStepFailureDegradeThreshold consecutive misses, keep ticking,
+// self-heal the instant one step succeeds.
+//
+// ErrNotAuthorized is the ONE deliberate exception (codex review finding,
+// round 3): a missing grant fails identically forever, so run keeps it on
+// the original fatal path -- see run's own comment for why absorbing it here
+// would be strictly worse than the crash-loop it replaces, not better. The
+// process staying up with the relay degraded is strictly better than the
+// outbox-reconciler-loop crash-looping the entire container ONLY for the
+// blips that actually clear on their own.
 type ReconcilerLoop struct {
 	stepper RelayStepper
 	config  ReconcilerLoopConfig
@@ -276,6 +283,29 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 				// derived deadline), so checking the context alone is both
 				// necessary and sufficient.
 				if ctx.Err() != nil || loop.isStopping() {
+					return
+				}
+				// ErrNotAuthorized is NOT a retryable blip (codex review
+				// finding, round 3): it means a runtime role is missing a
+				// grant a migration was supposed to apply
+				// (strand_repair.go's own doc comment), and no number of
+				// retries changes that -- the query fails identically
+				// forever. Absorbing it here the way a transient
+				// ErrUnavailable is absorbed would trade a loud, actionable
+				// crash-loop (RestartCount climbing, paged) for a silent
+				// permanent-misconfiguration loop that only shows up as one
+				// readyz gauge nobody watches. Preserve the original fatal
+				// path for exactly this one sentinel -- everything else
+				// Relay.Step can return (ErrUnavailable, ErrLeaseLost,
+				// ErrInvalidConfiguration) genuinely is a bounded, retry-safe
+				// condition and keeps the CHAOS-4429 fix below.
+				if errors.Is(err, ErrNotAuthorized) {
+					loop.setFailed()
+					loop.logger().ErrorContext(ctx, "outbox reconciler step failed: not authorized", "error", err.Error())
+					select {
+					case loop.errors <- fmt.Errorf("outbox reconciliation step: %w", err):
+					case <-ctx.Done():
+					}
 					return
 				}
 				loop.recordStepFailure(ctx, err)

@@ -322,6 +322,54 @@ func TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure(t *te
 	}
 }
 
+// TestReconcilerLoopNotAuthorizedStepFailurePreservesFatalPath is a codex
+// review finding (round 3, P1): CHAOS-4429's fix must NOT swallow
+// ErrNotAuthorized. strand_repair.go returns it for a real production
+// scenario -- the queue role missing a grant on the daily-metrics/work-graph
+// tables a migration was supposed to apply -- and unlike a transient
+// ErrUnavailable it fails identically FOREVER: no retry ever clears it.
+// Absorbing it the way a blip is absorbed would trade a loud, actionable
+// crash-loop for a silent permanent-misconfiguration retry loop visible only
+// as one readyz gauge. It must still reach Errors() (fatal, same as
+// pre-CHAOS-4429 behavior) and must NOT be counted in step_failures_total --
+// that counter is reserved for the retry-safe class.
+func TestReconcilerLoopNotAuthorizedStepFailurePreservesFatalPath(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	calls := 0
+	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		calls++
+		if calls == 1 {
+			return StepResult{}, nil
+		}
+		return StepResult{}, ErrNotAuthorized
+	}), clock)
+	openReconcilerReadiness(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+
+	if err := <-loop.Errors(); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("Errors() = %v, want it to wrap ErrNotAuthorized -- a missing grant must stay fatal, not be absorbed as a retry-safe blip", err)
+	}
+	if status := registry.Readiness(context.Background()); status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "reconciler_loop") {
+		t.Fatalf("readiness after ErrNotAuthorized = %#v, want closed", status)
+	}
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_step_failures_total 0\n") {
+		t.Fatalf("ErrNotAuthorized was counted in the retry-safe step_failures_total:\n%s", metrics.String())
+	}
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestReconcilerLoopExportsCHAOS4429Telemetry pins the new Prometheus
 // fragment: a lifetime failure counter that counts even absorbed blips below
 // the degrade threshold, and a degraded gauge that flips only once the

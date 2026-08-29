@@ -88,11 +88,37 @@ type systemReconcilerTicker struct{ *time.Ticker }
 
 func (ticker systemReconcilerTicker) Chan() <-chan time.Time { return ticker.C }
 
+// consecutiveStepFailureDegradeThreshold mirrors chris's CHAOS-4239 readiness
+// ruling (internal/syncreconciler/pipeline.go's
+// consecutiveFailureDegradeThreshold) for this loop's own Relay.Step: a
+// single transient failure -- a lock wait, a ctx deadline exceeded under
+// load, any of the bounded ErrUnavailable/ErrLeaseLost conditions Relay/
+// Repository already classify -- must not flap readiness (the false-alarm
+// failure mode), but a step failing on every tick must still be visible on
+// readyz. Three consecutive failures is the line; one success clears it
+// immediately.
+const consecutiveStepFailureDegradeThreshold = 3
+
 // ReconcilerLoop owns one polling goroutine around bounded Relay steps. A
 // successful empty step is a valid database/connectivity proof and opens its
-// required readiness dependency. Step errors are fatal: callers should use
-// Errors with lifecycle.Runtime so the process exits rather than silently
-// serving stale control-plane state.
+// required readiness dependency.
+//
+// CHAOS-4429: a periodic step failure is NO LONGER fatal to the process.
+// Before this fix, ANY single Relay.Step error -- a transient Postgres blip
+// indistinguishable in kind from the ones syncreconciler.MutationPipeline's
+// stages already absorb -- was reported through Errors() and, via
+// lifecycle.Runtime, treated as fatal to the WHOLE reconciler binary: it took
+// down the materializer, kernel, and lease-repair stages along with the
+// relay, even though CHAOS-4239 had already fixed exactly this defect shape
+// one component over. Every error Relay.Step can return is one of its own
+// package's bounded, already-classified sentinels (ErrUnavailable,
+// ErrLeaseLost, ErrInvalidConfiguration) -- never an arbitrary/unclassified
+// failure -- so absorbing all of them here, the same way the mutation
+// pipeline absorbs its own stage errors, is safe: log + count + reflect on
+// readyz after consecutiveStepFailureDegradeThreshold consecutive misses,
+// keep ticking, self-heal the instant one step succeeds. The process staying
+// up with the relay degraded is strictly better than the outbox-reconciler-
+// loop crash-looping the entire container on a blip that clears on its own.
 type ReconcilerLoop struct {
 	stepper RelayStepper
 	config  ReconcilerLoopConfig
@@ -121,6 +147,14 @@ type ReconcilerLoop struct {
 	leaseLost                    uint64
 	lastOK                       time.Time
 	up                           bool
+
+	// consecutiveFailures and stepFailures are the CHAOS-4429 telemetry pair:
+	// consecutiveFailures drives the readiness threshold above (reset to zero
+	// the instant a step succeeds), stepFailures is the lifetime counter an
+	// operator alerts on regardless of whether any single streak ever crossed
+	// the degrade threshold.
+	consecutiveFailures int
+	stepFailures        uint64
 
 	errors chan error
 }
@@ -213,13 +247,8 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 				return
 			}
 			if err := loop.step(ctx, now); err != nil {
-				loop.setFailed()
-				loop.logger().ErrorContext(ctx, "outbox reconciler step failed", "error", err.Error())
-				select {
-				case loop.errors <- fmt.Errorf("outbox reconciliation step: %w", err):
-				case <-ctx.Done():
-				}
-				return
+				loop.recordStepFailure(ctx, err)
+				continue
 			}
 		}
 	}
@@ -245,6 +274,10 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.leaseLost += nonNegativeUint(result.LeaseLost)
 	loop.lastOK = now
 	loop.up = true
+	// CHAOS-4429: one success clears the streak immediately, matching
+	// stageTelemetry.recordSuccess -- a relay that recovers is never held
+	// degraded on readyz by a stale streak.
+	loop.consecutiveFailures = 0
 	loop.mu.Unlock()
 	loop.ready.Store(true)
 	return nil
@@ -264,6 +297,38 @@ func (loop *ReconcilerLoop) setFailed() {
 	loop.mu.Unlock()
 }
 
+// recordStepFailure is CHAOS-4429's replacement for treating every periodic
+// Relay.Step error as fatal. It logs and counts the failure unconditionally,
+// and closes readiness ONLY once consecutiveFailures has crossed
+// consecutiveStepFailureDegradeThreshold -- exactly stageTelemetry's
+// recordFailure/isDegraded shape one component over, and for the same
+// reason: a lone blip must not flap readyz, but a relay stuck failing every
+// tick must be visible by name rather than only in a Prometheus counter.
+// It deliberately never sends on loop.errors / returns from run -- the
+// process itself is no longer at risk from a Relay.Step failure of any kind
+// (see the ReconcilerLoop doc comment for why every error Step can return is
+// safe to absorb here).
+func (loop *ReconcilerLoop) recordStepFailure(ctx context.Context, err error) {
+	loop.mu.Lock()
+	loop.stepFailures++
+	loop.consecutiveFailures++
+	consecutive := loop.consecutiveFailures
+	degraded := consecutive >= consecutiveStepFailureDegradeThreshold
+	if degraded {
+		loop.up = false
+	}
+	loop.mu.Unlock()
+	if degraded {
+		loop.ready.Store(false)
+	}
+	loop.logger().ErrorContext(
+		ctx, "outbox reconciler step failed",
+		"error", err.Error(),
+		"consecutive_failures", consecutive,
+		"degraded", degraded,
+	)
+}
+
 // logger is nil-safe: an unset Config.Logger discards rather than panicking,
 // and never falls back to slog.Default(), so an embedder cannot be surprised
 // by reconciler output appearing on a logger it did not choose.
@@ -281,9 +346,12 @@ func (loop *ReconcilerLoop) readiness(context.Context) error {
 	return errReconcilerLoopNotReady
 }
 
-// Errors reports periodic fatal reconciliation errors to lifecycle.Runtime.
-// It is intentionally buffered so the loop can stop before the runtime's
-// error watcher is scheduled.
+// Errors satisfies lifecycle.ErrorSource. CHAOS-4429: run's per-tick
+// failures no longer send on this channel -- see recordStepFailure and the
+// ReconcilerLoop doc comment -- so in normal operation nothing is ever sent
+// here. The channel is kept (rather than returning nil) as the seam a future
+// genuinely-fatal condition would use; it is intentionally buffered so the
+// loop can stop before the runtime's error watcher is scheduled.
 func (loop *ReconcilerLoop) Errors() <-chan error {
 	if loop == nil {
 		return nil
@@ -344,6 +412,8 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	leaseLost := loop.leaseLost
 	lastOK := loop.lastOK
 	up := loop.up
+	stepFailures := loop.stepFailures
+	degraded := loop.consecutiveFailures >= consecutiveStepFailureDegradeThreshold
 	now := loop.clock.Now()
 	loop.mu.Unlock()
 
@@ -376,6 +446,16 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_dead_total", "Outbox rows terminalized by the reconciler.", dead)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_lease_lost_total", "Outbox claims lost before reconciliation completed.", leaseLost)
+	// CHAOS-4429: the lifetime failure count survives even a streak that
+	// never crossed the degrade threshold below -- an operator alerting on
+	// this sees every absorbed blip, not only the ones that flipped readyz.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_step_failures_total", "Relay.Step failures absorbed by the reconciler loop, including ones that never crossed the readiness degrade threshold.", stepFailures)
+	fmt.Fprint(&text, "# HELP worker_outbox_reconciler_degraded Whether the reconciler loop has failed its last consecutive Relay.Step calls past the readiness threshold. One success clears it.\n# TYPE worker_outbox_reconciler_degraded gauge\nworker_outbox_reconciler_degraded ")
+	if degraded {
+		text.WriteString("1\n")
+	} else {
+		text.WriteString("0\n")
+	}
 	fmt.Fprint(&text, "# HELP worker_outbox_reconciler_up Whether the reconciler loop is currently healthy.\n# TYPE worker_outbox_reconciler_up gauge\nworker_outbox_reconciler_up ")
 	if up {
 		text.WriteString("1\n")

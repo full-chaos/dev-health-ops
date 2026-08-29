@@ -43,18 +43,29 @@ omit_slice_element_pointers: true
 # what confirms "YYYY-MM-DD" as the actual Python wire format
 # (Strawberry's built-in Date scalar, `date.isoformat()`).
 #
-# `DateTime` and `JSON` are UNCHANGED, still Wave-0 placeholders, and are
-# STILL KNOWN INCORRECT for the same reasons as before (codex review,
-# 2026-08-27) -- `reviewEdges` uses neither, so this port does not need to
-# fix them; a later wave that ports a resolver returning either must do so
-# there:
+# `DateTime` is UNCHANGED, still a Wave-0 placeholder, and is STILL KNOWN
+# INCORRECT for the same reason as before (codex review, 2026-08-27) --
+# `reviewEdges` doesn't use it, so that port didn't need to fix it; a
+# later wave that ports a resolver returning it must do so there:
 #   - `DateTime`: graphql.Time's marshaler can format Python's UTC
 #     isoformat() `+00:00` offset as Go's `Z` instead -- a client-visible
 #     serialization difference the comparator (CHAOS-4381 rule 2/3) would
 #     have to special-case rather than the scalar just matching.
-#   - `JSON` (graphql.Map): the SDL's `JSON` accepts any ECMA-404 value;
-#     graphql.Map and the generated `map[string]any` fields accept only
-#     JSON objects, rejecting valid arrays/scalars.
+#
+# `JSON` (CHAOS-4506 Wave 4, `analytics` -- `evidenceQualityDistribution`/
+# `bandCounts`): FIXED in this PR, bound to `internal/graphqljson.JSON`, a
+# real custom marshaler backed by `json.RawMessage` -- see that package's
+# doc comment for why `graphql.Map` (the Wave-0 placeholder) was KNOWN
+# INCORRECT (the SDL's `JSON` accepts any ECMA-404 value per its
+# `@specifiedBy`, contracts/graphql/v1/schema.graphql:1408; `graphql.Map`
+# and the generated `map[string]any` fields can only ever hold a JSON
+# *object*, not an array/string/number/bool) and why fixing it generically
+# now -- rather than narrowly for just this port's object-shaped fields --
+# is free: every OTHER `JSON`-typed field in the schema
+# (parameterOverrides/reportPlan/parameters/provenanceRecords) resolves
+# through SavedReport/SavedReports/ReportRuns, which are still
+# `panic("not implemented")` stubs in schema.resolvers.go, so nothing else
+# marshals a JSON value yet.
 # Python's actual serialization behavior (ISO-8601, JSON passthrough) is
 # documented in contracts/graphql/v1/README.md (plan §4: "custom scalar
 # serialization ... are all client-visible contracts").
@@ -67,7 +78,7 @@ models:
       - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate.Date
   JSON:
     model:
-      - github.com/99designs/gqlgen/graphql.Map
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson.JSON
 
 # autobind intentionally omitted: Wave 0 has no Go domain model package to
 # bind generated GraphQL types to yet (no resolver logic exists). Every

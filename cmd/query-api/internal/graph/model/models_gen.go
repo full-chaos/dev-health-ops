@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson"
 )
 
 type AIAttributionEvidenceRow struct {
@@ -363,7 +364,7 @@ type AnalyticsResult struct {
 	Breakdowns                  []BreakdownResult     `json:"breakdowns"`
 	Sankey                      *SankeyResult         `json:"sankey,omitempty"`
 	FlowMatrix                  *FlowMatrixResult     `json:"flowMatrix,omitempty"`
-	EvidenceQualityDistribution map[string]any        `json:"evidenceQualityDistribution,omitempty"`
+	EvidenceQualityDistribution graphqljson.JSON      `json:"evidenceQualityDistribution,omitempty"`
 	EvidenceQualityStats        *EvidenceQualityStats `json:"evidenceQualityStats,omitempty"`
 }
 
@@ -489,9 +490,9 @@ type CatalogValueItem struct {
 }
 
 type CloneSavedReportInput struct {
-	SourceReportID     string         `json:"sourceReportId"`
-	NewName            *string        `json:"newName,omitempty"`
-	ParameterOverrides map[string]any `json:"parameterOverrides,omitempty"`
+	SourceReportID     string           `json:"sourceReportId"`
+	NewName            *string          `json:"newName,omitempty"`
+	ParameterOverrides graphqljson.JSON `json:"parameterOverrides,omitempty"`
 }
 
 type CognitiveLoadInput struct {
@@ -640,13 +641,13 @@ type CoverageStat struct {
 }
 
 type CreateSavedReportInput struct {
-	Name             string         `json:"name"`
-	Description      *string        `json:"description,omitempty"`
-	ReportPlan       map[string]any `json:"reportPlan,omitempty"`
-	IsTemplate       bool           `json:"isTemplate"`
-	Parameters       map[string]any `json:"parameters,omitempty"`
-	ScheduleCron     *string        `json:"scheduleCron,omitempty"`
-	ScheduleTimezone string         `json:"scheduleTimezone"`
+	Name             string           `json:"name"`
+	Description      *string          `json:"description,omitempty"`
+	ReportPlan       graphqljson.JSON `json:"reportPlan,omitempty"`
+	IsTemplate       bool             `json:"isTemplate"`
+	Parameters       graphqljson.JSON `json:"parameters,omitempty"`
+	ScheduleCron     *string          `json:"scheduleCron,omitempty"`
+	ScheduleTimezone string           `json:"scheduleTimezone"`
 }
 
 type DataHealth struct {
@@ -1112,10 +1113,10 @@ type DevWorkGraphSourceRef struct {
 }
 
 type EvidenceQualityStats struct {
-	Mean       *float64       `json:"mean,omitempty"`
-	Stddev     *float64       `json:"stddev,omitempty"`
-	Total      int            `json:"total"`
-	BandCounts map[string]any `json:"bandCounts"`
+	Mean       *float64         `json:"mean,omitempty"`
+	Stddev     *float64         `json:"stddev,omitempty"`
+	Total      int              `json:"total"`
+	BandCounts graphqljson.JSON `json:"bandCounts"`
 }
 
 type EvidenceRef struct {
@@ -1542,18 +1543,18 @@ type ReportRunConnection struct {
 }
 
 type ReportRunType struct {
-	ID                string         `json:"id"`
-	ReportID          string         `json:"reportId"`
-	Status            string         `json:"status"`
-	StartedAt         *time.Time     `json:"startedAt,omitempty"`
-	CompletedAt       *time.Time     `json:"completedAt,omitempty"`
-	DurationSeconds   *float64       `json:"durationSeconds,omitempty"`
-	RenderedMarkdown  *string        `json:"renderedMarkdown,omitempty"`
-	ArtifactURL       *string        `json:"artifactUrl,omitempty"`
-	ProvenanceRecords map[string]any `json:"provenanceRecords,omitempty"`
-	Error             *string        `json:"error,omitempty"`
-	TriggeredBy       string         `json:"triggeredBy"`
-	CreatedAt         time.Time      `json:"createdAt"`
+	ID                string           `json:"id"`
+	ReportID          string           `json:"reportId"`
+	Status            string           `json:"status"`
+	StartedAt         *time.Time       `json:"startedAt,omitempty"`
+	CompletedAt       *time.Time       `json:"completedAt,omitempty"`
+	DurationSeconds   *float64         `json:"durationSeconds,omitempty"`
+	RenderedMarkdown  *string          `json:"renderedMarkdown,omitempty"`
+	ArtifactURL       *string          `json:"artifactUrl,omitempty"`
+	ProvenanceRecords graphqljson.JSON `json:"provenanceRecords,omitempty"`
+	Error             *string          `json:"error,omitempty"`
+	TriggeredBy       string           `json:"triggeredBy"`
+	CreatedAt         time.Time        `json:"createdAt"`
 }
 
 type ReviewEdgeRow struct {
@@ -1626,21 +1627,21 @@ type SavedReportConnection struct {
 }
 
 type SavedReportType struct {
-	ID               string         `json:"id"`
-	OrgID            string         `json:"orgId"`
-	Name             string         `json:"name"`
-	Description      *string        `json:"description,omitempty"`
-	ReportPlan       map[string]any `json:"reportPlan"`
-	IsTemplate       bool           `json:"isTemplate"`
-	TemplateSourceID *string        `json:"templateSourceId,omitempty"`
-	Parameters       map[string]any `json:"parameters,omitempty"`
-	ScheduleID       *string        `json:"scheduleId,omitempty"`
-	IsActive         bool           `json:"isActive"`
-	LastRunAt        *time.Time     `json:"lastRunAt,omitempty"`
-	LastRunStatus    *string        `json:"lastRunStatus,omitempty"`
-	CreatedAt        time.Time      `json:"createdAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
-	CreatedBy        *string        `json:"createdBy,omitempty"`
+	ID               string           `json:"id"`
+	OrgID            string           `json:"orgId"`
+	Name             string           `json:"name"`
+	Description      *string          `json:"description,omitempty"`
+	ReportPlan       graphqljson.JSON `json:"reportPlan"`
+	IsTemplate       bool             `json:"isTemplate"`
+	TemplateSourceID *string          `json:"templateSourceId,omitempty"`
+	Parameters       graphqljson.JSON `json:"parameters,omitempty"`
+	ScheduleID       *string          `json:"scheduleId,omitempty"`
+	IsActive         bool             `json:"isActive"`
+	LastRunAt        *time.Time       `json:"lastRunAt,omitempty"`
+	LastRunStatus    *string          `json:"lastRunStatus,omitempty"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+	CreatedBy        *string          `json:"createdBy,omitempty"`
 }
 
 type ScopeFilterInput struct {
@@ -1870,14 +1871,14 @@ type UnmappedIdentity struct {
 }
 
 type UpdateSavedReportInput struct {
-	Name             *string        `json:"name,omitempty"`
-	Description      *string        `json:"description,omitempty"`
-	ReportPlan       map[string]any `json:"reportPlan,omitempty"`
-	IsTemplate       *bool          `json:"isTemplate,omitempty"`
-	Parameters       map[string]any `json:"parameters,omitempty"`
-	IsActive         *bool          `json:"isActive,omitempty"`
-	ScheduleCron     *string        `json:"scheduleCron,omitempty"`
-	ScheduleTimezone *string        `json:"scheduleTimezone,omitempty"`
+	Name             *string          `json:"name,omitempty"`
+	Description      *string          `json:"description,omitempty"`
+	ReportPlan       graphqljson.JSON `json:"reportPlan,omitempty"`
+	IsTemplate       *bool            `json:"isTemplate,omitempty"`
+	Parameters       graphqljson.JSON `json:"parameters,omitempty"`
+	IsActive         *bool            `json:"isActive,omitempty"`
+	ScheduleCron     *string          `json:"scheduleCron,omitempty"`
+	ScheduleTimezone *string          `json:"scheduleTimezone,omitempty"`
 }
 
 type WhatFilterInput struct {

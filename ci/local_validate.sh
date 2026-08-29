@@ -200,6 +200,29 @@ if [ "${CH_HTTP_SCHEME}" = "https" ]; then
 else
   SCRATCH_URI="clickhouse://${CH_USER}:${CH_PASS}@${CH_HOST}:${CH_HTTP_PORT}/${SCRATCH_DB}"
 fi
+# redact_uri strips userinfo from a DSN for DISPLAY only (codex R3 / team-lead
+# R4 ruling). SCRATCH_URI necessarily carries a create/drop-capable credential,
+# and in CH_TRANSPORT=http that is a REAL cluster password on a shared host --
+# printing it verbatim put it in every gate log and scrollback. Everything the
+# operator actually needs to see (scheme, host, port, scratch db) survives.
+redact_uri() {
+  # Strip userinfo up to the LAST '@' that precedes the authority's first '/'.
+  # A non-greedy [^/@]*@ is wrong: a password may itself contain '@' (real
+  # example: clickhouse://ch:p@w0rd@host/db), and stopping at the first one
+  # leaks the remainder as if it were the host. Verified against exactly that
+  # shape. Falls through unchanged when there is no userinfo.
+  local uri="$1" scheme rest authority
+  case "$uri" in
+  *://*) scheme="${uri%%://*}://" ; rest="${uri#*://}" ;;
+  *) printf '%s' "$uri"; return ;;
+  esac
+  authority="${rest%%/*}"
+  case "$authority" in
+  *@*) printf '%s%s' "$scheme" "${rest#*"${authority%@*}"@}" ;;
+  *) printf '%s%s' "$scheme" "$rest" ;;
+  esac
+}
+
 PYBIN="${ROOT}/.venv/bin/python"
 RUFF="${ROOT}/.venv/bin/ruff"
 MYPY="${ROOT}/.venv/bin/mypy"
@@ -1107,9 +1130,9 @@ ch_migrate() {
   # Apply THIS branch's migrations into the scratch db, then read-only verify.
   # Belt-and-suspenders: never let an edited SCRATCH_URI point migrations at 'default'.
   case "${SCRATCH_URI}" in
-  *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
-  printf '   migrating into scratch: %s\n' "${SCRATCH_URI}"
+  printf '   migrating into scratch: %s\n' "$(redact_uri "${SCRATCH_URI}")"
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
     "${DEVHOPS}" migrate clickhouse upgrade || return 1
   OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
@@ -1271,7 +1294,7 @@ ch_provision() {
   run_stage "ch-migrate (upgrade + status --check)" ch_migrate ch_migrate
   CH_READY=1
   export CLICKHOUSE_URI="${SCRATCH_URI}"
-  printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "${SCRATCH_URI} (scratch)"
+  printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "$(redact_uri "${SCRATCH_URI}") (scratch)"
 }
 
 # CH-marked tests (need production DDL) + the direct argMax live-exec proof.
@@ -1361,7 +1384,7 @@ metrics_readback_diff_relevant() {
 
 metrics_readback() {
   case "${SCRATCH_URI}" in
-  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default (${SCRATCH_URI})." ;;
+  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
 
   local run_start
@@ -1377,7 +1400,10 @@ metrics_readback() {
   OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" env -u POSTGRES_URI -u DATABASE_URI -u DATABASE_URL \
     "${DEVHOPS}" fixtures generate \
-    --sink "${SCRATCH_URI}" --db-type clickhouse \
+    `# --sink omitted deliberately: it defaults to os.getenv("CLICKHOUSE_URI")` \
+    `# (fixtures/runner.py:3113) and this invocation already exports that, so` \
+    `# passing it again only put the credential into argv where ps can read it.` \
+    --db-type clickhouse \
     --repo-name "${METRICS_READBACK_REPO_NAME}" \
     --provider synthetic \
     --days 7 --commits-per-day 3 --pr-count 5 \
@@ -1417,8 +1443,9 @@ metrics_readback() {
   # generate` above seeds real commit stats (--commits-per-day 3), which
   # `metrics daily` needs to compute it, but the CI job's synthetic
   # cicd/deployments/incidents/tests seeding never touches git data at all.
-  PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
-    --clickhouse-uri "${SCRATCH_URI}" \
+  # CLICKHOUSE_URI in the environment, not --clickhouse-uri in argv: same
+  # reason as --sink above. assert_metrics_executed_proof.py reads the env.
+  CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \
     --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots

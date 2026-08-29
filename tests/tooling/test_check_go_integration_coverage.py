@@ -44,4 +44,8 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # canary's HTTP-level reachability test
     # (query_route_integration_test.go) is proved against a real Postgres
     # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
-    assert "32 package(s) discovered, 0 denylisted, 32 will run" in result.stdout
+    # CHAOS-4506 added cmd/query-api/internal/analytics (32 -> 33): the
+    # NaN-class live proof (nan_class_live_test.go) is proved against a
+    # real ClickHouse container -- the analytics package's first
+    # -tags integration file.
+    assert "33 package(s) discovered, 0 denylisted, 33 will run" in result.stdout

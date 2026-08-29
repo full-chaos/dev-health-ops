@@ -299,17 +299,38 @@ SETTINGS max_execution_time = {timeout:UInt64}
 `
 
 // flowMatrixRepoEnrichedSelect ports _FLOW_MATRIX_REPO_ENRICHED_CTE
-// (sql/templates.py:276-293) verbatim -- `wct FINAL` unchanged (this
-// site was already correct; CHAOS-4519's separate fix, already merged on
-// the feature tip, is what made `a.team_id` resolve here -- see BRIEF.md
-// §4).
+// (sql/templates.py:276-293) -- `wct FINAL` unchanged (CHAOS-4519's
+// separate fix, already merged on the feature tip, is what made
+// `a.team_id` resolve at all -- see BRIEF.md §4).
+//
+// NOT VERBATIM, unlike the doc comment above previously claimed: BRIEF.md
+// §4's claim that this site "is what made `a.team_id` resolve here" was
+// never executed against a live engine -- it was inferred from reading
+// that the CTE projects `t.team_id`, without checking that a self-joined
+// duplicate of this SAME select (`... AS a INNER JOIN (...) AS b`, this
+// port's WITH-avoidance shape -- see flowMatrixTeamActivitySelect's doc
+// comment) can actually resolve an UNALIASED qualified column across the
+// two aliases. It cannot: ClickHouse 26.7's analyzer rejects `a.team_id`
+// with `UNKNOWN_IDENTIFIER: Maybe you meant: ['t.team_id']` -- the exact
+// CHAOS-4519 error shape recurring at a second site, isolated live via
+// `docker exec dev-health-clickhouse-1 clickhouse-client` with a minimal
+// two-row self-join repro (2026-08-29, CHAOS-4506 slot execution) before
+// this fix was written, confirmed by BOTH failing and by the identical
+// minimal repro succeeding once the column carries an explicit `AS`.
+// `flowMatrixTeamActivitySelect` above already does this correctly
+// (`t.team_id AS team_id`) for the TEAM dimension's self-join; this site
+// and flowMatrixWorkTypeEnrichedSelect below did not, because neither had
+// ever been executed. `t.team_id` and `wi.repo_id` below are now
+// explicitly aliased to match -- same column, same value, no semantic
+// change, purely what the analyzer requires to resolve `a.team_id` /
+// `a.repo_id` in flowMatrixRepoEdgesTemplate's self-join below.
 const flowMatrixRepoEnrichedSelect = `
     SELECT
         wct.work_item_id,
-        t.team_id,
+        t.team_id AS team_id,
         wct.day,
         wct.org_id,
-        wi.repo_id,
+        wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL
     INNER JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
@@ -348,13 +369,18 @@ const flowMatrixRepoEnrichedSelect = `
 // which had neither), but the actual argument and the row-count/part-
 // count/max_threads/before-after-median number are NOT YET PRODUCED --
 // see the PR's RISK-NOTES. Do not treat this as decided.
+// flowMatrixWorkTypeEnrichedSelect: the same missing-alias analyzer bug
+// found live in flowMatrixRepoEnrichedSelect above applies here too --
+// flowMatrixWorkTypeEdgesTemplate's self-join references a.repo_id/
+// b.repo_id, which this select fed unaliased. Fixed the same way, same
+// verification method (see flowMatrixRepoEnrichedSelect's doc comment).
 const flowMatrixWorkTypeEnrichedSelect = `
     SELECT
         wct.work_item_id,
         wct.team_id,
         wct.day,
         wct.org_id,
-        wi.repo_id,
+        wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id

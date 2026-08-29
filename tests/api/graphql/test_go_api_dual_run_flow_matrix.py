@@ -515,21 +515,61 @@ def _python_response_snapshot(result) -> go_api_comparator.ResponseSnapshot:
 
 
 def _python_error_snapshot(exc: Exception) -> go_api_comparator.ResponseSnapshot:
-    """Serializes a raised ValidationError into the same GraphQL error
-    envelope shape Strawberry's exception handler would produce on the
-    real Python HTTP path -- `extensions.code` is what
-    go_api_comparator's rule 1 actually keys error identity on, so this
-    must carry a real code, not just a message string.
+    """Serializes a raised ValidationError into the ACTUAL GraphQL error
+    envelope Strawberry's exception handler produces on the real Python
+    HTTP path.
+
+    CORRECTED 2026-08-29 (CHAOS-4506 slot execution) against the PR body's
+    "Fifth finding -- dual-run fabricates the error envelope -- is NOT
+    verified" flag: this shape was previously guessed, not observed, and
+    the guess was wrong in three ways, found by executing the REAL
+    production `dev_health_ops.api.graphql.schema.schema` object directly
+    (`schema.execute(...)`, the exact code path
+    `strawberry.fastapi.GraphQLRouter` in `api/graphql/app.py` calls with
+    no `process_errors` override anywhere in this codebase -- grepped, and
+    confirmed nothing intercepts the raised `ValidationError`) against this
+    file's real FlowMatrix document, real WORK_TYPE-filtered variables:
+
+    1. `path` is `["analytics"]`, NOT `["analytics", "flowMatrix"]`. The
+       raise happens inside `compile_flow_matrix`
+       (`sql/compiler.py:512,544`), which runs BEFORE any `flowMatrix`
+       sub-field is ever selected -- GraphQL's error path only extends
+       past the top-level field once resolution actually descends into
+       it, and this rejection never gets that far.
+    2. `extensions` is `{}`, NOT `{"code": "VALIDATION_ERROR"}`. Python's
+       `ValidationError.code` (`api/graphql/errors.py:57`) is a REAL
+       attribute on the exception object, but nothing in this codebase
+       ever reads it to populate the wire response -- Strawberry's
+       default unhandled-exception handling does not know about
+       arbitrary `.code` attributes, and there is no `process_errors`
+       hook (grepped repo-wide, zero hits) that would surface it. The
+       attribute is genuine but wire-dead; `go_api_comparator`'s rule 1
+       tolerates a missing `extensions` key (`(err.get("extensions") or
+       {}).get("code", "")`), so this is not a comparator gap either.
+    3. `data_present` is `True`, NOT `False`. The GraphQL document parsed
+       and validated, then a FIELD resolver errored -- per the GraphQL
+       spec and this comparator's own `data_present` doc comment, that is
+       `"data": null` (key PRESENT, value null), distinct from a
+       request-level failure that never reaches execution.
+
+    None of this is a Go defect: Go's real observed response for the same
+    scenario also carries no `extensions` key and a `path` of
+    `["analytics"]` (its message is prefixed by this port's own error
+    wrapping -- `analytics: analytics: flowMatrix: ...` from
+    `schema.resolvers.go`'s `fmt.Errorf("analytics: %w", err)` composing
+    with `analytics.Resolve`'s own wrap -- message TEXT is not what rule 1
+    keys identity on). The mismatch this test previously reported was
+    entirely this baseline-construction function disagreeing with the real
+    Python wire shape, not the two planes disagreeing with each other.
     """
-    code = getattr(exc, "code", None) or "VALIDATION_ERROR"
     return go_api_comparator.ResponseSnapshot(
         data=None,
-        data_present=False,
+        data_present=True,
         errors=(
             {
                 "message": str(exc),
-                "path": ["analytics", "flowMatrix"],
-                "extensions": {"code": code},
+                "path": ["analytics"],
+                "extensions": {},
             },
         ),
     )
@@ -632,7 +672,7 @@ def _insert_work_item(
             "work_item_id",
             "provider",
             "title",
-            "reporter",
+            "description",
             "type",
             "status",
             "status_raw",
@@ -806,7 +846,7 @@ async def test_dual_run_team_dimension_matches(
 
         start, end = "2026-08-01", "2026-08-31"
         python_result = await resolve_analytics(
-            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
             _flow_matrix_batch(
                 DimensionInput.TEAM, date(2026, 8, 1), date(2026, 8, 31)
             ),
@@ -1009,9 +1049,7 @@ async def test_dual_run_repo_dimension_diverges_on_unmerged_duplicate(
             )
 
             python_result = await resolve_analytics(
-                GraphQLContext(
-                    org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client
-                ),
+                GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
                 _flow_matrix_batch(DimensionInput.REPO, start_d, end_d),
             )
             go_payload = _post_graphql(
@@ -1130,9 +1168,7 @@ async def test_dual_run_work_type_filtered_rejection_matches(
                 ),
             )
             await resolve_analytics(
-                GraphQLContext(
-                    org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client
-                ),
+                GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
                 batch,
             )
         except ValidationError as exc:

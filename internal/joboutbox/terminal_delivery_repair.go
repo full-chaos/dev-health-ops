@@ -82,7 +82,7 @@ func (repair *TerminalDeliveryRepair) Step(
 	}
 	tx, err := repair.begin(ctx)
 	if err != nil || tx == nil {
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(
@@ -99,7 +99,7 @@ func (repair *TerminalDeliveryRepair) Step(
 		providerContractRejectedDetail,
 	)
 	if err != nil || rows == nil {
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 	}
 	defer rows.Close()
 	type candidate struct {
@@ -117,13 +117,13 @@ func (repair *TerminalDeliveryRepair) Step(
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil || len(candidates) > limit {
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 	}
 	result := TerminalDeliveryRepairResult{}
 	for _, candidate := range candidates {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, candidate.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != candidate.riverJobID || deleted.State != rivertype.JobStateDiscarded {
-			return TerminalDeliveryRepairResult{}, ErrUnavailable
+			return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -133,7 +133,7 @@ func (repair *TerminalDeliveryRepair) Step(
 				claim_token = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = $2
 			WHERE id = $1`, candidate.outboxID, now.UTC(), candidate.recoveryCode, candidate.recoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return TerminalDeliveryRepairResult{}, ErrUnavailable
+			return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 		}
 		result.Recovered++
 		if candidate.recoveryCode == providerPostRepairContractRecoveryCode {
@@ -141,7 +141,7 @@ func (repair *TerminalDeliveryRepair) Step(
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return TerminalDeliveryRepairResult{}, ErrUnavailable
+		return TerminalDeliveryRepairResult{}, classifyStrandError(err)
 	}
 	return result, nil
 }

@@ -150,18 +150,198 @@ func TestReconcilerLoopAccumulatesResultsAndExportsLowCardinalityMetrics(t *test
 	}
 }
 
-func TestReconcilerLoopPropagatesPeriodicFatalErrorAndClosesReadiness(t *testing.T) {
+// TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError is the
+// CHAOS-4429 regression test. Before this fix, the very first periodic
+// Relay.Step failure sent on loop.Errors() AND returned from run(),
+// permanently killing the polling goroutine -- which lifecycle.Runtime then
+// treated as fatal to the ENTIRE reconciler process, taking the mutation
+// pipeline's materializer/kernel/lease-repair stages down with it even
+// though CHAOS-4239 had already fixed exactly this defect shape for them.
+// This test proves the corrected contract end to end: two consecutive
+// failures (below consecutiveStepFailureDegradeThreshold) leave readiness
+// open and Errors() silent; a third crosses the threshold and closes
+// readiness WITHOUT firing Errors(); a subsequent success both self-heals
+// readiness and proves the polling goroutine is still alive -- on the
+// pre-fix code this last tick is never consumed because run() already
+// returned, so the test hangs instead of completing.
+func TestReconcilerLoopAbsorbsTransientStepFailuresWithoutFatalError(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
-	fatal := errors.New("database unavailable")
-	steps := 0
-	failedStep := make(chan struct{}, 1)
+	failing := errors.New("database unavailable")
+	// index 0 (Start's initial step, run synchronously by Start itself) is
+	// consumed and complete by the time Start returns, so it needs no
+	// separate synchronization; 1-3 fail, crossing the 3-consecutive-failure
+	// threshold on the third; 4 succeeds again.
+	results := []error{nil, failing, failing, failing, nil}
 	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
-		steps++
-		if steps == 1 {
+		err := results[0]
+		results = results[1:]
+		return StepResult{}, err
+	}), clock)
+	// stepObserved (codex review finding) fires only once run has finished
+	// ALL bookkeeping for a tick -- recordStepFailure or the success path --
+	// so assertions right after it can never race that bookkeeping the way
+	// a signal sent from inside the stepper closure could.
+	observed := make(chan struct{}, 1)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	openReconcilerReadiness(t, registry)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+
+	// Two consecutive failures: below the degrade threshold. Readiness must
+	// stay open (chris's CHAOS-4239 ruling: a lone blip or two must not flap
+	// readyz) and nothing may reach Errors().
+	for i := 0; i < 2; i++ {
+		ticker.ticks <- clock.Now().Add(time.Duration(i+1) * time.Second)
+		<-observed
+	}
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("Errors() fired on a transient failure below the degrade threshold: %v", err)
+	default:
+	}
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("readiness closed after only 2 consecutive failures (below threshold %d): %#v",
+			consecutiveStepFailureDegradeThreshold, status)
+	}
+
+	// Third consecutive failure crosses the threshold: readiness closes, but
+	// the process itself is never torn down.
+	ticker.ticks <- clock.Now().Add(3 * time.Second)
+	<-observed
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("Errors() fired on a periodic step failure -- CHAOS-4429: this must never be fatal: %v", err)
+	default:
+	}
+	if status := registry.Readiness(context.Background()); status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "reconciler_loop") {
+		t.Fatalf("readiness did not close after %d consecutive failures: %#v", consecutiveStepFailureDegradeThreshold, status)
+	}
+
+	// A subsequent success self-heals readiness immediately AND proves the
+	// polling goroutine survived every failure above.
+	ticker.ticks <- clock.Now().Add(4 * time.Second)
+	<-observed
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("readiness did not self-heal after a successful step: %#v", status)
+	}
+
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReconcilerLoopStepPreservesCommittedResultOnFailure is a codex review
+// finding: Relay.Step returns a non-zero StepResult ALONGSIDE a non-nil
+// error on most of its own mid-pass failure paths (a claim already
+// dispatched before a later claim in the same pass faults, say) -- those
+// actions already committed to Postgres. step must count them even though
+// the pass as a whole failed; discarding them here would now lose that
+// evidence on every retry instead of just once before a pre-CHAOS-4429
+// crash-loop restart reset the counters anyway.
+func TestReconcilerLoopStepPreservesCommittedResultOnFailure(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	failing := errors.New("dispatch failed mid-pass")
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{Claimed: 3, Delivered: 2, Dead: 1}, failing
+	}), clock)
+	if err := loop.step(context.Background(), clock.Now()); !errors.Is(err, failing) {
+		t.Fatalf("step() error = %v, want %v", err, failing)
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"worker_outbox_reconciler_claimed_total 3",
+		"worker_outbox_reconciler_delivered_total 2",
+		"worker_outbox_reconciler_dead_total 1",
+	} {
+		if !strings.Contains(metrics.String(), want+"\n") {
+			t.Fatalf("metrics missing %q -- committed StepResult was discarded on a failed step:\n%s", want, metrics.String())
+		}
+	}
+}
+
+// TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure is a
+// codex review finding (round 2 tightened round 1's fix): Shutdown sets
+// stopping THEN cancels the loop's context, so a step in flight at that
+// moment observes its own shutdown as a Relay.Step error. That is the
+// process stopping on purpose, not an operational failure, and must never
+// increment step_failures_total or the degrade streak.
+//
+// The stepper here returns ErrUnavailable, NOT ctx.Err() -- matching what
+// the REAL Repository does (claimDueExcept/Dispatch/recordFailure all
+// collapse a cancellation into ErrUnavailable before Relay.Step ever
+// returns, internal/joboutbox/repository.go). Round 1's fix checked
+// errors.Is(err, context.Canceled), which this error deliberately does NOT
+// satisfy -- a synthetic ctx.Err() stepper here would have let that gap pass
+// silently, the same way it did the first time.
+func TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	entered := make(chan struct{}, 1)
+	calls := 0
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (StepResult, error) {
+		calls++
+		if calls == 1 {
 			return StepResult{}, nil
 		}
-		failedStep <- struct{}{}
-		return StepResult{}, fatal
+		entered <- struct{}{}
+		<-ctx.Done()
+		return StepResult{}, ErrUnavailable
+	}), clock)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.mu.Lock()
+	ticker := clock.ticker
+	clock.mu.Unlock()
+	ticker.ticks <- clock.Now().Add(time.Second)
+	<-entered
+
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-loop.Errors():
+		t.Fatalf("Errors() fired on shutdown cancellation, not an operational failure: %v", err)
+	default:
+	}
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_step_failures_total 0\n") {
+		t.Fatalf("shutdown cancellation was counted as a step failure:\n%s", metrics.String())
+	}
+}
+
+// TestReconcilerLoopNotAuthorizedStepFailurePreservesFatalPath is a codex
+// review finding (round 3, P1): CHAOS-4429's fix must NOT swallow
+// ErrNotAuthorized. strand_repair.go returns it for a real production
+// scenario -- the queue role missing a grant on the daily-metrics/work-graph
+// tables a migration was supposed to apply -- and unlike a transient
+// ErrUnavailable it fails identically FOREVER: no retry ever clears it.
+// Absorbing it the way a blip is absorbed would trade a loud, actionable
+// crash-loop for a silent permanent-misconfiguration retry loop visible only
+// as one readyz gauge. It must still reach Errors() (fatal, same as
+// pre-CHAOS-4429 behavior) and must NOT be counted in step_failures_total --
+// that counter is reserved for the retry-safe class.
+func TestReconcilerLoopNotAuthorizedStepFailurePreservesFatalPath(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	calls := 0
+	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		calls++
+		if calls == 1 {
+			return StepResult{}, nil
+		}
+		return StepResult{}, ErrNotAuthorized
 	}), clock)
 	openReconcilerReadiness(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
@@ -171,15 +351,92 @@ func TestReconcilerLoopPropagatesPeriodicFatalErrorAndClosesReadiness(t *testing
 	ticker := clock.ticker
 	clock.mu.Unlock()
 	ticker.ticks <- clock.Now().Add(time.Second)
-	<-failedStep
-	if err := <-loop.Errors(); !errors.Is(err, fatal) {
-		t.Fatalf("Errors() = %v, want %v", err, fatal)
+
+	if err := <-loop.Errors(); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("Errors() = %v, want it to wrap ErrNotAuthorized -- a missing grant must stay fatal, not be absorbed as a retry-safe blip", err)
 	}
 	if status := registry.Readiness(context.Background()); status.Ready || !strings.Contains(strings.Join(status.Failed, ","), "reconciler_loop") {
-		t.Fatalf("failed-loop readiness = %#v", status)
+		t.Fatalf("readiness after ErrNotAuthorized = %#v, want closed", status)
+	}
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_step_failures_total 0\n") {
+		t.Fatalf("ErrNotAuthorized was counted in the retry-safe step_failures_total:\n%s", metrics.String())
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcilerLoopUpGaugeClearsOnASingleFailureBelowTheDegradeThreshold is
+// a codex review finding (round 4, P2): worker_outbox_reconciler_up was
+// cleared only once consecutiveFailures crossed the degrade threshold,
+// contradicting its own HELP text ("currently healthy") and the pre-
+// CHAOS-4429 behavior, where a single failure cleared it immediately. up is
+// deliberately unthresholded -- readyz (chris's 3-consecutive-failure
+// ruling) is the ONLY signal allowed to stay quiet through a lone blip.
+func TestReconcilerLoopUpGaugeClearsOnASingleFailureBelowTheDegradeThreshold(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	}), clock)
+	ctx := context.Background()
+	if err := loop.step(ctx, clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	loop.recordStepFailure(ctx, errors.New("one blip, nowhere near the degrade threshold"))
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metrics.String(), "worker_outbox_reconciler_up 0\n") {
+		t.Fatalf("up gauge stayed healthy after a single failed step, below the degrade threshold:\n%s", metrics.String())
+	}
+	if strings.Contains(metrics.String(), "worker_outbox_reconciler_degraded 1\n") {
+		t.Fatalf("readiness/degraded flipped on a single failure -- it must stay below threshold while up clears:\n%s", metrics.String())
+	}
+}
+
+// TestReconcilerLoopExportsCHAOS4429Telemetry pins the new Prometheus
+// fragment: a lifetime failure counter that counts even absorbed blips below
+// the degrade threshold, and a degraded gauge that flips only once the
+// threshold is crossed.
+func TestReconcilerLoopExportsCHAOS4429Telemetry(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
+	failing := errors.New("database unavailable")
+	results := []error{nil, failing, failing, failing}
+	loop, _ := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		err := results[0]
+		results = results[1:]
+		return StepResult{}, err
+	}), clock)
+	ctx := context.Background()
+	for range 4 {
+		// run() is what actually calls recordStepFailure on a step error;
+		// exercise it directly rather than through the ticker so this test
+		// stays a fast, synchronous unit test of the telemetry alone.
+		if err := loop.step(ctx, clock.Now()); err != nil {
+			loop.recordStepFailure(ctx, err)
+		}
+		clock.mu.Lock()
+		clock.now = clock.now.Add(time.Second)
+		clock.mu.Unlock()
+	}
+
+	var metrics bytes.Buffer
+	if err := loop.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"worker_outbox_reconciler_step_failures_total 3",
+		"worker_outbox_reconciler_degraded 1",
+	} {
+		if !strings.Contains(metrics.String(), want+"\n") {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+		}
 	}
 }
 

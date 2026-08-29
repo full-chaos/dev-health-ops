@@ -204,13 +204,25 @@ SCRATCH_DB="${SCRATCH_DB:-$(default_scratch_db "${ROOT}")}"
 # tests/metrics/test_clickhouse_connection.py, which encodes `secret/word` as
 # `secret%2Fword` and expects `secret/word` back.
 uri_encode() {
-  # Encode everything outside the RFC 3986 unreserved set. LC_ALL=C so a byte
-  # is a byte; %02X so the output is canonical uppercase hex.
+  # Encode ONLY what actually breaks the authority parse or redact_uri:
+  # gen-delims :/?#[]@ , the escape character % itself, and whitespace/control.
+  # RFC 3986 sec 3.2.1 permits sub-delims !$&'()*+,;= raw in userinfo, and both
+  # urlsplit and clickhouse-connect take them literally.
+  #
+  # The first version encoded everything outside the UNRESERVED set, which
+  # forced the compatibility guard below to reject sub-delims too -- and that
+  # REGRESSED the default docker path: before this PR a CH_PASS like `sec!ret`
+  # went to clickhouse-client raw and into SCRATCH_URI raw, parsed correctly,
+  # and worked end to end. Encoding it broke it, then the guard refused it.
+  # Encode the smaller set and the regression disappears.
+  #
+  # Non-ASCII is deliberately NOT handled correctly here -- see the note in the
+  # guard below.
   local string="$1" index char
   for (( index = 0; index < ${#string}; index++ )); do
     char="${string:index:1}"
     case "$char" in
-    [A-Za-z0-9._~-]) printf '%s' "$char" ;;
+    [A-Za-z0-9._~!\$\&\'\(\)\*+,\;=-]) printf '%s' "$char" ;;
     *) LC_ALL=C printf '%%%02X' "'$char" ;;
     esac
   done
@@ -241,13 +253,19 @@ uri_encode() {
 # with the literal encoded string -- failing AFTER create and migrate, in the
 # default configuration. The limitation belongs to the migrate path, so the
 # guard has to sit outside the transport check.
+# Refuse exactly what uri_encode ENCODES, no more. Anything encoded reaches
+# `migrate clickhouse status --check` still percent-encoded, because that path
+# hands the DSN straight to clickhouse-connect, which does not decode userinfo
+# (CHAOS-4469). Sub-delims are left raw by uri_encode, so they are fine here and
+# the default docker path keeps working exactly as it did before this PR.
 case "${CH_USER}${CH_PASS}" in
-*[!A-Za-z0-9._~-]*)
-  printf 'CH_USER/CH_PASS must contain only unreserved URI characters (A-Za-z0-9._~-)\n' >&2
+*[!A-Za-z0-9._~!\$\&\'\(\)\*+,\;=-]*)
+  printf 'CH_USER/CH_PASS may not contain : / ? # [ ] @ %% whitespace or non-ASCII\n' >&2
   printf '  `migrate clickhouse status --check` passes the DSN straight to\n' >&2
   printf '  clickhouse-connect, which does not percent-decode userinfo, so an\n' >&2
   printf '  encoded credential fails there even though CREATE and upgrade accept\n' >&2
-  printf '  it. Tracked as CHAOS-4469.\n' >&2
+  printf '  it. Sub-delims !$&'"'"'()*+,;= are fine and are NOT encoded.\n' >&2
+  printf '  Tracked as CHAOS-4469.\n' >&2
   exit 2
   ;;
 esac

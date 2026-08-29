@@ -127,7 +127,22 @@ def _uri_encode(value: str) -> str:
 @pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
 @pytest.mark.parametrize(
     "credential",
-    ["sec/ret", "se#cr?et", "p@ssw%rd", "a:b", "sp ace", "plain"],
+    [
+        # encoded: gen-delims, the escape character, whitespace
+        "sec/ret",
+        "se#cr?et",
+        "p@ssw%rd",
+        "a:b",
+        "sp ace",
+        "plain",
+        # NOT encoded: RFC 3986 sub-delims are legal raw in userinfo, and both
+        # urlsplit and clickhouse-connect take them literally. Encoding these
+        # regressed the default docker path, where they had always worked.
+        "sec!ret",
+        "p$w=1",
+        "a,b;c",
+        "it's",
+    ],
 )
 def test_userinfo_is_percent_encoded_and_round_trips(credential: str) -> None:
     """The DSN parser must get back exactly the credential curl authenticates with.
@@ -213,12 +228,42 @@ def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+@pytest.mark.parametrize("credential", ["sec!ret", "p$w=1", "a,b;c", "it's"])
+def test_sub_delims_are_left_raw_and_not_refused(
+    credential: str, tmp_path: Path
+) -> None:
+    """Sub-delims must survive untouched, in BOTH transports.
+
+    Before this PR the default docker path passed CH_PASS straight to
+    clickhouse-client and interpolated it raw into SCRATCH_URI, so a password
+    like `sec!ret` worked end to end. Encoding everything outside the unreserved
+    set broke that and then the compatibility guard refused it -- a regression
+    introduced by the fix, in the configuration everyone uses. Encoding is now
+    limited to what actually breaks the parse, so these stay raw and stay legal.
+    """
+    assert _uri_encode(credential) == credential, (
+        f"{credential!r} must not be encoded: sub-delims are legal raw in "
+        "userinfo (RFC 3986 3.2.1) and encoding them regresses the docker path"
+    )
+    result = _run_gate(
+        {
+            "PATH": _stub_path(tmp_path),
+            "CH_PASS": credential,
+        }
+    )
+    combined = result.stdout + result.stderr
+    assert "may not contain" not in combined, (
+        f"docker mode refused {credential!r}, which worked before this PR: {combined}"
+    )
+
+
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
 @pytest.mark.parametrize(
     ("env", "expected"),
     [
         ({"CH_HTTP_SCHEME": "https", "CH_HTTP_PORT": "30501"}, "port 443 or 8443"),
-        ({"CH_PASS": "sec/ret"}, "unreserved URI characters"),
-        ({"CH_USER": "user@host"}, "unreserved URI characters"),
+        ({"CH_PASS": "sec/ret"}, "may not contain"),
+        ({"CH_USER": "user@host"}, "may not contain"),
     ],
 )
 def test_unsupported_http_combinations_refuse_up_front(
@@ -271,4 +316,4 @@ def test_supported_http_combinations_are_not_refused(tmp_path: Path) -> None:
         )
         combined = result.stdout + result.stderr
         assert "only supported on port" not in combined, (env, combined)
-        assert "unreserved URI characters" not in combined, (env, combined)
+        assert "may not contain" not in combined, (env, combined)

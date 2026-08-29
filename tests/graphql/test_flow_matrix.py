@@ -8,12 +8,17 @@ Validates the same-dimension flow matrix path end-to-end:
   the shared dimension (e.g., "team:EngineeringA")
 - validate_sub_request_count counts flow_matrix toward the budget
 - REPO + WORK_TYPE dims use asymmetric bridge-joined templates (CHAOS-1292)
+- REPO + WORK_TYPE edges queries actually execute against ClickHouse, not
+  just render as a string (CHAOS-4519)
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import date
+from urllib.parse import urlparse
+from uuid import uuid4
 
 import pytest
 
@@ -38,6 +43,8 @@ from dev_health_ops.api.graphql.sql.templates import (
     flow_matrix_work_type_edges_template,
     flow_matrix_work_type_nodes_template,
 )
+
+CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
 
 
 def _req(dimension: str = "team") -> FlowMatrixRequest:
@@ -450,3 +457,74 @@ def test_default_limits_admit_flow_matrix() -> None:
     req = _req()
     assert req.max_nodes <= DEFAULT_LIMITS.max_sankey_nodes
     assert req.max_edges <= DEFAULT_LIMITS.max_sankey_edges
+
+
+@pytest.mark.clickhouse
+@pytest.mark.skipif(
+    not CLICKHOUSE_URI,
+    reason="Requires CLICKHOUSE_URI pointed at an isolated scratch database",
+)
+class TestFlowMatrixEnrichedCTEsExecuteLive:
+    """CHAOS-4519: the REPO and WORK_TYPE edges templates must actually run
+    against a real ClickHouse engine, not just render as a string.
+
+    Every other test in this file mocks ``query_dicts`` and asserts on the
+    rendered SQL text -- which is exactly how this defect went unnoticed:
+    ``flow_matrix_repo_edges_template()`` self-joins its ``enriched`` CTE,
+    and that CTE's source (``PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE``) is
+    a derived subquery, not a plain table. Under ClickHouse's analyzer
+    (``allow_experimental_analyzer`` / ``enable_analyzer``, confirmed on in
+    prod and local dev at 26.7.5.10), resolving `a.team_id` / `b.team_id`
+    off that self-join requires the projected column to carry
+    an explicit ``AS team_id`` alias -- the same shape the working TEAM
+    sibling (``flow_matrix_team_edges_template``) already uses. Without the
+    alias this raises ``Code: 47 UNKNOWN_IDENTIFIER: Identifier
+    'a.team_id' cannot be resolved from subquery with name a``.
+
+    This class actually executes the compiled queries (not EXPLAIN) against
+    a scratch ClickHouse database carrying the real production schema, with
+    zero rows, so an analyzer/identifier failure surfaces the same way it
+    would in production while the schema stays otherwise empty and cheap.
+    """
+
+    @pytest.fixture(scope="class")
+    def ch_client(self):
+        import clickhouse_connect
+
+        from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+        clickhouse_uri = CLICKHOUSE_URI
+        assert clickhouse_uri is not None  # narrowed by pytestmark.skipif
+        parsed = urlparse(clickhouse_uri)
+        database = f"chaos4519_{uuid4().hex[:12]}"
+        isolated_uri = parsed._replace(path=f"/{database}").geturl()
+
+        admin = clickhouse_connect.get_client(dsn=clickhouse_uri)
+        admin.command(f"CREATE DATABASE `{database}`")
+
+        sink = ClickHouseMetricsSink(dsn=isolated_uri)
+        try:
+            sink.ensure_schema()
+        finally:
+            sink.close()
+
+        client = clickhouse_connect.get_client(dsn=isolated_uri)
+        try:
+            yield client
+        finally:
+            client.close()
+            admin.command(f"DROP DATABASE IF EXISTS `{database}`")
+            admin.close()
+
+    @pytest.mark.parametrize("dimension", ["repo", "work_type"])
+    def test_enriched_cte_edges_query_executes(self, ch_client, dimension: str) -> None:
+        """The exact SQL + params compile_flow_matrix hands the resolver
+        must execute cleanly against ClickHouse. Pre-fix this raises
+        Code: 47 UNKNOWN_IDENTIFIER for both REPO and WORK_TYPE; post-fix
+        it returns zero rows (the scratch schema has no data)."""
+        _, edges_queries = compile_flow_matrix(_req(dimension), org_id="org-1")
+        edge_sql, edge_params = edges_queries[0]
+
+        result = ch_client.query(edge_sql, parameters=edge_params)
+
+        assert result.result_rows == []

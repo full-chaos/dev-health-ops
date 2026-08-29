@@ -1,0 +1,216 @@
+{{- /*
+CHAOS-4428: the two migration steps the chart could not previously run.
+
+Before this, the chart rendered ONE migrate Job (Alembic + the ClickHouse
+migrator). Role provisioning and the River schema were not in the chart at all
+-- a lane or an operator ran them by hand, and the ORDER is load-bearing. These
+two Jobs put the rest of the chain in the chart, ordered by hook weight:
+
+    weight  0   …-migrate            Alembic + ClickHouse      (existing, untouched)
+    weight  5   …-provision-roles    the three runtime logins  (this file)
+    weight 10   …-river-migrate      River schema + grants     (this file)
+
+That mirrors Compose exactly (deploy/docker-compose/compose.go-workers.yml:
+`go-river-provision` depends_on migrate, `go-river-migrate` depends_on
+provision). Provisioning follows Alembic rather than preceding it because that
+is the order the running system uses; River's preflight needs the three logins,
+so it follows provisioning.
+
+BOTH hooks run on pre-install AND pre-upgrade. That was not obvious: an earlier
+draft of this design ran provisioning on pre-install only, on the belief that
+provisioning REVOKES what the River step GRANTS and would therefore strip a
+working deployment on upgrade. That is FALSE on current code, and the evidence
+is executed rather than argued -- production deploy 5.5, 2026-08-28:
+
+  * provision_river_roles.sql has been bootstrap-only since CHAOS-4261
+    (see its comment at :87-105). The only REVOKEs left are TEMPORARY on the
+    database and CREATE on schema public; the per-table whitelist that caused
+    CHAOS-4261's incident is gone.
+  * applyRuntimeGrants runs UNCONDITIONALLY after the migrator
+    (internal/storage/river/migrate.go:196-211) -- it is not gated on a version
+    having been applied, so "0 pending migrations" still re-applies the full
+    declared posture.
+  * Observed across three prod passes: 116 grants after pass 1, 119 after
+    pass 2 (+3 for a new table), 119 after a `workerctl --version` pass. No
+    revoke at any point.
+
+The 08-25 incident where pass 1 appeared to revoke grants was a pre-CHAOS-4261
+image. Non-hazard since CHAOS-4261: bootstrap-only provision, and migrate
+re-applies the full posture on every run.
+
+FAIL-CLOSED, and deliberately so. hook-delete-policy is `before-hook-creation`
+only -- NOT `hook-succeeded`. A failed migration's pod must survive for its
+logs: that is how the `worker_instances` grant gap (CHAOS-4463) was diagnosed
+at all. Helm aborts the release on any hook failure, so a half-migrated
+database can never get workers pointed at it.
+
+Both are gated OFF by default so no existing deployment changes behaviour on
+upgrade. Prod opts in deliberately.
+*/}}
+{{- if .Values.migrations.hook.enabled }}
+{{- $hookEvents := .Values.migrations.hook.events }}
+{{- if .Values.migrations.hook.provisionRoles.enabled }}
+{{- if not .Values.goWorkers.pgbouncer.secret.create }}
+{{- fail "migrations.hook.provisionRoles.enabled=true requires goWorkers.pgbouncer.secret.create=true, or a pre-created Secret carrying the three RIVER_*_DATABASE_PASSWORD keys: the provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-provision-roles
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "provision-roles" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "provision-roles" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: provision-roles
+          {{- /*
+          The OPS RUNTIME image, not a bare postgres image: the SQL is baked
+          into it at /usr/local/share/dev-health/provision_river_roles.sql,
+          which is also how Compose runs this step. A postgres:*-alpine image
+          would have psql but not the script.
+          */}}
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          {{- /*
+          Passwords arrive as env from the pooler Secret and are passed to psql
+          as --set values referencing those variables. They are never written
+          into this manifest and never appear in the Job's argv.
+          */}}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              exec psql "$POSTGRES_URI" \
+                --set=ON_ERROR_STOP=1 \
+                --set=app_database="$APP_DATABASE" \
+                --set=domain_role="$RIVER_DOMAIN_DATABASE_ROLE" \
+                --set=queue_role="$RIVER_QUEUE_DATABASE_ROLE" \
+                --set=coordinator_role="$RIVER_COORDINATOR_DATABASE_ROLE" \
+                --set=domain_password="$RIVER_DOMAIN_DATABASE_PASSWORD" \
+                --set=queue_password="$RIVER_QUEUE_DATABASE_PASSWORD" \
+                --set=coordinator_password="$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+                --file=/usr/local/share/dev-health/provision_river_roles.sql
+          env:
+            - name: APP_DATABASE
+              value: {{ include "dev-health.goPgbouncerPostgresDatabase" . | quote }}
+            - name: RIVER_DOMAIN_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_DOMAIN_DATABASE_ROLE | quote }}
+            - name: RIVER_QUEUE_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
+            - name: RIVER_COORDINATOR_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            - name: RIVER_DOMAIN_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  key: RIVER_DOMAIN_DATABASE_PASSWORD
+            - name: RIVER_QUEUE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  key: RIVER_QUEUE_DATABASE_PASSWORD
+            - name: RIVER_COORDINATOR_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dev-health.goPgbouncerSecretName" . }}
+                  key: RIVER_COORDINATOR_DATABASE_PASSWORD
+          envFrom:
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+              {{- else }}
+                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+              {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
+{{- if .Values.migrations.hook.riverMigrate.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-river-migrate
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "river-migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "river-migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: river-migrate
+          image: {{ .Values.migrations.hook.riverMigrate.image | quote }}
+          imagePullPolicy: {{ .Values.migrations.hook.riverMigrate.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          {{- /*
+          Two invocations, and the second is the point. `dev-health-worker-migrate`
+          applies the pinned River bundle and the full runtime grant posture;
+          `--check` then independently asserts that the resulting schema is
+          current. Without it a partial apply could exit 0 and the release would
+          proceed to start workers against a schema that is not what the binary
+          expects. Compose runs the identical pair.
+          */}}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ -z "${MIGRATION_DATABASE_URI:-}" ]; then
+                if [ -z "${POSTGRES_URI:-}" ]; then
+                  echo "river-migrate: neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set in the migration Secret; this Job needs an ELEVATED DSN pointed DIRECTLY at PostgreSQL (5432), never at a transaction pooler" >&2
+                  exit 1
+                fi
+                MIGRATION_DATABASE_URI="$POSTGRES_URI"
+                export MIGRATION_DATABASE_URI
+              fi
+              dev-health-worker-migrate && dev-health-worker-migrate --check
+          env:
+            - name: RIVER_DATABASE_SCHEMA
+              value: {{ .Values.config.RIVER_DATABASE_SCHEMA | default "river" | quote }}
+            - name: RIVER_DOMAIN_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_DOMAIN_DATABASE_ROLE | quote }}
+            - name: RIVER_QUEUE_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
+            - name: RIVER_COORDINATOR_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+          envFrom:
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+              {{- else }}
+                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+              {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
+{{- end }}

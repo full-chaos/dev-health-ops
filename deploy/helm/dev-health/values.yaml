@@ -390,6 +390,24 @@ migrations:
     # -- Explicit local/evaluation-only acknowledgement for post-install with
     #    the chart's bundled PostgreSQL. Requires postgresql.enabled=true.
     localBundledPostgres: false
+    # -- CHAOS-4428: the two migration steps that were previously run by hand.
+    #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
+    #    creates the three runtime logins, riverMigrate (10) applies the River
+    #    schema AND the full grant posture, then re-checks it. Both default to
+    #    false so an existing deployment is unchanged on upgrade.
+    #    Both run on pre-install AND pre-upgrade: provisioning has been
+    #    bootstrap-only since CHAOS-4261 and cannot revoke what riverMigrate
+    #    grants, and riverMigrate re-applies the full posture on every run even
+    #    with zero pending migrations. Verified on production deploy 5.5:
+    #    116 grants -> 119 -> 119 across three passes, no revoke.
+    provisionRoles:
+      enabled: false
+    riverMigrate:
+      enabled: false
+      # -- The Go migrator image. Pin it: this binary owns the runtime grant
+      #    posture, so a mutable tag silently changes what the roles may do.
+      image: "ghcr.io/full-chaos/dev-health-go-worker-migrate:latest"
+      pullPolicy: IfNotPresent
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

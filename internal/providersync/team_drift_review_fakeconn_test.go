@@ -17,12 +17,12 @@ import (
 
 type fakeTeamDriftConn struct {
 	driver.Conn
-	policies       map[string]teamDriftPolicy // team_id -> policy
-	existingRows   map[string]teamDriftExistingRow
+	policies        map[string]teamDriftPolicy // team_id -> policy
+	existingRows    map[string]teamDriftExistingRow
 	existingChanges []teamDriftChangeRow // pre-seeded team_drift_changes (team, field_changed)
 
-	observations     []teamProviderObservationCapture
-	insertedChanges  []teamDriftChangeRow
+	observations    []teamProviderObservationCapture
+	insertedChanges []teamDriftChangeRow
 }
 
 type teamProviderObservationCapture struct {

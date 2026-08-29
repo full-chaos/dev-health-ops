@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
@@ -37,59 +38,54 @@ func unknownTableNames(text string) map[string]struct{} {
 	return names
 }
 
-// errorChainText concatenates err.Error() at EVERY level of the
-// errors.Unwrap() chain, not just the outermost message. Required
-// because dev-health-go/clickhouse's Client.Query wraps every driver
-// error as &operationError{operation, cause} whose OWN Error() method
-// returns only the fixed string "ClickHouse query failed" -- the real
-// driver message (the one carrying "UNKNOWN_TABLE"/"code: 60"/the
-// offending table name) lives in operationError.cause, reachable only
-// via Unwrap(), never via a plain err.Error() call on the wrapped
-// error. This port's own workgraph packages wrap AGAIN with
-// fmt.Errorf("workgraph: ...: %w", err) on top of that, so a real error
-// reaching isMissingMembershipTableError is at least two levels removed
-// from the driver's own text. Found by codex (2026-08-29, gpt-5.6-terra
-// xhigh round): the original single-level err.Error() call could never
-// match against the REAL client, only against this package's own test
-// fakes (which set Err()/return an error whose Error() already IS the
-// raw driver text) -- making the narrow degraded-path contract
-// (work_graph.py's documented "missing work_unit_membership during
-// rollout -> degraded empty result, not a hard error") unreachable in
-// production: any genuinely missing membership table would surface as
-// a hard GraphQL error instead.
-func errorChainText(err error) string {
-	var b strings.Builder
-	for err != nil {
-		if b.Len() > 0 {
-			b.WriteString(" | ")
-		}
-		b.WriteString(err.Error())
-		err = errors.Unwrap(err)
-	}
-	return b.String()
-}
+// unknownTableExceptionCode is ClickHouse's UNKNOWN_TABLE error code.
+const unknownTableExceptionCode = 60
 
 // isMissingMembershipTableError mirrors work_graph.py:854-877's
 // _is_missing_membership_table_error: true ONLY when a ClickHouse
 // missing-table (code 60) error names work_unit_membership OR
 // work_unit_membership_runs (or the scoped-runs table) as the unknown
 // table -- any other code-60 error (a different missing table, e.g.
-// work_graph_edges itself) is NOT swallowed. This port sniffs the
-// error's string text the same way Python does (there is no
-// driver-specific typed error surfaced through the QueryClient
-// interface to inspect instead) -- see errorChainText's doc comment for
-// why that text must come from the FULL unwrap chain, not err.Error()
-// alone.
+// work_graph_edges itself) is NOT swallowed.
+//
+// Keys on the driver's own TYPED exception via errors.As, not a
+// string/substring match. dev-health-go/clickhouse's Client.Query wraps
+// every driver error as &operationError{operation, cause} whose OWN
+// Error() method returns only the fixed string "ClickHouse query
+// failed" -- the real error is clickhouse-go/v2/lib/proto.Exception
+// (Code int32, Message string), reachable through the chain because
+// operationError implements Unwrap() (returns cause) and errors.As
+// walks Unwrap() at every level automatically -- this port's own
+// fmt.Errorf("workgraph: ...: %w", err) wrapping on top is walked the
+// same way, no extra plumbing needed.
+//
+// An EARLIER version of this function read err.Error() (later:
+// errorChainText(err), a manual multi-level Unwrap+concat) and matched
+// the SUBSTRINGS "UNKNOWN_TABLE"/"code: 60" against that text --
+// text that exists only because proto.Exception.Error() happens to
+// render `fmt.Sprintf("code: %d, message: %s", e.Code, e.Message)`
+// today. That matched a FORMAT STRING, not a field: if the driver ever
+// reformats Error()'s output (a plausible, non-breaking change on
+// their side), the classifier would silently stop matching and this
+// exact degraded path goes dead again -- with every existing test still
+// green, because a text-shaped test double mirrors the string, not the
+// type, and keeps agreeing with itself regardless. Found by codex
+// (2026-08-29, gpt-5.6-terra xhigh round) as the original bug (the
+// single-level err.Error() call never saw the real client's wrapped
+// text at all, only this package's own test fakes' flat errors);
+// tightened to a structured check per chris/orchestrator's follow-up
+// ruling the same day, once the driver's typed Exception (already an
+// indirect dependency via go.mod's direct clickhouse-go/v2 v2.47.0) was
+// confirmed to carry Code as a real field, not just a rendered string.
 func isMissingMembershipTableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	text := errorChainText(err)
-	isUnknownTable := strings.Contains(text, "UNKNOWN_TABLE") || strings.Contains(text, "code: 60")
-	if !isUnknownTable {
+	var exc *chproto.Exception
+	if !errors.As(err, &exc) || exc.Code != unknownTableExceptionCode {
 		return false
 	}
-	names := unknownTableNames(text)
+	names := unknownTableNames(exc.Message)
 	for name := range names {
 		if _, ok := membershipTables[name]; ok {
 			return true

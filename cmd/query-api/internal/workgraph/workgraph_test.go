@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
@@ -236,30 +237,22 @@ func TestClampEdgesLimit(t *testing.T) {
 
 // --- isMissingMembershipTableError (work_graph.py:854-877) -----------------
 
-// chainWrapError mirrors dev-health-go/clickhouse's operationError shape
-// exactly for test purposes: Error() returns a FIXED generic string,
-// unrelated to cause's real text, and Unwrap() exposes cause -- so a
-// caller that reads only Error() sees nothing useful, and only a chain
-// walk (errorChainText) reaches the real message.
-type chainWrapError struct {
+// operationErrorDouble mirrors dev-health-go/clickhouse's UNEXPORTED
+// operationError shape exactly for test purposes: Error() returns a
+// FIXED generic string, unrelated to cause's real text, and Unwrap()
+// exposes cause -- so a caller that reads only Error() sees nothing
+// useful, and only errors.As (walking Unwrap at every level) reaches the
+// real *chproto.Exception. operationError itself cannot be constructed
+// from this package (unexported, external module), so this double
+// stands in for it -- structurally, not textually: the type it wraps is
+// the REAL clickhouse-go/v2/lib/proto.Exception, not a string.
+type operationErrorDouble struct {
 	outer string
 	cause error
 }
 
-func (e *chainWrapError) Error() string { return e.outer }
-func (e *chainWrapError) Unwrap() error { return e.cause }
-
-func TestErrorChainText_WalksMultipleUnwrapLevels(t *testing.T) {
-	inner := errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ...")
-	wrapped := fmt.Errorf("workgraph: batch resolve membership: %w", &chainWrapError{outer: "ClickHouse query failed", cause: inner})
-	text := errorChainText(wrapped)
-	if !strings.Contains(text, "UNKNOWN_TABLE") && !strings.Contains(text, "code: 60") {
-		t.Fatalf("errorChainText did not surface the innermost cause's text: %q", text)
-	}
-	if !strings.Contains(text, "work_unit_membership") {
-		t.Fatalf("errorChainText did not surface the table name: %q", text)
-	}
-}
+func (e *operationErrorDouble) Error() string { return e.outer }
+func (e *operationErrorDouble) Unwrap() error { return e.cause }
 
 func TestIsMissingMembershipTableError(t *testing.T) {
 	cases := []struct {
@@ -269,22 +262,22 @@ func TestIsMissingMembershipTableError(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{
-			"membership table, code 60",
-			errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."),
+			"membership table, code 60, real Exception type",
+			&chproto.Exception{Code: 60, Message: "Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."},
 			true,
 		},
 		{
-			"membership runs table, UNKNOWN_TABLE",
-			errors.New("DB::Exception: UNKNOWN_TABLE. Unknown table 'work_unit_membership_runs'"),
+			"membership runs table, real Exception type",
+			&chproto.Exception{Code: 60, Message: "DB::Exception: UNKNOWN_TABLE. Unknown table 'work_unit_membership_runs'"},
 			true,
 		},
 		{
 			"different missing table, same code 60 -- must NOT swallow",
-			errors.New("code: 60, message: Unknown table expression identifier 'work_graph_edges' in scope SELECT ..."),
+			&chproto.Exception{Code: 60, Message: "Unknown table expression identifier 'work_graph_edges' in scope SELECT ..."},
 			false,
 		},
 		{
-			"unrelated error",
+			"unrelated error, no Exception in the chain at all",
 			errors.New("connection reset by peer"),
 			false,
 		},
@@ -294,7 +287,7 @@ func TestIsMissingMembershipTableError(t *testing.T) {
 			// "work_unit_membership" would false-positive here. The
 			// identifier clause names work_graph_edges, not membership.
 			"echoed SQL mentions membership table but identifier clause does not",
-			errors.New("code: 60, message: Unknown table expression identifier 'work_graph_edges' in scope SELECT ... FROM work_unit_membership AS m ..."),
+			&chproto.Exception{Code: 60, Message: "Unknown table expression identifier 'work_graph_edges' in scope SELECT ... FROM work_unit_membership AS m ..."},
 			false,
 		},
 		{
@@ -303,19 +296,34 @@ func TestIsMissingMembershipTableError(t *testing.T) {
 			// Client.Query wraps every driver error as
 			// &operationError{operation, cause}, whose OWN Error() method
 			// returns ONLY "ClickHouse query failed" -- never the driver's
-			// real message. Every call site in this package wraps AGAIN
-			// with fmt.Errorf("workgraph: ...: %w", err). A single-level
-			// err.Error() call (this test's OWN earlier cases used flat
-			// errors.New() errors, which is exactly why they could not
-			// catch this) never sees the real text buried two levels down
-			// -- only a full errors.Unwrap() chain walk does.
+			// real message or code. Every call site in this package wraps
+			// AGAIN with fmt.Errorf("workgraph: ...: %w", err). errors.As
+			// walks Unwrap() at every level automatically, so this
+			// operationErrorDouble double (mirroring the real wrap shape)
+			// plus the extra fmt.Errorf layer must still classify.
 			"real client's two-level wrap (operationError + workgraph fmt.Errorf) -- must still classify",
 			fmt.Errorf("workgraph: batch resolve membership: %w",
-				&chainWrapError{
+				&operationErrorDouble{
 					outer: "ClickHouse query failed",
-					cause: errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."),
+					cause: &chproto.Exception{Code: 60, Message: "Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."},
 				}),
 			true,
+		},
+		{
+			// THE FOLLOW-UP RULING'S OWN REGRESSION CASE (chris/orchestrator,
+			// 2026-08-29, same day): a code-60-SHAPED error whose text says
+			// "code: 60" and names work_unit_membership, but is NOT a real
+			// *chproto.Exception in the chain (e.g. some other layer's
+			// error happens to render similar text). The STRUCTURED check
+			// must say false here -- a text-substring version of this
+			// function (the version this replaced) would have said true,
+			// which is exactly the failure mode the follow-up ruling
+			// diagnosed: matching a format string is not matching a type,
+			// and an adversarial/incidental text collision must not swallow
+			// a real, different error.
+			"text LOOKS like a code-60 membership-table error but carries no real Exception type -- must NOT swallow",
+			errors.New("code: 60, message: Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."),
+			false,
 		},
 	}
 	for _, tc := range cases {

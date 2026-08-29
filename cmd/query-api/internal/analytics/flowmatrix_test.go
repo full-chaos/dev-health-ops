@@ -44,6 +44,10 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(string)
 		case *uint64:
 			*ptr = row[i].(uint64)
+		case *float64:
+			*ptr = row[i].(float64)
+		case *graphqldate.Date:
+			*ptr = row[i].(graphqldate.Date)
 		default:
 			return errors.New("flowmatrix test: unsupported scan destination")
 		}

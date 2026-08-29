@@ -140,11 +140,32 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 // non-investment path, matching Python: the investment `mapping` dict
 // never receives the testops_mapping/ff_mapping updates in the
 // use_investment branch).
+// CHAOS-4534 NaN-class note (see the PR's RISK-NOTES for the full
+// enumeration): this function's outputs fall into three DISTINCT safety
+// categories, not two -- conflating them is the mistake to avoid.
+//  1. Non-nullable source column, no join that could inject NULL:
+//     genuinely safe, verified against the ClickHouse DDL (e.g.
+//     MeasurePipelineSuccessRate's `success_rate Float64`).
+//  2. Nullable(Float64) source column: AT RISK -- an all-NULL group
+//     NaNs (MeasurePipelineDurationP95/QueueTime,
+//     MeasureTestSuiteDurationP95, MeasureCoverage*,
+//     MeasureFlagFrictionDelta/ErrorRateDelta/ActivationRate).
+//  3. Self-guarded by `.../NULLIF(SUM(...), 0)`: safe TODAY, but ONLY
+//     because of the NULLIF -- MeasurePRReworkRatio below and the
+//     `useRepoAllocation` cycleTimeExpr/throughputExpr here are safe
+//     SOLELY due to this guard, not their underlying column's
+//     nullability. A future edit that "simplifies away" a NULLIF (e.g.
+//     replacing `/ NULLIF(SUM(x), 0)` with a bare `/ SUM(x)`) silently
+//     moves that measure into category 2 with NO DDL change to warn
+//     anyone -- this comment is the only signal. Do not remove a
+//     NULLIF from this file without re-running the CHAOS-4534
+//     enumeration.
 func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (string, error) {
 	if useInvestment {
 		throughputExpr := "SUM(subcategory_kv.2)"
-		cycleTimeExpr := "AVG(dateDiff('hour', from_ts, to_ts))"
+		cycleTimeExpr := "AVG(dateDiff('hour', from_ts, to_ts))" // safe: from_ts/to_ts are non-nullable DateTime64 (category 1)
 		if useRepoAllocation {
+			// category 3 -- safe ONLY via NULLIF, see doc comment above.
 			throughputExpr = "SUM(subcategory_kv.2 * allocation_weight)"
 			cycleTimeExpr = "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight) / NULLIF(SUM(allocation_weight), 0)"
 		}
@@ -166,9 +187,10 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureChurnLOC:
 		return "SUM(churn_loc)", nil
 	case MeasurePRReworkRatio:
+		// category 3 -- safe ONLY via NULLIF, see dbExpression's doc comment.
 		return "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)", nil
 	case MeasureCycleTimeHours:
-		return "AVG(cycle_p50_hours)", nil
+		return "AVG(cycle_p50_hours)", nil // safe: cycle_p50_hours is non-nullable Float64 (category 1)
 	case MeasureThroughput:
 		return "SUM(work_items_completed)", nil
 	case MeasurePipelineSuccessRate:
@@ -176,9 +198,9 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasurePipelineFailureRate:
 		return "AVG(failure_rate) * 100", nil
 	case MeasurePipelineDurationP95:
-		return "AVG(p95_duration_seconds)", nil
+		return "AVG(p95_duration_seconds)", nil // AT RISK: p95_duration_seconds is Nullable(Float64) (category 2)
 	case MeasurePipelineQueueTime:
-		return "AVG(avg_queue_seconds)", nil
+		return "AVG(avg_queue_seconds)", nil // AT RISK: avg_queue_seconds is Nullable(Float64) (category 2)
 	case MeasurePipelineRerunRate:
 		return "AVG(rerun_rate) * 100", nil
 	case MeasureTestPassRate:
@@ -188,21 +210,21 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureTestFlakeRate:
 		return "AVG(flake_rate) * 100", nil
 	case MeasureTestSuiteDurationP95:
-		return "AVG(suite_duration_p95_seconds)", nil
+		return "AVG(suite_duration_p95_seconds)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureCoverageLinePct:
-		return "AVG(line_coverage_pct)", nil
+		return "AVG(line_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureCoverageBranchPct:
-		return "AVG(branch_coverage_pct)", nil
+		return "AVG(branch_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureCoverageDeltaPct:
-		return "AVG(coverage_delta_pct)", nil
+		return "AVG(coverage_delta_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureFlagFrictionDelta:
-		return "AVG(release_user_friction_delta) * 100", nil
+		return "AVG(release_user_friction_delta) * 100", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureFlagErrorRateDelta:
-		return "AVG(release_error_rate_delta) * 100", nil
+		return "AVG(release_error_rate_delta) * 100", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureFlagCoverageRatio:
-		return "AVG(coverage_ratio) * 100", nil
+		return "AVG(coverage_ratio) * 100", nil // safe: coverage_ratio is Float32 non-nullable (category 1)
 	case MeasureFlagActivationRate:
-		return "AVG(flag_activation_rate) * 100", nil
+		return "AVG(flag_activation_rate) * 100", nil // AT RISK: Nullable(Float64) (category 2)
 	}
 	return "", fmt.Errorf("analytics: dbExpression: unhandled measure %q", measure)
 }

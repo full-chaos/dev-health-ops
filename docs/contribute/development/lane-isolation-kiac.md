@@ -281,13 +281,21 @@ a quoted key reaches the provider as an invalid credential.
 | Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |
 | Go integration suites needing Postgres + ClickHouse + River | In-cluster DSNs via the lane's NodePorts, scratch database per lane. |
 | `ci/check_go.sh live-python-oracles` | In-cluster DSNs. |
-| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once the script grows an explicit remote-ClickHouse mode. |
+| ops `ci/local_validate.sh` full gate | **Not supported in-cluster yet — keep running it the existing way, with the host lock.** The script always acquires the host-wide lock (`ci/local_validate.sh:1408`) and drives ClickHouse through `docker exec` against the Compose container (`ci/local_validate.sh:901-940`), so pointing DSNs at a namespace neither removes the serialization nor works without Compose. Tracked as **CHAOS-4457** (local_validate remote-datastore mode). It is closer than it looks: the lock is already scoped to `CH_CONTAINER` (`LOCK_DIR=/tmp/dev-health-ops-local-validate.${CH_CONTAINER}.lock`), so a lane-scoped name gives the run its own lock, and the only docker-bound call is `ch_query()` (`ci/local_validate.sh:939`) doing the scratch `CREATE`/`DROP DATABASE` — every other ClickHouse access already goes over HTTP via the env-overridable `CH_HOST`/`CH_HTTP_PORT`. This row becomes "in-cluster Postgres plus a scratch ClickHouse database in the lane's own ClickHouse" once that one function has an HTTP path. |
 | web Playwright e2e | The lane's own ops API and web. |
 | ACR two-turn corpus cases | The lane's own Postgres, ClickHouse and FalkorDB. |
 
 The rule: keep Testcontainers only where a suite genuinely wants a **throwaway**
 store. Anything that needs the seeded real organization must use the in-cluster
 plane.
+
+**One caveat learned by running it.** Pointing `DEV_HEALTH_POSTGRES_TEST_URI` at
+a lane's seeded Postgres opts in a set of live-PG tests that normally skip, and
+two of them assume an **empty** `worker_job_outbox`: they seed one wakeup and
+claim it back with `limit=1`, which fails on a restored snapshot that already
+carries 32 `pending` rows. Use the asyncpg dialect (`postgresql+asyncpg://`, not
+the psycopg2 sync fallback) and expect fixture assumptions like this to surface
+— the skip path hides them entirely on the Compose stack.
 
 ## Cost
 

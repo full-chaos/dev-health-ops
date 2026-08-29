@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -195,6 +196,14 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	if err != nil {
 		return compiledQuery{}, err
 	}
+	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
+	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
+	// for the AVG/ratio ones, and the native driver will NOT convert
+	// between them at scan time -- it errors, exactly as
+	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE
+	// scan type for every measure. Python does the same coercion one
+	// layer later with `float(row["value"])`, so values are unchanged.
+	measureExpr = "toFloat64(" + measureExpr + ")"
 	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
 
 	fc, err := translateFilters(filters, false, filterColumns{Team: "team_id", Repo: "repo_id", Author: "author_email"})
@@ -250,12 +259,17 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 	order := []string{}
 	buckets := map[string][]model.TimeseriesBucket{}
 	for rows.Next() {
-		var bucket graphqldate.Date
+		// Scan the DRIVER's type, convert after. graphqldate.Date has
+		// no Scan method, so it is not an sql.Scanner and the native
+		// Date.ScanRow rejects it outright -- every non-empty result
+		// failed. Precedent: reviewedges.go:152.
+		var bucketDay time.Time
 		var dimValue string
 		var value float64
-		if scanErr := rows.Scan(&bucket, &dimValue, &value); scanErr != nil {
+		if scanErr := rows.Scan(&bucketDay, &dimValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}
+		bucket := graphqldate.New(bucketDay)
 		if _, seen := buckets[dimValue]; !seen {
 			order = append(order, dimValue)
 		}

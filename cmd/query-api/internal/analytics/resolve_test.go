@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -19,6 +20,17 @@ import (
 // strings below are fixed and known-valid, so this never fires in
 // practice; it exists only so a future typo fails loudly instead of
 // silently producing a zero Date.
+// mustTime builds a row-fixture value the way the DRIVER delivers a
+// ClickHouse Date column: a time.Time. Fixtures must speak the driver's
+// types, not the model's.
+func mustTime(s string) time.Time {
+	t, err := time.Parse(graphqldate.Layout, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
 func mustGraphQLDate(s string) graphqldate.Date {
 	d, err := graphqldate.Parse(s)
 	if err != nil {
@@ -55,6 +67,12 @@ func (f *routingFakeClient) onErr(match string, err error) *routingFakeClient {
 }
 
 func (f *routingFakeClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	// Enforce the REAL client's read-only guard before anything else, so
+	// a statement production would never have executed cannot quietly
+	// return rows here. See clientcontract_test.go for why.
+	if err := validateLikeRealClient(statement); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, r := range f.rules {
@@ -168,7 +186,7 @@ func TestResolve_HappyPath_TimeseriesAndBreakdown(t *testing.T) {
 		{"team-x", 9.0},
 	}})
 	client.on("date_trunc", &fakeRowScanner{rows: [][]any{
-		{mustGraphQLDate("2026-01-01"), "repo-a", 3.0},
+		{mustTime("2026-01-01"), "repo-a", 3.0},
 	}})
 
 	batch := model.AnalyticsRequestInput{
@@ -419,3 +437,75 @@ type fakeOperationError struct {
 
 func (e *fakeOperationError) Error() string { return "ClickHouse " + e.operation + " failed" }
 func (e *fakeOperationError) Unwrap() error { return e.cause }
+
+// TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects pins the
+// THREE-state resolution of sankey's useInvestment.
+//
+// With batch-level AND sankey-level useInvestment both OMITTED, Python
+// keeps the value None (analytics.py:634-636 passes
+// `batch.use_investment` through unwrapped, NOT `bool(...)`), and
+// _get_context_params (compiler.py:152-155) then auto-routes any of
+// {THEME, SUBCATEGORY, WORK_TYPE} to the investment source.
+//
+// So "unset" must NOT mean "false" here. Collapsing it -- which this port
+// originally did, reusing timeseries/breakdown's analytics.py:554
+// `bool(batch.use_investment)` rule -- made the auto-route unreachable
+// and silently applied non-investment semantics where Python uses the
+// investment path. Rejection is the correct Go outcome because that path
+// is not yet ported (CHAOS-4538); answering with different semantics is
+// the failure mode being guarded against.
+func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects(t *testing.T) {
+	for _, dim := range []model.DimensionInput{
+		model.DimensionInputTheme,
+		model.DimensionInputSubcategory,
+		model.DimensionInputWorkType,
+	} {
+		t.Run(string(dim), func(t *testing.T) {
+			client := &routingFakeClient{}
+			batch := model.AnalyticsRequestInput{
+				// UseInvestment deliberately omitted at BOTH levels.
+				Sankey: &model.SankeyRequestInput{
+					Path:      []model.DimensionInput{model.DimensionInputTeam, dim},
+					Measure:   model.MeasureInputCount,
+					DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+					MaxNodes:  100,
+					MaxEdges:  500,
+				},
+			}
+			_, err := Resolve(context.Background(), client, "org-1", batch)
+			if err == nil {
+				t.Fatalf("expected rejection: %s auto-routes to the investment path when useInvestment is unset, and that path is not ported", dim)
+			}
+			if !strings.Contains(err.Error(), "investment path not yet ported") {
+				t.Fatalf("expected the investment-path guard to fire, got a different error (unset may have collapsed to false, making the auto-route unreachable): %v", err)
+			}
+		})
+	}
+}
+
+// TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun is the
+// other half: the auto-route must fire ONLY for the investment
+// dimensions. A blanket "unset -> investment" would reject ordinary
+// TEAM/REPO sankeys that Python serves normally.
+func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("'TEAM' AS dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "team-a", float64(3)}}})
+	client.on("'TEAM' AS source_dimension", &fakeRowScanner{rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}})
+
+	batch := model.AnalyticsRequestInput{
+		Sankey: &model.SankeyRequestInput{
+			Path:      []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputRepo},
+			Measure:   model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:  100,
+			MaxEdges:  500,
+		},
+	}
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("TEAM/REPO sankey with unset useInvestment must NOT auto-route to investment: %v", err)
+	}
+	if result.Sankey == nil {
+		t.Fatal("expected a sankey result")
+	}
+}

@@ -179,7 +179,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	// execute is swallowed to an empty result.
 	var sankeyResult *model.SankeyResult
 	if batch.Sankey != nil {
-		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, useInvestment, resolvedFilters)
+		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: sankey: %w", err)
 		}
@@ -239,21 +239,61 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 // compile_sankey's own validation is FATAL (returned as an error);
 // ExecuteSankeyQueries's failure is caught here and degrades to an
 // empty result, matching analytics.py:646-656 exactly.
-func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment bool, filters *model.FilterInput) (*model.SankeyResult, error) {
+// pathAutoRoutesToInvestment mirrors _get_context_params' auto-route
+// (compiler.py:152-155): with force_investment None, any of THEME,
+// SUBCATEGORY or WORK_TYPE in the dimension list selects the investment
+// source. WORK_TYPE is in the set because investment_metrics_daily has
+// no work_item_type column, so a non-investment WORK_TYPE query is
+// structurally invalid -- Python treats it as an investment dimension
+// rather than emitting broken SQL.
+//
+// Returning true here makes CompileSankey reject the request as
+// not-yet-ported, which is correct: Python would have served it from the
+// investment path this port does not implement (CHAOS-4538). Rejecting
+// loudly beats answering with different semantics.
+func pathAutoRoutesToInvestment(path []Dimension) bool {
+	for _, d := range path {
+		switch d {
+		case DimensionTheme, DimensionSubcategory, DimensionWorkType:
+			return true
+		}
+	}
+	return false
+}
+
+func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment *bool, filters *model.FilterInput) (*model.SankeyResult, error) {
 	req, err := SankeyRequestFromInput(input)
 	if err != nil {
 		return nil, err
 	}
-	// Per-request useInvestment overrides the batch flag when set
-	// (analytics.py: `sk_req.use_investment if sk_req.use_investment is
-	// not None else batch.use_investment`) -- unlike timeseries/breakdown,
-	// this preserves a genuine three-state resolution rather than
-	// collapsing to a bool up front. This port's Compile* functions only
-	// accept a bool, so `nil` (both unset) resolves to the batch flag,
-	// matching Python's fallback.
-	useInvestment := batchUseInvestment
-	if input.UseInvestment != nil {
-		useInvestment = *input.UseInvestment
+	// Sankey resolves useInvestment as a genuine THREE-state value, and
+	// collapsing it early is a real defect rather than a simplification.
+	//
+	// analytics.py:634-636 passes `sk_req.use_investment if ... is not
+	// None else batch.use_investment` through UNWRAPPED -- note it is
+	// `batch.use_investment`, NOT `bool(batch.use_investment)`. When both
+	// are unset the value stays None, and _get_context_params
+	// (compiler.py:152-155) then AUTO-ROUTES to the investment path for
+	// any of {THEME, SUBCATEGORY, WORK_TYPE}.
+	//
+	// The earlier version of this code took `batchUseInvestment bool`,
+	// already collapsed by Resolve, so unset became false and the
+	// auto-route could never fire: Go silently applied non-investment
+	// semantics where Python routes to investment -- or emitted
+	// structurally invalid WORK_TYPE SQL, since investment_metrics_daily
+	// has no work_item_type column. The comment above it cited
+	// analytics.py:554's `bool(batch.use_investment)`, which is true for
+	// timeseries/breakdown and NOT for sankey; a timeseries fact
+	// generalised to sankey is how the bug got written.
+	effective := input.UseInvestment
+	if effective == nil {
+		effective = batchUseInvestment
+	}
+	var useInvestment bool
+	if effective != nil {
+		useInvestment = *effective
+	} else {
+		useInvestment = pathAutoRoutesToInvestment(req.Path)
 	}
 
 	nodesQuery, edgesQueries, err := CompileSankey(req, orgID, queryTimeoutSecs, useInvestment, filters)

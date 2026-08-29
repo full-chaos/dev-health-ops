@@ -240,8 +240,16 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 // flowMatrixTeamNodesTemplate ports flow_matrix_team_nodes_template
 // (sql/templates.py:187-219) VERBATIM -- `wct FINAL` was already present
 // on main/feature tip, not part of this port's CHAOS-4516 fix.
-const flowMatrixTeamNodesTemplate = `
-WITH team_activity AS (
+// flowMatrixTeamActivitySelect is the former `WITH team_activity AS (...)`
+// CTE body, now a bare SELECT so it can be INLINED as a subquery.
+//
+// The pinned dev-health-go v0.4.0 client rejects any statement whose
+// first token is not SELECT (clickhouse/client.go:190), so a
+// WITH-leading query never reaches ClickHouse -- it returns
+// ErrUnsafeStatement, which resolveFlowMatrix then SWALLOWS to an empty
+// result. Shape copied from Lane A's workgraph/scope.go, which hit the
+// identical guard live.
+const flowMatrixTeamActivitySelect = `
     SELECT
         wct.work_item_id,
         wct.work_scope_id,
@@ -255,12 +263,14 @@ WITH team_activity AS (
       AND wct.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
-)
+`
+
+const flowMatrixTeamNodesTemplate = `
 SELECT
     'TEAM' AS dimension,
     toString(team_id) AS node_id,
-    uniqExact(work_item_id) AS value
-FROM team_activity
+    toFloat64(uniqExact(work_item_id)) AS value
+FROM (` + flowMatrixTeamActivitySelect + `) AS team_activity
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
@@ -270,29 +280,14 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // flowMatrixTeamEdgesTemplate ports flow_matrix_team_edges_template
 // (sql/templates.py:222-273) verbatim -- `wct FINAL` unchanged.
 const flowMatrixTeamEdgesTemplate = `
-WITH team_activity AS (
-    SELECT
-        wct.work_item_id,
-        wct.work_scope_id,
-        wct.day,
-        wct.org_id,
-        t.team_id AS team_id
-    FROM work_item_cycle_times AS wct FINAL
-    INNER JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
-      ON t.work_item_id = wct.work_item_id
-    WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
-      AND wct.org_id = {org_id:String}
-      AND t.team_id IS NOT NULL
-      AND t.team_id != ''
-)
 SELECT
     'TEAM' AS source_dimension,
     'TEAM' AS target_dimension,
     toString(a.team_id) AS source,
     toString(b.team_id) AS target,
-    uniqExact(a.work_item_id) AS value
-FROM team_activity AS a
-INNER JOIN team_activity AS b
+    toFloat64(uniqExact(a.work_item_id)) AS value
+FROM (` + flowMatrixTeamActivitySelect + `) AS a
+INNER JOIN (` + flowMatrixTeamActivitySelect + `) AS b
   ON a.work_scope_id = b.work_scope_id
   AND a.day = b.day
   AND a.org_id = b.org_id
@@ -303,12 +298,12 @@ LIMIT {max_edges:UInt32}
 SETTINGS max_execution_time = {timeout:UInt64}
 `
 
-// flowMatrixRepoEnrichedCTE ports _FLOW_MATRIX_REPO_ENRICHED_CTE
+// flowMatrixRepoEnrichedSelect ports _FLOW_MATRIX_REPO_ENRICHED_CTE
 // (sql/templates.py:276-293) verbatim -- `wct FINAL` unchanged (this
 // site was already correct; CHAOS-4519's separate fix, already merged on
 // the feature tip, is what made `a.team_id` resolve here -- see BRIEF.md
 // §4).
-const flowMatrixRepoEnrichedCTE = `WITH enriched AS (
+const flowMatrixRepoEnrichedSelect = `
     SELECT
         wct.work_item_id,
         t.team_id,
@@ -325,9 +320,9 @@ const flowMatrixRepoEnrichedCTE = `WITH enriched AS (
       AND wi.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
-)`
+`
 
-// flowMatrixWorkTypeEnrichedCTE ports _FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE
+// flowMatrixWorkTypeEnrichedSelect ports _FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE
 // (sql/templates.py:296-309).
 //
 // *** CHAOS-4516 FIX SITE 1 of 3 (sql/templates.py:304 on the Python
@@ -353,7 +348,7 @@ const flowMatrixRepoEnrichedCTE = `WITH enriched AS (
 // which had neither), but the actual argument and the row-count/part-
 // count/max_threads/before-after-median number are NOT YET PRODUCED --
 // see the PR's RISK-NOTES. Do not treat this as decided.
-const flowMatrixWorkTypeEnrichedCTE = `WITH enriched AS (
+const flowMatrixWorkTypeEnrichedSelect = `
     SELECT
         wct.work_item_id,
         wct.team_id,
@@ -366,21 +361,21 @@ const flowMatrixWorkTypeEnrichedCTE = `WITH enriched AS (
     WHERE wct.org_id = {org_id:String}
       AND wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
       AND wi.org_id = {org_id:String}
-)`
+`
 
 // flowMatrixRepoNodesTemplate ports flow_matrix_repo_nodes_template
 // (sql/templates.py:312-335).
 //
 // *** CHAOS-4516 FIX SITE 2 of 3 (sql/templates.py:325 on the Python
 // side). *** Same exposure/fix/UNMEASURED-cost shape as
-// flowMatrixWorkTypeEnrichedCTE above -- see that doc comment. The
+// flowMatrixWorkTypeEnrichedSelect above -- see that doc comment. The
 // `INNER JOIN work_items AS wi FINAL` here is likewise real but binds to
 // `wi`, not `wct`.
 const flowMatrixRepoNodesTemplate = `
 SELECT
     'REPO' AS dimension,
     toString(wi.repo_id) AS node_id,
-    uniqExact(wct.work_item_id) AS value
+    toFloat64(uniqExact(wct.work_item_id)) AS value
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
@@ -395,17 +390,17 @@ SETTINGS max_execution_time = {timeout:UInt64}
 
 // flowMatrixRepoEdgesTemplate ports flow_matrix_repo_edges_template
 // (sql/templates.py:338-382) verbatim -- reads only through
-// flowMatrixRepoEnrichedCTE, which already carries `wct FINAL`; not one
+// flowMatrixRepoEnrichedSelect, which already carries `wct FINAL`; not one
 // of the 3 exposed sites.
-const flowMatrixRepoEdgesTemplate = flowMatrixRepoEnrichedCTE + `
+const flowMatrixRepoEdgesTemplate = `
 SELECT
     'REPO' AS source_dimension,
     'REPO' AS target_dimension,
     toString(a.repo_id) AS source,
     toString(b.repo_id) AS target,
-    uniqExact(a.work_item_id) AS value
-FROM enriched AS a
-INNER JOIN enriched AS b
+    toFloat64(uniqExact(a.work_item_id)) AS value
+FROM (` + flowMatrixRepoEnrichedSelect + `) AS a
+INNER JOIN (` + flowMatrixRepoEnrichedSelect + `) AS b
   ON a.team_id = b.team_id
   AND a.day = b.day
   AND a.org_id = b.org_id
@@ -429,7 +424,7 @@ const flowMatrixWorkTypeNodesTemplate = `
 SELECT
     'WORK_TYPE' AS dimension,
     wi.type AS node_id,
-    uniqExact(wct.work_item_id) AS value
+    toFloat64(uniqExact(wct.work_item_id)) AS value
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
@@ -445,19 +440,19 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // flowMatrixWorkTypeEdgesTemplate ports flow_matrix_work_type_edges_template
 // (sql/templates.py:410-446) -- the template body itself contains no
 // direct read of work_item_cycle_times; it inherits the exposure from
-// flowMatrixWorkTypeEnrichedCTE (fix site 1) it interpolates. BRIEF.md's
+// flowMatrixWorkTypeEnrichedSelect (fix site 1) it interpolates. BRIEF.md's
 // correction: "fixing the template" without fixing the CTE would leave
 // the CTE (and its OTHER consumers, if any existed) still exposed --
 // there are none here, but the fix belongs at the CTE regardless.
-const flowMatrixWorkTypeEdgesTemplate = flowMatrixWorkTypeEnrichedCTE + `
+const flowMatrixWorkTypeEdgesTemplate = `
 SELECT
     'WORK_TYPE' AS source_dimension,
     'WORK_TYPE' AS target_dimension,
     a.work_item_type AS source,
     b.work_item_type AS target,
-    uniqExact(a.work_item_id) AS value
-FROM enriched AS a
-INNER JOIN enriched AS b
+    toFloat64(uniqExact(a.work_item_id)) AS value
+FROM (` + flowMatrixWorkTypeEnrichedSelect + `) AS a
+INNER JOIN (` + flowMatrixWorkTypeEnrichedSelect + `) AS b
   ON a.repo_id = b.repo_id
   AND a.day = b.day
   AND a.org_id = b.org_id
@@ -540,7 +535,12 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 	var out []model.SankeyNode
 	for rows.Next() {
 		var dimension, nodeID string
-		var value uint64
+		// float64, not uint64: every value expression is now coerced to
+		// Float64 in SQL (toFloat64) so ONE scan type serves both the
+		// uniqExact-based flowMatrix templates and sankey's AVG/ratio
+		// measures, which share this function. The native driver errors
+		// rather than converting between UInt64 and Float64.
+		var value float64
 		if scanErr := rows.Scan(&dimension, &nodeID, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}
@@ -553,7 +553,7 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 			ID:        dimension + ":" + nodeID,
 			Label:     nodeID,
 			Dimension: dimension,
-			Value:     float64(value),
+			Value:     value,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -572,7 +572,7 @@ func queryEdges(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 	var out []model.SankeyEdge
 	for rows.Next() {
 		var sourceDim, targetDim, source, target string
-		var value uint64
+		var value float64 // see queryNodes
 		if scanErr := rows.Scan(&sourceDim, &targetDim, &source, &target, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}
@@ -585,7 +585,7 @@ func queryEdges(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 		out = append(out, model.SankeyEdge{
 			Source: sourceDim + ":" + source,
 			Target: targetDim + ":" + target,
-			Value:  float64(value),
+			Value:  value,
 		})
 	}
 	if err := rows.Err(); err != nil {

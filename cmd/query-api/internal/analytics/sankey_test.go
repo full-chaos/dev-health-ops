@@ -179,9 +179,9 @@ func (f *concurrentFakeClient) Query(_ context.Context, statement string, _ []cl
 func TestExecuteSankeyQueries_MultiEdgeSuccess(t *testing.T) {
 	client := &concurrentFakeClient{
 		responses: map[string]*fakeRowScanner{
-			"'TEAM' AS dimension":        {rows: [][]any{{"TEAM", "team-a", uint64(3)}}},
-			"'TEAM' AS source_dimension": {rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", uint64(1)}}},
-			"'REPO' AS source_dimension": {rows: [][]any{{"REPO", "WORK_TYPE", "repo-x", "bug", uint64(2)}}},
+			"'TEAM' AS dimension":        {rows: [][]any{{"TEAM", "team-a", float64(3)}}},
+			"'TEAM' AS source_dimension": {rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}},
+			"'REPO' AS source_dimension": {rows: [][]any{{"REPO", "WORK_TYPE", "repo-x", "bug", float64(2)}}},
 		},
 	}
 	nodesQ := []compiledQuery{{sql: "SELECT 'TEAM' AS dimension, ..."}}

@@ -3,9 +3,11 @@ package analytics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -50,15 +52,43 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 	for i, d := range dest {
 		switch ptr := d.(type) {
 		case *string:
-			*ptr = row[i].(string)
+			v, ok := row[i].(string)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *string but fixture holds %T -- the real driver errors on a type mismatch, it does not convert", i, row[i])
+			}
+			*ptr = v
 		case *uint64:
-			*ptr = row[i].(uint64)
+			v, ok := row[i].(uint64)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *uint64 but fixture holds %T -- ClickHouse returns UInt64 for count()/uniqExact()/SUM(UInt*); the native driver will NOT scan it into another type", i, row[i])
+			}
+			*ptr = v
 		case *float64:
-			*ptr = row[i].(float64)
-		case *graphqldate.Date:
-			*ptr = row[i].(graphqldate.Date)
+			v, ok := row[i].(float64)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *float64 but fixture holds %T -- an aggregate returning UInt64 cannot be scanned into float64 by the native driver (see reviewedges.go:145's UInt32 note)", i, row[i])
+			}
+			*ptr = v
+		case *time.Time:
+			// The native driver's Date.ScanRow accepts *time.Time,
+			// **time.Time or sql.Scanner -- and NOTHING else. It used to
+			// accept *graphqldate.Date here, which the real driver
+			// rejects (graphqldate.Date has no Scan method), so every
+			// non-empty timeseries result failed in production while the
+			// tests passed. A fake kinder than the driver cannot fail on
+			// the class the driver enforces.
+			v, ok := row[i].(time.Time)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *time.Time but fixture holds %T -- a ClickHouse Date/DateTime arrives as time.Time", i, row[i])
+			}
+			*ptr = v
 		default:
-			return errors.New("flowmatrix test: unsupported scan destination")
+			// The real driver accepts a FIXED set of destinations. Anything
+			// else is a production failure, not a test-fixture gap -- most
+			// notably *graphqldate.Date, which has no Scan method and is
+			// therefore not an sql.Scanner. Scan the driver's type
+			// (time.Time) and convert after, as reviewedges.go:152 does.
+			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *float64, *time.Time, sql.Scanner)", i, d)
 		}
 	}
 	return nil
@@ -356,11 +386,11 @@ func TestCompileFlowMatrix_AuthorThemeSubcategoryNotYetPorted(t *testing.T) {
 func TestExecuteFlowMatrix_Success(t *testing.T) {
 	client := &fakeClient{
 		nodesResponse: &fakeRowScanner{rows: [][]any{
-			{"TEAM", "team-a", uint64(7)},
-			{"TEAM", "team-b", uint64(3)},
+			{"TEAM", "team-a", float64(7)},
+			{"TEAM", "team-b", float64(3)},
 		}},
 		edgesResponse: &fakeRowScanner{rows: [][]any{
-			{"TEAM", "TEAM", "team-a", "team-b", uint64(2)},
+			{"TEAM", "TEAM", "team-a", "team-b", float64(2)},
 		}},
 	}
 	nodesQ := compiledQuery{sql: flowMatrixTeamNodesTemplate}
@@ -433,7 +463,7 @@ func TestExecuteFlowMatrix_EdgesErrorPropagates(t *testing.T) {
 func TestExecuteFlowMatrix_MidStreamNodesFailureDiscardsPartialRows(t *testing.T) {
 	client := &fakeClient{
 		nodesResponse: &fakeRowScanner{
-			rows:     [][]any{{"TEAM", "team-a", uint64(7)}, {"TEAM", "team-b", uint64(3)}},
+			rows:     [][]any{{"TEAM", "team-a", float64(7)}, {"TEAM", "team-b", float64(3)}},
 			err:      errors.New("mid-stream failure"),
 			errAfter: 1, // first row scans fine, second Next() call fails
 		},
@@ -455,7 +485,7 @@ func TestExecuteFlowMatrix_MidStreamEdgesFailureDiscardsPartialRows(t *testing.T
 	client := &fakeClient{
 		nodesResponse: &fakeRowScanner{},
 		edgesResponse: &fakeRowScanner{
-			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", uint64(2)}, {"TEAM", "TEAM", "team-b", "team-c", uint64(1)}},
+			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", float64(2)}, {"TEAM", "TEAM", "team-b", "team-c", float64(1)}},
 			err:      errors.New("mid-stream failure"),
 			errAfter: 1,
 		},
@@ -484,7 +514,7 @@ func TestExecuteFlowMatrix_MidStreamEdgesFailureDiscardsPartialRows(t *testing.T
 func TestQueryNodes_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	client := &fakeClient{
 		nodesResponse: &fakeRowScanner{
-			rows:     [][]any{{"TEAM", "team-a", uint64(7)}, {"TEAM", "team-b", uint64(3)}},
+			rows:     [][]any{{"TEAM", "team-a", float64(7)}, {"TEAM", "team-b", float64(3)}},
 			err:      errors.New("mid-stream failure"),
 			errAfter: 1,
 		},
@@ -502,7 +532,7 @@ func TestQueryNodes_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 func TestQueryEdges_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	client := &fakeClient{
 		edgesResponse: &fakeRowScanner{
-			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", uint64(2)}, {"TEAM", "TEAM", "team-b", "team-c", uint64(1)}},
+			rows:     [][]any{{"TEAM", "TEAM", "team-a", "team-b", float64(2)}, {"TEAM", "TEAM", "team-b", "team-c", float64(1)}},
 			err:      errors.New("mid-stream failure"),
 			errAfter: 1,
 		},

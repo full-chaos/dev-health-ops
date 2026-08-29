@@ -78,6 +78,14 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 	if err != nil {
 		return compiledQuery{}, err
 	}
+	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
+	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
+	// for the AVG/ratio ones, and the native driver will NOT convert
+	// between them at scan time -- it errors, exactly as
+	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE
+	// scan type for every measure. Python does the same coercion one
+	// layer later with `float(row["value"])`, so values are unchanged.
+	measureExpr = "toFloat64(" + measureExpr + ")"
 	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
 
 	fc, err := translateFilters(filters, false, filterColumns{Team: "team_id", Repo: "repo_id", Author: "author_email"})

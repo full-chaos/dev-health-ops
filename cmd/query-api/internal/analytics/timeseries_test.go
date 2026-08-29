@@ -80,8 +80,8 @@ func TestCompileTimeseries_NonInvestment_DefaultSource(t *testing.T) {
 	if !strings.Contains(q.sql, "repo_id AS dimension_value") {
 		t.Errorf("expected repo_id dimension column, got: %s", q.sql)
 	}
-	if !strings.Contains(q.sql, "SUM(work_items_completed) AS value") {
-		t.Errorf("expected COUNT measure expression, got: %s", q.sql)
+	if !strings.Contains(q.sql, "toFloat64(SUM(work_items_completed)) AS value") {
+		t.Errorf("expected COUNT measure expression wrapped in toFloat64 (uniform Float64 scan type), got: %s", q.sql)
 	}
 	bindings := bindingMap(q.bindings)
 	if bindings["org_id"] != "org-1" {
@@ -155,9 +155,9 @@ func TestCompileTimeseries_FiltersApplied(t *testing.T) {
 func TestExecuteTimeseries_GroupsByDimensionValue(t *testing.T) {
 	client := &fakeSingleClient{
 		response: &fakeRowScanner{rows: [][]any{
-			{mustDate(t, "2026-01-01"), "repo-a", 1.0},
-			{mustDate(t, "2026-01-02"), "repo-a", 2.0},
-			{mustDate(t, "2026-01-01"), "repo-b", 5.0},
+			{mustTime("2026-01-01"), "repo-a", 1.0},
+			{mustTime("2026-01-02"), "repo-a", 2.0},
+			{mustTime("2026-01-01"), "repo-b", 5.0},
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
@@ -184,8 +184,8 @@ func TestExecuteTimeseries_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	client := &fakeSingleClient{
 		response: &fakeRowScanner{
 			rows: [][]any{
-				{mustDate(t, "2026-01-01"), "repo-a", 1.0},
-				{mustDate(t, "2026-01-02"), "repo-a", 2.0},
+				{mustTime("2026-01-01"), "repo-a", 1.0},
+				{mustTime("2026-01-02"), "repo-a", 2.0},
 			},
 			err:      errors.New("mid-stream failure"),
 			errAfter: 1,

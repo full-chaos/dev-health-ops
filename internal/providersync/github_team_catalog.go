@@ -169,6 +169,17 @@ type githubTeamCatalogRows struct {
 	// the same roster_write_safe discipline the members-globally-off path
 	// already uses, applied per-team.
 	FailedMemberFetchTeamIDs []string
+	// ObservedMembershipTeamIDs (CHAOS-4444) lists every team (by "gh:" id)
+	// whose member fetch was ATTEMPTED and SUCCEEDED this call, independent
+	// of wantTeams -- Teams' own row (and therefore rows.Teams) is only
+	// ever populated `if wantTeams`, but member fetches happen whenever
+	// wantMembers is true regardless, so deriving "observed" scopes from
+	// rows.Teams undercounts (silently empty) whenever a run selects
+	// Members without Teams. This is the identity-drift review engine's
+	// observed_team_ids equivalent -- see reviewMembershipsForDrift's doc
+	// comment for why an unobserved scope must never have its stale pending
+	// changes resolved.
+	ObservedMembershipTeamIDs []string
 }
 
 // githubTeamID mirrors team_autoimport_github.py's _team_id: "gh:" + the

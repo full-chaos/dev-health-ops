@@ -310,6 +310,16 @@ func TestApplyGitLabTeamMembershipConflictGuardFiltersAndCounts(t *testing.T) {
 	if staged1.Field == nil || *staged1.Field != identityDriftFieldTeamMembership {
 		t.Fatalf("staged row field = %v, want %q", staged1.Field, identityDriftFieldTeamMembership)
 	}
+	// codex review round 1, P1 (PR #2002): old_value_json must be the WHOLE
+	// _conflict_for wrapper ({"field": ..., "manual_membership": {...}}),
+	// not just the bare manual row -- apply_identity_membership_change's
+	// _expire_conflict reads old_value.get("field") to decide which table
+	// to expire; serializing only the inner row makes approval unable to
+	// identify (and therefore never expire) the conflicting manual record.
+	if !strings.Contains(staged1.OldValueJSON, `"field":"team_memberships"`) ||
+		!strings.Contains(staged1.OldValueJSON, `"manual_membership":{`) {
+		t.Fatalf("old_value_json = %q, want the wrapper shape {\"field\":\"team_memberships\",\"manual_membership\":{...}}", staged1.OldValueJSON)
+	}
 }
 
 // TestGitLabTeamCatalogCollectorRosterExcludesConflictFilteredMembership is

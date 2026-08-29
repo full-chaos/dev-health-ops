@@ -360,15 +360,16 @@ func TestReviewTeamRowsForDriftDifferentDiffSupersedesStalePending(t *testing.T)
 	}
 }
 
-// TestReviewTeamRowsForDriftManualPolicyBehavesLikeFlagForReview proves
-// MANUAL_POLICY (2) is treated the same as FLAG_FOR_REVIEW_POLICY (1) --
-// both stage instead of write, matching Python's `policy !=
-// FLAG_FOR_REVIEW_POLICY or not detect_drift: return` guard, which only
-// early-returns for values OTHER than FLAG_FOR_REVIEW when detect_drift is
-// on, but every non-AUTO_APPLY call from a native collector always has
-// detect_drift implicitly on -- MANUAL_POLICY reaches the same diff/stage
-// path as FLAG_FOR_REVIEW_POLICY here.
-func TestReviewTeamRowsForDriftManualPolicyStagesFieldDiff(t *testing.T) {
+// TestReviewTeamRowsForDriftManualPolicySkipsWriteAndStagesNothing pins the
+// CORRECTED semantics (codex review, PR #2002 round 1, P1): project_team's
+// guard is `if policy != FLAG_FOR_REVIEW_POLICY or not detect_drift: return
+// observed` -- MANUAL_POLICY(2) is NOT FLAG_FOR_REVIEW_POLICY(1), so it hits
+// this early return immediately, before ever reading the persisted row or
+// diffing anything. A manual-policy team is excluded from the write (same
+// as flag-for-review) but stages NOTHING -- it is admin-owned end-to-end;
+// the only effect this call has on it is the unconditional observation
+// insert every team gets regardless of policy.
+func TestReviewTeamRowsForDriftManualPolicySkipsWriteAndStagesNothing(t *testing.T) {
 	oldName := "Old Name"
 	conn := &fakeTeamDriftConn{
 		policies:     map[string]teamDriftPolicy{"gh:team-a": {Policy: teamDriftManualPolicy, ManagedFields: teamDriftManagedFields}},
@@ -378,11 +379,20 @@ func TestReviewTeamRowsForDriftManualPolicyStagesFieldDiff(t *testing.T) {
 	teams := []teamDriftTeamView{
 		{ID: "gh:team-a", Provider: "github", NativeTeamKey: "team-a", Name: &newName},
 	}
-	keptIdx, skipped, staged, _, err := reviewTeamRowsForDrift(context.Background(), conn, "org-1", teams, time.Now())
+	keptIdx, skipped, staged, superseded, err := reviewTeamRowsForDrift(context.Background(), conn, "org-1", teams, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(keptIdx) != 0 || len(skipped) != 1 || staged != 1 {
-		t.Fatalf("keptIdx=%v skipped=%v staged=%d, want empty/[gh:team-a]/1", keptIdx, skipped, staged)
+	if len(keptIdx) != 0 || len(skipped) != 1 || skipped[0] != "gh:team-a" {
+		t.Fatalf("keptIdx=%v skipped=%v, want empty/[gh:team-a]", keptIdx, skipped)
+	}
+	if staged != 0 || superseded != 0 {
+		t.Fatalf("staged=%d superseded=%d, want both 0 -- MANUAL_POLICY stages nothing", staged, superseded)
+	}
+	if len(conn.insertedChanges) != 0 {
+		t.Fatalf("insertedChanges=%+v, want none", conn.insertedChanges)
+	}
+	if len(conn.observations) != 1 {
+		t.Fatalf("observations=%+v, want exactly one -- observation recording is unconditional", conn.observations)
 	}
 }

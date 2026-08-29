@@ -153,10 +153,17 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	var keptMemberships []githubMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
-		observedTeamIDs := githubObservedMemberFetchTeamIDs(rows.Teams, rows.FailedMemberFetchTeamIDs)
+		// CHAOS-4444 / codex review round 1, P2: rows.Teams is only ever
+		// populated `if wantTeams` (githubTeamCatalogRows.Teams's own doc
+		// comment), so deriving observed scopes from it undercounts to
+		// EMPTY whenever a run selects Members without Teams -- a Members-
+		// only run would then never resolve any stale pending identity
+		// change, since no scope would ever be "observed". Collect uses
+		// ObservedMembershipTeamIDs instead, populated whenever a team's
+		// member fetch succeeds, independent of wantTeams.
 		var err error
 		keptMemberships, membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded, err = applyGitHubTeamMembershipConflictGuard(
-			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, observedTeamIDs, normalizedAt,
+			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, rows.ObservedMembershipTeamIDs, normalizedAt,
 		)
 		if err != nil {
 			return TeamCatalogResult{}, err
@@ -334,27 +341,6 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
 	return result, nil
-}
-
-// githubObservedMemberFetchTeamIDs is CHAOS-4444's observed_team_ids
-// equivalent for GitHub: every team whose member fetch was attempted this
-// run and did NOT fail (rows.FailedMemberFetchTeamIDs -- CHAOS-4461's
-// per-team soft-fail tracking), matching Python's own
-// observed_team_ids.add((PROVIDER, team_id)) which only runs after a
-// successful discover_members_github call for that team.
-func githubObservedMemberFetchTeamIDs(teams []githubTeamRow, failed []string) []string {
-	failedSet := make(map[string]struct{}, len(failed))
-	for _, id := range failed {
-		failedSet[id] = struct{}{}
-	}
-	observed := make([]string, 0, len(teams))
-	for _, team := range teams {
-		if _, isFailed := failedSet[team.ID]; isFailed {
-			continue
-		}
-		observed = append(observed, team.ID)
-	}
-	return observed
 }
 
 var _ TeamCatalogCollector = GitHubTeamCatalogCollector{}

@@ -333,6 +333,23 @@ func changeMemberKey(row teamDriftChangeRow) (provider, teamID, memberID string)
 	return row.Provider, row.EntityID, ""
 }
 
+// conflictOldValueJSON mirrors old_value_json = _canonical_json(conflict):
+// the WHOLE wrapper _conflict_for returns (`{"field": ..., "manual_membership":
+// ...}` or `{"field": ..., "manual_fallback": ...}`), not just the inner
+// manual/fallback row. This is what apply_identity_membership_change's
+// _expire_conflict reads back on approval (old_value.get("field") to decide
+// which table's row to expire) -- serializing only the inner row would make
+// approval unable to identify, and therefore never expire, the conflicting
+// manual record, and would compute a change_id Python's own _conflict_for
+// output could never reproduce.
+func conflictOldValueJSON(detail *membershipConflictDetail) string {
+	key := "manual_membership"
+	if detail.Field == identityDriftFieldMemberFallback {
+		key = "manual_fallback"
+	}
+	return pyCanonicalJSON(map[string]any{"field": detail.Field, key: detail.Value})
+}
+
 type membershipKey struct {
 	Provider string
 	TeamID   string
@@ -423,7 +440,7 @@ func reviewMembershipsForDrift(
 			// from the write by the caller regardless.
 			continue
 		}
-		oldJSON := pyCanonicalJSON(detail.Value)
+		oldJSON := conflictOldValueJSON(detail)
 		newJSON := pyCanonicalJSON(membershipRowJSON(orgID, row))
 		changeID := changeIDForIdentityMembership(orgID, row.TeamID, row.Provider, row.MemberID, detail.Field, oldJSON, newJSON)
 

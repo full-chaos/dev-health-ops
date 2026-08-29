@@ -410,17 +410,25 @@ func teamDriftStatusRow(existing teamDriftChangeRow, status string, now time.Tim
 //     `_mark_pending(..., status=STATUS_RESOLVED)` on the auto-apply path --
 //     a team switched back to auto-apply, or whose drift resolved itself,
 //     has nothing left pending for review).
-//   - FLAG_FOR_REVIEW_POLICY (1) / MANUAL_POLICY (2): the row is EXCLUDED
-//     from the write (native_team_key returned in skippedTeamIDs, same
-//     contract the interim guard already had), and each of the team's
-//     managed_fields is diffed against the currently-persisted row --  a
-//     changed field stages a new PENDING team_drift_changes row (or
-//     refreshes last_seen_at on an already-pending one with the identical
-//     diff), superseding any stale pending row for that field with a
-//     DIFFERENT diff, and resolving any pending row for a field that no
-//     longer differs. A field whose existing change is already
-//     approved/dismissed is left alone (the admin's decision stands until
-//     the next actual diff).
+//   - FLAG_FOR_REVIEW_POLICY (1): the row is EXCLUDED from the write
+//     (native_team_key returned in skippedTeamIDs, same contract the
+//     interim guard already had), and each of the team's managed_fields is
+//     diffed against the currently-persisted row -- a changed field stages
+//     a new PENDING team_drift_changes row (or refreshes last_seen_at on an
+//     already-pending one with the identical diff), superseding any stale
+//     pending row for that field with a DIFFERENT diff, and resolving any
+//     pending row for a field that no longer differs. A field whose
+//     existing change is already approved/dismissed is left alone (the
+//     admin's decision stands until the next actual diff).
+//   - MANUAL_POLICY (2) (or any other non-0/1 value): mirrors
+//     project_team's own `if policy != FLAG_FOR_REVIEW_POLICY or not
+//     detect_drift: return observed` exactly -- the row is EXCLUDED from
+//     the write, same as FLAG_FOR_REVIEW_POLICY, but NOTHING is staged,
+//     superseded, or resolved. The team is admin-owned end-to-end; this
+//     call's only effect on it is the unconditional observation insert
+//     every team gets regardless of policy (codex review round 1, P1, PR
+//     #2002 -- an earlier revision of this function incorrectly ran the
+//     diff/staging path for policy 2 too).
 //
 // Returns the indices (into teams, in order) safe to write through,
 // the native_team_key of every skipped team, how many DISTINCT teams got at
@@ -454,10 +462,16 @@ func reviewTeamRowsForDrift(
 		return nil, nil, 0, 0, err
 	}
 
+	// reviewTeamIDs is scoped to FLAG_FOR_REVIEW_POLICY(1) teams ONLY --
+	// mirrors project_team's `if policy != FLAG_FOR_REVIEW_POLICY or not
+	// detect_drift: return observed`: MANUAL_POLICY(2) returns immediately,
+	// before ever reading the persisted row or diffing anything. A team
+	// whose policy is neither 0 nor 1 must never reach the existing-row
+	// read below.
 	reviewTeamIDs := make([]string, 0, len(teams))
 	for _, team := range teams {
 		policy, ok := policies[team.ID]
-		if !ok || policy.Policy == teamDriftAutoApplyPolicy {
+		if !ok || policy.Policy != teamDriftFlagForReviewPolicy {
 			continue
 		}
 		reviewTeamIDs = append(reviewTeamIDs, team.ID)
@@ -486,6 +500,16 @@ func reviewTeamRowsForDrift(
 		}
 
 		skippedTeamIDs = append(skippedTeamIDs, team.ID)
+
+		if policy.Policy != teamDriftFlagForReviewPolicy {
+			// MANUAL_POLICY(2) (or any future non-0/1 value): mirrors
+			// project_team's own `policy != FLAG_FOR_REVIEW_POLICY` early
+			// return exactly -- no diff, no staging, no resolve/supersede
+			// of any existing pending change. The team is admin-owned
+			// end-to-end; this call's only effect on it was the
+			// unconditional observation insert above.
+			continue
+		}
 
 		existingRow, hasExisting := existingRows[team.ID]
 		var existingRowPtr *teamDriftExistingRow

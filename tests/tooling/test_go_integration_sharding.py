@@ -797,6 +797,25 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # team_repo_ownership_derivation_integration_test.go (//go:build
     # integration). 1088 -> 1115 top-level; 119 -> 126 integration-tagged.
     #
+    # CHAOS-4458 part (b) then added 6 more top-level tests in
+    # internal/providersync for the Linear id-space fix (Linear's
+    # team_project_ownership rows are keyed "{org_id}:linear:{team_key}"
+    # while a Linear work item's own project_id is a disjoint raw Linear
+    # Project UUID -- see team_repo_ownership_derivation.go's
+    # TeamRepoOwnershipWorkItem doc comment): 5 ordinary tests in
+    # team_repo_ownership_derivation_test.go
+    # (TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership,
+    # TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership,
+    # TestDirectProjectIDArmPreferredOverLinearTeamKeyArm,
+    # TestLinearTeamKeyArmNeverAppliesToNonLinearProviders,
+    # TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam --
+    # the last one pins a codex adversarial-review fix: the recorded
+    # resolution arm must not depend on ClickHouse scan order) and 1
+    # integration-tagged test in
+    # team_repo_ownership_derivation_integration_test.go
+    # (TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership).
+    # 1115 -> 1121 top-level; 126 -> 127 integration-tagged (this branch's delta).
+    #
     # CHAOS-4431 (Linear team-catalog native route) added 15 new top-level
     # tests in internal/providersync across its codex review rounds: 5
     # ordinary tests in linear_reference_catalog_test.go
@@ -881,9 +900,25 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # green), TestGitHubTestsSingleSuiteArtifactSuiteIDUnchanged (pins that
     # a non-colliding single suite's SuiteID hash is unchanged), and
     # TestGitLabNativeTestReportSameReportSiblingSuitesSameNameCollide (the
-    # GitLab-native twin). 1225 -> 1228 top-level; 144 unchanged.
-    assert len(expected_provider_tests) == 1228
-    assert len(expected_integration_tests) == 144
+    # GitLab-native twin). 1225 -> 1228 top-level; 144 unchanged
+    # (origin/main's delta from the shared 1225/144 base).
+    #
+    # CHAOS-4458 part (b) (this branch's delta from the SAME shared 1225/144
+    # base): 6 tests for the Linear id-space fix (5 ordinary +
+    # 1 integration-tagged) plus 2 more ordinary pinning tests from
+    # lane-4458b-live's compose live-proof
+    # (TestLinearTeamKeyOwnResolutionWithEmptyProjectID,
+    # TestLinearTeamKeyResolvesViaPRInheritanceIssueLink -- closing two
+    # fixture gaps the live proof found: no prior test used an actually-empty
+    # `project_id`, and none exercised the `issuePRLinks`/PR-inheritance path
+    # with a Linear donor). 1225 -> 1233 top-level; 144 -> 145
+    # integration-tagged (this branch's own delta, +8/+1).
+    #
+    # Merged total (this branch's +8/+1 delta applied on top of origin/main's
+    # independent +3/+0 delta from the same 1225/144 base): 1225 -> 1236
+    # top-level; 144 -> 145 integration-tagged.
+    assert len(expected_provider_tests) == 1236
+    assert len(expected_integration_tests) == 145
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -899,7 +934,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1228
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1236
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -960,7 +995,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1228
+    assert len(selected_tests) == len(set(selected_tests)) == 1236
     assert set(selected_tests) == expected_tests
 
 

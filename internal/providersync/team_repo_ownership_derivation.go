@@ -121,11 +121,28 @@ type teamRepoOwnershipProjectRef struct {
 // Provider gates the extkey donor-index (only linear/jira work items ever
 // carry a cross-provider issue key another tracker's PR parser can cite),
 // exactly like compute_work_items.py's donor-index build.
+//
+// NativeTeamKey (Linear only; work_items.native_team_key, migration 050) is
+// the raw Linear team key (issue.team.key) -- CHAOS-4458 part (b): Linear's
+// team_project_ownership writer (team_autoimport_linear.py) and its
+// work-item normalizer disagree on what project_id means. The ownership
+// writer stamps project_id = "{org_id}:linear:{team_key}" (falling back to
+// the team's own key when the team has no explicit Linear Project
+// associations -- team_autoimport_linear.py:454-456,472,487), while the
+// Linear work-item normalizer stamps ProjectID with the raw Linear Project
+// UUID, a DELIBERATELY separate id space the same file's docstring calls
+// out explicitly (team_autoimport_linear.py:309-314: "a SEPARATE id space
+// and are unaffected"). These two values never intersect, so a Linear-only
+// org's ownership never resolved via ProjectID alone (0 of 3168
+// project-id-bearing Linear work items matched, locally, before this fix).
+// NativeTeamKey lets resolveWorkItemProjectRef retry via the identity the
+// ownership rows actually carry -- see linearTeamKeyProjectID.
 type TeamRepoOwnershipWorkItem struct {
-	WorkItemID string
-	Provider   string
-	RepoID     string
-	ProjectID  string
+	WorkItemID    string
+	Provider      string
+	RepoID        string
+	ProjectID     string
+	NativeTeamKey string
 }
 
 // TeamRepoOwnershipDependencyEdge is one already-synced
@@ -163,6 +180,15 @@ type DerivedTeamRepoOwnershipRow struct {
 	TeamID      string
 	RepoID      string
 	Specificity uint16
+	// ResolutionArm names which identity resolved this row's team: either
+	// TeamRepoOwnershipResolutionArmProjectID (the direct join, every
+	// provider) or TeamRepoOwnershipResolutionArmLinearTeamKey (CHAOS-4458
+	// part (b) -- see TeamRepoOwnershipWorkItem's doc comment). Telemetry
+	// only; never written to team_repo_ownership itself. Set to whichever
+	// arm resolved the FIRST work item/PR-link that claimed this repo (the
+	// same first-wins row assign() already applies), so a repo reachable via
+	// both arms still reports one deterministic arm.
+	ResolutionArm string
 }
 
 // teamRepoOwnershipInferredSpecificity is deliberately lower than every
@@ -170,6 +196,51 @@ type DerivedTeamRepoOwnershipRow struct {
 // BASE_SPECIFICITY=100 upward, migration 051's default is 0) so a future
 // direct signal always outranks an inferred one at the same priority tier.
 const teamRepoOwnershipInferredSpecificity = 10
+
+// TeamRepoOwnershipResolutionArm* are the values deriveTeamRepoOwnership
+// tags each DerivedTeamRepoOwnershipRow.ResolutionArm with (CHAOS-4458 part
+// (b)). Mirrored (as a distinct, jobruntime-owned type) by
+// jobruntime.TeamRepoOwnershipResolutionArm for telemetry -- kept as plain
+// strings here since providersync must not import jobruntime.
+const (
+	TeamRepoOwnershipResolutionArmProjectID     = "project_id"
+	TeamRepoOwnershipResolutionArmLinearTeamKey = "linear_team_key"
+)
+
+// teamRepoOwnershipResolutionArmPriority ranks the two arms so
+// deriveTeamRepoOwnership's assign() can pick a deterministic winner when
+// the SAME (repo, team) pair is reachable via both -- e.g. one work item
+// resolves its own project_id directly while another, unrelated work item
+// donating to the same repo only resolves via native_team_key. project_id
+// outranks linear_team_key (the direct join is authoritative; the
+// team-key-shaped fallback only exists because Linear's ownership writer
+// and work-item normalizer disagree on project_id, per
+// TeamRepoOwnershipWorkItem's doc comment) -- an unrecognized/empty arm
+// ranks lowest so it is always replaced once any real arm is seen.
+func teamRepoOwnershipResolutionArmPriority(arm string) int {
+	switch arm {
+	case TeamRepoOwnershipResolutionArmProjectID:
+		return 2
+	case TeamRepoOwnershipResolutionArmLinearTeamKey:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// linearTeamKeyProjectID reconstructs the SAME project_id string
+// team_autoimport_linear.py's ownership writer stamps for a team with no
+// explicit Linear Project associations: `_project_id(org_id, "linear",
+// project_key)` where project_key defaults to the team's own key
+// (team_autoimport_linear.py:454-456,472,487) -- i.e. "{org_id}:linear:
+// {team_key}". Deliberately reconstructed rather than indexed separately: it
+// reuses the exact same (provider, project_id) lookup key and
+// resolveProjectToTeam ranking that the direct project_id arm already uses,
+// so a genuine ownership conflict on this identity is never-guess-dropped
+// exactly like every other arm.
+func linearTeamKeyProjectID(orgID, teamKey string) string {
+	return orgID + ":linear:" + teamKey
+}
 
 // teamRepoOwnershipInheritableRelationshipTypes mirrors
 // compute_work_items.py's _INHERITABLE_RELATIONSHIP_TYPES verbatim: only
@@ -193,6 +264,7 @@ var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
 // projects -- neither wins; the repo is left unresolved rather than
 // guessed, matching this schema's existing "never guess" precedent).
 func deriveTeamRepoOwnership(
+	orgID string,
 	projectLinks []TeamRepoOwnershipProjectLink,
 	workItems []TeamRepoOwnershipWorkItem,
 	dependencyEdges []TeamRepoOwnershipDependencyEdge,
@@ -208,21 +280,35 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
-	donorProjectID := buildDonorProjectIDResolver(byID, dependencyEdges, projectToTeam)
+	donorProjectID := buildDonorProjectIDResolver(orgID, byID, dependencyEdges, projectToTeam)
 
 	repoToTeam := map[string]string{}
+	repoArm := map[string]string{}
 	conflicted := map[string]bool{}
-	assign := func(repoID, teamID string) {
+	assign := func(repoID, teamID, arm string) {
 		if repoID == "" || teamID == "" {
 			return
 		}
 		if existing, ok := repoToTeam[repoID]; ok {
 			if existing != teamID {
 				conflicted[repoID] = true
+				return
+			}
+			// Same repo, same team, resolved again via a (possibly
+			// different) arm: keep whichever arm ranks higher by
+			// teamRepoOwnershipResolutionArmPriority, deterministically,
+			// rather than whichever candidate this loop happened to visit
+			// first. loadTeamRepoOwnershipWorkItems has no ORDER BY, so an
+			// unqualified first-wins policy let the recorded arm flicker
+			// between identical runs over the same ClickHouse snapshot
+			// (codex adversarial review, 2026-08-29, confirmed finding).
+			if teamRepoOwnershipResolutionArmPriority(arm) > teamRepoOwnershipResolutionArmPriority(repoArm[repoID]) {
+				repoArm[repoID] = arm
 			}
 			return
 		}
 		repoToTeam[repoID] = teamID
+		repoArm[repoID] = arm
 	}
 
 	// Path 1 + 2: every repo-bearing work item.
@@ -230,9 +316,9 @@ func deriveTeamRepoOwnership(
 		if item.RepoID == "" {
 			continue
 		}
-		ref := donorProjectID(item.WorkItemID)
+		ref, arm := donorProjectID(item.WorkItemID)
 		if teamID, ok := projectToTeam[ref]; ok {
-			assign(item.RepoID, teamID)
+			assign(item.RepoID, teamID, arm)
 		}
 	}
 
@@ -244,9 +330,9 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
-		ref := donorProjectID(link.WorkItemID)
+		ref, arm := donorProjectID(link.WorkItemID)
 		if teamID, ok := projectToTeam[ref]; ok {
-			assign(link.RepoID, teamID)
+			assign(link.RepoID, teamID, arm)
 		}
 	}
 
@@ -256,12 +342,45 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		rows = append(rows, DerivedTeamRepoOwnershipRow{
-			TeamID:      teamID,
-			RepoID:      repoID,
-			Specificity: teamRepoOwnershipInferredSpecificity,
+			TeamID:        teamID,
+			RepoID:        repoID,
+			Specificity:   teamRepoOwnershipInferredSpecificity,
+			ResolutionArm: repoArm[repoID],
 		})
 	}
 	return rows
+}
+
+// resolveWorkItemProjectRef is the single identity-resolution step shared by
+// the own-project_id path and the donor walk (CHAOS-4458 part (b)): try the
+// item's own project_id first (works for every provider today, and for a
+// future project-UUID-keyed Linear ownership row -- see TeamRepoOwnershipWorkItem's
+// doc comment on FIX SHAPE case (2)); only if that does not resolve, and only
+// for a Linear work item carrying a native_team_key, retry against the
+// team-key-shaped identity Linear's ownership writer actually emits today.
+// Never guesses between the two: the moment either arm resolves, the other
+// is not consulted.
+func resolveWorkItemProjectRef(
+	item TeamRepoOwnershipWorkItem,
+	orgID string,
+	projectToTeam map[teamRepoOwnershipProjectRef]string,
+) (teamRepoOwnershipProjectRef, string, bool) {
+	if item.ProjectID != "" {
+		ref := teamRepoOwnershipProjectRef{Provider: item.Provider, ProjectID: item.ProjectID}
+		if _, ok := projectToTeam[ref]; ok {
+			return ref, TeamRepoOwnershipResolutionArmProjectID, true
+		}
+	}
+	if item.Provider == "linear" && item.NativeTeamKey != "" {
+		ref := teamRepoOwnershipProjectRef{
+			Provider:  "linear",
+			ProjectID: linearTeamKeyProjectID(orgID, item.NativeTeamKey),
+		}
+		if _, ok := projectToTeam[ref]; ok {
+			return ref, TeamRepoOwnershipResolutionArmLinearTeamKey, true
+		}
+	}
+	return teamRepoOwnershipProjectRef{}, "", false
 }
 
 // resolveProjectToTeam reduces a project's possibly-multiple ownership
@@ -345,10 +464,11 @@ func resolveProjectToTeam(links []TeamRepoOwnershipProjectLink) map[teamRepoOwne
 // primary real-world use case (codex adversarial review, 2026-08-28,
 // confirmed high-severity finding).
 func buildDonorProjectIDResolver(
+	orgID string,
 	byID map[string]TeamRepoOwnershipWorkItem,
 	edges []TeamRepoOwnershipDependencyEdge,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
-) func(workItemID string) teamRepoOwnershipProjectRef {
+) func(workItemID string) (teamRepoOwnershipProjectRef, string) {
 	keyIndex := buildIssueKeyIndex(byID)
 
 	type pair struct{ source, target string }
@@ -363,6 +483,11 @@ func buildDonorProjectIDResolver(
 		}
 	}
 
+	type resolvedRef struct {
+		ref teamRepoOwnershipProjectRef
+		arm string
+	}
+
 	// Only a donor that ITSELF already resolves to a team is a valid
 	// candidate -- mirrors compute_work_items.py::build_linked_issue_team_resolver
 	// exactly (its `donor_team` map is populated ONLY for items with a
@@ -370,8 +495,13 @@ func buildDonorProjectIDResolver(
 	// `donor_team`). Without this gate, an unowned donor with a
 	// lexicographically smaller work_item_id could win the tie-break over a
 	// second donor that DOES resolve, silently suppressing a valid team
-	// (codex adversarial review, 2026-08-28, confirmed finding).
+	// (codex adversarial review, 2026-08-28, confirmed finding). Uses the
+	// SAME resolveWorkItemProjectRef as the own-item path (CHAOS-4458 part
+	// (b)) so a donor whose own project_id never resolves (a Linear issue
+	// donating through its team-key-shaped ownership row) is still a valid
+	// candidate.
 	candidateTargets := map[string][]string{}
+	targetRef := map[string]resolvedRef{}
 	for _, edge := range latestEdge {
 		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
 			continue
@@ -381,37 +511,35 @@ func buildDonorProjectIDResolver(
 			continue
 		}
 		donor, ok := byID[target]
-		if !ok || donor.ProjectID == "" {
+		if !ok {
 			continue
 		}
-		donorRef := teamRepoOwnershipProjectRef{Provider: donor.Provider, ProjectID: donor.ProjectID}
-		if _, resolves := projectToTeam[donorRef]; !resolves {
+		ref, arm, resolves := resolveWorkItemProjectRef(donor, orgID, projectToTeam)
+		if !resolves {
 			continue
 		}
+		targetRef[target] = resolvedRef{ref: ref, arm: arm}
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)
 	}
 
 	// Deterministic tie-break: the lexicographically smallest canonical
-	// target wins when a source has multiple valid donor candidates. The
-	// donor's OWN provider travels with its project_id -- a cross-provider
-	// extkey donor (e.g. a Jira item donating to a GitHub PR) must match
-	// against the Jira-sourced team_project_ownership row, not whatever
-	// provider the source item happens to carry.
-	donorRefBySource := make(map[string]teamRepoOwnershipProjectRef, len(candidateTargets))
+	// target wins when a source has multiple valid donor candidates.
+	donorRefBySource := make(map[string]resolvedRef, len(candidateTargets))
 	for source, targets := range candidateTargets {
 		sort.Strings(targets)
-		donor := byID[targets[0]]
-		donorRefBySource[source] = teamRepoOwnershipProjectRef{Provider: donor.Provider, ProjectID: donor.ProjectID}
+		donorRefBySource[source] = targetRef[targets[0]]
 	}
 
-	return func(workItemID string) teamRepoOwnershipProjectRef {
-		if item, ok := byID[workItemID]; ok && item.ProjectID != "" {
-			ref := teamRepoOwnershipProjectRef{Provider: item.Provider, ProjectID: item.ProjectID}
-			if _, resolves := projectToTeam[ref]; resolves {
-				return ref
+	return func(workItemID string) (teamRepoOwnershipProjectRef, string) {
+		if item, ok := byID[workItemID]; ok {
+			if ref, arm, resolves := resolveWorkItemProjectRef(item, orgID, projectToTeam); resolves {
+				return ref, arm
 			}
 		}
-		return donorRefBySource[workItemID]
+		if entry, ok := donorRefBySource[workItemID]; ok {
+			return entry.ref, entry.arm
+		}
+		return teamRepoOwnershipProjectRef{}, ""
 	}
 }
 

@@ -116,7 +116,13 @@ func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBrid
 // exact signature) -- named here as an interface only so the worker stays
 // testable without a real ClickHouse connection.
 type TeamRepoOwnershipDerivationRunner interface {
-	Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, err error)
+	// armCounts (CHAOS-4458 part (b)) keys by the plain-string resolution
+	// arms providersync exports (TeamRepoOwnershipResolutionArmProjectID /
+	// TeamRepoOwnershipResolutionArmLinearTeamKey): how many of the rows
+	// written this run resolved via each identity. May be nil (no rows
+	// derived, or the run never reached row assignment) -- Work() treats a
+	// missing key as 0.
+	Derive(ctx context.Context, orgID string) (written int, retracted int, inputsReady bool, armCounts map[string]int, err error)
 }
 
 // RegisterTeamRepoOwnershipDerivationWorker registers the CHAOS-4365 item 1b
@@ -245,7 +251,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 	}
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	defer func() { finishCoordinatorSpan(span, err) }()
-	written, retracted, inputsReady, err := worker.service.Derive(ctx, job.Args.OrgID)
+	written, retracted, inputsReady, armCounts, err := worker.service.Derive(ctx, job.Args.OrgID)
 	outcome := jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten
 	switch {
 	case err != nil:
@@ -271,6 +277,17 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 			)
 		}
 		_ = worker.observer.ObserveTeamRepoOwnershipDerivation(outcome, written)
+		// Resolution-arm breakdown (CHAOS-4458 part (b)): recorded every run,
+		// for every registered arm, so the project_id and linear_team_key
+		// series both stay present even on a run that produced 0 of one (or
+		// both) -- diagnosability requires the absent-vs-zero distinction to
+		// never collapse to "series never observed".
+		for _, arm := range []jobruntime.TeamRepoOwnershipResolutionArm{
+			jobruntime.TeamRepoOwnershipResolutionArmProjectID,
+			jobruntime.TeamRepoOwnershipResolutionArmLinearTeamKey,
+		} {
+			_ = worker.observer.ObserveTeamRepoOwnershipDerivationResolutionArm(arm, armCounts[string(arm)])
+		}
 	}
 	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation",
 		"outcome", string(outcome),

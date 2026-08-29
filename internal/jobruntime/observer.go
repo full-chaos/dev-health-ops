@@ -193,6 +193,15 @@ type PostSyncFanoutObserver interface {
 // worker that ran Derive() and got a row count (or an error) back knows.
 type TeamRepoOwnershipDerivationObserver interface {
 	ObserveTeamRepoOwnershipDerivation(TeamRepoOwnershipDerivationOutcome, int) error
+	// ObserveTeamRepoOwnershipDerivationResolutionArm records, per run, how
+	// many written rows came from each identity-resolution arm (CHAOS-4458
+	// part (b)): the pre-existing direct project_id join, or the
+	// linear_team_key join added because Linear's team_project_ownership
+	// writer and its work-item normalizer disagree on what project_id means
+	// (team-attribution.md §0.2). Called for every registered arm on every
+	// run, including 0, so both series stay present regardless of which arm
+	// (if either) actually produced rows this run.
+	ObserveTeamRepoOwnershipDerivationResolutionArm(TeamRepoOwnershipResolutionArm, int) error
 }
 
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics

@@ -218,6 +218,30 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 	}
 }
 
+// TeamRepoOwnershipResolutionArm identifies which identity resolved a
+// derived team_repo_ownership row (CHAOS-4458 part (b)): the pre-existing
+// direct project_id join (every provider), or the linear_team_key join added
+// because a Linear-only org's team_project_ownership rows are keyed
+// "{org_id}:linear:{team_key}" while work_items.project_id for a Linear item
+// carries the raw Linear Project UUID -- a disjoint id space by design
+// (providersync/team_repo_ownership_derivation.go's TeamRepoOwnershipWorkItem
+// doc comment has the full trace). Mirrors providersync's own
+// TeamRepoOwnershipResolutionArm* string constants as a distinct type here
+// since jobruntime must not import providersync.
+type TeamRepoOwnershipResolutionArm string
+
+const (
+	TeamRepoOwnershipResolutionArmProjectID     TeamRepoOwnershipResolutionArm = "project_id"
+	TeamRepoOwnershipResolutionArmLinearTeamKey TeamRepoOwnershipResolutionArm = "linear_team_key"
+)
+
+func teamRepoOwnershipResolutionArms() []TeamRepoOwnershipResolutionArm {
+	return []TeamRepoOwnershipResolutionArm{
+		TeamRepoOwnershipResolutionArmProjectID,
+		TeamRepoOwnershipResolutionArmLinearTeamKey,
+	}
+}
+
 // TeamCatalogEntryPoint names which of the two Python team-autoimport call
 // sites CHAOS-4431's native/bridge dispatch decided for (they are NOT
 // equivalent -- see teamCatalogAutoimportBridge's doc comment,
@@ -809,6 +833,10 @@ type MetricsCollector struct {
 	// teamMetricsDailyRepoCount above.
 	teamRepoOwnershipDerivation         map[TeamRepoOwnershipDerivationOutcome]uint64
 	teamRepoOwnershipDerivationRowCount *histogram
+	// teamRepoOwnershipResolutionArm (CHAOS-4458 part (b)): per-arm counter
+	// of rows produced by each identity resolution -- see
+	// TeamRepoOwnershipResolutionArm's doc comment.
+	teamRepoOwnershipResolutionArm map[TeamRepoOwnershipResolutionArm]uint64
 	// teamCatalogDispatch/teamCatalogRowsWritten (CHAOS-4431): per-call
 	// dispatch outcome for the native/bridge team-catalog split, and rows a
 	// native collector actually wrote per destination table.
@@ -990,6 +1018,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
+		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
@@ -1612,6 +1641,27 @@ func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivation(outcome Te
 	if outcome == TeamRepoOwnershipDerivationOutcomeRowsWritten {
 		collector.teamRepoOwnershipDerivationRowCount.observe(float64(rowCount))
 	}
+	return nil
+}
+
+// ObserveTeamRepoOwnershipDerivationResolutionArm records, per
+// sync.team_repo_ownership_derivation run, how many written rows came from
+// each identity-resolution arm (CHAOS-4458 part (b)): the pre-existing
+// direct project_id join, or the linear_team_key join added because Linear's
+// team_project_ownership writer and its work-item normalizer disagree on
+// what project_id means (team-attribution.md §0.2). count must be >= 0 and
+// is called for every registered arm on every run (even 0) so both series
+// stay present regardless of which arm (if either) actually produced rows.
+func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivationResolutionArm(arm TeamRepoOwnershipResolutionArm, count int) error {
+	if !slices.Contains(teamRepoOwnershipResolutionArms(), arm) {
+		return errors.New("team-repo-ownership-derivation resolution arm is not registered")
+	}
+	if count < 0 {
+		return errors.New("team-repo-ownership-derivation resolution arm count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.teamRepoOwnershipResolutionArm[arm] += uint64(count)
 	return nil
 }
 
@@ -2792,6 +2842,11 @@ func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *stri
 	}
 	writeMetadata(output, "dev_health_team_repo_ownership_derivation_row_count", "Rows written by one sync.team_repo_ownership_derivation worker run, observed only on the rows_written outcome.", "histogram")
 	writeHistogram(output, "dev_health_team_repo_ownership_derivation_row_count", nil, collector.teamRepoOwnershipDerivationRowCount)
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total", "Rows produced per identity-resolution arm across sync.team_repo_ownership_derivation runs: project_id (pre-existing direct join) vs linear_team_key (CHAOS-4458 part (b) -- Linear's team_project_ownership writer keys rows \"{org_id}:linear:{team_key}\" while work_items.project_id for a Linear item is the raw Linear Project UUID, a disjoint id space).", "counter")
+	for _, arm := range teamRepoOwnershipResolutionArms() {
+		writeUintSample(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total",
+			[]metricLabel{{"arm", string(arm)}}, collector.teamRepoOwnershipResolutionArm[arm])
+	}
 }
 
 func (collector *MetricsCollector) writeWorkGraphLease(output *strings.Builder) {

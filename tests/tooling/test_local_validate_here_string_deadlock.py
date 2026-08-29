@@ -53,6 +53,7 @@ measured threshold should re-run this file's bisection and convert them too.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -343,17 +344,100 @@ def test_probe_harness_hook_is_reachable_and_documented() -> None:
     )
 
 
-def _function_body(text: str, signature: str) -> str:
-    """The source text of a `name() { ... }` function, from its signature to
-    its closing brace at column 0. Fails loudly (not a silent empty match)
-    if the signature is absent, since a renamed/removed function must not
-    make a caller's `in check_body` assertions vacuously pass.
+_FUNCTION_DEF = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
+
+
+def _all_function_bodies(text: str) -> dict[str, str]:
+    """Every top-level-indented `name() { ... }` function in the script, as
+    {name: body}. Used to compute a real reachable-call-path closure below,
+    not a hand-picked pair of function names.
+
+    Bounds each function's closing `\\n}\\n` search to end at the START of
+    the NEXT `^name() {`-shaped match (or EOF for the last one), and skips
+    (rather than crashes on) any match with no unindented close in that
+    span. This file has exactly one such case: a nested `cleanup_scratch()
+    {` REDEFINITION inside the `--lock-probe-exit-order` test-only harness
+    block, whose closing brace is indented to match its enclosing `if`
+    (`  }`, not `}`) because it is a local override for that one probe, not
+    a real top-level helper. Skipping it is correct, not a hack: it plays
+    no part in `metrics_readback_diff_relevant`'s reachable call path, and
+    bounding the search keeps a skip from ever swallowing a LATER real
+    function's body by accident.
     """
 
-    assert signature in text, f"{signature!r} not found in {SCRIPT}"
-    start = text.index(signature)
-    end = text.index("\n}\n", start)
-    return text[start:end]
+    matches = list(_FUNCTION_DEF.finditer(text))
+    bodies: dict[str, str] = {}
+    for i, match in enumerate(matches):
+        name = match.group(1)
+        start = match.start()
+        bound = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        end = text.find("\n}\n", start, bound)
+        if end == -1:
+            continue
+        bodies[name] = text[start:end]
+    return bodies
+
+
+def _reachable_call_path_bodies(text: str, entry_point: str) -> dict[str, str]:
+    """The transitive closure of every function body reachable from
+    `entry_point`, by textual call reference -- not just the one or two
+    function names a human happened to name explicitly.
+
+    Codex review round 3, P2: a static guard that only scans two
+    hard-coded function names (however correctly chosen today) misses a
+    FUTURE refactor that moves the relevant logic into a third helper --
+    that helper's `<<<` would never be scanned, and the guard would stay
+    green while the deadlock returns. This closes that gap mechanically:
+    starting from `entry_point`, find every OTHER known function name
+    referenced anywhere in the current frontier's bodies as a bare call
+    (still deliberately over-inclusive of comment mentions -- a function
+    name mentioned in a comment costs one extra body scanned, which is the
+    safe direction; under-inclusion is the unsafe one), and keep expanding
+    until a fixed point. This is a real reachability computation over the
+    script's actual function set, not a scan of two names chosen by a
+    person.
+
+    A plain `\bname\b` word-boundary search is too loose to use here: this
+    script's own `metrics_readback_diff_relevant()` body contains the
+    literal string `origin/main` (a git ref), which false-matches `\bmain\b`
+    (`/` is a non-word character, so it *is* a word boundary) and pulls in
+    the `main()` entry point -- and from there the ENTIRE script, since
+    `main()` calls virtually every stage. That silently defeats the guard's
+    purpose: it would stop being a scoped check on the metrics-diff call
+    path and become "no `<<<` anywhere in the file," which is false today
+    (the other three sites are a deliberate, evidence-backed exception --
+    see `test_here_string_deadlock_is_not_payload_agnostic`) and would
+    forever fail for a reason unrelated to CHAOS-4487. `_CALL_REFERENCE`
+    instead requires a name to NOT be immediately preceded by a word
+    character, `/`, `.`, or `-` (ruling out path/ref fragments like
+    `origin/main` or `foo-main`) and NOT immediately followed by a word
+    character or `(` (ruling out being a prefix of a longer identifier or
+    matching a function's own `name() {` signature).
+    """
+
+    all_bodies = _all_function_bodies(text)
+    assert entry_point in all_bodies, (
+        f"{entry_point!r} is not a `name() {{ ... }}` function in {SCRIPT}"
+        " -- has it been renamed or removed?"
+    )
+
+    reachable: dict[str, str] = {}
+    frontier = {entry_point}
+    while frontier:
+        name = frontier.pop()
+        if name in reachable:
+            continue
+        body = all_bodies[name]
+        reachable[name] = body
+        for other_name, other_body in all_bodies.items():
+            if other_name in reachable or other_name == name:
+                continue
+            call_reference = re.compile(
+                r"(?<![\w/.-])" + re.escape(other_name) + r"(?![\w(])"
+            )
+            if call_reference.search(body) and other_body:
+                frontier.add(other_name)
+    return reachable
 
 
 def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> None:
@@ -366,42 +450,54 @@ def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> Non
     against the construct regressing is a static one: assert the fix's
     actual shape (a `mktemp` + `printf` BUILTIN write, per the argMax
     stage's own established pattern) is present, and that NO here-string
-    (`<<<`, in ANY form) exists anywhere in the two functions that make up
-    this check's whole call path.
+    (`<<<`, in ANY form) exists anywhere in this check's whole reachable
+    call path.
 
     Codex review round 2, P2: an earlier version of this test only rejected
     the one LITERAL string `<<<"${changed}"` inside
     `_metrics_diff_relevant_check` alone -- a refactor that renamed the
-    variable (`<<<"$changed"`, no braces), or moved the grep call into
-    `metrics_readback_diff_relevant` itself, or introduced a third helper,
-    would restore the identical deadlock while keeping that narrower check
-    green. Scans BOTH functions in this check's call path for ANY `<<<`
-    occurrence at all, not one hard-coded literal.
+    variable (`<<<"$changed"`, no braces) would restore the identical
+    deadlock while keeping that narrower check green. Widened to scan two
+    hard-coded function bodies for ANY `<<<` occurrence.
+
+    Codex review round 3, P2: hard-coding "two" function names is still a
+    person's guess at the call path, not a computed one -- a FUTURE
+    refactor that moves the relevant logic into a third helper (that
+    EITHER of the two calls into) would introduce a `<<<` this test still
+    could not see. `_reachable_call_path_bodies` closes this properly: it
+    computes the REAL transitive closure of every function textually
+    reachable from `metrics_readback_diff_relevant` and scans all of them,
+    so a future third (or fourth, or fifth) helper is covered automatically
+    the moment it is called from this path, with no test edit required.
     """
 
     text = SCRIPT.read_text(encoding="utf-8")
+    reachable = _reachable_call_path_bodies(text, "metrics_readback_diff_relevant")
 
-    assert "_metrics_diff_relevant_check() {" in text, (
-        "_metrics_diff_relevant_check is missing -- the core relevance"
-        " check must be a standalone, directly-testable function (see the"
-        " --metrics-diff-relevant-probe harness hook)"
+    # Sanity check on the closure itself: it must have actually found BOTH
+    # functions this fix touches, or the closure computation is broken and
+    # everything below would vacuously pass by scanning too little.
+    assert "metrics_readback_diff_relevant" in reachable
+    assert "_metrics_diff_relevant_check" in reachable, (
+        "the reachable-call-path closure from metrics_readback_diff_relevant"
+        " did not find _metrics_diff_relevant_check -- either the call was"
+        " removed, or the closure computation in this test needs fixing;"
+        " either way this test cannot currently verify the real fix"
     )
-    check_body = _function_body(text, "_metrics_diff_relevant_check() {")
-    caller_body = _function_body(text, "metrics_readback_diff_relevant() {")
 
-    for label, body in (
-        ("_metrics_diff_relevant_check", check_body),
-        ("metrics_readback_diff_relevant", caller_body),
-    ):
+    for name, body in sorted(reachable.items()):
         assert "<<<" not in body, (
-            f"a here-string (`<<<`) has reappeared in {label}() in"
-            " ci/local_validate.sh -- this is the exact CHAOS-4487 class of"
-            " construct (bash-5.3 heredoc_write pipe deadlock on a large"
-            " payload), REGARDLESS of which variable name or literal string"
-            " it uses; route any unbounded payload through a temp file"
-            " instead (mktemp + the printf BUILTIN, see"
+            f"a here-string (`<<<`) has reappeared in {name}() in"
+            " ci/local_validate.sh, reachable from"
+            " metrics_readback_diff_relevant() -- this is the exact"
+            " CHAOS-4487 class of construct (bash-5.3 heredoc_write pipe"
+            " deadlock on a large payload), REGARDLESS of which function or"
+            " variable name it uses; route any unbounded payload through a"
+            " temp file instead (mktemp + the printf BUILTIN, see"
             " _metrics_diff_relevant_check's current implementation)"
         )
+
+    check_body = reachable["_metrics_diff_relevant_check"]
 
     # The fix's actual shape must be present: a temp file created via
     # mktemp, written via the printf BUILTIN (not `cat <<EOF`, which would

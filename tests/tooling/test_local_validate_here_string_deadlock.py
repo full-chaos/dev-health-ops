@@ -168,6 +168,21 @@ def test_old_here_string_shape_genuinely_hangs_on_this_host() -> None:
         result = _old_here_string_shape(payload)
     except subprocess.TimeoutExpired:
         return  # the expected outcome: genuinely hung, killed by the harness timeout.
+    # Codex review (round 2, P2): a non-timeout result is only real evidence
+    # of "this environment does not reproduce the deadlock" if the old
+    # shape actually ran its intended grep and matched -- `payload` starts
+    # with a metrics-guarded path, so rc must be 0. Any OTHER exit (a crash,
+    # a shell error, SIGPIPE-141 from a DIFFERENT bug) is not "did not
+    # hang", it is a different failure this test must not silently absorb
+    # into a skip.
+    assert result.returncode == 0, (
+        "the pre-CHAOS-4487 here-string subprocess neither hung NOR exited"
+        f" with the expected rc=0 match -- got returncode={result.returncode}"
+        f", stdout={result.stdout!r}, stderr={result.stderr!r}. This is a"
+        " different failure than 'did not reproduce the deadlock' (e.g. the"
+        " CHAOS-4319 SIGPIPE/141 false-negative this shape was ALSO"
+        " vulnerable to) and must not be treated as a benign skip."
+    )
     pytest.skip(
         "the pre-CHAOS-4487 here-string shape did NOT hang on this host/run "
         f"({len(payload)}-byte payload, returncode={result.returncode}, "
@@ -268,7 +283,7 @@ def test_here_string_deadlock_is_not_payload_agnostic() -> None:
     inflated = "79840|Fri Aug 28 20:59:41 2026|" + ("/x" * 400)
     assert len(inflated) > _HANGING_PAYLOAD_BYTES, len(inflated)
     try:
-        subprocess.run(  # noqa: S603
+        inflated_result = subprocess.run(  # noqa: S603
             [
                 "bash",
                 "-c",
@@ -279,6 +294,20 @@ def test_here_string_deadlock_is_not_payload_agnostic() -> None:
             capture_output=True,
             text=True,
             timeout=_HANG_TIMEOUT_S,
+        )
+        # Codex review (round 2, P2): same distinction as the grep-based
+        # test above -- a non-hang result is only evidence of
+        # "not reproducible here" if the `read` actually ran and succeeded
+        # (rc=0, "done" on stdout). Any other exit is a different failure
+        # this test must not silently fold into a skip.
+        assert inflated_result.returncode == 0 and "done" in inflated_result.stdout, (
+            "the inflated read-based here-string subprocess neither hung NOR"
+            " completed successfully -- got"
+            f" returncode={inflated_result.returncode},"
+            f" stdout={inflated_result.stdout!r},"
+            f" stderr={inflated_result.stderr!r}. This is a different"
+            " failure than 'did not reproduce the deadlock' and must not be"
+            " treated as a benign skip."
         )
         pytest.skip(
             "expected the inflated read-based here-string to hang (same "
@@ -314,46 +343,70 @@ def test_probe_harness_hook_is_reachable_and_documented() -> None:
     )
 
 
+def _function_body(text: str, signature: str) -> str:
+    """The source text of a `name() { ... }` function, from its signature to
+    its closing brace at column 0. Fails loudly (not a silent empty match)
+    if the signature is absent, since a renamed/removed function must not
+    make a caller's `in check_body` assertions vacuously pass.
+    """
+
+    assert signature in text, f"{signature!r} not found in {SCRIPT}"
+    start = text.index(signature)
+    end = text.index("\n}\n", start)
+    return text[start:end]
+
+
 def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> None:
-    """Portable, environment-independent regression guard (codex review):
-    the live-reproduction tests above are SKIPPED, not failed, on a host/run
-    that is not currently under the specific bash-5.3 pipe pressure needed
-    to observe the deadlock -- expected on most CI runners most of the time,
-    since the phenomenon is host/load-dependent, not a portable bash
-    invariant. That means this file's only ALWAYS-run guard against the
-    construct regressing is a static one: assert the vulnerable shape is
-    gone from the script's source text, and the fix's actual shape (a
-    `mktemp` + `printf` BUILTIN write, per the argMax stage's own
-    established pattern) is present instead. This runs identically on every
-    host and can never merely "not reproduce" its way to a false green.
+    """Portable, environment-independent regression guard (codex review
+    round 1): the live-reproduction tests above are SKIPPED, not failed, on
+    a host/run that is not currently under the specific bash-5.3 pipe
+    pressure needed to observe the deadlock -- expected on most CI runners
+    most of the time, since the phenomenon is host/load-dependent, not a
+    portable bash invariant. That means this file's only ALWAYS-run guard
+    against the construct regressing is a static one: assert the fix's
+    actual shape (a `mktemp` + `printf` BUILTIN write, per the argMax
+    stage's own established pattern) is present, and that NO here-string
+    (`<<<`, in ANY form) exists anywhere in the two functions that make up
+    this check's whole call path.
+
+    Codex review round 2, P2: an earlier version of this test only rejected
+    the one LITERAL string `<<<"${changed}"` inside
+    `_metrics_diff_relevant_check` alone -- a refactor that renamed the
+    variable (`<<<"$changed"`, no braces), or moved the grep call into
+    `metrics_readback_diff_relevant` itself, or introduced a third helper,
+    would restore the identical deadlock while keeping that narrower check
+    green. Scans BOTH functions in this check's call path for ANY `<<<`
+    occurrence at all, not one hard-coded literal.
     """
 
     text = SCRIPT.read_text(encoding="utf-8")
 
-    # The exact construct CHAOS-4487 removed must not reappear anywhere in
-    # the file (not just in _metrics_diff_relevant_check -- a regression
-    # that reintroduced it under a different function name would be just as
-    # real a bug).
-    assert '<<<"${changed}"' not in text, (
-        'the vulnerable `grep -qE ... <<<"${changed}"` here-string construct'
-        " has reappeared in ci/local_validate.sh -- this is the exact shape"
-        " CHAOS-4487 fixed (bash-5.3 heredoc_write pipe deadlock on a"
-        " large payload); route the payload through a temp file instead"
-        " (see _metrics_diff_relevant_check)"
-    )
-
-    # The fix's actual shape must be present: a temp file created via
-    # mktemp, written via the printf BUILTIN (not `cat <<EOF`, which would
-    # reintroduce the identical CHAOS-3362 pipe -- see the argMax stage's
-    # own comment for why), and grep reading that file rather than stdin.
     assert "_metrics_diff_relevant_check() {" in text, (
         "_metrics_diff_relevant_check is missing -- the core relevance"
         " check must be a standalone, directly-testable function (see the"
         " --metrics-diff-relevant-probe harness hook)"
     )
-    check_start = text.index("_metrics_diff_relevant_check() {")
-    check_end = text.index("\n}\n", check_start)
-    check_body = text[check_start:check_end]
+    check_body = _function_body(text, "_metrics_diff_relevant_check() {")
+    caller_body = _function_body(text, "metrics_readback_diff_relevant() {")
+
+    for label, body in (
+        ("_metrics_diff_relevant_check", check_body),
+        ("metrics_readback_diff_relevant", caller_body),
+    ):
+        assert "<<<" not in body, (
+            f"a here-string (`<<<`) has reappeared in {label}() in"
+            " ci/local_validate.sh -- this is the exact CHAOS-4487 class of"
+            " construct (bash-5.3 heredoc_write pipe deadlock on a large"
+            " payload), REGARDLESS of which variable name or literal string"
+            " it uses; route any unbounded payload through a temp file"
+            " instead (mktemp + the printf BUILTIN, see"
+            " _metrics_diff_relevant_check's current implementation)"
+        )
+
+    # The fix's actual shape must be present: a temp file created via
+    # mktemp, written via the printf BUILTIN (not `cat <<EOF`, which would
+    # reintroduce the identical CHAOS-3362 pipe -- see the argMax stage's
+    # own comment for why), and grep reading that file rather than stdin.
     assert "mktemp" in check_body, (
         "_metrics_diff_relevant_check no longer creates a temp file via"
         " mktemp -- has the fix been reverted?"
@@ -364,9 +417,9 @@ def test_fixed_code_no_longer_uses_the_vulnerable_here_string_construct() -> Non
         " that removes the fork/pipe entirely; a `cat <<EOF` or a pipe form"
         " here would reintroduce CHAOS-4487 or CHAOS-4319 respectively"
     )
-    assert '"${changed_file}"' in check_body and "<<<" not in check_body, (
+    assert '"${changed_file}"' in check_body, (
         "_metrics_diff_relevant_check's grep call must read the temp file"
-        " directly, with no here-string anywhere in the function body"
+        " directly, not stdin"
     )
 
 

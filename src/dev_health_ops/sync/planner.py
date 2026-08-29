@@ -443,7 +443,17 @@ def seed_reference_discovery_run(
     existing zero-unit dispatch/finalize outbox chain (proven idempotent,
     see lane-4431's 2026-08-29 close-out) carries it from PLANNED to a
     terminal ``sync_runs.status`` on its own once reference discovery
-    stamps success -- no new Go or dispatch code needed.
+    stamps success -- no new Go or dispatch code needed. That terminal
+    status is ``FAILED``, not ``SUCCESS`` (live-verified, CHAOS-4502):
+    ``aggregateRunStatus``/``_aggregate_run_status`` treat any zero-unit
+    run as a loud failure by design (CHAOS-4159, "never a silent
+    success"), which this anchor collides with even though nothing
+    actually failed. Harmless to the caller -- the reference-discovery
+    ledger's own ``status``/``result`` are correct, and
+    ``run_backfill_for_config``'s return value reports the discovery
+    outcome, never this row's status -- but it does mean the anchor
+    shows up in failed-sync-run counts/dashboards until CHAOS-4502 gives
+    it its own terminal state.
 
     Credentials are resolved and frozen exactly as :func:`plan_sync_run`
     does (:func:`_resolve_credential_stamp`), because the Python-side

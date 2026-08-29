@@ -257,13 +257,25 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 			}
 			if err := loop.step(ctx, now); err != nil {
 				// A step in flight when Shutdown fires observes its own
-				// cancellation as a Relay.Step error (Shutdown sets stopping
-				// THEN cancels, matching syncreconciler.Loop's own
-				// isStopping/ctx.Err ordering) -- that is the process
+				// cancellation as a Relay.Step error -- that is the process
 				// stopping on purpose, not an operational failure, and must
 				// never count against step_failures_total or the degrade
-				// streak (codex review finding).
-				if isContextError(err) && (ctx.Err() != nil || loop.isStopping()) {
+				// streak (codex review finding, round 2).
+				//
+				// Deliberately NOT gated on the error's own type (e.g.
+				// errors.Is(err, context.Canceled)): Repository's methods
+				// (claimDueExcept, Dispatch, recordFailure, ...) collapse
+				// EVERY pg failure -- a cancellation-induced one included --
+				// into the package's own ErrUnavailable sentinel before it
+				// ever reaches here (internal/joboutbox/repository.go), so a
+				// type check on err would never match the very case it
+				// exists to catch (codex round-1 fix looked right in
+				// isolation and was wrong for exactly this reason). ctx here
+				// is loopCtx, cancelled ONLY by Shutdown (never a per-step
+				// timeout -- Relay.Step is called with it directly, no
+				// derived deadline), so checking the context alone is both
+				// necessary and sufficient.
+				if ctx.Err() != nil || loop.isStopping() {
 					return
 				}
 				loop.recordStepFailure(ctx, err)
@@ -277,10 +289,6 @@ func (loop *ReconcilerLoop) run(ctx context.Context, ticker reconcilerTicker, do
 			}
 		}
 	}
-}
-
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (loop *ReconcilerLoop) isStopping() bool {

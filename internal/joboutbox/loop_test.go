@@ -269,11 +269,19 @@ func TestReconcilerLoopStepPreservesCommittedResultOnFailure(t *testing.T) {
 }
 
 // TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure is a
-// codex review finding: Shutdown sets stopping THEN cancels the loop's
-// context (matching syncreconciler.Loop's own ordering), so a step in
-// flight at that moment sees its own shutdown as a Relay.Step error. That is
-// the process stopping on purpose, not an operational failure, and must
-// never increment step_failures_total or the degrade streak.
+// codex review finding (round 2 tightened round 1's fix): Shutdown sets
+// stopping THEN cancels the loop's context, so a step in flight at that
+// moment observes its own shutdown as a Relay.Step error. That is the
+// process stopping on purpose, not an operational failure, and must never
+// increment step_failures_total or the degrade streak.
+//
+// The stepper here returns ErrUnavailable, NOT ctx.Err() -- matching what
+// the REAL Repository does (claimDueExcept/Dispatch/recordFailure all
+// collapse a cancellation into ErrUnavailable before Relay.Step ever
+// returns, internal/joboutbox/repository.go). Round 1's fix checked
+// errors.Is(err, context.Canceled), which this error deliberately does NOT
+// satisfy -- a synthetic ctx.Err() stepper here would have let that gap pass
+// silently, the same way it did the first time.
 func TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure(t *testing.T) {
 	clock := &testReconcilerClock{now: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)}
 	entered := make(chan struct{}, 1)
@@ -285,7 +293,7 @@ func TestReconcilerLoopShutdownCancellationDuringStepIsNotCountedAsFailure(t *te
 		}
 		entered <- struct{}{}
 		<-ctx.Done()
-		return StepResult{}, ctx.Err()
+		return StepResult{}, ErrUnavailable
 	}), clock)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)

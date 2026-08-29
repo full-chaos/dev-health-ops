@@ -183,6 +183,20 @@ type Loop struct {
 	up               bool
 	errors           chan error
 	recorderBusy     chan struct{}
+
+	// stepObserved is a test-only synchronization hook (CHAOS-4553, porting
+	// the CHAOS-4429 pattern from the sibling internal/joboutbox.ReconcilerLoop):
+	// production never sets it, and run's nil check is a no-op in that case.
+	// It fires once run has finished ALL bookkeeping for a tick (the success
+	// path, or the degraded-absorb path, whichever ran) so a test can wait on
+	// it instead of racing run's own goroutine off a signal sent from inside
+	// the stepper closure -- the stepper returning is not the same instant as
+	// readiness/metrics reflecting that return. Several loop_test.go tests
+	// synchronized on a channel signaled from inside the stepper and then
+	// asserted registry.Readiness() immediately after, which raced this
+	// goroutine's own post-return bookkeeping; reproduced under
+	// `-count=500 -race -cpu=1,2,4` (3/2000 failures) before this fix.
+	stepObserved func()
 }
 
 func NewLoop(stepper Stepper, config LoopConfig) (*Loop, error) {
@@ -324,10 +338,16 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 				if errors.Is(err, ErrDegradedStage) || errors.Is(err, ErrStepEnvelopeExceeded) {
 					loop.setFailed()
 					loop.logger().WarnContext(ctx, "sync dispatch observer step degraded; continuing", "error", err.Error())
+					if loop.stepObserved != nil {
+						loop.stepObserved()
+					}
 					continue
 				}
 				fatal = fmt.Errorf("sync dispatch observation step: %w", err)
 				return
+			}
+			if loop.stepObserved != nil {
+				loop.stepObserved()
 			}
 		}
 	}

@@ -203,6 +203,14 @@ def main() -> int:
         "step summary).",
     )
     args = parser.parse_args()
+    # Defaulting from the environment must not become "silently None": with
+
+    # neither the flag nor CLICKHOUSE_URI set, this used to proceed and fail
+
+    # deep inside the sink with an unrelated-looking error.
+
+    if not args.clickhouse_uri:
+        parser.error("--clickhouse-uri or CLICKHOUSE_URI is required")
 
     # clickhouse_connect binds DateTime64(6) parameters from a real datetime
     # object, not a raw ISO8601 string -- a string with a "+00:00" offset

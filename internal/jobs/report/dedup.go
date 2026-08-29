@@ -86,6 +86,17 @@ var appendOnlyDailyKeys = map[string][]string{
 	// scoping. review_edges_daily has no org_id column (repo_id is the
 	// tenant boundary here); natural key mirrors clickhouse_dedup.py.
 	"review_edges_daily": {"repo_id", "reviewer", "author", "day"},
+	// CHAOS-4459 (self-audit against families.json's full write-table list,
+	// requested by team-lead after codex round 4): commit_metrics -- THIS
+	// TICKET'S OWN target table -- is a plain MergeTree source_table for
+	// metric_registry.json's commit charts (Commit Hash/Files Changed/Size
+	// Bucket/Total LOC) and had no dedup key registered, same gap class as
+	// the three tables above. A repeat partition-recompute of the same day
+	// (this PR's own integration test exercises exactly that) re-inserts
+	// the SAME (repo_id, day, author_email, commit_hash) rows under a fresh
+	// computed_at, doubling these charts' sums. Natural key mirrors the
+	// table's own ORDER BY (migration 001).
+	"commit_metrics": {"repo_id", "day", "author_email", "commit_hash"},
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

@@ -82,3 +82,24 @@ def test_review_edges_daily_source_is_deduplicated_on_read() -> None:
     # its ORDER BY (repo_id, reviewer, author, day).
     for column in ("repo_id", "reviewer", "author", "day"):
         assert column in source, f"review_edges_daily dedup key is missing {column}"
+
+
+def test_commit_metrics_source_is_deduplicated_on_read() -> None:
+    # CHAOS-4459 (self-audit against families.json's full write-table list,
+    # requested by team-lead after codex round 4): commit_metrics is THIS
+    # TICKET'S OWN target table, also a generic report-registry source_table,
+    # also missing a dedup key -- a repeat partition-recompute of the same
+    # day (this PR's own integration test does exactly that) would double
+    # the commit charts' sums without this fix.
+    source = dedup_from("commit_metrics")
+    assert source != "commit_metrics", (
+        "dedup_from('commit_metrics') returned the RAW table name -- the "
+        "generic report-registry chart path (reports/charts.py) reads it "
+        "unguarded, doubling commit charts for a repeated recompute."
+    )
+    assert "LIMIT 1 BY" in source
+    assert "computed_at DESC" in source
+    # Natural key matches migration 001's ORDER BY (repo_id, day,
+    # author_email, commit_hash).
+    for column in ("repo_id", "day", "author_email", "commit_hash"):
+        assert column in source, f"commit_metrics dedup key is missing {column}"

@@ -109,6 +109,8 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"file_hotspot_daily", "(SELECT * FROM file_hotspot_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, file_path) AS file_hotspot_daily"},
 		// CHAOS-4459 (codex review round 4): registered.
 		{"review_edges_daily", "(SELECT * FROM review_edges_daily ORDER BY computed_at DESC LIMIT 1 BY repo_id, reviewer, author, day) AS review_edges_daily"},
+		// CHAOS-4459 (self-audit, requested by team-lead): registered.
+		{"commit_metrics", "(SELECT * FROM commit_metrics ORDER BY computed_at DESC LIMIT 1 BY repo_id, day, author_email, commit_hash) AS commit_metrics"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.table, func(t *testing.T) {

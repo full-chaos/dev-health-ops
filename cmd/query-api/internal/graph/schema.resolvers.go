@@ -318,13 +318,13 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 }
 
 // CognitiveLoad is the resolver for the cognitiveLoad field (CHAOS-4369
-// Wave 3). Ports
+// Wave 3; extended to the ownership-gated team+repo path by CHAOS-4462
+// after the CHAOS-4352 rebase lane took origin/main's CHAOS-4406 fix).
+// Ports
 // dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load
 // via cognitiveload.Resolve -- see that package's doc comment for the
-// exact parity contract (the TWO read paths at the feature-branch tip:
-// single-team direct read, and org-wide/team+repo-combined merge -- and
-// the finding that CHAOS-4406's ownership-gated team+repo path is NOT yet
-// on this feature branch, only on origin/main).
+// exact parity contract (the THREE read paths: single-team direct read,
+// ownership-gated team+repo-combined, and org-wide merge).
 //
 // Authorization mirrors resolve_cognitive_load's/ReviewEdges's ACTUAL
 // behavior exactly, not FeatureFlags's stricter Go-side equality check:

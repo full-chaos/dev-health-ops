@@ -65,12 +65,12 @@ producer-seeded scratch state, compared via the CHAOS-4381 comparator):
 `tests/api/graphql/test_go_api_dual_run_cognitive_load.py`, and
 `tests/api/graphql/test_go_api_dual_run_complexity_timeseries.py`.
 
-## Wave 3: cognitiveLoad (CHAOS-4369)
+## Wave 3: cognitiveLoad (CHAOS-4369, extended to a third path by CHAOS-4462)
 
 `internal/cognitiveload` ports
 `dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load`
-verbatim, including the TWO distinct read paths the Python resolver picks
-between on `teamId`/`repoId` **at the actual feature-branch tip**:
+verbatim, including the THREE distinct read paths the Python resolver
+picks between on `teamId`/`repoId`:
 
 1. **Single-team** (`teamId` set, `repoId` unset): reads
    `team_cognitive_load_daily` directly — already team-scoped and
@@ -80,33 +80,40 @@ between on `teamId`/`repoId` **at the actual feature-branch tip**:
    `argMax(tuple(...), computed_at)` rather than five independent
    per-column `argMax` calls, so a day whose latest row is genuinely NULL
    never surfaces a stale non-null value from an older row.
-2. **Org-wide (`teamId` unset) OR team+repo combined (both set)**: the
-   original two-query merge over `user_metrics_daily`/`team_metrics_daily`,
-   each deduplicated via `argMax(..., computed_at)` before aggregating,
-   merged over the UNION of days. `repoId`, when set, narrows only
+2. **Team+repo combined** (both set, CHAOS-4406/CHAOS-4462): neither
+   `user_metrics_daily` nor `team_metrics_daily`'s own `team_id` column can
+   be trusted (CHAOS-4396 taint). `resolveOwnedRepoID` confirms via
+   `team_repo_ownership` (falling back to `teams.repo_patterns` only when
+   native ownership resolves no row at all for the candidate repo) that the
+   requested repo is CURRENTLY, CANONICALLY owned by the requested team —
+   if not owned (or the repo does not exist), returns an explicit empty
+   result rather than either the wrong team's data or a confusing error;
+   if owned, both queries filter by `repo_id` ALONE.
+3. **Org-wide** (`teamId` unset): the original two-query merge over
+   `user_metrics_daily`/`team_metrics_daily`, each deduplicated via
+   `argMax(..., computed_at)` before aggregating, merged over the UNION of
+   days. `repoId`, when set without `teamId`, narrows only
    `user_metrics_daily`; `team_metrics_daily` (`fetchTeamMetrics`) takes no
-   `repoId` argument at all in either sub-case.
+   `repoId` argument at all.
 
-**Finding, not an assumption (root AGENTS.md: reproduce claims, don't
-trust a briefing):** the Wave 3 task briefing stated CHAOS-4406's
-ownership-gated team+repo-combined path (commit `8519cd2a8`, which adds a
-THIRD branch resolving `team_repo_ownership`/`teams.repo_patterns` before
-filtering by `repo_id` alone) was "already in the feature base". Verified
-false: `git merge-base --is-ancestor 8519cd2a8
-origin/feature/chaos-4352-go-api` returns non-zero (not an ancestor) — the
-commit exists only on `origin/main`. This port targets the Python that
-ACTUALLY exists at the feature-branch tip today, confirmed by reading
-`src/dev_health_ops/api/graphql/resolvers/cognitive_load.py` directly in
-this worktree (437 lines, two branches, ends at commit `4795fc4e2`) rather
-than trusting the branch-count/behavior claimed in the handoff doc. The
-team+repo-combined case therefore still filters `user_metrics_daily` by
-BOTH `team_id` AND `repo_id` (the same tainted `team_id` column
-CHAOS-4396/CHAOS-4406 flag on `main`) — unchanged here, since fixing it is
-out of this port's scope. Tracked as **CHAOS-4462** (child of CHAOS-4352,
-"Go cognitiveLoad port must absorb main's 3-path resolver (CHAOS-4406)
-when the feature branch takes main"): a later wave that merges `main`'s
-CHAOS-4406 fix into the feature branch will need a follow-up PR to
-`internal/cognitiveload`.
+**History:** the Wave 3 port (PR #1993) initially shipped only paths 1 and
+3 — the Wave 3 task briefing's claim that CHAOS-4406 (commit `8519cd2a8`,
+adding the ownership-gated third path) was "already in the feature base"
+was verified false at the time
+(`git merge-base --is-ancestor 8519cd2a8 origin/feature/chaos-4352-go-api`
+returned non-zero; the commit existed only on `origin/main`), and was
+tracked as follow-up **CHAOS-4462**. The CHAOS-4352 rebase lane then
+rebased the feature branch onto `origin/main` (which carries 8519cd2a8),
+so `resolvers/cognitive_load.py` at the feature tip is now byte-identical
+to `origin/main`'s 3-path version, and this PR ports the third path to
+close CHAOS-4462. `resolveOwnedRepoID`'s pattern-fallback resolver
+(`repoPatternResolver`) is a small package-private port of
+`RepoPatternTeamResolver`/`build_repo_pattern_resolver`
+(`providers/teams.py`) — not a shared import, matching this package's
+existing convention (see `QueryClient`'s doc comment) of small per-package
+helpers over a shared library; a separate, independently-verified copy of
+the same logic already exists worker-side
+(`internal/jobs/metrics/daily/wellbeing_native_clickhouse.go`).
 
 Like `reviewEdges` (unlike `featureFlags`), `resolve_cognitive_load` has
 no missing-table degraded path — no `degradedReason` field on

@@ -5,30 +5,31 @@ against the same producer-seeded scratch ClickHouse/Postgres state,
 comparing the complete observable response via the CHAOS-4381 comparator
 (``go_api_comparator.compare_responses``) -- not merely "both return 200".
 
-``resolve_cognitive_load`` picks between TWO distinct read paths on
-``teamId``/``repoId`` AT THE ACTUAL FEATURE-BRANCH TIP (see its own
-docstring and this port's Go package doc comment,
-``cmd/query-api/internal/cognitiveload/cognitiveload.go``); this file
-seeds and dual-runs every branch the Python resolver distinguishes:
+``resolve_cognitive_load`` picks between THREE distinct read paths on
+``teamId``/``repoId`` (see its own docstring and this port's Go package
+doc comment, ``cmd/query-api/internal/cognitiveload/cognitiveload.go``);
+this file seeds and dual-runs every branch the Python resolver
+distinguishes:
 
 1. Single-team (``teamId`` set, ``repoId`` unset): a direct read of
    ``team_cognitive_load_daily``.
-2. Org-wide (no ``teamId``) OR team+repo combined (both set): the SAME
-   two-query merge over ``user_metrics_daily``/``team_metrics_daily`` --
-   ``repoId``, when set, narrows only ``user_metrics_daily``.
+2. Team+repo combined (both set, CHAOS-4406/CHAOS-4462): ownership-gated
+   via ``team_repo_ownership`` -- both queries filter by ``repo_id`` alone
+   once ownership is confirmed, never the tainted ``team_id`` column on
+   the metrics rows themselves.
+3. Org-wide (no ``teamId``): the two-query merge over
+   ``user_metrics_daily``/``team_metrics_daily`` -- ``repoId``, when set
+   without ``teamId``, narrows only ``user_metrics_daily``.
 
-**Finding, not an assumption (verified, not trusted from the task
-briefing):** the CHAOS-4369 lane briefing claimed CHAOS-4406's
-ownership-gated team+repo-combined path (commit ``8519cd2a8`` -- a THIRD
-branch resolving ``team_repo_ownership``/``teams.repo_patterns`` before
-filtering by ``repo_id`` alone) was "already in the feature base". This
-is FALSE: ``git merge-base --is-ancestor 8519cd2a8
-origin/feature/chaos-4352-go-api`` returns non-zero (not an ancestor) --
-that commit exists only on ``origin/main``. Confirmed by reading
-``src/dev_health_ops/api/graphql/resolvers/cognitive_load.py`` directly in
-this worktree (437 lines, two branches, ends at commit ``4795fc4e2``).
-This file dual-runs the Python that ACTUALLY exists at the feature-branch
-tip, not the (different, newer) behavior described in the briefing.
+**History:** at the original CHAOS-4369 Wave 3 port, the feature branch's
+``resolvers/cognitive_load.py`` had only paths 1 and 3 -- CHAOS-4406
+(commit ``8519cd2a8``, the ownership-gated third path) existed only on
+``origin/main`` at the time (verified via
+``git merge-base --is-ancestor 8519cd2a8 origin/feature/chaos-4352-go-api``,
+which returned non-zero), tracked as follow-up CHAOS-4462. The CHAOS-4352
+rebase lane then rebased the feature branch onto ``origin/main`` (which
+carries ``8519cd2a8``), so the resolver now has all three paths; this file
+adds path 2's dual-run coverage to close CHAOS-4462.
 
 Side effects: checked by reading
 ``resolve_cognitive_load``/its private ``_fetch_*`` helpers
@@ -85,6 +86,7 @@ from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.metrics.schemas import (
     TeamCognitiveLoadDailyRecord,
     TeamMetricsDailyRecord,
+    TeamRepoOwnershipRecord,
     UserMetricsDailyRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -537,6 +539,8 @@ def _cleanup_org_rows(sink: ClickHouseMetricsSink, org_id: str) -> None:
         "user_metrics_daily",
         "team_metrics_daily",
         "team_cognitive_load_daily",
+        "team_repo_ownership",
+        "teams",
         "repos",
     ):
         sink.client.command(
@@ -794,39 +798,61 @@ async def test_dual_run_single_team_reads_team_cognitive_load_daily(
 
 
 # ---------------------------------------------------------------------------
-# Path 2b: team+repo combined uses the SAME merge path as org-wide
+# Path 2: team+repo combined -- ownership-gated (CHAOS-4406/CHAOS-4462)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
+async def test_dual_run_team_repo_combined_ownership_gated_path(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """Stage 2, team+repo combined sub-case: at the feature-branch tip
-    (see the module docstring's finding), team+repo combined is NOT a
-    third branch -- it falls through to the identical two-query merge as
-    the org-wide path, with user_metrics_daily filtered by BOTH team_id
-    AND repo_id (the tainted team_id column CHAOS-4396/CHAOS-4406 flag on
-    ``main``, unchanged here) and team_metrics_daily filtered by team_id
-    alone (no repo_id argument at all). This proves Go reproduces that
-    ACTUAL behavior, not the newer ownership-gated behavior a different
-    branch has.
+    """Stage 2, team+repo combined sub-case: the feature branch now
+    carries main's CHAOS-4406 ownership-gated third path (this dual-run
+    lane's CHAOS-4462 close-out). Seeds BOTH ends of the ownership
+    relation -- the ``repos`` catalog row (the join target
+    ``_resolve_owned_repo_id`` matches on) AND the ``team_repo_ownership``
+    row linking the requesting team to that repo -- and deliberately
+    seeds ``user_metrics_daily``/``team_metrics_daily`` with a DIFFERENT,
+    tainted ``team_id`` label than the real owner, proving both planes
+    resolve via ``team_repo_ownership`` alone, never the CHAOS-4396-tainted
+    ``team_id`` column on the metrics rows themselves.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
     sink = _sink()
 
     org_id = f"chaos-4369-dual-run-combined-{uuid.uuid4()}"
-    team_id = "team-alpha"
+    owning_team_id = "team-alpha"
+    tainted_team_id = "team-wrong"  # what the metrics rows carry -- must be ignored
     repo_id = uuid.uuid4()
     repo_full_name = f"acme/repo-{uuid.uuid4().hex[:8]}"
     day = date(2026, 8, 10)
     author = f"author-{uuid.uuid4().hex[:8]}@example.com"
     computed_at = datetime(2026, 8, 11, 0, 0, 0, tzinfo=timezone.utc)
 
-    # Required for the repoId filter to resolve at all -- see
-    # _write_repo's own doc comment.
+    # Both ends of the ownership relation: the repos catalog row (the
+    # join target) AND the team_repo_ownership fact linking
+    # owning_team_id to this repo -- _resolve_owned_repo_id's LEFT JOIN
+    # matches on (org_id, provider, lower(repo)) ==
+    # (org_id, provider, lower(repo_full_name)).
     _write_repo(sink, org_id=org_id, repo_id=repo_id, full_name=repo_full_name)
+    sink.write_team_repo_ownership(
+        [
+            TeamRepoOwnershipRecord(
+                provider="github",
+                team_id=owning_team_id,
+                repo_full_name=repo_full_name,
+                match_type="exact",
+                source="native",
+                is_primary=1,
+                specificity=1,
+                priority=0,
+                valid_from=computed_at,
+                updated_at=computed_at,
+                org_id=org_id,
+            )
+        ]
+    )
     sink.write_user_metrics(
         [
             UserMetricsDailyRecord(
@@ -847,7 +873,7 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
                 pr_interruption_load=5,
                 context_spread_count=3,
                 review_request_load=2,
-                team_id=team_id,
+                team_id=tainted_team_id,
                 org_id=org_id,
             )
         ]
@@ -856,8 +882,8 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
         [
             TeamMetricsDailyRecord(
                 day=day,
-                team_id=team_id,
-                team_name="Team Alpha",
+                team_id=tainted_team_id,
+                team_name="Team Wrong",
                 commits_count=4,
                 after_hours_commits_count=1,
                 weekend_commits_count=0,
@@ -892,7 +918,7 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
                 org_id=org_id,
                 since_date=day,
                 until_date=day,
-                team_id=team_id,
+                team_id=owning_team_id,
                 repo_id=repo_full_name,
             ),
         )
@@ -904,7 +930,7 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
                     "orgId": org_id,
                     "sinceDate": day.isoformat(),
                     "untilDate": day.isoformat(),
-                    "teamId": team_id,
+                    "teamId": owning_team_id,
                     "repoId": repo_full_name,
                 }
             },
@@ -915,9 +941,12 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
         sink.close()
 
     assert python_result.total_days == 1, (
-        f"expected the team+repo combined merge to surface the seeded day: {python_result}"
+        f"expected ownership resolution to surface the repo-scoped day: {python_result}"
     )
-    assert python_result.signals[0].pr_interruption_load == pytest.approx(5.0)
+    assert python_result.signals[0].pr_interruption_load == pytest.approx(5.0), (
+        "the metrics rows' tainted team_id ('team-wrong') must never gate "
+        "this result -- only team_repo_ownership does"
+    )
     assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
 
     baseline = _cognitive_load_python_response_snapshot(python_result)
@@ -933,6 +962,114 @@ async def test_dual_run_team_repo_combined_uses_the_same_merge_path(
 
     assert comparison.is_match, (
         f"cognitiveLoad team+repo combined dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={baseline}\ngo={candidate}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dual_run_team_repo_combined_not_owned_returns_empty(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """Team+repo combined when the repo exists and is genuinely owned by
+    a DIFFERENT team (no team_repo_ownership row for the requesting team,
+    no repo_patterns anywhere in the org): both planes must return an
+    explicit empty result (0 signals), never the wrong team's data and
+    never an error -- CHAOS-4406's ownership-gate is the entire point of
+    this path.
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = _sink()
+
+    org_id = f"chaos-4369-dual-run-notowned-{uuid.uuid4()}"
+    requesting_team_id = "team-alpha"
+    actual_owner_team_id = "team-beta"
+    repo_id = uuid.uuid4()
+    repo_full_name = f"acme/repo-{uuid.uuid4().hex[:8]}"
+    day = date(2026, 8, 10)
+    computed_at = datetime(2026, 8, 11, 0, 0, 0, tzinfo=timezone.utc)
+
+    _write_repo(sink, org_id=org_id, repo_id=repo_id, full_name=repo_full_name)
+    sink.write_team_repo_ownership(
+        [
+            TeamRepoOwnershipRecord(
+                provider="github",
+                team_id=actual_owner_team_id,
+                repo_full_name=repo_full_name,
+                match_type="exact",
+                source="native",
+                is_primary=1,
+                specificity=1,
+                priority=0,
+                valid_from=computed_at,
+                updated_at=computed_at,
+                org_id=org_id,
+            )
+        ]
+    )
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-notowned.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        python_result = await resolve_cognitive_load(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            CognitiveLoadInput(
+                org_id=org_id,
+                since_date=day,
+                until_date=day,
+                team_id=requesting_team_id,
+                repo_id=repo_full_name,
+            ),
+        )
+        go_payload = _post_graphql(
+            server.base_url,
+            token,
+            {
+                "input": {
+                    "orgId": org_id,
+                    "sinceDate": day.isoformat(),
+                    "untilDate": day.isoformat(),
+                    "teamId": requesting_team_id,
+                    "repoId": repo_full_name,
+                }
+            },
+        )
+    finally:
+        server.stop()
+        _cleanup_org_rows(sink, org_id)
+        sink.close()
+
+    assert python_result.total_days == 0
+    assert python_result.signals == []
+    assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+
+    baseline = _cognitive_load_python_response_snapshot(python_result)
+    candidate = _cognitive_load_go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
+
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=document_digest,
+        terminal_state=comparison.terminal_state,
+        org_id=org_id,
+    )
+
+    assert comparison.is_match, (
+        f"cognitiveLoad team+repo combined (not-owned) dual-run MISMATCH: "
         f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
         f"python={baseline}\ngo={candidate}"
     )

@@ -167,41 +167,53 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		result.MembershipsWritten = len(keptMemberships)
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
-	if selections.Projects {
-		// CHAOS-4530 codex review round 2: CollectReferenceCatalog's own
-		// tombstone loop only retires a team-key-shaped pseudo-project for a
-		// team key present in THIS call's Linear response -- a team deleted
-		// or re-keyed since the last sync drops out of every future
-		// response and is never revisited. Reconcile against every
-		// still-active pseudo-project this collector previously wrote for
-		// the org and retire any whose team key this call did not observe,
-		// before preparing the Projects write.
-		currentTeamKeys := make([]string, 0, len(batch.Rows.Teams))
-		for _, team := range batch.Rows.Teams {
-			currentTeamKeys = append(currentTeamKeys, team.ID)
-		}
-		orphanedTombstones, err := RetireOrphanedLinearPseudoProjects(ctx, collector.Sink.Conn, ref.OrgID, currentTeamKeys, normalizedAt)
+	// CHAOS-4530 codex review round 3: retiring a legacy pseudo-project must
+	// NEVER depend on selections.Projects. Round 2's orphan reconciliation
+	// (and round 1's own per-response tombstone loop, CollectReferenceCatalog's
+	// unconditional block that already lands in batch.Rows.Projects/
+	// Effects.Projects regardless of selection) were previously gated behind
+	// `if selections.Projects`, right alongside the real-project/ownership
+	// write -- so an org that had Projects ON when the legacy row was first
+	// written, then turned it OFF, would never see that row retired: it
+	// stays is_active=1 in `projects` forever, and scope_catalog.py's active-
+	// project reads (Ask Dev search/portfolio) have no dependency on sync
+	// selections either. Reconciliation + writing whatever tombstones this
+	// call produced (per-response and/or orphaned) now run UNCONDITIONALLY;
+	// only fetching/writing REAL projects and their ownership rows stays
+	// selection-gated, exactly as before.
+	currentTeamKeys := make([]string, 0, len(batch.Rows.Teams))
+	for _, team := range batch.Rows.Teams {
+		currentTeamKeys = append(currentTeamKeys, team.ID)
+	}
+	orphanedTombstones, err := RetireOrphanedLinearPseudoProjects(ctx, collector.Sink.Conn, ref.OrgID, currentTeamKeys, normalizedAt)
+	if err != nil {
+		return result, err
+	}
+	// batch.Rows.Projects holds only this call's per-response tombstones when
+	// selections.Projects is off (CollectReferenceCatalog's real-project
+	// fetch block is itself selections.Projects-gated) -- never a real
+	// project row, so appending it here unconditionally is safe either way.
+	projectRows := append(append([]linearReferenceProjectRow(nil), batch.Rows.Projects...), orphanedTombstones...)
+	if len(projectRows) > 0 {
+		projectsEffect, err := effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, projectRows)
 		if err != nil {
 			return result, err
-		}
-		projectsEffect := batch.Effects.Projects
-		if len(orphanedTombstones) > 0 {
-			projectRows := append(append([]linearReferenceProjectRow(nil), batch.Rows.Projects...), orphanedTombstones...)
-			projectsEffect, err = effectBatchFromValues(linearReferenceCatalogProjectsDestination, EffectReadbackRequired, projectRows)
-			if err != nil {
-				return result, err
-			}
-			batch.Result.Projects += len(orphanedTombstones)
 		}
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, projectsEffect); err != nil {
 			return result, err
 		}
+		result.ProjectsWritten = len(projectRows)
+		for _, row := range projectRows {
+			if row.IsActive == 1 && row.ProjectKey == nil {
+				result.ProjectsWithoutKey++
+			}
+		}
+	}
+	if selections.Projects {
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Ownership); err != nil {
 			return result, err
 		}
-		result.ProjectsWritten = batch.Result.Projects
 		result.OwnershipWritten = batch.Result.Ownership
-		result.ProjectsWithoutKey = batch.Result.ProjectsWithoutKey
 	}
 	// Unconditional reference data -- see the function doc comment above.
 	if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Sprints); err != nil {

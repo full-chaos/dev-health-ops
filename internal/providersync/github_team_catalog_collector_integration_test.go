@@ -52,7 +52,10 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TeamsWritten != 1 || result.MembershipsWritten != 1 || result.MembersWritten != 1 ||
+	// MembersWritten stays 0: GitHub has no `members` table writer, only
+	// `team_memberships` (MembershipsWritten) -- see the comment at its
+	// only call site in github_team_catalog_collector.go.
+	if result.TeamsWritten != 1 || result.MembershipsWritten != 1 || result.MembersWritten != 0 ||
 		len(result.TeamKeys) != 1 || result.TeamKeys[0] != "platform" ||
 		result.ProjectsWritten != 0 || result.OwnershipWritten != 1 {
 		t.Fatalf("result=%+v", result)

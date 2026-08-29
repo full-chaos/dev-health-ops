@@ -178,11 +178,12 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			return result, err
 		}
 		result.MembershipsWritten = len(rows.Memberships)
-		distinctMembers := make(map[string]struct{}, len(rows.Memberships))
-		for _, membership := range rows.Memberships {
-			distinctMembers[membership.MemberID] = struct{}{}
-		}
-		result.MembersWritten = len(distinctMembers)
+		// MembersWritten stays 0 (codex round 2, P2): Linear's collector sets
+		// it to its own `members` table row count (linear_team_catalog_
+		// collector.go: batch.Result.Members == len(rows.Members)) -- GitHub
+		// has no `members` table writer at all, only `team_memberships`, so
+		// reporting a distinct-identity count under this field would claim
+		// rows were written to a table this producer never touches.
 	}
 	return result, nil
 }

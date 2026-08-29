@@ -385,6 +385,17 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	if err != nil {
 		return TeamCatalogResult{}, err
 	}
+	// codex review finding: a bounded GitLab listing hitting its page cap
+	// (evidence.Truncated / !batch.Result.Complete) must never be written as
+	// though it were a full, authoritative catalog -- TeamCatalogResult (the
+	// shared interface, lane-4431's file) carries no completeness field for
+	// the caller to inspect, so this fails closed here instead of writing a
+	// partial view and reporting success. A caller sees a pagination-cap
+	// error and can retry/investigate rather than silently losing teams,
+	// memberships, ownership, or native project subjects for a large group.
+	if !batch.Result.Complete {
+		return TeamCatalogResult{}, ErrPaginationCapExceeded
+	}
 	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	result := TeamCatalogResult{}
 	if selections.Teams && batch.Effects.Teams != nil {

@@ -443,3 +443,61 @@ func TestGitLabTeamCatalogRejectsInvalidInputs(t *testing.T) {
 		t.Fatal("expected error for invalid reference")
 	}
 }
+
+// TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation proves
+// GitLabTeamCatalogCollector -- the TeamCatalogCollector interface adapter
+// callers actually invoke -- never writes a partial catalog as if it were
+// complete (codex review finding). GitLabTeamCatalogRouteHandler.
+// CollectTeamCatalog reports Result.Complete=false whenever a bounded
+// listing exhausts its page budget; the collector must refuse to write in
+// that case rather than silently persist an incomplete view and report
+// success (TeamCatalogResult, the shared interface, carries no
+// completeness field for a caller to check on its own).
+func TestGitLabTeamCatalogRouteHandlerReportsIncompleteOnPaginationTruncation(t *testing.T) {
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	// gitlabTeamCatalogSubgroupsMaxPages=5, perPage=100: returning exactly
+	// 100 items with no X-Next-Page header on every page makes
+	// CollectGitLabPageParamPages keep re-requesting (len(items)==perPage
+	// authorizes continuing) until it exhausts the page budget.
+	fullSubgroupPage := make([]map[string]any, 100)
+	for i := range fullSubgroupPage {
+		fullSubgroupPage[i] = group(1000+i, "org/sub", "Sub")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			writeGitLabTeamCatalogJSON(t, w, group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			writeGitLabTeamCatalogJSON(t, w, fullSubgroupPage)
+		case "/api/v4/groups/org/projects", "/api/v4/groups/org%2Fsub/projects":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := gitlabTeamCatalogTestClient(t, server.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+
+	// The bare handler reports the truncation instead of hiding it. The
+	// collector-level "refuses to write it" behavior is proven against a
+	// real ClickHouse connection in
+	// TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation
+	// (integration test, gitlab_team_catalog_effects_integration_test.go)
+	// -- a nil driver.Conn here would make CollectTeamCatalog's OWN
+	// precondition check (Sink.Conn == nil) fire first, proving nothing
+	// about the truncation guard specifically.
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, time.Now())
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if batch.Result.Complete {
+		t.Fatal("expected Result.Complete=false on pagination-cap truncation")
+	}
+}

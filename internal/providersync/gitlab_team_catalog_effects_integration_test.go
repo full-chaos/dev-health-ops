@@ -5,6 +5,8 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -179,5 +181,70 @@ func TestGitLabTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	}
 	if len(members) != 1 || members[0] != "gitlab:root-owner" {
 		t.Fatalf("roster not preserved on members-off write: %v", members)
+	}
+}
+
+// TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation proves the
+// TeamCatalogCollector adapter (the interface production callers actually
+// invoke) refuses to write a truncated collection -- codex review finding:
+// TeamCatalogResult (the shared interface) carries no completeness field
+// for a caller to check, so this must fail closed inside the collector
+// itself rather than let a partial catalog look like a successful one.
+// Uses a REAL ClickHouse connection (not nil) so the failure proven here is
+// unambiguously the truncation guard, not the adapter's unrelated
+// Sink.Conn==nil precondition.
+func TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	fullSubgroupPage := make([]map[string]any, 100)
+	for i := range fullSubgroupPage {
+		fullSubgroupPage[i] = group(1000+i, "org/sub", "Sub")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			_ = json.NewEncoder(w).Encode(group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			_ = json.NewEncoder(w).Encode(fullSubgroupPage)
+		case "/api/v4/groups/org/projects", "/api/v4/groups/org%2Fsub/projects":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", server.URL, http.DefaultClient,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		lease,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orgID := "org-truncation-guard"
+	collector := GitLabTeamCatalogCollector{
+		Handler: GitLabTeamCatalogRouteHandler{},
+		Sink:    GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+	}
+	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	_, err = collector.CollectTeamCatalog(ctx, ref, credential, client, TeamCatalogSelections{Teams: true}, time.Now())
+	if err == nil {
+		t.Fatal("expected an error for a truncated collection, got nil")
+	}
+	var count uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM teams FINAL WHERE org_id = ? AND provider = 'gitlab'`, orgID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("truncated collection must write NOTHING, got %d teams rows", count)
 	}
 }

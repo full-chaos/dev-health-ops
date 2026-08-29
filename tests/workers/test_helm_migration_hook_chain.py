@@ -687,3 +687,70 @@ def test_cutover_authorisation_is_absent_by_default(tmp_path: Path) -> None:
         "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
         not in secrets[_MIGRATE_SECRETS]["stringData"]
     )
+
+
+# --- weight 10 must actually apply River, not silently no-op ----------------
+#
+# GW's condition on the weight-0 suppression: now that weight 0 deliberately
+# does nothing about River, the only thing left that applies the schema is this
+# Job. The assertion is wired end to end -- the environment comes from the very
+# Secret the rendered Job says it reads, not from values the test invents -- so
+# a break anywhere along Secret -> envFrom -> entrypoint -> binary shows up here.
+
+
+def _run_river_command(
+    job: dict, env: dict[str, str], tmp_path: Path
+) -> tuple[int, list[str], str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "river.log"
+    stub = bin_dir / "dev-health-worker-migrate"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "${MIGRATION_DATABASE_URI+x}" = x ]; then seen="$MIGRATION_DATABASE_URI";'
+        ' else seen="<unset>"; fi\n'
+        'printf "%s|%s\\n" "$*" "$seen" >> "$RIVER_LOG"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    command = job["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert command[:2] == ["/bin/sh", "-ec"], command
+    completed = subprocess.run(
+        ["/bin/sh", "-ec", command[2]],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "RIVER_LOG": str(log), **env},
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return completed.returncode, calls, completed.stderr
+
+
+def test_weight_10_job_applies_river_with_the_elevated_dsn(tmp_path: Path) -> None:
+    docs = _docs_from_values(_values(river_migrate=True), tmp_path)
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    (source,) = [
+        item["secretRef"]["name"]
+        for item in container["envFrom"]
+        if "secretRef" in item
+    ]
+    env = dict(secrets[source]["stringData"])
+
+    code, calls, stderr = _run_river_command(jobs[_RIVER], env, tmp_path)
+    assert code == 0, f"{stderr}\n{calls}"
+    assert len(calls) == 2, (
+        "the migrator must be applied and then re-checked; a single call means "
+        f"one of the two silently vanished: {calls}"
+    )
+    applied, checked = calls
+    assert applied.startswith("|"), f"the apply must take no arguments: {applied!r}"
+    assert checked.startswith("--check|"), f"the check must be second: {checked!r}"
+    for line in calls:
+        assert line.endswith(f"|{_MIGRATION_DSN}"), (
+            "the weight-10 Job did not see the elevated DSN, so River would "
+            f"either no-op or run against the wrong database: {line!r}"
+        )

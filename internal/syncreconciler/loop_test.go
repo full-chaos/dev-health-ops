@@ -406,22 +406,26 @@ func TestLoopPeriodicErrorClosesReadinessAndSurfacesError(t *testing.T) {
 func TestLoopDegradedStageOnInitialStepDoesNotFailStartAndSelfHeals(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)}
 	degraded := fmt.Errorf("observer stage: %w: %w", ErrDegradedStage, errors.New("boom"))
-	calls := make(chan struct{}, 2)
 	callIndex := 0
 	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
 		callIndex++
-		defer func() { calls <- struct{}{} }()
 		if callIndex == 1 {
 			return Observation{}, degraded
 		}
 		return testObservation(), nil
 	}), clock)
+	// stepObserved (CHAOS-4553) fires only once run has finished ALL
+	// bookkeeping for a tick, so waiting on it can never race that
+	// bookkeeping the way a signal sent from inside the stepper closure did.
+	observed := make(chan struct{}, 1)
+	loop.stepObserved = func() { observed <- struct{}{} }
 	openReadinessGate(t, registry)
 
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v, want nil: a degraded stage must not fail startup", err)
 	}
-	<-calls // the degraded initial step
+	// The initial step runs synchronously inside Start, which has already
+	// returned above -- no separate synchronization needed for it.
 	if readiness := registry.Readiness(context.Background()); readiness.Ready {
 		t.Fatalf("readiness after a degraded initial step = %#v, want closed until a tick succeeds", readiness)
 	}
@@ -436,7 +440,7 @@ func TestLoopDegradedStageOnInitialStepDoesNotFailStartAndSelfHeals(t *testing.T
 	ticker := clock.ticker
 	clock.mu.Unlock()
 	ticker.ticks <- clock.Now()
-	<-calls // the next, successful tick
+	<-observed // the next, successful tick
 	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
 		t.Fatalf("readiness after the next successful tick = %#v, want the loop to self-heal", readiness)
 	}
@@ -454,21 +458,25 @@ func TestLoopDegradedStageOnInitialStepDoesNotFailStartAndSelfHeals(t *testing.T
 func TestLoopDegradedStageDuringPollingKeepsTickingAndSelfHeals(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)}
 	degraded := fmt.Errorf("observer stage: %w: %w", ErrDegradedStage, errors.New("boom"))
-	calls := make(chan struct{}, 3)
 	callIndex := 0
 	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
 		callIndex++
-		defer func() { calls <- struct{}{} }()
 		if callIndex == 2 {
 			return Observation{}, degraded
 		}
 		return testObservation(), nil
 	}), clock)
+	// stepObserved (CHAOS-4553) fires only once run has finished ALL
+	// bookkeeping for a tick, so waiting on it can never race that
+	// bookkeeping the way a signal sent from inside the stepper closure did.
+	observed := make(chan struct{}, 1)
+	loop.stepObserved = func() { observed <- struct{}{} }
 	openReadinessGate(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	<-calls // initial, successful step
+	// The initial step runs synchronously inside Start, which has already
+	// returned above -- no separate synchronization needed for it.
 	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
 		t.Fatalf("readiness after the initial step = %#v, want open", readiness)
 	}
@@ -479,7 +487,7 @@ func TestLoopDegradedStageDuringPollingKeepsTickingAndSelfHeals(t *testing.T) {
 	clock.mu.Unlock()
 
 	ticker.ticks <- clock.Now()
-	<-calls // the degraded tick
+	<-observed // the degraded tick
 	if readiness := registry.Readiness(context.Background()); readiness.Ready {
 		t.Fatalf("readiness during a degraded tick = %#v, want closed", readiness)
 	}
@@ -490,7 +498,7 @@ func TestLoopDegradedStageDuringPollingKeepsTickingAndSelfHeals(t *testing.T) {
 	}
 
 	ticker.ticks <- clock.Now().Add(time.Second)
-	<-calls // the next, successful tick -- proves the loop kept ticking
+	<-observed // the next, successful tick -- proves the loop kept ticking
 	if readiness := registry.Readiness(context.Background()); !readiness.Ready {
 		t.Fatalf("readiness after the recovery tick = %#v, want the loop to self-heal", readiness)
 	}
@@ -567,6 +575,13 @@ func TestLoopPeriodicObservationDeadlineDegradesAndSelfHeals(t *testing.T) {
 			return testObservation(), nil
 		}
 	}), clock, minObservationTimeout)
+	// stepObserved (CHAOS-4553) fires only once run has finished ALL
+	// bookkeeping for a tick -- pollExited alone only proves the STEPPER
+	// goroutine saw ctx.Done and returned, not that run() has since finished
+	// processing that return (setFailed + logging). The fixed 50ms wait this
+	// replaced was a lucky-margin workaround, not a real synchronization.
+	observed := make(chan struct{}, 1)
+	loop.stepObserved = func() { observed <- struct{}{} }
 	openReadinessGate(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -580,10 +595,11 @@ func TestLoopPeriodicObservationDeadlineDegradesAndSelfHeals(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("periodic step goroutine did not exit after deadline")
 	}
+	<-observed
 	select {
 	case fatal := <-loop.Errors():
 		t.Fatalf("a degraded outer-envelope tick killed the loop -- Errors() = %v, want the process to survive it", fatal)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	if readiness := registry.Readiness(context.Background()); readiness.Ready {
 		t.Fatalf("deadline readiness = %#v, want closed", readiness)

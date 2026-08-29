@@ -693,6 +693,15 @@ func domainPosture() RolePosture {
 			{"billing_notifications", false, false, false},
 			{"daily_metrics_partitions", true, true, false},
 			{"daily_metrics_runs", true, true, false},
+			// CHAOS-4405: the finalize-redrive provenance ledger. INSERT
+			// (redriveOneFinalizeForRange's provenance row, redrive.go) and
+			// UPDATE (CompleteFinalize/ReleaseFinalize's own close-out, and
+			// ReconcileOrphanedFinalizeRedriveRuns's 'closed_orphaned'
+			// close-out, postgres.go/redrive.go) -- both only ever transition
+			// an existing row's status/closed_at from 'open'. No DELETE: the
+			// ledger is append-only by construction, matching every other
+			// audit-trail table in this manifest.
+			{"daily_metrics_finalize_redrive_events", true, true, false},
 			{"dev_conversations", false, true, true},
 			{"dev_conversation_tombstones", true, false, false},
 			{"external_ingest_batch_payloads", false, false, true},

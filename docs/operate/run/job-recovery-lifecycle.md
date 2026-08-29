@@ -309,6 +309,43 @@ row, not the Go-side run state, was the thing blocking them. See
 for the exact command shape, `--all-complete`'s cross-organization sweep,
 the ledger-repair ordering, and its telemetry counters.
 
+**Neither of the above covers re-running finalize for a day that already
+completed (CHAOS-4405).** `run_daily_metrics_finalize` now also writes
+`compounding_risk_daily`(scope='team') and `team_cognitive_load_daily`
+(CHAOS-4399, #1963) exactly once per org/day — a day finalized before that
+landed has zero rows in either table, even though its run is a perfectly
+healthy `status='succeeded'`. Neither `daily-redrive` (partitions only) nor
+`daily-finalize` (only ever touches a run still stuck non-terminal) can
+re-execute an already-completed day. `dev-health-workerctl metrics
+finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
+--review-evidence "<why>"` closes this: it transactionally resets an
+eligible `'succeeded'` run back to a claimable state (in the same
+transaction as the fresh publish) so it can reach `FinalizeHandler.Work`
+again at all — both Go's `ClaimFinalize` and the Python compat bridge's own
+claim-row query hard-require `status='running'`, so a bare republish against
+an already-terminal run is a guaranteed no-op — the reset ALSO assigns a
+fresh `generation`, or the redriven attempt would reuse the identical
+Python-side execution identity that already reached `'succeeded'` and get
+silently skipped instead of actually recomputing anything. Always start with
+`--dry-run` (lists days + current run state, zero writes) before authorizing
+the real pass. Every reset writes a provenance row to
+`daily_metrics_finalize_redrive_events` (prior state, actor, reason) in the
+same transaction as the reset and the publish, and steps `daily-finalize
+--all-complete`'s own sweep back from that run WHILE the redrive's own claim
+is plausibly still in flight — not permanently: the moment that specific
+claim resolves (success or failure), the same completion path that settles
+the run also closes this row, and a **failed** redriven finalize reappears
+in the sweep immediately, exactly like any other ordinary CHAOS-4389
+discard. A redriven job that never reaches a claim AT ALL — discarded/
+cancelled by River, or never delivered into River at all — has no
+completion path to close this row either, so `daily-finalize --all-complete`
+also runs `ReconcileOrphanedFinalizeRedriveRuns` right before its own sweep,
+closing any such row `'closed_orphaned'` once it confirms (via the
+queue-control pool) the job is really gone, not merely still in flight. See
+[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+for the full command shape, the `--include-succeeded` gate, and why
+re-running finalize twice for the same day is safe (argMax dedup).
+
 **Neither of the above covers a day that was never dispatched at all.**
 `jobs retry` and `metrics daily-redrive` both recover a run/partition that
 was dispatched and then stranded or discarded — they need a row to already
@@ -347,6 +384,9 @@ for the full command shape and coverage rule.
 - CHAOS-4409 — extends the CHAOS-4304 ledger-repair pattern to the finalize
   ledger row: a stuck `ambiguous`/`executing` finalize execution refuses a
   redriven finalize job forever, independent of the Go-side run state
+- CHAOS-4399 / CHAOS-4405 — team-scope aggregation moved into the finalize
+  step (fixing a multi-repo-team undercount), and the historical
+  finalize-redrive backfill that re-runs it for already-completed days
 - CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
   was never dispatched at all, and its use as the recovery path for a dora
   day frozen at 0 rows by the pre-fix same-day coverage bug

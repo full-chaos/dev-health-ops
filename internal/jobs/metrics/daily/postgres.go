@@ -79,13 +79,14 @@ const postSyncGenerationPrefix = "post-sync:"
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
 type PostgresStore struct {
-	pool                  *pgxpool.Pool
-	lease                 time.Duration
-	now                   func() time.Time
-	leaseObserver         jobruntime.DailyMetricsLeaseObserver
-	discoveryObserver     jobruntime.DailyMetricsDiscoveryObserver
-	redriveObserver       jobruntime.DailyMetricsRedriveObserver
-	finalizeSweepObserver jobruntime.DailyMetricsFinalizeSweepObserver
+	pool                    *pgxpool.Pool
+	lease                   time.Duration
+	now                     func() time.Time
+	leaseObserver           jobruntime.DailyMetricsLeaseObserver
+	discoveryObserver       jobruntime.DailyMetricsDiscoveryObserver
+	redriveObserver         jobruntime.DailyMetricsRedriveObserver
+	finalizeSweepObserver   jobruntime.DailyMetricsFinalizeSweepObserver
+	finalizeRedriveObserver jobruntime.DailyMetricsFinalizeRedriveObserver
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -119,6 +120,23 @@ func (store *PostgresStore) SetFinalizeSweepObserver(observer jobruntime.DailyMe
 func (store *PostgresStore) observeFinalizeSweep(outcome string, count int) {
 	if store.finalizeSweepObserver != nil && count > 0 {
 		_ = store.finalizeSweepObserver.ObserveDailyMetricsFinalizeSweep(outcome, count)
+	}
+}
+
+// SetFinalizeRedriveObserver wires the optional historical finalize-redrive
+// telemetry observer (CHAOS-4405). Telemetry must never gate durable state:
+// a nil or never-set observer makes observeFinalizeRedrive a silent no-op,
+// matching finalizeSweepObserver's discipline.
+func (store *PostgresStore) SetFinalizeRedriveObserver(observer jobruntime.DailyMetricsFinalizeRedriveObserver) {
+	if store == nil {
+		return
+	}
+	store.finalizeRedriveObserver = observer
+}
+
+func (store *PostgresStore) observeFinalizeRedrive(outcome string, count int) {
+	if store.finalizeRedriveObserver != nil && count > 0 {
+		_ = store.finalizeRedriveObserver.ObserveDailyMetricsFinalizeRedrive(outcome, count)
 	}
 }
 
@@ -1170,6 +1188,22 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// CHAOS-4405 (team-lead escalation on conditions (2)/(3)): close this
+	// run's own OPEN finalize-redrive event, if any -- 'closed_succeeded'
+	// is moot for FindStrandedFinalizeRuns's own exclusion (status='running'
+	// above already took this run out of that scan's WHERE clause the
+	// moment it committed), but keeps the audit trail accurate: an event
+	// left permanently 'open' after its run visibly succeeded would read as
+	// "still in flight" forever to anyone inspecting the table directly.
+	// Unconditional and cheap: the overwhelming majority of CompleteFinalize
+	// calls have no redrive event at all, and this UPDATE affects 0 rows
+	// for every one of them.
+	if _, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_finalize_redrive_events
+SET status = 'closed_succeeded', closed_at = $1
+WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID); err != nil {
+		return ErrUnavailable
+	}
 	if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
 		return ErrUnavailable
 	}
@@ -1194,7 +1228,17 @@ func (store *PostgresStore) transitionFinalize(ctx context.Context, claim Finali
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
 	}
-	command, err := store.pool.Exec(ctx, `
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	now := store.now().UTC()
+	command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET finalization_status = $1::varchar, finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL,
@@ -1203,13 +1247,49 @@ SET finalization_status = $1::varchar, finalization_claim_token = NULL,
     updated_at = $2
 WHERE id = $3::uuid AND finalization_status = 'running'
   AND finalization_claim_token = $4::uuid AND status = 'running'
-  AND finalization_lease_expires_at > $2`, status, store.now().UTC(), claim.Run.ID, claim.Token)
+  AND finalization_lease_expires_at > $2`, status, now, claim.Run.ID, claim.Token)
 	if err != nil {
 		return ErrUnavailable
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// CHAOS-4405 (team-lead escalation on conditions (2)/(3)): a redriven
+	// finalize that fails must not leave the run running-with-failed-
+	// finalize invisible to every recovery tool forever -- the original
+	// (pre-escalation) design permanently excluded any run finalize-redrive
+	// had ever touched from FindStrandedFinalizeRuns, which was exactly
+	// that silent-failure shape. Closing this run's OPEN event as
+	// 'closed_failed' the instant THIS SPECIFIC claim's failure commits
+	// (same transaction, so it can never land without the other) makes the
+	// run reappear in FindStrandedFinalizeRuns immediately -- an ordinary
+	// CHAOS-4389 sweep or `daily-finalize --run` can recover it exactly
+	// like any other stranded run. Never fires for status='succeeded' (this
+	// function's only other possible caller shape, though today only
+	// ReleaseFinalize calls it, always with "failed") -- a successful
+	// transition already goes through CompleteFinalize's own close-out
+	// above, never this one.
+	var redriveEventsClosed int64
+	if status != "succeeded" {
+		closedCommand, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_finalize_redrive_events
+SET status = 'closed_failed', closed_at = $1
+WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID)
+		if err != nil {
+			return ErrUnavailable
+		}
+		redriveEventsClosed = closedCommand.RowsAffected()
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	// Telemetry only after a successful commit: a redrive event actually
+	// closed as failed is real, durable state this run's operator-facing
+	// recovery story changed for -- see dailyMetricsFinalizeRedriveOutcomes'
+	// own doc comment for why "touched nothing" and "never wired" must
+	// still both read as a present, zero-valued series rather than being
+	// conflated with each other.
+	store.observeFinalizeRedrive("redriven_failed", int(redriveEventsClosed))
 	return nil
 }
 

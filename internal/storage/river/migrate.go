@@ -460,6 +460,14 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.billing_notifications') IS NOT NULL THEN GRANT SELECT ON TABLE public.billing_notifications TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_partitions TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.daily_metrics_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_runs TO " + domainRole + "; END IF; END $$",
+		// CHAOS-4405 (codex review finding on #1971): the finalize-redrive
+		// provenance ledger. Without this grant, CompleteFinalize/
+		// ReleaseFinalize's own close-out UPDATE and
+		// ReconcileOrphanedFinalizeRedriveRuns's read+close-out both fail
+		// 42501 in any real least-privilege deployment -- every ordinary
+		// finalize transition would roll back the instant this table has
+		// an 'open' row for its run. See domainPosture()'s matching entry.
+		"DO $$ BEGIN IF to_regclass('public.daily_metrics_finalize_redrive_events') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.daily_metrics_finalize_redrive_events TO " + domainRole + "; END IF; END $$",
 		// UPDATE is required by PostgreSQL for SELECT ... FOR UPDATE row
 		// locking; retention never updates conversation columns.
 		"DO $$ BEGIN IF to_regclass('public.dev_conversations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.dev_conversations TO " + domainRole + "; END IF; END $$",

@@ -236,7 +236,7 @@ func nodeTypeRank(nodeType string) int {
 // nil (unfiltered path never calls batchResolveMembership -- no, actually
 // Python always calls it; see edges.go's ResolveEdges, which always builds
 // this map, possibly empty).
-func rowToEdge(row edgeRow, resolved map[string]string, membership map[membershipKey]membershipEntry) model.WorkGraphEdgeResult {
+func rowToEdge(row edgeRow, resolved map[string]string, membership map[membershipKey]membershipEntry) (model.WorkGraphEdgeResult, error) {
 	sourceID := row.sourceID
 	targetID := row.targetID
 	sourceTypeRaw := row.sourceType
@@ -284,16 +284,33 @@ func rowToEdge(row edgeRow, resolved map[string]string, membership map[membershi
 		provenanceRaw = "heuristic"
 	}
 
+	sourceType, err := mapNodeType(sourceTypeRaw)
+	if err != nil {
+		return model.WorkGraphEdgeResult{}, fmt.Errorf("workgraph: row %q source_type: %w", row.edgeID, err)
+	}
+	targetType, err := mapNodeType(targetTypeRaw)
+	if err != nil {
+		return model.WorkGraphEdgeResult{}, fmt.Errorf("workgraph: row %q target_type: %w", row.edgeID, err)
+	}
+	edgeType, err := mapEdgeType(edgeTypeRaw)
+	if err != nil {
+		return model.WorkGraphEdgeResult{}, fmt.Errorf("workgraph: row %q edge_type: %w", row.edgeID, err)
+	}
+	provenance, err := mapProvenance(provenanceRaw)
+	if err != nil {
+		return model.WorkGraphEdgeResult{}, fmt.Errorf("workgraph: row %q provenance: %w", row.edgeID, err)
+	}
+
 	result := model.WorkGraphEdgeResult{
 		EdgeID:            row.edgeID,
-		SourceType:        mapNodeType(sourceTypeRaw),
+		SourceType:        sourceType,
 		SourceID:          sourceID,
 		SourceDisplayName: displayNameFor(sourceID, resolved),
-		TargetType:        mapNodeType(targetTypeRaw),
+		TargetType:        targetType,
 		TargetID:          targetID,
 		TargetDisplayName: displayNameFor(targetID, resolved),
-		EdgeType:          mapEdgeType(edgeTypeRaw),
-		Provenance:        mapProvenance(provenanceRaw),
+		EdgeType:          edgeType,
+		Provenance:        provenance,
 		Confidence:        row.confidence,
 		Evidence:          row.evidence,
 		Theme:             theme,
@@ -307,5 +324,5 @@ func rowToEdge(row edgeRow, resolved map[string]string, membership map[membershi
 		p := row.provider
 		result.Provider = &p
 	}
-	return result
+	return result, nil
 }

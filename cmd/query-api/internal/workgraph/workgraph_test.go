@@ -338,14 +338,33 @@ func TestIsMissingMembershipTableError(t *testing.T) {
 // --- mapNodeType / mapEdgeType / mapProvenance (pure case transform) -------
 
 func TestEnumMapping(t *testing.T) {
-	if got := mapNodeType("feature_flag"); got != model.WorkGraphNodeTypeFeatureFlag {
-		t.Fatalf("mapNodeType = %v, want %v", got, model.WorkGraphNodeTypeFeatureFlag)
+	if got, err := mapNodeType("feature_flag"); err != nil || got != model.WorkGraphNodeTypeFeatureFlag {
+		t.Fatalf("mapNodeType = (%v, %v), want (%v, nil)", got, err, model.WorkGraphNodeTypeFeatureFlag)
 	}
-	if got := mapEdgeType("is_blocked_by"); got != model.WorkGraphEdgeTypeIsBlockedBy {
-		t.Fatalf("mapEdgeType = %v, want %v", got, model.WorkGraphEdgeTypeIsBlockedBy)
+	if got, err := mapEdgeType("is_blocked_by"); err != nil || got != model.WorkGraphEdgeTypeIsBlockedBy {
+		t.Fatalf("mapEdgeType = (%v, %v), want (%v, nil)", got, err, model.WorkGraphEdgeTypeIsBlockedBy)
 	}
-	if got := mapProvenance("explicit_text"); got != model.WorkGraphProvenanceExplicitText {
-		t.Fatalf("mapProvenance = %v, want %v", got, model.WorkGraphProvenanceExplicitText)
+	if got, err := mapProvenance("explicit_text"); err != nil || got != model.WorkGraphProvenanceExplicitText {
+		t.Fatalf("mapProvenance = (%v, %v), want (%v, nil)", got, err, model.WorkGraphProvenanceExplicitText)
+	}
+}
+
+// TestEnumMapping_RejectsUnknownValue pins the codex-found (2026-08-29,
+// delta round) fix: an earlier version of these functions returned the
+// unchecked cast unconditionally, which gqlgen's generated MarshalGQL
+// would then serialize as a SCHEMA-INVALID GraphQL enum value (it only
+// quotes the string, never calls IsValid()) -- unlike Python's
+// WorkGraphNodeType(value.lower()), which raises on an unrecognized
+// value and surfaces as a resolver error instead.
+func TestEnumMapping_RejectsUnknownValue(t *testing.T) {
+	if _, err := mapNodeType("some_future_node_type"); err == nil {
+		t.Fatal("mapNodeType must reject an unrecognized value, got nil error")
+	}
+	if _, err := mapEdgeType("some_future_edge_type"); err == nil {
+		t.Fatal("mapEdgeType must reject an unrecognized value, got nil error")
+	}
+	if _, err := mapProvenance("some_future_provenance"); err == nil {
+		t.Fatal("mapProvenance must reject an unrecognized value, got nil error")
 	}
 }
 
@@ -414,12 +433,12 @@ func TestBuildWorkGraphWhere_IncludeEdgeFiltersGatesEdgeOnlyClauses(t *testing.T
 	filters := &model.WorkGraphEdgeFilterInput{SourceType: &sourceType, Limit: 1000}
 	scope := newFilterScope(filters, nil)
 
-	withEdgeFilters := buildWorkGraphWhere("org1", scope, true)
+	withEdgeFilters := buildWorkGraphWhere("org1", scope, true, true)
 	if !strings.Contains(withEdgeFilters.sql, "source_type = {source_type:String}") {
 		t.Fatalf("expected source_type clause when includeEdgeFilters=true: %s", withEdgeFilters.sql)
 	}
 
-	withoutEdgeFilters := buildWorkGraphWhere("org1", scope, false)
+	withoutEdgeFilters := buildWorkGraphWhere("org1", scope, false, true)
 	if strings.Contains(withoutEdgeFilters.sql, "source_type = {source_type:String}") {
 		t.Fatalf("source_type clause must NOT appear when includeEdgeFilters=false (aggregates apply graph-wide filters only): %s", withoutEdgeFilters.sql)
 	}
@@ -432,7 +451,7 @@ func TestBuildWorkGraphWhere_IncludeEdgeFiltersGatesEdgeOnlyClauses(t *testing.T
 func TestBuildWorkGraphWhere_ThemeFilterAddsExistsClause(t *testing.T) {
 	filters := &model.WorkGraphEdgeFilterInput{Theme: strPtr("delivery"), Limit: 1000}
 	scope := newFilterScope(filters, nil)
-	where := buildWorkGraphWhere("org1", scope, true)
+	where := buildWorkGraphWhere("org1", scope, true, true)
 	if !strings.Contains(where.sql, "EXISTS (") {
 		t.Fatalf("expected correlated EXISTS clause for active theme filter: %s", where.sql)
 	}
@@ -444,12 +463,38 @@ func TestBuildWorkGraphWhere_ThemeFilterAddsExistsClause(t *testing.T) {
 	}
 }
 
-func TestBuildWorkGraphWhere_RepoIDsClause(t *testing.T) {
+func TestBuildWorkGraphWhere_RepoIDsClause_IncludeRepoFilterTrue(t *testing.T) {
 	filters := &model.WorkGraphEdgeFilterInput{Limit: 1000}
 	scope := newFilterScope(filters, []string{"11111111-1111-1111-1111-111111111111"})
-	where := buildWorkGraphWhere("org1", scope, true)
+	where := buildWorkGraphWhere("org1", scope, true, true)
 	if !strings.Contains(where.sql, "repo_id IN {repo_ids:Array(String)}") {
-		t.Fatalf("expected repo_id IN clause: %s", where.sql)
+		t.Fatalf("expected repo_id IN clause folded into WHERE: %s", where.sql)
+	}
+	if where.repoHavingSQL != "" {
+		t.Fatalf("includeRepoFilter=true must not also populate repoHavingSQL, got %q", where.repoHavingSQL)
+	}
+}
+
+// TestBuildWorkGraphWhere_RepoIDsClause_IncludeRepoFilterFalse pins the
+// codex-found (2026-08-29, delta round) fix: fetchDedupedEdgeRows's
+// argMax(repo_id, ...) collapse means the repo filter must NOT be folded
+// into the pre-aggregation WHERE (it would filter on the raw, possibly
+// stale, pre-collapse repo_id) -- it must come back as a SEPARATE
+// repoHavingSQL clause the caller applies after GROUP BY instead.
+func TestBuildWorkGraphWhere_RepoIDsClause_IncludeRepoFilterFalse(t *testing.T) {
+	filters := &model.WorkGraphEdgeFilterInput{Limit: 1000}
+	scope := newFilterScope(filters, []string{"11111111-1111-1111-1111-111111111111"})
+	where := buildWorkGraphWhere("org1", scope, true, false)
+	if strings.Contains(where.sql, "repo_id IN") {
+		t.Fatalf("includeRepoFilter=false must NOT fold repo_id IN into WHERE (pre-aggregation): %s", where.sql)
+	}
+	if where.repoHavingSQL != "repo_id IN {repo_ids:Array(String)}" {
+		t.Fatalf("expected repoHavingSQL = %q, got %q", "repo_id IN {repo_ids:Array(String)}", where.repoHavingSQL)
+	}
+	if v, ok := bindingValue(where.repoBindings, "repo_ids"); !ok {
+		t.Fatal("expected repo_ids binding on repoBindings")
+	} else if ids := v.([]string); len(ids) != 1 || ids[0] != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("repoBindings repo_ids = %v", ids)
 	}
 }
 
@@ -472,8 +517,14 @@ func TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse(t *testing.T) {
 	}
 	sql := client.statements[0]
 	for _, want := range []string{
-		"argMax(repo_id, last_synced)",
-		"argMax(provider, last_synced)",
+		// argMax(tuple(...)).1, NOT bare argMax(repo_id, ...) -- the
+		// bare form silently skips rows whose repo_id/provider is NULL
+		// when picking the max, reviving a stale non-null value a newer
+		// version cleared (confirmed live against this ClickHouse
+		// version; codex 2026-08-29 delta round flagged the mechanism,
+		// the tuple-wrap fix was verified empirically before landing).
+		"(argMax(tuple(repo_id), last_synced)).1",
+		"(argMax(tuple(provider), last_synced)).1",
 		"argMax(provenance, last_synced)",
 		"toFloat64(argMax(confidence, last_synced))",
 		"argMax(evidence, last_synced)",
@@ -490,6 +541,38 @@ func TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse(t *testing.T) {
 	// would silently drop the CHAOS-4515 fix.
 	if !strings.Contains(sql, "GROUP BY") {
 		t.Fatal("dedup query must contain a GROUP BY -- the fix is a collapse, not a raw read")
+	}
+}
+
+// TestFetchDedupedEdgeRows_RepoFilterAppliesAsHavingNotWhere pins the
+// codex-found (2026-08-29, delta round) fix directly at the query-shape
+// level: a repo filter on this dedup query must render as HAVING
+// referencing the SELECT alias, never as a pre-aggregation WHERE clause
+// on the raw repo_id column.
+func TestFetchDedupedEdgeRows_RepoFilterAppliesAsHavingNotWhere(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: nil}}}
+	scope := newFilterScope(&model.WorkGraphEdgeFilterInput{Limit: 1000}, []string{"11111111-1111-1111-1111-111111111111"})
+	_, err := fetchDedupedEdgeRows(context.Background(), client, "org1", scope, 1000)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	sql := client.statements[0]
+	if strings.Contains(sql, "WHERE org_id = {org_id:String} AND repo_id IN") {
+		t.Fatalf("repo filter must not be folded into the pre-aggregation WHERE: %s", sql)
+	}
+	if !strings.Contains(sql, "HAVING repo_id IN {repo_ids:Array(String)}") {
+		t.Fatalf("expected repo filter as a HAVING clause referencing the SELECT alias: %s", sql)
+	}
+	// HAVING must appear AFTER GROUP BY in the rendered text.
+	groupByIdx := strings.Index(sql, "GROUP BY")
+	havingIdx := strings.Index(sql, "HAVING")
+	if groupByIdx < 0 || havingIdx < 0 || havingIdx < groupByIdx {
+		t.Fatalf("HAVING must be rendered after GROUP BY: %s", sql)
+	}
+	if v, ok := bindingValue(client.bindings[0], "repo_ids"); !ok {
+		t.Fatal("expected repo_ids binding")
+	} else if ids := v.([]string); len(ids) != 1 || ids[0] != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("repo_ids binding = %v", ids)
 	}
 }
 

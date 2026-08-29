@@ -285,10 +285,15 @@ func dependencyThemeMembershipExistsClause(scope *filterScope, tf themeFilter) s
 }
 
 // whereBuild is buildWorkGraphWhere's return value: the rendered WHERE
-// clause plus its bindings.
+// clause plus its bindings, and (only when the caller asked for
+// includeRepoFilter=false and a repo filter is actually active) a
+// SEPARATE repo HAVING clause/bindings the caller must apply itself,
+// post-aggregation -- see buildWorkGraphWhere's doc comment for why.
 type whereBuild struct {
-	sql      string
-	bindings []clickhouse.Binding
+	sql           string
+	bindings      []clickhouse.Binding
+	repoHavingSQL string
+	repoBindings  []clickhouse.Binding
 }
 
 // buildWorkGraphWhere mirrors work_graph.py:930-1009's
@@ -296,10 +301,31 @@ type whereBuild struct {
 // themeSubcategoryConflict and short-circuited to an empty result -- this
 // builder assumes a non-conflicting theme/subcategory, exactly as the
 // Python docstring states.
-func buildWorkGraphWhere(orgID string, scope *filterScope, includeEdgeFilters bool) whereBuild {
+//
+// includeRepoFilter controls WHERE the repo_id filter is applied.
+// flow.go/artifacts.go pass true: those queries never argMax-collapse
+// repo_id (they aggregate with uniqExact(edge_id) over raw rows), so
+// filtering the raw repo_id column pre-aggregation is both correct and
+// cheap. edges.go's fetchDedupedEdgeRows passes FALSE: found by codex
+// (2026-08-29, delta round, luna) -- that query DOES argMax-collapse
+// repo_id per identity (CHAOS-4515's dedup fix), so repo_id is a
+// disputed, version-dependent value until the collapse resolves it. If a
+// logical edge is re-emitted with its repo assignment changed (or an
+// argMax NULL-skipping edge case leaves a stale non-null value visible),
+// filtering the RAW pre-collapse repo_id in WHERE can silently exclude
+// the newest version (its repo_id no longer matches the filter) while a
+// stale duplicate row with the old repo_id survives filtering -- the scan
+// sees a row that should have been excluded/superseded. The caller must
+// instead apply repoHavingSQL AFTER the GROUP BY, referencing the
+// SELECT-level alias (not re-aggregating argMax(repo_id, ...) -- that
+// raises ClickHouse error 184 ILLEGAL_AGGREGATION, the same trap
+// work_graph/investment/queries.py's HAVING documents).
+func buildWorkGraphWhere(orgID string, scope *filterScope, includeEdgeFilters bool, includeRepoFilter bool) whereBuild {
 	clauses := []string{"org_id = {org_id:String}"}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
 	bindings = addMembershipScopeBindings(bindings, scope)
+	var repoHavingSQL string
+	var repoBindings []clickhouse.Binding
 
 	var theme, subcategory *string
 	if scope.filters != nil {
@@ -309,8 +335,13 @@ func buildWorkGraphWhere(orgID string, scope *filterScope, includeEdgeFilters bo
 
 	if scope.filters != nil {
 		if len(scope.repoIDs) > 0 {
-			clauses = append(clauses, "repo_id IN {repo_ids:Array(String)}")
-			bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: scope.repoIDs})
+			if includeRepoFilter {
+				clauses = append(clauses, "repo_id IN {repo_ids:Array(String)}")
+				bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: scope.repoIDs})
+			} else {
+				repoHavingSQL = "repo_id IN {repo_ids:Array(String)}"
+				repoBindings = []clickhouse.Binding{{Name: "repo_ids", Value: scope.repoIDs}}
+			}
 		}
 
 		if includeEdgeFilters {
@@ -348,7 +379,12 @@ func buildWorkGraphWhere(orgID string, scope *filterScope, includeEdgeFilters bo
 		bindings = append(bindings, clickhouse.Binding{Name: "wanted_count", Value: tf.wantedCount()})
 	}
 
-	return whereBuild{sql: "WHERE " + strings.Join(clauses, " AND "), bindings: bindings}
+	return whereBuild{
+		sql:           "WHERE " + strings.Join(clauses, " AND "),
+		bindings:      bindings,
+		repoHavingSQL: repoHavingSQL,
+		repoBindings:  repoBindings,
+	}
 }
 
 // dependencyEdgeFilterValues mirrors work_graph.py:213-228's

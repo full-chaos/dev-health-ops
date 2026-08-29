@@ -72,6 +72,7 @@ package workgraph
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -204,22 +205,48 @@ func looksLikeUUID(value string) bool {
 // not a lookup table -- confirmed by reading
 // api/graphql/models/outputs.py:471-492's WorkGraphNodeType enum, whose
 // every `.value` is the lowercase snake_case of its member name.
-func mapNodeType(raw string) model.WorkGraphNodeType {
-	return model.WorkGraphNodeType(strings.ToUpper(raw))
+//
+// Returns an error for an unrecognized raw value instead of returning the
+// invalid enum silently -- found by codex (2026-08-29, delta round, luna):
+// Python's `WorkGraphNodeType(value.lower())` RAISES on an unknown value
+// (a plain Enum constructor call), which Strawberry turns into a resolver
+// error; gqlgen's generated MarshalGQL for these enum types only quotes
+// whatever string it is given and does NOT call IsValid() itself, so an
+// earlier version of this port that skipped validation would have emitted
+// a SCHEMA-INVALID GraphQL response (an enum value not in the schema's
+// enum set) for a row with unexpected data -- a real state, reachable by
+// a newer edge_type added to the DB before this Go binary's enum set is
+// updated, or by data corruption, not merely a theoretical row.
+func mapNodeType(raw string) (model.WorkGraphNodeType, error) {
+	v := model.WorkGraphNodeType(strings.ToUpper(raw))
+	if !v.IsValid() {
+		return "", fmt.Errorf("workgraph: %q is not a valid WorkGraphNodeType", raw)
+	}
+	return v, nil
 }
 
 // mapEdgeType mirrors work_graph.py:162-163's _map_edge_type -- same pure
 // case-transform property as mapNodeType, confirmed against
-// outputs.py:496-543's WorkGraphEdgeType enum.
-func mapEdgeType(raw string) model.WorkGraphEdgeType {
-	return model.WorkGraphEdgeType(strings.ToUpper(raw))
+// outputs.py:496-543's WorkGraphEdgeType enum, same validate-before-return
+// contract (see mapNodeType's doc comment).
+func mapEdgeType(raw string) (model.WorkGraphEdgeType, error) {
+	v := model.WorkGraphEdgeType(strings.ToUpper(raw))
+	if !v.IsValid() {
+		return "", fmt.Errorf("workgraph: %q is not a valid WorkGraphEdgeType", raw)
+	}
+	return v, nil
 }
 
 // mapProvenance mirrors work_graph.py:166-167's _map_provenance -- same
 // pure case-transform property, confirmed against outputs.py:545-550's
-// WorkGraphProvenance enum.
-func mapProvenance(raw string) model.WorkGraphProvenance {
-	return model.WorkGraphProvenance(strings.ToUpper(raw))
+// WorkGraphProvenance enum, same validate-before-return contract (see
+// mapNodeType's doc comment).
+func mapProvenance(raw string) (model.WorkGraphProvenance, error) {
+	v := model.WorkGraphProvenance(strings.ToUpper(raw))
+	if !v.IsValid() {
+		return "", fmt.Errorf("workgraph: %q is not a valid WorkGraphProvenance", raw)
+	}
+	return v, nil
 }
 
 // lowerNodeTypeInput mirrors reading a WorkGraphNodeTypeInput's `.value` on

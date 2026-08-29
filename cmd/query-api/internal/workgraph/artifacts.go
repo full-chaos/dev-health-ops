@@ -85,7 +85,7 @@ func ResolveArtifacts(ctx context.Context, client QueryClient, orgID string, fil
 	// resolves each named placeholder from one shared parameter map, so
 	// re-using the same binding set for both occurrences is correct, not a
 	// duplicate-bind bug).
-	where := buildWorkGraphWhere(orgID, scope, false)
+	where := buildWorkGraphWhere(orgID, scope, false, true)
 	query := fmt.Sprintf(`
         SELECT node_type, node_id, uniqExact(edge_id) AS degree, any(evidence) AS evidence
         FROM (
@@ -138,8 +138,12 @@ func ResolveArtifacts(ctx context.Context, client QueryClient, orgID string, fil
 
 	artifactRows := make([]model.WorkGraphArtifactRow, len(rawRows))
 	for i, r := range rawRows {
+		nodeType, err := mapNodeType(r.nodeType)
+		if err != nil {
+			return nil, fmt.Errorf("workgraph: artifacts: %w", err)
+		}
 		row := model.WorkGraphArtifactRow{
-			NodeType:    mapNodeType(r.nodeType),
+			NodeType:    nodeType,
 			NodeID:      r.nodeID,
 			DisplayName: displayNameFor(r.nodeID, resolved),
 			Degree:      int(r.degree),

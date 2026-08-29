@@ -3,6 +3,7 @@ package workgraph
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -216,21 +217,38 @@ func resolveDeploymentDisplayNames(ctx context.Context, client QueryClient, orgI
 	_ = rows.Err()
 }
 
+// operationalOrderingContractEnv mirrors
+// operational_ordering_guard.py:15's OPERATIONAL_ORDERING_CONTRACT_ENV
+// verbatim -- the SAME env var name, read directly rather than through
+// any Python-side config object (this is a fresh Go process; nothing
+// Python parsed is inherited).
+const operationalOrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
+
+// operationalOrderingIsCurrent mirrors
+// operational_ordering_guard.py:62-69's
+// parse_operational_ordering_contract: the CURRENT contract only when
+// the env var is set to EXACTLY "2"; UNSET or "1" (or anything else --
+// Python raises on anything else, but this lookup is best-effort and
+// must never itself become a new failure mode) means LEGACY, matching
+// the documented default.
+func operationalOrderingIsCurrent() bool {
+	return os.Getenv(operationalOrderingContractEnv) == "2"
+}
+
 // resolveIncidentDisplayNames mirrors work_graph.py:388-414's incident
-// branch. It reads through current_operational_rows_sql
-// (storage/operational_current.py:25-64) with NO explicit
-// ordering_contract, which resolves to
-// configured_operational_ordering_contract() -- and
-// operational_ordering_guard.py:62-69's parse_operational_ordering_contract
-// returns OperationalOrderingContract.LEGACY when the env var
-// (DEV_HEALTH_OPERATIONAL_ORDERING_CONTRACT) is UNSET, which is the
-// contract's documented default. This port hard-codes that LEGACY branch
-// (operational_current.py:46-53: `FROM {table} FINAL WHERE {org_scope}`,
-// wrapped by the post-selection filter) rather than threading a
-// process-env toggle through a fresh Go binary that has never read that
-// env var -- if a target deployment has explicitly opted into the CURRENT
-// contract (env var = "2"), this diverges and needs the other branch; flag
-// this as a documented follow-up, not a silent gap.
+// branch, reading through current_operational_rows_sql's two ordering
+// contracts (storage/operational_current.py:25-64) -- found by codex
+// (2026-08-29, delta round, luna) as a real gap: an earlier version of
+// this port hard-coded the LEGACY branch only (documented as such, not
+// silently), on the reasoning that LEGACY is the contract's default
+// when the env var is unset. codex's point stands: a deployment that HAS
+// migrated to the CURRENT contract (env var = "2") needs the OTHER
+// branch, or FINAL on a contract-2 table can retain multiple revisions
+// for the same (org_id, id) (its sort key includes revision fields) and
+// silently pick a stale one instead of Python's `ORDER BY ... LIMIT 1 BY`
+// current-row selection. Both branches are now implemented, selected by
+// reading the SAME env var Python reads, exactly as
+// configured_operational_ordering_contract() does.
 func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID string, incidentIDs map[string]struct{}, resolved map[string]string) {
 	ids := make([]string, 0, len(incidentIDs))
 	for id := range incidentIDs {
@@ -238,15 +256,39 @@ func resolveIncidentDisplayNames(ctx context.Context, client QueryClient, orgID 
 	}
 	sort.Strings(ids)
 
-	query := `
-        SELECT id AS incident_id, normalized_status AS status, title
-        FROM (
+	var currentRowsSQL string
+	if operationalOrderingIsCurrent() {
+		// operational_current.py:54-63's CURRENT branch: the table's own
+		// sort key does not guarantee one row per (org_id, id) under
+		// contract 2 (revision columns are part of it), so the current
+		// row is selected explicitly by revision ordering, LIMIT 1 BY
+		// the entity key.
+		currentRowsSQL = `
+            SELECT *
+            FROM operational_incidents
+            WHERE org_id = {org_id:String}
+            ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC
+            LIMIT 1 BY org_id, id
+        `
+	} else {
+		// operational_current.py:46-53's LEGACY branch (the documented
+		// default when the env var is unset): FINAL alone gives one row
+		// per (org_id, id) because the pre-contract-2 sort key does not
+		// include revision columns.
+		currentRowsSQL = `
             SELECT *
             FROM operational_incidents FINAL
             WHERE org_id = {org_id:String}
+        `
+	}
+
+	query := fmt.Sprintf(`
+        SELECT id AS incident_id, normalized_status AS status, title
+        FROM (
+            %s
         )
         WHERE is_deleted = 0 AND id IN {inc_ids:Array(String)}
-    `
+    `, currentRowsSQL)
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "inc_ids", Value: ids},

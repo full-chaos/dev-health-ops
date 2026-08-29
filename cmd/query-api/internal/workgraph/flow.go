@@ -67,7 +67,7 @@ func ResolveFlow(ctx context.Context, client QueryClient, orgID string, filters 
 		return emptyFlowResult(nil, scope), nil
 	}
 
-	where := buildWorkGraphWhere(orgID, scope, false)
+	where := buildWorkGraphWhere(orgID, scope, false, true)
 	query := fmt.Sprintf(`
         SELECT source_type, target_type, uniqExact(edge_id) AS cnt
         FROM work_graph_edges
@@ -93,8 +93,14 @@ func ResolveFlow(ctx context.Context, client QueryClient, orgID string, filters 
 		if scanErr := rows.Scan(&sourceType, &targetType, &cnt); scanErr != nil {
 			return nil, fmt.Errorf("workgraph: flow scan: %w", scanErr)
 		}
-		st := mapNodeType(sourceType)
-		tt := mapNodeType(targetType)
+		st, err := mapNodeType(sourceType)
+		if err != nil {
+			return nil, fmt.Errorf("workgraph: flow: %w", err)
+		}
+		tt, err := mapNodeType(targetType)
+		if err != nil {
+			return nil, fmt.Errorf("workgraph: flow: %w", err)
+		}
 		outflow[st] += int(cnt)
 		inflow[tt] += int(cnt)
 	}

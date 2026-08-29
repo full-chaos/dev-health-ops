@@ -82,6 +82,22 @@ func (r edgeRow) identity() identityKey {
 // are identity columns, stable across duplicate versions of one edge, so
 // filtering on them before the GROUP BY is exact (a duplicate version can
 // never change which identity group a row belongs to).
+// (argMax(tuple(repo_id), last_synced)).1 / (argMax(tuple(provider), ...)).1
+// -- NOT the more obvious argMax(repo_id, last_synced): repo_id and
+// provider are Nullable columns, and ClickHouse's argMax SKIPS rows
+// whose value argument is NULL when selecting the max -- confirmed
+// empirically against this exact ClickHouse version (seeded an older
+// row with a real repo_id and a NEWER row with repo_id=NULL for the
+// same identity: plain argMax(repo_id, last_synced) returned the OLDER
+// non-null UUID, not NULL, silently reviving a stale repo assignment a
+// newer version had cleared). Wrapping the argument in a single-element
+// tuple makes the ARGUMENT itself never null (only its element can be),
+// so argMax stops skipping -- confirmed against the same seed: the
+// tuple form correctly returns NULL for the newer row. Found by codex
+// (2026-08-29, delta round, luna); the specific mechanism (skip-on-null,
+// not merely "the newest wins") was verified live, not assumed, before
+// choosing this fix over some other argMax variant.
+//
 // toFloat64(argMax(confidence, ...)): work_graph_edges.confidence is
 // Float32 (migration 014_work_graph.sql), and argMax() preserves its
 // input's ClickHouse type -- the native Go driver refuses to scan a
@@ -97,7 +113,23 @@ func (r edgeRow) identity() identityKey {
 // cognitiveload, complexitytimeseries) already standardizes on float64
 // for score-shaped fields.
 func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
-	where := buildWorkGraphWhere(orgID, scope, true)
+	// includeRepoFilter=false: this query argMax-collapses repo_id, so
+	// the repo filter is applied AFTER the GROUP BY (HAVING, below) --
+	// see buildWorkGraphWhere's doc comment for why filtering the raw
+	// pre-collapse repo_id column here would be wrong (codex, 2026-08-29
+	// delta round).
+	where := buildWorkGraphWhere(orgID, scope, true, false)
+
+	havingSQL := ""
+	if where.repoHavingSQL != "" {
+		// References the SELECT-level `repo_id` alias below, NOT
+		// argMax(repo_id, ...) again -- re-aggregating a raw column in
+		// HAVING raises ClickHouse error 184 ILLEGAL_AGGREGATION (the
+		// same trap work_graph/investment/queries.py's own HAVING
+		// documents).
+		havingSQL = "HAVING " + where.repoHavingSQL
+	}
+
 	query := fmt.Sprintf(`
         SELECT
             any(edge_id) AS edge_id,
@@ -106,19 +138,21 @@ func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string,
             target_type,
             target_id,
             edge_type,
-            ifNull(toString(argMax(repo_id, last_synced)), '') AS repo_id,
-            ifNull(argMax(provider, last_synced), '') AS provider,
+            ifNull(toString((argMax(tuple(repo_id), last_synced)).1), '') AS repo_id,
+            ifNull((argMax(tuple(provider), last_synced)).1, '') AS provider,
             argMax(provenance, last_synced) AS provenance,
             toFloat64(argMax(confidence, last_synced)) AS confidence,
             argMax(evidence, last_synced) AS evidence
         FROM work_graph_edges
         %s
         GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+        %s
         ORDER BY confidence DESC, edge_id ASC
         LIMIT {limit:UInt64}
-    `, where.sql)
+    `, where.sql, havingSQL)
 
-	bindings := append(where.bindings, clickhouse.Binding{Name: "limit", Value: limit})
+	bindings := append(where.bindings, where.repoBindings...)
+	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -399,7 +433,11 @@ func ResolveEdges(ctx context.Context, client QueryClient, orgID string, filters
 
 	edges := make([]model.WorkGraphEdgeResult, len(rows))
 	for i, r := range rows {
-		edges[i] = rowToEdge(r, resolved, membership)
+		edge, err := rowToEdge(r, resolved, membership)
+		if err != nil {
+			return nil, fmt.Errorf("workgraph: %w", err)
+		}
+		edges[i] = edge
 	}
 
 	pageInfo := &model.PageInfo{

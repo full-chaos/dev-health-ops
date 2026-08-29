@@ -96,6 +96,15 @@ func TestValidateSubRequestCount_OverLimit(t *testing.T) {
 	}
 }
 
+// TestResolve_RejectsInvestmentTrue: the FIRST version of this test only
+// checked `err != nil` against an EMPTY routingFakeClient (no rules
+// registered) -- removal-checked (as instructed) by deleting
+// CompileTimeseries's own useInvestment guard, and the test STAYED
+// GREEN, because with no compile-time rejection the query proceeds to
+// Execute, which then fails anyway with "no rule matches statement" from
+// the empty fake -- a genuine error, just the WRONG one, proving nothing
+// about the guard this test claims to cover. Fixed by asserting the
+// SPECIFIC guard message, which a routing-fake miss can never produce.
 func TestResolve_RejectsInvestmentTrue(t *testing.T) {
 	client := &routingFakeClient{}
 	batch := model.AnalyticsRequestInput{
@@ -105,6 +114,46 @@ func TestResolve_RejectsInvestmentTrue(t *testing.T) {
 	_, err := Resolve(context.Background(), client, "org-1", batch)
 	if err == nil {
 		t.Fatal("expected rejection when batch.useInvestment=true")
+	}
+	if !strings.Contains(err.Error(), "investment path not yet ported") {
+		t.Fatalf("expected the investment-path-not-yet-ported guard to fire, got a DIFFERENT error (possibly a fake-routing miss, not the guard): %v", err)
+	}
+}
+
+// TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject
+// mirrors web/src/lib/graphql/hooks/useChordFlow.ts's ACTUAL call shape
+// verbatim, not an assumption -- confirmed by reading the live caller:
+// EVERY useChordFlow request sets BOTH `flowMatrix.useInvestment: true`
+// AND the batch-level `useInvestment: true`, for TEAM/REPO/WORK_TYPE
+// alike (GROUPING_TO_DIMENSION maps chord groupings 1:1 onto exactly
+// those three). compile_flow_matrix's TEAM/REPO/WORK_TYPE branch never
+// reads use_investment at all (compiler.py:495-518), so this is not an
+// edge case Python happens to handle -- it is the ONLY shape real
+// FLOW_MATRIX_QUERY traffic sends. This test proves Resolve's top-level
+// `useInvestment` (used only by timeseries/breakdown/sankey) does NOT
+// leak into flowMatrix handling and wrongly reject it.
+func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("work_item_cycle_times AS wct FINAL", &fakeRowScanner{})
+
+	fmUseInvestment := true
+	batch := model.AnalyticsRequestInput{
+		UseInvestment: boolPtr(true),
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension:     model.DimensionInputTeam,
+			Measure:       model.MeasureInputCount,
+			DateRange:     &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:      50,
+			MaxEdges:      200,
+			UseInvestment: &fmUseInvestment,
+		},
+	}
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve error = %v -- the real useChordFlow.ts call shape (batch.useInvestment=true, flowMatrix-only) must NOT be rejected", err)
+	}
+	if result.FlowMatrix == nil {
+		t.Fatal("expected a non-nil FlowMatrixResult")
 	}
 }
 

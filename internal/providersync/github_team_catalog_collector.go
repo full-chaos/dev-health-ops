@@ -18,15 +18,11 @@ import (
 // False in Python): selections.Projects is read but never produces a
 // ProjectsWritten row.
 //
-// TeamCatalogResult.OwnershipWritten is REUSED here for team_repo_ownership
-// rows (Linear uses the same field for team_project_ownership -- a
-// different table entirely). This is the best fit the current shared result
-// shape offers; TeamCatalogDiscoveryExecutor's rows-written telemetry loop
-// hardcodes the label "team_project_ownership" for this field, so until
-// 4431 adds a provider-aware label (or a separate RepoOwnershipWritten
-// field), GitHub's team_repo_ownership row count is correctly WRITTEN but
-// exported under the wrong table name in Prometheus -- flagged, not silently
-// left broken.
+// team_repo_ownership rows are reported under TeamCatalogResult.
+// RepoOwnershipWritten (CHAOS-4431 added this dedicated field, team-lead
+// ruling 2026-08-28) -- a distinct destination table from Linear/GitLab's
+// team_project_ownership (OwnershipWritten), so the two never share a
+// telemetry label.
 //
 // Telemetry is generic, not per-provider: the caller (syncdispatchruntime.
 // TeamCatalogDiscoveryExecutor / teamCatalogAutoimportBridge) observes
@@ -135,6 +131,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// github.py's roster-preservation only ever engages when want_members
 	// is globally False) -- team-lead ruling 2026-08-28: fix in Go only,
 	// tracked as a Python-side gap in CHAOS-4461 (dies with CHAOS-4435).
+	rosterPreservationFailed := false
 	if selections.Members && len(rows.FailedMemberFetchTeamIDs) > 0 {
 		preserved, ok := adapter.Sink.ExistingTeamMembers(ctx, ref.OrgID, rows.FailedMemberFetchTeamIDs)
 		failed := make(map[string]struct{}, len(rows.FailedMemberFetchTeamIDs))
@@ -145,6 +142,11 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			// Cannot confirm these teams' current rosters -- skip writing
 			// THEIR rows entirely this cycle rather than risk clobbering an
 			// unconfirmed roster. Every other team still writes normally.
+			// This is the same shape as TeamCatalogResult.RosterPreservation
+			// Failed's documented case (a preservation pre-read failed and the
+			// collector chose to continue the write rather than hard-fail it)
+			// -- report it under the same shared telemetry outcome.
+			rosterPreservationFailed = true
 			filtered := rows.Teams[:0]
 			for _, team := range rows.Teams {
 				if _, isFailed := failed[team.ID]; !isFailed {
@@ -198,7 +200,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		}
 	}
 
-	result := TeamCatalogResult{}
+	result := TeamCatalogResult{RosterPreservationFailed: rosterPreservationFailed}
 	if selections.Teams && rosterWriteSafe && len(rows.Teams) > 0 {
 		if err := adapter.Sink.WriteTeams(ctx, ref.OrgID, rows.Teams); err != nil {
 			return result, err
@@ -219,7 +221,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		if err := adapter.Sink.WriteTeamRepoOwnership(ctx, ref.OrgID, rows.RepoOwnership); err != nil {
 			return result, err
 		}
-		result.OwnershipWritten = len(rows.RepoOwnership)
+		result.RepoOwnershipWritten = len(rows.RepoOwnership)
 	}
 	if selections.Members && len(rows.Memberships) > 0 {
 		if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, rows.Memberships); err != nil {

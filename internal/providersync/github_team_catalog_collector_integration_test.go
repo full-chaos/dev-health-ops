@@ -57,7 +57,7 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 	// only call site in github_team_catalog_collector.go.
 	if result.TeamsWritten != 1 || result.MembershipsWritten != 1 || result.MembersWritten != 0 ||
 		len(result.TeamKeys) != 1 || result.TeamKeys[0] != "platform" ||
-		result.ProjectsWritten != 0 || result.OwnershipWritten != 1 {
+		result.ProjectsWritten != 0 || result.RepoOwnershipWritten != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}

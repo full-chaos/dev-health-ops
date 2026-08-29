@@ -154,24 +154,39 @@ spec:
             - /bin/sh
             - -ec
             - |
-              # The migration Secret carries exactly ONE Postgres DSN: setting
-              # MIGRATION_DATABASE_URI makes migrationSecretData omit
-              # POSTGRES_URI, so reading POSTGRES_URI alone hands psql an empty
-              # argument and it silently attempts a local socket connection.
-              # Select the migration DSN the same way the migrate Job does.
-              PROVISION_DSN="${MIGRATION_DATABASE_URI:-${POSTGRES_URI:-${DATABASE_URI:-}}}"
-              if [ -z "$PROVISION_DSN" ]; then
-                echo "provision-roles: the migration Secret carries no MIGRATION_DATABASE_URI, POSTGRES_URI or DATABASE_URI; this Job needs a DSN pointed DIRECTLY at PostgreSQL (5432), never at a transaction pooler" >&2
-                exit 1
+              # Connect by PARTS when the Secret supplies them, exactly as
+              # Compose's go-river-provision does (compose.go-workers.yml:
+              # --host/--username/--dbname with PGPASSWORD out of band). Parts
+              # sidestep the question of which URL dialect the value is written
+              # in, so where they exist they win.
+              if [ -n "${POSTGRES_HOST:-}" ]; then
+                set -- --host="$POSTGRES_HOST" \
+                  --username="${POSTGRES_USER:-postgres}" \
+                  --dbname="${POSTGRES_DB:-$APP_DATABASE}"
+                if [ -n "${POSTGRES_PORT:-}" ]; then
+                  set -- "$@" --port="$POSTGRES_PORT"
+                fi
+              else
+                # No parts, so a DSN it is. The migration Secret carries exactly
+                # ONE: setting MIGRATION_DATABASE_URI makes migrationSecretData
+                # omit POSTGRES_URI, so reading POSTGRES_URI alone hands psql an
+                # empty argument and it silently attempts a LOCAL socket
+                # connection as the container user.
+                PROVISION_DSN="${MIGRATION_DATABASE_URI:-${POSTGRES_URI:-${DATABASE_URI:-}}}"
+                if [ -z "$PROVISION_DSN" ]; then
+                  echo "provision-roles: the migration Secret carries no POSTGRES_HOST parts and no MIGRATION_DATABASE_URI, POSTGRES_URI or DATABASE_URI; this Job needs PostgreSQL reachable DIRECTLY (5432), never through a transaction pooler" >&2
+                  exit 1
+                fi
+                # libpq does not speak SQLAlchemy's driver-qualified schemes,
+                # and the chart's own bundled DSN is postgresql+asyncpg://.
+                case "$PROVISION_DSN" in
+                  postgresql+*://*|postgres+*://*)
+                    PROVISION_DSN="postgresql://${PROVISION_DSN#*://}"
+                    ;;
+                esac
+                set -- "$PROVISION_DSN"
               fi
-              # libpq does not speak SQLAlchemy's driver-qualified schemes, and
-              # the chart's own bundled DSN is postgresql+asyncpg://.
-              case "$PROVISION_DSN" in
-                postgresql+*://*|postgres+*://*)
-                  PROVISION_DSN="postgresql://${PROVISION_DSN#*://}"
-                  ;;
-              esac
-              exec psql "$PROVISION_DSN" \
+              exec psql "$@" \
                 --set=ON_ERROR_STOP=1 \
                 --set=app_database="$APP_DATABASE" \
                 --set=domain_role="$RIVER_DOMAIN_DATABASE_ROLE" \

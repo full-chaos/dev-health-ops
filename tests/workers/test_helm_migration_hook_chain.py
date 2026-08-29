@@ -475,14 +475,15 @@ def test_migrate_job_still_runs_river_when_the_hook_is_off(tmp_path: Path) -> No
 
 def _run_provision_command(
     job: dict, tmp_path: Path, **env: str
-) -> tuple[int, str, str]:
+) -> tuple[int, list[str], str]:
     """Execute the provisioning Job's shell with a recording `psql` stub."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "psql.log"
     stub = bin_dir / "psql"
     stub.write_text(
-        '#!/bin/sh\nprintf "%s\\n" "$1" > "$PSQL_LOG"\nexit 0\n', encoding="utf-8"
+        '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$PSQL_LOG"\nexit 0\n',
+        encoding="utf-8",
     )
     stub.chmod(0o755)
 
@@ -506,8 +507,8 @@ def _run_provision_command(
             **env,
         },
     )
-    dsn = log.read_text(encoding="utf-8").strip() if log.exists() else ""
-    return completed.returncode, dsn, completed.stderr
+    argv = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return completed.returncode, argv, completed.stderr
 
 
 def _provision_job(tmp_path: Path) -> dict:
@@ -515,15 +516,15 @@ def _provision_job(tmp_path: Path) -> dict:
 
 
 def test_provisioning_uses_the_dedicated_migration_dsn(tmp_path: Path) -> None:
-    code, dsn, stderr = _run_provision_command(
+    code, argv, stderr = _run_provision_command(
         _provision_job(tmp_path),
         tmp_path,
         MIGRATION_DATABASE_URI=_MIGRATION_DSN,
     )
     assert code == 0, stderr
-    assert dsn == _MIGRATION_DSN, (
+    assert argv[0] == _MIGRATION_DSN, (
         "with only the preferred MIGRATION_DATABASE_URI configured, psql got "
-        f"{dsn!r} -- an empty argument makes it attempt a local connection"
+        f"{argv!r} -- an empty argument makes it attempt a local connection"
     )
 
 
@@ -531,21 +532,21 @@ def test_provisioning_normalises_the_bundled_sqlalchemy_scheme(
     tmp_path: Path,
 ) -> None:
     """`dev-health.postgresURI` is a SQLAlchemy URL; libpq rejects it."""
-    code, dsn, stderr = _run_provision_command(
+    code, argv, stderr = _run_provision_command(
         _provision_job(tmp_path),
         tmp_path,
         POSTGRES_URI="postgresql+asyncpg://postgres:postgres@db-postgresql:5432/devhealth",
     )
     assert code == 0, stderr
-    assert dsn == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
-        f"psql cannot consume a driver-qualified scheme: {dsn!r}"
+    assert argv[0] == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
+        f"psql cannot consume a driver-qualified scheme: {argv!r}"
     )
 
 
 def test_provisioning_without_any_dsn_fails_loudly(tmp_path: Path) -> None:
     """An empty DSN must stop the hook, not become a local-socket attempt."""
-    code, dsn, stderr = _run_provision_command(_provision_job(tmp_path), tmp_path)
-    assert code != 0, f"the Job connected to something with {dsn!r}"
+    code, argv, stderr = _run_provision_command(_provision_job(tmp_path), tmp_path)
+    assert code != 0, f"the Job connected to something with {argv!r}"
     assert "MIGRATION_DATABASE_URI" in stderr, (
         f"the error must name the value the operator has to supply: {stderr!r}"
     )
@@ -823,3 +824,56 @@ def test_hook_off_with_a_dsn_keeps_the_secret_key_that_activates_river(
         secrets[_MIGRATE_SECRETS]["stringData"]["MIGRATION_DATABASE_URI"]
         == _MIGRATION_DSN
     )
+
+
+# --- connect by PARTS when the Secret carries them ---------------------------
+#
+# GW's condition (d). Compose's go-river-provision does not build a DSN at all:
+# it passes --host/--username/--dbname and lets PGPASSWORD travel out of band
+# (deploy/docker-compose/compose.go-workers.yml:110-125). Parts avoid the whole
+# question of which URL dialect the value is written in, so where the Secret
+# supplies them they win; the DSN path -- and its scheme normalisation -- is for
+# when a DSN is all there is.
+
+
+def test_provisioning_prefers_the_postgres_parts_when_the_secret_has_them(
+    tmp_path: Path,
+) -> None:
+    code, argv, stderr = _run_provision_command(
+        _provision_job(tmp_path),
+        tmp_path,
+        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
+        POSTGRES_HOST="postgres.internal",
+        POSTGRES_PORT="5432",
+        POSTGRES_USER="devhealth",
+        POSTGRES_DB="devhealth",
+        PGPASSWORD="s3cret",
+    )
+    assert code == 0, stderr
+    assert "--host=postgres.internal" in argv, f"parts were not used: {argv}"
+    assert "--username=devhealth" in argv, argv
+    assert "--dbname=devhealth" in argv, argv
+    assert "--port=5432" in argv, argv
+    assert _MIGRATION_DSN not in argv, (
+        "a DSN positional alongside the parts makes the connection target "
+        f"ambiguous: {argv}"
+    )
+
+
+def test_provisioning_falls_back_to_the_dsn_without_parts(tmp_path: Path) -> None:
+    """Without a host there are no parts to build from, so the DSN it is.
+
+    Without this, preferring parts unconditionally would pass the test above
+    while breaking every install that configures only a DSN -- which is the
+    chart's own default shape.
+    """
+    code, argv, stderr = _run_provision_command(
+        _provision_job(tmp_path),
+        tmp_path,
+        POSTGRES_URI="postgresql+asyncpg://postgres:postgres@db-postgresql:5432/devhealth",
+    )
+    assert code == 0, stderr
+    assert argv[0] == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
+        f"the DSN path must survive: {argv}"
+    )
+    assert not [a for a in argv if a.startswith("--host=")], argv

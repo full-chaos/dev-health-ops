@@ -4,8 +4,8 @@ Go, read-only GraphQL analytics service. Part of the Go API epic
 (CHAOS-4352). Wave 0 (CHAOS-4366) built the proof infrastructure below;
 Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`;
 Wave 2 (CHAOS-4368) ported the second, `reviewEdges`; Wave 3 (CHAOS-4369)
-ports `cognitiveLoad` (a sibling lane) alongside `complexityTimeseries` and
-`hotspots` (this lane, same wave) — see
+ports `cognitiveLoad` alongside `complexityTimeseries` and `hotspots`
+(this lane, same wave) — see
 [`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
 [`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
@@ -42,15 +42,15 @@ port reproduces that "authorized org always wins" behavior exactly (see
 `/healthz`/`/readyz`). `/query` requests are gated by `routeswitch.Mux` +
 `PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
 `canary`/`primary` for the SPECIFIC operation being dispatched —
-featureFlags, reviewEdges, cognitiveLoad, and complexityTimeseries each
-have their own row and are gated fully independently) and authenticated
-by `principal.Verifier`
+featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, and
+hotspots each have their own row and are gated fully independently) and
+authenticated by `principal.Verifier`
 (effective-principal envelope, Bearer token). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
 `registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument` /
-`registeredCognitiveLoadDocument` / `registeredComplexityTimeseriesDocument`,
-indexed by operation name via `newQueryHandler`'s `digestByOperation`
-map) — see those constants' doc
+`registeredCognitiveLoadDocument` / `registeredComplexityTimeseriesDocument` /
+`registeredHotspotsDocument`, indexed by operation name via
+`newQueryHandler`'s `digestByOperation` map) — see those constants' doc
 comments for the known gap (hand-registered single documents, not yet
 sourced from Wave 0's real web-operations inventory) and for the Wave-1
 codex-round-3 lesson every document is sourced from the real web client
@@ -169,6 +169,34 @@ remain the same KNOWN INCORRECT Wave-0 placeholders described below;
 `reviewEdges` uses neither, so fixing them is left to whichever later wave
 ports a resolver that does.
 
+## Wave 3: hotspots is live behind the switch
+
+`internal/hotspots` ports
+`dev_health_ops.api.graphql.resolvers.complexity.resolve_hotspots`
+verbatim: same `argMax(<col>, computed_at)` latest-compute-pass selection
+over the append-only `file_hotspot_daily` table, same optional `repoIds`
+filter resolved through the org-scoped `repos` catalog (bounded to
+`MAX_ROWS`=1000 -- NOT the row limit -- before it becomes a bind
+parameter, exactly mirroring Python's `list(repo_ids)[:MAX_ROWS]`), same
+`ORDER BY risk_score DESC NULLS LAST` at the database level, same
+1..500 limit clamp with a default of 50, same best-effort repo-label
+join, and the same deterministic `evidenceUrl` deeplink built from
+`file_path` (a hand-rolled `quotePython` reproduces
+`urllib.parse.quote()`'s default `safe="/"` behavior byte-for-byte --
+neither `url.PathEscape` nor `url.QueryEscape` matches it: PathEscape
+escapes `/` and QueryEscape encodes space as `+` instead of `%20`).
+
+Deliberate divergence from `complexityTimeseries`'s date handling,
+confirmed by reading `resolve_hotspots` line by line: `sinceUtc`/
+`untilUtc` are converted to a date WITHOUT a `.astimezone(timezone.utc)`
+normalization first (unlike `resolve_complexity_timeseries`) -- this port
+reproduces that asymmetry exactly rather than "fixing" it, since the goal
+is Python parity, not what Python arguably should have done.
+
+Like `reviewEdges` and `complexityTimeseries`, `hotspots` has no
+missing-table degraded path -- a ClickHouse error propagates as a real
+GraphQL error on both sides.
+
 ## Wave 0 scope: intentionally empty
 
 **No resolver is implemented.** Every GraphQL field gqlgen generated in
@@ -242,9 +270,8 @@ earlier "CI cannot build this" caveat.)
 ## What's NOT here yet (later waves / other lanes)
 
 - Any resolver besides `featureFlags`, `reviewEdges`, `cognitiveLoad`,
-  and `complexityTimeseries` — every other field still panics with
-  `"not implemented"` (`hotspots`, Wave 3's remaining operation, ships in
-  a follow-up PR).
+  `complexityTimeseries`, and `hotspots` — every other field still
+  panics with `"not implemented"`.
 - The registered-document registry sourced from Wave 0's real
   web-operations inventory (deliverable 2) — every wave so far
   hand-registers its own canary document(s) instead (`query_route.go`).

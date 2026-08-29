@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
@@ -125,6 +126,95 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// CHAOS-4429 (codex review finding, round 4, live proof team-lead
+	// required before merge): a missing grant on the CORE outbox claim
+	// table must report ErrNotAuthorized, not ErrUnavailable, from the real
+	// Repository -- and ReconcilerLoop must still treat it as fatal
+	// (Errors() fires), unlike a transient ErrUnavailable which it now
+	// absorbs and retries. This is the exact regression class codex caught
+	// in round 3 (strand_repair.go only), reproduced end to end against a
+	// real, migrated Postgres and a real role/grant posture, not a fake.
+	t.Run("a missing grant on the outbox table reports itself rather than looking unavailable, and ReconcilerLoop treats it as fatal", func(t *testing.T) {
+		resetOutboxTables(t, ctx, adminPool)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+
+		// Repository-level proof first, independent of the loop: the claim
+		// path itself must classify the denial correctly.
+		if _, err := adminPool.Exec(ctx,
+			"REVOKE SELECT, UPDATE ON TABLE public.worker_job_outbox FROM "+outboxQueueRole); err != nil {
+			t.Fatal(err)
+		}
+		revoked := true
+		restoreGrant := func() {
+			if !revoked {
+				return
+			}
+			if _, err := adminPool.Exec(context.Background(),
+				"GRANT SELECT, UPDATE ON TABLE public.worker_job_outbox TO "+outboxQueueRole); err != nil {
+				t.Error(err)
+				return
+			}
+			revoked = false
+		}
+		defer restoreGrant()
+
+		_, claimErr := repository.ClaimDue(ctx, now, 10, 30*time.Second)
+		if !errors.Is(claimErr, ErrNotAuthorized) {
+			t.Fatalf("ClaimDue() error = %v, want ErrNotAuthorized", claimErr)
+		}
+		if errors.Is(claimErr, ErrUnavailable) {
+			t.Fatal("a denied statement must not be reported as an unavailable database")
+		}
+
+		restoreGrant()
+
+		// End-to-end proof: a REAL ReconcilerLoop, backed by this same
+		// repository, must surface the denial on Errors() (the fatal path)
+		// once it reappears mid-run -- not absorb it as a retry-safe blip.
+		loopRelay, err := NewRelay(repository, inserter, DefaultRelayConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		loopRegistry := health.NewRegistry(time.Second)
+		if err := (health.Gate{Registry: loopRegistry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		loop, err := NewReconcilerLoop(loopRelay, ReconcilerLoopConfig{
+			PollInterval: 50 * time.Millisecond,
+			Limit:        7,
+			Registry:     loopRegistry,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		loopCtx, loopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer loopCancel()
+		if err := loop.Start(loopCtx); err != nil {
+			t.Fatalf("Start() with an intact grant should succeed: %v", err)
+		}
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			_ = loop.Shutdown(shutdownCtx)
+		}()
+
+		if _, err := adminPool.Exec(ctx,
+			"REVOKE SELECT, UPDATE ON TABLE public.worker_job_outbox FROM "+outboxQueueRole); err != nil {
+			t.Fatal(err)
+		}
+		revoked = true
+		defer restoreGrant()
+
+		select {
+		case fatal := <-loop.Errors():
+			if !errors.Is(fatal, ErrNotAuthorized) {
+				t.Fatalf("Errors() = %v, want it to wrap ErrNotAuthorized", fatal)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("ReconcilerLoop did not surface ErrNotAuthorized as fatal within 10s of the grant being revoked")
+		}
+	})
 
 	t.Run("prerequisite fences do not consume relay attempts", func(t *testing.T) {
 		resetOutboxTables(t, ctx, adminPool)

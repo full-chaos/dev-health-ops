@@ -667,8 +667,7 @@ Before any `kiac resume`, send the budget line and wait for a go-ahead.
 owner (chris), never fixed by the lane operator.** Lanes never run
 `container system start` or any other `container system` verb: it is
 host-wide and would restart every kiac VM on the machine, including another
-lane's cluster or the standing `acr-local` trial plane
-([AGENTS.md](../../../AGENTS.md#L143-L145)).
+lane's cluster or the standing `acr-local` trial plane (`AGENTS.md:143-145`).
 
 ### Which cluster hosts what — ruling of 2026-08-28 19:47
 

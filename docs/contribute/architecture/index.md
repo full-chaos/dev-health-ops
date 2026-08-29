@@ -14,5 +14,6 @@ lifecycle: active
 - [Stable contracts and source-of-truth rules](contracts.md)
 - [Work-item team attribution](team-attribution.md)
 - [Go worker runtime architecture](go-worker-runtime.md)
+- [Go worker migration and drain lifecycle](go-worker-helm-lifecycle.md)
 
 Publish the current durable boundary, not the chronological history of a project or pull request.

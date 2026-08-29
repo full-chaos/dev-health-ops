@@ -1098,6 +1098,15 @@ by a separate, one-time operator action -- `dev-health-workerctl providersync
 retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
 `ALTER TABLE projects DELETE`, never a per-sync write.
 
+**Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
+still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
+prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a
+tombstone row moments after the verb's `DELETE` reports success -- the row would then reappear.
+Run the cleanup only once the rollout of the collector fix is 100% complete (no old-revision pods
+left), and re-run it if that is in doubt: the verb is idempotent (its `SELECT` and `DELETE` share
+the identical predicate), so a clean second pass finds nothing and is a safe way to confirm no
+straggler wrote the row back.
+
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s

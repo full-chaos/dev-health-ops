@@ -318,6 +318,114 @@ func TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday(t *testing
 	}
 }
 
+// newGitLabTeamCatalogFakeServerWithFailingRootMembers is
+// newGitLabTeamCatalogFakeServer with the root group's /members endpoint
+// returning a hard HTTP failure (500) instead of a member list -- team-a's
+// /members endpoint still succeeds, proving the fix applies per-group, not
+// all-or-nothing.
+func newGitLabTeamCatalogFakeServerWithFailingRootMembers(t *testing.T) *gitlabTeamCatalogFakeServer {
+	t.Helper()
+	fake := &gitlabTeamCatalogFakeServer{}
+
+	group := func(id int, fullPath, name string) map[string]any {
+		return map[string]any{"id": id, "full_path": fullPath, "name": name, "description": nil}
+	}
+	memberPayload := func(username, email string) map[string]any {
+		payload := map[string]any{"username": username, "name": username}
+		if email != "" {
+			payload["email"] = email
+		}
+		return payload
+	}
+
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.requests = append(fake.requests, r.URL.String())
+		switch r.URL.EscapedPath() {
+		case "/api/v4/groups/org":
+			writeGitLabTeamCatalogJSON(t, w, group(1, "org", "Org"))
+		case "/api/v4/groups/org/subgroups":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{group(2, "org/team-a", "Team A")})
+		case "/api/v4/groups/org/projects", "/api/v4/groups/org%2Fteam-a/projects":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
+		case "/api/v4/groups/org/members":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/api/v4/groups/org%2Fteam-a/members":
+			writeGitLabTeamCatalogJSON(t, w, []map[string]any{memberPayload("alice", "alice@example.com")})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+// TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict is the
+// CHAOS-4461 regression proof (ruling extended from GitHub to GitLab,
+// team-lead 2026-08-28): under non-strict (ref.Strict == false, the default
+// post-sync path), ONE group's /members fetch failing must not abort the
+// whole catalog walk. It must be recorded in FailedMemberFetchTeamIDs, that
+// team must be left with MembersAuthoritative == false (so the effects sink
+// carries forward its existing roster instead of writing an unconfirmed
+// empty one -- see FailedMemberFetchTeamIDs's doc comment), and every other
+// group must still collect normally.
+func TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingRootMembers(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true, Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect should soft-fail, not error, under non-strict: %v", err)
+	}
+	if len(batch.Rows.FailedMemberFetchTeamIDs) != 1 || batch.Rows.FailedMemberFetchTeamIDs[0] != "gl:org" {
+		t.Fatalf("FailedMemberFetchTeamIDs = %v, want [gl:org]", batch.Rows.FailedMemberFetchTeamIDs)
+	}
+	if batch.Evidence.SkippedTeamMemberships != 1 {
+		t.Fatalf("SkippedTeamMemberships = %d, want 1", batch.Evidence.SkippedTeamMemberships)
+	}
+
+	var root, teamA *gitlabTeamCatalogTeamRow
+	for i := range batch.Rows.Teams {
+		switch batch.Rows.Teams[i].ID {
+		case "gl:org":
+			root = &batch.Rows.Teams[i]
+		case "gl:org/team-a":
+			teamA = &batch.Rows.Teams[i]
+		}
+	}
+	if root == nil || teamA == nil {
+		t.Fatalf("missing expected teams: %+v", batch.Rows.Teams)
+	}
+	if root.MembersAuthoritative {
+		t.Fatalf("root's member fetch failed -- MembersAuthoritative must stay false so the sink preserves its existing roster, got true (members=%v)", root.Members)
+	}
+	if !teamA.MembersAuthoritative || len(teamA.Members) != 2 || teamA.Members[0] != "gitlab:alice" {
+		t.Fatalf("team-a's fetch succeeded -- expected authoritative [gitlab:alice, alice@example.com], got authoritative=%v members=%v", teamA.MembersAuthoritative, teamA.Members)
+	}
+}
+
+// TestGitLabTeamCatalogRouteHandlerReRaisesMemberFetchFailureUnderStrict
+// proves the strict (reference-discovery) side of the same ruling: a
+// group's /members fetch failure must still abort the whole walk with an
+// error, exactly like every other fetch failure in strict mode -- the
+// soft-fail carve-out in the non-strict test above must NOT apply here.
+func TestGitLabTeamCatalogRouteHandlerReRaisesMemberFetchFailureUnderStrict(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServerWithFailingRootMembers(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true}
+	selections := TeamCatalogSelections{Teams: true, Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	_, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err == nil {
+		t.Fatal("expected an error under strict mode, got nil")
+	}
+}
+
 func TestGitLabTeamCatalogTeamsOnlySkipsMembersAndProjects(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)

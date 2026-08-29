@@ -36,11 +36,20 @@ const (
 type GitLabTeamCatalogRouteHandler struct{}
 
 type GitLabTeamCatalogEvidence struct {
-	Provider  string `json:"provider"`
-	Requests  int    `json:"requests"`
-	Pages     int    `json:"pages"`
-	Groups    int    `json:"groups"`
-	Truncated bool   `json:"truncated"`
+	Provider string `json:"provider"`
+	Requests int    `json:"requests"`
+	Pages    int    `json:"pages"`
+	Groups   int    `json:"groups"`
+	// Truncated marks a bounded listing (subgroups/projects/members) that
+	// hit its page cap -- the collector adapter fails the whole run closed
+	// on this (ErrPaginationCapExceeded), it is never partially written.
+	Truncated bool `json:"truncated"`
+	// SkippedTeamMemberships (CHAOS-4461, extended to GitLab) counts groups
+	// whose /members fetch failed OUTRIGHT (a real request error, not a
+	// page-cap truncation) under non-strict -- that group's memberships are
+	// skipped and its roster is carried forward instead of aborting the
+	// whole run, matching GitHubTeamCatalogEvidence's identical field.
+	SkippedTeamMemberships int `json:"skipped_team_memberships"`
 }
 
 type GitLabTeamCatalogResult struct {
@@ -220,39 +229,67 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 		if selections.Members {
 			teamID := gitlabTeamID(group.FullPath)
-			memberPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+			memberPages, memberErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
-			if err != nil {
-				return GitLabTeamCatalogBatch{}, err
-			}
-			evidence.Requests += memberPages.Pages
-			evidence.Pages += memberPages.Pages
-			if memberPages.PageBudgetExhausted {
-				evidence.Truncated = true
-			}
-			for _, raw := range memberPages.Items {
-				var member gitlabTeamCatalogMemberPayload
-				if err := json.Unmarshal(raw, &member); err != nil {
-					return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+			if memberErr != nil {
+				// CHAOS-4461 ruling (team-lead, extended from GitHub to
+				// GitLab, 2026-08-28): a single group's member-fetch
+				// failure under non-strict (post-sync, default) must not
+				// abort the whole catalog walk -- skip only this group's
+				// memberships and mark it for roster carry-forward via
+				// FailedMemberFetchTeamIDs (see that field's doc comment).
+				// Under strict (reference discovery), re-raise, matching
+				// the pre-existing behavior exactly.
+				if ref.Strict {
+					return GitLabTeamCatalogBatch{}, memberErr
 				}
-				row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, normalizedAt)
-				if !ok {
-					continue
+				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, teamID)
+				evidence.SkippedTeamMemberships++
+			} else {
+				evidence.Requests += memberPages.Pages
+				evidence.Pages += memberPages.Pages
+				if memberPages.PageBudgetExhausted {
+					evidence.Truncated = true
 				}
-				key := teamID + "\x00" + memberID
-				if seenMembership[key] {
-					continue
+				for _, raw := range memberPages.Items {
+					var member gitlabTeamCatalogMemberPayload
+					if err := json.Unmarshal(raw, &member); err != nil {
+						return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+					}
+					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, normalizedAt)
+					if !ok {
+						continue
+					}
+					key := teamID + "\x00" + memberID
+					if seenMembership[key] {
+						continue
+					}
+					seenMembership[key] = true
+					rows.Memberships = append(rows.Memberships, row)
 				}
-				seenMembership[key] = true
-				rows.Memberships = append(rows.Memberships, row)
 			}
 		}
 	}
 
 	if selections.Members {
+		failedMemberFetch := make(map[string]bool, len(rows.FailedMemberFetchTeamIDs))
+		for _, id := range rows.FailedMemberFetchTeamIDs {
+			failedMemberFetch[id] = true
+		}
 		roster := gitlabRosterFromMemberships(rows.Memberships)
 		for i := range rows.Teams {
+			if failedMemberFetch[rows.Teams[i].ID] {
+				// CHAOS-4461: this team's /members fetch failed under
+				// non-strict -- leave MembersAuthoritative false (its
+				// zero value from normalizeGitLabTeamRow) rather than
+				// stamping the empty roster gitlabRosterFromMemberships
+				// necessarily produces for it (no memberships were ever
+				// added). GitLabTeamCatalogClickHouseEffects.writeTeams's
+				// existing roster-preservation path then confirms and
+				// carries forward the currently-persisted roster instead.
+				continue
+			}
 			rows.Teams[i].Members = roster[rows.Teams[i].ID]
 			rows.Teams[i].MembersAuthoritative = true
 		}

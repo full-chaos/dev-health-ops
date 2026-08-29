@@ -136,6 +136,19 @@ type GitLabTeamCatalogRows struct {
 	Ownership   []gitlabTeamCatalogOwnershipRow  `json:"ownership"`
 	Memberships []gitlabTeamCatalogMembershipRow `json:"memberships"`
 	Projects    []gitlabTeamCatalogProjectRow    `json:"projects"`
+	// FailedMemberFetchTeamIDs (CHAOS-4461, ruling extended from GitHub to
+	// GitLab by team-lead, 2026-08-28) lists the teams (by their "gl:" id,
+	// matching gitlabTeamCatalogTeamRow.ID) whose /members fetch failed
+	// under a non-strict Collect (TeamCatalogReference.Strict == false)
+	// while members were globally selected. These teams are deliberately
+	// left with MembersAuthoritative == false in the post-loop roster
+	// rebuild below, so GitLabTeamCatalogClickHouseEffects.writeTeams's
+	// existing roster-preservation path (CHAOS-4323 round 2) confirms and
+	// carries forward their currently-persisted roster instead of writing
+	// an unconfirmed empty one. Under strict (reference discovery), the
+	// fetch error is returned immediately instead -- this field stays
+	// empty in that path.
+	FailedMemberFetchTeamIDs []string `json:"-"`
 }
 
 const (

@@ -248,3 +248,56 @@ func TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation(t *testing.
 		t.Fatalf("truncated collection must write NOTHING, got %d teams rows", count)
 	}
 }
+
+// TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure
+// is the CHAOS-4461 regression proof (ruling extended from GitHub to GitLab,
+// team-lead 2026-08-28) at the full collector-adapter level, against a REAL
+// ClickHouse write/readback: with members globally selected under non-strict,
+// ONE group's /members fetch failing must not wipe that group's roster to []
+// -- its existing, previously-persisted roster must survive, while a second,
+// healthy group in the same run gets its freshly observed roster. Uses
+// newGitLabTeamCatalogFakeServerWithFailingRootMembers (gitlab_team_catalog_
+// test.go, same package) -- org's /members returns 500, org/team-a's
+// succeeds.
+func TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	orgID := "org-partial-member-fetch-failure"
+	sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}
+	claim := Claim{Unit: Unit{OrgID: orgID, Provider: gitlabTeamCatalogProvider}}
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	// Seed org's existing roster, as if a prior successful run had already
+	// written it.
+	seedTeam := normalizeGitLabTeamRow(orgID, gitlabTeamCatalogGroupPayload{FullPath: "org", Name: "Org"}, nil, now)
+	seedTeam.Members = []string{"gitlab:existing-owner"}
+	seedTeam.MembersAuthoritative = true
+	if err := sink.writeTeams(ctx, claim, []gitlabTeamCatalogTeamRow{seedTeam}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := newGitLabTeamCatalogFakeServerWithFailingRootMembers(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	collector := GitLabTeamCatalogCollector{Handler: GitLabTeamCatalogRouteHandler{}, Sink: sink}
+	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1", Strict: false}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+
+	result, err := collector.CollectTeamCatalog(ctx, ref, credential, client, TeamCatalogSelections{Teams: true, Members: true}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("collect should soft-fail, not error, under non-strict: %v", err)
+	}
+	if result.TeamsWritten != 2 {
+		t.Fatalf("result=%+v (org's failed member fetch must not exclude it from the teams write)", result)
+	}
+
+	roster, err := gitlabExistingTeamRoster(ctx, conn, orgID, []string{"gl:org", "gl:org/team-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster["gl:org"]) != 1 || roster["gl:org"][0] != "gitlab:existing-owner" {
+		t.Fatalf("org's existing roster was NOT preserved after its member fetch failed: roster=%+v", roster)
+	}
+	if len(roster["gl:org/team-a"]) != 2 || roster["gl:org/team-a"][0] != "gitlab:alice" {
+		t.Fatalf("team-a (healthy fetch) got the wrong roster: roster=%+v", roster)
+	}
+}

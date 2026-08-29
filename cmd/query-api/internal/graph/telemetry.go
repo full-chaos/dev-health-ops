@@ -20,6 +20,8 @@ import (
 var (
 	featureFlagsCallCounter    = mustCounter("devhealth_query_api_feature_flags_calls_total", "featureFlags resolver invocations")
 	featureFlagsOutcomeCounter = mustCounter("devhealth_query_api_feature_flags_outcome_total", "featureFlags resolver outcomes, by result")
+	reviewEdgesCallCounter     = mustCounter("devhealth_query_api_review_edges_calls_total", "reviewEdges resolver invocations")
+	reviewEdgesOutcomeCounter  = mustCounter("devhealth_query_api_review_edges_outcome_total", "reviewEdges resolver outcomes, by result")
 	tracer                     = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
 
@@ -67,4 +69,30 @@ func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome s
 // FEATURE_FLAG_NOT_MATERIALIZED path), or "error".
 func recordFeatureFlagsOutcome(outcome string) {
 	featureFlagsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startReviewEdgesSpan is startFeatureFlagsSpan's counterpart for the
+// reviewEdges resolver (CHAOS-4368 Wave 2) -- same "count and start the
+// span before the ClickHouse query, finish only once real resolver work
+// completes" contract, so a hung or never-returning query still shows up
+// as traffic received.
+func startReviewEdgesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	reviewEdgesCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.reviewEdges")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "reviewEdges resolver error")
+		}
+		span.End()
+		recordReviewEdgesOutcome(outcome)
+	}
+}
+
+// recordReviewEdgesOutcome increments the outcome counter. outcome is
+// one of "ok" or "error" -- reviewEdges has no degraded-result path
+// (unlike featureFlags; see reviewedges package's doc comment), so
+// "degraded" is not part of this operation's outcome vocabulary.
+func recordReviewEdgesOutcome(outcome string) {
+	reviewEdgesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

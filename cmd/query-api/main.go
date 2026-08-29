@@ -82,11 +82,11 @@ func main() {
 	mux.HandleFunc("/healthz", healthzHandler())
 	mux.HandleFunc("/readyz", readyzHandler())
 
-	// CHAOS-4367 Wave 1: mount the real featureFlags route when its
-	// dependencies are configured. See query_route.go's doc comments for
-	// what "configured" means and why an unconfigured environment falls
-	// back to Wave 0's "nothing mounted" behavior instead of failing to
-	// start.
+	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2: mount the real featureFlags
+	// and reviewEdges routes when their (shared) dependencies are
+	// configured. See query_route.go's doc comments for what "configured"
+	// means and why an unconfigured environment falls back to Wave 0's
+	// "nothing mounted" behavior instead of failing to start.
 	if routeCfg, ok := loadQueryRouteConfig(); ok {
 		queryHandler, cleanup, buildErr := buildQueryRoute(routeCfg)
 		if buildErr != nil {
@@ -94,7 +94,7 @@ func main() {
 		}
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
-		log.Print("query-api: /query route mounted (featureFlags)")
+		log.Print("query-api: /query route mounted (featureFlags, reviewEdges)")
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
 	}

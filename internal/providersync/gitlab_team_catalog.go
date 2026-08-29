@@ -301,8 +301,9 @@ func normalizeGitLabOwnershipRow(
 // alias gap shared by every native Go reference-catalog collector today; not
 // a regression this port introduces. Wiring the real IdentityResolver
 // (parsing identity_mapping.yaml, alias matching) into Go is out of scope
-// here and belongs to whichever ticket closes that gap for all three
-// providers at once, not one provider's port.
+// here and belongs to CHAOS-4453 (filed by lane-4434, shared child of
+// CHAOS-4198), which closes this gap for all three native providers at
+// once, not one provider's port.
 func gitlabTeamCatalogMembershipFacets(username string, email *string) []string {
 	username = strings.TrimSpace(username)
 	if username == "" {

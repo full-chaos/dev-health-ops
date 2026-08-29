@@ -4,7 +4,7 @@ package providersync
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -15,33 +15,32 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// gitlabLiveGroupPathResolver ports resolveTeamCatalogIntegration/the
-// sync_options read team_catalog_clients.go's teamCatalogSelectionsResolver
-// already does (cmd/dev-health-worker), scoped to just the one key GitLab
-// needs. Only wired up in THIS manual proof -- production wiring for
-// GroupPathResolver is the cmd/dev-health-worker layer's job once the
-// group_path threading question (asked of team-lead) is settled.
-type gitlabLiveGroupPathResolver struct{ pool *pgxpool.Pool }
-
-func (resolver gitlabLiveGroupPathResolver) ResolveGroupPath(ctx context.Context, ref TeamCatalogReference) (string, error) {
-	var groupPath string
-	err := resolver.pool.QueryRow(ctx, `
-SELECT COALESCE(sync_options->>'owner', sync_options->>'group', sync_options->>'group_path', '')
+// gitlabLiveSyncOptions ports the exact sync_configurations read
+// team_catalog_clients.go's teamCatalogSelectionsResolver already does
+// (cmd/dev-health-worker), decoded into the map[string]any shape
+// TeamCatalogReference.SyncOptions carries in production (team-lead ruling,
+// 2026-08-28: no per-provider injection seams -- this collector reads
+// ref.SyncOptions directly, so this manual proof populates it the same way
+// the real resolver will).
+func gitlabLiveSyncOptions(ctx context.Context, pool *pgxpool.Pool, orgID, integrationID string) (map[string]any, error) {
+	var raw []byte
+	err := pool.QueryRow(ctx, `
+SELECT COALESCE(sync_options, '{}'::json)::text
 FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
-LIMIT 1`, ref.OrgID, ref.IntegrationID).Scan(&groupPath)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrInvalidConfiguration
-	}
+LIMIT 1`, orgID, integrationID).Scan(&raw)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return groupPath, nil
+	var options map[string]any
+	if err := json.Unmarshal(raw, &options); err != nil {
+		return nil, err
+	}
+	return options, nil
 }
 
 // TestGitLabTeamCatalogAgainstRealLocalStack is a ONE-OFF, manually-invoked
@@ -100,7 +99,11 @@ LIMIT 1`, orgID).Scan(&integrationID, &credentialID, &syncRunID); err != nil {
 		// downstream of this collector.
 		syncRunID = "00000000-0000-4000-8000-000000000000"
 	}
-	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: syncRunID, IntegrationID: integrationID}
+	syncOptions, err := gitlabLiveSyncOptions(ctx, pool, orgID, integrationID)
+	if err != nil {
+		t.Fatalf("resolve sync_options: %v", err)
+	}
+	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: syncRunID, IntegrationID: integrationID, SyncOptions: syncOptions, Strict: true}
 	t.Logf("resolved integration_id=%s (credential id/token/group_path withheld)", integrationID)
 
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(encryptionKey), "")
@@ -139,7 +142,7 @@ LIMIT 1`, orgID).Scan(&integrationID, &credentialID, &syncRunID); err != nil {
 	t.Logf("BEFORE (local, real data, org %s): %+v", orgID, before)
 
 	collector := GitLabTeamCatalogCollector{
-		Handler: GitLabTeamCatalogRouteHandler{GroupPathResolver: gitlabLiveGroupPathResolver{pool: pool}},
+		Handler: GitLabTeamCatalogRouteHandler{},
 		Sink:    GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
 	}
 	selections := TeamCatalogSelections{Teams: true, Projects: true, Members: true}

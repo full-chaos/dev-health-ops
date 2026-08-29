@@ -27,47 +27,13 @@ const (
 // Claim and carries no lease. GitLabTeamCatalogCollector below adapts this
 // walk (plus GitLabTeamCatalogClickHouseEffects, the writer) to the shared
 // TeamCatalogCollector seam every native provider implements.
-type GitLabTeamCatalogRouteHandler struct {
-	// GroupPathResolver is consulted ONLY when credential.Config carries no
-	// group_path/group/owner key (GitLab's credential Config is empty in
-	// practice today -- the group lives in sync_configurations.sync_options,
-	// keyed by this sync run's own integration, exactly like Python's
-	// _gitlab_group reads credentials first then falls back to
-	// scope.sync_options). Left nil, a credential-less lookup fails closed.
-	GroupPathResolver GitLabGroupPathResolver
-	// SourceSelectionResolver mirrors team_autoimport_gitlab.py's
-	// source_external_ids (populated ONLY by the reference-discovery scope,
-	// workers/reference_discovery.py's _load_discovery_context -- the more
-	// common post-sync trigger path never threads it, a no-op filter Python
-	// itself documents). Left nil, every discovered project is cataloged
-	// (identical to Python's "not scoped" None default), matching this
-	// collector's registration today.
-	SourceSelectionResolver GitLabSourceSelectionResolver
-}
-
-// GitLabGroupPathResolver resolves the GitLab group full_path this sync
-// run's own integration is configured against. The concrete implementation
-// (a small sync_configurations.sync_options read keyed by
-// ref.IntegrationID, mirroring team_catalog_clients.go's existing
-// resolveTeamCatalogIntegration join) lives at the cmd/dev-health-worker
-// wiring layer alongside teamCatalogClientResolver, not in this package --
-// this collector stays free of a *pgxpool.Pool dependency the same way
-// LinearTeamCatalogCollector never needed one.
-type GitLabGroupPathResolver interface {
-	ResolveGroupPath(ctx context.Context, ref TeamCatalogReference) (string, error)
-}
-
-// GitLabSourceSelectionResolver resolves the enabled IntegrationSource
-// external_id set for this sync run (GitLab's numeric project id, as a
-// string), the same set team_autoimport_gitlab._gitlab_project_catalog_rows
-// filters the native project catalog against. scoped=false (the common
-// case: this run's caller never threaded a selection at all) means "every
-// discovered project is cataloged" -- Python's own None-means-unscoped
-// default. scoped=true with an EMPTY set means "zero enabled sources",
-// filtering everything out, never everything in -- also matching Python.
-type GitLabSourceSelectionResolver interface {
-	ResolveSourceExternalIDs(ctx context.Context, ref TeamCatalogReference) (ids map[string]bool, scoped bool, err error)
-}
+//
+// No injectable resolver fields (team-lead ruling, 2026-08-28: "no
+// per-provider injection seams on the shared wiring") -- group_path comes
+// straight off ref.SyncOptions, the run's own canonical
+// sync_configurations.sync_options, the same source Python's
+// _gitlab_group falls back to.
+type GitLabTeamCatalogRouteHandler struct{}
 
 type GitLabTeamCatalogEvidence struct {
 	Provider  string `json:"provider"`
@@ -94,33 +60,44 @@ type GitLabTeamCatalogBatch struct {
 	Evidence GitLabTeamCatalogEvidence `json:"evidence"`
 }
 
-// gitlabTeamCatalogGroupPath mirrors team_autoimport_gitlab._gitlab_group's
-// credential-first lookup. The sync_options fallback that function also has
-// is the caller's job here (GroupPathResolver), not this package's -- see
-// its doc comment.
-func gitlabTeamCatalogGroupPath(credential providerfoundation.Credential) string {
-	for _, key := range []string{"group_path", "group", "owner"} {
-		if value := strings.TrimSpace(credential.Config[key]); value != "" {
-			return value
+// gitlabTeamCatalogGroupPathKeys is the exact key precedence
+// team_autoimport_gitlab._gitlab_group uses (_first_string(mapping,
+// "group_path", "group", "owner") -- the first present, non-empty string
+// wins): group_path outranks group outranks owner. Verified against that
+// function's current source, not assumed.
+var gitlabTeamCatalogGroupPathKeys = []string{"group_path", "group", "owner"}
+
+func gitlabTeamCatalogFirstString(mapping map[string]any, keys []string) string {
+	for _, key := range keys {
+		if value, ok := mapping[key].(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
 		}
 	}
 	return ""
 }
 
+// gitlabTeamCatalogGroupPath mirrors team_autoimport_gitlab._gitlab_group
+// exactly: credential.Config (credentials, in Python) first, then
+// ref.SyncOptions (scope.sync_options, in Python) -- same key precedence on
+// both sides. credential.Config carries only auth material for GitLab in
+// practice today (empty), so this resolves from ref.SyncOptions in
+// production; the credential-first check stays for parity with Python's
+// contract and for a future credential shape that DOES carry it.
+func gitlabTeamCatalogGroupPath(credential providerfoundation.Credential, ref TeamCatalogReference) string {
+	for _, key := range gitlabTeamCatalogGroupPathKeys {
+		if value := strings.TrimSpace(credential.Config[key]); value != "" {
+			return value
+		}
+	}
+	return gitlabTeamCatalogFirstString(ref.SyncOptions, gitlabTeamCatalogGroupPathKeys)
+}
+
 func (handler GitLabTeamCatalogRouteHandler) resolveGroupPath(
-	ctx context.Context, ref TeamCatalogReference, credential providerfoundation.Credential,
+	ref TeamCatalogReference, credential providerfoundation.Credential,
 ) (string, error) {
-	if groupPath := gitlabTeamCatalogGroupPath(credential); groupPath != "" {
-		return groupPath, nil
-	}
-	if handler.GroupPathResolver == nil {
-		return "", ErrInvalidConfiguration
-	}
-	groupPath, err := handler.GroupPathResolver.ResolveGroupPath(ctx, ref)
-	if err != nil {
-		return "", err
-	}
-	groupPath = strings.TrimSpace(groupPath)
+	groupPath := gitlabTeamCatalogGroupPath(credential, ref)
 	if groupPath == "" {
 		return "", ErrInvalidConfiguration
 	}
@@ -143,7 +120,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	if !selections.Any() {
 		return GitLabTeamCatalogBatch{Result: GitLabTeamCatalogResult{Complete: true}}, nil
 	}
-	groupPath, err := handler.resolveGroupPath(ctx, ref, credential)
+	groupPath, err := handler.resolveGroupPath(ref, credential)
 	if err != nil {
 		return GitLabTeamCatalogBatch{}, err
 	}
@@ -282,14 +259,22 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	if selections.Projects {
-		var sourceExternalIDs map[string]bool
-		sourceScoped := false
-		if handler.SourceSelectionResolver != nil {
-			sourceExternalIDs, sourceScoped, err = handler.SourceSelectionResolver.ResolveSourceExternalIDs(ctx, ref)
-			if err != nil {
-				return GitLabTeamCatalogBatch{}, err
-			}
-		}
+		// NOT filtered by selected IntegrationSource ids (codex review
+		// finding, CHAOS-4432): team_autoimport_gitlab._gitlab_project_catalog_rows's
+		// source_external_ids filter is populated by
+		// workers/reference_discovery.py's _load_discovery_context via a
+		// LIVE DB join (sync_run_units -> integration_sources.external_id
+		// for THIS run's own claimed units) -- a separate computation from
+		// integration.config/sync_options (verified against that function's
+		// current source: the scope dict carries "source_external_ids" and
+		// "sync_options" as two independent keys). ref.SyncOptions carries
+		// only the latter, so it cannot derive the former; per team-lead's
+		// "no per-provider injection seams" ruling, this collector does not
+		// add its own DB dependency to get it either. Every discovered
+		// project is cataloged unscoped -- identical to Python's own
+		// default for the common post-sync path, but a real, open gap for
+		// the strict/reference-discovery path specifically until
+		// TeamCatalogReference grows a field for it.
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path: rootPath + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
@@ -306,9 +291,6 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			var project gitlabTeamCatalogProjectPayload
 			if err := json.Unmarshal(raw, &project); err != nil {
 				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
-			}
-			if sourceScoped && !sourceExternalIDs[project.ID.String()] {
-				continue
 			}
 			row, ok := normalizeGitLabProjectCatalogRow(ref.OrgID, project, normalizedAt)
 			if !ok {

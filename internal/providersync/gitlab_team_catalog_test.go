@@ -289,24 +289,19 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	}
 }
 
-type fakeGitLabSourceSelectionResolver struct {
-	ids    map[string]bool
-	scoped bool
-}
-
-func (resolver fakeGitLabSourceSelectionResolver) ResolveSourceExternalIDs(
-	context.Context, TeamCatalogReference,
-) (map[string]bool, bool, error) {
-	return resolver.ids, resolver.scoped, nil
-}
-
-// TestGitLabTeamCatalogSourceSelectionFiltersNativeProjectCatalog proves the
-// native project catalog (CHAOS-3380) respects a scoped
-// SourceSelectionResolver -- codex review finding: unfiltered import makes
-// every credential-visible project a resolvable Ask Dev subject regardless
-// of sync selection, matching team_autoimport_gitlab._gitlab_project_catalog_rows's
-// source_external_ids filter.
-func TestGitLabTeamCatalogSourceSelectionFiltersNativeProjectCatalog(t *testing.T) {
+// TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday documents
+// a known, open gap (codex review finding, CHAOS-4432 RISK-NOTES): the
+// native project catalog is NOT filtered by selected IntegrationSource ids.
+// Python's source_external_ids filter is populated by a live DB join
+// (sync_run_units -> integration_sources) reference_discovery.py's
+// _load_discovery_context does, a separate computation from
+// TeamCatalogReference.SyncOptions -- team-lead's "no per-provider
+// injection seams" ruling means this collector does not add its own DB
+// dependency to recover it. This test pins the CURRENT behavior so a
+// silent regression in either direction (accidentally scoping, or the gap
+// growing) is visible, not a guess about what SHOULD happen once
+// TeamCatalogReference grows a field for it.
+func TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
 	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
@@ -314,39 +309,12 @@ func TestGitLabTeamCatalogSourceSelectionFiltersNativeProjectCatalog(t *testing.
 	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
-	// Unscoped (no resolver): every discovered project is cataloged --
-	// Python's own "not scoped" default.
-	unscoped, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
-	if len(unscoped.Rows.Projects) != 3 {
-		t.Fatalf("unscoped native projects = %d, want 3", len(unscoped.Rows.Projects))
-	}
-
-	// Scoped to a single native id: only that project is cataloged, even
-	// though discovery still sees all three.
-	handler := GitLabTeamCatalogRouteHandler{
-		SourceSelectionResolver: fakeGitLabSourceSelectionResolver{ids: map[string]bool{"100": true}, scoped: true},
-	}
-	scoped, err := handler.CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
-	if err != nil {
-		t.Fatalf("collect: %v", err)
-	}
-	if len(scoped.Rows.Projects) != 1 || scoped.Rows.Projects[0].ID != "org-1:gitlab:100" {
-		t.Fatalf("scoped native projects = %+v, want exactly project 100", scoped.Rows.Projects)
-	}
-
-	// Scoped to zero sources: filters everything out, never everything in.
-	handlerEmpty := GitLabTeamCatalogRouteHandler{
-		SourceSelectionResolver: fakeGitLabSourceSelectionResolver{ids: map[string]bool{}, scoped: true},
-	}
-	empty, err := handlerEmpty.CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
-	if err != nil {
-		t.Fatalf("collect: %v", err)
-	}
-	if len(empty.Rows.Projects) != 0 {
-		t.Fatalf("zero-source-scoped native projects = %+v, want none", empty.Rows.Projects)
+	if len(batch.Rows.Projects) != 3 {
+		t.Fatalf("native projects = %d, want 3 (every discovered project, unscoped)", len(batch.Rows.Projects))
 	}
 }
 
@@ -400,6 +368,53 @@ func TestGitLabTeamCatalogNoSelectionsIsZeroSummary(t *testing.T) {
 	}
 	if len(batch.Rows.Teams) != 0 || len(batch.Effects.Batches()) != 0 {
 		t.Fatalf("expected a no-op zero summary, got %+v", batch)
+	}
+}
+
+// TestGitLabTeamCatalogGroupPathPrecedence proves gitlabTeamCatalogGroupPath
+// mirrors team_autoimport_gitlab._gitlab_group's exact key precedence
+// (group_path outranks group outranks owner, credential.Config outranks
+// ref.SyncOptions) -- team-lead ruling, 2026-08-28: group_path resolves
+// from ref.SyncOptions directly, no injectable resolver.
+func TestGitLabTeamCatalogGroupPathPrecedence(t *testing.T) {
+	cases := []struct {
+		name        string
+		credential  providerfoundation.Credential
+		syncOptions map[string]any
+		want        string
+	}{
+		{
+			name:        "sync_options owner only (org 70d529e0's real shape)",
+			credential:  providerfoundation.Credential{Provider: "gitlab"},
+			syncOptions: map[string]any{"owner": "full.chaos", "auto_import_teams": false},
+			want:        "full.chaos",
+		},
+		{
+			name:        "sync_options group_path outranks group and owner",
+			credential:  providerfoundation.Credential{Provider: "gitlab"},
+			syncOptions: map[string]any{"group_path": "org/team-a", "group": "org", "owner": "org-owner"},
+			want:        "org/team-a",
+		},
+		{
+			name:        "credential.Config outranks ref.SyncOptions",
+			credential:  providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"owner": "cred-owner"}},
+			syncOptions: map[string]any{"owner": "sync-options-owner"},
+			want:        "cred-owner",
+		},
+		{
+			name:        "nothing configured",
+			credential:  providerfoundation.Credential{Provider: "gitlab"},
+			syncOptions: nil,
+			want:        "",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", SyncOptions: testCase.syncOptions}
+			if got := gitlabTeamCatalogGroupPath(testCase.credential, ref); got != testCase.want {
+				t.Fatalf("got %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 

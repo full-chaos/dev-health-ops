@@ -254,12 +254,23 @@ const (
 	TeamCatalogOutcomeBridge               TeamCatalogOutcome = "bridge"
 	TeamCatalogOutcomeSkipped              TeamCatalogOutcome = "skipped"
 	TeamCatalogOutcomeNativeFailedNonfatal TeamCatalogOutcome = "native_failed_nonfatal"
+	// TeamCatalogOutcomeRosterPreservationFailed (team-lead ruling,
+	// 2026-08-28) names a successful collection call that nonetheless
+	// reported TeamCatalogResult.RosterPreservationFailed: the existing-
+	// manual_members pre-read (CHAOS-4446's PreserveExistingTeamManualMembers)
+	// failed and the collector chose to continue rather than hard-fail the
+	// whole write. No collector does this today -- Linear's always
+	// hard-fails instead, surfacing as native_failed_nonfatal/a propagated
+	// error -- but the outcome exists so a future collector's choice to
+	// soft-fail that one step is never silently indistinguishable from a
+	// clean run.
+	TeamCatalogOutcomeRosterPreservationFailed TeamCatalogOutcome = "roster_preservation_failed"
 )
 
 func teamCatalogOutcomes() []TeamCatalogOutcome {
 	return []TeamCatalogOutcome{
 		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
-		TeamCatalogOutcomeNativeFailedNonfatal,
+		TeamCatalogOutcomeNativeFailedNonfatal, TeamCatalogOutcomeRosterPreservationFailed,
 	}
 }
 
@@ -274,12 +285,18 @@ const (
 	TeamCatalogTableTeamMemberships      TeamCatalogTable = "team_memberships"
 	TeamCatalogTableProjects             TeamCatalogTable = "projects"
 	TeamCatalogTableTeamProjectOwnership TeamCatalogTable = "team_project_ownership"
+	// TeamCatalogTableTeamRepoOwnership is GitHub's destination table --
+	// DISTINCT from TeamCatalogTableTeamProjectOwnership (team-lead ruling,
+	// 2026-08-28): TeamCatalogResult.OwnershipWritten and .RepoOwnershipWritten
+	// are separate fields specifically so GitHub's rows are never reported
+	// under Linear/GitLab's team_project_ownership label.
+	TeamCatalogTableTeamRepoOwnership TeamCatalogTable = "team_repo_ownership"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
 	return []TeamCatalogTable{
 		TeamCatalogTableTeams, TeamCatalogTableMembers, TeamCatalogTableTeamMemberships,
-		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership,
+		TeamCatalogTableProjects, TeamCatalogTableTeamProjectOwnership, TeamCatalogTableTeamRepoOwnership,
 	}
 }
 

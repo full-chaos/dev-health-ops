@@ -99,6 +99,15 @@ func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Con
 	return resolver.selections, resolver.syncOptions, resolver.err
 }
 
+type fakeSourceExternalIDsResolver struct {
+	ids []string
+	err error
+}
+
+func (resolver *fakeSourceExternalIDsResolver) ResolveSourceExternalIDs(context.Context, string, string) ([]string, error) {
+	return resolver.ids, resolver.err
+}
+
 // TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector pins
 // the core CHAOS-4431 dispatch rule: a provider with a registered native
 // collector never reaches the bridge fallback, and the collector receives
@@ -108,7 +117,7 @@ func (resolver *fakeTeamCatalogSelectionsResolver) ResolveSelections(context.Con
 // this path gates on selections exactly like the post-sync path does).
 func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *testing.T) {
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
-		TeamsWritten: 3, TeamKeys: []string{"ENG", "OPS"},
+		TeamsWritten: 3, RepoOwnershipWritten: 9, TeamKeys: []string{"ENG", "OPS"},
 	}}
 	fallback := &fakeTeamCatalogFallbackExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
@@ -122,6 +131,7 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 			selections:  providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true},
 			syncOptions: syncOptions,
 		},
+		Sources:  &fakeSourceExternalIDsResolver{ids: []string{"src-1", "src-2"}},
 		Observer: observer,
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "linear")
@@ -137,25 +147,37 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	if !collector.gotRef.Strict {
 		t.Fatalf("collector ref.Strict=%t want=true (reference-discovery mirrors run_team_autoimport_strict)", collector.gotRef.Strict)
 	}
+	if len(collector.gotRef.SourceExternalIDs) != 2 || collector.gotRef.SourceExternalIDs[0] != "src-1" {
+		t.Fatalf("collector ref.SourceExternalIDs=%+v want the resolved ids threaded through", collector.gotRef.SourceExternalIDs)
+	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeNative,
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 5 {
+	if len(observer.rows) != 6 {
 		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
 	}
-	foundTeamsRow := false
+	foundTeamsRow, foundRepoOwnershipRow := false, false
 	for _, row := range observer.rows {
-		if row.table == jobruntime.TeamCatalogTableTeams {
+		switch row.table {
+		case jobruntime.TeamCatalogTableTeams:
 			foundTeamsRow = true
 			if row.count != 3 {
 				t.Fatalf("teams row count=%d want=3", row.count)
+			}
+		case jobruntime.TeamCatalogTableTeamRepoOwnership:
+			foundRepoOwnershipRow = true
+			if row.count != 9 {
+				t.Fatalf("team_repo_ownership row count=%d want=9", row.count)
 			}
 		}
 	}
 	if !foundTeamsRow {
 		t.Fatalf("no teams row observed: %+v", observer.rows)
+	}
+	if !foundRepoOwnershipRow {
+		t.Fatalf("no team_repo_ownership row observed (RepoOwnershipWritten must get its own table label, not share team_project_ownership's): %+v", observer.rows)
 	}
 	if fallback.gotProvider != "" {
 		t.Fatalf("native provider reached the bridge fallback: %+v", fallback)
@@ -188,6 +210,33 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 // ledger still reaches status=success and unit dispatch still proceeds
 // (native_dispatch_sync_run_service.go:242-253), with zero ClickHouse
 // writes and zero bridge calls.
+// TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure pins the
+// team-lead ruling (2026-08-28): a collector that returns success but flags
+// TeamCatalogResult.RosterPreservationFailed must record the dedicated
+// outcome, not the generic "native" one -- so that choice (no collector
+// makes it today) is never silently indistinguishable from a clean run.
+func TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure(t *testing.T) {
+	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{RosterPreservationFailed: true}}
+	observer := &fakeTeamCatalogObserver{}
+	executor := &TeamCatalogDiscoveryExecutor{
+		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Fallback: &fakeTeamCatalogFallbackExecutor{},
+		Clients:  &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "linear"}},
+		Selections: &fakeTeamCatalogSelectionsResolver{
+			selections: providersync.TeamCatalogSelections{Teams: true},
+		},
+		Observer: observer,
+	}
+	if _, err := executor.Discover(context.Background(), testOrg, testRun, "linear"); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeRosterPreservationFailed,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
+	}
+}
+
 func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t *testing.T) {
 	collector := &fakeTeamCatalogCollector{}
 	fallback := &fakeTeamCatalogFallbackExecutor{}

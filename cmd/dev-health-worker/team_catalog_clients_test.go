@@ -108,8 +108,17 @@ func (resolver fakeAutoimportSelectionsResolver) ResolveSelections(context.Conte
 	return resolver.selections, resolver.syncOptions, resolver.err
 }
 
+type fakeAutoimportSourceResolver struct {
+	ids []string
+	err error
+}
+
+func (resolver fakeAutoimportSourceResolver) ResolveSourceExternalIDs(context.Context, string, string) ([]string, error) {
+	return resolver.ids, resolver.err
+}
+
 func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
-	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 2}}
+	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 2, RepoOwnershipWritten: 4}}
 	observer := &fakeTeamCatalogObserver{}
 	syncOptions := map[string]any{"owner": "acme-group"}
 	bridge := &teamCatalogAutoimportBridge{
@@ -121,6 +130,7 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 			selections:  providersync.TeamCatalogSelections{Teams: true, Members: true},
 			syncOptions: syncOptions,
 		},
+		sources:  fakeAutoimportSourceResolver{ids: []string{"src-1"}},
 		observer: observer,
 	}
 	err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
@@ -147,13 +157,28 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	if native.gotRef.Strict {
 		t.Fatalf("ref.Strict=%t want=false (post-sync mirrors non-strict run_team_autoimport)", native.gotRef.Strict)
 	}
+	if len(native.gotRef.SourceExternalIDs) != 1 || native.gotRef.SourceExternalIDs[0] != "src-1" {
+		t.Fatalf("ref.SourceExternalIDs=%+v want the resolved ids threaded through", native.gotRef.SourceExternalIDs)
+	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNative,
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 5 {
+	if len(observer.rows) != 6 {
 		t.Fatalf("observer rows=%+v, want one call per destination table", observer.rows)
+	}
+	foundRepoOwnershipRow := false
+	for _, row := range observer.rows {
+		if row.table == jobruntime.TeamCatalogTableTeamRepoOwnership {
+			foundRepoOwnershipRow = true
+			if row.count != 4 {
+				t.Fatalf("team_repo_ownership row count=%d want=4", row.count)
+			}
+		}
+	}
+	if !foundRepoOwnershipRow {
+		t.Fatalf("no team_repo_ownership row observed: %+v", observer.rows)
 	}
 }
 
@@ -197,6 +222,101 @@ func TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal(t *testing.T
 	}
 	if len(observer.rows) != 0 {
 		t.Fatalf("observer rows=%+v, want none on a failed collection", observer.rows)
+	}
+}
+
+// TestTeamCatalogAutoimportBridgeDegradesResolverFailuresToNonfatal pins the
+// team-lead ruling (2026-08-28): EVERY failure past provider resolution on
+// the post-sync path -- selections, credential/client, or source ids, not
+// only the collector call itself -- must degrade to a non-fatal zero
+// result, or a resolver blip causes the exact retry storm the collector-
+// error degrade (TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal)
+// already exists to prevent.
+func TestTeamCatalogAutoimportBridgeDegradesResolverFailuresToNonfatal(t *testing.T) {
+	okSelections := fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}}
+	for _, testCase := range []struct {
+		name       string
+		selections syncdispatchruntime.TeamCatalogSelectionsResolver
+		clients    syncdispatchruntime.ProviderClientResolver
+		sources    syncdispatchruntime.SourceExternalIDsResolver
+	}{
+		{
+			name:       "selections resolver error",
+			selections: fakeAutoimportSelectionsResolver{err: errors.New("sync_configurations query failed")},
+			clients:    fakeAutoimportClientResolver{},
+		},
+		{
+			name:       "client resolver error",
+			selections: okSelections,
+			clients:    erroringClientResolver{err: errors.New("credential resolution failed")},
+		},
+		{
+			name:       "source ids resolver error",
+			selections: okSelections,
+			clients:    fakeAutoimportClientResolver{},
+			sources:    fakeAutoimportSourceResolver{err: errors.New("source inventory incomplete")},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			native := &linearCollectorSpy{}
+			fallback := &fakeCoordinatorBridge{}
+			observer := &fakeTeamCatalogObserver{}
+			bridge := &teamCatalogAutoimportBridge{
+				CoordinatorBridge: fallback,
+				resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
+				native:            map[string]providersync.TeamCatalogCollector{"linear": native},
+				clients:           testCase.clients,
+				selections:        testCase.selections,
+				sources:           testCase.sources,
+				observer:          observer,
+			}
+			err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+				OrganizationID: testOrg, SyncRunID: testRun,
+			})
+			if err != nil {
+				t.Fatalf("TeamAutoImport must not propagate a resolver error on the post-sync path, got: %v", err)
+			}
+			if fallback.teamAutoImportCalled {
+				t.Fatal("wrapped bridge was called despite a registered native collector")
+			}
+			if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+				provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNativeFailedNonfatal,
+			}) {
+				t.Fatalf("observer dispatches=%+v", observer.dispatches)
+			}
+		})
+	}
+}
+
+type erroringClientResolver struct{ err error }
+
+func (resolver erroringClientResolver) ResolveClient(context.Context, string, string, string) (providerfoundation.Credential, *providerfoundation.HTTPClient, string, error) {
+	return providerfoundation.Credential{}, nil, "", resolver.err
+}
+
+// TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure mirrors
+// TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure for the
+// post-sync seam.
+func TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure(t *testing.T) {
+	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{RosterPreservationFailed: true}}
+	observer := &fakeTeamCatalogObserver{}
+	bridge := &teamCatalogAutoimportBridge{
+		CoordinatorBridge: &fakeCoordinatorBridge{},
+		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:           fakeAutoimportClientResolver{},
+		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:          observer,
+	}
+	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); err != nil {
+		t.Fatalf("TeamAutoImport: %v", err)
+	}
+	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeRosterPreservationFailed,
+	}) {
+		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
 }
 

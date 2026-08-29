@@ -54,6 +54,18 @@ type TeamCatalogReference struct {
 	// propagates, which already matches strict semantics, and the
 	// non-strict safety net lives at the bridge boundary instead).
 	Strict bool
+	// SourceExternalIDs is the run's own provider-source external id set
+	// (team-lead ruling, 2026-08-28), ported from the SAME
+	// sync_run_units-JOIN-integration_sources join
+	// reference_discovery.py:281-303 uses to build scope["source_external_ids"]
+	// (and fails closed -- "reference discovery source inventory incomplete"
+	// -- if any of this run's sync_run_units.source_id has no resolvable
+	// integration_sources.external_id). A collector that must scope its walk
+	// to the run's selected sources (e.g. GitLab's project catalog) reads
+	// this instead of querying sync_run_units itself -- collectors stay
+	// DB-free; the resolver carries it. Sorted, deduplicated. Collectors
+	// that need nothing beyond the credential (Linear today) ignore it.
+	SourceExternalIDs []string
 }
 
 func (ref TeamCatalogReference) validate() error {
@@ -71,7 +83,14 @@ type TeamCatalogResult struct {
 	MembersWritten     int
 	MembershipsWritten int
 	ProjectsWritten    int
-	OwnershipWritten   int
+	// OwnershipWritten is team_project_ownership rows (Linear, GitLab).
+	OwnershipWritten int
+	// RepoOwnershipWritten is team_repo_ownership rows (GitHub) -- a
+	// DIFFERENT destination table from OwnershipWritten's
+	// team_project_ownership (team-lead ruling, 2026-08-28: the two must
+	// never share one field, or one provider's rows get the other's table
+	// label in telemetry). Zero for collectors that don't write this table.
+	RepoOwnershipWritten int
 	// TeamKeys is the native_team_key set actually written to `teams` this
 	// call (empty when Teams was not selected). It exists so a caller can
 	// hand it to the existing ClickHouse readback verifier
@@ -79,6 +98,16 @@ type TeamCatalogResult struct {
 	// bridge path's summary["reference_team_keys"] already does -- CHAOS-4431
 	// keeps that verification for native providers too, not just bridge ones.
 	TeamKeys []string
+	// RosterPreservationFailed (team-lead ruling, 2026-08-28) is true when
+	// the existing-manual_members pre-read (CHAOS-4446's
+	// PreserveExistingTeamManualMembers) failed and the collector chose to
+	// CONTINUE the write rather than hard-fail it. No collector sets this
+	// today -- hard-failing is the safe default (it is exactly what CHAOS-4446
+	// fixed: a quiet empty override is a silent data-loss bug) -- but the
+	// field exists so a future collector's deliberate soft-fail of that one
+	// step is never indistinguishable from a clean run in telemetry (see
+	// jobruntime.TeamCatalogOutcomeRosterPreservationFailed).
+	RosterPreservationFailed bool
 }
 
 // TeamCatalogCollector is the shared, provider-neutral seam every native

@@ -57,6 +57,19 @@ type TeamCatalogSelectionsResolver interface {
 	ResolveSelections(ctx context.Context, orgID, runID, provider string) (selections providersync.TeamCatalogSelections, syncOptions map[string]any, err error)
 }
 
+// SourceExternalIDsResolver reads this sync run's own provider-source
+// external id set (team-lead ruling, 2026-08-28), the same
+// sync_run_units-JOIN-integration_sources join reference_discovery.py:
+// 281-303 uses to build scope["source_external_ids"] -- including its
+// fail-closed behavior when a run's source_id has no resolvable
+// external_id. A collector that must scope its walk to the run's selected
+// sources (e.g. GitLab's project catalog) reads
+// TeamCatalogReference.SourceExternalIDs instead of querying sync_run_units
+// itself; collectors stay DB-free.
+type SourceExternalIDsResolver interface {
+	ResolveSourceExternalIDs(ctx context.Context, orgID, runID string) ([]string, error)
+}
+
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
 // a provider with a registered native collector runs it directly (gated by
 // CHAOS-4323 selections, same as the post-sync path) and skips the Python
@@ -79,6 +92,7 @@ type TeamCatalogDiscoveryExecutor struct {
 	Fallback   DiscoveryExecutor
 	Clients    ProviderClientResolver
 	Selections TeamCatalogSelectionsResolver
+	Sources    SourceExternalIDsResolver
 	// Observer is optional: a nil Observer records nothing, the same
 	// convention every other telemetry hook in this codebase uses.
 	Observer jobruntime.TeamCatalogObserver
@@ -134,14 +148,32 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if err != nil {
 		return nil, err
 	}
+	// Sources is optional: a collector that does not need run-scoped source
+	// ids (Linear today) is unaffected by its absence; one that does
+	// (GitLab's project catalog) requires it wired in production.
+	var sourceExternalIDs []string
+	if executor.Sources != nil {
+		sourceExternalIDs, err = executor.Sources.ResolveSourceExternalIDs(ctx, orgID, runID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	result, err := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
 		OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
-		SyncOptions: syncOptions, Strict: true,
+		SyncOptions: syncOptions, Strict: true, SourceExternalIDs: sourceExternalIDs,
 	}, credential, client, selections, executor.now())
 	if err != nil {
 		return nil, err
 	}
-	executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNative)
+	if result.RosterPreservationFailed {
+		// See providersync.TeamCatalogResult.RosterPreservationFailed's doc
+		// comment: no collector sets this today, but the branch exists so a
+		// future one's deliberate soft-fail is never silently indistinguishable
+		// from a clean run.
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
+	} else {
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNative)
+	}
 	if executor.Observer != nil {
 		for _, row := range []struct {
 			table string
@@ -150,6 +182,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
 			{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
 			{"team_project_ownership", result.OwnershipWritten},
+			{"team_repo_ownership", result.RepoOwnershipWritten},
 		} {
 			_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTable(row.table), row.count)
 		}

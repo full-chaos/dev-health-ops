@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -111,8 +112,11 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 		return providerfoundation.Credential{}, nil, "", err
 	}
 	lease := teamCatalogLease{}
+	// IntegrationID is required: TenantScope.Validate() fails closed
+	// ("invalid provider tenant scope") without it -- confirmed via local
+	// readback, org 70d529e0, CHAOS-4431.
 	credential, err := resolver.credentials.Resolve(ctx, lease, providerfoundation.TenantScope{
-		OrgID: orgID, Provider: provider, CredentialID: credentialID,
+		OrgID: orgID, Provider: provider, IntegrationID: integrationID, CredentialID: credentialID,
 	})
 	if err != nil {
 		return providerfoundation.Credential{}, nil, "", err
@@ -149,9 +153,14 @@ func (resolver teamCatalogSelectionsResolver) ResolveSelections(
 	// (team-lead ruling, 2026-08-28) -- same canonical root row
 	// native_post_sync.go:567-577 already reads (there, only the OR of the
 	// three flags; here, each flag individually plus the full map).
+	// sync_configurations.sync_options is `json`, NOT `jsonb` -- a COALESCE
+	// default cast as ::jsonb fails closed with "COALESCE could not convert
+	// type jsonb to json" (SQLSTATE 42846; confirmed via local readback,
+	// org 70d529e0, CHAOS-4431). The column is also NOT NULL with a
+	// '{}'::json default already, so COALESCE is defensive, not load-bearing.
 	var syncOptionsJSON []byte
 	queryErr := resolver.pool.QueryRow(ctx, `
-SELECT COALESCE(sync_options, '{}'::jsonb)
+SELECT COALESCE(sync_options, '{}'::json)
 FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
@@ -204,6 +213,9 @@ type teamCatalogAutoimportBridge struct {
 	native          map[string]providersync.TeamCatalogCollector
 	clients         syncdispatchruntime.ProviderClientResolver
 	selections      syncdispatchruntime.TeamCatalogSelectionsResolver
+	// sources is optional: a collector that does not need run-scoped source
+	// ids (Linear today) is unaffected by its absence.
+	sources syncdispatchruntime.SourceExternalIDsResolver
 	// observer is optional: a nil observer records nothing, the same
 	// convention every other telemetry hook in this codebase uses.
 	observer jobruntime.TeamCatalogObserver
@@ -234,9 +246,20 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 	provider, err := bridge.resolveProvider(ctx, orgID, runID)
 	if err == nil {
 		if collector, ok := bridge.native[provider]; ok {
+			// Non-strict (team-lead ruling, 2026-08-28): mirrors Python's
+			// run_team_autoimport, which catches every populator exception --
+			// including auth/config resolution failures, not only the
+			// populate call itself -- and returns a zero summary rather than
+			// failing the job. EVERY error from this point on (selections,
+			// credential/client, source ids, or the collection call itself)
+			// must degrade the same way, or a resolver blip still causes a
+			// retry storm exactly like an un-degraded collector error would.
+			// The strict reference-discovery seam (TeamCatalogDiscoveryExecutor)
+			// has no such decorator and keeps propagating every one of these.
 			selections, syncOptions, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider)
 			if selectionsErr != nil {
-				return selectionsErr
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+				return nil
 			}
 			if !selections.Any() {
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
@@ -244,25 +267,39 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 			}
 			credential, client, integrationID, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
 			if clientErr != nil {
-				return clientErr
-			}
-			result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
-				OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
-				SyncOptions: syncOptions, Strict: false,
-			}, credential, client, selections, bridge.nowUTC())
-			if collectErr != nil {
-				// Non-strict (team-lead ruling, 2026-08-28): mirrors Python's
-				// run_team_autoimport, which catches every populator
-				// exception and returns a zero summary rather than failing
-				// the job -- the strict reference-discovery seam
-				// (TeamCatalogDiscoveryExecutor) is the one that still
-				// propagates. Degrading here avoids a retry storm on a
-				// transient provider failure; the failure is still visible
-				// via the dedicated nonfatal outcome, not silently dropped.
 				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 				return nil
 			}
-			bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
+			var sourceExternalIDs []string
+			if bridge.sources != nil {
+				var sourcesErr error
+				sourceExternalIDs, sourcesErr = bridge.sources.ResolveSourceExternalIDs(ctx, orgID, runID)
+				if sourcesErr != nil {
+					bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+					return nil
+				}
+			}
+			result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
+				OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
+				SyncOptions: syncOptions, Strict: false, SourceExternalIDs: sourceExternalIDs,
+			}, credential, client, selections, bridge.nowUTC())
+			if collectErr != nil {
+				// The failure is still visible via the dedicated nonfatal
+				// outcome, not silently dropped.
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+				return nil
+			}
+			if result.RosterPreservationFailed {
+				// A collector may choose to continue after its own
+				// existing-members pre-read failed rather than hard-failing
+				// the whole write (Linear's collector does not -- it always
+				// hard-fails instead, see CHAOS-4446). This outcome exists so
+				// that choice, if any collector ever makes it, is visible in
+				// telemetry rather than indistinguishable from a clean run.
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
+			} else {
+				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
+			}
 			if bridge.observer != nil {
 				for _, row := range []struct {
 					table string
@@ -271,6 +308,7 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 					{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
 					{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
 					{"team_project_ownership", result.OwnershipWritten},
+					{"team_repo_ownership", result.RepoOwnershipWritten},
 				} {
 					_ = bridge.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
 				}
@@ -285,3 +323,64 @@ func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
 }
 
 var _ syncdispatchruntime.CoordinatorBridge = &teamCatalogAutoimportBridge{}
+
+// teamCatalogSourceResolver implements
+// syncdispatchruntime.SourceExternalIDsResolver against the SAME
+// sync_run_units-JOIN-integration_sources join
+// src/dev_health_ops/workers/reference_discovery.py:281-303 uses to build
+// scope["source_external_ids"], including its fail-closed behavior: a run
+// whose sync_run_units references a source_id with no resolvable
+// integration_sources.external_id is a data-integrity gap, not a
+// "just skip it" case, so this returns an error instead of a partial list.
+type teamCatalogSourceResolver struct {
+	pool *pgxpool.Pool
+}
+
+func (resolver teamCatalogSourceResolver) ResolveSourceExternalIDs(
+	ctx context.Context, orgID, runID string,
+) ([]string, error) {
+	if resolver.pool == nil || orgID == "" || runID == "" {
+		return nil, providersync.ErrInvalidConfiguration
+	}
+	rows, err := resolver.pool.Query(ctx, `
+SELECT DISTINCT sru.source_id::text, isrc.external_id
+FROM public.sync_run_units sru
+LEFT JOIN public.integration_sources isrc ON isrc.id = sru.source_id
+WHERE sru.sync_run_id = $1::uuid`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	externalIDs := make(map[string]struct{})
+	var unresolved []string
+	for rows.Next() {
+		var sourceID string
+		var externalID *string
+		if err := rows.Scan(&sourceID, &externalID); err != nil {
+			return nil, err
+		}
+		if externalID == nil || strings.TrimSpace(*externalID) == "" {
+			unresolved = append(unresolved, sourceID)
+			continue
+		}
+		externalIDs[strings.TrimSpace(*externalID)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		return nil, fmt.Errorf(
+			"%w: reference discovery source inventory incomplete: unresolved_source_ids=%v",
+			providersync.ErrInvalidConfiguration, unresolved,
+		)
+	}
+	result := make([]string, 0, len(externalIDs))
+	for id := range externalIDs {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+var _ syncdispatchruntime.SourceExternalIDsResolver = teamCatalogSourceResolver{}

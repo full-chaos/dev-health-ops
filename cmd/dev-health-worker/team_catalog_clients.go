@@ -67,8 +67,16 @@ const authSourceEnvironment = "environment"
 // 3's P1 fix: this Go resolver has no equivalent of sync_bootstrap.py's
 // _resolve_env_credentials, so an environment-stamped run fails closed here
 // with a distinct, honest error instead of silently falling through to a
-// mutable or empty credential_id.
-var errTeamCatalogEnvironmentAuthUnsupported = errors.New("team catalog native resolver does not support environment-stamped auth; route this provider's reference discovery through the bridge")
+// mutable or empty credential_id. Verified safe against live prod traffic
+// (team-lead, 2026-08-28: 0 environment-stamped sync_runs in the last 30
+// days, 0 NULL-credential integrations) -- fail-closed stands rather than
+// building env-credential resolution for an unreached case. A bridge
+// fallback for this case specifically (so a future environment-stamped run
+// degrades to the Python path instead of erroring) is CHAOS-4198's "bridge
+// fallback for environment-stamped auth on native team-catalog routes"
+// child, not built here -- this error's text states the fact, it does not
+// promise behavior this code does not implement.
+var errTeamCatalogEnvironmentAuthUnsupported = errors.New("team catalog native resolver: environment-stamped auth is not supported; run fails closed")
 
 // resolveTeamCatalogIntegration ports the exact join
 // native_reference_discovery.go's resolveAuthoritativeProvider already uses
@@ -256,6 +264,22 @@ WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at, id
 LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 	if errors.Is(queryErr, pgx.ErrNoRows) {
+		// CHAOS-4431 codex review (4432's round, routed here as base owner):
+		// no canonical row means sync_options itself carries nothing
+		// trustworthy for CHAOS-4323 selections (handled below, strict vs
+		// non-strict), but a collector may still need a provider-specific
+		// SCOPE value beyond the resolved credential -- GitLab's group_path,
+		// GitHub's org ("owner") fallback. reference_discovery.py:329-333
+		// falls back to `dict(integration.config or {})` for EXACTLY that
+		// reason; its own comment says this is kept ONLY for that fallback,
+		// never trusted for auto_import_* category resolution (which is why
+		// selections below stay governed purely by strict/non-strict, not by
+		// this map's content). Integration.config is stale for selections
+		// per chris -- never read auto_import_* out of it.
+		fallbackConfig, configErr := resolveIntegrationConfigFallback(ctx, resolver.pool, integrationID)
+		if configErr != nil {
+			return providersync.TeamCatalogSelections{}, nil, configErr
+		}
 		if strict {
 			// CHAOS-4431 codex review round 2, P2: no canonical
 			// sync_configurations row at all is NOT the same case as an
@@ -266,12 +290,12 @@ LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 			// codex-review fix) so a legacy/no-config integration keeps
 			// importing everything, matching pre-CHAOS-4323 behavior,
 			// instead of silently going to "everything off".
-			return providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}, nil, nil
+			return providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}, fallbackConfig, nil
 		}
 		// Non-strict (post-sync): every flag unconfigured -- the OR-gate at
 		// native_post_sync.go:577 treats the identical case as "false" via
 		// COALESCE; this mirrors that exactly.
-		return providersync.TeamCatalogSelections{}, nil, nil
+		return providersync.TeamCatalogSelections{}, fallbackConfig, nil
 	}
 	if queryErr != nil {
 		return providersync.TeamCatalogSelections{}, nil, queryErr
@@ -286,6 +310,29 @@ LIMIT 1`, orgID, integrationID).Scan(&syncOptionsJSON)
 		Members:  syncOptionBool(syncOptions, "auto_import_members"),
 	}
 	return selections, syncOptions, nil
+}
+
+// resolveIntegrationConfigFallback reads an integration's own `config`
+// column (jsonb, NOT NULL DEFAULT '{}') -- used ONLY when no canonical
+// sync_configurations row exists, mirroring reference_discovery.py:329-333's
+// `dict(integration.config or {})` fallback. That Python comment is explicit
+// that this value is trustworthy ONLY for a provider-specific scope
+// fallback (GitHub's "owner", GitLab's group_path) -- never for CHAOS-4323
+// category resolution, which is why the selections decision in
+// ResolveSelections never reads this map at all.
+func resolveIntegrationConfigFallback(ctx context.Context, pool *pgxpool.Pool, integrationID string) (map[string]any, error) {
+	var configJSON []byte
+	if err := pool.QueryRow(ctx, `
+SELECT COALESCE(config, '{}'::jsonb)
+FROM public.integrations
+WHERE id = $1::uuid`, integrationID).Scan(&configJSON); err != nil {
+		return nil, err
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return nil, fmt.Errorf("decode integration config fallback: %w", err)
+	}
+	return config, nil
 }
 
 // syncOptionBool reads a boolean flag out of a decoded sync_options map,

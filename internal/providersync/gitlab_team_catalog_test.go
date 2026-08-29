@@ -289,19 +289,15 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	}
 }
 
-// TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday documents
-// a known, open gap (codex review finding, CHAOS-4432 RISK-NOTES): the
-// native project catalog is NOT filtered by selected IntegrationSource ids.
-// Python's source_external_ids filter is populated by a live DB join
-// (sync_run_units -> integration_sources) reference_discovery.py's
-// _load_discovery_context does, a separate computation from
-// TeamCatalogReference.SyncOptions -- team-lead's "no per-provider
-// injection seams" ruling means this collector does not add its own DB
-// dependency to recover it. This test pins the CURRENT behavior so a
-// silent regression in either direction (accidentally scoping, or the gap
-// growing) is visible, not a guess about what SHOULD happen once
-// TeamCatalogReference grows a field for it.
-func TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday(t *testing.T) {
+// TestGitLabTeamCatalogNativeProjectCatalogUnscopedWhenSourceExternalIDsEmpty
+// proves the "empty = unscoped" side of ref.SourceExternalIDs filtering
+// (team-lead ruling, 2026-08-28): an empty/nil set means catalog every
+// discovered project, matching the shared resolver's behavior when a run
+// has nothing (or, deliberately not distinguished here, an explicit empty
+// enabled-source set) to scope by. See the filter's doc comment in
+// gitlab_team_catalog_route.go for the documented divergence from Python's
+// None-vs-empty-set distinction.
+func TestGitLabTeamCatalogNativeProjectCatalogUnscopedWhenSourceExternalIDsEmpty(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
 	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
@@ -315,6 +311,35 @@ func TestGitLabTeamCatalogNativeProjectCatalogIsUnscopedByDesignToday(t *testing
 	}
 	if len(batch.Rows.Projects) != 3 {
 		t.Fatalf("native projects = %d, want 3 (every discovered project, unscoped)", len(batch.Rows.Projects))
+	}
+}
+
+// TestGitLabTeamCatalogNativeProjectCatalogScopedBySourceExternalIDs proves
+// the scoping side: a non-empty ref.SourceExternalIDs set (the run's
+// enabled IntegrationSource.external_id values, populated by the shared
+// teamCatalogSourceResolver) filters the native project catalog to only
+// those discovered projects whose raw numeric id is in the set --
+// newGitLabTeamCatalogFakeServer discovers native ids "100", "101", "102";
+// scoping to {"100", "101"} must drop "102" (org/team-a/archived-svc).
+func TestGitLabTeamCatalogNativeProjectCatalogScopedBySourceExternalIDs(t *testing.T) {
+	fake := newGitLabTeamCatalogFakeServer(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", SourceExternalIDs: []string{"100", "101"}}
+	selections := TeamCatalogSelections{Projects: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(batch.Rows.Projects) != 2 {
+		t.Fatalf("native projects = %d, want 2 (scoped out id 102)", len(batch.Rows.Projects))
+	}
+	for _, row := range batch.Rows.Projects {
+		if row.ID == gitlabProjectCatalogID("org-1", "102") {
+			t.Fatalf("id 102 must be scoped out, got rows=%+v", batch.Rows.Projects)
+		}
 	}
 }
 

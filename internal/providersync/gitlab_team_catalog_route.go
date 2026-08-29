@@ -320,22 +320,35 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	if selections.Projects {
-		// NOT filtered by selected IntegrationSource ids (codex review
-		// finding, CHAOS-4432): team_autoimport_gitlab._gitlab_project_catalog_rows's
-		// source_external_ids filter is populated by
-		// workers/reference_discovery.py's _load_discovery_context via a
-		// LIVE DB join (sync_run_units -> integration_sources.external_id
-		// for THIS run's own claimed units) -- a separate computation from
-		// integration.config/sync_options (verified against that function's
-		// current source: the scope dict carries "source_external_ids" and
-		// "sync_options" as two independent keys). ref.SyncOptions carries
-		// only the latter, so it cannot derive the former; per team-lead's
-		// "no per-provider injection seams" ruling, this collector does not
-		// add its own DB dependency to get it either. Every discovered
-		// project is cataloged unscoped -- identical to Python's own
-		// default for the common post-sync path, but a real, open gap for
-		// the strict/reference-discovery path specifically until
-		// TeamCatalogReference grows a field for it.
+		// Filtered by ref.SourceExternalIDs (CHAOS-4431's base push,
+		// team-lead ruling 2026-08-28): mirrors team_autoimport_gitlab.
+		// _gitlab_project_catalog_rows's source_external_ids filter --
+		// only a discovered project whose raw numeric id (the SAME id
+		// gitlabProjectCatalogID mints this row's id from) is in the
+		// run's enabled-source set is cataloged. The shared resolver
+		// (teamCatalogSourceResolver, cmd/dev-health-worker/team_catalog_
+		// clients.go) populates ref.SourceExternalIDs from the identical
+		// sync_run_units-JOIN-integration_sources join Python's
+		// _load_discovery_context uses -- this collector stays DB-free,
+		// per team-lead's "no per-provider injection seams" ruling.
+		//
+		// Deliberate simplification vs Python (team-lead ruling,
+		// 2026-08-28: "empty = unscoped"): Python's _source_external_ids
+		// distinguishes None (key absent -- unscoped, the common post-sync
+		// trigger's behavior today) from an explicit empty set (reference
+		// discovery enumerated zero enabled sources -- filter everything
+		// OUT). Go's ref.SourceExternalIDs collapses both into "no
+		// filtering" when empty, since the shared resolver populates it
+		// uniformly at both call sites (bea10bee9) and a Go nil/empty-slice
+		// split at this boundary would be a fragile, easily-inverted signal
+		// to carry across the interface. A zero-enabled-source run is a
+		// pre-existing edge case (this org's IntegrationSource rows are all
+		// disabled) that both dispatchers already guard elsewhere; not
+		// re-litigated here.
+		sourceExternalIDs := make(map[string]bool, len(ref.SourceExternalIDs))
+		for _, id := range ref.SourceExternalIDs {
+			sourceExternalIDs[id] = true
+		}
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path: rootPath + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
@@ -352,6 +365,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			var project gitlabTeamCatalogProjectPayload
 			if err := json.Unmarshal(raw, &project); err != nil {
 				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			if len(sourceExternalIDs) > 0 && !sourceExternalIDs[strings.TrimSpace(project.ID.String())] {
+				continue
 			}
 			row, ok := normalizeGitLabProjectCatalogRow(ref.OrgID, project, normalizedAt)
 			if !ok {

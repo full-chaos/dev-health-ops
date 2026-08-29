@@ -110,6 +110,38 @@ var errTeamCatalogEnvironmentAuthUnsupported = errors.New("team catalog native r
 // non-empty return means the caller MUST verify it once the credential is
 // decrypted (ResolveClient below) -- resolveTeamCatalogIntegration itself
 // never sees decrypted credential content, so it cannot compute the witness.
+// resolveTeamCatalogIntegrationID looks up the integration row for a sync
+// run, independent of credential resolution. ResolveSelections only ever
+// needs the integration id (to read sync_configurations/integrations.config
+// for CHAOS-4323 selections and the scope fallback) and must not fail just
+// because this run has no resolvable credential -- reference_discovery.py
+// resolves credentials (resolve_run_auth, line ~273) and sync_options
+// (canonical_sync_config_for_sync_run, line ~329) as two fully independent
+// calls, neither gated on the other succeeding, and an environment-stamped
+// or as-yet-uncredentialed run must still get a selections/scope answer.
+// resolveTeamCatalogIntegration (below) additionally resolves+validates a
+// credential id and is for ResolveClient's use only.
+func resolveTeamCatalogIntegrationID(ctx context.Context, pool *pgxpool.Pool, orgID, runID, provider string) (string, error) {
+	if pool == nil || orgID == "" || runID == "" || provider == "" {
+		return "", providersync.ErrInvalidConfiguration
+	}
+	var integrationID string
+	queryErr := pool.QueryRow(ctx, `
+SELECT integrations.id::text
+FROM public.sync_runs
+JOIN public.integrations ON integrations.id = sync_runs.integration_id
+WHERE sync_runs.id = $1::uuid AND sync_runs.org_id = $2 AND integrations.org_id = $2
+  AND lower(trim(integrations.provider)) = $3`,
+		runID, orgID, provider).Scan(&integrationID)
+	if errors.Is(queryErr, pgx.ErrNoRows) {
+		return "", providersync.ErrInvalidConfiguration
+	}
+	if queryErr != nil {
+		return "", queryErr
+	}
+	return integrationID, nil
+}
+
 func resolveTeamCatalogIntegration(
 	ctx context.Context, pool *pgxpool.Pool, orgID, runID, provider string,
 ) (integrationID, credentialID, stampedFingerprint string, err error) {
@@ -242,7 +274,7 @@ func (resolver teamCatalogSelectionsResolver) ResolveSelections(
 	ctx context.Context, orgID, runID, provider string, strict bool,
 ) (providersync.TeamCatalogSelections, map[string]any, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	integrationID, _, _, err := resolveTeamCatalogIntegration(ctx, resolver.pool, orgID, runID, provider)
+	integrationID, err := resolveTeamCatalogIntegrationID(ctx, resolver.pool, orgID, runID, provider)
 	if err != nil {
 		return providersync.TeamCatalogSelections{}, nil, err
 	}

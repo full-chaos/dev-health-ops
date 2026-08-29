@@ -656,8 +656,14 @@ Two consequences worth separating, because they answer different questions:
 - **A node's vCPU is fixed at create time** (no live resize), so the budget is
   spent when the cluster is created, not when a lane starts.
 
-Before any `kiac resume` or `container system start`, send the budget line and
-wait for a go-ahead.
+Before any `kiac resume`, send the budget line and wait for a go-ahead.
+
+**A stopped or unhealthy Apple `container` runtime is escalated to the host
+owner (chris), never fixed by the lane operator.** Lanes never run
+`container system start` or any other `container system` verb: it is
+host-wide and would restart every kiac VM on the machine, including another
+lane's cluster or the standing `acr-local` trial plane
+([AGENTS.md](../../../AGENTS.md#L143-L145)).
 
 ### Which cluster hosts what — ruling of 2026-08-28 19:47
 

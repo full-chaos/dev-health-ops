@@ -350,9 +350,9 @@ func TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult(t *testing.T) 
 		t.Fatal("native collector was not called -- this test proves the collector's OWN skip decision, not the pre-collector no-selection skip")
 	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
-		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeSkipped,
+		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeCollectorSkipped,
 	}) {
-		t.Fatalf("observer dispatches=%+v, want a single TeamCatalogOutcomeSkipped dispatch", observer.dispatches)
+		t.Fatalf("observer dispatches=%+v, want a single TeamCatalogOutcomeCollectorSkipped dispatch (distinct from TeamCatalogOutcomeSkipped -- the collector WAS called here)", observer.dispatches)
 	}
 	if len(observer.rows) != 0 {
 		t.Fatalf("observer rows=%+v, want no rows-written calls for a skipped result", observer.rows)

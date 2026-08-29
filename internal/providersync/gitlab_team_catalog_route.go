@@ -507,24 +507,86 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	}
 	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	result := TeamCatalogResult{}
+
+	// CHAOS-4431 codex review finding #6, ROUND 2 correction (P1, mirrored
+	// from LinearTeamCatalogCollector): the membership-conflict guard must
+	// run BEFORE the team roster is rebuilt, not after -- a membership the
+	// guard rejects must never still show up in `teams.members` even though
+	// it was correctly kept out of `team_memberships`. Computed once, up
+	// front, so both blocks below read from its result.
+	var keptMemberships []gitlabTeamCatalogMembershipRow
+	var membershipsSkippedManualConflict int
+	if selections.Members && len(batch.Rows.Memberships) > 0 {
+		var guardErr error
+		keptMemberships, membershipsSkippedManualConflict, guardErr = applyGitLabTeamMembershipConflictGuard(
+			ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, batch.Rows.Memberships,
+		)
+		if guardErr != nil {
+			return result, guardErr
+		}
+	}
+
 	if selections.Teams && batch.Effects.Teams != nil {
-		if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Teams); err != nil {
+		teamRows := batch.Rows.Teams
+		if selections.Members {
+			// Rebuild each team's roster from the CONFLICT-FILTERED
+			// memberships, not the raw walk-observed roster the Handler
+			// baked into the row -- see the doc comment above. A team whose
+			// own member fetch failed (FailedMemberFetchTeamIDs, non-strict
+			// soft-fail, CHAOS-4461) keeps MembersAuthoritative=false from
+			// the walk untouched here -- the sink's existing roster-
+			// preservation path (CHAOS-4323 round 2) already handles it,
+			// independent of this guard.
+			roster := gitlabRosterFromMemberships(keptMemberships)
+			teamRows = append([]gitlabTeamCatalogTeamRow(nil), teamRows...)
+			for index := range teamRows {
+				if !teamRows[index].MembersAuthoritative {
+					continue
+				}
+				teamRows[index].Members = roster[teamRows[index].ID]
+			}
+		}
+		// CHAOS-4431 codex review findings #3/#6, team-lead ruling
+		// 2026-08-28 (extended to GitLab): a team whose sync_policy is not
+		// the auto-apply default (0) is left completely untouched by this
+		// write, not overwritten with this call's observed values.
+		keptTeams, skippedTeamIDs, guardErr := applyGitLabTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows)
+		if guardErr != nil {
+			return result, guardErr
+		}
+		result.TeamsSkippedPolicy = len(skippedTeamIDs)
+		teamsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogTeamsDestination, EffectReadbackRequired, keptTeams)
+		if effectErr != nil {
+			return result, effectErr
+		}
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, teamsEffect); err != nil {
 			return result, err
 		}
-		result.TeamsWritten = batch.Result.TeamsImported
-		result.TeamKeys = make([]string, 0, len(batch.Rows.Teams))
-		for _, team := range batch.Rows.Teams {
+		result.TeamsWritten = len(keptTeams)
+		result.TeamKeys = make([]string, 0, len(keptTeams))
+		for _, team := range keptTeams {
 			if team.NativeTeamKey != nil && *team.NativeTeamKey != "" {
 				result.TeamKeys = append(result.TeamKeys, *team.NativeTeamKey)
 			}
 		}
 	}
 	if selections.Members && batch.Effects.Memberships != nil {
-		if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Memberships); err != nil {
+		// CHAOS-4431 codex review finding #6, team-lead ruling 2026-08-28
+		// (extended to GitLab): write the CONFLICT-FILTERED memberships,
+		// computed above before the Teams block, so the roster and the
+		// memberships table never disagree about which assignments are
+		// safe. Independent of the #3 sync_policy guard above: this gate
+		// applies even to policy-0 teams (team-attribution.md:793-797).
+		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
+		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
+		if effectErr != nil {
+			return result, effectErr
+		}
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, membershipsEffect); err != nil {
 			return result, err
 		}
-		result.MembershipsWritten = batch.Result.TeamMembershipsImported
-		result.MembersWritten = batch.Result.MembersImported
+		result.MembershipsWritten = len(keptMemberships)
+		result.MembersWritten = len(distinctGitLabMembershipMembers(keptMemberships))
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {

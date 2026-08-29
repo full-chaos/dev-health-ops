@@ -178,9 +178,10 @@ async def test_aggregates_reflect_full_mix_not_capped_page(sink):
 
         # Sanity: with a NARROWING filter active (repo_ids), the candidate set is
         # bounded so the relevance sort (ORDER BY confidence DESC) applies and the
-        # high-confidence dependency edges surface on the first page. (The
-        # fully-unfiltered overview intentionally emits NO ORDER BY to preserve
-        # early-LIMIT termination — see resolve_work_graph_edges.)
+        # high-confidence dependency edges surface on the first page. (CHAOS-4493:
+        # the unfiltered overview now ALSO carries this ORDER BY, unconditionally
+        # — see resolve_work_graph_edges — but this scenario exercises the
+        # narrowing-filter path specifically.)
         overview = await resolve_work_graph_edges(
             context, WorkGraphEdgeFilterInput(repo_ids=[repo_uuid], limit=1000)
         )

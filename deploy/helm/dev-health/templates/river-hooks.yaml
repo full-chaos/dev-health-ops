@@ -169,8 +169,15 @@ spec:
         runAsNonRoot: true
       containers:
         - name: river-migrate
-          image: {{ .Values.migrations.hook.riverMigrate.image | quote }}
-          imagePullPolicy: {{ .Values.migrations.hook.riverMigrate.pullPolicy }}
+          {{- /*
+          Defaults to the OPS RUNTIME image: `dev-health-worker-migrate` is
+          installed into it at docker/Dockerfile:87, and Compose's
+          go-river-migrate builds and runs that same image. There is no
+          separate published migrator image -- naming one tripped
+          tests/tooling/test_go_image_publishing.py, correctly.
+          */}}
+          image: {{ .Values.migrations.hook.riverMigrate.image | default (include "dev-health.image" .) | quote }}
+          imagePullPolicy: {{ .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
           {{- /*

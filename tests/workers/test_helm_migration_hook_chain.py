@@ -139,6 +139,28 @@ def test_provisioning_uses_the_ops_image_that_carries_the_sql() -> None:
     assert "provision_river_roles.sql" in command
 
 
+def test_river_migrate_defaults_to_the_ops_image_that_carries_the_binary() -> None:
+    """`dev-health-worker-migrate` lives in the ops runtime image.
+
+    docker/Dockerfile:87 installs it into /usr/local/bin in the `runner`
+    target, and Compose's go-river-migrate builds and runs that same image.
+    An earlier version of this chart named
+    `ghcr.io/full-chaos/dev-health-go-worker-migrate:latest`, which CI has
+    never published -- caught by
+    tests/tooling/test_go_image_publishing.py::test_every_referenced_go_image_is_published
+    with "deployment renderers name Go images that CI never publishes". A
+    chart that renders an unpullable image fails at ImagePullBackOff, long
+    after the operator has committed to the upgrade.
+    """
+    jobs = _jobs(*_BOTH_ON)
+    river_image = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]["image"]
+    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert river_image == migrate_image, (
+        "river-migrate must default to the ops runtime image that actually "
+        f"carries the binary: {river_image} != {migrate_image}"
+    )
+
+
 def test_river_migrate_asserts_posture_after_applying_it() -> None:
     """`--check` is the posture assertion, and it must run AFTER the apply."""
     jobs = _jobs(*_BOTH_ON)

@@ -404,10 +404,17 @@ migrations:
       enabled: false
     riverMigrate:
       enabled: false
-      # -- The Go migrator image. Pin it: this binary owns the runtime grant
-      #    posture, so a mutable tag silently changes what the roles may do.
-      image: "ghcr.io/full-chaos/dev-health-go-worker-migrate:latest"
-      pullPolicy: IfNotPresent
+      # -- Image carrying `dev-health-worker-migrate`. EMPTY MEANS THE OPS
+      #    RUNTIME IMAGE, which is where that binary actually lives
+      #    (docker/Dockerfile:87 installs it into /usr/local/bin in the
+      #    `runner` target) and is exactly what Compose's go-river-migrate
+      #    builds and runs. There is no separate published migrator image:
+      #    naming one here made tests/tooling/test_go_image_publishing.py fail
+      #    with "deployment renderers name Go images that CI never publishes",
+      #    which is that guard doing its job. Override only if you genuinely
+      #    publish a dedicated migrator image.
+      image: ""
+      pullPolicy: ""
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

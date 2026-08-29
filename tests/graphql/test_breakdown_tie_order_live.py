@@ -81,7 +81,15 @@ def test_tied_rows_return_stable_order_and_set_across_repeated_calls() -> None:
             day=day,
             team_id=None,
             investment_area="feature_delivery",
-            project_stream=None,
+            # project_stream is LowCardinality(String) -- non-nullable
+            # (migration 007). team_id is genuinely Nullable, project_stream
+            # is not; production callers (work_item_engine_destinations.py,
+            # fixtures/generators/investments.py) always pass "" here, never
+            # None. None raised clickhouse_connect.driver.exceptions.DataError
+            # ("Invalid None value in non-Nullable column") when this test
+            # was first run live against a real server (CHAOS-4495 slot
+            # proof) -- it had never been executed before.
+            project_stream="",
             delivery_units=7,
             work_items_completed=7,
             prs_merged=0,
@@ -117,17 +125,33 @@ def test_tied_rows_return_stable_order_and_set_across_repeated_calls() -> None:
 
         # Repeat the identical query several times. With the CHAOS-4495 fix,
         # the tie-break makes both the row SET (which 3 of 5 survive LIMIT)
-        # and the row ORDER identical every time -- the deterministic
-        # tie-break sorts by dimension_value (repo_id) ascending among equal
-        # value, so the 3 lexicographically-smallest repo_ids must win every
-        # run.
+        # and the row ORDER identical every time.
+        #
+        # The baseline is the FIRST call's own result, not a Python-side
+        # `sorted(str(uuid), ...)` computation: `dimension_value` (repo_id)
+        # is a ClickHouse `UUID`-typed column (schema: `repo_id
+        # Nullable(UUID)`, migration 007), and ClickHouse orders UUID by its
+        # internal 128-bit representation, not by the lexicographic order of
+        # its canonical hyphenated string form -- the two orderings
+        # disagree, discovered live when this test was first executed
+        # (CHAOS-4495 slot proof): the query deterministically returned the
+        # same 3 rows in the same order on every one of 8 calls, but a
+        # Python string-sort of the same 5 UUIDs picked a different 3.
+        # Comparing every repeat against the server's own first answer tests
+        # exactly what the docstring claims -- stability across repeated
+        # calls -- without depending on replicating ClickHouse's UUID sort
+        # semantics in the test.
         orders = [_fetch_order() for _ in range(8)]
 
-        expected = sorted(str(r) for r in repo_ids)[:3]
+        baseline = orders[0]
+        assert set(baseline) <= {str(r) for r in repo_ids}, (
+            f"baseline row set {baseline} was not drawn from the 5 seeded "
+            f"tied repo_ids {sorted(str(r) for r in repo_ids)}"
+        )
         for i, order in enumerate(orders):
-            assert order == expected, (
+            assert order == baseline, (
                 f"run {i}: tied-row order/set was not deterministic: got "
-                f"{order}, expected {expected} (CHAOS-4495 regression -- "
+                f"{order}, run 0 got {baseline} (CHAOS-4495 regression -- "
                 f"ORDER BY value DESC alone does not guarantee a stable "
                 f"result among tied rows)"
             )

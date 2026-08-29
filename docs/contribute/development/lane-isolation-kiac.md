@@ -615,6 +615,25 @@ Node use with the full stack in one namespace: 1114 m CPU (22 %) and 4449 MiB
 cluster, and only when a lane actually needs it.** Any other kiac cluster and any
 kind cluster stay down while Docker Desktop runs.
 
+### Preflight — check for another live cluster before `up`
+
+`lane.sh up` creates `dev-full` without checking for another live kiac
+cluster. Run this yourself, every time, before `up`:
+
+```bash
+kiac get clusters
+```
+
+If it lists any OTHER running cluster — most likely `acr-local`, the acr pilot
+and the standing trial-data plane — **stop; do not run `up`.** Escalate to the
+host owner (chris) and wait for a go-ahead. Never stop `acr-local` yourself,
+even to free capacity — it hosts `acr-trial-data`'s seeded `@backups` PVCs.
+
+The arithmetic behind the rule: Docker Desktop (4 vCPU) + `dev-full` (4) +
+`acr-local` (4) = 12, plus buildkit (2) = 14 of 16 logical CPUs committed,
+leaving only 2 for the host, editors and every agent — the exact contention
+that stalled the machine when all three were up at once.
+
 | Consumer | vCPU | Note |
 | --- | --- | --- |
 | Docker Desktop VM | 4 | `docker info` NCPU |

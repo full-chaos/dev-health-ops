@@ -101,6 +101,12 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 					OperationalBridgeAllowInsecure: true,
 					ClickHouseURI:                  secrets.NewValue(clickhouseInstance.URI),
 					ValkeyURI:                      secrets.NewValue(valkeyInstance.URI),
+					// CHAOS-4431: buildSyncCoordinatorWorker now constructs a
+					// credential decryptor for the native team-catalog
+					// collector path (same newWorkerCredentialCipher
+					// provider_sync_test.go already requires), so this
+					// family's build now needs it too.
+					SettingsEncryptionKey: secrets.NewValue("test-master-key"),
 				},
 				reportBuilderDatabase(t),
 				registry,

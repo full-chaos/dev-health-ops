@@ -147,3 +147,88 @@ def test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row(
     except SystemExit:
         raised = True
     assert raised, "consistency guard did not fail on an untracked new worker file"
+
+
+def test_team_item_kinds_native_for_linear_github_gitlab_chaos_4492() -> None:
+    """CHAOS-4492: linear/github/gitlab team-item writes must read as Go-native.
+
+    #1989 (27bef7286, Linear), #1984 (950752653, GitHub), and #1985
+    (5bff38a5a, GitLab) merged native Go collectors for `teams` /
+    `team_memberships` / `team_project_ownership`. The ledger's
+    `sync.team_autoimport` kind row must say so -- citing all three merge
+    SHAs -- and must no longer claim those three providers are still
+    "In Progress" ports.
+
+    The `state` field is asserted on its own (not the whole row's aggregate
+    text), and pinned to specific per-provider clauses -- codex round 1
+    (2026-08-29) found the original substring-anywhere version would still
+    pass a swapped or partial attribution, e.g. "native for jira, bridge for
+    linear/github/gitlab" or a route that marks only jira dead.
+    """
+    gen = _load_gen_module()
+    row = gen.KIND_LEDGER["sync.team_autoimport"]
+    row_text = " ".join(row.values()).lower()
+    state = row.get("state", "").lower()
+
+    for sha in ("27bef7286", "950752653", "5bff38a5a"):
+        assert sha in row_text, (
+            f"sync.team_autoimport ledger row must cite merge SHA {sha}"
+        )
+    assert "in progress" not in row_text, (
+        "sync.team_autoimport row must not still call 4431/4432/4434 In Progress -- they are Done"
+    )
+
+    # Pin the exact per-provider attribution in `state`, not just "some field
+    # somewhere mentions the words native/linear/github/gitlab/jira".
+    assert "native for linear/github/gitlab" in state, (
+        f"sync.team_autoimport state must claim native specifically for linear/github/gitlab (got: {row.get('state')!r})"
+    )
+    assert "bridge for jira only" in state, (
+        f"sync.team_autoimport state must claim bridge specifically for jira only (got: {row.get('state')!r})"
+    )
+    # Reject the swapped/partial attributions codex's finding named explicitly.
+    for bad_provider in ("linear", "github", "gitlab"):
+        assert f"bridge for {bad_provider}" not in state, (
+            f"sync.team_autoimport state must not claim {bad_provider} is still bridge"
+        )
+    assert "native for jira" not in state, (
+        "sync.team_autoimport state must not claim jira is native"
+    )
+
+
+def test_bridge_routes_marked_dead_after_5_6_readback_chaos_4492() -> None:
+    """CHAOS-4492: the two live bridge routes are dead for 3/4 providers, pending prod proof.
+
+    `/team-autoimport` and `/reference-discovery-populate` stay live only for
+    jira until the 5.6 prod readback confirms the native linear/github/gitlab
+    routes are actually running in prod -- the ledger must say so explicitly,
+    not claim the routes are fully dead before that proof exists.
+
+    Pinned to exact per-provider clauses in `state` (see the kind-row test's
+    docstring for why substring-anywhere was insufficient -- codex round 1,
+    2026-08-29).
+    """
+    gen = _load_gen_module()
+    for route in (
+        "/api/internal/worker-sync/team-autoimport",
+        "/api/internal/worker-sync/reference-discovery-populate",
+    ):
+        row = gen.BRIDGE_ROUTE_LEDGER[route]
+        state = row.get("state", "").lower()
+        assert "live for jira" in state, (
+            f"{route} state must claim live specifically for jira (got: {row.get('state')!r})"
+        )
+        assert "dead for linear/github/gitlab" in state, (
+            f"{route} state must claim dead specifically for linear/github/gitlab (got: {row.get('state')!r})"
+        )
+        assert "5.6" in state, (
+            f"{route} state must cite the 5.6 readback gate (got: {row.get('state')!r})"
+        )
+        # Reject the swapped attributions codex's finding named explicitly.
+        assert "dead for jira" not in state, (
+            f"{route} state must not claim jira is dead"
+        )
+        for bad_provider in ("linear", "github", "gitlab"):
+            assert f"live for {bad_provider}" not in state, (
+                f"{route} state must not claim {bad_provider} is still live"
+            )

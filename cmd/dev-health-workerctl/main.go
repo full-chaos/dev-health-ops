@@ -881,6 +881,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return dispatchMetricsDailyFinalize(ctx, runtime, args[1:], stdout, stderr)
 	case "finalize-redrive":
 		return dispatchMetricsFinalizeRedrive(ctx, runtime, args[1:], stdout, stderr)
+	case "partition-recompute":
+		return dispatchMetricsPartitionRecompute(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1172,6 +1174,79 @@ func dispatchMetricsFinalizeRedrive(
 	return writeResult(stdout, stderr, map[string]any{
 		"finalize_redrive": outcome,
 		"dry_run":          *dryRun,
+	})
+}
+
+// dispatchMetricsPartitionRecompute handles `metrics partition-recompute`
+// (CHAOS-4459): the operator entry point that repairs the class
+// `daily-redrive`/`finalize-redrive` cannot touch -- a daily_metrics_run
+// whose partitions are ALL status='succeeded' (the ledger reports the day
+// complete) but whose family output was computed under a writer that is now
+// known to have been wrong (CHAOS-4341: the native repo_user_commit
+// executor wrote org_id="" on repo_metrics_daily/user_metrics_daily/
+// commit_metrics before PR #1960 -- historical partitions computed under
+// the old writer stay wrong forever, since a 'succeeded' partition is never
+// dispatchable again through any existing path). Mirrors
+// `metrics finalize-redrive`'s command shape exactly (WORKER_OPERATOR_TOKEN
+// authentication via configureRuntime, --review-evidence required unless
+// --dry-run, quiet invalid_request on any malformed input).
+//
+// --family is restricted to daily.SupportedPartitionRecomputeFamilies --
+// see that var's doc comment for why the reset itself recomputes every
+// family in the partition, not just the named one, and why --family is
+// audit/intent scoping rather than a real narrowing of the blast radius.
+func dispatchMetricsPartitionRecompute(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics partition-recompute")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	family := flags.String("family", "", "metrics.daily family this recompute is repairing (supported: repo_user_commit) -- recorded for audit; every family in the partition is recomputed, not just this one (see docs)")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED unless --dry-run: why this historical re-run is authorized (e.g. \"CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this day because the partition succeeded under the pre-#1960 writer that stamped org_id=''\")")
+	dryRun := flags.Bool("dry-run", false, "report what a real pass would do (which days, which runs would be reset) without writing anything -- no reset, no provenance row, no publish")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if !slices.Contains(daily.SupportedPartitionRecomputeFamilies, *family) {
+		return writeError(stderr, "invalid_request")
+	}
+	if !*dryRun && strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	nonce := ""
+	if !*dryRun {
+		nonce = uuid.NewString()
+	}
+	outcome, err := store.RedrivePartitionsForRange(ctx, publisher, *org, fromDay, toDay, nonce, *family, *reviewEvidence, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"partition_recompute": outcome,
+		"dry_run":             *dryRun,
 	})
 }
 

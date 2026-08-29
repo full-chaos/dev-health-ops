@@ -278,6 +278,22 @@ type DailyMetricsFinalizeRedriveObserver interface {
 	ObserveDailyMetricsFinalizeRedrive(outcome string, count int) error
 }
 
+// DailyMetricsPartitionRecomputeObserver is the narrow capability
+// PostgresStore.RedrivePartitionsForRange depends on (CHAOS-4459): an
+// operator-invoked historical recompute that resets an already-'succeeded'
+// daily_metrics_run's partitions back to a claimable state for one org
+// across a [from, to] calendar-day range, one day at a time -- the
+// partition-level counterpart to DailyMetricsFinalizeRedriveObserver.
+// "redriven" counts calendar days a fresh metrics.daily_partition job was
+// actually enqueued for; "skipped_ineligible" counts days in the requested
+// range with no eligible run (no run at all for that day, its partitions
+// not 100% succeeded, or a concurrent caller already reset it). A nil
+// observer makes this a silent no-op, matching every other observer in this
+// package: telemetry must never gate durable state.
+type DailyMetricsPartitionRecomputeObserver interface {
+	ObserveDailyMetricsPartitionRecompute(family, outcome string, count int) error
+}
+
 // DailyMetricsNativeFamilyObserver is the narrow capability
 // PartitionHandler depends on after attempting one native family compute
 // inside a partition (CHAOS-4276, the daily bridge's per-partition
@@ -358,6 +374,23 @@ type CoverageCacheInvalidationObserver interface {
 // fail-open logic must carry a counter with a bounded reason label.
 type BudgetEstimateFailureObserver interface {
 	ObserveBudgetEstimateFailure(reason string) error
+}
+
+// TeamCatalogObserver is the narrow capability CHAOS-4431's native/bridge
+// team-catalog dispatch depends on to report what it did: generic runtime
+// middleware cannot infer which path a provider took (native collector vs
+// the Python bridge vs skipped for no CHAOS-4323 selection) or how many rows
+// a native collector actually wrote per destination table -- only the
+// dispatch implementation itself (TeamCatalogDiscoveryExecutor or
+// teamCatalogAutoimportBridge, both cmd/dev-health-worker/internal/syncdispatchruntime)
+// knows either.
+type TeamCatalogObserver interface {
+	// ObserveTeamCatalogDispatch records one dispatch decision: which path a
+	// (provider, entry point) pair took for one call.
+	ObserveTeamCatalogDispatch(provider string, entryPoint TeamCatalogEntryPoint, outcome TeamCatalogOutcome) error
+	// ObserveTeamCatalogRowsWritten records rows written to one destination
+	// table by a native collector. Only called on the native outcome.
+	ObserveTeamCatalogRowsWritten(provider string, table TeamCatalogTable, rowsWritten int) error
 }
 
 // RegisterRuntime validates the low-cardinality scrape-presence identity

@@ -60,31 +60,37 @@ func TestLinearReferenceCatalogTreatsTrashedProjectAsRetired(t *testing.T) {
 
 func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 	baseClaim := nativeTestClaim("linear", "work-items")
+	baseRef := teamCatalogRefFromClaim(baseClaim)
 	observed := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	for _, testCase := range []struct {
 		name       string
-		claim      Claim
+		ref        TeamCatalogReference
 		credential providerfoundation.Credential
 		client     func(*providerfoundation.HTTPClient)
 	}{
 		{
-			name:       "wrong claim provider",
-			claim:      nativeTestClaim("github", "work-items"),
+			name:       "invalid reference: missing org id",
+			ref:        TeamCatalogReference{SyncRunID: baseRef.SyncRunID},
+			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
+		},
+		{
+			name:       "invalid reference: missing sync run id",
+			ref:        TeamCatalogReference{OrgID: baseRef.OrgID},
 			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
 		},
 		{
 			name:       "wrong credential provider",
-			claim:      baseClaim,
+			ref:        baseRef,
 			credential: providerfoundation.Credential{Provider: "github", ID: baseClaim.CredentialID},
 		},
 		{
-			name:       "wrong credential id",
-			claim:      baseClaim,
-			credential: providerfoundation.Credential{Provider: "linear", ID: "credential-other"},
+			name:       "missing credential id",
+			ref:        baseRef,
+			credential: providerfoundation.Credential{Provider: "linear", ID: ""},
 		},
 		{
 			name:       "wrong client provider",
-			claim:      baseClaim,
+			ref:        baseRef,
 			credential: providerfoundation.Credential{Provider: "linear", ID: baseClaim.CredentialID},
 			client:     func(client *providerfoundation.HTTPClient) { client.Provider = "github" },
 		},
@@ -96,12 +102,23 @@ func TestLinearReferenceCatalogRejectsCrossScopeInputs(t *testing.T) {
 				testCase.client(client)
 			}
 			batch, err := (LinearReferenceCatalogRouteHandler{}).CollectReferenceCatalog(
-				context.Background(), testCase.claim, testCase.credential, client, observed,
+				context.Background(), testCase.ref, testCase.credential, client,
+				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, observed,
 			)
 			if !errors.Is(err, ErrInvalidConfiguration) || batch.Result.Complete || len(doer.requests) != 0 {
 				t.Fatalf("batch=%+v error=%v requests=%d", batch, err, len(doer.requests))
 			}
 		})
+	}
+}
+
+// teamCatalogRefFromClaim lets existing tests keep building scenarios off
+// nativeTestClaim's fixture data (CHAOS-4431 dropped the Claim parameter
+// from CollectReferenceCatalog; it is now fed a claim-free reference).
+func teamCatalogRefFromClaim(claim Claim) TeamCatalogReference {
+	return TeamCatalogReference{
+		OrgID: claim.OrgID, SyncRunID: claim.SyncRunID,
+		IntegrationID: claim.IntegrationID, SourceID: claim.SourceID,
 	}
 }
 
@@ -142,6 +159,7 @@ func TestLinearReferenceCatalogBuildsConcreteEffects(t *testing.T) {
 		Memberships: []linearReferenceMembershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", MemberID: "linear:alice@example.com", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
 		Projects:    []linearReferenceProjectRow{{OrgID: claim.OrgID, Provider: "linear", ID: "project-1", Name: "Platform", IsActive: 1, UpdatedAt: now, LastSynced: now}},
 		Ownership:   []linearReferenceOwnershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", ProjectID: "project-1", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
+		Sprints:     []linearSprintRow{{OrgID: claim.OrgID, Provider: "linear", SprintID: "linear:cycle:cycle-1", Name: linearReferenceStringPtr("Cycle 1"), State: linearReferenceStringPtr("active"), NativeTeamKey: linearReferenceStringPtr("ENG"), LastSynced: now}},
 	}
 	effects, err := BuildLinearReferenceCatalogEffects(rows)
 	if err != nil {
@@ -157,6 +175,7 @@ func TestLinearReferenceCatalogBuildsConcreteEffects(t *testing.T) {
 		linearReferenceCatalogMembershipsDestination,
 		linearReferenceCatalogProjectsDestination,
 		linearReferenceCatalogOwnershipDestination,
+		linearReferenceCatalogSprintsDestination,
 	}
 	for index, want := range wantDestinations {
 		if got := batches[index].Destination; got != want {
@@ -190,18 +209,20 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	observed := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","description":"Platform team","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true},{"id":"user-2","name":"Inactive","email":"inactive@example.com","active":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"projects":{"nodes":[{"id":"project-42","name":"Platform","description":"Platform project","status":{"id":"status-1","name":"Completed","type":"completed"},"trashed":false,"targetDate":"2026-09-30","archivedAt":null,"url":"https://linear.app/project-42","lead":{"id":"user-1","name":"Alice","email":"alice@example.com"},"teams":{"nodes":[{"id":"team-raw-1","key":"ENG"}]} }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), observed,
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, observed,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.Failure != nil || !batch.Result.Complete || batch.Watermark == nil ||
-		batch.Evidence.Requests != 2 || batch.Evidence.Pages != 2 ||
+	if batch.Failure != nil || !batch.Result.Complete ||
+		batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 ||
 		!batch.Evidence.TeamsComplete || !batch.Evidence.MembersComplete || !batch.Evidence.ProjectsComplete {
 		t.Fatalf("batch=%+v", batch)
 	}
@@ -230,7 +251,9 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	if err := json.NewDecoder(doer.requests[0].Body).Decode(&teamRequest); err != nil {
 		t.Fatal(err)
 	}
-	if err := json.NewDecoder(doer.requests[1].Body).Decode(&projectRequest); err != nil {
+	// requests[1] is the unconditional per-team cycles/sprint fetch (CHAOS-4431
+	// codex review P1) -- the projects request now lands at index 2.
+	if err := json.NewDecoder(doer.requests[2].Body).Decode(&projectRequest); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(teamRequest.Query, "members(first: 10)") ||
@@ -240,6 +263,13 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	}
 }
 
+// TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects pins
+// the STRICT (reference-discovery) behavior: a capped or malformed projects
+// response must hard-fail the whole call rather than risk writing a false
+// "no projects" claim. CHAOS-4431 codex review round 3, P2 split this from
+// the non-strict case -- see
+// TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows for the
+// complementary degrade-and-continue behavior post-sync dispatch needs.
 func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *testing.T) {
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "workspace"
@@ -267,15 +297,51 @@ func TestLinearReferenceCatalogDoesNotRetireFromCappedOrMalformedProjects(t *tes
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			doer := &linearWorkItemsDoer{responses: testCase.responses}
+			ref := teamCatalogRefFromClaim(claim)
+			ref.Strict = true
 			batch, err := testCase.handler.CollectReferenceCatalog(
-				context.Background(), claim,
+				context.Background(), ref,
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-				linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+				linearWorkItemsClient(t, doer),
+				TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 			)
-			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Watermark != nil || batch.Effects.Batches()[0].Destination != "" {
+			if err == nil || !errors.Is(err, testCase.wantErr) || batch.Failure == nil || batch.Failure.Code != testCase.code || batch.Effects.Batches()[0].Destination != "" {
 				t.Fatalf("batch=%+v err=%v", batch, err)
 			}
 		})
+	}
+}
+
+// TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows pins
+// CHAOS-4431 codex review round 3, P2: team_autoimport_linear.py:605-623's
+// except clause keeps teams/members already fetched and marks projects
+// incomplete on a non-strict failure -- it never discards the whole call.
+// An earlier revision here aborted unconditionally, discarding already-
+// fetched teams/members along with the projects error, the same bug class
+// already fixed for cycles failures in round 2.
+func TestLinearReferenceCatalogNonStrictMalformedProjectsKeepsOtherRows(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"project-1","name":"Broken"}],"pageInfo":{}}}}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = false
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("non-strict projects failure must not abort the whole call, got err=%v", err)
+	}
+	if batch.Evidence.ProjectsComplete {
+		t.Fatal("projects must be marked incomplete after a non-strict malformed-page failure")
+	}
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Members) != 1 {
+		t.Fatalf("teams/members already fetched must survive a non-strict projects failure: teams=%+v members=%+v", batch.Rows.Teams, batch.Rows.Members)
 	}
 }
 
@@ -285,15 +351,26 @@ func TestLinearReferenceCatalogPaginatesLargeTeamMemberships(t *testing.T) {
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":true,"endCursor":"members-1"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"team":{"members":{"nodes":[{"id":"user-2","name":"Bob","email":"bob@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
-	if err != nil || batch.Result.Members != 2 || batch.Evidence.Requests != 3 || !batch.Evidence.MembersComplete {
+	if err != nil || batch.Result.Members != 2 || batch.Evidence.Requests != 4 || !batch.Evidence.MembersComplete {
 		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+	// CHAOS-4431 codex review P1: the team roster must reflect BOTH pages of
+	// members, not just the page-1 node returned alongside the teams query --
+	// a roster built from page 1 alone would silently truncate to Alice only
+	// (2 facets: "linear:alice@example.com" + "alice@example.com"), never
+	// reaching Bob's page-2 facets at all.
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Teams[0].Members) != 4 ||
+		!containsString(batch.Rows.Teams[0].Members, "linear:bob@example.com") {
+		t.Fatalf("roster truncated to page 1: teams=%+v", batch.Rows.Teams)
 	}
 }
 
@@ -306,12 +383,104 @@ func TestLinearReferenceCatalogCountsMultiplePagesOnce(t *testing.T) {
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
-		context.Background(), claim,
+		context.Background(), teamCatalogRefFromClaim(claim),
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, doer), time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil || batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 || !batch.Result.Complete {
 		t.Fatalf("batch=%+v err=%v", batch, err)
+	}
+}
+
+// TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows pins CHAOS-
+// 4431 codex review round 2, P1: team_autoimport_linear.py:636-639's outer
+// except only zeroes sprint_rows on a non-strict cycles failure ("if strict:
+// raise; sprint_rows = []") -- it never discards teams/members/projects
+// already fetched. The cycles fetch here returns a GraphQL error response so
+// it fails with providerfoundation.ErrGraphQLResponse.
+func TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"errors":[{"message":"boom"}]}`,
+		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = false
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("non-strict cycles failure must not abort the whole call, got err=%v", err)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints must be discarded after a non-strict cycles failure, got=%+v", batch.Rows.Sprints)
+	}
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Members) != 1 {
+		t.Fatalf("teams/members already fetched must survive a non-strict cycles failure: teams=%+v members=%+v", batch.Rows.Teams, batch.Rows.Members)
+	}
+}
+
+// TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall is the
+// strict-mode complement: reference discovery must still propagate a cycles
+// failure as a hard error (Python's "if strict: raise"), never silently
+// degrade.
+func TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall(t *testing.T) {
+	claim := nativeTestClaim("linear", "work-items")
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"errors":[{"message":"boom"}]}`,
+	}}
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = true
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err == nil || !errors.Is(err, providerfoundation.ErrGraphQLResponse) {
+		t.Fatalf("strict cycles failure must propagate as an error, got batch=%+v err=%v", batch, err)
+	}
+}
+
+// TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships
+// pins CHAOS-4431 codex review round 2, P1: the roster LinearTeamCatalog
+// Collector writes to `teams.members` must be built from the membership-
+// conflict guard's KEPT rows only. A member the guard rejected (e.g.
+// alice, who has an active manual pin to a different team) must never
+// appear in the roster even though she was one of the raw discovered
+// members -- mirroring Python's _apply_roster, which runs on memberships
+// AFTER split_memberships_for_review already filtered them.
+func TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships(t *testing.T) {
+	// Simulates: alice was discovered on ENG but the conflict guard rejected
+	// her (kept out of the memberships passed here); bob was kept.
+	keptMemberships := []linearReferenceMembershipRow{
+		{TeamID: "ENG", MemberID: "linear:bob@example.com", IdentityFacets: []string{"linear:bob@example.com", "bob@example.com"}},
+	}
+	roster := linearReferenceTeamRosterFromMemberships("ENG", keptMemberships)
+	if len(roster) != 2 || !containsString(roster, "linear:bob@example.com") || !containsString(roster, "bob@example.com") {
+		t.Fatalf("roster=%+v want bob's facets only", roster)
+	}
+	if containsString(roster, "linear:alice@example.com") || containsString(roster, "alice@example.com") {
+		t.Fatalf("roster=%+v must not contain a membership the conflict guard rejected", roster)
+	}
+}
+
+// TestLinearReferenceTeamRosterFromMembershipsScopesByTeam proves the
+// rebuild is per-team: a kept membership for a DIFFERENT team must not leak
+// into this team's roster.
+func TestLinearReferenceTeamRosterFromMembershipsScopesByTeam(t *testing.T) {
+	keptMemberships := []linearReferenceMembershipRow{
+		{TeamID: "OPS", MemberID: "linear:carol@example.com", IdentityFacets: []string{"linear:carol@example.com"}},
+	}
+	roster := linearReferenceTeamRosterFromMemberships("ENG", keptMemberships)
+	if len(roster) != 0 {
+		t.Fatalf("roster=%+v want empty -- the only kept membership is for a different team", roster)
 	}
 }
 

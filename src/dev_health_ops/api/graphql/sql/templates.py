@@ -275,11 +275,11 @@ SETTINGS max_execution_time = %(timeout)s
 
 _FLOW_MATRIX_REPO_ENRICHED_CTE = f"""WITH enriched AS (
     SELECT
-        wct.work_item_id,
-        t.team_id,
-        wct.day,
-        wct.org_id,
-        wi.repo_id,
+        wct.work_item_id AS work_item_id,
+        t.team_id AS team_id,
+        wct.day AS day,
+        wct.org_id AS org_id,
+        wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL
     INNER JOIN {PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE} AS t
@@ -296,7 +296,7 @@ _FLOW_MATRIX_REPO_ENRICHED_CTE = f"""WITH enriched AS (
 _FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE = """WITH enriched AS (
     SELECT
         wct.work_item_id,
-        wct.team_id,
+        wct.team_id AS team_id,
         wct.day,
         wct.org_id,
         wi.repo_id,

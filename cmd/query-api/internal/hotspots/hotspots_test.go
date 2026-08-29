@@ -284,6 +284,46 @@ func TestResolve_RepoIDsFilterBindsUnboundedByRowLimit(t *testing.T) {
 	}
 }
 
+// TestResolve_OrderByHasDeterministicTieBreak pins CHAOS-4472: the
+// resolver's ORDER BY must carry the deterministic repo_id/file_path
+// tie-break after risk_score DESC NULLS LAST, matching the Python fix
+// (complexity.py's _fetch_hotspot_rows, CHAOS-4472) exactly -- a bare
+// `risk_score DESC NULLS LAST` has no tie-break, and ClickHouse does not
+// guarantee a stable row order/set among rows with equal risk_score,
+// which the CHAOS-4381 stage-2 comparator cannot tolerate.
+func TestResolve_OrderByHasDeterministicTieBreak(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{}},
+		},
+	}
+	_, err := Resolve(context.Background(), client, "org-1",
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	query := client.statements[0]
+	const wantOrderBy = "ORDER BY risk_score DESC NULLS LAST, repo_id, file_path"
+	if !contains(query, wantOrderBy) {
+		t.Fatalf("query = %q, want it to contain %q (CHAOS-4472 tie-break)", query, wantOrderBy)
+	}
+	idxGroup := indexOf(query, "GROUP BY repo_id, file_path")
+	idxOrder := indexOf(query, wantOrderBy)
+	idxLimit := indexOf(query, "LIMIT")
+	if !(idxGroup >= 0 && idxGroup < idxOrder && idxOrder < idxLimit) {
+		t.Fatalf("expected GROUP BY < ORDER BY(with tie-break) < LIMIT in query, got indices group=%d order=%d limit=%d, query=%q", idxGroup, idxOrder, idxLimit, query)
+	}
+}
+
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestResolve_NilClientErrors(t *testing.T) {
 	_, err := Resolve(context.Background(), nil, "org-1",
 		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)

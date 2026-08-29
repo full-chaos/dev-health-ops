@@ -10,11 +10,22 @@
 // catalog (bounded to MAX_ROWS=1000 -- NOT the row limit -- before it
 // becomes a bind parameter, exactly mirroring Python's
 // `list(repo_ids)[:MAX_ROWS]`), same `ORDER BY risk_score DESC NULLS
-// LAST` at the database level, same 1..MAX_HOTSPOTS_ROWS(500) limit
-// clamp with a default of 50, same best-effort repo-label join (falls
-// back to the repo_id string when the repos catalog row is missing), and
-// the same deterministic evidenceUrl deeplink built from file_path (no
-// external service is queried).
+// LAST, repo_id, file_path` at the database level (CHAOS-4472: the bare
+// `risk_score DESC NULLS LAST` had no tie-break -- ClickHouse does not
+// guarantee a stable row order/set among rows with equal risk_score,
+// which a LIMIT sitting at a tie boundary can turn into a genuinely
+// non-deterministic row SET, not just order, breaking the CHAOS-4381
+// stage-2 comparator; `repo_id, file_path` is exactly this resolver's
+// own GROUP BY key below, already a total order over the deduplicated
+// row set, same fix shape as CHAOS-4421's reviewedges. Python fixed
+// first, in its own PR (CHAOS-4472), per the epic's standing rule for a
+// non-deterministic inherited ORDER BY -- this port picks up the
+// already-fixed Python query rather than diverging from it), same
+// 1..MAX_HOTSPOTS_ROWS(500) limit clamp with a default of 50, same
+// best-effort repo-label join (falls back to the repo_id string when
+// the repos catalog row is missing), and the same deterministic
+// evidenceUrl deeplink built from file_path (no external service is
+// queried).
 //
 // Deliberate divergence from complexitytimeseries's date handling,
 // confirmed by reading resolve_hotspots line by line, not assumed:
@@ -167,7 +178,7 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: bounded})
 	}
 
-	query += fmt.Sprintf("\nGROUP BY repo_id, file_path\nORDER BY risk_score DESC NULLS LAST\nLIMIT %d", limit)
+	query += fmt.Sprintf("\nGROUP BY repo_id, file_path\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

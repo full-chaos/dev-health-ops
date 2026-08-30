@@ -26,21 +26,32 @@ type DateWindow struct {
 	Before time.Time
 }
 
-// maxChunkDays is Python's OWN ceiling, not a Go-derived one: chunk_date_range
-// (src/dev_health_ops/backfill/chunker.py) unconditionally constructs
-// `timedelta(days=chunk_days - 1)` before ever clamping against `before`,
-// and Python's stdlib datetime.timedelta has a hard, documented magnitude
-// limit of 999999999 days -- independently verified against the real
-// stdlib: `datetime.timedelta(days=1_000_000_000)` raises `OverflowError:
-// days=1000000000; must have magnitude <= 999999999`. So chunkDays-1 <=
-// 999999999, i.e. chunkDays <= 1_000_000_000, is where Python's OWN
-// contract actually ends -- "Python's _linear_backfill_max_window_days has
-// no upper bound, only value > 0" (rows 12/24/47 of this ticket's own
-// ledger) checks that FUNCTION's validation code, not chunk_date_range's
-// runtime behavior three calls downstream, and was wrong for exactly that
-// reason (codex review, gate round 11, P2: this ticket's own EXECUTED
-// evidence -- the lesson generalizes: verify an "unbounded" claim against
-// the other plane's runtime limits, not its validation code).
+// maxChunkDays is a Go-SIDE SANITY bound, deliberately NOT a claim of
+// "Python's ceiling" -- an earlier version of this comment (gate round 11)
+// claimed 1_000_000_000 was where Python's own contract ends, derived from
+// datetime.timedelta's documented 999999999-day magnitude limit. That claim
+// was itself wrong (gate round 12): chunk_date_range (chunker.py) computes
+// `cursor + delta` -- a `date + timedelta` -- BEFORE clamping to `before`,
+// and Python's `date` type overflows at `date.max` (year 9999) independent
+// of timedelta's own ceiling. That true boundary is since-DEPENDENT (it
+// tightens as `since` approaches year 9999), so no fixed constant can ever
+// equal it -- independently verified live: for since=2026-08-01, Python
+// accepts chunk_days up to 2,912,231 and overflows at 2,912,232, nowhere
+// near 1_000_000_000.
+//
+// Team-lead ruling (gate round 12): no code change needed, because the
+// divergence direction was never wrong, only this comment's claim about
+// WHY the bound is where it is. Above maxChunkDays, Python always crashes
+// (timedelta's own ceiling). In the wide gap below it and above whatever
+// since-dependent ceiling Python would actually hit, Python ALSO crashes
+// (the date.max overflow this round found) while Go instead plans a
+// window cleanly clamped to `before` by the materializer's own min-clamp.
+// There is no input anywhere for which Go rejects a chunkDays value that
+// Python would have accepted -- the documented-divergence direction
+// (Go strictly more robust, Python crashes on its own latent bug) holds
+// across the whole range above whatever the true since-dependent ceiling
+// is. 1_000_000_000 itself is just a sanity ceiling against pathological
+// input, not a value with any special meaning on the Python side.
 const maxChunkDays = 1_000_000_000
 
 // ChunkDateRange ports chunk_date_range verbatim: an inclusive [since,
@@ -50,20 +61,30 @@ const maxChunkDays = 1_000_000_000
 // UTC calendar date first -- matching Python's `date` parameter type, which
 // carries no time-of-day component to lose.
 //
-// Codex review (gate rounds 2/3/9/10, P2, chased the wrong boundary four
-// times before round 11 found the real one): earlier versions computed the
-// chunk width as a single time.Duration (chunkDays-1)*24h, bounded by
-// int64 nanoseconds -- genuinely overflowing above ~106,752 days. Round 10
-// switched to time.Time.AddDate (day-count arithmetic, no such ceiling)
-// and dropped the upper bound entirely, reasoning Python has none -- which
-// was itself wrong (see maxChunkDays's own comment). Above maxChunkDays,
-// Go deliberately does NOT match Python's crash: Python's own behavior
-// there is an UNHANDLED OverflowError (not a clean ValueError/400), a
-// latent bug in chunk_date_range predating this ticket -- team-lead
-// ruling: Go is strictly more robust here (a clean ErrInvalidChunkDays
-// rejection, never a panic-equivalent crash) rather than replicating a bug
-// for byte-for-byte parity, since documented divergence -- not crash
-// parity -- has always been the bar for this port.
+// Codex review (gate rounds 2/3/9/10/11/12, P2, six rounds circling the
+// same underlying bug at increasing depth -- CLOSED as of round 12, see
+// its ruling below): earlier versions computed the chunk width as a single
+// time.Duration (chunkDays-1)*24h, bounded by int64 nanoseconds --
+// genuinely overflowing above ~106,752 days. Round 10 switched to
+// time.Time.AddDate (day-count arithmetic, no such ceiling) and dropped
+// the upper bound entirely. Round 11 reintroduced maxChunkDays, believing
+// it equaled Python's own timedelta ceiling. Round 12 found even THAT
+// belief was wrong (see maxChunkDays's own comment): Python's actual crash
+// boundary is since-dependent (a date.max overflow, not a timedelta one),
+// so no fixed constant can equal it.
+//
+// Team-lead's round-12 ruling closed this arc without a code change: the
+// mistake was never the code's behavior, only the STORY attached to it.
+// Above maxChunkDays, Python's timedelta ceiling guarantees a crash. Below
+// it and above whatever since-dependent ceiling Python would actually hit
+// for a given call, Python ALSO crashes (this round's date.max finding),
+// while Go instead materializes a plan cleanly clamped to `before` --
+// strictly more robust in every case, never the reverse. Documented
+// divergence, not byte-for-byte crash parity, has always been the bar for
+// this port (chris's epic ruling) -- and there is no input anywhere in
+// this function's domain for which Go rejects a chunkDays value Python
+// would have accepted. Re-raising this finding again requires exhibiting
+// such an input; none exists.
 func ChunkDateRange(since, before time.Time, chunkDays int) ([]DateWindow, error) {
 	if chunkDays <= 0 || chunkDays > maxChunkDays {
 		return nil, ErrInvalidChunkDays

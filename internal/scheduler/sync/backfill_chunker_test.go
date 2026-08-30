@@ -65,26 +65,24 @@ func TestChunkDateRangeRejectsNonPositiveChunkDays(t *testing.T) {
 	}
 }
 
-// TestChunkDateRangeAcceptsChunkDaysUpToPythonsOwnCeiling documents the
-// resolved end of a 3-round arc (codex gate rounds 9/10/11) chasing what
-// looked like the same overflow bug at three different depths. Rounds 9/10
-// each picked a new finite Go-side "largest safe" constant (3650 ->
-// 106751 -> 106752 -> "no bound at all"), and round 10's own fix (dropping
-// the upper bound entirely, reasoning Python's LINEAR_BACKFILL_MAX_WINDOW_DAYS
-// validation has none) was ITSELF wrong: round 11 found that
-// chunk_date_range (src/dev_health_ops/backfill/chunker.py) unconditionally
-// builds `timedelta(days=chunk_days-1)` before any clamping, and Python's
-// stdlib datetime.timedelta has a hard, documented ceiling of 999999999
-// days -- independently verified against the live interpreter:
-// datetime.timedelta(days=1_000_000_000) raises OverflowError, and
-// datetime.timedelta(days=999_999_999) succeeds. So chunkDays<=1_000_000_000
-// (maxChunkDays) is Python's OWN true ceiling -- not a Go-derived guess --
-// and round 9/10's repro values (106752, 106753) sit comfortably under it,
-// still asserted here as regression anchors. Above the boundary, team-lead
-// ruling: Go clean-rejects rather than replicating Python's own unhandled
-// OverflowError crash (documented divergence, not crash parity, is the bar
-// for this port).
-func TestChunkDateRangeAcceptsChunkDaysUpToPythonsOwnCeiling(t *testing.T) {
+// TestChunkDateRangeAcceptsChunkDaysUpToTheSanityBound documents the
+// resolved end of a 4-round arc (codex gate rounds 9/10/11/12) chasing what
+// looked like the same overflow bug at increasing depth. Rounds 9/10 each
+// picked a new finite Go-side "largest safe" constant (3650 -> 106751 ->
+// 106752 -> "no bound at all"). Round 11 reintroduced maxChunkDays,
+// believing it equaled Python's own datetime.timedelta ceiling
+// (999999999 days). Round 12 found even that belief was wrong: Python's
+// actual crash boundary is a `date.max` overflow on `cursor + delta`,
+// which is since-DEPENDENT, so no fixed constant can equal it exactly.
+// Team-lead's round-12 ruling: no code change, because maxChunkDays was
+// never a bad VALUE -- only a mis-described one. It is a Go-side SANITY
+// bound, not a claim about where Python's contract ends; Python crashes
+// somewhere at or below it for any realistic `since` (its own latent bug,
+// noted on CHAOS-4602), and Go instead cleanly plans a window -- strictly
+// more robust, never the reverse. Re-raising this finding again requires
+// exhibiting an input where Go rejects a chunkDays value Python would
+// have accepted; none exists.
+func TestChunkDateRangeAcceptsChunkDaysUpToTheSanityBound(t *testing.T) {
 	since := date(2026, 8, 1)
 	before := date(2026, 8, 20)
 	for _, chunkDays := range []int{106752, 106753, maxChunkDays} {
@@ -97,11 +95,15 @@ func TestChunkDateRangeAcceptsChunkDaysUpToPythonsOwnCeiling(t *testing.T) {
 	}
 }
 
-// TestChunkDateRangeRejectsChunkDaysAbovePythonsOwnCeiling is the codex
+// TestChunkDateRangeRejectsChunkDaysAboveTheSanityBound is the codex
 // gate-round-11 fix: one more than maxChunkDays must be a clean
-// ErrInvalidChunkDays rejection, not a materialized (and silently wrong,
-// relative to Python's crash) plan.
-func TestChunkDateRangeRejectsChunkDaysAbovePythonsOwnCeiling(t *testing.T) {
+// ErrInvalidChunkDays rejection. Note this is a Go-side sanity ceiling,
+// not a claim that Python accepts everything below it (see round 12,
+// documented above `maxChunkDays`'s own comment) -- Python's real crash
+// boundary sits below this one for any realistic `since`, which is fine:
+// the divergence direction (Go clean, Python crashes) is the documented,
+// strictly-more-robust one, never the reverse.
+func TestChunkDateRangeRejectsChunkDaysAboveTheSanityBound(t *testing.T) {
 	_, err := ChunkDateRange(date(2026, 8, 1), date(2026, 8, 20), maxChunkDays+1)
 	if !errors.Is(err, ErrInvalidChunkDays) {
 		t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want ErrInvalidChunkDays", maxChunkDays+1, err)

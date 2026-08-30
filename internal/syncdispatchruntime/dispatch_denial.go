@@ -284,6 +284,48 @@ func terminalizeInvalidClaimUnits(ctx context.Context, tx pgx.Tx, units []invali
 	if len(units) == 0 {
 		return 0, nil
 	}
+	// codex round 13 (post-rebase): this function has TWO call sites (see
+	// doc comment above) -- a post-claim one that already runs inside
+	// Dispatch()'s transaction AFTER authorizeRun's own bucket-lock
+	// acquisition (dispatch_guard.go), and a pre-capacity one (CHAOS-4556,
+	// landed on main independently of this PR) that runs BEFORE
+	// authorizeRun ever executes. The pre-capacity call site's bulk
+	// UPDATE below (`id = ANY($1::uuid[])`, no explicit row-lock order --
+	// Postgres locks matching rows in whatever order its plan finds them)
+	// therefore has NO bucket-lock protection at all on that path: a
+	// concurrent UnreclaimableSweep.Step (deterministic ascending-unit-id
+	// lock order, round 4) locking the SAME two units in the opposite
+	// order is a genuine ABBA deadlock. Rather than have the caller reason
+	// about which of the two call sites needs the lock and which already
+	// has it transitively, this function now takes its own bucket locks
+	// unconditionally, before touching any row: pg_advisory_xact_lock is
+	// reentrant within one session/transaction (re-acquiring a lock this
+	// same transaction already holds, from the post-claim call site's
+	// perspective, is a harmless no-op), so this is safe and correct for
+	// BOTH call sites uniformly.
+	buckets := make([]dispatchBucket, 0, len(units))
+	seenBuckets := map[dispatchBucket]bool{}
+	for _, entry := range units {
+		bucket := dispatchBucket{orgID: entry.unit.orgID, provider: entry.unit.provider, costClass: entry.unit.costClass}
+		if seenBuckets[bucket] {
+			continue
+		}
+		seenBuckets[bucket] = true
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		if buckets[i].orgID != buckets[j].orgID {
+			return buckets[i].orgID < buckets[j].orgID
+		}
+		if buckets[i].provider != buckets[j].provider {
+			return buckets[i].provider < buckets[j].provider
+		}
+		return buckets[i].costClass < buckets[j].costClass
+	})
+	if err := acquireBucketAdvisoryLocks(ctx, tx, buckets); err != nil {
+		return 0, err
+	}
+
 	type claimGroupKey struct{ reason, status string }
 	unitIDsByGroup := map[claimGroupKey][]string{}
 	for _, entry := range units {

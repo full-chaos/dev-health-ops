@@ -765,7 +765,7 @@ class ScheduledSyncOccurrence(Base):
 
 class SyncManualTrigger(Base):
     """The backfill-selector payload for a manual "Sync Now" / backfill
-    scheduled_sync_occurrences row (CHAOS-4602, alembic migration 0118).
+    scheduled_sync_occurrences row (CHAOS-4602, alembic migration 0119).
 
     1:1 with one ScheduledSyncOccurrence: mode/since/before/source_ids/
     dataset_keys/triggered_by are this ONE trigger's own ask, never a
@@ -787,7 +787,7 @@ class SyncManualTrigger(Base):
     before: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # postgresql.ARRAY on real Postgres (matches migration 0118 exactly);
+    # postgresql.ARRAY on real Postgres (matches migration 0119 exactly);
     # sqlite's ORM-level test fixtures (Base.metadata.create_all against an
     # in-memory sqlite engine, e.g. tests/test_sync_manual_trigger_safety.py)
     # have no ARRAY type, so JSON is the portable list-round-trip fallback

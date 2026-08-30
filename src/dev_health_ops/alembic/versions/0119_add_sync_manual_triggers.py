@@ -1,7 +1,7 @@
 """Add sync_manual_triggers (CHAOS-4602).
 
-Revision ID: 0118
-Revises: 0117
+Revision ID: 0119
+Revises: 0118
 Create Date: 2026-08-30 00:00:00
 
 Creates/Modifies tables for:
@@ -33,8 +33,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0118"
-down_revision: str | None = "0117"
+revision: str = "0119"
+down_revision: str | None = "0118"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

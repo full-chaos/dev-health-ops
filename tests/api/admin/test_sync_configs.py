@@ -2459,12 +2459,12 @@ async def test_create_jira_sync_config_auto_discovers_real_projects_at_creation(
 ):
     """CHAOS-4584: the actual capability gap this ticket closes. Unlike the
     zero-source case above (no resolvable credential, so nothing to
-    discover), a jira "auto-import everything" config whose credential CAN
-    enumerate real projects gets them materialized as real, planner-tagged
-    ``integration_sources`` rows immediately at creation -- run through the
-    SAME discover_repos_for_config seam github/gitlab use, not a sibling
-    path. Best-effort: creation succeeds even though discovery here is
-    mocked, matching the "must not fail config creation" contract."""
+    discover), a jira config with no explicit project_key/project_id whose
+    credential CAN enumerate real projects gets them materialized as real,
+    planner-tagged ``integration_sources`` rows immediately at creation --
+    run through the SAME discover_repos_for_config seam github/gitlab use,
+    not a sibling path. Best-effort: creation succeeds even though discovery
+    here is mocked, matching the "must not fail config creation" contract."""
     ac, _ = client
 
     with patch(
@@ -2480,7 +2480,7 @@ async def test_create_jira_sync_config_auto_discovers_real_projects_at_creation(
                 "name": "JIRA-auto",
                 "provider": "jira",
                 "sync_targets": ["work-items"],
-                "sync_options": {"auto_import_projects": True},
+                "sync_options": {},
             },
         )
     assert create_resp.status_code == 201, create_resp.text
@@ -2545,7 +2545,7 @@ async def test_create_jira_sync_config_caps_discovery_at_repo_limit(
                 "name": "JIRA-capped",
                 "provider": "jira",
                 "sync_targets": ["work-items"],
-                "sync_options": {"auto_import_projects": True},
+                "sync_options": {},
             },
         )
     assert create_resp.status_code == 201, create_resp.text

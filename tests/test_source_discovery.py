@@ -101,7 +101,7 @@ def jira_integration(session: Session) -> Integration:
         org_id=_JIRA_ORG_ID,
         provider="jira",
         name="Test Jira",
-        config={"auto_import_projects": True},
+        config={},
         is_active=True,
     )
     session.add(integration)

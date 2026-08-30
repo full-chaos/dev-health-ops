@@ -2283,8 +2283,9 @@ async def create_sync_config(
         # be stuck at zero sources forever (CHAOS-4582 made that outcome
         # safe, not real). Run the same discover_repos_for_config seam
         # github/gitlab use (via the /integrations/{id}/discover endpoint)
-        # right here at creation time so "auto-import everything" actually
-        # materializes real per-project sources immediately. Best-effort: a
+        # right here at creation time so a jira config with no explicit
+        # project_key/project_id actually gets real per-project sources
+        # materialized immediately. Best-effort: a
         # discovery failure (bad credential, Jira unreachable) must not fail
         # config creation -- the config is still valid and can be
         # re-discovered later via that endpoint once the credential works.

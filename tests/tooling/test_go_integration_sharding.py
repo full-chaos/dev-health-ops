@@ -1379,7 +1379,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestObserveCicdPartialSuccessRecordsPerCauseOverflow (the P3 fix's
     # test) is in internal/jobs/providerunit, does not count toward this pin.
     # 1294 -> 1295 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1295
+    # CHAOS-4592/4601 codex review gate round 6 (terra/xhigh, full-base +
+    # ledger; THE INVARIANT still confirmed closed -- these 2 findings are
+    # in items 24/25's OWN robustness/telemetry class, not the invariant).
+    # P2: item 24's ID truncation bounded only NEWLY appended markers --
+    # normalizeLegacyGitHubTestsSkippedArtifacts re-truncates an inherited
+    # Name for exactly this reason (a prior binary's shape can exceed this
+    # binary's own caps) but left RunID/ArtifactID untouched, so a resumed
+    # cursor with a legacy oversized ID could still fail its next checkpoint
+    # after any new skip. Fixed by re-truncating RunID/ArtifactID in the
+    # same legacy-normalize loop that already re-truncates Name. 1 new
+    # ordinary top-level test:
+    # TestGitHubTestsChunkCursorNormalizeRetruncatesInheritedIDs
+    # (github_tests_chunk_cursor_budget_test.go). Not integration-tagged.
+    # 1295 -> 1296 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1296
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1396,7 +1410,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1295
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1296
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1457,7 +1471,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1295
+    assert len(selected_tests) == len(set(selected_tests)) == 1296
     assert set(selected_tests) == expected_tests
 
 

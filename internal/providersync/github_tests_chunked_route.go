@@ -882,6 +882,25 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 			renamed[index].Name = truncated
 			changed = true
 		}
+		// RunID/ArtifactID re-truncated here too (codex review gate round 6,
+		// P2): normalizeLegacyGitHubTestsSkippedArtifacts re-bounds Name for
+		// exactly this reason -- a cursor a PRIOR binary wrote can already
+		// carry a shape THIS binary's own caps would never produce -- but a
+		// legacy binary that predates githubTestsMaxArtifactIDBytes could
+		// equally have carried an unbounded RunID/ArtifactID (round 5's fix
+		// only bounds a NEWLY appended record). Left untouched, a resumed
+		// cursor with a syntactically valid oversized legacy ID could sit
+		// just under maxChunkCursorBytes, then fail the very next checkpoint
+		// after any new skip -- repeating on every resume of that same
+		// cursor, exactly the hazard round 5's fix closed for new records.
+		if truncated := githubTestsTruncateArtifactID(record.RunID); truncated != record.RunID {
+			renamed[index].RunID = truncated
+			changed = true
+		}
+		if truncated := githubTestsTruncateArtifactID(record.ArtifactID); truncated != record.ArtifactID {
+			renamed[index].ArtifactID = truncated
+			changed = true
+		}
 	}
 	if changed {
 		cursor.SkippedArtifacts = renamed

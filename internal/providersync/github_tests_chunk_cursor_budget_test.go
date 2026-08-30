@@ -293,6 +293,59 @@ func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testi
 	}
 }
 
+// TestGitHubTestsChunkCursorNormalizeRetruncatesInheritedIDs pins the
+// CHAOS-4592 gate round 6, P2 fix. Round 5's fix bounded RunID/ArtifactID
+// only at the single NEW-record append site
+// (appendGitHubTestsSkippedArtifact) -- normalizeLegacyGitHubTestsSkippedArtifacts
+// re-truncates an inherited record's Name for exactly this reason (a PRIOR
+// binary can carry a shape THIS binary's own caps would never produce), but
+// left RunID/ArtifactID untouched. A cursor a binary predating
+// githubTestsMaxArtifactIDBytes wrote, carrying a syntactically valid
+// oversized ID, could sit just under maxChunkCursorBytes, resume here, and
+// then fail its VERY NEXT checkpoint after any new skip -- repeating on
+// every resume of that same cursor, the identical hazard round 5's fix
+// closed for newly appended records.
+func TestGitHubTestsChunkCursorNormalizeRetruncatesInheritedIDs(t *testing.T) {
+	oversizedID := strings.Repeat("7", githubTestsMaxArtifactIDBytes*4)
+	legacyCursor := githubTestsChunkCursor{
+		Phase: "artifacts", Repo: "acme/api",
+		SkippedArtifacts: []GitHubTestsSkippedArtifact{
+			{RunID: oversizedID, ArtifactID: oversizedID, Cause: githubTestsArtifactOversizedCause},
+		},
+	}
+	raw, err := json.Marshal(legacyCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeGitHubTestsChunkCursor(string(raw))
+	if err != nil {
+		t.Fatalf("decode returned err=%v, want normalization not rejection", err)
+	}
+	if len(decoded.SkippedArtifacts) != 1 {
+		t.Fatalf("premise failed: decoded %d records, want 1", len(decoded.SkippedArtifacts))
+	}
+	got := decoded.SkippedArtifacts[0]
+	if len(got.RunID) > githubTestsMaxArtifactIDBytes+len("…") {
+		t.Fatalf("decoded RunID=%q (%d bytes), want re-truncated to <= %d bytes", got.RunID, len(got.RunID), githubTestsMaxArtifactIDBytes)
+	}
+	if len(got.ArtifactID) > githubTestsMaxArtifactIDBytes+len("…") {
+		t.Fatalf("decoded ArtifactID=%q (%d bytes), want re-truncated to <= %d bytes", got.ArtifactID, len(got.ArtifactID), githubTestsMaxArtifactIDBytes)
+	}
+
+	// The scenario codex's finding actually cares about: this inherited
+	// oversized-ID record, resumed and re-encoded alongside enough NEW skips
+	// to fill out the sample, must still fit the hard budget.
+	for i := 0; i < githubTestsMaxSkippedArtifactRecords-1; i++ {
+		decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, decoded.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+			decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, decoded.SkippedArtifactCauseCount,
+			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "1", Cause: githubTestsArtifactOversizedCause},
+		)
+	}
+	if _, err := encodeGitHubTestsChunkCursor(decoded); err != nil {
+		t.Fatalf("resumed cursor carrying the inherited oversized ID failed to encode after new skips: %v", err)
+	}
+}
+
 // TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause
 // pins the CHAOS-4592 codex review finding (P1, round 6): a PRE-CHAOS-4394
 // cursor can legally have exactly the old githubTestsMaxSkippedArtifactRecords

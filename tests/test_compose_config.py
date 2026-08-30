@@ -1833,3 +1833,52 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
     # Same rollout-safe-default regression guard as the Kubernetes ConfigMap
     # assertion above.
     assert values["goWorkers"]["operationalOrderingContract"] == "1"
+
+
+def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
+    """codex review (delta round 2, P1): migration 067 itself checks
+    OPERATIONAL_ORDERING_CONTRACT to decide whether to apply the
+    ordering-contract cutover. Wiring only the workers (the tests above)
+    left the migrate job/Job unable to receive an operator's export at all
+    -- 067 would silently defer ("successfully") while workers, wired to
+    the same export, started against a still-contract-1 table. Every
+    mechanism's migrate step must be able to receive this variable too, so
+    a single export (or a single values.yaml knob, for Helm) moves both
+    together.
+
+    Red before this fix: none of these five migrate/Job definitions
+    reference the key at all.
+    """
+    for manifest in (
+        _REPO_ROOT / "compose.yml",
+        _PROD_COMPOSE,
+        _SWARM_STACK,
+    ):
+        migrate = _load_yaml(manifest)["services"]["migrate"]
+        env = migrate.get("environment") or {}
+        assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
+            f"{manifest.name}:migrate is missing OPERATIONAL_ORDERING_CONTRACT"
+        )
+
+    migrate_job = next(
+        d for d in _k8s_docs("migrate-job.yaml") if d.get("kind") == "Job"
+    )
+    container = migrate_job["spec"]["template"]["spec"]["containers"][0]
+    config_refs = {
+        ref["configMapRef"]["name"]
+        for ref in container.get("envFrom", [])
+        if "configMapRef" in ref
+    }
+    assert "dev-health-go-worker-config" in config_refs, (
+        "kubernetes migrate Job must envFrom dev-health-go-worker-config to "
+        "receive OPERATIONAL_ORDERING_CONTRACT"
+    )
+
+    helm_migrate_template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "name: OPERATIONAL_ORDERING_CONTRACT" in helm_migrate_template
+    assert ".Values.goWorkers.operationalOrderingContract" in helm_migrate_template, (
+        "helm migrate job should reuse goWorkers.operationalOrderingContract "
+        "(one knob for migrate + every worker), not a second, driftable value"
+    )

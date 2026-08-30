@@ -1027,7 +1027,12 @@ def test_kubernetes_migration_wiring_matches_contract() -> None:
         for source in container["envFrom"]
         if "secretRef" in source
     }
-    assert config_refs == {"dev-health-config"}
+    # CHAOS-4587: also envFroms dev-health-go-worker-config, deliberately --
+    # migration 067 checks OPERATIONAL_ORDERING_CONTRACT (defined there) to
+    # decide whether to apply the ordering-contract cutover; without this
+    # reference, bumping that ConfigMap's value at cutover would move every
+    # go-* worker but never this Job (see deploy/go-workers/README.md).
+    assert config_refs == {"dev-health-config", "dev-health-go-worker-config"}
     assert secret_refs == {
         "dev-health-migration-secrets",
     }

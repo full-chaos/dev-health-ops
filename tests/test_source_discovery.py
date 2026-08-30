@@ -1269,6 +1269,197 @@ def test_jira_discovery_repairs_preexisting_case_variant_duplicate(
     assert "duplicate_of_external_id" in disabled[0].metadata_
 
 
+def test_jira_case_normalization_invariant(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 gate round 4): ONE invariant -- every Jira
+    provider-name and project-key comparison in this module goes through
+    ``jira_key_norm`` (``discovery/repos.py``), never a site-local
+    ``.lower()`` or exact-match. Three sub-cases, one per round-4 finding,
+    each red on ``7ad1efaea``:
+
+    (a) #33 P1 -- a mixed-case ``provider="JIRA"`` integration must still
+        read the planner-managed config's CURRENT ``sync_options`` (not
+        stale ``Integration.config``) on PATCH-triggered rediscovery.
+    (b) #34 P1 -- case-variant self-repair must never end with the project
+        having ZERO enabled sources: the already-enabled candidate must
+        survive even when a DISABLED row is the exact-case match.
+    (c) #35 P2 -- case-variant self-repair must migrate the SyncWatermark
+        off the LOSING duplicate onto the survivor, even when the losing
+        duplicate (not the exact-case survivor) is the one that actually
+        held it.
+    """
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    # --- (a) mixed-case provider="JIRA" --------------------------------
+    mixed_case_integration = Integration(
+        id=uuid.uuid4(),
+        org_id=_JIRA_ORG_ID,
+        provider="JIRA",
+        name="Test Jira Mixed Case",
+        config={"project_key": "OLD"},  # stale Integration.config -- must
+        # NOT be read once a planner-managed config exists (see the
+        # docstring on _build_config_shim)
+        is_active=True,
+    )
+    session.add(mixed_case_integration)
+    session.commit()
+    mixed_case_config = SyncConfiguration(
+        name="Test Jira Mixed Case",
+        provider="JIRA",
+        org_id=_JIRA_ORG_ID,
+        sync_targets=["work-items"],
+        sync_options={"project_key": "ENG"},  # current, authoritative scope
+        is_active=True,
+        integration_id=mixed_case_integration.id,
+        planner_managed=True,
+    )
+    session.add(mixed_case_config)
+    session.commit()
+
+    def _discriminating_discovery(config, credentials):
+        # Discriminates which sync_options actually reached
+        # discover_repos_for_config -- the stale Integration.config
+        # ("OLD") or the planner-managed config's current sync_options
+        # ("ENG") -- rather than returning a fixed value regardless of
+        # input, which would never exercise the bug.
+        scoped_key = (config.sync_options or {}).get("project_key")
+        if scoped_key == "ENG":
+            return [("ENG", "Engineering", "software")]
+        return [("OLD", "Old Project", "software")]
+
+    with patch(DISCOVERY_PATH, side_effect=_discriminating_discovery):
+        discover_sources_for_integration(session, mixed_case_integration.id)
+
+    mixed_case_rows = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == mixed_case_integration.id)
+        .all()
+    }
+    assert "ENG" in mixed_case_rows and mixed_case_rows["ENG"].is_enabled is True, (
+        "(a) a mixed-case provider integration must still read the "
+        "planner-managed config's CURRENT sync_options, not stale "
+        "Integration.config -- otherwise the PATCH scope repair silently "
+        "no-ops for it"
+    )
+    assert "OLD" not in mixed_case_rows, (
+        "(a) discovery must not have run against the STALE "
+        "Integration.config scope at all"
+    )
+
+    # --- (b) an already-enabled row must survive case-variant repair ---
+    disabled_uppercase = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=False,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    enabled_lowercase = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="eng",
+        name="eng",
+        full_name="eng",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([disabled_uppercase, enabled_lowercase])
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("ENG", "Engineering", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    eng_variants = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.integration_id == jira_integration.id,
+            IntegrationSource.external_id.in_(["ENG", "eng"]),
+        )
+        .all()
+    )
+    enabled_eng_variants = [r for r in eng_variants if r.is_enabled]
+    assert len(enabled_eng_variants) == 1, (
+        "(b) case-variant repair must never zero out enabled sources for "
+        "a project that had one enabled candidate before the repair"
+    )
+    assert enabled_eng_variants[0].external_id == "eng", (
+        "(b) the survivor must be the row that was actually enabled, not "
+        "picked by exact-case match regardless of enabled state"
+    )
+
+    # --- (c) the watermark must follow the survivor, not the exact-case
+    #     match, when they disagree ------------------------------------
+    enabled_upper_sup = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="SUP",
+        name="SUP",
+        full_name="SUP",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    enabled_lower_sup = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="sup",
+        name="sup",
+        full_name="sup",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([enabled_upper_sup, enabled_lower_sup])
+    session.commit()
+    watermark = SyncWatermark(
+        org_id=_JIRA_ORG_ID,
+        repo_id="sup",
+        source_id="sup",  # on the LOSING duplicate (not the exact-case match)
+        target="work-items",
+        dataset_key="issues",
+        last_synced_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(watermark)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("SUP", "Support Desk", "service_desk")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    sup_watermarks = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == _JIRA_ORG_ID,
+            SyncWatermark.source_id.in_(["SUP", "sup"]),
+        )
+        .all()
+    )
+    assert [w.source_id for w in sup_watermarks] == ["SUP"], (
+        "(c) the watermark must migrate onto the surviving row, even "
+        "though the LOSING duplicate ('sup') -- not the exact-case "
+        "survivor ('SUP') -- was the one that actually held it"
+    )
+
+
 def test_jira_discovery_caps_new_sources_before_preexisting_ones(
     session: Session,
     jira_integration: Integration,

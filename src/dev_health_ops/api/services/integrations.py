@@ -185,12 +185,24 @@ class IntegrationSourceService:
     async def set_enabled(
         self, source: IntegrationSource, enabled: bool
     ) -> IntegrationSource:
-        if enabled and not source.is_enabled and source.provider == "jira":
+        from dev_health_ops.discovery.repos import jira_key_norm
+
+        if (
+            enabled
+            and not source.is_enabled
+            and jira_key_norm(source.provider) == "jira"
+        ):
             # codex review (CHAOS-4584 round 6, P2): enforce the org's
             # max_repos limit AT enable time -- otherwise a manual re-enable
             # of a cap-marked row (which clears the marker below) gets
             # silently undone by the very next over-limit discovery run,
             # since a marker-less row looks like any other ordinary
+            #
+            # codex review (CHAOS-4584 gate round 4, P1 class): compare via
+            # jira_key_norm, not ``==`` -- a source whose ``provider`` was
+            # stored as mixed-case (e.g. "JIRA") previously skipped this
+            # entitlement check entirely, mirroring the same bug class
+            # found in sync/discovery.py::set_source_enabled.
             # pre-existing source to the rebalancer. Lazy import: this
             # service is imported BY api/admin/routers/sync.py, so importing
             # it back at module load time would be circular.

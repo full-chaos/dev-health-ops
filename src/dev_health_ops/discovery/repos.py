@@ -4,10 +4,34 @@ import fnmatch
 from typing import Any
 
 
+def jira_key_norm(value: str | None) -> str:
+    """Canonical form for every Jira provider-name and project-key
+    comparison across the discovery/sync-discovery seam (codex review,
+    CHAOS-4584 gate round 4, P1x2/P2): ``.strip().lower()``, exactly once,
+    in one place.
+
+    Before this, three sites each grew their own ad hoc case handling and
+    quietly diverged: ``_build_config_shim`` compared ``Integration.provider``
+    unmodified (round 4 P1 -- a mixed-case ``"JIRA"`` integration silently
+    read stale ``Integration.config`` instead of the planner-managed
+    config's current ``sync_options``), the case-variant self-repair chose
+    its survivor by exact-case match regardless of which candidate was
+    actually enabled (round 4 P1 -- could disable the only active source),
+    and two ``source.provider == "jira"`` checks in the enable-time
+    repo-limit enforcement (``sync/discovery.py::set_source_enabled``,
+    ``api/services/integrations.py::IntegrationSourceService.set_enabled``)
+    skipped the entitlement check entirely for the same mixed-case rows.
+    Every comparison against the literal string ``"jira"``, and every
+    project-key match, must go through this function -- no site-local
+    ``.lower()`` left.
+    """
+    return (value or "").strip().lower()
+
+
 def discover_repos_for_config(
     config, credentials: dict[str, Any]
 ) -> list[tuple[str, ...]]:
-    provider = (config.provider or "").lower()
+    provider = jira_key_norm(config.provider)
     sync_options = dict(config.sync_options or {})
 
     if provider == "github":
@@ -104,7 +128,7 @@ def discover_jira_projects(
     finally:
         client.close()
 
-    explicit_key = str((sync_options or {}).get("project_key") or "").strip().lower()
+    explicit_key = jira_key_norm((sync_options or {}).get("project_key"))
     explicit_id = str((sync_options or {}).get("project_id") or "").strip()
     # codex review (CHAOS-4584 round 4 P2 + round 5 P2): a config scoped by
     # project_id has its existing IntegrationSource keyed by that numeric id
@@ -138,7 +162,7 @@ def discover_jira_projects(
             # is ignored, not additionally enforced.
             if project_id != explicit_id:
                 continue
-        elif explicit_key and key.lower() != explicit_key:
+        elif explicit_key and jira_key_norm(key) != explicit_key:
             continue
         name = str(project.get("name") or key)
         project_type_key = str(project.get("projectTypeKey") or "").strip().lower()

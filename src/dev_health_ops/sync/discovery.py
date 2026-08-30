@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from dev_health_ops.discovery.repos import discover_repos_for_config
+from dev_health_ops.discovery.repos import discover_repos_for_config, jira_key_norm
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ def _env_credentials_mapping(provider: str | None) -> dict[str, Any]:
     not touch."""
     import os
 
-    if (provider or "").lower() != "jira":
+    if jira_key_norm(provider) != "jira":
         return {}
     base_url = os.getenv("JIRA_BASE_URL")
     email = os.getenv("JIRA_EMAIL")
@@ -101,7 +101,9 @@ def _env_credentials_mapping(provider: str | None) -> dict[str, Any]:
     return {}
 
 
-def _build_config_shim(integration: Integration, planner_config: Any | None) -> Any:
+def _build_config_shim(
+    integration: Integration, planner_config: Any | None, *, provider: str
+) -> Any:
     """Build a minimal config-shim that ``discover_repos_for_config`` accepts.
 
     ``discover_repos_for_config`` expects an object with:
@@ -123,6 +125,13 @@ def _build_config_shim(integration: Integration, planner_config: Any | None) -> 
     sync only for github, as a provider-specific special case), so an
     operator changing an explicitly-scoped jira project's ``project_key``
     would otherwise have discovery keep filtering by the stale value.
+
+    *provider* is the caller's already-``jira_key_norm``-normalized provider
+    string (codex review, CHAOS-4584 gate round 4, P1): this function used
+    to re-derive it from ``integration.provider`` and compare unnormalized,
+    so a mixed-case ``"JIRA"`` integration silently read the stale
+    ``Integration.config`` instead of the current ``sync_options`` -- the
+    caller's canonical value must be threaded through, not re-derived here.
     """
 
     class _Shim:
@@ -134,7 +143,7 @@ def _build_config_shim(integration: Integration, planner_config: Any | None) -> 
     shim.provider = integration.provider or ""
     shim.sync_options = dict(integration.config or {})
     shim.org_id = integration.org_id
-    if shim.provider == "jira" and planner_config is not None:
+    if provider == "jira" and planner_config is not None:
         shim.sync_options = dict(getattr(planner_config, "sync_options", None) or {})
     return shim
 
@@ -395,7 +404,7 @@ def discover_sources_for_integration(
     if integration is None:
         raise ValueError(f"Integration not found: {integration_id}")
 
-    provider = (integration.provider or "").lower()
+    provider = jira_key_norm(integration.provider)
     planner_config = (
         _planner_managed_config_for_integration(session, integration_id)
         if provider == "jira"
@@ -405,7 +414,7 @@ def discover_sources_for_integration(
         str(planner_config.id) if planner_config is not None else None
     )
 
-    config_shim = _build_config_shim(integration, planner_config)
+    config_shim = _build_config_shim(integration, planner_config, provider=provider)
     credentials = _resolve_credentials(integration)
 
     raw_tuples: list[tuple[str, ...]] = discover_repos_for_config(
@@ -425,7 +434,7 @@ def discover_sources_for_integration(
     created_count = 0
     created_external_ids_lower: set[str] = set()
     discovered_external_ids_lower = {
-        str(fields["external_id"]).lower() for fields in source_dicts
+        jira_key_norm(str(fields["external_id"])) for fields in source_dicts
     }
 
     # codex review (CHAOS-4584 round 1, P2): isolate the upsert loop in a
@@ -458,7 +467,8 @@ def discover_sources_for_integration(
 
                 candidates = (
                     base_query.filter(
-                        func.lower(IntegrationSource.external_id) == external_id.lower()
+                        func.lower(IntegrationSource.external_id)
+                        == jira_key_norm(external_id)
                     )
                     .order_by(
                         IntegrationSource.discovered_at.asc(),
@@ -468,8 +478,6 @@ def discover_sources_for_integration(
                 )
                 existing = None
                 if candidates:
-                    exact = [c for c in candidates if c.external_id == external_id]
-                    existing = exact[0] if exact else candidates[0]
                     # codex review (CHAOS-4584 round 3, P1): a pre-existing
                     # case-variant pair (e.g. "eng" and "ENG") would make
                     # this filter match more than one row -- self-repair by
@@ -477,9 +485,41 @@ def discover_sources_for_integration(
                     # instead of ever calling one_or_none() (which would
                     # raise MultipleResultsFound and 503 every future
                     # discovery run for this integration).
+                    #
+                    # codex review (CHAOS-4584 gate round 4, P1/P2): the
+                    # survivor MUST be an already-ENABLED candidate when one
+                    # exists. Picking by exact-case match alone (ignoring
+                    # enabled state) could choose a disabled exact-case row
+                    # as the survivor and then disable every OTHER
+                    # candidate -- including the one actually enabled --
+                    # leaving the project with ZERO enabled sources and
+                    # silently stopping its sync. Preferring the enabled
+                    # row, and falling back to exact-case only to break
+                    # ties among multiple enabled (or multiple disabled)
+                    # candidates, keeps at least one row enabled whenever
+                    # any candidate already was.
+                    enabled_candidates = [c for c in candidates if c.is_enabled]
+                    pool = enabled_candidates or candidates
+                    exact = [c for c in pool if c.external_id == external_id]
+                    existing = exact[0] if exact else pool[0]
                     for dup in candidates:
                         if dup is existing:
                             continue
+                        if dup.external_id != existing.external_id:
+                            # codex review (gate round 4, P2): the losing
+                            # duplicate may be the one that actually held
+                            # the project's SyncWatermark (e.g. "eng" was
+                            # enabled and synced before, "ENG" never was).
+                            # Move it onto the survivor's external_id so
+                            # incremental sync continuity isn't silently
+                            # lost the same way a project rename's
+                            # watermark migration already protects against.
+                            _migrate_jira_watermarks_on_rename(
+                                session,
+                                integration.org_id,
+                                dup.external_id,
+                                existing.external_id,
+                            )
                         dup.is_enabled = False
                         dup.metadata_ = {
                             **(dup.metadata_ or {}),
@@ -511,7 +551,9 @@ def discover_sources_for_integration(
                         )
                         if renamed is not None:
                             old_external_id = renamed.external_id
-                            if old_external_id.lower() != external_id.lower():
+                            if jira_key_norm(old_external_id) != jira_key_norm(
+                                external_id
+                            ):
                                 _migrate_jira_watermarks_on_rename(
                                     session,
                                     integration.org_id,
@@ -565,7 +607,7 @@ def discover_sources_for_integration(
                 session.add(source)
                 upserted.append(source)
                 created_count += 1
-                created_external_ids_lower.add(external_id.lower())
+                created_external_ids_lower.add(jira_key_norm(external_id))
 
         if provider == "jira" and planner_managed_sync_config_id:
             _supersede_stale_scoped_jira_sources(
@@ -671,7 +713,7 @@ def _supersede_stale_scoped_jira_sources(
             "planner_managed_sync_config_id"
         ) != planner_managed_sync_config_id:
             continue
-        if source.external_id.lower() in discovered_external_ids_lower:
+        if jira_key_norm(source.external_id) in discovered_external_ids_lower:
             continue
         source.is_enabled = False
         source.metadata_ = {
@@ -866,12 +908,12 @@ def _rebalance_jira_sources_against_repo_limit(
             newly_created = [
                 s
                 for s in enabled_sources
-                if s.external_id.lower() in created_external_ids_lower
+                if jira_key_norm(s.external_id) in created_external_ids_lower
             ]
             pre_existing = [
                 s
                 for s in enabled_sources
-                if s.external_id.lower() not in created_external_ids_lower
+                if jira_key_norm(s.external_id) not in created_external_ids_lower
             ]
             capped = (newly_created + pre_existing)[:overflow]
             for source in capped:
@@ -916,7 +958,7 @@ def _rebalance_jira_sources_against_repo_limit(
         r
         for r in capped_rows
         if (r.metadata_ or {}).get(_CAP_MARKER_KEY)
-        and r.external_id.lower() in discovered_external_ids_lower
+        and jira_key_norm(r.external_id) in discovered_external_ids_lower
     ]
     if not recoverable:
         return
@@ -1012,13 +1054,18 @@ def set_source_enabled(
     source = session.get(IntegrationSource, source_id)
     if source is None:
         raise ValueError(f"IntegrationSource not found: {source_id}")
-    if enabled and not source.is_enabled and source.provider == "jira":
+    if enabled and not source.is_enabled and jira_key_norm(source.provider) == "jira":
         # codex review (CHAOS-4584 round 6, P2): enforce the org's
         # max_repos limit AT enable time -- otherwise a manual re-enable of
         # a cap-marked row (whose marker gets cleared just below) gets
         # silently undone by the very next over-limit discovery run, since
         # a marker-less row looks like any other ordinary pre-existing
         # source to the rebalancer.
+        #
+        # codex review (CHAOS-4584 gate round 4, P1 class): compare via
+        # jira_key_norm, not ``==`` -- a source whose ``provider`` was
+        # stored as mixed-case (e.g. "JIRA") previously skipped this
+        # entitlement check entirely.
         from dev_health_ops.api.services.licensing import TierLimitService
 
         # codex review (gate round, P1): serialize this read-check-write on

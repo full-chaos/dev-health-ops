@@ -1,9 +1,45 @@
 package providersync
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// githubTestsRealisticCursorBase returns a githubTestsChunkCursor with every
+// field EXCEPT SkippedArtifacts/SkippedArtifactCauseOverflow/
+// ExcludedArtifactSample set to a realistic in-flight maximum: a long
+// paginated NextURL, six-digit counters, and every (component, cause) pair
+// the closed incomplete vocabulary allows -- automatically covering a future
+// vocabulary addition, which is the whole point of a worst-case budget test.
+// Shared by both tests in this file so their SkippedArtifacts shape is the
+// only thing that differs between them.
+func githubTestsRealisticCursorBase() githubTestsChunkCursor {
+	seen, unreadable := 6219, 6219
+	cursor := githubTestsChunkCursor{
+		Phase: "artifacts",
+		NextURL: "https://api.github.com/repos/full-chaos/dev-health-ops/actions/runs/" +
+			"33301167231/artifacts?per_page=100&page=42&branch=main",
+		Index: 42, Pipelines: 999999, Jobs: 999999, Acceptance: 999999,
+		Suites: 999999, Cases: 999999, Coverage: 999999,
+		Requests: 999999, Pages: 999999, RunPages: 999999, ArtifactPages: 999999,
+		Repo:                     "full-chaos/dev-health-ops",
+		ArchivesSeen:             &seen,
+		ArchivesUnreadable:       &unreadable,
+		SkippedArtifactsOverflow: 999999,
+		ExcludedNonReportSuffix:  999999,
+		ExcludedNonReportPrefix:  999999,
+	}
+	for component, causes := range githubTestsIncompleteVocabulary {
+		for cause := range causes {
+			cursor.Incomplete = append(cursor.Incomplete, GitHubTestsIncomplete{
+				Component: component, Cause: cause, Count: 999999,
+			})
+		}
+	}
+	return cursor
+}
 
 // TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget pins the CHAOS-4592
 // codex review finding (P1, on merged CHAOS-4588/CHAOS-4591 code): a record
@@ -21,41 +57,15 @@ import (
 // is lost).
 //
 // This constructs a cursor with every field at a realistic maximum --
-// EVERY (component, cause) pair in the closed incomplete vocabulary,
 // githubTestsMaxSkippedArtifactRecords records each carrying a
 // githubTestsMaxArtifactNameBytes-length name and int64-max size/cap
-// fields, githubTestsMaxExcludedArtifactSampleRecords excluded samples, and
-// a long realistic paginated NextURL -- and asserts the encoded cursor both
-// succeeds and leaves real margin under the budget, not just enough to pass
-// today. RED on the pre-fix caps (20 records, 48-byte names): encoding
+// fields, githubTestsMaxExcludedArtifactSampleRecords excluded samples, on
+// top of githubTestsRealisticCursorBase -- and asserts the encoded cursor
+// both succeeds and leaves real margin under the budget, not just enough to
+// pass today. RED on the pre-fix caps (20 records, 48-byte names): encoding
 // fails ErrChunkCheckpointConflict outright.
 func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
-	seen, unreadable := 6219, 6219
-	cursor := githubTestsChunkCursor{
-		Phase: "artifacts",
-		NextURL: "https://api.github.com/repos/full-chaos/dev-health-ops/actions/runs/" +
-			"33301167231/artifacts?per_page=100&page=42&branch=main",
-		Index: 42, Pipelines: 999999, Jobs: 999999, Acceptance: 999999,
-		Suites: 999999, Cases: 999999, Coverage: 999999,
-		Requests: 999999, Pages: 999999, RunPages: 999999, ArtifactPages: 999999,
-		Repo:                     "full-chaos/dev-health-ops",
-		ArchivesSeen:             &seen,
-		ArchivesUnreadable:       &unreadable,
-		SkippedArtifactsOverflow: 999999,
-		ExcludedNonReportSuffix:  999999,
-		ExcludedNonReportPrefix:  999999,
-	}
-
-	// Every (component, cause) pair the closed vocabulary allows -- this
-	// test automatically covers a future vocabulary addition, which is the
-	// whole point of a worst-case budget test.
-	for component, causes := range githubTestsIncompleteVocabulary {
-		for cause := range causes {
-			cursor.Incomplete = append(cursor.Incomplete, GitHubTestsIncomplete{
-				Component: component, Cause: cause, Count: 999999,
-			})
-		}
-	}
+	cursor := githubTestsRealisticCursorBase()
 
 	name := strings.Repeat("x", githubTestsMaxArtifactNameBytes)
 	causeOverflow := map[string]bool{}
@@ -102,5 +112,83 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 				"the byte budget this file's caps were sized against has eroded",
 			remaining, wantMargin,
 		)
+	}
+}
+
+// TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode pins the
+// CHAOS-4592 codex review finding (P1, round 5) that shrinking
+// githubTestsMaxSkippedArtifactRecords/githubTestsMaxArtifactNameBytes only
+// bounds a NEWLY appended record: a cursor a PRIOR binary version already
+// wrote under the OLDER, larger caps decodes with its sample exactly as
+// written -- up to 20 records with 48-byte names (and, for the
+// artifact_oversized cause, size/cap fields) is legal JSON this binary's own
+// json.Unmarshal has no reason to reject. Without normalizing that
+// inherited sample down to the CURRENT bounded shape, an otherwise ordinary
+// in-flight cursor (realistic NextURL, several incomplete observations --
+// githubTestsRealisticCursorBase) can already sit over maxChunkCursorBytes
+// on its own once the legacy sample is added back in, and the very next
+// re-encode -- this attempt's own checkpoint write, unrelated to any new
+// skip -- fails ErrChunkCheckpointConflict outright: during a rolling
+// deploy, a unit resuming a pre-upgrade cursor loses its committed progress
+// instead of degrading gracefully.
+func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testing.T) {
+	const legacyRecords = 20           // the OLD githubTestsMaxSkippedArtifactRecords
+	oldName := strings.Repeat("x", 48) // the OLD githubTestsMaxArtifactNameBytes
+	legacyCursor := githubTestsRealisticCursorBase()
+	for i := 0; i < legacyRecords; i++ {
+		legacyCursor.SkippedArtifacts = append(legacyCursor.SkippedArtifacts, GitHubTestsSkippedArtifact{
+			RunID: "33301167231234567", ArtifactID: strconv.Itoa(9729013072123456 + i),
+			Name: oldName, Cause: githubTestsArtifactOversizedCause,
+			SizeBytes: 9223372036854775807, CapBytes: 9223372036854775807,
+		})
+	}
+
+	raw, err := json.Marshal(legacyCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RED without normalization: exactly what a prior binary version could
+	// legally have written, re-encoded verbatim, already exceeds budget --
+	// this is the bug, not a contrived edge case.
+	if len(raw) <= maxChunkCursorBytes {
+		t.Fatalf(
+			"premise failed: this legacy-shaped cursor must already exceed maxChunkCursorBytes on its "+
+				"own (encoded=%d bytes) or this test proves nothing",
+			len(raw),
+		)
+	}
+
+	decoded, err := decodeGitHubTestsChunkCursor(string(raw))
+	if err != nil {
+		t.Fatalf("decode of a legacy-shaped cursor returned err=%v, want normalization not rejection", err)
+	}
+
+	if len(decoded.SkippedArtifacts) != githubTestsMaxSkippedArtifactRecords {
+		t.Fatalf(
+			"decoded sample has %d records, want trimmed to the current cap %d",
+			len(decoded.SkippedArtifacts), githubTestsMaxSkippedArtifactRecords,
+		)
+	}
+	for _, record := range decoded.SkippedArtifacts {
+		if len(record.Name) > githubTestsMaxArtifactNameBytes+len("…") {
+			t.Fatalf("decoded record name %q is %d bytes, want <= %d", record.Name, len(record.Name), githubTestsMaxArtifactNameBytes+len("…"))
+		}
+	}
+	wantOverflow := 999999 + (legacyRecords - githubTestsMaxSkippedArtifactRecords)
+	if decoded.SkippedArtifactsOverflow != wantOverflow {
+		t.Fatalf(
+			"SkippedArtifactsOverflow=%d, want %d -- trimmed records must be reflected, not silently dropped, "+
+				"on top of whatever aggregate overflow the cursor already carried",
+			decoded.SkippedArtifactsOverflow, wantOverflow,
+		)
+	}
+	// The legacy sentinel must also fire: this cursor already had aggregate
+	// overflow with no per-cause ledger before normalization ever ran.
+	if !decoded.SkippedArtifactCauseOverflow[githubTestsLegacyReportOverflowSentinel] {
+		t.Fatalf("legacy overflow did not stamp the legacy sentinel: %+v", decoded.SkippedArtifactCauseOverflow)
+	}
+
+	if _, err := encodeGitHubTestsChunkCursor(decoded); err != nil {
+		t.Fatalf("normalized legacy cursor still fails to encode: %v", err)
 	}
 }

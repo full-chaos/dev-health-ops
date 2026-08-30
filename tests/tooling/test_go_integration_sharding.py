@@ -1229,7 +1229,25 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget. Not
     # integration-tagged.
     # 1283 -> 1284 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1284
+    #
+    # CHAOS-4592 fourth CHAOS-4588 fold-in (codex P1, round 5): shrinking the
+    # skipped-artifact caps only bounds a NEWLY appended record -- a cursor a
+    # PRIOR binary version already wrote under the OLDER, larger caps
+    # decodes with its sample exactly as written (up to 20 records with
+    # 48-byte names), and without normalizing it down to the current bounded
+    # shape, an otherwise-ordinary in-flight cursor can already exceed
+    # maxChunkCursorBytes on its own once that legacy sample is added back
+    # in -- the very next re-encode during a rolling deploy fails
+    # ErrChunkCheckpointConflict outright, losing committed progress.
+    # decodeGitHubTestsChunkCursor now normalizes an inherited
+    # SkippedArtifacts sample to the current caps, trimming into
+    # SkippedArtifactsOverflow exactly as appendGitHubTestsSkippedArtifact
+    # already does for a new record. Added 1 new ordinary top-level test in
+    # github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode.
+    # Not integration-tagged.
+    # 1284 -> 1285 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1285
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1246,7 +1264,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1284
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1285
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1307,7 +1325,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1284
+    assert len(selected_tests) == len(set(selected_tests)) == 1285
     assert set(selected_tests) == expected_tests
 
 

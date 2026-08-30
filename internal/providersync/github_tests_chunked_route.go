@@ -644,16 +644,59 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
+	// A cursor written under EARLIER caps can legally carry a
+	// SkippedArtifacts sample this binary's own githubTestsMaxSkippedArtifactRecords/
+	// githubTestsMaxArtifactNameBytes would never have produced -- normalize
+	// it to the current bounded shape BEFORE anything else touches the
+	// cursor (codex review round 5, P1): a heavier legacy sample can already
+	// sit near or over maxChunkCursorBytes on its own, and the very next
+	// re-encode -- this attempt's own checkpoint write, unrelated to any NEW
+	// skip -- would otherwise fail ErrChunkCheckpointConflict outright,
+	// losing committed progress instead of degrading into
+	// SkippedArtifactsOverflow the same way appendGitHubTestsSkippedArtifact
+	// already does for a newly appended record.
+	cursor = normalizeLegacyGitHubTestsSkippedArtifacts(cursor)
 	// A cursor already carrying aggregate overflow with no per-cause ledger
 	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
-	// round 3, P2): stamp the sentinel HERE, on the raw decoded shape,
-	// before this attempt's own marker-writing can add an unrelated cause
-	// and make the map merely non-empty rather than legacy-shaped -- see
-	// githubTestsLegacyReportOverflowSentinel.
+	// round 3, P2): stamp the sentinel HERE, on the raw decoded shape (after
+	// the legacy-sample normalization above, so overflow that migration
+	// itself introduces is covered too), before this attempt's own marker-
+	// writing can add an unrelated cause and make the map merely non-empty
+	// rather than legacy-shaped -- see githubTestsLegacyReportOverflowSentinel.
 	if cursor.SkippedArtifactsOverflow > 0 && cursor.SkippedArtifactCauseOverflow == nil {
 		cursor.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
 	}
 	return cursor, nil
+}
+
+// normalizeLegacyGitHubTestsSkippedArtifacts trims a decoded SkippedArtifacts
+// sample down to the CURRENT githubTestsMaxSkippedArtifactRecords count and
+// re-truncates any name still over the CURRENT githubTestsMaxArtifactNameBytes
+// bound, moving any trimmed records into SkippedArtifactsOverflow -- exactly
+// what appendGitHubTestsSkippedArtifact already does for a newly appended
+// record, applied once here for a slice a PRIOR (possibly less-bounded)
+// binary version already wrote (codex review round 5, P1). A no-op for a
+// cursor that already fits: same length or shorter than the current cap,
+// every name already within the current bound.
+func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) githubTestsChunkCursor {
+	kept := cursor.SkippedArtifacts
+	if len(kept) > githubTestsMaxSkippedArtifactRecords {
+		cursor.SkippedArtifactsOverflow += len(kept) - githubTestsMaxSkippedArtifactRecords
+		kept = kept[:githubTestsMaxSkippedArtifactRecords]
+	}
+	changed := len(kept) != len(cursor.SkippedArtifacts)
+	renamed := make([]GitHubTestsSkippedArtifact, len(kept))
+	for index, record := range kept {
+		renamed[index] = record
+		if truncated := githubTestsTruncateArtifactName(record.Name); truncated != record.Name {
+			renamed[index].Name = truncated
+			changed = true
+		}
+	}
+	if changed {
+		cursor.SkippedArtifacts = renamed
+	}
+	return cursor
 }
 
 func encodeGitHubTestsChunkCursor(cursor githubTestsChunkCursor) (string, error) {

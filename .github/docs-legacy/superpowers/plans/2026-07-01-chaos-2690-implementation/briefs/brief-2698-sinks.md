@@ -298,35 +298,22 @@ from dataclasses import dataclass, field
 from typing import Any
 import uuid
 
-
 @dataclass
 class NormalizedBatch:
     org_id: str
     source_id: uuid.UUID
-    source_system: str  # "github" | "gitlab" | "jira" | "linear" | "custom"
-    source_instance: str  # e.g. "github.com/acme"
+    source_system: str        # "github" | "gitlab" | "jira" | "linear" | "custom"
+    source_instance: str      # e.g. "github.com/acme"
     ingestion_id: uuid.UUID
-    repositories: list[dict[str, Any]] = field(default_factory=list)  # -> Repo-shaped
-    identities: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # -> insert_identities row shape
-    teams: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # -> insert_teams row shape
-    work_items: list[Any] = field(default_factory=list)  # WorkItem | dict
-    work_item_transitions: list[Any] = field(
-        default_factory=list
-    )  # WorkItemStatusTransition | dict
-    work_item_dependencies: list[Any] = field(
-        default_factory=list
-    )  # WorkItemDependency | dict
-    pull_requests: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # -> GitPullRequest-shaped
-    reviews: list[dict[str, Any]] = field(
-        default_factory=list
-    )  # -> GitPullRequestReview-shaped
-    commits: list[dict[str, Any]] = field(default_factory=list)  # -> GitCommit-shaped
+    repositories: list[dict[str, Any]] = field(default_factory=list)       # -> Repo-shaped
+    identities: list[dict[str, Any]] = field(default_factory=list)         # -> insert_identities row shape
+    teams: list[dict[str, Any]] = field(default_factory=list)              # -> insert_teams row shape
+    work_items: list[Any] = field(default_factory=list)                    # WorkItem | dict
+    work_item_transitions: list[Any] = field(default_factory=list)         # WorkItemStatusTransition | dict
+    work_item_dependencies: list[Any] = field(default_factory=list)        # WorkItemDependency | dict
+    pull_requests: list[dict[str, Any]] = field(default_factory=list)      # -> GitPullRequest-shaped
+    reviews: list[dict[str, Any]] = field(default_factory=list)            # -> GitPullRequestReview-shaped
+    commits: list[dict[str, Any]] = field(default_factory=list)            # -> GitCommit-shaped
     # per-record provenance for error reporting back to CHAOS-2694
     record_index_by_kind: dict[str, list[int]] = field(default_factory=dict)
 ```
@@ -345,19 +332,17 @@ flag any mismatch to the CHAOS-2697 implementer before merge**, not after
 class SinkWriteResult:
     ingestion_id: uuid.UUID
     org_id: str
-    counts_written: dict[str, int]  # {"repository": 1, "commit": 40, ...}
-    errors: list["SinkWriteError"]  # write-time failures only (not validation)
+    counts_written: dict[str, int]           # {"repository": 1, "commit": 40, ...}
+    errors: list["SinkWriteError"]           # write-time failures only (not validation)
     affected_scope: "AffectedScope"
-
 
 @dataclass
 class SinkWriteError:
     record_index: int
     kind: str
     external_id: str | None
-    code: str  # e.g. "clickhouse_insert_failed", "missing_repo_full_name"
+    code: str            # e.g. "clickhouse_insert_failed", "missing_repo_full_name"
     message: str
-
 
 @dataclass
 class AffectedScope:
@@ -431,33 +416,22 @@ async def write_batch(
     async with store:
         if batch.repositories:
             for row in batch.repositories:
-                repo = _build_repo(
-                    row, source_id=batch.source_id
-                )  # D2 UUID derivation here
+                repo = _build_repo(row, source_id=batch.source_id)  # D2 UUID derivation here
                 await store.insert_repo(repo)
             counts["repository"] = len(batch.repositories)
         if batch.commits:
             await store.insert_git_commit_data(
-                [
-                    _stamp_source_id(_build_commit(r), batch.source_id)
-                    for r in batch.commits
-                ]
+                [_stamp_source_id(_build_commit(r), batch.source_id) for r in batch.commits]
             )
             counts["commit"] = len(batch.commits)
         if batch.pull_requests:
             await store.insert_git_pull_requests(
-                [
-                    _stamp_source_id(_build_pr(r), batch.source_id)
-                    for r in batch.pull_requests
-                ]
+                [_stamp_source_id(_build_pr(r), batch.source_id) for r in batch.pull_requests]
             )
             counts["pull_request"] = len(batch.pull_requests)
         if batch.reviews:
             await store.insert_git_pull_request_reviews(
-                [
-                    _stamp_source_id(_build_review(r), batch.source_id)
-                    for r in batch.reviews
-                ]
+                [_stamp_source_id(_build_review(r), batch.source_id) for r in batch.reviews]
             )
             counts["review"] = len(batch.reviews)
         if batch.teams:
@@ -467,29 +441,20 @@ async def write_batch(
             counts["team"] = len(batch.teams)
         if batch.identities:
             await store.insert_identities(
-                [
-                    _apply_d8_updated_at({**i, "source_id": str(batch.source_id)})
-                    for i in batch.identities
-                ]
+                [_apply_d8_updated_at({**i, "source_id": str(batch.source_id)}) for i in batch.identities]
             )
             counts["identity"] = len(batch.identities)
 
     if batch.work_items or batch.work_item_transitions or batch.work_item_dependencies:
         sink = create_sink(clickhouse_dsn)
         try:
-
             def _write_work_graph() -> None:
                 if batch.work_items:
                     sink.write_work_items(_stamp_work_items(batch.work_items, batch))
                 if batch.work_item_transitions:
-                    sink.write_work_item_transitions(
-                        _stamp_work_items(batch.work_item_transitions, batch)
-                    )
+                    sink.write_work_item_transitions(_stamp_work_items(batch.work_item_transitions, batch))
                 if batch.work_item_dependencies:
-                    sink.write_work_item_dependencies(
-                        _stamp_work_items(batch.work_item_dependencies, batch)
-                    )
-
+                    sink.write_work_item_dependencies(_stamp_work_items(batch.work_item_dependencies, batch))
             await asyncio.to_thread(_write_work_graph)
             counts["work_item"] = len(batch.work_items)
             counts["work_item_transition"] = len(batch.work_item_transitions)
@@ -521,16 +486,16 @@ granularity given ClickHouse insert() is all-or-nothing per call anyway.)
 
 ```python
 {
-    "canonical_id": str,  # required
-    "org_id": str,  # this layer's write_batch sets/overrides with batch.org_id
-    "identity_uuid": str | None,  # optional, sink derives if absent
+    "canonical_id": str,             # required
+    "org_id": str,                   # this layer's write_batch sets/overrides with batch.org_id
+    "identity_uuid": str | None,     # optional, sink derives if absent
     "display_name": str | None,
     "email": str | None,
-    "provider_identities": str,  # JSON-encoded dict[str, list[str]], default "{}"
+    "provider_identities": str,      # JSON-encoded dict[str, list[str]], default "{}"
     "team_ids": list[str],
-    "is_active": int,  # 0/1
-    "updated_at": datetime | str,  # D8: from payload when present
-    "source_id": str,  # this layer stamps
+    "is_active": int,                # 0/1
+    "updated_at": datetime | str,    # D8: from payload when present
+    "source_id": str,                # this layer stamps
 }
 ```
 
@@ -538,7 +503,7 @@ granularity given ClickHouse insert() is all-or-nothing per call anyway.)
 
 ```python
 {
-    "id": str,  # slug PK
+    "id": str,                       # slug PK
     "team_uuid": str | None,
     "name": str,
     "description": str | None,
@@ -546,9 +511,9 @@ granularity given ClickHouse insert() is all-or-nothing per call anyway.)
     "project_keys": list[str],
     "repo_patterns": list[str],
     "is_active": int,
-    "updated_at": datetime | str,  # D8
+    "updated_at": datetime | str,    # D8
     "org_id": str,
-    "provider": str,  # source.system value
+    "provider": str,                 # source.system value
     "native_team_key": str | None,
     "parent_team_id": str | None,
     "source_id": str,

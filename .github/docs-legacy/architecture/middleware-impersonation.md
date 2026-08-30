@@ -181,13 +181,10 @@ class ImpersonationMiddleware:
         )
 
         # Add response headers
-        send = wrap_send_with_headers(
-            send,
-            {
-                "X-Impersonating": "true",
-                "X-Impersonated-User-Id": str(session.target_user_id),
-            },
-        )
+        send = wrap_send_with_headers(send, {
+            "X-Impersonating": "true",
+            "X-Impersonated-User-Id": str(session.target_user_id),
+        })
 
         try:
             await self.app(scope, receive, send)
@@ -204,8 +201,8 @@ class ImpersonationMiddleware:
 # OrgIdMiddleware extracts org_id from header/JWT
 # ImpersonationMiddleware overrides it if session is active
 # So ImpersonationMiddleware must run AFTER OrgIdMiddleware (wrap it)
-app.add_middleware(OrgIdMiddleware)  # Inner
-app.add_middleware(ImpersonationMiddleware)  # Outer (runs after OrgId sets context)
+app.add_middleware(OrgIdMiddleware)              # Inner
+app.add_middleware(ImpersonationMiddleware)      # Outer (runs after OrgId sets context)
 ```
 
 (ASGI middleware order is LIFO — last added wraps everything, so `ImpersonationMiddleware` added last makes it the outermost wrapper.)
@@ -219,7 +216,6 @@ _impersonation_ctx: ContextVar[ImpersonationContext | None] = ContextVar(
     "impersonation_ctx", default=None
 )
 
-
 @dataclass
 class ImpersonationContext:
     target_user_id: str
@@ -228,10 +224,8 @@ class ImpersonationContext:
     real_user_id: str
     is_active: bool = True
 
-
 def get_impersonation_context() -> ImpersonationContext | None:
     return _impersonation_ctx.get(None)
-
 
 def is_impersonating() -> bool:
     ctx = _impersonation_ctx.get(None)

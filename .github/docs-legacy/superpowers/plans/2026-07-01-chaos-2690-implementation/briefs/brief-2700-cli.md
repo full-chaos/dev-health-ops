@@ -342,7 +342,6 @@ from dev_health_ops.api.external_ingest.schemas import (
     ExternalIngestValidationError,
 )
 
-
 def validate_payload(raw: dict) -> tuple[bool, list[ExternalIngestValidationError]]:
     try:
         ExternalIngestBatchEnvelope.model_validate(raw)

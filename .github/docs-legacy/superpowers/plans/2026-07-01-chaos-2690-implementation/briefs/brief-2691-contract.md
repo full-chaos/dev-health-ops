@@ -160,19 +160,11 @@ a public contract). New exception type + handler, registered from
 ```python
 # api/external_ingest/errors.py
 class ExternalIngestError(Exception):
-    def __init__(
-        self,
-        status_code: int,
-        code: str,
-        message: str,
-        *,
-        errors: list[dict] | None = None,
-    ):
+    def __init__(self, status_code: int, code: str, message: str, *, errors: list[dict] | None = None):
         self.status_code = status_code
         self.code = code
         self.message = message
         self.errors = errors or []
-
 
 def register_external_ingest_error_handlers(app: FastAPI) -> None:
     async def _handler(request: Request, exc: ExternalIngestError) -> JSONResponse:
@@ -180,7 +172,6 @@ def register_external_ingest_error_handlers(app: FastAPI) -> None:
         if exc.errors:
             body["error"]["errors"] = exc.errors
         return JSONResponse(status_code=exc.status_code, content=body)
-
     app.add_exception_handler(ExternalIngestError, _handler)
 ```
 Starlette dispatches on exact exception type first, so this handler wins
@@ -239,17 +230,13 @@ file long-term.
 ```python
 # api/external_ingest/streams.py
 import json, logging, os
-
 logger = logging.getLogger(__name__)
-
 
 class StreamUnavailableError(Exception):
     """Raised when the durable ingest stream cannot accept a write."""
 
-
 def stream_name(org_id: str) -> str:
     return f"external-ingest:{org_id}:batches"
-
 
 def get_redis_client():
     redis_url = os.getenv("REDIS_URL")
@@ -257,22 +244,14 @@ def get_redis_client():
         return None
     try:
         import valkey as redis
-
         return redis.from_url(redis_url, decode_responses=True)
     except Exception:
         logger.warning("Redis unavailable for external-ingest streams")
         return None
 
-
 def enqueue_batch(
-    *,
-    org_id: str,
-    ingestion_id: str,
-    source_system: str,
-    source_instance: str,
-    schema_version: str,
-    idempotency_key: str,
-    payload_json: str,
+    *, org_id: str, ingestion_id: str, source_system: str, source_instance: str,
+    schema_version: str, idempotency_key: str, payload_json: str,
 ) -> str:
     """Write one batch to the durable stream. Returns the stream key.
 
@@ -323,13 +302,11 @@ from dev_health_ops.api.services.auth import set_current_org_id
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class IngestAuthContext:
     org_id: str
     scopes: set[str] = field(default_factory=set)
     token_id: str | None = None  # populated once CHAOS-2696 lands
-
 
 def require_ingest_scope(required_scope: str):
     async def _dep(
@@ -343,8 +320,7 @@ def require_ingest_scope(required_scope: str):
         # CHAOS-2712 deletes this flag together with the interim body.
         if os.environ.get("EXTERNAL_INGEST_INSECURE_AUTH") != "1":
             raise ExternalIngestError(  # 503, code="auth_not_configured"
-                status_code=503,
-                code="auth_not_configured",
+                status_code=503, code="auth_not_configured",
                 message="external-ingest auth is not configured on this deployment",
             )
         if not authorization or not authorization.lower().startswith("bearer "):
@@ -360,14 +336,9 @@ def require_ingest_scope(required_scope: str):
             "external-ingest interim auth: unvalidated token accepted for org_id=%s",
             x_org_id,
         )
-        ctx = IngestAuthContext(
-            org_id=x_org_id, scopes={"ingest:write", "ingest:status", "schema:read"}
-        )
-        set_current_org_id(
-            ctx.org_id
-        )  # keep ClickHouse auto-scoping consistent (api-app recon gotcha)
+        ctx = IngestAuthContext(org_id=x_org_id, scopes={"ingest:write", "ingest:status", "schema:read"})
+        set_current_org_id(ctx.org_id)  # keep ClickHouse auto-scoping consistent (api-app recon gotcha)
         return ctx
-
     return _dep
 ```
 This is intentionally permissive ONCE the `EXTERNAL_INGEST_INSECURE_AUTH=1` flag is set
@@ -400,7 +371,6 @@ RECORD_KIND_MODELS: dict[str, type[BaseModel]] = {
     "commit.v1": CommitV1,
 }
 
-
 @router.get("/schemas")
 async def list_schemas():
     return {
@@ -408,15 +378,10 @@ async def list_schemas():
         "recordKinds": sorted(RECORD_KIND_MODELS),
     }
 
-
 @router.get("/schemas/{schema_version}")
 async def get_schema(schema_version: str):
     if schema_version != SCHEMA_VERSION:
-        raise ExternalIngestError(
-            404,
-            "unsupported_schema_version",
-            f"Unknown schema version: {schema_version}",
-        )
+        raise ExternalIngestError(404, "unsupported_schema_version", f"Unknown schema version: {schema_version}")
     return {
         "schemaVersion": SCHEMA_VERSION,
         "envelope": BatchEnvelope.model_json_schema(by_alias=True),
@@ -510,15 +475,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 SCHEMA_VERSION = "external-ingest.v1"
 MAX_RECORDS_DEFAULT = 1000
 
-
 class SourceDescriptor(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     type: Literal["customer_push"] = "customer_push"
     system: Literal["github", "gitlab", "jira", "linear", "custom"]
     instance: str = Field(..., min_length=1, max_length=255)  # e.g. "github.com/acme"
-    producer: str | None = None  # e.g. "dev-hops-cli"
+    producer: str | None = None            # e.g. "dev-hops-cli"
     producer_version: str | None = Field(default=None, alias="producerVersion")
-
 
 class IngestWindow(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -533,24 +496,17 @@ class IngestWindow(BaseModel):
             raise ValueError("window.endedAt must be >= window.startedAt")
         return v
 
-
 class RecordEnvelope(BaseModel):
     """Generic wrapper: kind + externalId (for error correlation) + kind-specific payload."""
-
     model_config = ConfigDict(populate_by_name=True)
-    kind: str  # e.g. "pull_request.v1"
+    kind: str                       # e.g. "pull_request.v1"
     external_id: str = Field(..., alias="externalId", min_length=1, max_length=512)
-    payload: (
-        dict  # validated per-kind in router.py against RECORD_KIND_MODELS, not here
-    )
-
+    payload: dict  # validated per-kind in router.py against RECORD_KIND_MODELS, not here
 
 class BatchEnvelope(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     schema_version: str = Field(..., alias="schemaVersion")
-    idempotency_key: str = Field(
-        ..., alias="idempotencyKey", min_length=1, max_length=255
-    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=255)
     source: SourceDescriptor
     window: IngestWindow | None = None
     records: list[RecordEnvelope] = Field(..., min_length=0)
@@ -601,10 +557,9 @@ class ValidationErrorItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     index: int
     kind: str
-    code: str  # e.g. "missing_required_field", "invalid_literal", "unknown_kind"
+    code: str                 # e.g. "missing_required_field", "invalid_literal", "unknown_kind"
     message: str
-    path: str | None = None  # e.g. "records[12].payload.title"
-
+    path: str | None = None   # e.g. "records[12].payload.title"
 
 class ValidationResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -612,7 +567,6 @@ class ValidationResponse(BaseModel):
     items_accepted: int = Field(..., alias="itemsAccepted")
     items_rejected: int = Field(..., alias="itemsRejected")
     errors: list[ValidationErrorItem] = Field(default_factory=list)
-
 
 class BatchAcceptedResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -641,14 +595,11 @@ class RepositoryV1(BaseModel):
     # NOT a URL — becomes Repo.repo AND the get_repo_uuid_from_repo() seed, matching
     # native sync (processors/github.py:1572 repo=repo_info.full_name). Must equal
     # source.instance for git systems. custom: seed = f"custom:{instance}:{externalId}".
-    source_system: Literal["github", "gitlab", "custom"] = Field(
-        ..., alias="sourceSystem"
-    )
+    source_system: Literal["github", "gitlab", "custom"] = Field(..., alias="sourceSystem")
     # ^ becomes Repo.provider directly (D10) -- no "customer_push" value.
     default_ref: str | None = Field(default=None, alias="defaultRef")
     tags: list[str] = Field(default_factory=list, max_length=50)
     settings: dict[str, str | int | float | bool] = Field(default_factory=dict)
-
 
 # --- identity.v1 -> ClickHouseStore.insert_identities row shape ---
 class IdentityV1(BaseModel):
@@ -656,32 +607,24 @@ class IdentityV1(BaseModel):
     canonical_id: str = Field(..., alias="canonicalId", min_length=1, max_length=255)
     display_name: str | None = Field(default=None, alias="displayName")
     email: str | None = None
-    provider_identities: dict[str, list[str]] = Field(
-        default_factory=dict, alias="providerIdentities"
-    )
+    provider_identities: dict[str, list[str]] = Field(default_factory=dict, alias="providerIdentities")
     team_ids: list[str] = Field(default_factory=list, alias="teamIds")
     is_active: bool = Field(default=True, alias="isActive")
     updated_at: datetime = Field(..., alias="updatedAt")
 
-
 # --- team.v1 -> ClickHouseStore.insert_teams row shape ---
 class TeamV1(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-    id: str = Field(
-        ..., min_length=1, max_length=255
-    )  # slug, matches Postgres Team.id convention
+    id: str = Field(..., min_length=1, max_length=255)   # slug, matches Postgres Team.id convention
     name: str
     description: str | None = None
-    members: list[str] = Field(
-        default_factory=list
-    )  # canonical_ids, resolved by worker
+    members: list[str] = Field(default_factory=list)     # canonical_ids, resolved by worker
     project_keys: list[str] = Field(default_factory=list, alias="projectKeys")
     repo_patterns: list[str] = Field(default_factory=list, alias="repoPatterns")
     is_active: bool = Field(default=True, alias="isActive")
     updated_at: datetime = Field(..., alias="updatedAt")
     native_team_key: str | None = Field(default=None, alias="nativeTeamKey")
     parent_team_id: str | None = Field(default=None, alias="parentTeamId")
-
 
 # --- work_item.v1 -> models/work_items.py WorkItem ---
 class WorkItemV1(BaseModel):
@@ -692,33 +635,11 @@ class WorkItemV1(BaseModel):
     # server-side in external_ingest/ids.py (CHAOS-2698) — customers never send it.
     provider: Literal["jira", "github", "gitlab", "linear"]
     title: str
-    type: Literal[
-        "story",
-        "task",
-        "bug",
-        "epic",
-        "pr",
-        "merge_request",
-        "issue",
-        "incident",
-        "chore",
-        "unknown",
-    ] = "unknown"
-    status: Literal[
-        "backlog",
-        "todo",
-        "in_progress",
-        "in_review",
-        "blocked",
-        "done",
-        "canceled",
-        "unknown",
-    ]
+    type: Literal["story", "task", "bug", "epic", "pr", "merge_request", "issue", "incident", "chore", "unknown"] = "unknown"
+    status: Literal["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled", "unknown"]
     status_raw: str | None = Field(default=None, alias="statusRaw")
     description: str | None = None
-    repository_external_id: str | None = Field(
-        default=None, alias="repositoryExternalId"
-    )
+    repository_external_id: str | None = Field(default=None, alias="repositoryExternalId")
     native_team_key: str | None = Field(default=None, alias="nativeTeamKey")
     project_key: str | None = Field(default=None, alias="projectKey")
     project_id: str | None = Field(default=None, alias="projectId")
@@ -741,7 +662,6 @@ class WorkItemV1(BaseModel):
     service_class: str | None = Field(default=None, alias="serviceClass")
     due_at: datetime | None = Field(default=None, alias="dueAt")
 
-
 # --- work_item_transition.v1 -> models/work_items.py WorkItemStatusTransition ---
 class WorkItemTransitionV1(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -750,46 +670,22 @@ class WorkItemTransitionV1(BaseModel):
     occurred_at: datetime = Field(..., alias="occurredAt")
     from_status_raw: str | None = Field(default=None, alias="fromStatusRaw")
     to_status_raw: str | None = Field(default=None, alias="toStatusRaw")
-    from_status: Literal[
-        "backlog",
-        "todo",
-        "in_progress",
-        "in_review",
-        "blocked",
-        "done",
-        "canceled",
-        "unknown",
-    ] = Field(..., alias="fromStatus")
-    to_status: Literal[
-        "backlog",
-        "todo",
-        "in_progress",
-        "in_review",
-        "blocked",
-        "done",
-        "canceled",
-        "unknown",
-    ] = Field(..., alias="toStatus")
+    from_status: Literal["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled", "unknown"] = Field(..., alias="fromStatus")
+    to_status: Literal["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled", "unknown"] = Field(..., alias="toStatus")
     actor: str | None = None
-
 
 # --- work_item_dependency.v1 -> models/work_items.py WorkItemDependency ---
 class WorkItemDependencyV1(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     source_work_item_id: str = Field(..., alias="sourceWorkItemId")
     target_work_item_id: str = Field(..., alias="targetWorkItemId")
-    relationship_type: Literal[
-        "blocks", "blocked_by", "relates_to", "duplicates", "parent_of", "child_of"
-    ] = Field(..., alias="relationshipType")
+    relationship_type: Literal["blocks", "blocked_by", "relates_to", "duplicates", "parent_of", "child_of"] = Field(..., alias="relationshipType")
     relationship_type_raw: str | None = Field(default=None, alias="relationshipTypeRaw")
-
 
 # --- pull_request.v1 -> models/git.py GitPullRequest ---
 class PullRequestV1(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-    repository_external_id: str = Field(
-        ..., alias="repositoryExternalId"
-    )  # -> Repo.id via D9 derivation
+    repository_external_id: str = Field(..., alias="repositoryExternalId")  # -> Repo.id via D9 derivation
     number: int = Field(..., ge=1)
     title: str | None = None
     body: str | None = None
@@ -806,13 +702,10 @@ class PullRequestV1(BaseModel):
     changed_files: int | None = Field(default=None, alias="changedFiles", ge=0)
     first_review_at: datetime | None = Field(default=None, alias="firstReviewAt")
     first_comment_at: datetime | None = Field(default=None, alias="firstCommentAt")
-    changes_requested_count: int | None = Field(
-        default=0, alias="changesRequestedCount", ge=0
-    )
+    changes_requested_count: int | None = Field(default=0, alias="changesRequestedCount", ge=0)
     reviews_count: int | None = Field(default=0, alias="reviewsCount", ge=0)
     comments_count: int | None = Field(default=0, alias="commentsCount", ge=0)
     url: str | None = None
-
 
 # --- review.v1 -> models/git.py GitPullRequestReview ---
 class ReviewV1(BaseModel):
@@ -821,11 +714,8 @@ class ReviewV1(BaseModel):
     pull_request_number: int = Field(..., alias="pullRequestNumber", ge=1)
     review_id: str = Field(..., alias="reviewId", min_length=1)
     reviewer: str
-    state: Literal[
-        "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"
-    ]  # D12
+    state: Literal["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]  # D12
     submitted_at: datetime = Field(..., alias="submittedAt")
-
 
 # --- commit.v1 -> models/git.py GitCommit ---
 class CommitV1(BaseModel):
@@ -857,14 +747,11 @@ customers don't expect `/validate` to catch dangling repo references.
 ```python
 router = APIRouter(prefix="/api/v1/external-ingest", tags=["external-ingest"])
 
-
 @router.get("/schemas")
 async def list_schemas(): ...  # D8, no auth
 
-
 @router.get("/schemas/{schema_version}")
 async def get_schema(schema_version: str): ...  # D8, no auth
-
 
 @router.post("/validate", response_model=ValidationResponse)
 async def validate_batch(
@@ -872,10 +759,10 @@ async def validate_batch(
     ctx: IngestAuthContext = Depends(require_ingest_scope("schema:read")),
 ):
     raw = await _read_body_enforcing_size_limit(request)  # D4, 413
-    envelope = _parse_envelope_or_400(raw)  # D2, 400
-    _check_schema_version_or_400(envelope)  # 400 unsupported_schema_version
-    _check_batch_size_or_400(envelope)  # D4, 400 batch_too_large
-    errors = _validate_records(envelope.records)  # per-record, D2/discriminator note
+    envelope = _parse_envelope_or_400(raw)                 # D2, 400
+    _check_schema_version_or_400(envelope)                 # 400 unsupported_schema_version
+    _check_batch_size_or_400(envelope)                     # D4, 400 batch_too_large
+    errors = _validate_records(envelope.records)            # per-record, D2/discriminator note
     return ValidationResponse(
         valid=not errors,
         items_accepted=len(envelope.records) - len(errors),
@@ -883,19 +770,18 @@ async def validate_batch(
         errors=errors,
     )
 
-
 @router.post("/batches", response_model=BatchAcceptedResponse, status_code=202)
 async def accept_batch(
     request: Request,
     ctx: IngestAuthContext = Depends(require_ingest_scope("ingest:write")),
     idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    raw = await _read_body_enforcing_size_limit(request)  # 413
-    envelope = _parse_envelope_or_400(raw)  # 400
+    raw = await _read_body_enforcing_size_limit(request)     # 413
+    envelope = _parse_envelope_or_400(raw)                    # 400
     _check_idempotency_header_matches_body(envelope, idempotency_key_header)  # D1, 400
-    _check_schema_version_or_400(envelope)  # 400
-    _check_all_kinds_known_or_400(envelope)  # 400 unknown_record_kind
-    _check_batch_size_or_400(envelope)  # 400 batch_too_large
+    _check_schema_version_or_400(envelope)                     # 400
+    _check_all_kinds_known_or_400(envelope)                     # 400 unknown_record_kind
+    _check_batch_size_or_400(envelope)                           # 400 batch_too_large
     ingestion_id = str(uuid4())
     try:
         stream = enqueue_batch(
@@ -908,13 +794,9 @@ async def accept_batch(
             payload_json=raw.decode("utf-8"),
         )
     except StreamUnavailableError as exc:
-        raise ExternalIngestError(
-            503, "stream_unavailable", "Ingest stream unavailable"
-        ) from exc
+        raise ExternalIngestError(503, "stream_unavailable", "Ingest stream unavailable") from exc
     return BatchAcceptedResponse(
-        ingestion_id=ingestion_id,
-        items_received=len(envelope.records),
-        stream=stream,
+        ingestion_id=ingestion_id, items_received=len(envelope.records), stream=stream,
     )
 ```
 `429` is emitted by a `slowapi` rate-limit decorator keyed by

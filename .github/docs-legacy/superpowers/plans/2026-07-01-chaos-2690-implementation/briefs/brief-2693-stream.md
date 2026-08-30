@@ -239,13 +239,11 @@ existing consumers (ingest, product-telemetry) are byte-for-byte unaffected:
 ```python
 class StreamConsumer:
     ...
-    enable_reclaim: bool = False  # opt-in; existing subclasses unaffected
-    reclaim_idle_ms: int = (
-        900_000  # 15 min (post-critique CC11; was 60s — the in-process
-    )
-    # retry ladder alone sleeps 14s and a 1000-record batch
-    # can exceed 60s, risking duplicate concurrent processing)
-    max_deliveries: int = 5  # after this many attempts, give up -> DLQ
+    enable_reclaim: bool = False       # opt-in; existing subclasses unaffected
+    reclaim_idle_ms: int = 900_000     # 15 min (post-critique CC11; was 60s — the in-process
+                                       # retry ladder alone sleeps 14s and a 1000-record batch
+                                       # can exceed 60s, risking duplicate concurrent processing)
+    max_deliveries: int = 5            # after this many attempts, give up -> DLQ
 
     def reclaim_stale(self, rc, stream_key: str) -> list[tuple[str, dict]]:
         """Reclaim entries idle > reclaim_idle_ms. Entries at/above
@@ -254,30 +252,21 @@ class StreamConsumer:
         if not self.enable_reclaim:
             return []
         pending = rc.xpending_range(
-            stream_key,
-            self.consumer_group,
-            min="-",
-            max="+",
-            count=self.batch_size,
-            idle=self.reclaim_idle_ms,
+            stream_key, self.consumer_group,
+            min="-", max="+", count=self.batch_size, idle=self.reclaim_idle_ms,
         )
         claim_ids = []
         for p in pending:
             if p["times_delivered"] >= self.max_deliveries:
-                self.move_to_dlq(
-                    rc, stream_key, p["message_id"], "max_deliveries_exceeded"
-                )
+                self.move_to_dlq(rc, stream_key, p["message_id"], "max_deliveries_exceeded")
                 rc.xack(stream_key, self.consumer_group, p["message_id"])
             else:
                 claim_ids.append(p["message_id"])
         if not claim_ids:
             return []
         return rc.xclaim(
-            stream_key,
-            self.consumer_group,
-            self.consumer_name,
-            min_idle_time=self.reclaim_idle_ms,
-            message_ids=claim_ids,
+            stream_key, self.consumer_group, self.consumer_name,
+            min_idle_time=self.reclaim_idle_ms, message_ids=claim_ids,
         )
 ```
 
@@ -469,15 +458,15 @@ async def enqueue_external_ingest_batch(
     return stream
 
 
-async def reenqueue_batch(*, org_id: str, ingestion_id: str, **kwargs) -> str:
+async def reenqueue_batch(
+    *, org_id: str, ingestion_id: str, **kwargs
+) -> str:
     """Re-drive a batch whose Postgres row exists but was never (successfully)
     enqueued (D2 orphan case) or whose processing needs a manual retry.
     Thin wrapper around enqueue_external_ingest_batch for a future
     reconciler (CHAOS-2694/2699) to call. Not scheduled by this issue.
     """
-    return await enqueue_external_ingest_batch(
-        org_id=org_id, ingestion_id=ingestion_id, **kwargs
-    )
+    return await enqueue_external_ingest_batch(org_id=org_id, ingestion_id=ingestion_id, **kwargs)
 ```
 
 ### `consumer.py` — consumer group + retry + DLQ
@@ -493,8 +482,8 @@ from .streams import CONSUMER_GROUP, dlq_stream_name
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 50  # smaller than ingest's 100: each entry now triggers
-# a Postgres payload fetch + full record processing
+BATCH_SIZE = 50            # smaller than ingest's 100: each entry now triggers
+                            # a Postgres payload fetch + full record processing
 BLOCK_MS = 5000
 RECLAIM_IDLE_MS = 900_000  # 15 min, post-critique CC11
 MAX_DELIVERIES = 5
@@ -539,9 +528,7 @@ class ExternalIngestStreamConsumer(StreamConsumer):
         except Exception:
             logger.exception("Failed to move %s to DLQ", entry_id)
 
-    def process_entry(
-        self, stream_key: str, entry_id: str, data: dict[str, str]
-    ) -> int:
+    def process_entry(self, stream_key: str, entry_id: str, data: dict[str, str]) -> int:
         from dev_health_ops.external_ingest.processor import process_batch
 
         return process_batch(
@@ -635,7 +622,6 @@ Revision ID: 0032
 Revises: 0031
 Create Date: 2026-07-XX 00:00:00
 """
-
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -680,9 +666,7 @@ def _table_exists(table_name: str) -> bool:
     return table_name in sa.inspect(bind).get_table_names()
 
 
-def _create_index_if_missing(
-    index_name: str, table_name: str, columns: list[str]
-) -> None:
+def _create_index_if_missing(index_name: str, table_name: str, columns: list[str]) -> None:
     bind = op.get_bind()
     existing = {ix["name"] for ix in sa.inspect(bind).get_indexes(table_name)}
     if index_name not in existing:
@@ -700,10 +684,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-
-async def upsert_payload(
-    session, *, ingestion_id, org_id, schema_version, payload_bytes
-) -> None:
+async def upsert_payload(session, *, ingestion_id, org_id, schema_version, payload_bytes) -> None:
     # POST-CRITIQUE (CC22): upsert, not plain INSERT — a RETRY accept (stream_unavailable,
     # failed, or stale-accepted; CC13) reuses the SAME ingestion_id, so the row may already
     # exist (stream_unavailable: worker never ran) or not (failed: worker deleted it).
@@ -753,7 +734,6 @@ async def upsert_payload(
             params,
         )
 
-
 async def fetch_payload(session, *, ingestion_id, org_id) -> bytes | None:
     # org_id in the predicate even though ingestion_id is already unique --
     # defense in depth against a leaked/guessed UUID crossing tenants.
@@ -768,12 +748,9 @@ async def fetch_payload(session, *, ingestion_id, org_id) -> bytes | None:
     ).first()
     return row[0] if row else None
 
-
 async def delete_payload(session, *, ingestion_id) -> None:
     await session.execute(
-        text(
-            "DELETE FROM external_ingest_batch_payloads WHERE ingestion_id = :ingestion_id"
-        ),
+        text("DELETE FROM external_ingest_batch_payloads WHERE ingestion_id = :ingestion_id"),
         {"ingestion_id": ingestion_id},
     )
 ```

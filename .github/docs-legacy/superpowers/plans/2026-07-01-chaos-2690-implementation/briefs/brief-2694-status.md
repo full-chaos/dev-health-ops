@@ -171,7 +171,9 @@ def upgrade() -> None:
             sa.Column("schema_version", sa.Text(), nullable=False),
             sa.Column("window_started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("window_ended_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("status", sa.Text(), nullable=False, server_default="accepted"),
+            sa.Column(
+                "status", sa.Text(), nullable=False, server_default="accepted"
+            ),
             sa.Column(
                 "items_received", sa.Integer(), nullable=False, server_default="0"
             ),
@@ -202,9 +204,7 @@ def upgrade() -> None:
         _ORG_CREATED_INDEX, _BATCHES_TABLE, ["org_id", "created_at"]
     )
     _create_index_if_missing(
-        _ORG_SOURCE_INDEX,
-        _BATCHES_TABLE,
-        ["org_id", "source_system", "source_instance"],
+        _ORG_SOURCE_INDEX, _BATCHES_TABLE, ["org_id", "source_system", "source_instance"]
     )
     _create_unique_index_if_missing(
         _IDEM_INDEX,
@@ -479,13 +479,7 @@ class DuplicateIdempotencyKeyError(Exception):
     Callers (CHAOS-2691/2695) should catch this, re-run find_existing_batch(),
     and apply the same-hash-200 / different-hash-409 policy."""
 
-    def __init__(
-        self,
-        org_id: str,
-        source_system: str,
-        source_instance: str,
-        idempotency_key: str,
-    ) -> None:
+    def __init__(self, org_id: str, source_system: str, source_instance: str, idempotency_key: str) -> None:
         self.org_id = org_id
         self.source_system = source_system
         self.source_instance = source_instance
@@ -572,9 +566,7 @@ async def create_batch(
     ...
 
 
-async def mark_processing(
-    session: AsyncSession, *, org_id: str, ingestion_id: uuid.UUID
-) -> None:
+async def mark_processing(session: AsyncSession, *, org_id: str, ingestion_id: uuid.UUID) -> None:
     """accepted -> processing. Idempotent: a no-op UPDATE (WHERE status =
     'accepted') if already processing/terminal, so redelivered stream entries
     (at-least-once) never regress a terminal status back to processing."""
@@ -602,9 +594,7 @@ async def complete_batch(
     ...
 
 
-async def get_batch(
-    session: AsyncSession, *, org_id: str, ingestion_id: uuid.UUID
-) -> BatchRow | None:
+async def get_batch(session: AsyncSession, *, org_id: str, ingestion_id: uuid.UUID) -> BatchRow | None:
     """Tenant-scoped single lookup. Returns None (never raises) for both
     'does not exist' and 'exists but belongs to a different org' -- callers
     MUST turn both into an identical 404, never a 403 (avoid leaking
@@ -646,12 +636,8 @@ async def list_rejections(
 Terminal-status derivation helper (co-located, pure function, unit-testable without a DB):
 
 ```python
-def _terminal_status_for(
-    items_received: int, items_accepted: int, items_rejected: int
-) -> BatchStatus:
-    assert items_received > 0, (
-        "empty batches must be rejected by CHAOS-2691 schema validation before reaching status store"
-    )
+def _terminal_status_for(items_received: int, items_accepted: int, items_rejected: int) -> BatchStatus:
+    assert items_received > 0, "empty batches must be rejected by CHAOS-2691 schema validation before reaching status store"
     if items_rejected == 0:
         return BatchStatus.COMPLETED
     if items_accepted == 0:
@@ -692,35 +678,24 @@ status_router = APIRouter()
 @status_router.get("/batches/{ingestion_id}")
 async def get_batch_status(
     ingestion_id: uuid.UUID,
-    auth: Annotated[
-        IngestAuthContext, Depends(require_ingest_scope(INGEST_SCOPE_STATUS))
-    ],
+    auth: Annotated[IngestAuthContext, Depends(require_ingest_scope(INGEST_SCOPE_STATUS))],
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     error_limit: Annotated[int, Query(ge=1, le=200)] = 50,
     error_offset: Annotated[int, Query(ge=0)] = 0,
 ) -> BatchStatusResponse:
-    batch = await status.get_batch(
-        session, org_id=auth.org_id, ingestion_id=ingestion_id
-    )
+    batch = await status.get_batch(session, org_id=auth.org_id, ingestion_id=ingestion_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="ingestion batch not found")
     errors, total_errors = await status.list_rejections(
-        session,
-        org_id=auth.org_id,
-        ingestion_id=ingestion_id,
-        limit=error_limit,
-        offset=error_offset,
+        session, org_id=auth.org_id, ingestion_id=ingestion_id,
+        limit=error_limit, offset=error_offset,
     )
-    return BatchStatusResponse.from_row(
-        batch, errors, total_errors, error_limit, error_offset
-    )
+    return BatchStatusResponse.from_row(batch, errors, total_errors, error_limit, error_offset)
 
 
 @status_router.get("/batches")
 async def list_batch_statuses(
-    auth: Annotated[
-        IngestAuthContext, Depends(require_ingest_scope(INGEST_SCOPE_STATUS))
-    ],
+    auth: Annotated[IngestAuthContext, Depends(require_ingest_scope(INGEST_SCOPE_STATUS))],
     session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
     source_system: str | None = Query(None),
     source_instance: str | None = Query(None),
@@ -729,14 +704,14 @@ async def list_batch_statuses(
     created_before: datetime | None = Query(None),
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> BatchListResponse: ...
+) -> BatchListResponse:
+    ...
 ```
 
 Registration in CHAOS-2691's `api/external_ingest/router.py` (a one-line edit CHAOS-2694 must also make if 2691 already landed):
 
 ```python
 from dev_health_ops.api.external_ingest.status import status_router
-
 router.include_router(status_router)
 ```
 
@@ -810,7 +785,6 @@ Deletes batches (and cascade-deletes their rejections via
 ON DELETE CASCADE) older than the retention window. Beat-scheduled,
 env-tunable via EXTERNAL_INGEST_STATUS_RETENTION_DAYS (default 90).
 """
-
 from __future__ import annotations
 
 import logging

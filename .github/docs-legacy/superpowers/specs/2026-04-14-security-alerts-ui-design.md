@@ -64,7 +64,6 @@ class SecuritySeverityInput(Enum):
     CRITICAL = "critical"
     UNKNOWN = "unknown"
 
-
 @strawberry.enum
 class SecuritySourceInput(Enum):
     DEPENDABOT = "dependabot"
@@ -72,7 +71,6 @@ class SecuritySourceInput(Enum):
     ADVISORY = "advisory"
     GITLAB_VULNERABILITY = "gitlab_vulnerability"
     GITLAB_DEPENDENCY = "gitlab_dependency"
-
 
 @strawberry.enum
 class SecurityStateInput(Enum):
@@ -83,7 +81,6 @@ class SecurityStateInput(Enum):
     CONFIRMED = "confirmed"
     RESOLVED = "resolved"
 
-
 @strawberry.input
 class SecurityAlertFilterInput:
     repo_ids: list[str] | None = None
@@ -92,14 +89,13 @@ class SecurityAlertFilterInput:
     states: list[SecurityStateInput] | None = None
     since: datetime | None = None  # created_at >= since
     until: datetime | None = None  # created_at <= until
-    open_only: bool = False  # shorthand for states=OPEN,DETECTED,CONFIRMED
-    search: str | None = None  # ILIKE on title + package_name + cve_id
-
+    open_only: bool = False        # shorthand for states=OPEN,DETECTED,CONFIRMED
+    search: str | None = None      # ILIKE on title + package_name + cve_id
 
 @strawberry.input
 class SecurityPaginationInput:
     first: int = 50
-    after: str | None = None  # cursor; format matches work_graph_edges
+    after: str | None = None       # cursor; format matches work_graph_edges
 ```
 
 "Open" is defined once: `{open, detected, confirmed}`. `open_only=True` overrides `states` when both are provided (resolver coerces).
@@ -113,26 +109,24 @@ Appended. Connection shape reuses the existing `PageInfo` (`outputs.py:142-189`)
 class SecurityAlertNode:
     alert_id: str
     repo_id: str
-    repo_name: str  # joined from repos
+    repo_name: str            # joined from repos
     repo_url: str | None
-    source: str  # lowercase string matching enum values
+    source: str               # lowercase string matching enum values
     severity: str
     state: str
     package_name: str | None
     cve_id: str | None
-    url: str | None  # upstream link (GitHub/GitLab alert page)
+    url: str | None           # upstream link (GitHub/GitLab alert page)
     title: str | None
     description: str | None
     created_at: datetime
     fixed_at: datetime | None
     dismissed_at: datetime | None
 
-
 @strawberry.type
 class SecurityAlertEdge:
     node: SecurityAlertNode
     cursor: str
-
 
 @strawberry.type
 class SecurityAlertConnection:
@@ -140,21 +134,18 @@ class SecurityAlertConnection:
     total_count: int
     page_info: PageInfo
 
-
 @strawberry.type
 class SecurityKpis:
     open_total: int
     critical: int
     high: int
-    mean_days_to_fix_30d: float | None  # null if no alerts fixed in window
-    open_delta_30d: int  # net change in open over last 30d
-
+    mean_days_to_fix_30d: float | None   # null if no alerts fixed in window
+    open_delta_30d: int                   # net change in open over last 30d
 
 @strawberry.type
 class SeverityBucket:
-    severity: str  # one of low/medium/high/critical/unknown
+    severity: str   # one of low/medium/high/critical/unknown
     count: int
-
 
 @strawberry.type
 class RepoAlertCount:
@@ -163,20 +154,18 @@ class RepoAlertCount:
     repo_url: str | None
     count: int
 
-
 @strawberry.type
 class TrendPoint:
     day: date
     opened: int
     fixed: int
 
-
 @strawberry.type
 class SecurityOverview:
     kpis: SecurityKpis
     severity_breakdown: list[SeverityBucket]
-    top_repos: list[RepoAlertCount]  # LIMIT 10, count DESC
-    trend: list[TrendPoint]  # last 30d, one point per day
+    top_repos: list[RepoAlertCount]   # LIMIT 10, count DESC
+    trend: list[TrendPoint]           # last 30d, one point per day
 ```
 
 ### Resolvers — `ops/src/dev_health_ops/api/graphql/resolvers/security.py` (new)
@@ -211,7 +200,6 @@ async def security_alerts(
     filters: SecurityAlertFilterInput | None = None,
     pagination: SecurityPaginationInput | None = None,
 ) -> SecurityAlertConnection: ...
-
 
 @strawberry.field(description="Aggregated security posture for the dashboard")
 async def security_overview(

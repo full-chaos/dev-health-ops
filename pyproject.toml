@@ -195,8 +195,14 @@ exclude = [
   "__pycache__",
   "docs",
   # Non-source documentation trees. Ruff 0.16 formats Python code fences in
-  # Markdown; .planning holds internal planning notes.
+  # Markdown; .planning holds internal planning notes. .github/docs-legacy
+  # holds implementation plans/briefs whose code fences are literal
+  # "replace lines N-M" / "insert before X" diff instructions at a specific
+  # indentation (class/method body) -- ruff's fence formatter dedents them
+  # to column 0, silently changing what a reader would paste (CHAOS-4606,
+  # codex round 2: 4 corrupted snippets across 3 plan docs).
   ".planning",
+  ".github/docs-legacy",
   "build",
   "dist",
   "migrations",

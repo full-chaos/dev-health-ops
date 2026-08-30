@@ -124,17 +124,11 @@ Rationale: lets this issue merge and be fully unit-tested (with an in-memory fak
 ```python
 class StatusReporter(Protocol):
     async def mark_processing(self, ingestion_id: str, org_id: str) -> None: ...
-    async def record_rejections(
-        self, ingestion_id: str, org_id: str, rejections: list[RejectedRecord]
-    ) -> None: ...
+    async def record_rejections(self, ingestion_id: str, org_id: str, rejections: list[RejectedRecord]) -> None: ...
     async def complete(
-        self,
-        ingestion_id: str,
-        org_id: str,
-        *,
+        self, ingestion_id: str, org_id: str, *,
         status: Literal["completed", "partial", "failed"],
-        items_accepted: int,
-        items_rejected: int,
+        items_accepted: int, items_rejected: int,
         error_summary: str | None = None,
     ) -> None: ...
 ```
@@ -177,17 +171,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 RecordKind = Literal[
-    "repository.v1",
-    "identity.v1",
-    "team.v1",
-    "work_item.v1",
-    "work_item_transition.v1",
-    "work_item_dependency.v1",
-    "pull_request.v1",
-    "review.v1",
-    "commit.v1",
+    "repository.v1", "identity.v1", "team.v1",
+    "work_item.v1", "work_item_transition.v1", "work_item_dependency.v1",
+    "pull_request.v1", "review.v1", "commit.v1",
 ]
-
 
 class RecordEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -200,7 +187,7 @@ class RecordEnvelope(BaseModel):
 ```python
 class RepositoryV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    repo: str = Field(min_length=1)  # human-facing URL, stored as repos.repo
+    repo: str = Field(min_length=1)          # human-facing URL, stored as repos.repo
     ref: str | None = None
     tags: list[str] = Field(default_factory=list)
     settings: dict = Field(default_factory=dict)
@@ -236,10 +223,10 @@ Mapping: `{"id": externalId, "org_id": org_id, "name": ..., "description": ..., 
 class WorkItemV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1)
-    type: WorkItemType = "unknown"  # reuse Literal from models.work_items
+    type: WorkItemType = "unknown"                 # reuse Literal from models.work_items
     status: WorkItemStatusCategory = "unknown"
     statusRaw: str | None = None
-    repoExternalId: str | None = None  # optional link to a repository.v1
+    repoExternalId: str | None = None               # optional link to a repository.v1
     projectKey: str | None = None
     projectId: str | None = None
     projectName: str | None = None
@@ -261,9 +248,7 @@ Mapping: `provider` is **not** a per-record field — it's derived from the batc
 ```python
 class WorkItemTransitionV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    workItemId: str = Field(
-        min_length=1
-    )  # must equal a work_item.v1 externalId (cross-batch OK, not validated for existence)
+    workItemId: str = Field(min_length=1)   # must equal a work_item.v1 externalId (cross-batch OK, not validated for existence)
     occurredAt: datetime
     fromStatusRaw: str | None = None
     toStatusRaw: str | None = None
@@ -279,9 +264,7 @@ class WorkItemDependencyV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sourceWorkItemId: str = Field(min_length=1)
     targetWorkItemId: str = Field(min_length=1)
-    relationshipType: str = Field(
-        min_length=1
-    )  # e.g. "blocks", "relates_to" — passthrough, no enum in the internal model either
+    relationshipType: str = Field(min_length=1)   # e.g. "blocks", "relates_to" — passthrough, no enum in the internal model either
 ```
 
 ### `pull_request.v1` → `GitPullRequest`
@@ -319,9 +302,7 @@ class ReviewV1(BaseModel):
     prNumber: int = Field(gt=0)
     reviewId: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)
-    state: str = Field(
-        min_length=1
-    )  # raw passthrough — no normalized enum in the internal model either, confirmed
+    state: str = Field(min_length=1)   # raw passthrough — no normalized enum in the internal model either, confirmed
     submittedAt: datetime
 ```
 `externalId` convention: `f"{repoExternalId}#{prNumber}#{reviewId}"`.
@@ -354,16 +335,14 @@ import dataclasses
 import uuid
 from datetime import datetime
 
-
 @dataclasses.dataclass
 class RejectedRecord:
     index: int
     kind: str
     external_id: str | None
-    code: str  # e.g. "missing_external_id", "unsupported_provider", "invalid_field"
+    code: str          # e.g. "missing_external_id", "unsupported_provider", "invalid_field"
     message: str
-    path: str | None = None  # e.g. "data.createdAt"
-
+    path: str | None = None   # e.g. "data.createdAt"
 
 @dataclasses.dataclass
 class AffectedScope:
@@ -376,13 +355,7 @@ class AffectedScope:
     min_ts: datetime | None = None
     max_ts: datetime | None = None
 
-    def observe(
-        self,
-        *,
-        ts: datetime | None,
-        repo_id: uuid.UUID | None = None,
-        team_id: str | None = None,
-    ) -> None:
+    def observe(self, *, ts: datetime | None, repo_id: uuid.UUID | None = None, team_id: str | None = None) -> None:
         if repo_id is not None:
             self.repo_ids.add(repo_id)
         if team_id is not None:
@@ -391,31 +364,26 @@ class AffectedScope:
             self.min_ts = ts if self.min_ts is None else min(self.min_ts, ts)
             self.max_ts = ts if self.max_ts is None else max(self.max_ts, ts)
 
-
 @dataclasses.dataclass
 class NormalizedBatch:
     org_id: str
     ingestion_id: str
-    repos: list  # Repo
+    repos: list       # Repo
     identities: list  # dict rows
-    teams: list  # dict rows
-    work_items: list  # WorkItem
-    work_item_transitions: list  # WorkItemStatusTransition
+    teams: list       # dict rows
+    work_items: list       # WorkItem
+    work_item_transitions: list   # WorkItemStatusTransition
     work_item_dependencies: list  # WorkItemDependency
-    pull_requests: list  # GitPullRequest
-    reviews: list  # GitPullRequestReview
-    commits: list  # GitCommit
+    pull_requests: list    # GitPullRequest
+    reviews: list           # GitPullRequestReview
+    commits: list            # GitCommit
     rejections: list[RejectedRecord]
     scope: AffectedScope
     items_received: int
 
-
 def process_batch(
-    *,
-    org_id: str,
-    ingestion_id: str,
-    source_system: str,
-    records: list[dict],  # already-parsed JSON, one per RecordEnvelope
+    *, org_id: str, ingestion_id: str, source_system: str,
+    records: list[dict],   # already-parsed JSON, one per RecordEnvelope
 ) -> NormalizedBatch: ...
 ```
 
@@ -425,27 +393,18 @@ from __future__ import annotations
 from typing import Literal, Protocol
 from .normalize import RejectedRecord
 
-
 class StatusReporter(Protocol):
     async def mark_processing(self, *, ingestion_id: str, org_id: str) -> None: ...
-    async def record_rejections(
-        self, *, ingestion_id: str, org_id: str, rejections: list[RejectedRecord]
-    ) -> None: ...
+    async def record_rejections(self, *, ingestion_id: str, org_id: str, rejections: list[RejectedRecord]) -> None: ...
     async def complete(
-        self,
-        *,
-        ingestion_id: str,
-        org_id: str,
+        self, *, ingestion_id: str, org_id: str,
         status: Literal["completed", "partial", "failed"],
-        items_accepted: int,
-        items_rejected: int,
+        items_accepted: int, items_rejected: int,
         error_summary: str | None = None,
     ) -> None: ...
 
-
 class LoggingStatusReporter:
     """No-op-but-logs default used until CHAOS-2694's Postgres-backed reporter is wired in."""
-
     ...
 ```
 
@@ -453,14 +412,13 @@ class LoggingStatusReporter:
 # src/dev_health_ops/external_ingest/processor.py
 from __future__ import annotations
 
-
 async def process_stream_entry(
-    entry_payload: dict,  # {"ingestion_id", "org_id", "source_system", "source_instance",
-    #  "schema_version", "idempotency_key", "payload": "<json records array>"}
+    entry_payload: dict,           # {"ingestion_id", "org_id", "source_system", "source_instance",
+                                    #  "schema_version", "idempotency_key", "payload": "<json records array>"}
     *,
     clickhouse_dsn: str,
     status_reporter: "StatusReporter | None" = None,
-    recompute_enqueue=None,  # defaults to external_ingest.recompute.enqueue_bounded_recompute
+    recompute_enqueue=None,        # defaults to external_ingest.recompute.enqueue_bounded_recompute
 ) -> "ProcessResult": ...
 ```
 
@@ -468,7 +426,6 @@ async def process_stream_entry(
 # src/dev_health_ops/external_ingest/recompute.py
 from __future__ import annotations
 from .normalize import AffectedScope
-
 
 def enqueue_bounded_recompute(scope: AffectedScope) -> None:
     """Best-effort; never raises. See Design Decision D8."""

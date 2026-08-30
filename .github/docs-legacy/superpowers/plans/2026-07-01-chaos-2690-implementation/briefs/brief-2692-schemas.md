@@ -104,7 +104,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --- Source / window --------------------------------------------------------
 
-
 class SourceDescriptor(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -124,18 +123,12 @@ class IngestWindow(BaseModel):
 
 # --- Record kinds (each is independently JSON-Schema-exportable) ----------
 
-
 class RepositoryRecordV1(BaseModel):
     """repository.v1"""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["repository.v1"] = "repository.v1"
-    external_id: str = Field(
-        ...,
-        alias="externalId",
-        description="Customer-stable repo identifier, e.g. 'acme/api'",
-    )
+    external_id: str = Field(..., alias="externalId", description="Customer-stable repo identifier, e.g. 'acme/api'")
     name: str
     url: str | None = None
     default_branch: str | None = Field(default=None, alias="defaultBranch")
@@ -144,7 +137,6 @@ class RepositoryRecordV1(BaseModel):
 
 class IdentityRecordV1(BaseModel):
     """identity.v1"""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["identity.v1"] = "identity.v1"
@@ -156,43 +148,25 @@ class IdentityRecordV1(BaseModel):
 
 class TeamRecordV1(BaseModel):
     """team.v1"""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["team.v1"] = "team.v1"
     external_id: str = Field(..., alias="externalId")
     name: str
-    member_external_ids: list[str] = Field(
-        default_factory=list, alias="memberExternalIds"
-    )
+    member_external_ids: list[str] = Field(default_factory=list, alias="memberExternalIds")
 
 
 WorkItemProviderLiteral = Literal["jira", "github", "gitlab", "linear", "custom"]
 WorkItemTypeLiteral = Literal[
-    "story",
-    "task",
-    "bug",
-    "epic",
-    "issue",
-    "incident",
-    "chore",
-    "unknown",
+    "story", "task", "bug", "epic", "issue", "incident", "chore", "unknown",
 ]
 WorkItemStatusLiteral = Literal[
-    "backlog",
-    "todo",
-    "in_progress",
-    "in_review",
-    "blocked",
-    "done",
-    "canceled",
-    "unknown",
+    "backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled", "unknown",
 ]
 
 
 class WorkItemRecordV1(BaseModel):
     """work_item.v1 — mirrors dev_health_ops.models.work_items.WorkItem field names."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["work_item.v1"] = "work_item.v1"
@@ -203,9 +177,7 @@ class WorkItemRecordV1(BaseModel):
     status: WorkItemStatusLiteral = "unknown"
     status_raw: str | None = Field(default=None, alias="statusRaw")
     description: str | None = None
-    repository_external_id: str | None = Field(
-        default=None, alias="repositoryExternalId"
-    )
+    repository_external_id: str | None = Field(default=None, alias="repositoryExternalId")
     project_key: str | None = Field(default=None, alias="projectKey")
     assignees: list[str] = Field(default_factory=list)
     reporter: str | None = None
@@ -221,7 +193,6 @@ class WorkItemRecordV1(BaseModel):
 
 class WorkItemTransitionRecordV1(BaseModel):
     """work_item_transition.v1 — mirrors WorkItemStatusTransition."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["work_item_transition.v1"] = "work_item_transition.v1"
@@ -237,15 +208,14 @@ class WorkItemTransitionRecordV1(BaseModel):
 
 class WorkItemDependencyRecordV1(BaseModel):
     """work_item_dependency.v1 — mirrors WorkItemDependency."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["work_item_dependency.v1"] = "work_item_dependency.v1"
     source_work_item_external_id: str = Field(..., alias="sourceWorkItemExternalId")
     target_work_item_external_id: str = Field(..., alias="targetWorkItemExternalId")
-    relationship_type: Literal[
-        "blocks", "blocked_by", "relates_to", "duplicates", "unknown"
-    ] = Field(..., alias="relationshipType")
+    relationship_type: Literal["blocks", "blocked_by", "relates_to", "duplicates", "unknown"] = Field(
+        ..., alias="relationshipType"
+    )
     relationship_type_raw: str = Field(..., alias="relationshipTypeRaw")
 
 
@@ -260,7 +230,6 @@ class PullRequestReviewV1(BaseModel):
 
 class PullRequestRecordV1(BaseModel):
     """pull_request.v1 — mirrors GitPullRequest."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["pull_request.v1"] = "pull_request.v1"
@@ -285,7 +254,6 @@ class ReviewRecordV1(BaseModel):
     """review.v1 — standalone (also embeddable via PullRequestRecordV1.reviews in v1 payloads,
     but exists as its own record kind for reviews reported independently of a full PR object,
     e.g. a review posted on a PR FullChaos already knows about)."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["review.v1"] = "review.v1"
@@ -299,7 +267,6 @@ class ReviewRecordV1(BaseModel):
 
 class CommitRecordV1(BaseModel):
     """commit.v1 — mirrors GitCommit."""
-
     model_config = ConfigDict(populate_by_name=True)
 
     kind: Literal["commit.v1"] = "commit.v1"
@@ -335,9 +302,7 @@ class BatchEnvelopeV1(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     schema_version: Literal["external-ingest.v1"] = Field(..., alias="schemaVersion")
-    idempotency_key: str = Field(
-        ..., alias="idempotencyKey", min_length=1, max_length=256
-    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=256)
     source: SourceDescriptor
     window: IngestWindow
     records: list[RecordV1] = Field(..., min_length=1, max_length=5000)
@@ -389,11 +354,9 @@ class SchemaBundle:
 
 
 def _load_example(kind: str) -> dict[str, Any]:
-    data = (
-        resources.files("dev_health_ops.api.external_ingest.examples")
-        .joinpath(f"{kind}.json")
-        .read_text()
-    )
+    data = resources.files("dev_health_ops.api.external_ingest.examples").joinpath(
+        f"{kind}.json"
+    ).read_text()
     return json.loads(data)
 
 
@@ -481,9 +444,7 @@ async def list_schemas() -> dict:
 async def get_schema(schema_version: str, request: Request, response: Response) -> dict:
     bundle = get_bundle(schema_version)
     if bundle is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown schema version"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown schema version")
 
     if request.headers.get("if-none-match") == bundle.etag:
         response.status_code = status.HTTP_304_NOT_MODIFIED
@@ -500,9 +461,8 @@ Mount in `main.py` (follow the existing `from .ingest import router as ingest_ro
 ```python
 # alongside the other .api submodule imports, alphabetically near .ingest:
 from .external_ingest import router as external_ingest_router
-
 ...
-app.include_router(external_ingest_router)  # add near app.include_router(ingest_router)
+app.include_router(external_ingest_router)   # add near app.include_router(ingest_router)
 ```
 
 If `src/dev_health_ops/api/external_ingest/__init__.py` doesn't yet exist per D1, create it as `from .router import router  # noqa: F401` (matches `ingest/__init__.py`'s shape — verify by reading it before copying).

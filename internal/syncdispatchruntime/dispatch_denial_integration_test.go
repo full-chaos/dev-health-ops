@@ -296,3 +296,105 @@ func TestTerminalizeUnroutableUnitsReturnsZeroForAnEmptySlice(t *testing.T) {
 		}
 	})
 }
+
+// TestTerminalizeInvalidClaimUnitsDoesNotClobberAConcurrentlyClaimedUnit is
+// the CHAOS-4556 codex round-1 regression: terminalizeInvalidClaimUnits'
+// write-time CAS must match each unit's OWN observed status, not a blanket
+// ANY(planned, retrying, dispatching) covering every pre-terminal status.
+// The invalidClaimUnit here carries the status invalidClaimsAmongDispatch
+// Candidates would have observed (PLANNED) at read time; between that read
+// and this call, a CONCURRENT dispatch pass legitimately claims the SAME
+// unit to DISPATCHING (simulated directly here -- the exact effect
+// claimUnits' own UPDATE ... RETURNING would have). A blanket predicate
+// would still match DISPATCHING and clobber this fresh claim to FAILED,
+// silently orphaning whatever provider job that concurrent pass just queued.
+// The fix must exclude it: zero rows terminalized, and the unit's status
+// must remain untouched (still DISPATCHING, not FAILED).
+func TestTerminalizeInvalidClaimUnitsDoesNotClobberAConcurrentlyClaimedUnit(t *testing.T) {
+	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-000000000751"
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
+
+		// Simulate a concurrent dispatch pass claiming this unit to
+		// DISPATCHING (and, in production, publishing it to the outbox)
+		// AFTER the invalid-claim scan observed it as PLANNED but BEFORE
+		// terminalizeInvalidClaimUnits' own UPDATE runs.
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status=$1 WHERE id=$2`,
+			syncRunUnitStatusDispatching, unitID); err != nil {
+			t.Fatal(err)
+		}
+
+		invalid := []invalidClaimUnit{{
+			unit:   budgetUnit{id: unitID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
+			reason: "provider-family claim for linear/work-items is invalid: test fixture",
+		}}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		n, err := terminalizeInvalidClaimUnits(ctx, tx, invalid, now)
+		if err != nil {
+			t.Fatalf("terminalizeInvalidClaimUnits: %v", err)
+		}
+		if n != 0 {
+			t.Fatalf("terminalized %d units, want 0 -- a unit observed PLANNED but now DISPATCHING must be excluded by the write-time CAS", n)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		var status string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != syncRunUnitStatusDispatching {
+			t.Fatalf("unit status=%q, want unchanged (dispatching) -- the concurrently-claimed unit must not be clobbered to failed", status)
+		}
+	})
+}
+
+// TestTerminalizeInvalidClaimUnitsTerminalizesAGenuinelyStillPlannedUnit is
+// the positive control for the test above: when the unit's CURRENT status
+// still matches what was observed (no concurrent claim happened), the exact
+// per-status CAS must still terminalize it -- proving the CHAOS-4556 fix
+// narrowed the predicate without making it vacuous.
+func TestTerminalizeInvalidClaimUnitsTerminalizesAGenuinelyStillPlannedUnit(t *testing.T) {
+	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-000000000752"
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
+
+		invalid := []invalidClaimUnit{{
+			unit:   budgetUnit{id: unitID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
+			reason: "provider-family claim for linear/work-items is invalid: test fixture",
+		}}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		n, err := terminalizeInvalidClaimUnits(ctx, tx, invalid, now)
+		if err != nil {
+			t.Fatalf("terminalizeInvalidClaimUnits: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("terminalized %d units, want 1 -- no concurrent claim happened, so the still-PLANNED unit must terminalize", n)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		var status, errorCategory string
+		if err := pool.QueryRow(ctx, `SELECT status, result->>'error_category' FROM sync_run_units WHERE id=$1`, unitID).
+			Scan(&status, &errorCategory); err != nil {
+			t.Fatal(err)
+		}
+		if status != syncRunUnitStatusFailed || errorCategory != invalidProviderFamilyClaimErrorCategory {
+			t.Fatalf("status=%q error_category=%q, want failed/%q", status, errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+	})
+}

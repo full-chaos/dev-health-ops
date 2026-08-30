@@ -152,7 +152,7 @@ CREATE TABLE public.scheduled_sync_occurrences (
  FOREIGN KEY(job_run_id) REFERENCES job_runs(id),
  FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id)
 );
--- CHAOS-4602 migration 0118, mirrored verbatim (including its CHECK
+-- CHAOS-4602 migration 0119, mirrored verbatim (including its CHECK
 -- constraints) so a fixture row that would be rejected in production is
 -- rejected here too.
 CREATE TABLE public.sync_manual_triggers (

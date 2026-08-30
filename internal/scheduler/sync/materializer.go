@@ -786,7 +786,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 }
 
 // manualSyncTrigger is the Go read-side mirror of one sync_manual_triggers
-// row (migration 0118): Python is the sole writer (a separate DB login,
+// row (migration 0119): Python is the sole writer (a separate DB login,
 // grants doc'd in domain_authorization.go's coordinatorPosture); Go only
 // ever reads it, by occurrence_id, to learn what a manual "Sync Now" or
 // Backfill trigger actually asked for.
@@ -797,7 +797,7 @@ type manualSyncTrigger struct {
 	SourceIDs   []string
 	DatasetKeys []string
 	// TriggeredBy is the row's own triggered_by ("manual"/"backfill",
-	// CHECK-constrained by migration 0118) -- this is what
+	// CHECK-constrained by migration 0119) -- this is what
 	// persistDomainGraph stamps onto sync_runs.triggered_by, replacing the
 	// hardcoded 'schedule' every non-manual occurrence still gets.
 	TriggeredBy string

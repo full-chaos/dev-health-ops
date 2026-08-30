@@ -80,6 +80,32 @@ func (function pipelineObserverFunc) Step(
 	return function(ctx, now, limit)
 }
 
+type pipelineTerminalOutboxCloseFunc func(
+	context.Context,
+	time.Time,
+	int,
+) (TerminalOutboxCloseResult, error)
+
+func (function pipelineTerminalOutboxCloseFunc) Step(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) (TerminalOutboxCloseResult, error) {
+	return function(ctx, now, limit)
+}
+
+// noopTerminalOutboxClose is the shared stub for every pipeline test that
+// constructs a MutationPipeline but does not itself exercise CHAOS-4583's
+// terminal-close stage: TerminalOutboxCloseStepper is a REQUIRED constructor
+// argument (like repair/terminal/materializer/kernel/observer, never optional
+// like sweep), so every existing call site needs an answer, not a silent
+// skip -- see TerminalOutboxCloseStepper's doc comment for why.
+func noopTerminalOutboxClose() pipelineTerminalOutboxCloseFunc {
+	return func(context.Context, time.Time, int) (TerminalOutboxCloseResult, error) {
+		return TerminalOutboxCloseResult{}, nil
+	}
+}
+
 func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.FixedZone("local", -7*60*60))
 	config := DefaultMutationPipelineConfig()
@@ -136,6 +162,7 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 		publish,
 		postSync,
 		nil,
+		noopTerminalOutboxClose(),
 		config,
 	)
 	if err != nil {
@@ -190,6 +217,7 @@ func TestMutationPipelineAbortsRemainingMutationStagesWhenRepairFails(t *testing
 		nil,
 		nil,
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -233,6 +261,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing repair error = %v", err)
@@ -248,6 +277,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		noopTerminalOutboxClose(),
 		invalid,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("invalid config error = %v", err)
@@ -261,6 +291,7 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing terminal repair error = %v", err)
@@ -348,6 +379,7 @@ func newRecoveryCountingPipeline(
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 }
@@ -391,6 +423,7 @@ func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
 				AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 				PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 				nil,
+				noopTerminalOutboxClose(),
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {

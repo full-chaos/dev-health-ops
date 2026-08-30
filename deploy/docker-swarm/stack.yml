@@ -114,6 +114,15 @@ services:
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # CHAOS-4587 (codex delta round 2, P1): migration 067 checks this same
+      # variable to decide whether to apply the ordering-contract cutover
+      # (src/dev_health_ops/migrations/clickhouse/067_operational_ordering_contract.py) --
+      # without a reference here, an operator's shell export never reaches
+      # this container, 067 silently defers ("successfully"), and workers
+      # wired to the same export (stack.go-workers.yml) start against a
+      # still-contract-1 table. Must move with the worker export in the
+      # same deploy pass; see deploy/go-workers/README.md.
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
       CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
       LOG_LEVEL: INFO
     deploy:

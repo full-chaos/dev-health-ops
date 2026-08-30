@@ -30,8 +30,8 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 
 	var body string
 	switch {
-	case request.URL.Path == "/rest/api/3/search":
-		body = `{"issues":[{"key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"startAt":0,"total":1}`
+	case request.URL.Path == "/rest/api/3/search/jql":
+		body = `{"issues":[{"key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
 		body = `{"values":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}],"total":1,"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
@@ -128,7 +128,14 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if parsed.Path == "/rest/api/3/search" && parsed.Query().Get("startAt") != "0" {
+		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("expand") != "" {
+			// CHAOS-4585 review: this route fetches each issue's changelog
+			// separately (collectJiraAtlassianChangelog) and overwrites
+			// issue["changelog"] with it, so an inlined search-response
+			// changelog is unread bytes that can trip the 2MiB per-object cap.
+			t.Fatalf("Atlassian route's search requested expand=%s -- changelog is fetched separately, not from the search response", parsed.Query().Get("expand"))
+		}
+		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("startAt") != "0" {
 			t.Fatalf("search pagination=%s", raw)
 		}
 	}

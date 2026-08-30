@@ -279,6 +279,8 @@ type Metrics struct {
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
 	duplicateNaturalKey            map[string]uint64
+	syncRunRollupBumped            map[string]uint64
+	jiraSearchPages                map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -303,6 +305,8 @@ func NewMetrics() *Metrics {
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
 		duplicateNaturalKey:            map[string]uint64{},
+		syncRunRollupBumped:            map[string]uint64{},
+		jiraSearchPages:                map[string]uint64{},
 	}
 }
 
@@ -856,6 +860,61 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 	m.allArtifactsUnreadable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// RecordSyncRunRollupBumped counts one sync_runs.completed_units/failed_units
+// live recompute (CHAOS-4559), by outcome ("success"/"failed" -- which
+// terminal stamp triggered it). Before this, those columns were written only
+// at run finalization, so a run mid-dispatch read 0/0 no matter how many of
+// its units had already finished; a flat line here on an org with sync
+// activity is the same "measurement never happened" shape RecordUnitClaimed
+// exists to catch for claims.
+func (m *Metrics) RecordSyncRunRollupBumped(outcome string) {
+	if m == nil {
+		return
+	}
+	lowered := strings.ToLower(strings.TrimSpace(outcome))
+	if lowered != "success" && lowered != "failed" {
+		lowered = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncRunRollupBumped[lowered]++
+}
+
+// metricJiraSearchPageOutcomeVocabulary is the closed set of outcomes for one
+// Jira /rest/api/3/search/jql cursor-paging walk (CHAOS-4585). Atlassian
+// retired GET /rest/api/3/search (410 Gone) with no runtime signal beyond a
+// generic "provider request failed" until CHAOS-4582 added Path/Body to
+// ProviderError -- this counter is the CHAOS-4585 twin for the new endpoint's
+// own failure modes, so a future regression (a cap hit, a malformed page) is
+// visible on a dashboard rather than only in a log line an operator has to
+// already be looking for.
+var metricJiraSearchPageOutcomeVocabulary = map[string]struct{}{
+	"succeeded": {}, "pagination_cap_exceeded": {}, "invalid_response": {}, "request_failed": {},
+}
+
+// MetricJiraSearchPageOutcomeLabel bounds the outcome label by allowlist, the
+// same shape as MetricPerRunCauseLabel above.
+func MetricJiraSearchPageOutcomeLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricJiraSearchPageOutcomeVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordJiraSearchPage counts one completed /rest/api/3/search/jql
+// cursor-paging walk (one Collect-level search, which may itself have spanned
+// several HTTP pages), by how it ended.
+func (m *Metrics) RecordJiraSearchPage(outcome string) {
+	if m == nil {
+		return
+	}
+	label := MetricJiraSearchPageOutcomeLabel(outcome)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.jiraSearchPages[label]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1231,6 +1290,20 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_cicd_partial_success_total",
 		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by the report_member/per-run cause that made it partial (CHAOS-4394). Not labeled by repo -- see RecordCicdPartialSuccess's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
 		"reason", m.cicdPartialSuccess,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_sync_run_rollup_bumped_total",
+		"sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it (CHAOS-4559).",
+		"outcome", m.syncRunRollupBumped,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_jira_search_pages_total",
+		"Jira /rest/api/3/search/jql cursor-paging walks, by outcome (CHAOS-4585).",
+		"outcome", m.jiraSearchPages,
 	); err != nil {
 		return err
 	}

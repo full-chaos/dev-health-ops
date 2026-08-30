@@ -16,9 +16,14 @@ const (
 	StageLeaseRepair            StageName = "lease_repair"
 	StageUnreclaimableSweep     StageName = "unreclaimable_sweep"
 	StageTerminalDeliveryRepair StageName = "terminal_delivery_repair"
-	StageMaterializer           StageName = "materializer"
-	StageKernel                 StageName = "kernel"
-	StageObserver               StageName = "observer"
+	// StageTerminalOutboxClose is CHAOS-4583's closer: a bounded, read-adjacent
+	// safety net over sync_dispatch_outbox, sibling to StageUnreclaimableSweep
+	// and StageTerminalDeliveryRepair (see terminal_outbox_close.go's package
+	// doc comment).
+	StageTerminalOutboxClose StageName = "terminal_outbox_close"
+	StageMaterializer        StageName = "materializer"
+	StageKernel              StageName = "kernel"
+	StageObserver            StageName = "observer"
 )
 
 // orderedStages is the exhaustive, ordered list of stages MutationPipeline.Step
@@ -33,6 +38,7 @@ var orderedStages = []StageName{
 	StageLeaseRepair,
 	StageUnreclaimableSweep,
 	StageTerminalDeliveryRepair,
+	StageTerminalOutboxClose,
 	StageMaterializer,
 	StageKernel,
 	StageObserver,
@@ -44,9 +50,9 @@ const (
 )
 
 // StageBudgets gives each MutationPipeline stage its own bounded sub-context
-// instead of every stage racing one flat envelope for the whole 7-stage/3-pool
+// instead of every stage racing one flat envelope for the whole 8-stage/3-pool
 // pipeline (CHAOS-4239). A stage that exceeds its own budget fails only
-// itself; it can no longer starve its five siblings of the time they need.
+// itself; it can no longer starve its seven siblings of the time they need.
 type StageBudgets map[StageName]time.Duration
 
 // DefaultStageBudgets sizes each stage from what it actually does, not from
@@ -60,6 +66,10 @@ type StageBudgets map[StageName]time.Duration
 //     measured at ~467ms warm even before the fix; this budget carries slack
 //     for the cold-cache case CHAOS-4092 also measured, and for the cold-start
 //     window CHAOS-4239 observed failures clustering in.
+//   - TerminalOutboxClose (CHAOS-4583): four index-driven CTE updates against
+//     sync_dispatch_outbox, the same table and pool Materializer already
+//     budgets 600ms for; sized identically since it is the same shape of
+//     work (bounded per-kind candidate scan + UPDATE ... RETURNING).
 //   - Materializer: coordinator-exclusive wakeup materialization.
 //   - Kernel: the heaviest stage -- claims on the domain pool, delivers on the
 //     queue pool, and runs the publish closure (a River insert plus a domain
@@ -77,6 +87,7 @@ func DefaultStageBudgets() StageBudgets {
 		StageLeaseRepair:            400 * time.Millisecond,
 		StageUnreclaimableSweep:     600 * time.Millisecond,
 		StageTerminalDeliveryRepair: 750 * time.Millisecond,
+		StageTerminalOutboxClose:    600 * time.Millisecond,
 		StageMaterializer:           600 * time.Millisecond,
 		StageKernel:                 1000 * time.Millisecond,
 		StageObserver:               400 * time.Millisecond,

@@ -24,6 +24,56 @@ _IMPORTER_MODULES = {
     "gitlab": "dev_health_ops.workers.team_autoimport_gitlab",
 }
 
+# CHAOS-4555: CHAOS-4431's Go collector is the sole live writer for Linear
+# team/project/ownership catalog rows (prod deploy 5.6+; CHAOS-4530 proved
+# and #2012 deleted the {org}:linear:{team} pseudo-project artifact this
+# Python populator still emits at team_autoimport_linear.py:463-465).
+#
+# Enumerated by mechanism (not by route name -- chris 2026-08-29, "Not
+# again": 4466/4495/4493 each missed a sibling caller outside the named
+# producer), every path that can reach this module's populator dispatch for
+# provider=linear:
+#   - HTTP bridge (worker_sync.py), all reachable with WORKER_OPERATIONAL_
+#     BRIDGE_TOKEN and no provider scoping of their own:
+#       * POST /team-autoimport -> run_post_sync_team_autoimport.run() ->
+#         run_team_autoimport (proved live-local: HTTP 200, recreated the
+#         pseudo-project, before this guard existed).
+#       * POST /reference-discovery-populate ->
+#         run_reference_discovery_populate_for_sync_run ->
+#         run_reference_discovery_populate_strict -> run_team_autoimport_strict.
+#       * POST /reference-discovery -> run_sync_reference_discovery.run() ->
+#         (same run_reference_discovery_populate_strict call, reference_discovery.py:135).
+#   - Go side (internal/, cmd/dev-health-worker/): every one of the three
+#     HTTP calls above is Fallback-only. teamCatalogAutoimportBridge.
+#     TeamAutoImport (team_catalog_clients.go:426-536) resolves the sync
+#     run's own provider and, for any provider in its `native` map (linear
+#     since #1989/27bef7286), runs the Go collector and `return`s WITHOUT
+#     ever calling the wrapped CoordinatorBridge.TeamAutoImport --
+#     structurally unreachable for linear. TeamCatalogDiscoveryExecutor.
+#     Discover (team_catalog_discovery_executor.go:137-143) is the same
+#     shape for the other two: `Native[provider]` always hits for linear,
+#     so `Fallback.Discover` (bridge_discovery_executor.go, which itself
+#     only calls PopulateReferenceDiscovery -> /reference-discovery-populate,
+#     never HTTPBridge.Discover -> /reference-discovery) never runs.
+#     HTTPBridge.Discover exists only to satisfy the CoordinatorBridge
+#     interface; nothing in cmd/dev-health-worker invokes it -- the native
+#     reference-discovery River worker (worker.go:308) calls
+#     NativeReferenceDiscoveryService.Discover, which is the executor chain
+#     above, not the bridge directly.
+#   - backfill/runner.py (CHAOS-4498): no longer calls run_team_autoimport_
+#     strict in-process for any provider; it arms the same ledger/outbox
+#     row sync-time dispatch uses and goes through the identical
+#     TeamCatalogDiscoveryExecutor chain above.
+#   - Celery: retired (CHAOS-4026) -- no consumer drains `apply_async`;
+#     only the three `.run()` bridge call sites above execute synchronously.
+#
+# So every live and dead-but-reachable path funnels through this module's
+# _resolve_populator/run_team_autoimport(_strict). Refuse at the lowest
+# shared layer -- _resolve_populator itself -- so no current or future
+# caller, of this function or of run_team_autoimport(_strict), can ever
+# resolve the Linear writer again.
+_GO_NATIVE_PROVIDERS = frozenset({"linear"})
+
 TeamAutoimportPopulator = Callable[..., dict[str, Any]]
 
 
@@ -51,7 +101,15 @@ def _provider_capability(provider: str) -> bool:
 
 
 def _resolve_populator(provider: str) -> TeamAutoimportPopulator | None:
-    module_name = _IMPORTER_MODULES.get(provider.strip().lower())
+    normalized = provider.strip().lower()
+    if normalized in _GO_NATIVE_PROVIDERS:
+        # CHAOS-4555: the actual refusal. Every caller of this function --
+        # today's run_team_autoimport/run_team_autoimport_strict and any
+        # future one -- gets None here for linear, same as an unregistered
+        # provider, regardless of which of the three bridge routes (or a
+        # not-yet-written caller) reached it.
+        return None
+    module_name = _IMPORTER_MODULES.get(normalized)
     if module_name is None:
         return None
     try:
@@ -73,6 +131,22 @@ def run_team_autoimport(
     analytics_db_url: str | None = None,
 ) -> dict[str, Any]:
     normalized_provider = provider.strip().lower()
+    if normalized_provider in _GO_NATIVE_PROVIDERS:
+        # Redundant defence: _resolve_populator already refuses this
+        # provider (would fall through to the generic "populator_not_
+        # available" skip below either way). Kept explicit so this
+        # function's own log line/reason names CHAOS-4555 instead of
+        # reading as an ordinary missing-module case.
+        logger.info(
+            "Skipping team auto-import for provider=%s org_id=%s: writer is Go-native (CHAOS-4555)",
+            normalized_provider,
+            org_id,
+        )
+        return _zero_summary(
+            provider=normalized_provider,
+            org_id=org_id,
+            reason="provider_writer_is_go_native",
+        )
     if not _provider_capability(normalized_provider):
         logger.info(
             "Skipping team auto-import for provider=%s org_id=%s: provider is not import-capable",
@@ -178,6 +252,23 @@ def run_team_autoimport_strict(
     analytics_db_url: str | None = None,
 ) -> dict[str, Any]:
     normalized_provider = provider.strip().lower()
+    if normalized_provider in _GO_NATIVE_PROVIDERS:
+        # NOT redundant: without this, _resolve_populator returning None
+        # below would hit this function's "populator is unavailable" branch
+        # and raise ValueError (a 500 through the /reference-discovery* and
+        # /reference-discovery-populate bridge routes) instead of a clean
+        # no-op. This mirrors the _provider_capability no-op just below it.
+        logger.info(
+            "Reference discovery no-op for provider=%s org_id=%s: writer is "
+            "Go-native (CHAOS-4555)",
+            normalized_provider,
+            org_id,
+        )
+        return _zero_summary(
+            provider=normalized_provider,
+            org_id=org_id,
+            reason="provider_writer_is_go_native",
+        )
     if not _provider_capability(normalized_provider):
         # Providers without a reference tier (e.g. launchdarkly) have nothing
         # to discover today, so strict reference discovery is a successful

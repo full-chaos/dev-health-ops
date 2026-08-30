@@ -317,7 +317,7 @@ def test_0109_backfill_is_idempotent_and_downgrade_is_clean(
     assert _revisions(engine) == {"0108"}
 
     command.upgrade(_migration_config(), "application_schema@head")
-    assert _revisions(engine) == {"0117"}
+    assert _revisions(engine) == {"0118"}
     assert _ledger(engine) == first
 
 

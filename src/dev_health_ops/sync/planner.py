@@ -94,6 +94,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncConfiguration,
     SyncRun,
     SyncRunMode,
     SyncRunReferenceDiscovery,
@@ -317,10 +318,37 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     credential_fp: str | None = None
     auth_source: str | None = None
     if planned_units:
-        # Freeze auth only for executable work. A zero-unit plan has no later
-        # phase that can consume credentials, so it must not hydrate secrets.
         credential_id, credential_fp, auth_source = _resolve_credential_stamp(
             session, integration
+        )
+    elif _zero_unit_plan_needs_credential_stamp(integration):
+        # Freeze auth for a zero-unit jira plan whose UNCONDITIONAL
+        # reference-discovery ledger row (seeded below by
+        # seed_reference_discovery_ledger for every mode, backfill included)
+        # will still make a real, credential-requiring Jira API call
+        # (CHAOS-4593; see _zero_unit_plan_needs_credential_stamp for the
+        # full root cause and why this stays jira-only rather than every
+        # provider, and for the pinned tests/carve-outs this preserves).
+        credential_id, credential_fp, auth_source = _resolve_credential_stamp(
+            session, integration
+        )
+        # Codex review (CHAOS-4593, round 1, P2): plan_sync_run does not own
+        # this session's transaction boundary -- every caller commits
+        # separately, sometime after this function returns -- so counting
+        # here, inline, would publish a stamp for a plan that a later flush
+        # or the caller's own commit could still roll back. Mirrors the
+        # ALREADY-existing deferred-increment pattern this codebase uses for
+        # exactly this reason (`workers/sync_units.py`'s
+        # ZERO_UNIT_FINALIZATIONS_TOTAL, "DECIDED here, not incremented
+        # here"): register a one-shot `after_commit` hook instead of
+        # incrementing inline, so a rolled-back transaction never inflates
+        # the counter.
+        _defer_zero_unit_credential_stamp_telemetry(
+            session,
+            org_id=str(integration.org_id),
+            integration_id=str(integration.id),
+            provider=str(integration.provider),
+            mode=mode,
         )
 
     sync_run = SyncRun(
@@ -567,6 +595,141 @@ def _load_integration(
     if integration is None:
         raise ValueError(f"Integration not found for org {org_id}: {integration_id}")
     return integration
+
+
+_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY = (
+    "_chaos_4593_zero_unit_credential_stamp_pending"
+)
+_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY = (
+    "_chaos_4593_zero_unit_credential_stamp_listeners_installed"
+)
+
+
+def _drain_zero_unit_credential_stamp_telemetry(session: Session) -> None:
+    """``after_commit`` drain: emit + clear whatever is queued in
+    ``session.info``, a no-op when nothing is pending (CHAOS-4593)."""
+    pending = session.info.pop(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, None)
+    if not pending:
+        return
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    for item in pending:
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+            provider=item["provider"]
+        ).inc()
+        logger.info(
+            "sync.planner.zero_unit_plan_stamped_for_strict_discovery", extra=item
+        )
+
+
+def _cancel_zero_unit_credential_stamp_telemetry(session: Session) -> None:
+    """``after_rollback`` drain: discard whatever is queued, unemitted."""
+    session.info.pop(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, None)
+
+
+def _defer_zero_unit_credential_stamp_telemetry(
+    session: Session,
+    *,
+    org_id: str,
+    integration_id: str,
+    provider: str,
+    mode: str,
+) -> None:
+    """Increment the CHAOS-4593 zero-unit credential-stamp counter/log ONLY
+    after this ``session``'s enclosing transaction actually commits.
+
+    ``plan_sync_run`` does not own the transaction boundary -- every caller
+    (the admin router, the scheduler, ``create_sync_execution_trigger``)
+    commits ``session`` on its own, sometime after this function returns --
+    so an inline increment would survive a later rollback and publish a
+    stamp for a plan that was never actually persisted, and (if the
+    rollback's listener is never cleared) could misattribute telemetry to a
+    later, unrelated commit on a reused session.
+
+    Two codex review rounds (CHAOS-4593) landed on this final shape after
+    two unsafe attempts:
+
+    * Round 2 attempt: each handler called ``event.remove()`` on itself from
+      inside its own dispatch -- crashes SQLAlchemy with "deque mutated
+      during iteration" (regression test below pins this).
+    * Round 3 attempt: a shared cancelled-flag with both listeners
+      registered ``once=True`` avoided that crash and the misattribution,
+      but ``once=True`` in SQLAlchemy 2.0 only gates re-EXECUTION -- it does
+      NOT deregister the listener (verified empirically:
+      ``event.contains()`` still returns ``True`` after the one-shot fires).
+      Every zero-unit plan on a long-lived, reused session would therefore
+      permanently grow that session's listener list by two closures.
+
+    This shape installs at most ONE (non-``once``) ``after_commit`` /
+    ``after_rollback`` pair PER SESSION, EVER -- guarded by a sentinel in
+    ``session.info`` that is never cleared -- and every call just appends a
+    plain dict to a ``session.info`` list. The listener count is therefore
+    bounded at 2 regardless of how many zero-unit plans that session plans;
+    the drain functions are idempotent no-ops when nothing is pending, so
+    firing on an unrelated commit/rollback is harmless by construction
+    (there is nothing of THIS plan's left to emit or cancel incorrectly).
+    """
+    pending = session.info.setdefault(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, [])
+    pending.append(
+        {
+            "org_id": org_id,
+            "integration_id": integration_id,
+            "provider": provider,
+            "mode": mode,
+        }
+    )
+    if session.info.get(_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY):
+        return
+    session.info[_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY] = True
+
+    from sqlalchemy import event
+
+    event.listen(session, "after_commit", _drain_zero_unit_credential_stamp_telemetry)
+    event.listen(
+        session, "after_rollback", _cancel_zero_unit_credential_stamp_telemetry
+    )
+
+
+def _zero_unit_plan_needs_credential_stamp(integration: Integration) -> bool:
+    """Whether a ZERO-unit :func:`plan_sync_run` plan should still resolve
+    its credential stamp (CHAOS-4593).
+
+    ``seed_reference_discovery_ledger`` arms a reference-discovery job
+    unconditionally -- for every mode, including a zero-unit plan (e.g. every
+    ``IntegrationSource`` temporarily disabled). The original ``if
+    planned_units:`` gate assumed a zero-unit plan "has no later phase that
+    can consume credentials" -- true for most providers' best-effort
+    (non-strict) discovery, which skips cleanly on missing credentials, but
+    false for Jira: ``workers/team_autoimport_jira.py``'s ``populate()``
+    raises on missing credentials even with zero import categories selected
+    (it still resolves dispatch-blocking sprint keys unconditionally in
+    strict mode). A zero-unit jira plan that skips this stamp leaves
+    ``auth_source`` NULL, ``_load_discovery_context`` resolves ``{}``
+    credentials, and the strict populate() raises "missing Jira credentials
+    for strict reference discovery" on every attempt -- the run never
+    leaves PLANNED, retrying until it exhausts attempts (live-reproduced,
+    org 70d529e0, run 527271e6-ac3d-4c24-af35-2147bde8d59c).
+
+    Scoped to jira only, NOT every provider: GitHub's populate()
+    (``workers/team_autoimport_github.py``) has the identical
+    strict-mode-raises-on-missing-credentials shape, so it plausibly carries
+    the same latent bug for a zero-unit GitHub plan -- but that is unproven
+    here and out of THIS ticket's scope (flagged as a follow-up, parent
+    CHAOS-4198, rather than folded in speculatively). Widening this beyond
+    jira would also break the existing pinned
+    ``test_disabled_source_produces_zero_units_without_hydrating_credentials``
+    /``test_disabled_dataset_produces_zero_units_without_hydrating_credentials``
+    (both use the default "github" provider and assert NO credential
+    hydration for a zero-unit plan) and PagerDuty's credential-less carve-out
+    (CHAOS-4498 codex round 2, P1 --
+    ``test_load_discovery_context_preserves_credential_free_zero_unit_planner_run``:
+    ``_resolve_credential_stamp`` itself raises for a NULL ``credential_id``
+    there, and that raise must stay reachable only for executable
+    (``planned_units > 0``) runs).
+    """
+    return str(integration.provider).lower() == "jira"
 
 
 def _resolve_credential_stamp(
@@ -1318,6 +1481,69 @@ def _build_fold_family_units(
     ]
 
 
+def _is_non_project_jira_source(session: Session, source: IntegrationSource) -> bool:
+    """Whether ``source`` is the known-bad shape CHAOS-4582 fixed at the
+    writer: a jira ``source_type='project'`` row whose ``external_id`` is
+    not a real per-project key. Signals, in order, any one sufficient to
+    resolve the question:
+
+    1. ``metadata_.explicit_project_scope`` -- the writer's own marker
+       (``_non_git_source_rows``) for a NEW row created from an explicit
+       ``project_key``/``project_id``. Always wins: never suppress it.
+    2. ``metadata_.org_wide_placeholder`` -- the SAME typed marker Linear's
+       writer already sets for ITS org-wide mode; recognized here in case a
+       future writer ever legitimately reuses it for jira.
+    3. If ``external_id`` equals the provider name itself
+       (case-insensitive) -- the exact literal ("JIRA") the pre-fix writer
+       fell back to when a config had no explicit project scope (live
+       evidence, org 70d529e0, CHAOS-4582) -- look up the LEGACY row's own
+       ``sync_configurations.sync_options`` (via
+       ``metadata_.planner_managed_sync_config_id``, which every non-git
+       source carries) for an explicit ``project_key``/``project_id``.
+       Codex review (CHAOS-4582, P2): a row created BEFORE this PR has no
+       ``explicit_project_scope`` marker even if a caller legitimately named
+       a real project "JIRA" -- the writer's old code produced an identical
+       shape for both cases, so external_id alone can never disambiguate a
+       PRE-EXISTING row. The persisted sync_options this row was ACTUALLY
+       created from can: if the config it came from explicitly asked for a
+       project literally named "JIRA" (case-insensitive), this is that
+       project, not the fallback -- planning proceeds. This closes the gap
+       for legacy data without a migration; a config config the source no
+       longer references (renamed org, deleted config) falls through to the
+       known-bad classification, matching this ticket's live evidence
+       (org 70d529e0's bad row's config carries no project scope at all).
+    """
+    metadata = getattr(source, "metadata_", None) or {}
+    if metadata.get("explicit_project_scope"):
+        return False
+    if metadata.get("org_wide_placeholder"):
+        return True
+    if str(source.external_id or "").strip().lower() != "jira":
+        return False
+    config_id = metadata.get("planner_managed_sync_config_id")
+    if config_id:
+        config = (
+            session.query(SyncConfiguration)
+            .filter(SyncConfiguration.id == config_id)
+            .one_or_none()
+        )
+        if config is not None:
+            sync_options = config.sync_options or {}
+            # Mirrors api/admin/routers/sync.py's _non_git_explicit_source_id
+            # precedence exactly (project_id > project_key > team_id > repo).
+            # Not imported directly: that module imports FROM this one
+            # (BackfillSelector), so the reverse import would be circular.
+            explicit_id = (
+                sync_options.get("project_id")
+                or sync_options.get("project_key")
+                or sync_options.get("team_id")
+                or sync_options.get("repo")
+            )
+            if explicit_id is not None and str(explicit_id).strip().lower() == "jira":
+                return False
+    return True
+
+
 def _build_work_item_family_units(
     *,
     session: Session,
@@ -1333,6 +1559,30 @@ def _build_work_item_family_units(
     """Collapse the enabled work-item-family datasets into ONE composite unit
     per (source, window) (CHAOS-2721, AD-3)."""
     if not family_specs:
+        return []
+
+    if provider.strip().lower() == "jira" and _is_non_project_jira_source(
+        session, source
+    ):
+        # CHAOS-4582 (defense-in-depth): the writer (_non_git_source_rows,
+        # api/admin/routers/sync.py) no longer materializes this shape for a
+        # NEW jira config, but a pre-existing row (or a future writer bug of
+        # the same class) could still reach here. Refuse to plan rather than
+        # emit a unit that is guaranteed to fail every attempt -- Jira's
+        # work-items route requires a real per-project source (unlike
+        # Linear's org-wide search mode), so JQL built from a non-project
+        # external_id (e.g. the literal provider name) 400s against Jira
+        # every time. Log loud with the source id so an operator can find
+        # and fix the source, then return zero units -- CONTAINED to this
+        # one source, never aborting the rest of this integration's plan.
+        logger.error(
+            "sync.plan.jira_source_not_a_project org_id=%s source_id=%s "
+            "external_id=%r: refusing to plan a work-items unit for a "
+            "non-project Jira source (error_category=jira_source_not_a_project)",
+            integration.org_id,
+            source.id,
+            source.external_id,
+        )
         return []
 
     canonical_spec = get_dataset_spec(provider, _FAMILY_CANONICAL_DATASET_KEY)

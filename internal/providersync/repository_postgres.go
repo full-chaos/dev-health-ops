@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -183,6 +184,10 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
 	// the persisted row -- not `encoded` -- with the identical predicate the
@@ -243,6 +248,7 @@ func (repository *PostgresRepository) Complete(
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
+	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
 	return nil
 }
 
@@ -279,6 +285,10 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
+	if err != nil {
+		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -320,6 +330,7 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
+	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
 	return nil
 }
 
@@ -534,6 +545,10 @@ func (repository *PostgresRepository) failTx(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
+	if err != nil {
+		return ErrInvalidConfiguration
+	}
 	if category == ProviderDatasetUnavailableCategory {
 		if _, err := tx.Exec(ctx, markDatasetUnavailableSQL,
 			claim.OrgID, claim.IntegrationID, claim.Dataset, category, completedAt.UTC(),
@@ -556,6 +571,7 @@ func (repository *PostgresRepository) failTx(
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
 	}
+	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
@@ -958,6 +974,94 @@ WHERE unit.id = $1::uuid
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
+
+// bumpSyncRunRollupSQL keeps sync_runs.completed_units/failed_units live
+// (CHAOS-4559). Before this, those columns were written only by
+// finalize_sync_run's own aggregate recompute and by the early-termination
+// paths (dispatch_denial.go, feature_disabled_termination.go) -- never by the
+// normal per-unit success/failure commit here, so a run mid-dispatch read
+// 0/0 no matter how many of its units had already finished. Multiple readers
+// (the admin sync-run API, the web SyncJobHistory/SyncProgressBar views)
+// consume that column directly with no live-unit fallback, so the fix
+// belongs at the source of truth rather than in each reader.
+//
+// This recomputes both counters from a fresh COUNT rather than incrementing,
+// which is what makes it safe to call on every terminal commit: a unit's
+// status is mutable (dispatching -> running -> failed/success, with retries
+// cycling back through dispatching/running before a FINAL terminal stamp),
+// so a blind "+1" could double-count a unit that was previously counted
+// under a different terminal status. COUNT(*) WHERE status=X is idempotent
+// no matter how many times this call happens to run for the same unit.
+const bumpSyncRunRollupSQL = `
+UPDATE public.sync_runs
+SET completed_units = (
+      SELECT count(*) FROM public.sync_run_units
+      WHERE sync_run_id = $1 AND status = 'success'
+    ),
+    failed_units = (
+      SELECT count(*) FROM public.sync_run_units
+      WHERE sync_run_id = $1 AND status = 'failed'
+    )
+WHERE id = $1
+RETURNING completed_units, failed_units, total_units`
+
+// bumpSyncRunRollup runs bumpSyncRunRollupSQL and returns the resulting
+// counters (completed, failed, total) so the caller can log/record them
+// AFTER its transaction actually commits -- this function only prepares the
+// values, it never records the metric or logs itself, so a rollback never
+// leaves a phantom counter increment behind (CHAOS-4559 codex round 1, P2).
+//
+// It takes the row lock FIRST, as its own statement, before counting
+// (CHAOS-4559 codex round 1, P1): bumpSyncRunRollupSQL's two COUNT(*)
+// subqueries reference only $1, so Postgres plans them as InitPlans that
+// run ONCE, using the snapshot taken when the UPDATE statement starts --
+// not a fresh snapshot per row. If two units of the same run complete
+// concurrently, the second UPDATE blocks on the first's row lock; without
+// this lock-first step, it would resume using the STALE pre-wait InitPlan
+// result and overwrite the just-committed first unit's contribution,
+// undercounting until finalization recomputes unconditionally. Locking the
+// row in its own statement first forces a NEW statement-level snapshot
+// (READ COMMITTED takes one per statement) for the counting UPDATE that
+// follows, taken only after the lock is held and any prior writer has
+// committed.
+//
+// Both indexes covering (sync_run_id, status) already exist
+// (ix_sync_run_units_run_status, ix_sync_run_units_status_available, both
+// from migration 0015), so the count itself is an index-only scan, not a
+// sequential scan -- confirmed via EXPLAIN ANALYZE on the largest local run
+// (1248 units, 0.038ms).
+func bumpSyncRunRollup(
+	ctx context.Context, tx pgx.Tx, syncRunID string,
+) (completedUnits, failedUnits, totalUnits int, err error) {
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM public.sync_runs WHERE id = $1 FOR UPDATE`, syncRunID).Scan(&locked); err != nil {
+		return 0, 0, 0, err
+	}
+	if err := tx.QueryRow(ctx, bumpSyncRunRollupSQL, syncRunID).Scan(
+		&completedUnits, &failedUnits, &totalUnits,
+	); err != nil {
+		return 0, 0, 0, err
+	}
+	return completedUnits, failedUnits, totalUnits, nil
+}
+
+// recordSyncRunRollupBump logs and counts a completed bumpSyncRunRollup
+// call. Call this ONLY after the surrounding transaction has committed
+// (CHAOS-4559 codex round 1, P2) -- matching the existing RecordUnitFailed/
+// RecordUnitClaimed convention in this file, both also recorded post-commit.
+func recordSyncRunRollupBump(
+	ctx context.Context, metrics *providerfoundation.Metrics, syncRunID, outcome string,
+	completedUnits, failedUnits, totalUnits int,
+) {
+	metrics.RecordSyncRunRollupBumped(outcome)
+	slog.DebugContext(ctx, "sync_run.rollup_bumped",
+		slog.String("sync_run_id", syncRunID),
+		slog.String("outcome", outcome),
+		slog.Int("completed_units", completedUnits),
+		slog.Int("failed_units", failedUnits),
+		slog.Int("total_units", totalUnits),
+	)
+}
 
 // markDatasetUnavailableSQL surfaces a repeated provider_dataset_unavailable
 // terminalization onto the IntegrationDataset row the owner-facing API

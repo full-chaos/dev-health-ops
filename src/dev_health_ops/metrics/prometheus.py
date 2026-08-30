@@ -119,6 +119,14 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL = _prometheus_client_module.Counter(
+        "sync_zero_unit_plan_credential_stamped_total",
+        "Zero-unit plan_sync_run plans that still stamped run-level "
+        "credentials because the provider's reference discovery is strict "
+        "and runs unconditionally regardless of unit count (CHAOS-4593)",
+        ["provider"],
+    )
+
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _prometheus_client_module.Counter(
         "credential_mapping_rejected_total",
         "Stored credentials a provider resolver refused to build, by the "
@@ -764,6 +772,7 @@ else:
     SYNC_COVERAGE_DATASETS_EXCLUDED_BY_INTENT_TOTAL = _noop_counter()
     SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
+    SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()

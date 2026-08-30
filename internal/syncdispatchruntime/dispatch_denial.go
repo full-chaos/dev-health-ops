@@ -197,40 +197,106 @@ func invalidClaimReason(provider, dataset string, claimErr error) string {
 	)
 }
 
-// terminalizeInvalidClaimUnits fails claimed units whose persisted
+// invalidClaimsAmongDispatchCandidates runs providerfamilycontract.ValidateClaim
+// over EVERY unit currently eligible for this dispatch pass -- the identical
+// PLANNED / due-RETRYING / stale-DISPATCHING predicate claimUnits itself
+// applies (dispatchCandidateUnits, the same query BudgetGuard's
+// observeRun/enforceRun already share) -- rather than only over whatever
+// claimUnits ends up actually claiming.
+//
+// CHAOS-4556: authorizeRun's concurrency cap and BudgetGuard's budget/cooldown
+// deferrals are computed from this SAME candidate set, and claimUnits then
+// excludes every id either one decided (claim_units.go:71,88,103, the
+// cappedUnitIDs parameter, built before Dispatch's per-claimed-unit
+// ValidateClaim loop ever runs). Validating only claimUnits' own return value
+// means a malformed/stale claim ordered past a saturated bucket's
+// allowedSlots is deferred every pass without ever reaching ValidateClaim --
+// it stays PLANNED/RETRYING indefinitely under sustained concurrency/budget
+// pressure, all the while still occupying a "counted candidate" slot in the
+// guard's own bucket math. Calling this BEFORE authorizeRun and terminalizing
+// what it finds removes a malformed claim from the candidate set before ANY
+// capacity computation sees it, so it can never be capped in the first place
+// and always terminalizes on the very pass it becomes dispatch-eligible,
+// independent of concurrency/budget pressure.
+func invalidClaimsAmongDispatchCandidates(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) ([]invalidClaimUnit, error) {
+	candidates, err := dispatchCandidateUnits(ctx, tx, syncRunID, nil, now)
+	if err != nil {
+		return nil, err
+	}
+	var invalid []invalidClaimUnit
+	for _, unit := range candidates {
+		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
+			invalid = append(invalid, invalidClaimUnit{
+				unit:   unit,
+				reason: invalidClaimReason(unit.provider, unit.datasetKey, err),
+			})
+		}
+	}
+	return invalid, nil
+}
+
+// terminalizeInvalidClaimUnits fails units whose persisted
 // dataset_key/processor_flags fail providerfamilycontract.ValidateClaim
-// (CHAOS-4550): a claim this malformed can never become dispatchable by
-// itself being retried, so leaving it PLANNED/DISPATCHING re-poisons every
-// future dispatch pass for the whole run (the discard-storm class
-// CHAOS-3990's terminalizeUnroutableUnits already exists to prevent for the
-// no-route case -- this is the same idiom for the malformed-claim case).
-// Write-time CAS on status='dispatching' keeps a concurrent worker's
-// DISPATCHING -> RUNNING claim from being overwritten. Units are grouped by
-// their exact reason string (not just provider/dataset, since two units of
-// the same pair can fail for different reasons) so the durable per-unit
-// reason always names the specific defect, matching CHAOS-3990's own
-// "never a bare category with no reason attached" rule.
+// (CHAOS-4550/CHAOS-4556): a claim this malformed can never become
+// dispatchable by itself being retried, so leaving it PLANNED/RETRYING/
+// DISPATCHING re-poisons every future dispatch pass for the whole run (the
+// discard-storm class CHAOS-3990's terminalizeUnroutableUnits already exists
+// to prevent for the no-route case -- this is the same idiom for the
+// malformed-claim case). Called from two sites: pre-capacity, over every
+// dispatch candidate regardless of status (CHAOS-4556), and post-claim, as a
+// backstop over whatever claimUnits actually claimed (still needed: a unit
+// can become newly dispatch-eligible, e.g. a RETRYING unit's available_at
+// arriving, between the pre-capacity read and claimUnits' own write inside
+// this same transaction).
+//
+// Write-time CAS on EACH unit's OWN status AS OBSERVED when it was read
+// (codex round-1 finding on CHAOS-4556, 2026-08-30): units are grouped by
+// (reason, unit.status) rather than reason alone, and each group's UPDATE
+// matches only that exact status -- never a blanket ANY(planned, retrying,
+// dispatching) covering every pre-terminal status at once. A blanket
+// predicate would let a stale read of one unit (observed PLANNED) clobber a
+// row a CONCURRENT dispatch pass has, in between, legitimately claimed to
+// DISPATCHING and published to the outbox: the blanket predicate still
+// matches DISPATCHING, so the first pass's terminalize would mark that fresh
+// claim FAILED and clear its lease, orphaning the already-queued provider
+// job. Matching the precise observed status is the same CAS discipline
+// budget_guard.go's own comments name throughout ("narrow races via CAS
+// predicates rather than SERIALIZABLE") -- restoring it here closes exactly
+// the race the broader predicate reopened.
+//
+// Units are ALSO grouped by their exact reason string (not just
+// provider/dataset, since two units of the same pair can fail for different
+// reasons) so the durable per-unit reason always names the specific defect,
+// matching CHAOS-3990's own "never a bare category with no reason attached"
+// rule.
 func terminalizeInvalidClaimUnits(ctx context.Context, tx pgx.Tx, units []invalidClaimUnit, now time.Time) (int, error) {
 	if len(units) == 0 {
 		return 0, nil
 	}
-	unitIDsByReason := map[string][]string{}
+	type claimGroupKey struct{ reason, status string }
+	unitIDsByGroup := map[claimGroupKey][]string{}
 	for _, entry := range units {
-		unitIDsByReason[entry.reason] = append(unitIDsByReason[entry.reason], entry.unit.id)
+		key := claimGroupKey{reason: entry.reason, status: entry.unit.status}
+		unitIDsByGroup[key] = append(unitIDsByGroup[key], entry.unit.id)
 	}
-	reasons := make([]string, 0, len(unitIDsByReason))
-	for reason := range unitIDsByReason {
-		reasons = append(reasons, reason)
+	groups := make([]claimGroupKey, 0, len(unitIDsByGroup))
+	for key := range unitIDsByGroup {
+		groups = append(groups, key)
 	}
-	sort.Strings(reasons)
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].reason != groups[j].reason {
+			return groups[i].reason < groups[j].reason
+		}
+		return groups[i].status < groups[j].status
+	})
 
 	var terminalized int
-	for _, reason := range reasons {
-		unitIDs := unitIDsByReason[reason]
+	for _, key := range groups {
+		unitIDs := unitIDsByGroup[key]
 		sort.Strings(unitIDs)
 		resultJSON, err := json.Marshal(map[string]any{
 			"error_category": invalidProviderFamilyClaimErrorCategory,
-			"reason":         reason,
+			"reason":         key.reason,
 		})
 		if err != nil {
 			return terminalized, fmt.Errorf("marshal invalid-claim unit result: %w", err)
@@ -240,7 +306,7 @@ UPDATE public.sync_run_units
 SET status = $2, available_at = NULL, error = $3, last_retry_reason = $4,
     result = $5::json, lease_owner = NULL, lease_expires_at = NULL, updated_at = $6
 WHERE id = ANY($1::uuid[]) AND status = $7`,
-			unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, reason, resultJSON, now, syncRunUnitStatusDispatching)
+			unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, key.reason, resultJSON, now, key.status)
 		if err != nil {
 			return terminalized, fmt.Errorf("terminalize invalid-claim units: %w", err)
 		}

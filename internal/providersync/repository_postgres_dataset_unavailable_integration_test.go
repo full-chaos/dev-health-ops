@@ -112,6 +112,20 @@ WHERE org_id = 'org-acme' AND integration_id = $1 AND dataset_key = 'commits'`,
 		t.Fatalf("unavailable_last_seen_at=%v, want %s", lastSeen, firstFailedAt)
 	}
 
+	// CHAOS-4559: Fail used to leave sync_runs.completed_units/failed_units
+	// untouched until finalize_sync_run recomputed them, so a run mid-dispatch
+	// with a failed unit still read 0/0 for failed_units.
+	var runCompletedUnits, runFailedUnits int
+	if err := pool.QueryRow(ctx, `
+SELECT completed_units, failed_units FROM public.sync_runs WHERE id = $1`,
+		firstRunID).Scan(&runCompletedUnits, &runFailedUnits); err != nil {
+		t.Fatal(err)
+	}
+	if runCompletedUnits != 0 || runFailedUnits != 1 {
+		t.Fatalf("sync_runs rollup after one unit failed: completed_units=%d failed_units=%d, want 0/1",
+			runCompletedUnits, runFailedUnits)
+	}
+
 	// A second unit for the SAME dataset fails again, later. unavailable_since
 	// must NOT move -- it marks when the outage started, not the latest
 	// failure -- but unavailable_last_seen_at must advance.

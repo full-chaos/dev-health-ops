@@ -189,6 +189,43 @@ _GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.
 _GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
+_SPLIT_COMPOSE_OVERLAY = (
+    _REPO_ROOT / "deploy" / "docker-compose" / "compose.go-workers.yml"
+)
+_SWARM_GO_WORKER_OVERLAY = (
+    _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
+)
+_DEPLOYMENT_JSON = _REPO_ROOT / "deploy" / "go-workers" / "deployment.json"
+
+# CHAOS-4587: deploy/go-workers/deployment.json's `processes` list is the
+# mechanism-level registry -- every long-running Go binary the platform ships
+# is named there exactly once. Each per-mechanism deploy artifact spells the
+# same nine processes under its own naming convention; these maps translate
+# registry name -> that mechanism's service/Deployment name so the
+# enumeration below never hardcodes "go-worker-heavy is process heavy" more
+# than once.
+_SPLIT_COMPOSE_SERVICE_BY_PROCESS = {
+    "heavy": "go-worker-heavy",
+    "ops": "go-worker-ops",
+    "sync": "go-worker-sync",
+    "sync-provider": "go-worker-sync-provider",
+    "reconciler": "go-reconciler",
+    "scheduler": "go-scheduler",
+    "stream-external": "go-stream-external",
+    "stream-ingest": "go-stream-ingest",
+    "stream-pagerduty": "go-stream-pagerduty",
+}
+_K8S_DEPLOYMENT_BY_PROCESS = {
+    "heavy": "dev-health-go-worker-heavy",
+    "ops": "dev-health-go-worker-ops",
+    "sync": "dev-health-go-worker-sync",
+    "sync-provider": "dev-health-go-worker-sync-provider",
+    "reconciler": "dev-health-go-reconciler",
+    "scheduler": "dev-health-go-scheduler",
+    "stream-external": "dev-health-go-stream-external",
+    "stream-ingest": "dev-health-go-stream-ingest",
+    "stream-pagerduty": "dev-health-go-stream-pagerduty",
+}
 
 
 #: CHAOS-4054 deleted the whole ``WORKER_*_ENABLED`` route-switch plane: no
@@ -1650,3 +1687,219 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
             "docstring claims go-reconciler's is the only one in this "
             "overlay -- update the docstring if that changed on purpose"
         )
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-4587: OPERATIONAL_ORDERING_CONTRACT must reach every go-* process
+# that can read a canonical operational table, on every mechanism that can
+# deploy one. go-worker-heavy crash-looped locally 2026-08-30 08:31Z
+# (RestartCount 6) once migration 067 flipped operational_incidents to
+# contract 2 with the env wired nowhere in ops -- only the root,
+# hand-maintained local compose file (not version controlled) carried the
+# fix. These are registry-level: they enumerate deploy/go-workers/
+# deployment.json's `processes` list rather than asserting on one hardcoded
+# service name, so a tenth process added later fails closed instead of
+# silently shipping unwired.
+# ---------------------------------------------------------------------------
+
+
+def test_go_worker_process_registry_matches_ordering_contract_coverage_maps() -> None:
+    """deployment.json's `processes` list is the single source of truth for
+    which Go binaries exist -- `internal/deploymentcontract` decodes it with
+    `DisallowUnknownFields`, so this registry intentionally carries no
+    `config_env`/ordering-contract field of its own (adding one is a Go
+    schema + validation change, out of scope for this config-only ticket).
+    Cross-mechanism enumeration below instead keys off `processes[].name`,
+    an already-existing field. This guard makes sure that if a process is
+    ever added, removed, or renamed in the registry, the per-mechanism name
+    maps this module hardcodes are caught out of sync in the same PR,
+    instead of the other mechanism tests silently checking a stale subset.
+    """
+    names = {p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]}
+    assert names, "deployment.json must declare at least one process"
+    assert names == set(_SPLIT_COMPOSE_SERVICE_BY_PROCESS), (
+        f"deployment.json processes {sorted(names)} do not match "
+        f"_SPLIT_COMPOSE_SERVICE_BY_PROCESS keys "
+        f"{sorted(_SPLIT_COMPOSE_SERVICE_BY_PROCESS)}"
+    )
+    assert names == set(_K8S_DEPLOYMENT_BY_PROCESS), (
+        f"deployment.json processes {sorted(names)} do not match "
+        f"_K8S_DEPLOYMENT_BY_PROCESS keys {sorted(_K8S_DEPLOYMENT_BY_PROCESS)}"
+    )
+
+
+def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract() -> (
+    None
+):
+    """The fully split compose overlay and its Swarm equivalent each carry
+    all nine registry processes as distinct services -- assert every one
+    resolves OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
+    environment.
+
+    Red on origin/main 2b3032b63: neither file's shared env anchor sets the
+    key, so every service is reported missing.
+    """
+    processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
+    for manifest in (_SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
+        services = _load_yaml(manifest)["services"]
+        for process in processes:
+            service_name = _SPLIT_COMPOSE_SERVICE_BY_PROCESS[process]
+            env = services[service_name].get("environment") or {}
+            assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
+                f"{manifest.name}:{service_name} (registry process "
+                f"{process!r}) is missing OPERATIONAL_ORDERING_CONTRACT"
+            )
+
+
+def test_single_machine_go_overlay_wires_operational_ordering_contract() -> None:
+    """compose-go-workers.yml (`_GO_WORKER_OVERLAY`) is the single
+    hand-maintained local-machine topology described in its own header
+    comment -- it implements only the `sync` (as service `go-worker`) and
+    `reconciler` registry processes, not the full split fleet. Assert those
+    two, not the nine-process registry that the split overlay above covers.
+
+    Red on origin/main 2b3032b63: neither service's environment sets the
+    key.
+    """
+    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    for service_name in ("go-worker", "go-reconciler"):
+        env = services[service_name].get("environment") or {}
+        assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
+            f"{service_name} is missing OPERATIONAL_ORDERING_CONTRACT"
+        )
+
+
+def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:
+    """The raw Kubernetes manifests project OPERATIONAL_ORDERING_CONTRACT
+    through a dedicated `dev-health-go-worker-config` ConfigMap (not the
+    shared api/worker `dev-health-config` one -- the Python api's own
+    ordering-contract awareness is a separate, out-of-scope concern) that
+    every go-* Deployment must envFrom.
+
+    Red on origin/main 2b3032b63: the ConfigMap has no such key and no
+    Deployment envFroms it.
+    """
+    processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
+    docs = _k8s_docs("go-workers.yaml")
+
+    config = next(
+        d
+        for d in docs
+        if d.get("kind") == "ConfigMap"
+        and d["metadata"]["name"] == "dev-health-go-worker-config"
+    )
+    # Default stays "1" (rollout-safe, matches the binary's own omitted
+    # default) -- a codex-caught regression during this PR's own review
+    # defaulted this to "2" unconditionally, which crash-loops any
+    # environment that has not yet applied migration 067. Never flip this
+    # back without also reading deploy/go-workers/README.md's rollout note.
+    assert config["data"].get("OPERATIONAL_ORDERING_CONTRACT") == "1"
+
+    deployments = {
+        d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
+    }
+    for process in processes:
+        deployment_name = _K8S_DEPLOYMENT_BY_PROCESS[process]
+        container = deployments[deployment_name]["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        config_refs = {
+            ref["configMapRef"]["name"]
+            for ref in container.get("envFrom", [])
+            if "configMapRef" in ref
+        }
+        assert "dev-health-go-worker-config" in config_refs, (
+            f"{deployment_name} (registry process {process!r}) must envFrom "
+            "dev-health-go-worker-config to receive "
+            "OPERATIONAL_ORDERING_CONTRACT"
+        )
+
+
+def test_helm_go_workers_wire_operational_ordering_contract() -> None:
+    """Helm renders every goWorkers.groups[] entry (all nine registry
+    processes) from one shared template -- unlike the other mechanisms, one
+    text assertion on the template plus the values.yaml default covers the
+    whole registry, since the same `env:` block is emitted per group by the
+    chart's own `range $group := .Values.goWorkers.groups` loop.
+
+    Red on origin/main 2b3032b63: neither the template nor values.yaml
+    mentions OPERATIONAL_ORDERING_CONTRACT.
+    """
+    template = (_HELM_DIR / "templates" / "go-workers.yaml").read_text(encoding="utf-8")
+    assert "name: OPERATIONAL_ORDERING_CONTRACT" in template
+    assert ".Values.goWorkers.operationalOrderingContract" in template
+
+    values = _load_yaml(_HELM_DIR / "values.yaml")
+    # Same rollout-safe-default regression guard as the Kubernetes ConfigMap
+    # assertion above.
+    assert values["goWorkers"]["operationalOrderingContract"] == "1"
+
+
+def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
+    """codex review (delta round 2, P1): migration 067 itself checks
+    OPERATIONAL_ORDERING_CONTRACT to decide whether to apply the
+    ordering-contract cutover. Wiring only the workers (the tests above)
+    left the migrate job/Job unable to receive an operator's export at all
+    -- 067 would silently defer ("successfully") while workers, wired to
+    the same export, started against a still-contract-1 table. Every
+    mechanism's migrate step must be able to receive this variable too, so
+    a single export (or a single values.yaml knob, for Helm) moves both
+    together.
+
+    Red before this fix: none of these five migrate/Job definitions
+    reference the key at all.
+    """
+    for manifest in (
+        _REPO_ROOT / "compose.yml",
+        _PROD_COMPOSE,
+        _SWARM_STACK,
+    ):
+        migrate = _load_yaml(manifest)["services"]["migrate"]
+        env = migrate.get("environment") or {}
+        assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
+            f"{manifest.name}:migrate is missing OPERATIONAL_ORDERING_CONTRACT"
+        )
+
+    migrate_job = next(
+        d for d in _k8s_docs("migrate-job.yaml") if d.get("kind") == "Job"
+    )
+    container = migrate_job["spec"]["template"]["spec"]["containers"][0]
+    config_refs = {
+        ref["configMapRef"]["name"]
+        for ref in container.get("envFrom", [])
+        if "configMapRef" in ref
+    }
+    assert "dev-health-go-worker-config" in config_refs, (
+        "kubernetes migrate Job must envFrom dev-health-go-worker-config to "
+        "receive OPERATIONAL_ORDERING_CONTRACT"
+    )
+
+    helm_migrate_template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "name: OPERATIONAL_ORDERING_CONTRACT" in helm_migrate_template
+    assert ".Values.goWorkers.operationalOrderingContract" in helm_migrate_template, (
+        "helm migrate job should reuse goWorkers.operationalOrderingContract "
+        "(one knob for migrate + every worker), not a second, driftable value"
+    )
+
+
+def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
+    """codex review (delta round 4, P1): unlike Compose/Swarm/Helm, the raw
+    Kubernetes manifests have no shell-interpolation surface -- exporting
+    OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
+    nothing, because the ConfigMap value is a literal. The only correct
+    cutover mechanism there is editing the ConfigMap value directly. This
+    guards against the rollout note quietly reverting to a single
+    "export the env var" instruction that is actually false for this one
+    topology.
+    """
+    readme = (_REPO_ROOT / "deploy" / "go-workers" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "no shell-interpolation surface" in readme
+        or "no environment to export into" in readme
+    )
+    assert "dev-health-go-worker-config" in readme
+    assert 'from `"1"` to `"2"`' in readme

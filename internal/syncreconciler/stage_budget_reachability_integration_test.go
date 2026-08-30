@@ -100,6 +100,7 @@ func TestMutationPipelineStageBudgetReachability(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		pipelineConfigWithBudget(StageMaterializer, 200*time.Millisecond),
 	)
 	if err != nil {

@@ -60,6 +60,7 @@ func TestRunStageBudgetIsIndependentOfItsSiblings(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		pipelineConfigWithBudget(StageMaterializer, 5*time.Millisecond),
 	)
 	if err != nil {
@@ -116,6 +117,7 @@ func TestObserverExceedingItsBudgetDegradesRatherThanFails(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		pipelineConfigWithBudget(StageObserver, 5*time.Millisecond),
 	)
 	if err != nil {
@@ -160,6 +162,7 @@ func TestStageFailureIsTelemetered(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -238,6 +241,7 @@ func TestStageCancellationSQLStateIsTelemetered(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -318,6 +322,7 @@ func TestRunStageDoesNotTelemeterParentCancellation(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -371,6 +376,7 @@ func TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess(t
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		config,
 	)
 	if err != nil {
@@ -469,6 +475,7 @@ func TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess(t *
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -558,6 +565,7 @@ func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
 		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		config,
 	)
 	if err != nil {

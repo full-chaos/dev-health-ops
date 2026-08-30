@@ -229,11 +229,12 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 // never wires the option would produce) leaves the CHAOS-4239 composed
 // default standing rather than tripping LoopConfig.validate's >= 10ms floor
 // with a zero value. That composed default is
-// syncreconciler.DefaultStageBudgets().Sum() (3.75s) plus
-// stageBudgetOuterEnvelopeMargin (250ms) = 4s -- no longer
+// syncreconciler.DefaultStageBudgets().Sum() (4.35s, CHAOS-4583's
+// terminal_outbox_close stage added a 600ms entry) plus
+// stageBudgetOuterEnvelopeMargin (250ms) = 4.6s -- no longer
 // DefaultLoopConfig's flat 2s, which described a single bounded Stepper call
-// and was never sized for the 7-stage mutation pipeline (see the doc comment
-// on DefaultLoopConfig and on the ObservationTimeout override below).
+// and was never sized for the (now 8-stage) mutation pipeline (see the doc
+// comment on DefaultLoopConfig and on the ObservationTimeout override below).
 func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 

@@ -54,3 +54,10 @@ e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
 50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1018
 50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1025
 50d55194a:.github/docs-legacy/superpowers/plans/2026-07-01-chaos-2690-implementation/briefs/brief-2695-idempotency.md:generic-api-key:1032
+# CHAOS-4582: a JWT-shaped fake literal in a redaction-regression test
+# fixture (TestRedactTextCatchesBareCredentialShapedText). The finding is on
+# an already-pushed commit within this PR's own branch range, so a later
+# commit changing the literal does not remove it from the range gitleaks
+# scans; both full-SHA and short-id forms per the CHAOS-2690 precedent above.
+8201b545fb716f3189060126172bfded8dea65c3:internal/platform/logging/logging_test.go:generic-api-key:65
+8201b545f:internal/platform/logging/logging_test.go:generic-api-key:65

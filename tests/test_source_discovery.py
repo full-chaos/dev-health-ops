@@ -1553,6 +1553,60 @@ def test_jira_case_normalization_invariant(
     assert eng_row_scope_change is not None and eng_row_scope_change.is_enabled is True
 
 
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("SUP", "sup"),
+        (" SUP ", "SUP"),  # codex's exact gate round 6 repro
+        ("SUP", " sup "),
+        ("Sup", "sUP"),
+        (" Sup ", "SUP"),
+        ("SUP", "SUP "),
+        ("SUP", " SUP"),
+        ("SUP", "SUP"),  # already-clean identity case
+        ("SUP", "SUPPORT"),  # must NOT match
+        (" S U P ", "SUP"),  # interior whitespace must NOT be collapsed
+        ("", " "),  # both normalize to empty -- must still agree
+    ],
+)
+def test_sql_side_comparator_agrees_with_jira_key_norm(
+    session: Session, a: str, b: str
+):
+    """Codex review (CHAOS-4584 gate round 6, P2): a symmetry property test
+    for the ONE normalization rule -- for every adversarial value pair
+    (mixed case, leading/trailing/interior whitespace, already-clean, both
+    empty), the SQL-side comparator (``_normalized_column_matches``, the
+    shared implementation ``_provider_matches``/``_jira_key_matches`` both
+    delegate to) must agree EXACTLY with the Python-side ``jira_key_norm``.
+
+    Root cause of the round 6 finding: two independent implementations of
+    one normalization rule (``func.lower(column)`` on the SQL side vs
+    ``.strip().lower()`` in Python) that could drift out of sync -- and
+    did, on whitespace. This test executes the ACTUAL SQL expression
+    (against the real SQLite engine, not a Python re-implementation of
+    what the SQL is supposed to do) for every pair, so a future edit to
+    ``_normalized_column_matches`` that reintroduces drift fails here
+    structurally, rather than needing its own bespoke regression case."""
+    from sqlalchemy import literal
+
+    from dev_health_ops.discovery.repos import jira_key_norm
+    from dev_health_ops.sync.discovery import _normalized_column_matches
+
+    python_truth = jira_key_norm(a) == jira_key_norm(b)
+
+    sql_match = (
+        session.query(literal(1))
+        .filter(_normalized_column_matches(literal(a), b))
+        .first()
+    )
+    sql_truth = sql_match is not None
+
+    assert sql_truth == python_truth, (
+        f"SQL-side comparator diverged from jira_key_norm for "
+        f"({a!r}, {b!r}): sql_matches={sql_truth} python_equal={python_truth}"
+    )
+
+
 def test_jira_discovery_caps_new_sources_before_preexisting_ones(
     session: Session,
     jira_integration: Integration,

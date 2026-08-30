@@ -38,11 +38,38 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalized_column_matches(column: Any, value: str):
+    """SQL-side counterpart of ``jira_key_norm`` -- ``func.lower(func.trim(
+    column))`` matched against the Python-normalized *value*.
+
+    This is the ONE place a column comparison against a Jira provider name
+    or project key is expressed. ``_provider_matches`` and
+    ``_jira_key_matches`` below are the only two callers; every provider or
+    key comparison reachable from this module's own new code goes through
+    one of them, or carries a documented justified-skip in
+    ``.codex-review-context.md``'s enumeration table -- never its own
+    ``func.lower()``/``func.trim()`` combination.
+
+    codex review (CHAOS-4584 gate round 6, P2): a comparator that mirrored
+    only ``jira_key_norm``'s ``.lower()`` half -- ``func.lower(column)``,
+    with no ``func.trim()`` -- missed a persisted key/provider value with
+    leading/trailing whitespace (e.g. a source created from
+    ``project_key=" SUP "``, stored verbatim by ``_non_git_source_rows``):
+    the SQL side stayed ``" sup "`` while the Python side normalized to
+    ``"sup"``, so the two never matched. Root cause was two independent
+    implementations of one normalization rule that could drift; there is
+    now exactly one (this function), so every routed site inherits a fix
+    to it automatically instead of needing its own follow-up patch.
+    """
+    return func.lower(func.trim(column)) == jira_key_norm(value)
+
+
 def _provider_matches(column: Any, provider_value: str):
     """SQLAlchemy filter expression comparing a ``provider`` column to
-    *provider_value* through ``jira_key_norm`` (codex review, CHAOS-4584
-    gate round 5, P1) -- the ORM-side counterpart of the Python-side
-    ``jira_key_norm`` comparisons everywhere else in this module.
+    *provider_value* through ``_normalized_column_matches`` (codex review,
+    CHAOS-4584 gate round 5, P1) -- the ORM-side counterpart of the
+    Python-side ``jira_key_norm`` comparisons everywhere else in this
+    module.
 
     Two query filters in this file used to compare
     ``IntegrationSource.provider`` to a raw literal (``fields["provider"]``,
@@ -61,7 +88,17 @@ def _provider_matches(column: Any, provider_value: str):
     Every ``IntegrationSource.provider ==`` query filter reachable from
     this module's own new code goes through this one helper now, not a
     site-local ``==``."""
-    return func.lower(column) == jira_key_norm(provider_value)
+    return _normalized_column_matches(column, provider_value)
+
+
+def _jira_key_matches(column: Any, value: str):
+    """SQLAlchemy filter expression comparing a Jira project-key/external-id
+    column to *value* through ``_normalized_column_matches`` -- the
+    SQL-side counterpart of every Python-side ``jira_key_norm(external_id)``
+    comparison in this module's upsert loop. See
+    ``_normalized_column_matches``'s docstring for the round 6 finding this
+    replaces (a comparator that lowercased but never trimmed)."""
+    return _normalized_column_matches(column, value)
 
 
 def _resolve_credentials(integration: Integration) -> dict[str, Any]:
@@ -501,8 +538,7 @@ def discover_sources_for_integration(
                 # duplicate that then double-schedules the project.
                 candidates = (
                     base_query.filter(
-                        func.lower(IntegrationSource.external_id)
-                        == jira_key_norm(external_id)
+                        _jira_key_matches(IntegrationSource.external_id, external_id)
                     )
                     .order_by(
                         IntegrationSource.discovered_at.asc(),

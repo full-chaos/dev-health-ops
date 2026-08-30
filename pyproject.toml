@@ -200,9 +200,12 @@ exclude = [
   # "replace lines N-M" / "insert before X" diff instructions at a specific
   # indentation (class/method body) -- ruff's fence formatter dedents them
   # to column 0, silently changing what a reader would paste (CHAOS-4606,
-  # codex round 2: 4 corrupted snippets across 3 plan docs).
+  # codex round 2: 4 corrupted snippets across 3 plan docs). Scoped to
+  # *.md only -- .github/docs-legacy/examples/*.py are real source files
+  # and must stay linted/formatted (codex round 3 caught a first, too-broad
+  # directory-exclude draft that silently dropped them from `ruff check`).
   ".planning",
-  ".github/docs-legacy",
+  ".github/docs-legacy/**/*.md",
   "build",
   "dist",
   "migrations",

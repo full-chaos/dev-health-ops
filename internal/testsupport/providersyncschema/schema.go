@@ -30,13 +30,19 @@ import (
 //     schedule_cron/timezone/created_at/updated_at; integration_sources.
 //     provider/is_enabled/discovered_at/last_seen_at/last_sync_*;
 //     integration_datasets.is_enabled; sync_runs.triggered_by/mode/
-//     total_units/completed_units/failed_units/started_at/completed_at/
-//     result/created_at/trace_parent; sync_run_units.retry_exhausted_at) are
-//     deliberately NOT reproduced -- adding them would force every INSERT in
-//     this package to invent values for columns no assertion here ever
-//     observes, without buying back any additional safety. sync_runs.
-//     integration_id is the one exception: a codex adversarial review
-//     caught that omitting it left the fixture's central sync_runs row a
+//     started_at/completed_at/result/created_at/trace_parent;
+//     sync_run_units.retry_exhausted_at) are deliberately NOT reproduced --
+//     adding them would force every INSERT in this package to invent values
+//     for columns no assertion here ever observes, without buying back any
+//     additional safety. sync_runs.total_units/completed_units/failed_units
+//     are the CHAOS-4559 exception: the per-unit terminal commit now writes
+//     them (bumpSyncRunRollupSQL), so a suite without them cannot observe
+//     that write at all. DEFAULT 0 here matches every real INSERT path
+//     (processors/sync.py, sync/planner.py) that always supplies 0 at row
+//     creation -- it is not more permissive than production, just less
+//     verbose for callers that don't care about the initial value.
+//     sync_runs.integration_id is the other exception: a codex adversarial
+//     review caught that omitting it left the fixture's central sync_runs row a
 //     shape that cannot exist in a migrated production database (the column
 //     is NOT NULL there), so it is kept even though providersync's own
 //     queries never read it. Every other real FK/unique key that depends
@@ -128,7 +134,10 @@ func Create(ctx context.Context, pool *pgxpool.Pool) error {
 			id uuid PRIMARY KEY, org_id text NOT NULL,
 			integration_id uuid NOT NULL REFERENCES public.integrations(id),
 			status text NOT NULL,
-			credential_id uuid, credential_fingerprint text, auth_source text
+			credential_id uuid, credential_fingerprint text, auth_source text,
+			total_units integer NOT NULL DEFAULT 0,
+			completed_units integer NOT NULL DEFAULT 0,
+			failed_units integer NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY, org_id text NOT NULL,

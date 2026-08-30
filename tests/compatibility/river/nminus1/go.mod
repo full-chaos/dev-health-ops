@@ -1,6 +1,6 @@
 module github.com/full-chaos/dev-health-ops/tests/compatibility/river/nminus1
 
-go 1.25.9
+go 1.27.0
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2

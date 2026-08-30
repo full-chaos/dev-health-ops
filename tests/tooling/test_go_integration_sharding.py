@@ -152,7 +152,7 @@ def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
 
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.25.9"
+    env["GOTOOLCHAIN"] = "go1.27.0"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -1687,7 +1687,7 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
     assert workflow_source.count("- 'ci/go_providersync_test_shards.tsv'") == 2
 
     check_go_source = CHECK_GO.read_text(encoding="utf-8")
-    assert 'GO_TOOLCHAIN="go1.25.9"' in check_go_source
+    assert 'GO_TOOLCHAIN="go1.27.0"' in check_go_source
     assert 'export GOTOOLCHAIN="${GO_TOOLCHAIN}"' in check_go_source
     assert 'export GOCACHE="${DEV_HEALTH_GO_CACHE}"' in check_go_source
     assert (

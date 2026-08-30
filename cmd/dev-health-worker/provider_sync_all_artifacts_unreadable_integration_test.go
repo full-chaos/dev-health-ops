@@ -207,8 +207,9 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 		   VALUES ($1, $2, $3, 'cicd', '{}'::jsonb)`,
 			[]any{uuid.NewString(), orgID, integrationID}},
 		{`INSERT INTO public.sync_runs
-		   (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source)
-		   VALUES ($1, $2, $3, 'running', $4, 'fingerprint', 'integration_credential')`,
+		   (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
+		    total_units, completed_units, failed_units)
+		   VALUES ($1, $2, $3, 'running', $4, 'fingerprint', 'integration_credential', 0, 0, 0)`,
 			[]any{runID, orgID, integrationID, credentialID}},
 		{`INSERT INTO public.sync_run_units (
 		     id, org_id, sync_run_id, integration_id, source_id, provider,

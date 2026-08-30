@@ -20,7 +20,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.integrations import Integration, IntegrationSource
 from dev_health_ops.models.licensing import OrgLicense
-from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
+from dev_health_ops.models.settings import (
+    IntegrationCredential,
+    SyncConfiguration,
+    SyncWatermark,
+)
 from dev_health_ops.models.users import Organization
 from tests._helpers import tables_of
 
@@ -36,6 +40,7 @@ _TABLES = tables_of(
     IntegrationSource,
     Organization,
     OrgLicense,
+    SyncWatermark,
 )
 
 # Jira discovery exercises TierLimitService, which requires a real UUID
@@ -795,7 +800,7 @@ def test_jira_discovery_project_id_wins_identity_over_project_key(
         result = discover_jira_projects(
             creds, sync_options={"project_id": "10002", "project_key": "ENG"}
         )
-    assert result == [("10002", "Engineering", "")]
+    assert result == [("10002", "Engineering", "", "10002")]
 
 
 def test_jira_discovery_moves_to_new_project_id_despite_stale_project_key(
@@ -850,6 +855,72 @@ def test_jira_discovery_moves_to_new_project_id_despite_stale_project_key(
     assert by_external["10002"].is_enabled is True, "new project must be discovered"
     assert by_external["10001"].is_enabled is False, (
         "old project must be superseded, not left enabled forever"
+    )
+
+
+def test_jira_discovery_preserves_watermark_on_unscoped_project_rename(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 gate round 2, P2): unscoped discovery must
+    key an existing row by Jira's immutable project id, not the mutable
+    project key. Rename ENG -> NEW (same id=10001): rediscovery must update
+    the SAME row's external_id, not create a second enabled row, AND must
+    move the existing SyncWatermark row from source_id="ENG" to
+    source_id="NEW" so incremental sync doesn't silently restart."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[("ENG", "Engineering", "software", "10001")],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    eng = (
+        session.query(IntegrationSource)
+        .filter(IntegrationSource.external_id == "ENG")
+        .one()
+    )
+    assert eng.metadata_["jira_project_id"] == "10001"
+
+    watermark = SyncWatermark(
+        org_id=_JIRA_ORG_ID,
+        repo_id="ENG",
+        source_id="ENG",
+        target="work-items",
+        dataset_key="issues",
+        last_synced_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(watermark)
+    session.commit()
+
+    # Jira admin renames the project key (same numeric id).
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[("NEW", "Engineering", "software", "10001")],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    rows = (
+        session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    )
+    assert [r.external_id for r in rows] == ["NEW"], (
+        "rename must update the same row, not create a second enabled one"
+    )
+    assert rows[0].id == eng.id, "row identity must be preserved across rename"
+    assert rows[0].is_enabled is True
+
+    watermarks = (
+        session.query(SyncWatermark).filter(SyncWatermark.org_id == _JIRA_ORG_ID).all()
+    )
+    assert [w.source_id for w in watermarks] == ["NEW"], (
+        "watermark must move to the new key, not be orphaned under the old one"
+    )
+    assert watermarks[0].last_synced_at == datetime(2026, 1, 1, tzinfo=timezone.utc), (
+        "watermark's synced-at cursor must survive the rename"
     )
 
 

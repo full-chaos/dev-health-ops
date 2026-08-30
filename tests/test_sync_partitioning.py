@@ -280,9 +280,9 @@ class TestDiscoverJiraProjects:
         )
         result = discover_jira_projects(creds, org_id="org-test")
         assert result == [
-            ("SUP", "Support Desk", "service_desk"),
-            ("OPS", "Platform Ops", "software"),
-            ("BIZ", "Biz Ops", "business"),
+            ("SUP", "Support Desk", "service_desk", ""),
+            ("OPS", "Platform Ops", "software", ""),
+            ("BIZ", "Biz Ops", "business", ""),
         ]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
@@ -307,7 +307,7 @@ class TestDiscoverJiraProjects:
             }
         )
         result = discover_jira_projects(creds, sync_options={"project_key": "eng"})
-        assert result == [("ENG", "Engineering", "software")]
+        assert result == [("ENG", "Engineering", "software", "")]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_explicit_project_id_stays_scoped(self, mock_get_all):
@@ -330,7 +330,7 @@ class TestDiscoverJiraProjects:
             }
         )
         result = discover_jira_projects(creds, sync_options={"project_id": "10002"})
-        assert result == [("10002", "Support Desk", "")]
+        assert result == [("10002", "Support Desk", "", "10002")]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_explicit_project_id_wins_even_with_a_stale_project_key(self, mock_get_all):
@@ -362,7 +362,7 @@ class TestDiscoverJiraProjects:
         result = discover_jira_projects(
             creds, sync_options={"project_id": "10002", "project_key": "eng"}
         )
-        assert result == [("10002", "Support Desk", "")]
+        assert result == [("10002", "Support Desk", "", "10002")]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_skips_projects_without_a_key(self, mock_get_all):
@@ -382,7 +382,7 @@ class TestDiscoverJiraProjects:
             }
         )
         result = discover_jira_projects(creds)
-        assert result == [("OK", "Fine", "software")]
+        assert result == [("OK", "Fine", "software", "")]
 
 
 class TestDiscoverGithubRepos:

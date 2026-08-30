@@ -76,10 +76,14 @@ def discover_jira_projects(
     ``_non_git_explicit_source_id``/``_non_git_source_rows`` already enforce
     at config-creation time.
 
-    Returns ``(project_key, project_name, project_type_key)`` tuples using
-    the existing paginated ``GET /rest/api/3/project/search`` client method
-    (``JiraClient.get_all_projects``, already used by the unrelated
-    team/project catalog import in ``providers/teams.py``).
+    Returns ``(identity, project_name, project_type_key, jira_project_id)``
+    tuples using the existing paginated ``GET /rest/api/3/project/search``
+    client method (``JiraClient.get_all_projects``, already used by the
+    unrelated team/project catalog import in ``providers/teams.py``).
+    ``identity`` is the project key, except when the config was explicitly
+    scoped by ``project_id`` (then it's that id); ``jira_project_id`` is
+    ALWAYS Jira's own immutable numeric id, regardless of which one
+    ``identity`` uses, so callers can detect a project key rename.
     """
     from dev_health_ops.providers.jira.client import (
         JiraAuth,
@@ -139,7 +143,16 @@ def discover_jira_projects(
         name = str(project.get("name") or key)
         project_type_key = str(project.get("projectTypeKey") or "").strip().lower()
         identity = project_id if (identity_is_project_id and project_id) else key
-        result.append((identity, name, project_type_key))
+        # codex review (CHAOS-4584 gate round 2, P2): always carry Jira's
+        # own immutable numeric project id, even when the KEY is the
+        # identity (the unscoped "discover everything" case). A Jira admin
+        # can rename a project's key while its id stays the same; without
+        # this, a rename looked identical to "old project gone, new
+        # project appeared" -- a second, separately-watermarked source got
+        # created under the new key while the old key's row (this
+        # module's own "never auto-disable on absence" policy) stayed
+        # enabled forever, double-syncing the same Jira project.
+        result.append((identity, name, project_type_key, project_id))
     return result
 
 

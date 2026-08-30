@@ -1440,13 +1440,30 @@ def _non_git_explicit_source_id(sync_options: dict[str, Any]) -> Any:
     (which decides whether to materialize a source at all) and
     ``create_sync_config``'s repo-limit preflight (CHAOS-4582 codex review:
     the two must agree on how many sources a config will actually consume,
-    or the preflight over- or under-charges the org's limit)."""
-    return (
-        sync_options.get("project_id")
-        or sync_options.get("project_key")
-        or sync_options.get("team_id")
-        or sync_options.get("repo")
-    )
+    or the preflight over- or under-charges the org's limit).
+
+    A whitespace-only string means "not set" (codex review, CHAOS-4584 gate
+    round 2 P2): without this, a config PATCHed/created with
+    ``{"project_key": "   "}`` was treated as explicitly scoped HERE
+    (materializing a real, enabled, repo-slot-consuming source keyed on
+    literal whitespace) but as UNSCOPED by ``discover_jira_projects``'s own
+    normalization -- the two disagreeing meant that garbage source was
+    created once and then never touched (superseded/capped/recovered)
+    again by anything, permanently occupying a slot for a project that can
+    never sync.
+    """
+    for value in (
+        sync_options.get("project_id"),
+        sync_options.get("project_key"),
+        sync_options.get("team_id"),
+        sync_options.get("repo"),
+    ):
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def _jira_config_materializes_zero_sources(
@@ -2656,10 +2673,44 @@ async def update_sync_config(
                     "service_repository_mappings"
                 ],
             }
+    was_inactive = not bool(getattr(config, "is_active", True))
     if payload.is_active is not None:
         mutable_config.is_active = payload.is_active
     await session.flush()
     updated = config
+
+    updated_integration_id = getattr(updated, "integration_id", None)
+    if (
+        str(getattr(updated, "provider", "")).lower() == "jira"
+        and updated_integration_id is not None
+        and (sync_options_provided or (was_inactive and bool(updated.is_active)))
+    ):
+        # codex review (gate round 2, P1 x2): PATCH previously persisted a
+        # jira config's sync_options (or reactivated it) without ever
+        # re-running discovery -- every scope-change/cap-recovery mechanism
+        # built across rounds 3-6 only ran when something called
+        # discover_sources_for_integration directly (tests, or the
+        # standalone /integrations/{id}/discover endpoint); a real operator
+        # PATCHing project_key via THIS endpoint got a 200 while the
+        # planner kept routing whatever was enabled before the PATCH.
+        # Reactivation additionally needs this because
+        # _active_repo_usage_count_for_limit only counts sources whose
+        # config is_active=True -- discovery that ran while paused could
+        # under-count and over-recover; re-running now, with the flush
+        # above already active, re-establishes a correct count and caps
+        # again if the org is over its allowance. Best-effort: never fail
+        # the PATCH itself.
+        try:
+            await session.run_sync(
+                lambda sync_session: discover_sources_for_integration(
+                    sync_session, updated_integration_id
+                )
+            )
+        except Exception:
+            logger.exception(
+                "jira_project_discovery_on_update_failed",
+                extra={"org_id": org_id, "config_id": config_id},
+            )
 
     await _upsert_scheduled_job(session, updated, org_id)
 

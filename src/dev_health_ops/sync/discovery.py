@@ -190,15 +190,17 @@ def _map_jira_tuple(
     project_key: str,
     project_name: str,
     project_type_key: str,
+    jira_project_id: str,
     *,
     org_id: str,
     integration_id: uuid.UUID,
     planner_managed_sync_config_id: str | None,
 ) -> dict[str, Any]:
-    """Map a Jira discovery tuple ``(key, name, project_type_key)`` to source
-    fields, shaped like the pre-existing hand-inserted proof rows (SUP/OPS,
-    org 70d529e0): ``source_type='project'``, ``metadata.planner_managed_sync_config_id``
-    set to the owning planner-managed config so the planner
+    """Map a Jira discovery tuple ``(key, name, project_type_key, jira_project_id)``
+    to source fields, shaped like the pre-existing hand-inserted proof rows
+    (SUP/OPS, org 70d529e0): ``source_type='project'``,
+    ``metadata.planner_managed_sync_config_id`` set to the owning
+    planner-managed config so the planner
     (``sync/trigger_routing.py::_planner_scoped_source_ids``) picks the row up.
 
     ``metadata.discovered_project`` (codex review, CHAOS-4584 round 5 P2):
@@ -209,11 +211,21 @@ def _map_jira_tuple(
     CHAOS-4582 legacy placeholder shape (external_id=="jira") and the
     planner silently plans zero units for it -- a marker this function
     controls proves a real discovery run created the row, independent of
-    what the key happens to be."""
+    what the key happens to be.
+
+    ``metadata.jira_project_id`` (codex review, CHAOS-4584 gate round 2, P2):
+    Jira's own immutable numeric project id, stored even when
+    ``external_id`` is the (mutable) key -- lets the upsert loop in
+    ``discover_sources_for_integration`` detect a project RENAME (same id,
+    new key) and update the existing row in place instead of creating a
+    second, separately-watermarked source while the old key's row sits
+    enabled forever."""
     metadata: dict[str, Any] = {
         "project_type_key": project_type_key,
         "discovered_project": True,
     }
+    if jira_project_id:
+        metadata["jira_project_id"] = jira_project_id
     if planner_managed_sync_config_id:
         metadata["planner_managed_sync_config_id"] = planner_managed_sync_config_id
     return {
@@ -259,6 +271,7 @@ def _tuples_to_source_dicts(
                     t[0],
                     t[1],
                     t[2] if len(t) > 2 else "",
+                    t[3] if len(t) > 3 else "",
                     org_id=org_id,
                     integration_id=integration_id,
                     planner_managed_sync_config_id=planner_managed_sync_config_id,
@@ -285,6 +298,59 @@ def _planner_managed_config_for_integration(
         )
         .one_or_none()
     )
+
+
+def _migrate_jira_watermarks_on_rename(
+    session: Session, org_id: str, old_external_id: str, new_external_id: str
+) -> None:
+    """Move ``SyncWatermark`` rows from a renamed Jira project's OLD key to
+    its NEW key (codex review, CHAOS-4584 gate round 2, P2).
+
+    ``SyncWatermark`` is keyed by ``(org_id, source_id, dataset_key)``
+    (``source_id`` holds the same string as ``IntegrationSource.external_id``
+    -- see ``sync/watermarks.py``'s module docstring). If the
+    ``IntegrationSource`` row's ``external_id`` is updated to the new project
+    key without also moving its watermarks, the old watermark rows become
+    unreachable (orphaned under the stale key) and incremental sync for that
+    project silently restarts from scratch on its next run -- the exact
+    continuity loss the finding calls out.
+
+    A watermark row already present under the NEW key (e.g. from a stale
+    ghost state) is not overwritten blindly: this keeps whichever row has the
+    more recent ``last_synced_at`` and drops the other, rather than risk
+    resurrecting an older cursor or violating
+    ``uq_sync_watermark_org_source_dataset``.
+    """
+    from dev_health_ops.models.settings import SyncWatermark
+
+    old_rows = (
+        session.query(SyncWatermark)
+        .filter(
+            SyncWatermark.org_id == org_id,
+            SyncWatermark.source_id == old_external_id,
+        )
+        .all()
+    )
+    for row in old_rows:
+        conflict = (
+            session.query(SyncWatermark)
+            .filter(
+                SyncWatermark.org_id == org_id,
+                SyncWatermark.source_id == new_external_id,
+                SyncWatermark.dataset_key == row.dataset_key,
+            )
+            .one_or_none()
+        )
+        if conflict is not None:
+            row_ts = row.last_synced_at or datetime.min.replace(tzinfo=timezone.utc)
+            conflict_ts = conflict.last_synced_at or datetime.min.replace(
+                tzinfo=timezone.utc
+            )
+            if row_ts > conflict_ts:
+                conflict.last_synced_at = row.last_synced_at
+            session.delete(row)
+        else:
+            row.source_id = new_external_id
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +485,41 @@ def discover_sources_for_integration(
                             **(dup.metadata_ or {}),
                             "duplicate_of_external_id": existing.external_id,
                         }
+
+                if existing is None:
+                    # codex review (CHAOS-4584 gate round 2, P2): no row
+                    # matches the discovered key at all -- before treating
+                    # this as a brand-new project, check whether it is the
+                    # SAME Jira project under a NEW key (an operator renamed
+                    # it). Jira's numeric project id never changes across a
+                    # rename, so a match there means "reuse this row and
+                    # move its watermarks", not "create a duplicate".
+                    jira_project_id = fields["metadata_"].get("jira_project_id")
+                    if jira_project_id:
+                        renamed = (
+                            base_query.filter(
+                                IntegrationSource.metadata_[
+                                    "jira_project_id"
+                                ].as_string()
+                                == str(jira_project_id)
+                            )
+                            .order_by(
+                                IntegrationSource.discovered_at.asc(),
+                                IntegrationSource.id.asc(),
+                            )
+                            .first()
+                        )
+                        if renamed is not None:
+                            old_external_id = renamed.external_id
+                            if old_external_id.lower() != external_id.lower():
+                                _migrate_jira_watermarks_on_rename(
+                                    session,
+                                    integration.org_id,
+                                    old_external_id,
+                                    external_id,
+                                )
+                                renamed.external_id = external_id
+                            existing = renamed
             else:
                 existing = base_query.filter(
                     IntegrationSource.external_id == external_id
@@ -729,6 +830,23 @@ def _rebalance_jira_sources_against_repo_limit(
     from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
 
     org_id = integration.org_id
+
+    planner_config = _planner_managed_config_for_integration(session, integration.id)
+    if planner_config is not None and not bool(
+        getattr(planner_config, "is_active", True)
+    ):
+        # codex review (gate round 2, P1): _active_repo_usage_count_for_limit
+        # only counts sources whose owning config is_active=True, so a
+        # discovery run against a PAUSED integration would see this
+        # integration's own usage as zero -- overflow looks negative, and
+        # the recovery branch below could re-enable every previously
+        # capped source for it, none of which the org-wide count actually
+        # reflects. Skip cap/recovery entirely while paused; the PATCH
+        # handler re-runs discovery on reactivation
+        # (api/admin/routers/sync.py::update_sync_config), by which point
+        # is_active=True again and the count is trustworthy.
+        return
+
     _acquire_repo_limit_lock(session, org_id)
     max_repos = TierLimitService(session).get_limit(uuid.UUID(org_id), "max_repos")
 

@@ -106,6 +106,16 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
+	// SkippedArtifacts carries a durable GitHubTestsSkippedArtifact marker for
+	// every malformed/unreadable report member this artifact skipped
+	// (CHAOS-4592). The caller (github_tests_chunked_route.go,
+	// github_tests_route.go) bounds and merges this into the unit-wide
+	// cursor.SkippedArtifacts via appendGitHubTestsSkippedArtifact, exactly as
+	// it already does for the three whole-artifact causes -- without a
+	// marker, githubTestsReportMemberSkippedWithoutDurableMarker refuses to
+	// let these two causes advance the watermark even though
+	// githubTestsWatermarkAdvancingPairs now allows them.
+	SkippedArtifacts []GitHubTestsSkippedArtifact
 	// DuplicateCases counts within-suite test-case natural-key collisions
 	// this parse disambiguated with an ordinal suffix (CHAOS-4392) -- see
 	// newJUnitCaseRow. Purely observational: the rows themselves are already
@@ -168,20 +178,33 @@ type GitHubTestsSkippedArtifact struct {
 }
 
 // githubTestsMaxSkippedArtifactRecords bounds how many GitHubTestsSkippedArtifact
-// records one unit's cursor carries. Chosen conservatively against
-// maxChunkCursorBytes (4KiB, chunked_persistence.go): a record serializes to
-// roughly 90-120 bytes depending on id lengths, and the cursor already
-// carries NextURL, Repo, and the rest of githubTestsChunkCursor's fields
-// before this list even starts, so a cap sized for those bytes alone (e.g.
-// 50) could push an otherwise-healthy cursor over budget and fail
-// ErrChunkCheckpointConflict on encode -- turning a documented, harmless
-// truncation (records beyond the cap collapse into
-// SkippedArtifactsOverflow) into an undocumented, harmful one (the WHOLE
-// cursor becomes unencodable, and unrelated committed progress is lost).
+// records one unit's cursor carries. Chosen against maxChunkCursorBytes
+// (4KiB, chunked_persistence.go): a cap sized for the SkippedArtifacts bytes
+// alone, ignoring the rest of githubTestsChunkCursor's fields, could push an
+// otherwise-healthy cursor over budget and fail ErrChunkCheckpointConflict
+// on encode -- turning a documented, harmless truncation (records beyond
+// the cap collapse into SkippedArtifactsOverflow) into an undocumented,
+// harmful one (the WHOLE cursor becomes unencodable, and unrelated
+// committed progress is lost).
+//
+// CHAOS-4592 codex review (P1, on merged CHAOS-4588/CHAOS-4591 code): the
+// value this replaced (20) was set BEFORE GitHubTestsSkippedArtifact.Name
+// existed and never revisited when CHAOS-4588/4591 added it -- computed with
+// Name at its old 48-byte cap, one record actually serializes to ~206 bytes,
+// so 20 records alone encoded to ~4.1KB, already exceeding the ENTIRE
+// cursor's 4KiB budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
+// everything else is added: a heavy-skip-volume unit's checkpoint write
+// could fail outright. 8 here, alongside githubTestsMaxArtifactNameBytes's
+// 24, keeps a full worst-case cursor (every field at a realistic maximum) at
+// ~3.3KB -- verified, not assumed, by
+// TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget, which encodes
+// exactly that shape and fails if a future field addition erodes the
+// margin again.
+//
 // Occurrences beyond this cap are still fully reflected in the closed
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
-const githubTestsMaxSkippedArtifactRecords = 20
+const githubTestsMaxSkippedArtifactRecords = 8
 
 // githubTestsMaxExcludedArtifactSampleRecords bounds
 // githubTestsChunkCursor.ExcludedArtifactSample, kept well under
@@ -258,7 +281,51 @@ const (
 	// cause could not tell which failure actually happened (CHAOS-4315,
 	// reversing the prior UNIT-level-failure disposition for this bound).
 	githubTestsArtifactOversizedCause = "artifact_oversized"
+	// githubTestsMalformedCause records that ONE report member inside an
+	// otherwise-opened archive could not be parsed as its detected report kind
+	// (JUnit XML or LCOV) -- readZipReport succeeded, parseJUnitRows or
+	// parseGitHubCoverageRow did not. It ADVANCES the watermark as of
+	// CHAOS-4592 -- see githubTestsWatermarkAdvancingPairs for why.
+	githubTestsMalformedCause = "malformed"
+	// githubTestsUnreadableCause records that ONE report member's bytes could
+	// not even be read out of an otherwise-opened archive (readZipReport
+	// itself failed). It ADVANCES the watermark as of CHAOS-4592 -- see
+	// githubTestsWatermarkAdvancingPairs for why.
+	githubTestsUnreadableCause = "unreadable"
 )
+
+// githubTestsLegacyReportOverflowSentinel is a reserved
+// SkippedArtifactCauseOverflow key -- never a real report_member cause, so it
+// can never collide with one -- marking that a cursor already carried
+// aggregate SkippedArtifactsOverflow before per-cause tracking existed
+// (CHAOS-4592 codex review round 3, P2). decodeGitHubTestsChunkCursor sets
+// it exactly once, from the RAW decoded shape, before this attempt's own
+// marker-writing has touched the map at all, and it survives every
+// subsequent copy-then-add in markGitHubTestsSkippedArtifactCauseOverflow.
+// Without it, a walk that starts on a pre-CHAOS-4592 binary and then, mid-
+// flight, resumes on this one loses the earlier un-attributed overflow
+// evidence the moment this attempt's OWN marker-writing first touches an
+// UNRELATED cause: causeOverflow stops being empty, the plain
+// "len(causeOverflow)==0" fallback this ticket's earlier rounds used
+// disables itself, and an earlier original-cause skip that was only ever
+// covered by the legacy aggregate count incorrectly withholds the
+// watermark -- not a permanent stall (the very next attempt's OWN full walk
+// would cover it), but an avoidable re-run this sentinel exists to skip.
+//
+// The value is plain ASCII, not a NUL byte (codex review round 4, P1): this
+// map round-trips through githubTestsFinalMetadataBatch's Result and is
+// persisted via repository_postgres.go's completeUnitSQL, which casts the
+// encoded JSON to ::jsonb. encoding/json renders a NUL byte as a "u0000"
+// Unicode escape, which PostgreSQL's jsonb input function rejects outright
+// ("unsupported Unicode escape sequence") -- exactly the legacy/rolling-
+// upgrade unit this sentinel exists to rescue would then fail to finalize
+// at all, a strictly worse outcome than the withhold-and-retry it was
+// meant to avoid. The double-underscore wrapping keeps it visually and
+// lexically distinct from
+// any real snake_case report_member cause (malformed, unreadable,
+// artifact_oversized, artifact_unavailable, unreadable_archive) without
+// relying on a byte no valid cause could ever contain.
+const githubTestsLegacyReportOverflowSentinel = "__legacy__"
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
 // pairs that may advance the watermark. It is an allowlist rather than a
@@ -283,9 +350,9 @@ const (
 // nothing and pins since_at forever, which is the CHAOS-4142 outage.
 //
 // report_member's three whole-artifact skip causes (artifact_oversized,
-// artifact_unavailable, unreadable_archive) all advance. malformed/unreadable
-// (report-parse-time issues inside an otherwise-read artifact, CHAOS-4153)
-// stay withholding, unchanged.
+// artifact_unavailable, unreadable_archive) all advance, and so do its two
+// report-parse-time causes (malformed, unreadable) as of CHAOS-4592 -- see
+// below.
 //
 // CHAOS-4315 first carved out ONLY githubTestsArtifactOversizedCause, on the
 // theory that the other two causes are properties of ONE download ATTEMPT --
@@ -309,6 +376,33 @@ const (
 // real backstop against a systematically broken repository: it fails the
 // unit outright, before any of this, when EVERY observed artifact was
 // unreadable.
+//
+// CHAOS-4592 carries the identical reasoning one level DEEPER, into the two
+// report-parse-time causes (malformed, unreadable) that CHAOS-4394 explicitly
+// left withholding. Those two are properties of ONE report member's bytes
+// inside an artifact GitHub already returned successfully -- not a download
+// attempt at all, so CHAOS-4394's "maybe a retry observes it differently"
+// theory never applied to them in the first place. Evidence (local, real
+// data, 2026-08-30, org 70d529e0, full-chaos/dev-health-ops, via the shared
+// local compose stack's postgres -- NOT prod, no oci access): sync_watermarks for
+// dataset_key=cicd/tests pinned at last_synced_at=2026-08-08 for three weeks
+// while dozens of hourly units completed a full run-listing walk
+// (job_runs_synced=6219, stable) and reported reports_complete=false with the
+// SAME {cause: "malformed", component: "report_member", count: 77} on every
+// single one -- an immutable historical CI artifact's bytes parse the same
+// way every time, so withholding recovered nothing and pinned since_at
+// forever, exactly the CHAOS-4394 outage one cause short of being fully
+// fixed. A durable GitHubTestsSkippedArtifact marker is required for these
+// two now too, same as the three whole-artifact causes, so
+// githubTestsReportMemberSkippedWithoutDurableMarker still refuses an advance
+// with no targeted-backfill evidence behind it. parseGitHubTestsArtifact
+// (below) builds the marker at the one call site both the chunked route and
+// the non-chunked oracle share; the oracle never forwards it into a
+// GitHubTestsSkippedArtifact list at all (github_tests_route.go), an
+// existing, documented, intentional divergence predating this change (see
+// that route's own comment) -- the oracle stays conservative for
+// malformed/unreadable exactly as it already was for the three whole-artifact
+// causes.
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
@@ -317,6 +411,8 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactUnavailableCause: {},
 		githubTestsUnreadableArchiveCause:   {},
+		githubTestsMalformedCause:           {},
+		githubTestsUnreadableCause:          {},
 	},
 }
 
@@ -341,7 +437,8 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 // Folding the guard in here, so both callers see the identical verdict, is
 // what makes the invariant hold again.
 func githubTestsBlocksWatermark(
-	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
+	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
 ) bool {
 	for _, observation := range incomplete {
 		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
@@ -352,7 +449,7 @@ func githubTestsBlocksWatermark(
 			return true
 		}
 	}
-	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow)
+	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow, causeOverflow, causeCount)
 }
 
 // githubTestsSkippedArtifactCause returns a marker's cause, recognizing a
@@ -391,38 +488,136 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // -- round 1's first version checked only "does SkippedArtifacts have ANY
 // entry", which a legacy cursor mixing a marked artifact_oversized skip with
 // an unmarked artifact_unavailable one would satisfy vacuously, advancing on
-// the unmarked cause anyway). SkippedArtifactsOverflow is the one exception,
-// checked in aggregate: it only exists on a THIS-binary cursor (the old
-// binary never wrote it either), so overflow>0 anywhere proves this walk's
-// marker-writing path executed for its full duration, and the sample cap
-// legitimately leaving some individual occurrences unmarked is the SAME
-// sanctioned degradation appendGitHubTestsSkippedArtifact already accepts
-// for a heavy-skip-volume unit -- not evidence of a legacy cursor.
+// the unmarked cause anyway).
+//
+// overflow/causeOverflow together replace what used to be a single aggregate
+// SkippedArtifactsOverflow shortcut, itself found unsound one level deeper
+// (CHAOS-4592 codex review round 2, P1): when the shared 20-record
+// GitHubTestsSkippedArtifact sample is full, EVERY cause's dropped marker
+// bumped the SAME aggregate int, so "overflow>0 anywhere" could not prove
+// which cause it actually came from. Depending on skip ordering that let one
+// cause's overflow wrongly excuse an unrelated unmarked cause (over-
+// permissive), or let a heavy run of the three original causes permanently
+// starve a later malformed/unreadable skip out of ever counting as covered
+// (over-restrictive -- recreating the exact permanent-stall class this
+// ticket exists to close). causeOverflow now tracks, per cause, whether THAT
+// cause specifically had a marker dropped by the cap -- see
+// githubTestsChunkCursor.SkippedArtifactCauseOverflow and
+// appendGitHubTestsSkippedArtifact.
+//
+// The bare overflow int survives ONLY as a narrow backward-compat fallback,
+// gated on githubTestsLegacyReportOverflowSentinel rather than on
+// causeOverflow being empty (CHAOS-4592 codex review round 3, P2 -- round
+// 2's version gated on len(causeOverflow)==0, which a walk straddling THIS
+// deploy would silently disable the moment its own post-upgrade marker-
+// writing touched even one unrelated cause, incorrectly withholding on an
+// earlier legacy-only-covered one). The sentinel is stamped once, at
+// decode, from the cursor's RAW shape (decodeGitHubTestsChunkCursor), so it
+// reflects what the cursor looked like BEFORE this attempt, and persists
+// through every later copy-then-add.
+//
+// The sentinel covers artifact_oversized ONLY, not artifact_unavailable or
+// unreadable_archive too (codex review round 7, P1 -- round 3's version
+// covered all three original CHAOS-4394 causes, on the assumption that any
+// raw overflow with no per-cause ledger could only have come from the
+// CHAOS-4394 binary that shared one aggregate counter across all three).
+// That assumption misses an EARLIER era: CHAOS-4315 gave artifact_oversized
+// ITS OWN marker-and-overflow tracking before CHAOS-4394 extended the same
+// mechanism to artifact_unavailable/unreadable_archive -- a cursor written
+// in that CHAOS-4315-to-pre-CHAOS-4394 window can carry real
+// SkippedArtifactsOverflow (from oversized markers alone) while
+// artifact_unavailable/unreadable_archive had NO overflow tracking
+// whatsoever, not even in aggregate. A decoded cursor's raw shape cannot
+// distinguish that era from the later CHAOS-4394-through-pre-CHAOS-4592 one
+// where the counter was genuinely shared -- so the fallback trusts only
+// what is true in EVERY era that could have produced this shape:
+// artifact_oversized is the one cause whose overflow-tracking predates all
+// the others, the other two are trusted only through a literal marker or
+// normalizeLegacyGitHubTestsSkippedArtifacts's precise per-cause
+// attribution, never through this blanket fallback.
 //
 // This can fire at most once per unit -- the checkpoint this guards against
 // is deleted the moment the unit terminalizes (repository_postgres.go's
 // deletePreparedChunkStateTx, inside the same transaction as Complete), so
 // the unit simply retries next window: today's status quo, no data lost, no
 // permanent stall, not a new outage class.
+//
+// THE INVARIANT (codex review gate round 5): the watermark may advance past
+// a report_member observation ONLY when some signal proves the FULL
+// observation.Count -- a MAGNITUDE, not a boolean -- is durably evidenced.
+// No boolean "this cause was touched somehow" signal may ever excuse a
+// magnitude on its own. Three rounds each found the identical defect at a
+// different layer because each fix patched the layer found instead of this
+// invariant:
+//   - round 2, P1: marker PRESENCE (any marker for a cause exists) was
+//     trusted as covering the whole Count. A cursor resumed from a binary
+//     that predates ANY marker-writing for a cause (true of
+//     malformed/unreadable before this ticket) can carry
+//     Incomplete{malformed, Count:5} with zero markers; the moment THIS
+//     binary appends ONE new marker, presence alone would excuse all 5.
+//   - round 3, P2 (a regression IN round 2's fix): the fix above added
+//     causeCount but made it authoritative the MOMENT it was tracked at
+//     all, still a presence check just moved one layer over -- causeCount
+//     merely being non-nil for a cause was trusted, abandoning the
+//     magnitude comparison for that cause entirely if causeCount fell
+//     short. 3 old, fully-retained markers plus causeCount={cause:1} from
+//     ONE new skip after resume wrongly withheld, because 1 was compared
+//     against nothing once causeCount was "tracked", instead of against
+//     Count.
+//   - round 5, P1 found in round 4 (a regression IN round 3's fix): the
+//     remaining causeOverflow[cause] fallback was STILL a boolean --
+//     "did this cause ever overflow" -- with no magnitude behind it, the
+//     exact round-2 defect recurring one layer further out. It is now
+//     PROVABLY REDUNDANT for every legitimate case: causeCount is
+//     incremented UNCONDITIONALLY by appendGitHubTestsSkippedArtifact on
+//     every call, including ones that overflow the bounded sample, so any
+//     cause THIS binary genuinely overflowed already has an exact
+//     causeCount that independently proves coverage via the FIRST check
+//     below. The only case causeOverflow[cause] could still fire in is
+//     exactly the unsafe one: a boolean inherited from a binary that
+//     tracked overflow without tracking count (the round 4-7 era, which had
+//     SkippedArtifactCauseOverflow but not yet SkippedArtifactCauseCount).
+//     Removed entirely rather than patched again.
+//
+// The two signals that remain besides causeCount are still magnitude-based,
+// not boolean, and stay:
+//   - sampleCount: an exact count of markers literally retained in
+//     skippedArtifacts for a cause -- every entry is one concrete,
+//     identified skip event, so comparing it against observation.Count is
+//     a real magnitude check, never a presence shortcut.
+//   - the legacy sentinel (round 7, P1): the ONE exception, and not a
+//     magnitude check either, but proven safe for a different reason --
+//     era analysis, not counting. It fires only for artifact_oversized,
+//     the one cause whose overflow-tracking (CHAOS-4315) predates every
+//     other cause's in EVERY possible binary era that could produce a raw
+//     "overflow>0, no per-cause ledger" cursor shape. See
+//     githubTestsLegacyReportOverflowSentinel's stamping in
+//     decodeGitHubTestsChunkCursor.
 func githubTestsReportMemberSkippedWithoutDurableMarker(
-	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
+	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
+	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
 ) bool {
-	if overflow > 0 {
-		return false
-	}
-	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
+	sampleCount := make(map[string]int, len(skippedArtifacts))
 	for _, marker := range skippedArtifacts {
 		if cause := githubTestsSkippedArtifactCause(marker); cause != "" {
-			markedCauses[cause] = struct{}{}
+			sampleCount[cause]++
 		}
 	}
 	for _, observation := range incomplete {
 		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
 			continue
 		}
-		if _, marked := markedCauses[observation.Cause]; !marked {
-			return true
+		if causeCount[observation.Cause] >= observation.Count {
+			continue
 		}
+		if sampleCount[observation.Cause] >= observation.Count {
+			continue
+		}
+		if causeOverflow[githubTestsLegacyReportOverflowSentinel] && overflow > 0 &&
+			observation.Cause == githubTestsArtifactOversizedCause {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -477,6 +672,28 @@ func DecodeGitHubTestsIncomplete(value any) ([]GitHubTestsIncomplete, bool) {
 		return nil, false
 	}
 	return incomplete, true
+}
+
+// DecodeGitHubTestsSkippedArtifactCauseOverflow is DecodeGitHubTestsIncomplete's
+// twin for payload["skipped_artifact_cause_overflow"] (codex review gate
+// round 5, P3): the identical dual-shape problem, for the identical reason
+// -- internal/jobs/providerunit's completion path reloads a chunked unit's
+// final Result through JSONB, so this key too arrives as the generic
+// map[string]any shape, never the live typed map. A nil/absent value
+// (a unit with no overflow at all) is NOT an error -- returns (nil, true).
+func DecodeGitHubTestsSkippedArtifactCauseOverflow(value any) (map[string]bool, bool) {
+	if value == nil {
+		return nil, true
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var causeOverflow map[string]bool
+	if json.Unmarshal(encoded, &causeOverflow) != nil {
+		return nil, false
+	}
+	return causeOverflow, true
 }
 
 // validatePerRunPageBudget refuses a configuration in which a per-run PAGE
@@ -707,7 +924,10 @@ func parseGitHubTestsArtifact(
 		}
 		body, err := readZipReport(member)
 		if err != nil {
-			result.recordSkipped("unreadable", false)
+			result.recordSkipped(githubTestsUnreadableCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: artifactID, Cause: githubTestsUnreadableCause,
+			})
 			continue
 		}
 		expanded += uint64(len(body))
@@ -720,7 +940,10 @@ func parseGitHubTestsArtifact(
 		case "junit":
 			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
-				result.recordSkipped("malformed", false)
+				result.recordSkipped(githubTestsMalformedCause, false)
+				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+				})
 				continue
 			}
 			result.Suites = append(result.Suites, suites...)
@@ -729,7 +952,10 @@ func parseGitHubTestsArtifact(
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
-				result.recordSkipped("malformed", false)
+				result.recordSkipped(githubTestsMalformedCause, false)
+				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+				})
 				continue
 			}
 			result.Coverage = append(result.Coverage, coverage)

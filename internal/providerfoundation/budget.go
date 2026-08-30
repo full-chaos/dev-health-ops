@@ -265,6 +265,7 @@ type Metrics struct {
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
+	skippedArtifactCauseOverflow   map[string]uint64
 	snapshotDiscarded              map[string]uint64
 	resumeReanchor                 map[string]uint64
 	unitTerminalWithRows           map[string]uint64
@@ -281,6 +282,7 @@ type Metrics struct {
 	duplicateNaturalKey            map[string]uint64
 	syncRunRollupBumped            map[string]uint64
 	jiraSearchPages                map[string]uint64
+	chunkContinuation              map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -291,6 +293,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
+		skippedArtifactCauseOverflow:   map[string]uint64{},
 		snapshotDiscarded:              map[string]uint64{},
 		resumeReanchor:                 map[string]uint64{},
 		unitTerminalWithRows:           map[string]uint64{},
@@ -307,6 +310,7 @@ func NewMetrics() *Metrics {
 		duplicateNaturalKey:            map[string]uint64{},
 		syncRunRollupBumped:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
+		chunkContinuation:              map[string]uint64{},
 	}
 }
 
@@ -496,6 +500,52 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 		":"+MetricArtifactSkipReasonLabel(reason)]++
 }
 
+// metricSkippedArtifactCauseOverflowVocabulary bounds the cause label on
+// RecordSkippedArtifactCauseOverflow to the five report_member causes
+// SkippedArtifactCauseOverflow can name (see
+// githubTestsChunkCursor.SkippedArtifactCauseOverflow in providersync) --
+// metricArtifactSkipReasonVocabulary's three whole-artifact causes plus the
+// two report-parse-time ones CHAOS-4592 added. Anything else, including the
+// internal legacy sentinel, collapses to "other" rather than opening the
+// label.
+var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
+	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
+	"malformed": {}, "unreadable": {},
+}
+
+// MetricSkippedArtifactCauseOverflowLabel bounds the
+// RecordSkippedArtifactCauseOverflow cause label the same way
+// MetricArtifactSkipReasonLabel bounds its own.
+func MetricSkippedArtifactCauseOverflowLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricSkippedArtifactCauseOverflowVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordSkippedArtifactCauseOverflow counts ONE completed unit whose bounded
+// SkippedArtifacts sample dropped at least one marker for `cause` (codex
+// review gate round 5, P3): SkippedArtifactCauseOverflow was durable and
+// logged (skipped_sample_cause_overflow) since round 2, but had no bounded
+// metric of its own -- an operator could only see it via
+// RecordCicdPartialSuccess's single reason label, which names ONE dominant
+// cause for the whole unit and cannot distinguish a unit with 9 malformed
+// skips (sample overflowed) from one with a single malformed skip (sample
+// has room). Called once per overflowed cause, not once per dropped record:
+// this is "is the sample for this cause truncated", a presence signal for
+// operator triage, not a count -- githubTestsChunkCursor.SkippedArtifactCauseCount
+// (providersync) is the exact per-cause count when one is needed instead.
+func (m *Metrics) RecordSkippedArtifactCauseOverflow(provider, dataset, cause string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.skippedArtifactCauseOverflow[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricSkippedArtifactCauseOverflowLabel(cause)]++
+}
+
 // metricCicdPartialSuccessReasonVocabulary bounds the reason label on
 // RecordCicdPartialSuccess to the report_member causes that can advance the
 // watermark (see githubTestsWatermarkAdvancingPairs), plus "mixed" for a unit
@@ -506,8 +556,13 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	"artifact_oversized":   {},
 	"artifact_unavailable": {},
 	"unreadable_archive":   {},
-	"per_run_cap":          {},
-	"mixed":                {},
+	// malformed/unreadable (CHAOS-4592): report-parse-time causes that now
+	// advance the watermark alongside the three whole-artifact causes above --
+	// see githubTestsWatermarkAdvancingPairs.
+	"malformed":   {},
+	"unreadable":  {},
+	"per_run_cap": {},
+	"mixed":       {},
 }
 
 // MetricCicdPartialSuccessReasonLabel bounds the RecordCicdPartialSuccess
@@ -777,6 +832,32 @@ func (m *Metrics) RecordUnitClaimed(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unitClaimed[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordChunkContinuation counts one chunked-route continuation: a unit that
+// committed as many chunks as its policy allows in one attempt and snoozed to
+// resume from its durable checkpoint (CHAOS-4592), by bounded provider and
+// dataset. This is the ONE shared seam every chunked route's continuation
+// passes through (internal/jobs/providerunit/providerunit.go, at the
+// DeferChunkContinuation call), so it counts github and gitlab tests/cicd
+// alike without route-specific wiring.
+//
+// This is deliberately a durable, monotonic PROCESS counter, not the same
+// number as river_job.metadata->>'snoozes' on any one job row: a job that
+// dies and is re-dispatched starts a new row with its own snoozes count, but
+// every one of its continuations still increments this counter, so an
+// operator comparing "how many continuations has this unit's work needed
+// overall" against a single job row's snooze count (which resets on
+// re-dispatch) is answering two different questions on purpose -- see the
+// CHAOS-4592 investigation note on river_job.attempt vs metadata.snoozes for
+// why the two must not be conflated.
+func (m *Metrics) RecordChunkContinuation(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chunkContinuation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
 // metricUnitFailureReasonVocabulary is the closed set of durable
@@ -1193,6 +1274,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_skipped_artifact_cause_overflow_total",
+		"Completed units whose bounded per-artifact skip sample dropped at least one marker for the cause, by bounded provider, dataset, and cause (CHAOS-4592).",
+		"cause", m.skippedArtifactCauseOverflow,
+	); err != nil {
+		return err
+	}
 	if err := writeProviderDatasetCounter(
 		writer, "dev_health_cicd_duplicate_test_case_total",
 		"Within-suite test-case natural-key collisions disambiguated with an ordinal suffix instead of failing the unit, by bounded provider and dataset. Not labeled by repo -- see RecordDuplicateTestCase's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
@@ -1246,6 +1334,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_unit_claimed_total",
 		"Provider units successfully claimed for execution, by bounded provider and dataset (CHAOS-4078).",
 		m.unitClaimed,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_chunk_continuation_total",
+		"Chunked-route continuations (durable checkpoint snoozes), by bounded provider and dataset (CHAOS-4592).",
+		m.chunkContinuation,
 	); err != nil {
 		return err
 	}

@@ -683,21 +683,22 @@ func githubFilesTraversalExecutor(now time.Time) ExecutorFactory {
 }
 
 type memoryUnitRepository struct {
-	mu                  sync.Mutex
-	unit                providersync.Unit
-	status              string
-	attempt             int
-	lastClaim           providersync.Claim
-	result              map[string]any
-	watermark           *time.Time
-	failures            int
-	lastFailCategory    string
-	releaseErr          error
-	releaseCalls        int
-	contentionDeferrals int
-	rateLimitDeferrals  int
-	rateLimitFirstSeen  *time.Time
-	availableAt         time.Time
+	mu                         sync.Mutex
+	unit                       providersync.Unit
+	status                     string
+	attempt                    int
+	lastClaim                  providersync.Claim
+	result                     map[string]any
+	watermark                  *time.Time
+	failures                   int
+	lastFailCategory           string
+	releaseErr                 error
+	releaseCalls               int
+	contentionDeferrals        int
+	rateLimitDeferrals         int
+	rateLimitFirstSeen         *time.Time
+	availableAt                time.Time
+	chunkContinuationDeferrals int
 }
 
 func newMemoryUnitRepository(unit providersync.Unit) *memoryUnitRepository {
@@ -837,6 +838,23 @@ func (repository *memoryUnitRepository) DeferForRateLimit(
 		stamped := now
 		repository.rateLimitFirstSeen = &stamped
 	}
+	repository.availableAt = availableAt
+	repository.status = "dispatching"
+	return nil
+}
+
+func (repository *memoryUnitRepository) DeferChunkContinuation(
+	_ context.Context,
+	claim providersync.Claim,
+	availableAt time.Time,
+	_ time.Time,
+) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
+		return providersync.ErrLeaseLost
+	}
+	repository.chunkContinuationDeferrals++
 	repository.availableAt = availableAt
 	repository.status = "dispatching"
 	return nil

@@ -597,6 +597,19 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// syncCoordinatorMetrics is ONLY a vehicle for calling
+	// RecordSyncRunRollupBumped on -- that method delegates to a
+	// process-wide singleton (providerfoundation.SyncRunRollupBumpedMetricsSource,
+	// registered once, unconditionally, in dependencies.go), not to this
+	// instance's own counters. Deliberately NOT registered as this family's
+	// own workerFamily.metricsSource (codex round 1, P1, CHAOS-4586): a
+	// worker group running both the sync_provider and sync_coordinator
+	// queues would then construct TWO providerfoundation.Metrics instances,
+	// each independently declaring the SAME ~20 dev_health_provider_*
+	// metric families (empty on this side, since this family never calls
+	// most of those methods) -- most Prometheus parsers hard-fail the
+	// WHOLE scrape on a metric name declared twice, not just that series.
+	syncCoordinatorMetrics := providerfoundation.NewMetrics()
 	// The budget-estimate-failure counter reports directly, the same way the
 	// zero-unit finalization counter does just above: only this
 	// implementation knows when its BudgetGuard estimate-bridge fetch fell
@@ -622,6 +635,13 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// WithMetrics wires dev_health_sync_run_rollup_bumped_total's five
+	// syncdispatchruntime path labels (CHAOS-4586) through to the
+	// process-wide singleton -- RecordSyncRunRollupBumped delegates there
+	// regardless of which *Metrics instance it is called on, so
+	// syncCoordinatorMetrics never needs to be scraped itself.
+	dispatchSyncRun.WithMetrics(syncCoordinatorMetrics)
+	referenceDiscovery.WithMetrics(syncCoordinatorMetrics)
 	if err := syncdispatchruntime.RegisterWorkers(workers, dispatchSyncRun, postSync, finalizeSyncRun, referenceDiscovery); err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -702,6 +722,8 @@ func buildSyncCoordinatorWorker(
 			clickhouseConnection.Close,
 			func() error { valkeyClient.Close(); return nil },
 		},
+		// No metricsSource here (codex round 1, P1, CHAOS-4586) -- see
+		// syncCoordinatorMetrics's own doc comment above for why.
 	}, nil
 }
 

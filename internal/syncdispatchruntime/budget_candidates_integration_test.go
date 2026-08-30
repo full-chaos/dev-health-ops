@@ -14,6 +14,17 @@ import (
 
 func createBudgetCandidatesTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586): every mechanism
+	// that terminalizes a sync_run_units row in this package recomputes this
+	// row's completed_units/failed_units in the same transaction.
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE public.sync_runs (
+ id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
+ failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
+);
+INSERT INTO public.sync_runs (id, total_units) VALUES ('`+budgetCandidatesRunID+`', 0);`); err != nil {
+		t.Fatal(err)
+	}
 	_, err := pool.Exec(ctx, `
 CREATE TABLE public.sync_run_units (
  id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL,

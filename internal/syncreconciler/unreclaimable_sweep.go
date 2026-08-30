@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -118,6 +120,9 @@ const (
 	sweepStepTerminalizePayload = "terminalize payload encode"
 	sweepStepTerminalizeExec    = "terminalize write to public.sync_run_units"
 	sweepStepTerminalizeRows    = "terminalize affected-row count"
+	sweepStepBucketLock         = "org/provider/cost_class advisory lock, shared with dispatch (CHAOS-4586)"
+	sweepStepUnitLock           = "sync_run_units row lock, ascending order (CHAOS-4586)"
+	sweepStepRollupBump         = "sync_runs rollup recompute (CHAOS-4586)"
 	sweepStepCommit             = "commit domain transaction"
 )
 
@@ -494,6 +499,74 @@ func (sweep *UnreclaimableSweep) Step(
 	if sweep.config.Mode != SweepModeActive {
 		return result, nil
 	}
+
+	// CHAOS-4586 (codex round 5, P1): take the SAME sorted per-bucket
+	// advisory lock dispatch's AuthorizeRun and LeaseRepair.Step already
+	// take, before this transaction locks or writes any sync_run_units
+	// row. Without it, dispatch's claimUnits (a bulk multi-row UPDATE with
+	// no row-lock order of its own) and this sweep's
+	// lockSyncRunUnitsAscending below (ascending unit id, round 4) can
+	// each hold one contested unit and wait on the other -- see
+	// acquireUnreclaimableBucketLocks's doc comment for the full scenario.
+	// Acquired here, before ANY row touch, so this pass and a concurrent
+	// dispatch pass on the same bucket can never even be in a position to
+	// contend on the same row's lock in the first place.
+	if err := acquireUnreclaimableBucketLocks(ctx, tx, candidates); err != nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepBucketLock, err)
+	}
+
+	// CHAOS-4586 (codex round 4, P1): lock every candidate's OWN unit row
+	// up front, before this transaction ever calls syncrunrollup.Bump
+	// (which locks a run row and holds it for the rest of the
+	// transaction). Without this, a pass with two candidates in the SAME
+	// run locks that run after its first candidate's terminalize write,
+	// then tries to lock the second candidate's unit row WHILE holding the
+	// run lock -- run-before-unit for that one candidate, inverted against
+	// every single-run terminal writer elsewhere. result.UnitIDs above
+	// already has every candidate's unit id, pre-sort. See
+	// lockSyncRunUnitsAscending's doc comment for the full ABBA scenario
+	// and why this generalizes round 3's per-candidate unit-then-run
+	// ordering to the whole transaction at once.
+	if err := lockSyncRunUnitsAscending(ctx, tx, result.UnitIDs); err != nil {
+		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepUnitLock, err)
+	}
+
+	// CHAOS-4586 (codex round 2, P1; round 3, P1 corrected this): this
+	// pass's candidates can span MULTIPLE sync_run_ids, and the terminalize
+	// loop below calls syncrunrollup.Bump per candidate -- each one locking
+	// its own run AFTER that same candidate's terminalize write already
+	// locked its sync_run_units row. LeaseRepair.Step does the identical
+	// unit-then-run sequence but selects its own candidates in a DIFFERENT
+	// order (lease_expires_at vs this sweep's created_at), so two
+	// concurrent reconciler replicas -- one in each stage -- touching
+	// overlapping runs could lock the RUN halves of that pair in opposite
+	// order and deadlock.
+	//
+	// Round 2 tried to fix this by pre-locking every run in result.RunIDs,
+	// all at once, before any terminalize write -- but that inverts the
+	// lock order (run before unit) against EVERY single-run terminal
+	// writer elsewhere in the codebase (PostgresRepository.Fail,
+	// terminalizeUnroutableUnits, etc.), which all lock their one
+	// sync_run_units row first and then call Bump. A concurrent single-run
+	// writer already holding a unit-row lock and waiting on that run's
+	// row, against this transaction already holding the run's row (via
+	// the round-2 pre-lock) and waiting on that same unit row, is exactly
+	// the ABBA cycle codex caught.
+	//
+	// The fix that does not require touching every other terminal writer:
+	// keep this function's own per-candidate order terminalize-then-Bump
+	// (so it agrees with every single-run caller), but make the RUN ids
+	// this transaction touches, across its OWN candidates, come in the
+	// SAME fixed order (ascending sync_run_id) that LeaseRepair.Step now
+	// also uses -- so the two reconciler paths can no longer walk an
+	// overlapping run set in opposite order. Sorting is stable so ties
+	// (multiple candidates in the same run) keep their original relative
+	// order; result.RunIDs/UnitIDs/Pairs above were already built from the
+	// pre-sort candidate order, so this reordering does not change what
+	// this pass reports, only the order its writes touch runs in.
+	sort.SliceStable(candidates, func(left, right int) bool {
+		return candidates[left].syncRunID < candidates[right].syncRunID
+	})
 
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalize(ctx, tx, candidate, now)
@@ -1182,7 +1255,21 @@ func (sweep *UnreclaimableSweep) terminalize(
 	if err != nil {
 		return 0, sweepUnavailable(sweepStepTerminalizeExec, err)
 	}
-	return command.RowsAffected(), nil
+	rowsAffected := command.RowsAffected()
+	// CHAOS-4586: this sweep terminalizes a sync_run_units row (the run
+	// commonly stays active -- a strand is one unit among many still
+	// dispatching/running) exactly like syncdispatchruntime's denial/
+	// exhaustion paths, so it must go through the SAME shared seam those
+	// paths and providersync's own per-unit commit (CHAOS-4559) use: never
+	// a second, local recompute. A lost CAS (rowsAffected == 0, the
+	// candidate moved on concurrently) writes nothing, so there is nothing
+	// to recompute.
+	if rowsAffected > 0 {
+		if _, _, _, err := syncrunrollup.Bump(ctx, tx, candidate.syncRunID); err != nil {
+			return 0, sweepUnavailable(sweepStepRollupBump, err)
+		}
+	}
+	return rowsAffected, nil
 }
 
 // unreclaimableReason is the durable record an operator reads off the row.

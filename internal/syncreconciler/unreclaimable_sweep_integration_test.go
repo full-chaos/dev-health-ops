@@ -58,7 +58,10 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		`CREATE TABLE public.sync_runs (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
-			status text NOT NULL
+			status text NOT NULL,
+			completed_units int NOT NULL DEFAULT 0,
+			failed_units int NOT NULL DEFAULT 0,
+			total_units int NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY,

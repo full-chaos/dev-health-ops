@@ -145,6 +145,56 @@ type MutationPipeline struct {
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
+	// rollupBumps reuses dev_health_sync_run_rollup_bumped_total (CHAOS-4559,
+	// widened CHAOS-4586) for THIS pipeline's own two terminal-status
+	// mechanisms -- UnreclaimableSweep.terminalize and LeaseRepair.Step's
+	// markExpiredLeaseFailed both now write through the shared
+	// internal/syncrunrollup.Bump seam, and a write with no matching counter
+	// bump is exactly the "measurement never happened" gap the standing
+	// order this counters. Same metric NAME as internal/providerfoundation's
+	// own RecordSyncRunRollupBumped in the dev-health-worker binary -- two
+	// independent processes/label sources under one Prometheus family, not
+	// one shared Go instance.
+	rollupBumps rollupBumpCounts
+}
+
+// rollupBumpCounts is this package's own minimal counter for
+// dev_health_sync_run_rollup_bumped_total{outcome,path} -- deliberately not
+// a dependency on internal/providerfoundation (this binary, dev-health-
+// reconciler, has no other reason to import it, and CHAOS-4239 already
+// established the pattern of a pipeline-local counter type for its own
+// stage metrics rather than reaching for a shared Metrics type).
+type rollupBumpCounts struct {
+	mu     sync.Mutex
+	counts map[[2]string]uint64 // [outcome, path] -> count
+}
+
+func newRollupBumpCounts() rollupBumpCounts {
+	return rollupBumpCounts{counts: make(map[[2]string]uint64, 2)}
+}
+
+// record is a no-op for n<=0 -- callers pass a result count that is
+// legitimately zero on a quiet pass, and a zero-add must never be
+// distinguished from "never called" in the underlying map (both read back
+// as zero either way, but a stray zero-key entry would grow the map
+// forever across ticks for no reason).
+func (counts *rollupBumpCounts) record(outcome, path string, n int) {
+	if counts == nil || n <= 0 {
+		return
+	}
+	counts.mu.Lock()
+	defer counts.mu.Unlock()
+	counts.counts[[2]string{outcome, path}] += uint64(n)
+}
+
+func (counts *rollupBumpCounts) snapshot() map[[2]string]uint64 {
+	counts.mu.Lock()
+	defer counts.mu.Unlock()
+	snapshot := make(map[[2]string]uint64, len(counts.counts))
+	for key, value := range counts.counts {
+		snapshot[key] = value
+	}
+	return snapshot
 }
 
 // UnreclaimableSweepStepper is the CHAOS-4005 safety net. It is a positional
@@ -189,6 +239,7 @@ func NewMutationPipeline(
 		outboxClose:  outboxClose,
 		config:       config,
 		stages:       newStageTelemetry(),
+		rollupBumps:  newRollupBumpCounts(),
 	}
 	if config.Registry != nil {
 		if err := config.Registry.RegisterMetrics("sync_reconciler_pipeline", pipeline); err != nil {
@@ -402,8 +453,10 @@ func (pipeline *MutationPipeline) Step(
 	swept := Observation{}
 	aborted := false
 
+	var repairResult LeaseRepairResult
 	if err := pipeline.runStage(ctx, StageLeaseRepair, func(stageCtx context.Context) error {
-		_, stepErr := pipeline.repair.Step(stageCtx, now, limit)
+		var stepErr error
+		repairResult, stepErr = pipeline.repair.Step(stageCtx, now, limit)
 		return stepErr
 	}); err != nil {
 		if ctx.Err() != nil {
@@ -411,6 +464,11 @@ func (pipeline *MutationPipeline) Step(
 		}
 		aborted = true
 	}
+	// CHAOS-4586: markExpiredLeaseFailed already recomputed sync_runs'
+	// rollup via syncrunrollup.Bump for each of these; repairResult.Failed
+	// is zero on a failed Step (see LeaseRepairResult's own zero-value
+	// return on error), so this is a safe no-op in that case.
+	pipeline.rollupBumps.record("failed", "lease_repair", repairResult.Failed)
 
 	// CHAOS-4005: the never-leased strand. Lease repair above reaches only a
 	// RUNNING unit whose lease expired; a unit stuck in 'dispatching' holds no
@@ -481,6 +539,10 @@ func (pipeline *MutationPipeline) Step(
 			// The sweep ran and answered, so its zero -- if it is a zero -- is
 			// a finding rather than an absence.
 			swept.UnreclaimableMeasured = true
+			// CHAOS-4586: terminalize() already recomputed sync_runs' rollup
+			// via syncrunrollup.Bump for each of these (always zero in shadow
+			// mode, matching Terminalized's own doc comment).
+			pipeline.rollupBumps.record("failed", "unreclaimable_sweep", sweepResult.Terminalized)
 		}
 		if sweepErr != nil {
 			if ctx.Err() != nil {
@@ -1191,6 +1253,19 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 			fmt.Fprintf(&text, "dev_health_sync_dispatch_outbox_closed_total{kind=%q,outcome=%q} %d\n",
 				kind, outcome, byOutcome[outcome])
 		}
+	}
+	// CHAOS-4586: SAME metric name/HELP as internal/providerfoundation's own
+	// RecordSyncRunRollupBumped in the dev-health-worker binary -- one
+	// Prometheus family, two independent processes each reporting the path
+	// values only they can produce. Both known paths are declared even at
+	// zero (matching this function's own stage-loop convention above): a
+	// pass with nothing to terminalize is a finding, not an absence, same
+	// rationale as swept.UnreclaimableMeasured.
+	text.WriteString("# HELP dev_health_sync_run_rollup_bumped_total sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it and which code path made the write (CHAOS-4559, CHAOS-4586).\n# TYPE dev_health_sync_run_rollup_bumped_total counter\n")
+	rollupBumps := pipeline.rollupBumps.snapshot()
+	for _, path := range []string{"unreclaimable_sweep", "lease_repair"} {
+		fmt.Fprintf(&text, "dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} %d\n",
+			"failed", path, rollupBumps[[2]string{"failed", path}])
 	}
 	_, err := io.WriteString(output, text.String())
 	return err

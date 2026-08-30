@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
@@ -62,6 +63,12 @@ type NativeDispatchSyncRunService struct {
 	registry joboutbox.PolicyRegistry
 	observer jobruntime.BudgetEstimateFailureObserver
 	now      func() time.Time
+	// metrics is optional (nil-safe on every Record* call, see
+	// providerfoundation.Metrics) -- CHAOS-4586 reuses
+	// dev_health_sync_run_rollup_bumped_total for this package's own
+	// denial/exhaustion rollup bumps. See the constructor's variadic
+	// metrics parameter doc comment for why production wiring is deferred.
+	metrics *providerfoundation.Metrics
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
@@ -101,6 +108,24 @@ func NewNativeDispatchSyncRunService(
 		producer: producer, registry: registry, observer: observer,
 		now: time.Now,
 	}, nil
+}
+
+// WithMetrics attaches an optional *providerfoundation.Metrics for
+// dev_health_sync_run_rollup_bumped_total telemetry (CHAOS-4586), reusing
+// the same counter CHAOS-4559 added for providersync's per-unit path. A
+// setter rather than a constructor parameter: NewNativeDispatchSyncRunService
+// already has one variadic parameter (observers), and Go permits only one
+// per signature, so adding a second optional value here would force every
+// existing call site (production and test) to change. Nil-safe: not calling
+// this, or passing nil, leaves rollup-bump telemetry a no-op while the
+// rollup WRITE itself (bumpSyncRunRollup) still runs unconditionally --
+// see this method's callers' doc comments for why production wiring
+// (cmd/dev-health-worker/sync_dispatch.go) does not call this yet.
+func (service *NativeDispatchSyncRunService) WithMetrics(metrics *providerfoundation.Metrics) *NativeDispatchSyncRunService {
+	if service != nil {
+		service.metrics = metrics
+	}
+	return service
 }
 
 func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
@@ -186,6 +211,12 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return ErrDispatchSyncRunUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-4586: every terminal-status write this pass makes (denyRun,
+	// terminalizeUnroutableUnits, terminalizeInvalidClaimUnits, terminalizeUnit
+	// via the budget chokepoint) shares this ONE transaction, so a single
+	// tally covers the whole pass -- flushed once, after whichever commit
+	// below actually succeeds.
+	ctx = withRollupBumpTally(ctx)
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first
@@ -460,6 +491,7 @@ WHERE id = $1::uuid`,
 	if err := tx.Commit(ctx); err != nil {
 		return ErrDispatchSyncRunUnavailable
 	}
+	flushRollupBumpTally(ctx, service.metrics)
 
 	if riverQueued > 0 {
 		if nextDeferredAt != nil {
@@ -570,7 +602,16 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 		slog.String("sync_run_id", run.id), slog.String("org_id", run.orgID),
 		slog.String("error_category", featureDisabledErrorCategory),
 		slog.Int("running_units", transition.RunningUnits))
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// CHAOS-4586 (codex round 10): terminalizeFeatureDisabledRun above
+	// already tallied a rollup bump onto Dispatch's own ctx (installed at
+	// this transaction's start); flush it now that the commit it belongs
+	// to has actually succeeded, same as every other terminal path in
+	// this file.
+	flushRollupBumpTally(ctx, service.metrics)
+	return nil
 }
 
 // denyRun ports the total-cap hard-deny branch verbatim: two different
@@ -608,10 +649,28 @@ func (service *NativeDispatchSyncRunService) denyRun(
 		if err := armFinalizeSyncRunWakeup(ctx, tx, run.id, now); err != nil {
 			return err
 		}
+		// CHAOS-4586: the sibling !hasActive branch below terminalizes the
+		// WHOLE run immediately and writes sync_runs.failed_units directly
+		// from an in-memory count, which was always correct. THIS branch
+		// leaves the run active (other units still dispatching/running) with
+		// no equivalent write, so sync_runs.failed_units/completed_units go
+		// stale until finalize_sync_run eventually recomputes them
+		// unconditionally. Recompute now, through the same seam and lock
+		// order every other terminal-status path in this package uses.
+		if failedPlanned+failedStale > 0 {
+			if _, _, _, err := bumpSyncRunRollup(ctx, tx, run.id); err != nil {
+				return err
+			}
+			recordRollupBump(ctx, rollupPathDenied)
+		}
 		service.logger.WarnContext(ctx, "dispatch_sync_run.denied_with_active_units",
 			slog.String("sync_run_id", run.id), slog.String("reason", errorText),
 			slog.Int("failed_planned_units", failedPlanned), slog.Int("failed_stale_dispatching_units", failedStale))
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		flushRollupBumpTally(ctx, service.metrics)
+		return nil
 	}
 
 	// No active units: fail the whole run now.
@@ -637,5 +696,9 @@ WHERE id = $1::uuid`,
 	}
 	service.logger.WarnContext(ctx, "dispatch_sync_run.denied",
 		slog.String("sync_run_id", run.id), slog.String("reason", errorText), slog.Int("failed_planned_units", failedPlanned))
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	flushRollupBumpTally(ctx, service.metrics)
+	return nil
 }

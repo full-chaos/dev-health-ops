@@ -160,6 +160,17 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 		}
 		terminalized += int(tag.RowsAffected())
 	}
+	// CHAOS-4586: the run stays active (other units still dispatching/
+	// running) while these units become terminal, so sync_runs.failed_units
+	// would otherwise lag until finalize_sync_run runs. units all belong to
+	// one sync run (Dispatch's own claimedUnits for the run it is dispatching),
+	// so any element's syncRunID identifies the parent row.
+	if terminalized > 0 {
+		if _, _, _, err := bumpSyncRunRollup(ctx, tx, units[0].syncRunID); err != nil {
+			return terminalized, err
+		}
+		recordRollupBump(ctx, rollupPathUnroutable)
+	}
 	return terminalized, nil
 }
 
@@ -311,6 +322,15 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 			return terminalized, fmt.Errorf("terminalize invalid-claim units: %w", err)
 		}
 		terminalized += int(tag.RowsAffected())
+	}
+	// CHAOS-4586: same rollup gap as terminalizeUnroutableUnits above -- the
+	// run stays active while these units terminalize. units all belong to
+	// one sync run (Dispatch's own claimedUnits for the run it is dispatching).
+	if terminalized > 0 {
+		if _, _, _, err := bumpSyncRunRollup(ctx, tx, units[0].unit.syncRunID); err != nil {
+			return terminalized, err
+		}
+		recordRollupBump(ctx, rollupPathInvalidClaim)
 	}
 	return terminalized, nil
 }

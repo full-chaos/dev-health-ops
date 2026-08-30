@@ -280,9 +280,11 @@ type Metrics struct {
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
 	duplicateNaturalKey            map[string]uint64
-	syncRunRollupBumped            map[string]uint64
-	jiraSearchPages                map[string]uint64
-	chunkContinuation              map[string]uint64
+	// syncRunRollupBumped intentionally does NOT live here -- see
+	// syncRunRollupBumpedMetrics's doc comment (codex round 1, P1,
+	// CHAOS-4586): it is a process-wide singleton, not a per-family field.
+	jiraSearchPages   map[string]uint64
+	chunkContinuation map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -308,7 +310,6 @@ func NewMetrics() *Metrics {
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
 		duplicateNaturalKey:            map[string]uint64{},
-		syncRunRollupBumped:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
 	}
@@ -941,24 +942,130 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 	m.allArtifactsUnreadable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
-// RecordSyncRunRollupBumped counts one sync_runs.completed_units/failed_units
-// live recompute (CHAOS-4559), by outcome ("success"/"failed" -- which
-// terminal stamp triggered it). Before this, those columns were written only
-// at run finalization, so a run mid-dispatch read 0/0 no matter how many of
-// its units had already finished; a flat line here on an org with sync
-// activity is the same "measurement never happened" shape RecordUnitClaimed
-// exists to catch for claims.
-func (m *Metrics) RecordSyncRunRollupBumped(outcome string) {
+// metricSyncRunRollupBumpedOutcomeVocabulary is the closed set of outcome
+// labels RecordSyncRunRollupBumped accepts: which terminal STAMP triggered
+// the bump (CHAOS-4559). Every syncdispatchruntime denial/exhaustion path
+// (CHAOS-4586) only ever writes a failed stamp, so outcome is always
+// "failed" for those -- see metricSyncRunRollupBumpedPathVocabulary for the
+// dimension that actually distinguishes them.
+var metricSyncRunRollupBumpedOutcomeVocabulary = map[string]bool{
+	"success": true,
+	"failed":  true,
+}
+
+// metricSyncRunRollupBumpedPathVocabulary is the closed set of path labels:
+// which code path made the write. "provider_unit" is providersync's
+// original per-unit success/failure commit (CHAOS-4559); the other six are
+// syncdispatchruntime's denial/exhaustion paths (CHAOS-4586, "feature_disabled"
+// added in codex round 10 once terminalizeFeatureDisabledRun was found to
+// need the same lock-protected recompute every other path here already
+// has) -- see syncdispatchruntime's rollupBumpPathVocabulary, which must
+// list exactly those six. dev-health-reconciler's own two paths
+// (unreclaimable_sweep/lease_repair) render under the SAME metric name from
+// a separate counter in internal/syncreconciler -- see that package's
+// rollupBumpCounts -- so they are deliberately NOT in this vocabulary; it
+// bounds only what THIS binary (dev-health-worker) emits.
+var metricSyncRunRollupBumpedPathVocabulary = map[string]bool{
+	"provider_unit":              true,
+	"denied":                     true,
+	"unroutable":                 true,
+	"invalid_claim":              true,
+	"budget_exhausted":           true,
+	"reference_discovery_failed": true,
+	"feature_disabled":           true,
+}
+
+// syncRunRollupBumpedMetrics is a PROCESS-WIDE singleton, deliberately NOT a
+// field on Metrics (codex round 1, P1, CHAOS-4586): every OTHER counter on
+// Metrics is scoped to one constructed family (one instance per
+// buildProviderSyncWorker call, one per buildSyncCoordinatorWorker call),
+// and a dev-health-worker process can run BOTH families at once. If this
+// counter lived on Metrics too, each family's instance would independently
+// emit its own HELP/TYPE declaration for dev_health_sync_run_rollup_bumped_total
+// -- a metric name may carry only ONE such declaration per scrape, and most
+// Prometheus parsers (including
+// Prometheus's own) hard-fail the WHOLE scrape on a second one, not just
+// that series. A single process-wide instance, registered exactly once
+// (see cmd/dev-health-worker's health-registry setup), is what
+// internal/synccoverage's ScopeIntentMetrics/FoldedKeyResolutionMetrics
+// already do for exactly this reason -- this follows that precedent rather
+// than inventing a second pattern.
+var syncRunRollupBumpedMetrics = newSyncRunRollupBumpedMetrics()
+
+type syncRunRollupBumpedMetricsType struct {
+	mu     sync.Mutex
+	counts map[string]uint64
+}
+
+func newSyncRunRollupBumpedMetrics() *syncRunRollupBumpedMetricsType {
+	return &syncRunRollupBumpedMetricsType{counts: map[string]uint64{}}
+}
+
+// SyncRunRollupBumpedMetricsSource returns the process-wide singleton as a
+// health.MetricsSource-shaped value (WritePrometheus(io.Writer) error is
+// satisfied structurally, so this package does not need to import
+// internal/platform/health) -- register it ONCE per process, unconditionally,
+// the same way internal/synccoverage.ScopeIntentMetricsSource() is registered
+// regardless of which queues a worker selected.
+func SyncRunRollupBumpedMetricsSource() *syncRunRollupBumpedMetricsType {
+	return syncRunRollupBumpedMetrics
+}
+
+func (m *syncRunRollupBumpedMetricsType) record(outcome, path string) {
 	if m == nil {
 		return
 	}
-	lowered := strings.ToLower(strings.TrimSpace(outcome))
-	if lowered != "success" && lowered != "failed" {
-		lowered = "other"
+	loweredOutcome := strings.ToLower(strings.TrimSpace(outcome))
+	if !metricSyncRunRollupBumpedOutcomeVocabulary[loweredOutcome] {
+		loweredOutcome = "other"
+	}
+	loweredPath := strings.ToLower(strings.TrimSpace(path))
+	if !metricSyncRunRollupBumpedPathVocabulary[loweredPath] {
+		loweredPath = "other"
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.syncRunRollupBumped[lowered]++
+	m.counts[loweredOutcome+":"+loweredPath]++
+}
+
+// WritePrometheus implements health.MetricsSource.
+func (m *syncRunRollupBumpedMetricsType) WritePrometheus(writer io.Writer) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	snapshot := make(map[string]uint64, len(m.counts))
+	for key, value := range m.counts {
+		snapshot[key] = value
+	}
+	m.mu.Unlock()
+	return writeTwoLabelCounter(
+		writer, "dev_health_sync_run_rollup_bumped_total",
+		"sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it and which code path made the write (CHAOS-4559, CHAOS-4586). The same metric name is also emitted by dev-health-reconciler's own two paths (unreclaimable_sweep, lease_repair) from a separate counter -- see internal/syncreconciler.",
+		"outcome", "path", snapshot,
+	)
+}
+
+// RecordSyncRunRollupBumped counts one sync_runs.completed_units/failed_units
+// live recompute (CHAOS-4559), by outcome (which terminal stamp) and path
+// (which code path made the write, CHAOS-4586). Before this, those columns
+// were written only at run finalization, so a run mid-dispatch read 0/0 no
+// matter how many of its units had already finished; a flat line here on an
+// org with sync activity is the same "measurement never happened" shape
+// RecordUnitClaimed exists to catch for claims.
+//
+// A METHOD on Metrics (not a bare package function) so every existing
+// call site (providersync's recordSyncRunRollupBump,
+// syncdispatchruntime's flushRollupBumpTally, both typed against
+// *providerfoundation.Metrics) keeps compiling unchanged -- but it
+// delegates to the process-wide singleton above, so it is safe to call on
+// ANY *Metrics instance, including one that is never itself registered
+// with a health.Registry (see buildSyncCoordinatorWorker).
+func (m *Metrics) RecordSyncRunRollupBumped(outcome, path string) {
+	if m == nil {
+		return
+	}
+	syncRunRollupBumpedMetrics.record(outcome, path)
 }
 
 // metricJiraSearchPageOutcomeVocabulary is the closed set of outcomes for one
@@ -1388,13 +1495,10 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
-	if err := writeLabeledCounter(
-		writer, "dev_health_sync_run_rollup_bumped_total",
-		"sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it (CHAOS-4559).",
-		"outcome", m.syncRunRollupBumped,
-	); err != nil {
-		return err
-	}
+	// dev_health_sync_run_rollup_bumped_total is deliberately NOT emitted
+	// here -- see syncRunRollupBumpedMetrics's doc comment: it is a
+	// process-wide singleton registered separately (once, unconditionally),
+	// not a per-family fragment like everything else in this method.
 	if err := writeLabeledCounter(
 		writer, "dev_health_jira_search_pages_total",
 		"Jira /rest/api/3/search/jql cursor-paging walks, by outcome (CHAOS-4585).",
@@ -1428,6 +1532,36 @@ func writeLabeledCounter(
 	for _, key := range keys {
 		if _, err := fmt.Fprintf(
 			writer, "%s{%s=%q} %d\n", name, labelName, key, values[key],
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTwoLabelCounter emits a counter series with two ARBITRARY label
+// names (unlike writeProviderLabeledCounter, whose first label is always
+// "provider") -- keys are "first:second" composite strings built from two
+// bounded vocabularies, so SplitN into exactly two parts is total.
+func writeTwoLabelCounter(
+	writer io.Writer, name, help, firstLabel, secondLabel string, values map[string]uint64,
+) error {
+	if _, err := fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n", name, help, name); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s{%s=%q,%s=%q} %d\n",
+			name, firstLabel, parts[0], secondLabel, parts[1], values[key],
 		); err != nil {
 			return err
 		}

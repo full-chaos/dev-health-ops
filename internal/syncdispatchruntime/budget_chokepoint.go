@@ -165,6 +165,17 @@ WHERE id = $1::uuid
 	if tag.RowsAffected() == 0 {
 		return terminalDecision{outcome: terminalOutcomeCASLost}, nil
 	}
+	// CHAOS-4586: this is THE single budget/rate-limit/aggregate-deferral-
+	// exhaustion terminal-fail path (three call sites: terminalizeRateLimitExhausted,
+	// terminalizeDeferralTotalExhausted, terminalizeBudgetExhausted), and the run
+	// commonly stays active with other units still dispatching/running --
+	// recompute the parent sync_runs rollup in the SAME transaction, same
+	// lock-first order as the normal per-unit path (CHAOS-4559), so
+	// sync_runs.failed_units never lags a budget/rate-limit terminalization.
+	if _, _, _, err := bumpSyncRunRollup(ctx, tx, unit.syncRunID); err != nil {
+		return terminalDecision{}, err
+	}
+	recordRollupBump(ctx, rollupPathBudgetExhausted)
 	logger.WarnContext(ctx, "dispatch_sync_run.unit_terminalized",
 		slog.String("unit_id", unit.id), slog.String("error_category", verdict.errorCategory), slog.String("error", verdict.errorText))
 	return terminalDecision{outcome: terminalOutcomeTerminalized, at: now}, nil

@@ -208,6 +208,120 @@ func TestStageFailureIsTelemetered(t *testing.T) {
 	}
 }
 
+// TestRollupBumpsAreTelemetered pins CHAOS-4586: LeaseRepair.Step and
+// UnreclaimableSweep.terminalize both now recompute sync_runs' rollup
+// through the shared internal/syncrunrollup.Bump seam, and a write with no
+// matching counter bump is exactly the "measurement never happened" gap
+// this ticket exists to close. dev_health_sync_run_rollup_bumped_total must
+// carry BOTH paths, and a path this pass did not exercise (lease_repair,
+// left at zero here) must still be declared rather than silently absent --
+// same "zero is a finding, not an absence" rule this file already applies
+// to sync_reconciler_stage_failures_total.
+func TestRollupBumpsAreTelemetered(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{Selected: 1, Failed: 0}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 3, Terminalized: 3}},
+		noopTerminalOutboxClose(),
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	if _, err := pipeline.Step(context.Background(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("Step() error = %v, want nil", err)
+	}
+
+	var metrics strings.Builder
+	if err := pipeline.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	text := metrics.String()
+	for _, want := range []string{
+		"# TYPE dev_health_sync_run_rollup_bumped_total counter",
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed",path="unreclaimable_sweep"} 3`,
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed",path="lease_repair"} 0`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestRollupBumpsRecordsLeaseRepairFailures closes a mutation-survival gap
+// codex found in TestRollupBumpsAreTelemetered (CHAOS-4586): that test's
+// fake LeaseRepair.Step always returns Failed: 0, and rollupBumpCounts.record
+// is a documented no-op for n<=0 -- so deleting the production
+// `pipeline.rollupBumps.record("failed", "lease_repair", repairResult.Failed)`
+// call in Step entirely would STILL leave that test green, since "recorded
+// zero" and "never called" render identically (both read back as the
+// zero-value from WritePrometheus's declared-even-at-zero loop). This test
+// gives LeaseRepair.Step a NONZERO Failed count and asserts the rendered
+// counter actually reflects it -- a genuine kill of that call would flip
+// this assertion to a mismatched count, not just remove a zero line. Sweep
+// is left at zero here (the sibling half of the same declared-even-at-zero
+// proof TestRollupBumpsAreTelemetered already demonstrates for
+// lease_repair, now covered for unreclaimable_sweep too).
+func TestRollupBumpsRecordsLeaseRepairFailures(t *testing.T) {
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+			return LeaseRepairResult{Selected: 2, Failed: 1}, nil
+		}),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+			return Observation{}, nil
+		}),
+		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 0, Terminalized: 0}},
+		noopTerminalOutboxClose(),
+		DefaultMutationPipelineConfig(),
+	)
+	if err != nil {
+		t.Fatalf("construct pipeline: %v", err)
+	}
+	if _, err := pipeline.Step(context.Background(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("Step() error = %v, want nil", err)
+	}
+
+	var metrics strings.Builder
+	if err := pipeline.WritePrometheus(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	text := metrics.String()
+	for _, want := range []string{
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed",path="lease_repair"} 1`,
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed",path="unreclaimable_sweep"} 0`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestStageCancellationSQLStateIsTelemetered pins CHAOS-4262's fix for the
 // masking pattern CHAOS-4239's telemetry left in place: every stage failure
 // -- a real statement cancellation, a permission fault, an actual outage --

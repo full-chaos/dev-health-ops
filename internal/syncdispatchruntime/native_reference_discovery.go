@@ -9,11 +9,13 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -97,6 +99,10 @@ type NativeReferenceDiscoveryService struct {
 	logger   *slog.Logger
 	executor DiscoveryExecutor
 	now      func() time.Time
+	// metrics is optional (nil-safe) -- CHAOS-4586 reuses
+	// dev_health_sync_run_rollup_bumped_total for this service's own
+	// terminal-failure rollup bump. See WithMetrics.
+	metrics *providerfoundation.Metrics
 }
 
 func NewNativeReferenceDiscoveryService(
@@ -111,6 +117,19 @@ func NewNativeReferenceDiscoveryService(
 		logger = slog.Default()
 	}
 	return &NativeReferenceDiscoveryService{pool: pool, logger: logger, executor: executor, now: time.Now}, nil
+}
+
+// WithMetrics attaches an optional *providerfoundation.Metrics for
+// dev_health_sync_run_rollup_bumped_total telemetry (CHAOS-4586), matching
+// NativeDispatchSyncRunService.WithMetrics's own convention and rationale
+// (a setter, not a constructor parameter, to avoid touching every existing
+// call site). Nil-safe: the rollup WRITE (bumpSyncRunRollup) runs
+// unconditionally in handleFailure whether or not this is ever called.
+func (service *NativeReferenceDiscoveryService) WithMetrics(metrics *providerfoundation.Metrics) *NativeReferenceDiscoveryService {
+	if service != nil {
+		service.metrics = metrics
+	}
+	return service
 }
 
 func (service *NativeReferenceDiscoveryService) nowUTC() time.Time {
@@ -221,6 +240,11 @@ func (service *NativeReferenceDiscoveryService) claim(
 		return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-4586 (codex round 10): this transaction's feature-disabled
+	// branch below can call into terminalizeFeatureDisabledRun, which
+	// tallies a rollup bump via recordRollupBump -- a no-op unless this
+	// ctx carries a tally, which this function never installed before now.
+	ctx = withRollupBumpTally(ctx)
 
 	current, err := currentTransportReference(ctx, tx, args, outboxKindReferenceDiscovery)
 	if err != nil {
@@ -265,6 +289,10 @@ func (service *NativeReferenceDiscoveryService) claim(
 			if err := tx.Commit(ctx); err != nil {
 				return false, "", time.Time{}, ErrReferenceDiscoveryUnavailable
 			}
+			// CHAOS-4586 (codex round 10): flush the rollup-bump tally
+			// terminalizeFeatureDisabledPlan just recorded, now that its
+			// commit has actually succeeded.
+			flushRollupBumpTally(ctx, service.metrics)
 			// Python: `return {"status": "feature_disabled", ...}` -- a
 			// legitimate terminal outcome, not a claim.
 			return false, "", time.Time{}, nil
@@ -409,6 +437,7 @@ func (service *NativeReferenceDiscoveryService) handleFailure(
 		return ErrReferenceDiscoveryUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	ctx = withRollupBumpTally(ctx)
 
 	now := service.nowUTC()
 	var ledgerID, status string
@@ -471,6 +500,16 @@ WHERE id = $1::uuid AND status = $6 AND lease_owner = $7 AND lease_expires_at > 
 	if err := failNonterminalUnits(ctx, tx, runID, now, referenceDiscoveryErrorMessage, discoverErr); err != nil {
 		return err
 	}
+	// CHAOS-4586: failNonterminalUnits just moved every non-terminal unit of
+	// this run to failed, but the run itself may still have units already
+	// terminal from an earlier pass -- either way sync_runs.failed_units/
+	// completed_units must reflect the post-write truth now, through the
+	// same seam and lock order every other terminal-status path in this
+	// package uses, not just the bare `error` stamp below.
+	if _, _, _, err := bumpSyncRunRollup(ctx, tx, runID); err != nil {
+		return ErrReferenceDiscoveryUnavailable
+	}
+	recordRollupBump(ctx, rollupPathReferenceDiscoveryFailed)
 	if _, err := tx.Exec(ctx, `UPDATE public.sync_runs SET error = $2 WHERE id = $1::uuid`,
 		runID, referenceDiscoveryErrorMessage); err != nil {
 		return ErrReferenceDiscoveryUnavailable
@@ -478,7 +517,11 @@ WHERE id = $1::uuid AND status = $6 AND lease_owner = $7 AND lease_expires_at > 
 	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", runID, outboxKindFinalizeSyncRun, now); err != nil {
 		return err
 	}
-	return commitOrUnavailable(ctx, tx)
+	if err := tx.Commit(ctx); err != nil {
+		return ErrReferenceDiscoveryUnavailable
+	}
+	flushRollupBumpTally(ctx, service.metrics)
+	return nil
 }
 
 func commitOrUnavailable(ctx context.Context, tx pgx.Tx) error {
@@ -542,6 +585,19 @@ func ledgerLeaseIsOwnedAndLive(status string, leaseExpiresAt *time.Time, ownedBy
 }
 
 // failNonterminalUnits ports _fail_nonterminal_units.
+//
+// CHAOS-4586 (codex round 11 follow-up, closed enumeration): this bulk
+// UPDATE (a bare `status NOT IN (...)` predicate matching potentially every
+// non-terminal unit of the run, with no explicit row-lock order -- Postgres
+// locks matching rows in whatever order its plan finds them) is the SAME
+// unlocked-bulk-writer shape terminalizeFeatureDisabledRun had before round
+// 11's fix: it can deadlock against UnreclaimableSweep.Step's deterministic
+// ascending-unit-id lock order (round 4) the same way. handleFailure (this
+// function's only caller) opens its own fresh transaction with no earlier
+// authorizeRun-style bucket-lock gate -- reference discovery runs before
+// dispatch and has no DispatchGuard of its own -- so this closes the gap
+// the same way feature_disabled_termination.go's fix does: take the SAME
+// sorted per-bucket advisory locks before touching any row.
 func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time.Time, message string, discoverErr error) error {
 	resultJSON, err := json.Marshal(map[string]any{
 		"error_category": referenceDiscoveryErrorCategory,
@@ -550,6 +606,40 @@ func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}
+	rows, err := tx.Query(ctx, `
+SELECT DISTINCT org_id, provider, cost_class FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND status NOT IN ($2, $3)`,
+		runID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed)
+	if err != nil {
+		return ErrReferenceDiscoveryUnavailable
+	}
+	var buckets []dispatchBucket
+	for rows.Next() {
+		var bucket dispatchBucket
+		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass); err != nil {
+			rows.Close()
+			return ErrReferenceDiscoveryUnavailable
+		}
+		buckets = append(buckets, bucket)
+	}
+	if rows.Err() != nil {
+		rows.Close()
+		return ErrReferenceDiscoveryUnavailable
+	}
+	rows.Close()
+	sort.Slice(buckets, func(left, right int) bool {
+		if buckets[left].orgID != buckets[right].orgID {
+			return buckets[left].orgID < buckets[right].orgID
+		}
+		if buckets[left].provider != buckets[right].provider {
+			return buckets[left].provider < buckets[right].provider
+		}
+		return buckets[left].costClass < buckets[right].costClass
+	})
+	if err := acquireBucketAdvisoryLocks(ctx, tx, buckets); err != nil {
+		return ErrReferenceDiscoveryUnavailable
+	}
+
 	if _, err := tx.Exec(ctx, `
 UPDATE public.sync_run_units
 SET status = $2, error = $3, result = $4::json, lease_owner = NULL, lease_expires_at = NULL,

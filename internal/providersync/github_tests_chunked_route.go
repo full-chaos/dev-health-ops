@@ -396,18 +396,25 @@ func githubTestsLogArtifactSkipSummary(
 	if len(incomplete) == 0 && excludedSuffix == 0 && excludedPrefix == 0 {
 		return
 	}
-	// incomplete mixes THREE different kinds of observation under one closed
-	// vocabulary: whole-artifact report_member skips, run-level
+	// incomplete mixes several different kinds of observation under one
+	// closed vocabulary (codex round 1 P2, round 2 P2): run-level
 	// inventory/per-run truncations (run_inventory, run_reports,
-	// run_artifacts), and none of those are "an artifact this unit skipped"
-	// in the sense the WARN's own wording implies (codex round 1, P2).
-	// artifactSkipTotal isolates the report_member subset so the headline
-	// number an operator reads first means what it says; incomplete_total
-	// keeps the full closed-vocabulary count available alongside it, broken
-	// down per (component, cause) in the attrs loop below regardless of kind.
+	// run_artifacts) are not artifact skips at all; and even within
+	// report_member, "malformed"/"unreadable" mean ONE MEMBER inside an
+	// otherwise-valid, fully-read archive was skipped -- the artifact itself
+	// was not. Only artifact_oversized/artifact_unavailable/unreadable_archive
+	// mean the WHOLE artifact was skipped. artifactSkipTotal isolates exactly
+	// that closed set so the headline number an operator reads first means
+	// what it says; incomplete_total keeps the full closed-vocabulary count
+	// available alongside it, broken down per (component, cause) in the
+	// attrs loop below regardless of kind.
 	artifactSkipTotal := 0
 	for _, observation := range incomplete {
-		if observation.Component == githubTestsReportMemberComponent {
+		if observation.Component != githubTestsReportMemberComponent {
+			continue
+		}
+		switch observation.Cause {
+		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause:
 			artifactSkipTotal += observation.Count
 		}
 	}
@@ -990,17 +997,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// counters again), rather than risk a false positive from
 				// state a replay can no longer be trusted to represent.
 				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
-				// Same reasoning applies to the exclusion bookkeeping
-				// (CHAOS-4588/CHAOS-4591, codex round 1, P2): a re-anchor
-				// re-walks the WHOLE page from index 0, re-evaluating the
-				// selection seam on every artifact it already reflected in
-				// these counters/sample. Reset to a clean baseline rather
-				// than double-count -- these are purely observational (they
-				// never gate the watermark or Incomplete), so zeroing them is
-				// safe and simply means the summary reflects only the
-				// re-walked pass, not a phantom doubled count.
-				cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix = 0, 0
-				cursor.ExcludedArtifactSample = nil
+				// The exclusion bookkeeping (CHAOS-4588/CHAOS-4591) is
+				// DELIBERATELY NOT reset here (codex round 2, P2 -- round 1
+				// had this wrong). ArchivesSeen/Unreadable above are
+				// per-WALK gate inputs where "unknown" is a safe default a
+				// fresh pass can restore; ExcludedNonReportSuffix/Prefix and
+				// ExcludedArtifactSample are a cursor-wide running total
+				// across every page this walk has already completed, not
+				// just the re-anchored one. Zeroing them here would discard
+				// every EARLIER page's legitimate exclusion count along with
+				// the replayed page's, silently undercounting the final
+				// result and summary. Leaving them alone means the replayed
+				// prefix's exclusions can be double-counted on the rare
+				// re-anchor -- a bounded, purely cosmetic over-count (these
+				// never gate the watermark or Incomplete) -- which is a far
+				// safer failure mode than erasing real history.
 			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor

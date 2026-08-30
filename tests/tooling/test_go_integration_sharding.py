@@ -1132,7 +1132,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # and TestGitHubTestsExcludedArtifactSampleNameIsBounded for the name
     # truncation fix. Net: -1 removed, +4 added.
     # 1273 -> 1276 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1276
+    #
+    # CHAOS-4588 codex review round 2 (P2 fixes): artifact_skip_total counted
+    # member-level malformed/unreadable causes as if the whole artifact were
+    # skipped; narrowed to the three whole-artifact-skip causes only
+    # (artifact_oversized/artifact_unavailable/unreadable_archive). Reverted
+    # round 1's exclusion-counter reset on page re-anchor -- it discarded
+    # EARLIER pages' legitimate totals, not just the replayed page's; the
+    # counters are a cursor-wide running total, not a per-walk gate input
+    # like ArchivesSeen/Unreadable, so leaving them alone (accepting a bounded,
+    # purely cosmetic double-count on the rare re-anchor) is safer than
+    # silently undercounting. Added 1 new ordinary top-level test in
+    # github_tests_artifact_skip_log_test.go:
+    # TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip.
+    # 1276 -> 1277 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1277
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1149,7 +1163,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1276
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1277
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1210,7 +1224,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1276
+    assert len(selected_tests) == len(set(selected_tests)) == 1277
     assert set(selected_tests) == expected_tests
 
 

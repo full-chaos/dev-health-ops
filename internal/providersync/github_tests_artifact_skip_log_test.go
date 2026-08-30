@@ -1,7 +1,11 @@
 package providersync
 
 import (
+	"bytes"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +76,80 @@ func TestGitHubTestsHealthyUnitLogsNoSkipSummary(t *testing.T) {
 		if record.Message == "provider artifacts skipped this unit; inventory continued" {
 			t.Fatalf("a fully healthy unit logged a skip summary: %+v", record)
 		}
+	}
+}
+
+// githubTestsMixedMemberArtifactDoer serves ONE artifact whose archive OPENS
+// successfully and contains one valid JUnit member alongside one malformed
+// one -- a member-level skip, not a whole-artifact one.
+type githubTestsMixedMemberArtifactDoer struct{ t *testing.T }
+
+func (doer *githubTestsMixedMemberArtifactDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": {"application/json"}}
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api":
+		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+	case path == "/repos/acme/api/actions/runs":
+		return githubTestsHTTPResponse(request, header, githubTestsWorkflowRunsFixture(1, 1)), nil
+	case strings.HasSuffix(path, "/jobs"):
+		return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+	case strings.HasSuffix(path, "/artifacts"):
+		return githubTestsHTTPResponse(request, header, githubTestsArtifactsFixture(1)), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		archive := githubTestsZip(doer.t, map[string]string{
+			"good.xml": githubTestsMultiSuiteJUnit(1),
+			"bad.xml":  `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+		})
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/zip"}},
+			Body:       io.NopCloser(bytes.NewReader(archive)),
+			Request:    request,
+		}, nil
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+// RED on the pre-fix version of this summary (codex round 2, P2). An
+// artifact that opens fine but has one malformed MEMBER is a report_member
+// skip in the closed vocabulary, but the artifact itself was not skipped --
+// the healthy member's rows still land. artifact_skip_total (which an
+// operator reads as "how many whole artifacts were skipped") must stay 0;
+// only incomplete_total (the full closed-vocabulary count) reflects it.
+func TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsMixedMemberArtifactDoer{t: t}
+
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+	if walk.cursor.Suites != 1 {
+		t.Fatalf("committed %d suites, want 1 from the healthy member", walk.cursor.Suites)
+	}
+
+	var summary slog.Record
+	found := false
+	for _, record := range *records {
+		if record.Message == "provider artifacts skipped this unit; inventory continued" {
+			summary, found = record, true
+		}
+	}
+	if !found {
+		t.Fatalf("no skip-summary log record, want one for the malformed member (all records: %+v)", *records)
+	}
+	attrs := membershipLogAttrs(summary)
+	if attrs["artifact_skip_total"] != int64(0) {
+		t.Fatalf("artifact_skip_total=%v, want 0: the artifact was not skipped, only one member inside it", attrs["artifact_skip_total"])
+	}
+	if attrs["incomplete_total"] != int64(1) {
+		t.Fatalf("incomplete_total=%v, want 1 (the malformed member)", attrs["incomplete_total"])
+	}
+	if attrs["report_member_malformed"] != int64(1) {
+		t.Fatalf("report_member_malformed=%v, want 1", attrs["report_member_malformed"])
 	}
 }

@@ -903,6 +903,11 @@ def set_source_enabled(
         # source to the rebalancer.
         from dev_health_ops.api.services.licensing import TierLimitService
 
+        # codex review (gate round, P1): serialize this read-check-write on
+        # the org's advisory lock too -- two concurrent enables (this path
+        # and/or the async admin-API path) could otherwise each read the
+        # same pre-commit count and together exceed max_repos.
+        _acquire_repo_limit_lock(session, source.org_id)
         max_repos = TierLimitService(session).get_limit(
             uuid.UUID(source.org_id), "max_repos"
         )

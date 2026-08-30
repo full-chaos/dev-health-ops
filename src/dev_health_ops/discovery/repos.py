@@ -121,9 +121,20 @@ def discover_jira_projects(
         if not key:
             continue
         project_id = str(project.get("id") or "").strip()
-        if explicit_key and key.lower() != explicit_key:
-            continue
-        if explicit_id and project_id != explicit_id:
+        if explicit_id:
+            # codex review (CHAOS-4584 gate round, P2): project_id winning
+            # for IDENTITY but not for FILTERING left a real gap -- if a
+            # config's sync_options carries a STALE project_key alongside a
+            # freshly-PATCHed project_id (e.g. a partial PATCH that updated
+            # only project_id), requiring the key to ALSO match meant no
+            # project could ever satisfy both, discovery returned [],
+            # and the empty-result safeguard (round 4) left the OLD project
+            # enabled forever while the NEW target was never discovered.
+            # project_id, once present, is the ENTIRE scope -- project_key
+            # is ignored, not additionally enforced.
+            if project_id != explicit_id:
+                continue
+        elif explicit_key and key.lower() != explicit_key:
             continue
         name = str(project.get("name") or key)
         project_type_key = str(project.get("projectTypeKey") or "").strip().lower()

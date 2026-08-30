@@ -192,9 +192,20 @@ class IntegrationSourceService:
             # service is imported BY api/admin/routers/sync.py, so importing
             # it back at module load time would be circular.
             from dev_health_ops.api.admin.routers.sync import (
+                _acquire_repo_limit_create_lock,
                 _active_repo_usage_count_for_limit,
             )
             from dev_health_ops.api.services.licensing import TierLimitService
+
+            # codex review (gate round, P1): the read-check-write below was
+            # not serialized -- two concurrent PATCH requests enabling
+            # DIFFERENT sources could each read the same pre-commit count,
+            # both pass the check, and together exceed max_repos. Reuse the
+            # SAME org advisory lock create_sync_config's preflight and
+            # discover_sources_for_integration's rebalance already hold for
+            # exactly this reason (reentrant per session/backend, so a
+            # caller that already holds it pays no extra cost).
+            await _acquire_repo_limit_create_lock(self._session, self._org_id)
 
             def _get_max_repos(sync_session) -> int | float | None:
                 return TierLimitService(sync_session).get_limit(

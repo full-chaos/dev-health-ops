@@ -798,6 +798,61 @@ def test_jira_discovery_project_id_wins_identity_over_project_key(
     assert result == [("10002", "Engineering", "")]
 
 
+def test_jira_discovery_moves_to_new_project_id_despite_stale_project_key(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Codex review (gate round, P1 scenario for the P2 finding): a config
+    scoped to project_id=10001 (source ENG) gets its project_id PATCHed to
+    10002 while sync_options still carries the stale project_key="ENG" from
+    before. Exercises the REAL discover_jira_projects filtering (not just
+    a mocked discover_repos_for_config) so the stale-key bug is actually
+    reachable: it must find the NEW project (SUP, id=10002) despite the
+    stale key -- not return [] and trigger the empty-result safeguard,
+    which would leave ENG enabled forever and never discover SUP."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok")
+
+    jira_planner_config.sync_options = {"project_id": "10001"}
+    session.commit()
+    with patch(
+        "dev_health_ops.providers.jira.client.JiraClient.get_all_projects",
+        return_value=[
+            {"id": "10001", "key": "ENG", "name": "Engineering"},
+            {"id": "10002", "key": "SUP", "name": "Support Desk"},
+        ],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    # PATCH moves project_id to 10002 but leaves the stale project_key.
+    jira_planner_config.sync_options = {"project_id": "10002", "project_key": "ENG"}
+    session.commit()
+    with patch(
+        "dev_health_ops.providers.jira.client.JiraClient.get_all_projects",
+        return_value=[
+            {"id": "10001", "key": "ENG", "name": "Engineering"},
+            {"id": "10002", "key": "SUP", "name": "Support Desk"},
+        ],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    by_external = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    }
+    assert by_external["10002"].is_enabled is True, "new project must be discovered"
+    assert by_external["10001"].is_enabled is False, (
+        "old project must be superseded, not left enabled forever"
+    )
+
+
 def test_jira_discovery_whitespace_scope_treated_as_unscoped(
     session: Session,
     jira_integration: Integration,

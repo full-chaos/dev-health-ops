@@ -333,6 +333,38 @@ class TestDiscoverJiraProjects:
         assert result == [("10002", "Support Desk", "")]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_explicit_project_id_wins_even_with_a_stale_project_key(self, mock_get_all):
+        """Codex review (gate round, P2): project_id must win as the ENTIRE
+        scope, not just for identity naming -- a config that PATCHed only
+        project_id (leaving a STALE project_key from before the change,
+        e.g. {project_id: "10002", project_key: "ENG"} where ENG was the
+        OLD project) must still discover the NEW project_id's project.
+        Requiring the stale key to ALSO match meant discovery returned []
+        for every real project, and the empty-result safeguard then left
+        the OLD project's source enabled forever -- the planner never
+        noticed the config had moved to a different project."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"id": "10001", "key": "ENG", "name": "Engineering"},
+            {"id": "10002", "key": "SUP", "name": "Support Desk"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        # project_key is STALE (still says "eng", the OLD project) --
+        # project_id ("10002") is the current, authoritative scope.
+        result = discover_jira_projects(
+            creds, sync_options={"project_id": "10002", "project_key": "eng"}
+        )
+        assert result == [("10002", "Support Desk", "")]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_skips_projects_without_a_key(self, mock_get_all):
         from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
         from dev_health_ops.discovery.repos import discover_jira_projects

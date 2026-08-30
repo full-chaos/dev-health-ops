@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,53 @@ func TestIsRetryableDiscoveryErrorTreatsBridgeFailuresAsRetryable(t *testing.T) 
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := isRetryableDiscoveryError(testCase.err); got != testCase.want {
 				t.Fatalf("isRetryableDiscoveryError(%v)=%v want=%v", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestDiscoveryErrorDetailSanitizesCredentialShapedText pins the
+// codex-flagged gap (CHAOS-4575 review, P1): discoverErr can wrap a raw
+// transport failure whose message embeds the request that failed --
+// bridge.go's `do()` propagates the underlying net/http error verbatim,
+// which can carry an Authorization header, a bearer token, or URL userinfo.
+// discoveryErrorDetail persists into a durable, queryable result column, so
+// it must run through the same sanitizer finalize_sync_run's error path
+// already uses, not store discoverErr.Error() unchanged.
+func TestDiscoveryErrorDetailSanitizesCredentialShapedText(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantRedact bool
+	}{
+		{
+			name:       "bearer token",
+			err:        errors.New("sync dispatch bridge request failed: Authorization: Bearer sk-abcdef0123456789"),
+			wantRedact: true,
+		},
+		{
+			name:       "url userinfo",
+			err:        errors.New("dial tcp: connect to https://user:hunterpassword2@internal.example.com/reference-discovery"),
+			wantRedact: true,
+		},
+		{
+			name:       "ordinary status text is left alone",
+			err:        fmt.Errorf("%w: status=500", ErrBridgeRequest),
+			wantRedact: false,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			detail := discoveryErrorDetail(testCase.err)
+			if testCase.wantRedact {
+				if !strings.Contains(detail, "[REDACTED]") {
+					t.Fatalf("discoveryErrorDetail(%v)=%q want a [REDACTED] marker", testCase.err, detail)
+				}
+				if strings.Contains(detail, "hunterpassword2") || strings.Contains(detail, "sk-abcdef0123456789") {
+					t.Fatalf("discoveryErrorDetail(%v)=%q leaked the original secret", testCase.err, detail)
+				}
+			} else if strings.Contains(detail, "[REDACTED]") {
+				t.Fatalf("discoveryErrorDetail(%v)=%q unexpectedly redacted", testCase.err, detail)
 			}
 		})
 	}

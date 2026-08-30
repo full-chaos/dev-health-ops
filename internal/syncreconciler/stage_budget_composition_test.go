@@ -106,6 +106,8 @@ func identifierToStageName(identifier string) string {
 		return string(StageUnreclaimableSweep)
 	case "StageTerminalDeliveryRepair":
 		return string(StageTerminalDeliveryRepair)
+	case "StageTerminalOutboxClose":
+		return string(StageTerminalOutboxClose)
 	case "StageMaterializer":
 		return string(StageMaterializer)
 	case "StageKernel":

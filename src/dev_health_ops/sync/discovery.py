@@ -444,34 +444,44 @@ def discover_sources_for_integration(
     # ``AsyncSession.run_sync`` inside a "best-effort, must not fail"
     # request path (create_sync_config) can then catch the propagated
     # exception and continue using its session normally afterward.
+    # codex review (CHAOS-4584 gate round 7, P2): a SQL-side normalization
+    # comparator (func.lower(func.trim(...))) cannot be made to agree with
+    # Python's Unicode-aware jira_key_norm for every input (tab/
+    # non-breaking-space whitespace, Turkish-i-style case folding) -- two
+    # independent implementations of one rule will always be able to
+    # drift, no matter how many adversarial cases the SQL side is patched
+    # to handle. chris's ruling: drop the SQL-side mirror entirely. Fetch
+    # every IntegrationSource row for this integration ONCE (provider is
+    # NOT write-time controlled -- nothing rejects a mixed-case
+    # ``provider="JIRA"`` at creation, round 5 finding) and do every
+    # provider/key comparison in Python through jira_key_norm, the ONE
+    # normalization implementation, with no SQL counterpart left to fall
+    # out of sync with it.
+    #
+    # codex review (CHAOS-4584 gate round 8, P2): this MUST be fetched
+    # once per discovery run, not once per discovered project -- fetching
+    # inside the per-project loop below turned config creation/rediscovery
+    # quadratic in discovered-projects x existing-sources (codex's executed
+    # benchmark: 1,000 projects -> 1,001 full-table selects, 3.27s). A row
+    # this run itself CREATES is appended to this list in place (below), so
+    # a later iteration within the SAME run still sees it -- matching what
+    # the old per-iteration query would have seen via SQLAlchemy autoflush.
+    all_integration_sources: list[IntegrationSource] = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.org_id == integration.org_id,
+            IntegrationSource.integration_id == integration_id,
+        )
+        .all()
+        if provider == "jira"
+        else []
+    )
+
     with session.begin_nested():
         for fields in source_dicts:
             external_id = fields["external_id"]
 
             if provider == "jira":
-                # codex review (CHAOS-4584 gate round 7, P2): a SQL-side
-                # normalization comparator (func.lower(func.trim(...)))
-                # cannot be made to agree with Python's Unicode-aware
-                # jira_key_norm for every input (tab/non-breaking-space
-                # whitespace, Turkish-i-style case folding) -- two
-                # independent implementations of one rule will always be
-                # able to drift, no matter how many adversarial cases the
-                # SQL side is patched to handle. chris's ruling: drop the
-                # SQL-side mirror entirely. Fetch every IntegrationSource
-                # row for this integration (provider is NOT write-time
-                # controlled -- nothing rejects a mixed-case
-                # ``provider="JIRA"`` at creation, round 5 finding) and do
-                # every provider/key comparison in Python through
-                # jira_key_norm, the ONE normalization implementation, with
-                # no SQL counterpart left to fall out of sync with it.
-                all_integration_sources = (
-                    session.query(IntegrationSource)
-                    .filter(
-                        IntegrationSource.org_id == integration.org_id,
-                        IntegrationSource.integration_id == integration_id,
-                    )
-                    .all()
-                )
                 # codex review (CHAOS-4584 round 2, P1): Jira project keys
                 # are case-insensitive server-side (always canonicalized to
                 # uppercase in API responses), but an explicitly-scoped
@@ -633,6 +643,14 @@ def discover_sources_for_integration(
                 upserted.append(source)
                 created_count += 1
                 created_external_ids_lower.add(jira_key_norm(external_id))
+                if provider == "jira":
+                    # keep the in-memory candidate cache current within
+                    # this run (gate round 8 fix) -- without this, two
+                    # source_dicts entries that normalize to the same key
+                    # (shouldn't happen from a real Jira API response, but
+                    # cheap to keep correct) would both create a row
+                    # instead of the second one matching the first.
+                    all_integration_sources.append(source)
 
         if provider == "jira" and planner_managed_sync_config_id:
             _supersede_stale_scoped_jira_sources(

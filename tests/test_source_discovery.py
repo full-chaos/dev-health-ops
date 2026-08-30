@@ -1630,6 +1630,59 @@ def test_jira_discovery_matches_unicode_and_exotic_whitespace_variants(
     )
 
 
+def test_jira_discovery_fetches_candidate_sources_once_per_run_not_per_project(
+    session: Session,
+    engine,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 gate round 8, P2), EXECUTED: fetching every
+    IntegrationSource row for the integration (round 7's fix, replacing the
+    deleted SQL-side normalization mirror) must happen ONCE per discovery
+    run, not once per discovered project. codex's benchmark: 1,000
+    discovered projects triggered 1,001 full-table selects against
+    integration_sources (quadratic in discovered-projects x
+    existing-sources). Asserts the SELECT count against integration_sources
+    does not scale with the number of discovered projects -- a query-count
+    proof, not a timing one, so it stays reliable under load."""
+    from sqlalchemy import event
+
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    def _count_integration_source_selects(n_projects: int, key_prefix: str) -> int:
+        tuples = [
+            (f"{key_prefix}{i}", f"Project {i}", "software") for i in range(n_projects)
+        ]
+        count = 0
+
+        def _before_cursor_execute(conn, cursor, statement, *args, **kwargs):
+            nonlocal count
+            normalized = statement.strip().upper()
+            if (
+                normalized.startswith("SELECT")
+                and "INTEGRATION_SOURCES" in statement.upper()
+            ):
+                count += 1
+
+        event.listen(engine, "before_cursor_execute", _before_cursor_execute)
+        try:
+            with patch(DISCOVERY_PATH, return_value=tuples):
+                discover_sources_for_integration(session, jira_integration.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", _before_cursor_execute)
+        return count
+
+    small_count = _count_integration_source_selects(5, "SMALL")
+    large_count = _count_integration_source_selects(50, "LARGE")
+
+    assert large_count <= small_count + 2, (
+        f"SELECT count against integration_sources scaled with the "
+        f"discovered-project count ({small_count} selects for 5 new "
+        f"projects, {large_count} for 50 new projects) -- the candidate "
+        f"fetch must happen once per discovery run, not once per project"
+    )
+
+
 def test_jira_discovery_caps_new_sources_before_preexisting_ones(
     session: Session,
     jira_integration: Integration,

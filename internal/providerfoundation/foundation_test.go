@@ -140,6 +140,85 @@ func TestHTTPClassificationAndPaginationFixtures(t *testing.T) {
 	}
 }
 
+// bodyDoer answers every request with the same fixed status and body,
+// recording the path of the last request it saw.
+type bodyDoer struct {
+	status int
+	body   string
+	path   string
+}
+
+func (d *bodyDoer) Do(request *http.Request) (*http.Response, error) {
+	d.path = request.URL.Path
+	return &http.Response{
+		StatusCode: d.status,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(d.body)),
+		Request:    request,
+	}, nil
+}
+
+// TestHTTPClientSurfacesStatusPathAndBodyOnFailure pins the CHAOS-4582 fix:
+// Do() was already reading the response body (to let
+// ClassifyHTTPWithMessage sniff a GitHub/GitLab rate-limit body) and then
+// discarding it -- every consumer (job lifecycle logs, sync_run_units.result)
+// saw only the generic Class ("provider request failed: permanent"), never
+// the provider's own rejection reason. A jira 400 for a project search that
+// looked identical to a request known-good via the Python client took a live
+// redrive to even notice this gap existed.
+func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
+	t.Parallel()
+	doer := &bodyDoer{status: http.StatusBadRequest, body: `{"errorMessages":["The value 'bogus' does not exist for the field 'project'."]}`}
+	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", doer, func(request *http.Request) error {
+		request.SetBasicAuth("dev@acme.test", "token")
+		return nil
+	}, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(context.Background(), http.MethodGet, "/rest/api/3/search/jql?jql=project+%3D+%27bogus%27", nil)
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Do err = %v, want a *ProviderError", err)
+	}
+	if providerErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("StatusCode = %d, want 400", providerErr.StatusCode)
+	}
+	if providerErr.Path != "/rest/api/3/search/jql" {
+		t.Fatalf("Path = %q, want the request path without its query string", providerErr.Path)
+	}
+	message := providerErr.Error()
+	for _, want := range []string{"status=400", "path=/rest/api/3/search/jql", "does not exist for the field 'project'"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("Error() = %q, want it to contain %q", message, want)
+		}
+	}
+}
+
+// TestHTTPClientRedactsCredentialShapedBodyOnFailure: a response body is
+// untrusted content from the far side of the wire, not an input this code
+// controls -- the same "sanitize at the point of storage" discipline
+// CHAOS-4575's own codex review required for discoverErr applies here too.
+func TestHTTPClientRedactsCredentialShapedBodyOnFailure(t *testing.T) {
+	t.Parallel()
+	doer := &bodyDoer{status: http.StatusBadRequest, body: `see https://user:hunter2@internal.example.com/debug for detail`}
+	client, err := NewHTTPClient("jira", "https://acme.atlassian.net", doer, func(request *http.Request) error {
+		request.SetBasicAuth("dev@acme.test", "token")
+		return nil
+	}, RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(context.Background(), http.MethodGet, "/rest/api/3/search/jql", nil)
+	message := err.Error()
+	if strings.Contains(message, "hunter2") {
+		t.Fatalf("Error() = %q leaked the credential-shaped body", message)
+	}
+	if !strings.Contains(message, "[REDACTED]") {
+		t.Fatalf("Error() = %q, want a [REDACTED] marker", message)
+	}
+}
+
 func TestGitLabForbiddenRateLimitQualification(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

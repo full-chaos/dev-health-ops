@@ -94,6 +94,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
+    SyncConfiguration,
     SyncRun,
     SyncRunMode,
     SyncRunReferenceDiscovery,
@@ -1318,6 +1319,69 @@ def _build_fold_family_units(
     ]
 
 
+def _is_non_project_jira_source(session: Session, source: IntegrationSource) -> bool:
+    """Whether ``source`` is the known-bad shape CHAOS-4582 fixed at the
+    writer: a jira ``source_type='project'`` row whose ``external_id`` is
+    not a real per-project key. Signals, in order, any one sufficient to
+    resolve the question:
+
+    1. ``metadata_.explicit_project_scope`` -- the writer's own marker
+       (``_non_git_source_rows``) for a NEW row created from an explicit
+       ``project_key``/``project_id``. Always wins: never suppress it.
+    2. ``metadata_.org_wide_placeholder`` -- the SAME typed marker Linear's
+       writer already sets for ITS org-wide mode; recognized here in case a
+       future writer ever legitimately reuses it for jira.
+    3. If ``external_id`` equals the provider name itself
+       (case-insensitive) -- the exact literal ("JIRA") the pre-fix writer
+       fell back to when a config had no explicit project scope (live
+       evidence, org 70d529e0, CHAOS-4582) -- look up the LEGACY row's own
+       ``sync_configurations.sync_options`` (via
+       ``metadata_.planner_managed_sync_config_id``, which every non-git
+       source carries) for an explicit ``project_key``/``project_id``.
+       Codex review (CHAOS-4582, P2): a row created BEFORE this PR has no
+       ``explicit_project_scope`` marker even if a caller legitimately named
+       a real project "JIRA" -- the writer's old code produced an identical
+       shape for both cases, so external_id alone can never disambiguate a
+       PRE-EXISTING row. The persisted sync_options this row was ACTUALLY
+       created from can: if the config it came from explicitly asked for a
+       project literally named "JIRA" (case-insensitive), this is that
+       project, not the fallback -- planning proceeds. This closes the gap
+       for legacy data without a migration; a config config the source no
+       longer references (renamed org, deleted config) falls through to the
+       known-bad classification, matching this ticket's live evidence
+       (org 70d529e0's bad row's config carries no project scope at all).
+    """
+    metadata = getattr(source, "metadata_", None) or {}
+    if metadata.get("explicit_project_scope"):
+        return False
+    if metadata.get("org_wide_placeholder"):
+        return True
+    if str(source.external_id or "").strip().lower() != "jira":
+        return False
+    config_id = metadata.get("planner_managed_sync_config_id")
+    if config_id:
+        config = (
+            session.query(SyncConfiguration)
+            .filter(SyncConfiguration.id == config_id)
+            .one_or_none()
+        )
+        if config is not None:
+            sync_options = config.sync_options or {}
+            # Mirrors api/admin/routers/sync.py's _non_git_explicit_source_id
+            # precedence exactly (project_id > project_key > team_id > repo).
+            # Not imported directly: that module imports FROM this one
+            # (BackfillSelector), so the reverse import would be circular.
+            explicit_id = (
+                sync_options.get("project_id")
+                or sync_options.get("project_key")
+                or sync_options.get("team_id")
+                or sync_options.get("repo")
+            )
+            if explicit_id is not None and str(explicit_id).strip().lower() == "jira":
+                return False
+    return True
+
+
 def _build_work_item_family_units(
     *,
     session: Session,
@@ -1333,6 +1397,30 @@ def _build_work_item_family_units(
     """Collapse the enabled work-item-family datasets into ONE composite unit
     per (source, window) (CHAOS-2721, AD-3)."""
     if not family_specs:
+        return []
+
+    if provider.strip().lower() == "jira" and _is_non_project_jira_source(
+        session, source
+    ):
+        # CHAOS-4582 (defense-in-depth): the writer (_non_git_source_rows,
+        # api/admin/routers/sync.py) no longer materializes this shape for a
+        # NEW jira config, but a pre-existing row (or a future writer bug of
+        # the same class) could still reach here. Refuse to plan rather than
+        # emit a unit that is guaranteed to fail every attempt -- Jira's
+        # work-items route requires a real per-project source (unlike
+        # Linear's org-wide search mode), so JQL built from a non-project
+        # external_id (e.g. the literal provider name) 400s against Jira
+        # every time. Log loud with the source id so an operator can find
+        # and fix the source, then return zero units -- CONTAINED to this
+        # one source, never aborting the rest of this integration's plan.
+        logger.error(
+            "sync.plan.jira_source_not_a_project org_id=%s source_id=%s "
+            "external_id=%r: refusing to plan a work-items unit for a "
+            "non-project Jira source (error_category=jira_source_not_a_project)",
+            integration.org_id,
+            source.id,
+            source.external_id,
+        )
         return []
 
     canonical_spec = get_dataset_spec(provider, _FAMILY_CANONICAL_DATASET_KEY)

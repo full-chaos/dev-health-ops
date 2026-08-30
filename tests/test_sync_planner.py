@@ -14,6 +14,7 @@ from dev_health_ops.models import (
     IntegrationCredential,
     IntegrationDataset,
     IntegrationSource,
+    SyncConfiguration,
     SyncDispatchOutbox,
     SyncExecutedProofLedger,
     SyncRun,
@@ -80,6 +81,7 @@ def _create_source(
     external_id: str,
     provider: str | None = None,
     is_enabled: bool = True,
+    metadata: dict | None = None,
 ) -> IntegrationSource:
     source_provider = provider or integration.provider
     source = IntegrationSource(
@@ -90,7 +92,7 @@ def _create_source(
         external_id=external_id,
         name=external_id.rsplit("/", 1)[-1],
         full_name=external_id,
-        metadata_={},
+        metadata_=dict(metadata or {}),
         is_enabled=is_enabled,
         discovered_at=datetime.now(timezone.utc),
         last_seen_at=datetime.now(timezone.utc),
@@ -2142,6 +2144,192 @@ def test_work_item_family_collapse_provider_matrix(db_session, provider, externa
     ]
     assert len(work_item_units) == 1
     assert work_item_units[0].dataset_key == "work-items"
+
+
+def test_jira_non_project_source_plans_zero_work_item_units(db_session):
+    """CHAOS-4582: a jira source whose external_id equals the provider name
+    itself ("jira") -- the exact known-bad shape the pre-fix writer produced
+    for an "auto-import everything" config with no explicit project scope
+    (live evidence, org 70d529e0) -- must plan ZERO work-items units, not one
+    that's guaranteed to fail every attempt with `project = 'jira'` JQL
+    against a project that doesn't exist. Case-insensitive: the real bad row
+    was "JIRA"."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="jira")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
+def test_jira_source_named_jira_with_explicit_scope_marker_still_plans(db_session):
+    """Codex review (CHAOS-4582, P2): a caller CAN legitimately name a real
+    Jira project "JIRA" -- the writer stamps
+    metadata_.explicit_project_scope=True for exactly that case
+    (api/admin/routers/sync.py's explicit_external_id branch), and that
+    marker must always win over the external_id=="jira" heuristic, or a
+    genuinely-scoped project gets silently suppressed the same way the
+    known-bad placeholder is."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"explicit_project_scope": True},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+
+
+def test_jira_non_project_source_guard_is_case_insensitive_on_provider(db_session):
+    """Codex review (CHAOS-4582, P3): the writer persists provider casing as
+    supplied (``IntegrationSource(provider=provider)``, no normalization), so
+    a legacy row created with provider="JIRA" (or any other casing) must
+    still trip the planner guard -- comparing the raw, unnormalized casing
+    would let the exact known-bad shape back in for those rows."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="JIRA")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
+def test_jira_legacy_source_named_jira_preserved_via_persisted_sync_config(
+    db_session,
+):
+    """Codex review (CHAOS-4582, P2, round 2): a row created BEFORE this fix
+    shipped has no ``explicit_project_scope`` marker even if a caller
+    legitimately named a real project "JIRA" -- the pre-fix writer produced
+    an identical shape for that case and for the actual bug (no scope at
+    all, fell back to the integration's display name). external_id alone
+    can never disambiguate a legacy row. The persisted
+    ``sync_configurations.sync_options`` it was ACTUALLY created from can:
+    if that config explicitly asked for a project literally named "JIRA",
+    this is that project, not the fallback -- planning must proceed."""
+    integration = _create_integration(db_session, provider="jira")
+    config = SyncConfiguration(
+        name="Legacy Jira config",
+        provider="jira",
+        org_id=ORG_ID,
+        sync_options={"project_key": "JIRA"},
+        integration_id=integration.id,
+        planner_managed=True,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"planner_managed_sync_config_id": str(config.id)},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+
+
+def test_jira_legacy_source_named_jira_without_a_persisted_config_is_dropped(
+    db_session,
+):
+    """The other half of the same fix: a legacy row whose
+    planner_managed_sync_config_id points at nothing (deleted config) --
+    exactly the live evidence shape from org 70d529e0, whose bad row's
+    config carried no project scope at all -- still trips the guard. The
+    sync_configurations lookup is a narrowing exception, not a blanket
+    amnesty for every "JIRA"-named source."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"planner_managed_sync_config_id": str(uuid.uuid4())},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
 
 
 def test_work_item_family_collapse_backfill_one_composite_per_chunk(

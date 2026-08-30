@@ -69,15 +69,16 @@ import (
 // This makes the predicate self-referencing (used inside an ALTER TABLE
 // team_project_ownership DELETE against team_project_ownership itself).
 // Codex review round 2 (2026-08-30, P2) flagged this as unsupported --
-// disproven by direct execution: a real ALTER TABLE ... DELETE with this
-// exact predicate (mutations_sync=1) against a scratch org on ClickHouse
-// 26.7.5.10 (the version both the local dev stack and prod run, per
-// AGENTS.md's local/prod data vocabulary) completed with no error and
-// deleted exactly the CHAOS-keyed row while leaving its NULL-keyed sibling
-// untouched. Not re-verified against CI's pinned 25.1
-// (.github/workflows/test.yml) since no CI test executes this SQL against a
-// live ClickHouse -- only the two real execution paths (local dev stack,
-// prod) matter here, and both are 26.7.
+// disproven by direct execution on both engines that could plausibly run
+// it: a real ALTER TABLE ... DELETE with this exact predicate
+// (mutations_sync=1) against a scratch org, on (1) the local dev stack's
+// ClickHouse 26.7.5.10 (the version local + prod both run, per AGENTS.md's
+// data vocabulary) and (2) a throwaway container from the exact digest
+// internal/testsupport/containers/harness.go pins for Go integration tests
+// (resolves to 26.6.1.1193, distinct from the Python-CI-gate 25.1 pinned in
+// .github/workflows/test.yml/live-e2e.yml) -- both completed with no error
+// and deleted exactly the CHAOS-keyed row, leaving its NULL-keyed sibling
+// untouched.
 const linearStaleProjectOwnershipPredicate = `provider = 'linear' AND project_key IS NOT NULL AND NOT startsWith(project_id, concat(org_id, ':linear:')) AND (org_id, project_id) IN (SELECT org_id, project_id FROM team_project_ownership WHERE provider = 'linear' AND project_key IS NULL)`
 
 const linearStaleProjectOwnershipSelectQuery = `SELECT org_id, project_id, project_key, team_id FROM team_project_ownership WHERE ` + linearStaleProjectOwnershipPredicate

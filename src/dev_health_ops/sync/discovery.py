@@ -21,7 +21,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from dev_health_ops.discovery.repos import discover_repos_for_config, jira_key_norm
@@ -36,69 +35,6 @@ logger = logging.getLogger(__name__)
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _normalized_column_matches(column: Any, value: str):
-    """SQL-side counterpart of ``jira_key_norm`` -- ``func.lower(func.trim(
-    column))`` matched against the Python-normalized *value*.
-
-    This is the ONE place a column comparison against a Jira provider name
-    or project key is expressed. ``_provider_matches`` and
-    ``_jira_key_matches`` below are the only two callers; every provider or
-    key comparison reachable from this module's own new code goes through
-    one of them, or carries a documented justified-skip in
-    ``.codex-review-context.md``'s enumeration table -- never its own
-    ``func.lower()``/``func.trim()`` combination.
-
-    codex review (CHAOS-4584 gate round 6, P2): a comparator that mirrored
-    only ``jira_key_norm``'s ``.lower()`` half -- ``func.lower(column)``,
-    with no ``func.trim()`` -- missed a persisted key/provider value with
-    leading/trailing whitespace (e.g. a source created from
-    ``project_key=" SUP "``, stored verbatim by ``_non_git_source_rows``):
-    the SQL side stayed ``" sup "`` while the Python side normalized to
-    ``"sup"``, so the two never matched. Root cause was two independent
-    implementations of one normalization rule that could drift; there is
-    now exactly one (this function), so every routed site inherits a fix
-    to it automatically instead of needing its own follow-up patch.
-    """
-    return func.lower(func.trim(column)) == jira_key_norm(value)
-
-
-def _provider_matches(column: Any, provider_value: str):
-    """SQLAlchemy filter expression comparing a ``provider`` column to
-    *provider_value* through ``_normalized_column_matches`` (codex review,
-    CHAOS-4584 gate round 5, P1) -- the ORM-side counterpart of the
-    Python-side ``jira_key_norm`` comparisons everywhere else in this
-    module.
-
-    Two query filters in this file used to compare
-    ``IntegrationSource.provider`` to a raw literal (``fields["provider"]``,
-    always ``"jira"``, or the string ``"jira"`` itself) with exact ``==``.
-    An ``Integration``/``SyncConfiguration`` row created with a mixed-case
-    ``provider`` (e.g. ``"JIRA"``, which nothing rejects at creation --
-    ``SyncConfigCreate.provider`` has no case validator) stores that same
-    casing verbatim onto every ``IntegrationSource`` this seam's OWN new
-    branches don't touch -- but rows THIS PR's discovery mapper creates
-    always carry the lowercase literal ``"jira"`` (``_map_jira_tuple``).
-    An exact-match filter against either side of that mismatch silently
-    excludes the mixed-case row from the upsert loop's candidate matching
-    (round 5 finding: a pre-existing ``provider="JIRA"`` explicit-scope
-    source became invisible to both rediscovery and scope-supersession).
-
-    Every ``IntegrationSource.provider ==`` query filter reachable from
-    this module's own new code goes through this one helper now, not a
-    site-local ``==``."""
-    return _normalized_column_matches(column, provider_value)
-
-
-def _jira_key_matches(column: Any, value: str):
-    """SQLAlchemy filter expression comparing a Jira project-key/external-id
-    column to *value* through ``_normalized_column_matches`` -- the
-    SQL-side counterpart of every Python-side ``jira_key_norm(external_id)``
-    comparison in this module's upsert loop. See
-    ``_normalized_column_matches``'s docstring for the round 6 finding this
-    replaces (a comparator that lowercased but never trimmed)."""
-    return _normalized_column_matches(column, value)
 
 
 def _resolve_credentials(integration: Integration) -> dict[str, Any]:
@@ -512,21 +448,30 @@ def discover_sources_for_integration(
         for fields in source_dicts:
             external_id = fields["external_id"]
 
-            base_query = session.query(IntegrationSource).filter(
-                IntegrationSource.org_id == integration.org_id,
-                IntegrationSource.integration_id == integration_id,
-                # codex review (CHAOS-4584 gate round 5, P1): normalized via
-                # _provider_matches, not exact ``==`` -- an
-                # Integration/SyncConfiguration created with a mixed-case
-                # provider stores that casing verbatim, but this seam's own
-                # discovery mapper always emits the lowercase literal
-                # (``fields["provider"]``), so an exact match silently
-                # excluded a mixed-case row's IntegrationSource from every
-                # candidate lookup below. Safe for every provider, not just
-                # jira: it only ADDS tolerance for mixed-case existing rows.
-                _provider_matches(IntegrationSource.provider, fields["provider"]),
-            )
             if provider == "jira":
+                # codex review (CHAOS-4584 gate round 7, P2): a SQL-side
+                # normalization comparator (func.lower(func.trim(...)))
+                # cannot be made to agree with Python's Unicode-aware
+                # jira_key_norm for every input (tab/non-breaking-space
+                # whitespace, Turkish-i-style case folding) -- two
+                # independent implementations of one rule will always be
+                # able to drift, no matter how many adversarial cases the
+                # SQL side is patched to handle. chris's ruling: drop the
+                # SQL-side mirror entirely. Fetch every IntegrationSource
+                # row for this integration (provider is NOT write-time
+                # controlled -- nothing rejects a mixed-case
+                # ``provider="JIRA"`` at creation, round 5 finding) and do
+                # every provider/key comparison in Python through
+                # jira_key_norm, the ONE normalization implementation, with
+                # no SQL counterpart left to fall out of sync with it.
+                all_integration_sources = (
+                    session.query(IntegrationSource)
+                    .filter(
+                        IntegrationSource.org_id == integration.org_id,
+                        IntegrationSource.integration_id == integration_id,
+                    )
+                    .all()
+                )
                 # codex review (CHAOS-4584 round 2, P1): Jira project keys
                 # are case-insensitive server-side (always canonicalized to
                 # uppercase in API responses), but an explicitly-scoped
@@ -536,15 +481,16 @@ def discover_sources_for_integration(
                 # case-insensitively here is what makes rediscovery update
                 # that SAME row instead of inserting a case-variant
                 # duplicate that then double-schedules the project.
-                candidates = (
-                    base_query.filter(
-                        _jira_key_matches(IntegrationSource.external_id, external_id)
-                    )
-                    .order_by(
-                        IntegrationSource.discovered_at.asc(),
-                        IntegrationSource.id.asc(),
-                    )
-                    .all()
+                normalized_key = jira_key_norm(external_id)
+                normalized_provider = jira_key_norm(fields["provider"])
+                candidates = sorted(
+                    (
+                        c
+                        for c in all_integration_sources
+                        if jira_key_norm(c.provider) == normalized_provider
+                        and jira_key_norm(c.external_id) == normalized_key
+                    ),
+                    key=lambda c: (c.discovered_at, c.id),
                 )
                 existing = None
                 if candidates:
@@ -606,19 +552,17 @@ def discover_sources_for_integration(
                     # move its watermarks", not "create a duplicate".
                     jira_project_id = fields["metadata_"].get("jira_project_id")
                     if jira_project_id:
-                        renamed = (
-                            base_query.filter(
-                                IntegrationSource.metadata_[
-                                    "jira_project_id"
-                                ].as_string()
+                        rename_candidates = sorted(
+                            (
+                                c
+                                for c in all_integration_sources
+                                if jira_key_norm(c.provider) == normalized_provider
+                                and (c.metadata_ or {}).get("jira_project_id")
                                 == str(jira_project_id)
-                            )
-                            .order_by(
-                                IntegrationSource.discovered_at.asc(),
-                                IntegrationSource.id.asc(),
-                            )
-                            .first()
+                            ),
+                            key=lambda c: (c.discovered_at, c.id),
                         )
+                        renamed = rename_candidates[0] if rename_candidates else None
                         if renamed is not None:
                             old_external_id = renamed.external_id
                             if jira_key_norm(old_external_id) != jira_key_norm(
@@ -633,9 +577,20 @@ def discover_sources_for_integration(
                                 renamed.external_id = external_id
                             existing = renamed
             else:
-                existing = base_query.filter(
-                    IntegrationSource.external_id == external_id
-                ).one_or_none()
+                # github/gitlab: unchanged from before CHAOS-4584 -- exact
+                # match, no normalization (out of this ticket's jira-scoped
+                # case-handling class; provider casing for these rows has
+                # never been shown to drift).
+                existing = (
+                    session.query(IntegrationSource)
+                    .filter(
+                        IntegrationSource.org_id == integration.org_id,
+                        IntegrationSource.integration_id == integration_id,
+                        IntegrationSource.provider == fields["provider"],
+                        IntegrationSource.external_id == external_id,
+                    )
+                    .one_or_none()
+                )
 
             if existing is not None:
                 # Update mutable fields; preserve is_enabled and discovered_at.
@@ -772,17 +727,20 @@ def _supersede_stale_scoped_jira_sources(
         .filter(
             IntegrationSource.org_id == integration.org_id,
             IntegrationSource.integration_id == integration.id,
-            # codex review (CHAOS-4584 gate round 5, P1): normalized via
-            # _provider_matches -- a mixed-case-provider source was
-            # invisible to this supersession query entirely, so an
-            # explicit-scope change never disabled it.
-            _provider_matches(IntegrationSource.provider, "jira"),
             IntegrationSource.is_enabled.is_(True),
         )
         .all()
     )
     superseded = []
     for source in enabled_sources:
+        # codex review (CHAOS-4584 gate round 7, P2): the provider filter
+        # moved from SQL (round 5's _provider_matches) into this Python
+        # loop -- a SQL-side normalization mirror can never be made to
+        # agree with jira_key_norm for every input (round 7's tab/NBSP/
+        # Turkish-i finding), so there is no SQL counterpart left to drift
+        # out of sync with it. Fetch wider, filter here.
+        if jira_key_norm(source.provider) != "jira":
+            continue
         if (source.metadata_ or {}).get(
             "planner_managed_sync_config_id"
         ) != planner_managed_sync_config_id:

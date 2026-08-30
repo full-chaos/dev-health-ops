@@ -1554,56 +1554,79 @@ def test_jira_case_normalization_invariant(
 
 
 @pytest.mark.parametrize(
-    "a,b",
+    "persisted_key,discovered_key",
     [
-        ("SUP", "sup"),
-        (" SUP ", "SUP"),  # codex's exact gate round 6 repro
-        ("SUP", " sup "),
-        ("Sup", "sUP"),
-        (" Sup ", "SUP"),
-        ("SUP", "SUP "),
-        ("SUP", " SUP"),
-        ("SUP", "SUP"),  # already-clean identity case
-        ("SUP", "SUPPORT"),  # must NOT match
-        (" S U P ", "SUP"),  # interior whitespace must NOT be collapsed
-        ("", " "),  # both normalize to empty -- must still agree
+        pytest.param("\tSUP\t", "SUP", id="tab-whitespace"),
+        pytest.param("\xa0SUP\xa0", "SUP", id="non-breaking-space"),
+        pytest.param("İ", "i̇", id="turkish-dotted-I-case-fold"),
     ],
 )
-def test_sql_side_comparator_agrees_with_jira_key_norm(
-    session: Session, a: str, b: str
+def test_jira_discovery_matches_unicode_and_exotic_whitespace_variants(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+    persisted_key: str,
+    discovered_key: str,
 ):
-    """Codex review (CHAOS-4584 gate round 6, P2): a symmetry property test
-    for the ONE normalization rule -- for every adversarial value pair
-    (mixed case, leading/trailing/interior whitespace, already-clean, both
-    empty), the SQL-side comparator (``_normalized_column_matches``, the
-    shared implementation ``_provider_matches``/``_jira_key_matches`` both
-    delegate to) must agree EXACTLY with the Python-side ``jira_key_norm``.
+    """Codex review (CHAOS-4584 gate round 7, P2), chris's ruling: a
+    SQL-side normalization mirror (round 5's ``_provider_matches``, round
+    6's trim fix) can never be made to agree with Python's Unicode-aware
+    ``jira_key_norm`` for every input -- two independent implementations
+    of one rule will always be able to drift, and round 7 found exactly
+    that: tab/non-breaking-space whitespace and Turkish-style case folding
+    all diverged from the SQL comparator despite round 6's fix.
 
-    Root cause of the round 6 finding: two independent implementations of
-    one normalization rule (``func.lower(column)`` on the SQL side vs
-    ``.strip().lower()`` in Python) that could drift out of sync -- and
-    did, on whitespace. This test executes the ACTUAL SQL expression
-    (against the real SQLite engine, not a Python re-implementation of
-    what the SQL is supposed to do) for every pair, so a future edit to
-    ``_normalized_column_matches`` that reintroduces drift fails here
-    structurally, rather than needing its own bespoke regression case."""
-    from sqlalchemy import literal
+    The fix drops the SQL-side mirror entirely: the upsert loop's
+    candidate matching now fetches every ``IntegrationSource`` row for the
+    integration and compares in Python via ``jira_key_norm`` alone -- the
+    ONE normalization implementation, with no SQL counterpart left to
+    drift out of sync with it.
 
-    from dev_health_ops.discovery.repos import jira_key_norm
-    from dev_health_ops.sync.discovery import _normalized_column_matches
+    These three pairs are codex's exact round-7 EXECUTED repro
+    (independently re-run by the lane against the tree before this fix,
+    confirming ``jira_key_norm(persisted) == jira_key_norm(discovered)``
+    while the SQL comparator disagreed). Each must now be recognized as
+    the SAME project -- rediscovery updates the existing row instead of
+    creating a duplicate enabled source."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
 
-    python_truth = jira_key_norm(a) == jira_key_norm(b)
-
-    sql_match = (
-        session.query(literal(1))
-        .filter(_normalized_column_matches(literal(a), b))
-        .first()
+    existing = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id=persisted_key,
+        name=persisted_key,
+        full_name=persisted_key,
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
-    sql_truth = sql_match is not None
+    session.add(existing)
+    session.commit()
 
-    assert sql_truth == python_truth, (
-        f"SQL-side comparator diverged from jira_key_norm for "
-        f"({a!r}, {b!r}): sql_matches={sql_truth} python_equal={python_truth}"
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[(discovered_key, "Support Desk", "service_desk")],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    rows = (
+        session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    )
+    enabled = [r for r in rows if r.is_enabled]
+    assert len(enabled) == 1, (
+        f"discovered key {discovered_key!r} must be recognized as the SAME "
+        f"project as the persisted key {persisted_key!r} (jira_key_norm "
+        f"treats them as equal) -- not create a duplicate enabled row. "
+        f"Found {len(enabled)} enabled rows: "
+        f"{[r.external_id for r in enabled]!r}"
+    )
+    assert enabled[0].id == existing.id, (
+        "the SAME row must be updated in place, not replaced by a new one"
     )
 
 

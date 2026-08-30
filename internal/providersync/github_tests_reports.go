@@ -336,8 +336,9 @@ const (
 // left withholding. Those two are properties of ONE report member's bytes
 // inside an artifact GitHub already returned successfully -- not a download
 // attempt at all, so CHAOS-4394's "maybe a retry observes it differently"
-// theory never applied to them in the first place. Prod evidence (local,
-// 2026-08-30, org 70d529e0, full-chaos/dev-health-ops): sync_watermarks for
+// theory never applied to them in the first place. Evidence (local, real
+// data, 2026-08-30, org 70d529e0, full-chaos/dev-health-ops, via the shared
+// local compose stack's postgres -- NOT prod, no oci access): sync_watermarks for
 // dataset_key=cicd/tests pinned at last_synced_at=2026-08-08 for three weeks
 // while dozens of hourly units completed a full run-listing walk
 // (job_runs_synced=6219, stable) and reported reports_complete=false with the

@@ -272,8 +272,9 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		{component: githubTestsReportMemberComponent, cause: githubTestsArtifactUnavailableCause, marked: true, blocking: false},
 		{component: githubTestsReportMemberComponent, cause: githubTestsUnreadableArchiveCause, marked: true, blocking: false},
 		// RED on the pre-CHAOS-4592 baseline for the last two (the
-		// report-parse-time causes, CHAOS-4153): prod evidence (local,
-		// 2026-08-30, org 70d529e0, full-chaos/dev-health-ops) found
+		// report-parse-time causes, CHAOS-4153): evidence (local, real data,
+		// 2026-08-30, org 70d529e0, full-chaos/dev-health-ops, via the shared
+		// local compose stack's postgres -- NOT prod) found
 		// sync_watermarks for dataset_key=cicd/tests pinned at
 		// last_synced_at=2026-08-08 for three weeks, with the SAME
 		// {cause: "malformed", count: 77} recurring on every hourly unit even

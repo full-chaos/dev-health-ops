@@ -461,18 +461,32 @@ import json
 from pathlib import Path
 from typing import Any
 
-FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "external_ingest" / "v1"
+FIXTURE_DIR = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "external_ingest" / "v1"
+)
 ALL_KINDS = [
-    "repository", "identity", "team", "work_item", "work_item_transition",
-    "work_item_dependency", "pull_request", "review", "commit",
+    "repository",
+    "identity",
+    "team",
+    "work_item",
+    "work_item_transition",
+    "work_item_dependency",
+    "pull_request",
+    "review",
+    "commit",
 ]
+
 
 def load_fixture(kind: str) -> dict[str, Any]:
     return json.loads((FIXTURE_DIR / f"{kind}.json").read_text())
 
+
 def build_batch_envelope(
-    *, idempotency_key: str, source_instance: str = "github.com/acme",
-    kinds: list[str] | None = None, inject_invalid: bool = False,
+    *,
+    idempotency_key: str,
+    source_instance: str = "github.com/acme",
+    kinds: list[str] | None = None,
+    inject_invalid: bool = False,
 ) -> dict[str, Any]:
     kinds = kinds or ALL_KINDS
     records = []
@@ -485,10 +499,16 @@ def build_batch_envelope(
         "schemaVersion": "external-ingest.v1",
         "idempotencyKey": idempotency_key,
         "source": {
-            "type": "customer_push", "system": "github", "instance": source_instance,
-            "producer": "pytest-e2e", "producerVersion": "0.0.0",
+            "type": "customer_push",
+            "system": "github",
+            "instance": source_instance,
+            "producer": "pytest-e2e",
+            "producerVersion": "0.0.0",
         },
-        "window": {"startedAt": "2026-06-25T00:00:00Z", "endedAt": "2026-06-26T00:00:00Z"},
+        "window": {
+            "startedAt": "2026-06-25T00:00:00Z",
+            "endedAt": "2026-06-26T00:00:00Z",
+        },
         "records": records,
     }
 ```
@@ -502,6 +522,7 @@ Opt-in (filtered from unit/CI-unit runs): pytest -m clickhouse.
 Requires CLICKHOUSE_URI, POSTGRES_URI (or DATABASE_URI), and REDIS_URL simultaneously —
 the only test module in this repo that needs all three live services at once.
 """
+
 from __future__ import annotations
 
 import os
@@ -537,6 +558,7 @@ def org_id() -> str:
 @pytest.fixture(scope="module")
 def clickhouse_sink():
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
     sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
     sink.ensure_schema(force=True)
     yield sink
@@ -546,6 +568,7 @@ def clickhouse_sink():
 @pytest_asyncio.fixture
 async def client():
     from dev_health_ops.api.main import app
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -565,11 +588,17 @@ async def registered_source_and_token(org_id):
 
 
 @pytest.mark.asyncio
-async def test_validate_rejects_invalid_record_without_enqueue(client, registered_source_and_token):
+async def test_validate_rejects_invalid_record_without_enqueue(
+    client, registered_source_and_token
+):
     from tests._helpers.external_ingest_fixtures import build_batch_envelope
-    envelope = build_batch_envelope(idempotency_key="e2e-validate-1", inject_invalid=True)
+
+    envelope = build_batch_envelope(
+        idempotency_key="e2e-validate-1", inject_invalid=True
+    )
     resp = await client.post(
-        "/api/v1/external-ingest/validate", json=envelope,
+        "/api/v1/external-ingest/validate",
+        json=envelope,
         headers={"Authorization": f"Bearer {registered_source_and_token['token']}"},
     )
     assert resp.status_code == 200
@@ -581,9 +610,13 @@ async def test_validate_rejects_invalid_record_without_enqueue(client, registere
 
 @pytest.mark.asyncio
 async def test_batch_accept_process_status_and_bounded_recompute(
-    client, registered_source_and_token, clickhouse_sink, org_id,
+    client,
+    registered_source_and_token,
+    clickhouse_sink,
+    org_id,
 ):
     from tests._helpers.external_ingest_fixtures import build_batch_envelope
+
     token = registered_source_and_token["token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -593,7 +626,9 @@ async def test_batch_accept_process_status_and_bounded_recompute(
         "dev_health_ops.workers.celery_app.celery_app.send_task"
     ) as mock_send_task:
         resp = await client.post(
-            "/api/v1/external-ingest/batches", json=envelope, headers=headers,
+            "/api/v1/external-ingest/batches",
+            json=envelope,
+            headers=headers,
         )
         assert resp.status_code == 202
         ingestion_id = resp.json()["ingestionId"]
@@ -606,10 +641,12 @@ async def test_batch_accept_process_status_and_bounded_recompute(
         from dev_health_ops.workers.external_ingest_consumer import (
             consume_external_ingest_batches,
         )
+
         consume_external_ingest_batches.apply(kwargs={"max_iterations": 1})
 
         status_resp = await client.get(
-            f"/api/v1/external-ingest/batches/{ingestion_id}", headers=headers,
+            f"/api/v1/external-ingest/batches/{ingestion_id}",
+            headers=headers,
         )
         assert status_resp.status_code == 200
         status_body = status_resp.json()
@@ -619,12 +656,17 @@ async def test_batch_accept_process_status_and_bounded_recompute(
         assert any(e["code"] == "missing_external_id" for e in status_body["errors"])
 
         # Assertion (a): recompute was enqueued, naming-agnostic (decision 4).
-        assert mock_send_task.called, "expected a Celery task to be enqueued for bounded recompute"
+        assert mock_send_task.called, (
+            "expected a Celery task to be enqueued for bounded recompute"
+        )
         enqueued_orgs = [
-            call.kwargs.get("org_id") or (call.args[1].get("org_id") if len(call.args) > 1 else None)
+            call.kwargs.get("org_id")
+            or (call.args[1].get("org_id") if len(call.args) > 1 else None)
             for call in mock_send_task.call_args_list
         ]
-        assert org_id in enqueued_orgs or any(org_id in str(a) for a in mock_send_task.call_args_list)
+        assert org_id in enqueued_orgs or any(
+            org_id in str(a) for a in mock_send_task.call_args_list
+        )
 
     # Assertion (b): recompute was NOT executed inline -- metrics tables still empty
     # for this org immediately after the worker's status flip. Confirm exact table
@@ -636,7 +678,11 @@ async def test_batch_accept_process_status_and_bounded_recompute(
     assert result.result_rows[0][0] == 0
 
     # ClickHouse sink assertions -- FINAL + org_id predicate (house rule).
-    from dev_health_ops.storage.clickhouse import ClickHouseStore, get_repo_uuid_from_repo
+    from dev_health_ops.storage.clickhouse import (
+        ClickHouseStore,
+        get_repo_uuid_from_repo,
+    )
+
     store = ClickHouseStore(CLICKHOUSE_URI, org_id=org_id)
     repo_uuid = get_repo_uuid_from_repo("github.com/acme/api")
     pr_rows = clickhouse_sink.client.query(

@@ -77,23 +77,75 @@ async def fake_query_dicts(
     client.calls.append((sql, params))
     if "active_anonymous_users" in sql:
         return [{"day": date(2026, 5, 24), "active_anonymous_users": 7}]
-    if "FROM product_telemetry_events" in sql and "route_pattern" in sql and "page_viewed" in sql:
-        return [{"route_pattern": "/metrics", "events": 9, "sessions": 3, "anonymous_users": 2}]
+    if (
+        "FROM product_telemetry_events" in sql
+        and "route_pattern" in sql
+        and "page_viewed" in sql
+    ):
+        return [
+            {
+                "route_pattern": "/metrics",
+                "events": 9,
+                "sessions": 3,
+                "anonymous_users": 2,
+            }
+        ]
     if "feature_viewed" in sql:
-        return [{"feature": "investment", "surface": "dashboard", "views": 5, "anonymous_users": 2}]
+        return [
+            {
+                "feature": "investment",
+                "surface": "dashboard",
+                "views": 5,
+                "anonymous_users": 2,
+            }
+        ]
     if "filter_changed" in sql:
-        return [{"view": "metrics", "filter_key": "team", "changes": 4, "avg_value_count": 1.5}]
+        return [
+            {
+                "view": "metrics",
+                "filter_key": "team",
+                "changes": 4,
+                "avg_value_count": 1.5,
+            }
+        ]
     if "chart_interacted" in sql:
-        return [{"chart": "quadrant", "action": "hover", "surface": "metrics", "interactions": 8, "sessions": 2}]
+        return [
+            {
+                "chart": "quadrant",
+                "action": "hover",
+                "surface": "metrics",
+                "interactions": 8,
+                "sessions": 2,
+            }
+        ]
     if "client_error" in sql:
-        return [{"route_pattern": "/metrics", "boundary": "chart", "error_class": "RenderError", "errors": 2, "affected_anonymous_users": 1}]
+        return [
+            {
+                "route_pattern": "/metrics",
+                "boundary": "chart",
+                "error_class": "RenderError",
+                "errors": 2,
+                "affected_anonymous_users": 1,
+            }
+        ]
     if "session_ended" in sql:
-        return [{"p50_duration_ms": 1000, "p75_duration_ms": 1500, "p90_duration_ms": 2500, "p95_duration_ms": 3000, "avg_pages_viewed": 4.0, "avg_interactions": 11.0}]
+        return [
+            {
+                "p50_duration_ms": 1000,
+                "p75_duration_ms": 1500,
+                "p90_duration_ms": 2500,
+                "p95_duration_ms": 3000,
+                "avg_pages_viewed": 4.0,
+                "avg_interactions": 11.0,
+            }
+        ]
     return []
 
 
 @pytest.mark.asyncio
-async def test_load_product_telemetry_dashboard_queries_all_sections(monkeypatch) -> None:
+async def test_load_product_telemetry_dashboard_queries_all_sections(
+    monkeypatch,
+) -> None:
     client = FakeQueryClient()
     monkeypatch.setattr(
         "dev_health_ops.api.product_telemetry.dashboard.query_dicts",
@@ -190,11 +242,17 @@ from dev_health_ops.api.product_telemetry.dashboard import (
 
 
 @pytest.mark.asyncio
-async def test_resolve_product_telemetry_dashboard_requires_org_and_maps_sections(monkeypatch) -> None:
+async def test_resolve_product_telemetry_dashboard_requires_org_and_maps_sections(
+    monkeypatch,
+) -> None:
     async def fake_loader(client, org_id_hash, date_range):
         assert org_id_hash == "org_hash_123"
         return ProductTelemetryDashboard(
-            daily_active_users=[ProductTelemetryDailyActiveUsers(day=date(2026, 5, 24), active_anonymous_users=7)],
+            daily_active_users=[
+                ProductTelemetryDailyActiveUsers(
+                    day=date(2026, 5, 24), active_anonymous_users=7
+                )
+            ],
             top_routes=[],
             feature_views=[],
             filter_changes=[],
@@ -211,7 +269,9 @@ async def test_resolve_product_telemetry_dashboard_requires_org_and_maps_section
     context = GraphQLContext(client=object(), org_id="org_hash_123")
     result = await resolve_product_telemetry_dashboard(
         context,
-        ProductTelemetryDashboardInput(start_date=date(2026, 5, 1), end_date=date(2026, 5, 25)),
+        ProductTelemetryDashboardInput(
+            start_date=date(2026, 5, 1), end_date=date(2026, 5, 25)
+        ),
     )
 
     assert result.daily_active_users[0].active_anonymous_users == 7

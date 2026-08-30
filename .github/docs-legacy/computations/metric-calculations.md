@@ -76,13 +76,13 @@ Work items from all providers normalize to unified `WorkItem` model:
 
 ```python
 class WorkItem:
-    provider: str          # jira, github, gitlab
-    work_item_id: str      # Provider-native ID
-    work_scope_id: str     # Project/repo identifier
-    team_id: Optional[str] # Assigned team
+    provider: str  # jira, github, gitlab
+    work_item_id: str  # Provider-native ID
+    work_scope_id: str  # Project/repo identifier
+    team_id: Optional[str]  # Assigned team
     created_at: datetime
-    started_at: Optional[datetime]   # First in_progress
-    completed_at: Optional[datetime] # First done/canceled
+    started_at: Optional[datetime]  # First in_progress
+    completed_at: Optional[datetime]  # First done/canceled
 ```
 
 ### Status Normalization

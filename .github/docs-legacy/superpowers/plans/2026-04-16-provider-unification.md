@@ -402,8 +402,9 @@ from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 
 @pytest.fixture
 def client() -> GitHubWorkClient:
-    with patch("github.Github"), patch(
-        "dev_health_ops.providers.github.client.GitHubGraphQLClient"
+    with (
+        patch("github.Github"),
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
     ):
         return GitHubWorkClient(auth=GitHubAuth(token="fake"))
 
@@ -1362,28 +1363,27 @@ from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 Read the existing `from_env` body (lines 88-103) to learn the shape. Replace with:
 
 ```python
-    @classmethod
-    def from_env(cls) -> JiraClient:
-        env = read_env_spec(
-            EnvSpec(
-                required={
-                    "base_url": "JIRA_BASE_URL",
-                    "email": "JIRA_EMAIL",
-                    "api_token": "JIRA_API_TOKEN",
-                },
-                missing_error=(
-                    "Jira env vars required: JIRA_BASE_URL, JIRA_EMAIL, "
-                    "JIRA_API_TOKEN"
-                ),
-            )
+@classmethod
+def from_env(cls) -> JiraClient:
+    env = read_env_spec(
+        EnvSpec(
+            required={
+                "base_url": "JIRA_BASE_URL",
+                "email": "JIRA_EMAIL",
+                "api_token": "JIRA_API_TOKEN",
+            },
+            missing_error=(
+                "Jira env vars required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN"
+            ),
         )
-        return cls(
-            auth=JiraAuth(
-                base_url=_normalize_jira_base_url(str(env["base_url"])),
-                email=str(env["email"]),
-                api_token=str(env["api_token"]),
-            )
+    )
+    return cls(
+        auth=JiraAuth(
+            base_url=_normalize_jira_base_url(str(env["base_url"])),
+            email=str(env["email"]),
+            api_token=str(env["api_token"]),
         )
+    )
 ```
 
 - [ ] **Step 5.7: Migrate `linear/client.py::from_env`**
@@ -1981,7 +1981,7 @@ class TestExtractJsonObject:
         assert extract_json_object('{"a": 1}') == {"a": 1}
 
     def test_object_within_text(self) -> None:
-        text = "Here is the result: {\"a\": 1, \"b\": 2}. Thanks!"
+        text = 'Here is the result: {"a": 1, "b": 2}. Thanks!'
         assert extract_json_object(text) == {"a": 1, "b": 2}
 
     def test_empty_returns_none(self) -> None:
@@ -2289,18 +2289,20 @@ from dev_health_ops.metrics.query_builder import OrgScopedQuery
 Replace the `__init__` (lines 55-57) and the two private methods (lines 59-71) with:
 
 ```python
-    def __init__(self, client: Any, org_id: str = "") -> None:
-        self.client = client
-        self.org_id = org_id
-        self._scope = OrgScopedQuery(org_id)
+def __init__(self, client: Any, org_id: str = "") -> None:
+    self.client = client
+    self.org_id = org_id
+    self._scope = OrgScopedQuery(org_id)
 
-    def _org_filter(self, *, alias: str = "") -> str:
-        """Return an ``AND org_id = …`` clause when *org_id* is set."""
-        return self._scope.filter(alias=alias)
 
-    def _inject_org_id(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Inject *org_id* into query parameters when set."""
-        return self._scope.inject(params)
+def _org_filter(self, *, alias: str = "") -> str:
+    """Return an ``AND org_id = …`` clause when *org_id* is set."""
+    return self._scope.filter(alias=alias)
+
+
+def _inject_org_id(self, params: dict[str, Any]) -> dict[str, Any]:
+    """Inject *org_id* into query parameters when set."""
+    return self._scope.inject(params)
 ```
 
 Keep `self.org_id` as a public attribute — the existing `if self.org_id:` check on line 89 (inside `load_git_rows`) relies on it. Leave that block alone; the builder is a refinement of the two helpers, not a full replacement of every org-scope use.

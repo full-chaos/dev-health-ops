@@ -332,8 +332,12 @@ class RecomputeScope:
         )
 
     @classmethod
-    def empty(cls, *, org_id: str, source_system: str, source_instance: str) -> "RecomputeScope":
-        return cls(org_id=org_id, source_system=source_system, source_instance=source_instance)
+    def empty(
+        cls, *, org_id: str, source_system: str, source_instance: str
+    ) -> "RecomputeScope":
+        return cls(
+            org_id=org_id, source_system=source_system, source_instance=source_instance
+        )
 ```
 
 ### Planner + dispatcher
@@ -345,9 +349,9 @@ class RecomputePlan:
     trigger: bool  # False => nothing to dispatch (e.g. repository.v1-only)
     repo_ids: list[str]
     team_ids: list[str]
-    day: str | None          # ISO date, for run_daily_metrics
+    day: str | None  # ISO date, for run_daily_metrics
     backfill_days: int | None
-    from_date: str | None    # ISO datetime, for work_graph_build / investment
+    from_date: str | None  # ISO datetime, for work_graph_build / investment
     to_date: str | None
     capped_days: bool
     capped_repos: bool
@@ -400,6 +404,7 @@ def schedule_or_coalesce(
 # src/dev_health_ops/workers/external_ingest_tasks.py (new file, re-exported
 # from workers/tasks.py per the flat-namespace convention)
 
+
 @celery_app.task(
     bind=True,
     max_retries=3,
@@ -450,6 +455,7 @@ chains + one investment-materialize call).
 Guarded per the 0025/0030/0031 create-if-missing convention so a partial
 rerun resumes cleanly.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -548,8 +554,13 @@ def downgrade() -> None:
 # src/dev_health_ops/external_ingest/recompute_status.py
 from sqlalchemy import text
 
+
 async def record_recompute_dispatch(
-    session, *, org_id: str, ingestion_ids: list[str], scope: RecomputeScope,
+    session,
+    *,
+    org_id: str,
+    ingestion_ids: list[str],
+    scope: RecomputeScope,
     result: RecomputeDispatchResult,
 ) -> None:
     await session.execute(

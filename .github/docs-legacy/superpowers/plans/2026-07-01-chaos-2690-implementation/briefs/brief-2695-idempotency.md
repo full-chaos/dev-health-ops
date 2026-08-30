@@ -297,11 +297,12 @@ issue's functions are called:
 #    Malformed body / unsupported schemaVersion -> 400 BEFORE reaching this issue's code.
 
 # 3. Source ownership + registration check (CHAOS-2696 lookup + this issue's resolver):
-source = lookup_external_ingest_source(db, org_id=org_id,
-                                        system=envelope.source.system,
-                                        instance=envelope.source.instance)
-mode = resolve_effective_mode(db, org_id=org_id, system=envelope.source.system,
-                               instance=envelope.source.instance)
+source = lookup_external_ingest_source(
+    db, org_id=org_id, system=envelope.source.system, instance=envelope.source.instance
+)
+mode = resolve_effective_mode(
+    db, org_id=org_id, system=envelope.source.system, instance=envelope.source.instance
+)
 if mode == "unclaimed":
     raise ingest_error(403, "source_not_registered", ...)
 if mode == "disabled":
@@ -313,14 +314,20 @@ if mode == "fullchaos_sync":
 # 4. Idempotency resolution (THIS issue, §6/§7) -- FIRST write in this session (decision 6):
 payload_hash = compute_payload_hash(envelope)
 outcome = resolve_batch_idempotency(
-    db, org_id=org_id, source_system=envelope.source.system,
+    db,
+    org_id=org_id,
+    source_system=envelope.source.system,
     source_instance=envelope.source.instance,
-    idempotency_key=envelope.idempotencyKey, payload_hash=payload_hash,
+    idempotency_key=envelope.idempotencyKey,
+    payload_hash=payload_hash,
     schema_version=envelope.schemaVersion,
-    window_started_at=envelope.window.startedAt, window_ended_at=envelope.window.endedAt,
+    window_started_at=envelope.window.startedAt,
+    window_ended_at=envelope.window.endedAt,
     items_received=len(envelope.records),
 )
-await db.commit()  # commit-before-raise: batch row must survive even if step 5 raises 503/409
+await (
+    db.commit()
+)  # commit-before-raise: batch row must survive even if step 5 raises 503/409
 
 if outcome.kind == "conflict":
     raise ingest_error(409, "idempotency_key_conflict", ...)
@@ -331,11 +338,15 @@ if outcome.kind == "replay":
 try:
     stream_write(outcome.batch.id, envelope)
 except StreamUnavailableError:
-    await mark_batch_stream_unavailable(db, outcome.batch.id)  # commit-before-raise again
+    await mark_batch_stream_unavailable(
+        db, outcome.batch.id
+    )  # commit-before-raise again
     raise ingest_error(503, "ingest_stream_unavailable", ...)
 
 if outcome.kind == "retry":
-    await mark_batch_accepted(db, outcome.batch.id)  # clear stream_unavailable -> accepted
+    await mark_batch_accepted(
+        db, outcome.batch.id
+    )  # clear stream_unavailable -> accepted
 return accepted_response(outcome.batch)  # 202
 ```
 
@@ -424,18 +435,22 @@ class ExternalIngestSource(Base):
     mode: Mapped[str] = mapped_column(Text, nullable=False, default="customer_push")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
     __table_args__ = (
         UniqueConstraint(
-            "org_id", "system", "instance",
+            "org_id",
+            "system",
+            "instance",
             name="uq_external_ingest_sources_identity",
         ),
         Index("ix_external_ingest_sources_org_system", "org_id", "system"),
@@ -449,27 +464,49 @@ requires the `payload_hash` column and the unique constraint below)
 class ExternalIngestBatch(Base):
     __tablename__ = "external_ingest_batches"
 
-    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)  # == ingestionId
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID, primary_key=True, default=uuid.uuid4
+    )  # == ingestionId
     org_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     source_system: Mapped[str] = mapped_column(Text, nullable=False)
     source_instance: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
-    payload_hash: Mapped[str] = mapped_column(Text, nullable=False)  # sha256 hex, 64 chars
+    payload_hash: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )  # sha256 hex, 64 chars
     schema_version: Mapped[str] = mapped_column(Text, nullable=False)
-    window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    window_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    window_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, default="accepted")
     items_received: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     items_accepted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     items_rejected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint(
-            "org_id", "source_system", "source_instance", "idempotency_key",
+            "org_id",
+            "source_system",
+            "source_instance",
+            "idempotency_key",
             name="uq_external_ingest_batches_identity",
         ),
         Index("ix_external_ingest_batches_org_status", "org_id", "status"),
@@ -538,15 +575,23 @@ def upgrade() -> None:
             sa.Column("org_id", sa.Text(), nullable=False),
             sa.Column("system", sa.Text(), nullable=False),
             sa.Column("instance", sa.Text(), nullable=False),
-            sa.Column("mode", sa.Text(), nullable=False, server_default="customer_push"),
-            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "mode", sa.Text(), nullable=False, server_default="customer_push"
+            ),
+            sa.Column(
+                "enabled", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("id"),
         )
-    _create_index_if_missing("ix_external_ingest_sources_org_system", _SOURCES_TABLE, ["org_id", "system"])
+    _create_index_if_missing(
+        "ix_external_ingest_sources_org_system", _SOURCES_TABLE, ["org_id", "system"]
+    )
     _create_unique_if_missing(
-        "uq_external_ingest_sources_identity", _SOURCES_TABLE, ["org_id", "system", "instance"]
+        "uq_external_ingest_sources_identity",
+        _SOURCES_TABLE,
+        ["org_id", "system", "instance"],
     )
 
     if not _table_exists(_BATCHES_TABLE):
@@ -562,19 +607,30 @@ def upgrade() -> None:
             sa.Column("window_started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("window_ended_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("status", sa.Text(), nullable=False, server_default="accepted"),
-            sa.Column("items_received", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column("items_accepted", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column("items_rejected", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "items_received", sa.Integer(), nullable=False, server_default="0"
+            ),
+            sa.Column(
+                "items_accepted", sa.Integer(), nullable=False, server_default="0"
+            ),
+            sa.Column(
+                "items_rejected", sa.Integer(), nullable=False, server_default="0"
+            ),
             sa.Column("error_summary", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
             sa.PrimaryKeyConstraint("id"),
         )
-    _add_column_if_missing(_BATCHES_TABLE, sa.Column("payload_hash", sa.Text(), nullable=True))
-    _create_index_if_missing("ix_external_ingest_batches_org_status", _BATCHES_TABLE, ["org_id", "status"])
+    _add_column_if_missing(
+        _BATCHES_TABLE, sa.Column("payload_hash", sa.Text(), nullable=True)
+    )
+    _create_index_if_missing(
+        "ix_external_ingest_batches_org_status", _BATCHES_TABLE, ["org_id", "status"]
+    )
     _create_unique_if_missing(
-        "uq_external_ingest_batches_identity", _BATCHES_TABLE,
+        "uq_external_ingest_batches_identity",
+        _BATCHES_TABLE,
         ["org_id", "source_system", "source_instance", "idempotency_key"],
     )
 
@@ -606,6 +662,7 @@ policy writeup (canonicalization algorithm, outcome semantics, ownership
 interplay). This module implements the algorithm; it does not own the
 external_ingest_batches table's general CRUD (see CHAOS-2694's status.py).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -738,6 +795,7 @@ fullchaos_sync ownership is DERIVED from integrations/integration_sources (nativ
 sync's existing tables) rather than mirrored into external_ingest_sources -- see
 CHAOS-2695 brief decision 11.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -805,7 +863,10 @@ def check_registration_conflict(
     ownership. CHAOS-2696's registration endpoint calls this before writing
     a new external_ingest_sources row.
     """
-    return resolve_effective_mode(session, org_id=org_id, system=system, instance=instance) == "fullchaos_sync"
+    return (
+        resolve_effective_mode(session, org_id=org_id, system=system, instance=instance)
+        == "fullchaos_sync"
+    )
 ```
 
 ---

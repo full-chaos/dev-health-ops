@@ -346,10 +346,23 @@ async def test_providers_discovered_concurrently(monkeypatch):
     def _noop(): ...
 
     with (
-        patch.object(mod, "run_async", lambda coro: asyncio.get_event_loop().run_until_complete(coro)),
-patch("dev_health_ops.api.services.configuration.IntegrationCredentialsService", return_value=fake_creds),
-patch("dev_health_ops.api.services.configuration.TeamDiscoveryService", return_value=fake_discovery),
-patch("dev_health_ops.api.services.configuration.TeamDriftSyncService", return_value=fake_drift),
+        patch.object(
+            mod,
+            "run_async",
+            lambda coro: asyncio.get_event_loop().run_until_complete(coro),
+        ),
+        patch(
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService",
+            return_value=fake_creds,
+        ),
+        patch(
+            "dev_health_ops.api.services.configuration.TeamDiscoveryService",
+            return_value=fake_discovery,
+        ),
+        patch(
+            "dev_health_ops.api.services.configuration.TeamDriftSyncService",
+            return_value=fake_drift,
+        ),
         patch("dev_health_ops.db.get_postgres_session", lambda: _FakeSession()),
     ):
         # Call the async body directly via the helper we'll add
@@ -906,8 +919,7 @@ def test_category_pattern_compiled_once_per_key():
     compiled_category_patterns = [p for p in compile_calls if "[^.]*" in p]
     # 2 categories, each should appear 0 or 1 time (cache hit on second call)
     counts = {
-        k: sum(1 for p in compiled_category_patterns if k in p)
-        for k in categories
+        k: sum(1 for p in compiled_category_patterns if k in p) for k in categories
     }
     for k, n in counts.items():
         assert n <= 1, f"{k} re-compiled {n} times across calls (expected <=1)"
@@ -1045,9 +1057,7 @@ async def test_repo_and_team_edges_fetched_in_parallel(monkeypatch):
     monkeypatch.setattr(mod, "_tables_present", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "_columns_present", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "resolve_repo_filter_ids", AsyncMock(return_value=[]))
-    monkeypatch.setattr(
-        mod, "build_scope_filter_multi", lambda *_a, **_kw: ("", {})
-    )
+    monkeypatch.setattr(mod, "build_scope_filter_multi", lambda *_a, **_kw: ("", {}))
 
     class _Scope:
         level = "org"
@@ -1057,7 +1067,9 @@ async def test_repo_and_team_edges_fetched_in_parallel(monkeypatch):
     filters.themes = []
     filters.subcategories = []
 
-    monkeypatch.setattr(mod, "time_window", lambda _f: (date(2026, 1, 1), date(2026, 1, 7), None, None))
+    monkeypatch.setattr(
+        mod, "time_window", lambda _f: (date(2026, 1, 1), date(2026, 1, 7), None, None)
+    )
     monkeypatch.setattr(mod, "_split_category_filters", lambda _f: ([], []))
 
     await mod.build_investment_flow_response(
@@ -1355,62 +1367,60 @@ Expected: FAIL — current impl always calls `.get()` per key (`mget_calls == 0`
 Edit `src/dev_health_ops/api/graphql/loaders/base.py`. Replace the body of `_load_with_cache` (lines 69-114):
 
 ```python
-    async def _load_with_cache(self, keys: list[K]) -> Sequence[V]:
-        """Load values with optional cache lookup.
+async def _load_with_cache(self, keys: list[K]) -> Sequence[V]:
+    """Load values with optional cache lookup.
 
-        Uses a single mget() call per batch when the backend supports it,
-        falling back to per-key get() otherwise.
-        """
-        results: dict[int, V] = {}
-        missing_keys: list[tuple[int, K]] = []
+    Uses a single mget() call per batch when the backend supports it,
+    falling back to per-key get() otherwise.
+    """
+    results: dict[int, V] = {}
+    missing_keys: list[tuple[int, K]] = []
 
-        if self._external_cache is None:
-            missing_keys = [(idx, key) for idx, key in enumerate(keys)]
+    if self._external_cache is None:
+        missing_keys = [(idx, key) for idx, key in enumerate(keys)]
+    else:
+        cache_keys = [
+            make_cache_key(self._cache_prefix, self._org_id, key) for key in keys
+        ]
+        mget_fn = getattr(self._external_cache, "mget", None)
+        if callable(mget_fn):
+            try:
+                cached_values = mget_fn(cache_keys)
+            except Exception as e:
+                logger.debug("Cache mget failed: %s", e)
+                cached_values = [None] * len(cache_keys)
         else:
-            cache_keys = [
-                make_cache_key(self._cache_prefix, self._org_id, key) for key in keys
-            ]
-            mget_fn = getattr(self._external_cache, "mget", None)
-            if callable(mget_fn):
+            cached_values = []
+            for ck in cache_keys:
                 try:
-                    cached_values = mget_fn(cache_keys)
+                    cached_values.append(self._external_cache.get(ck))
                 except Exception as e:
-                    logger.debug("Cache mget failed: %s", e)
-                    cached_values = [None] * len(cache_keys)
+                    logger.debug("Cache get failed for %s: %s", ck, e)
+                    cached_values.append(None)
+
+        for idx, key, cached in zip(range(len(keys)), keys, cached_values):
+            if cached is not None:
+                results[idx] = cached
             else:
-                cached_values = []
-                for ck in cache_keys:
-                    try:
-                        cached_values.append(self._external_cache.get(ck))
-                    except Exception as e:
-                        logger.debug("Cache get failed for %s: %s", ck, e)
-                        cached_values.append(None)
+                missing_keys.append((idx, key))
 
-            for idx, key, cached in zip(range(len(keys)), keys, cached_values):
-                if cached is not None:
-                    results[idx] = cached
-                else:
-                    missing_keys.append((idx, key))
+    # Batch load missing keys
+    if missing_keys:
+        missing_indices, missing_key_values = (
+            zip(*missing_keys) if missing_keys else ([], [])
+        )
+        loaded_values = await self.batch_load(list(missing_key_values))
 
-        # Batch load missing keys
-        if missing_keys:
-            missing_indices, missing_key_values = (
-                zip(*missing_keys) if missing_keys else ([], [])
-            )
-            loaded_values = await self.batch_load(list(missing_key_values))
+        for idx, key, value in zip(missing_indices, missing_key_values, loaded_values):
+            results[idx] = value
+            if self._external_cache and value is not None:
+                cache_key = make_cache_key(self._cache_prefix, self._org_id, key)
+                try:
+                    self._external_cache.set(cache_key, value)
+                except Exception as e:
+                    logger.debug("Cache set failed for %s: %s", cache_key, e)
 
-            for idx, key, value in zip(
-                missing_indices, missing_key_values, loaded_values
-            ):
-                results[idx] = value
-                if self._external_cache and value is not None:
-                    cache_key = make_cache_key(self._cache_prefix, self._org_id, key)
-                    try:
-                        self._external_cache.set(cache_key, value)
-                    except Exception as e:
-                        logger.debug("Cache set failed for %s: %s", cache_key, e)
-
-        return [results[idx] for idx in range(len(keys))]
+    return [results[idx] for idx in range(len(keys))]
 ```
 
 - [ ] **Step 4: Run test to verify it passes**

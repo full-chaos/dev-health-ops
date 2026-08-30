@@ -308,6 +308,7 @@ into external-ingest.v1 records, derive a stable idempotency key, and POST a bat
 Run: FULLCHAOS_INGEST_TOKEN=... FULLCHAOS_API_URL=... GITHUB_WEBHOOK_SECRET=... \
      uvicorn github_relay:app --port 8080
 """
+
 import hashlib
 import hmac
 import os
@@ -328,7 +329,9 @@ FULLCHAOS_ORG_ID = os.environ["FULLCHAOS_ORG_ID"]
 def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
     if not signature_header or not signature_header.startswith("sha256="):
         raise HTTPException(status_code=401, detail="missing signature")
-    expected = hmac.new(GITHUB_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        GITHUB_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256
+    ).hexdigest()
     if not hmac.compare_digest(f"sha256={expected}", signature_header):
         raise HTTPException(status_code=401, detail="bad signature")
 
@@ -376,7 +379,8 @@ async def github_webhook(
         "source": {
             "type": "customer_push",
             "system": "github",
-            "instance": payload["repository"]["full_name"].split("/")[0] + ".github.com",
+            "instance": payload["repository"]["full_name"].split("/")[0]
+            + ".github.com",
             "producer": "webhook-relay",
             "producerVersion": "0.1.0",
         },

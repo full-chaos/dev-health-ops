@@ -101,14 +101,14 @@ from dev_health_ops.fixtures.coherence import (
 )
 
 bundle = FixtureBundle(
-    coverage_snapshots=my_snapshots,      # list[dict]
-    test_suite_results=my_suite_rows,     # list[dict]
-    work_item_metrics=my_wi_rows,         # list[dict]
-    commit_stats=my_stat_rows,            # list[dict]
+    coverage_snapshots=my_snapshots,  # list[dict]
+    test_suite_results=my_suite_rows,  # list[dict]
+    work_item_metrics=my_wi_rows,  # list[dict]
+    commit_stats=my_stat_rows,  # list[dict]
 )
 
 try:
-    validate_all(bundle)                  # raises CoherenceError if any violation
+    validate_all(bundle)  # raises CoherenceError if any violation
 except CoherenceError as exc:
     for v in exc.violations:
         print(v)

@@ -53,12 +53,14 @@ see [PagerDuty OAuth app setup](./user-guide/pagerduty-oauth-app-setup.md).
 ```python
 # Async context (API, async workers)
 from dev_health_ops.credentials import CredentialResolver
+
 async with get_async_session() as session:
     resolver = CredentialResolver(session, org_id="my-org")
     creds = await resolver.resolve("github")
 
 # Sync context (Celery workers, CLI)
 from dev_health_ops.credentials import resolve_credentials_sync
+
 creds = resolve_credentials_sync("github", org_id="my-org", db_url=db_url)
 ```
 

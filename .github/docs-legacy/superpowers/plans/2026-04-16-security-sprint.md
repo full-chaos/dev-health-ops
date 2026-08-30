@@ -35,6 +35,7 @@ Create `tests/api/test_org_id_middleware_membership.py`:
 Verifies that OrgIdMiddleware rejects a forged X-Org-Id header pointing at
 an org the authenticated user is NOT a member of.
 """
+
 from __future__ import annotations
 
 import types
@@ -263,7 +264,11 @@ class OrgIdMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
-__all__ = ["OrgIdMiddleware", "get_authenticated_user_from_headers", "user_is_member_of_org"]
+__all__ = [
+    "OrgIdMiddleware",
+    "get_authenticated_user_from_headers",
+    "user_is_member_of_org",
+]
 ```
 
 - [ ] **Step 1.4: Run failing test again — it should now pass**
@@ -335,7 +340,9 @@ async def test_missing_header_falls_back_to_jwt_org():
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                response = await client.get("/", headers={"authorization": "Bearer tok"})
+                response = await client.get(
+                    "/", headers={"authorization": "Bearer tok"}
+                )
         finally:
             _current_org_id.set(None)
 
@@ -371,6 +378,7 @@ Create `tests/api/admin/test_orgs_auth.py`:
 
 ```python
 """Auth-dependency tests for admin orgs router (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import importlib
@@ -387,9 +395,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization
 
-orgs_router_module = importlib.import_module(
-    "dev_health_ops.api.admin.routers.orgs"
-)
+orgs_router_module = importlib.import_module("dev_health_ops.api.admin.routers.orgs")
 admin_common = importlib.import_module("dev_health_ops.api.admin.routers.common")
 admin_middleware = importlib.import_module("dev_health_ops.api.admin.middleware")
 
@@ -547,6 +553,7 @@ Create `tests/api/services/test_sso_xxe.py`:
 
 ```python
 """XXE-resistance tests for SAML XML parsing (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
@@ -799,6 +806,7 @@ Create `tests/api/services/test_sso_allowed_domains.py`:
 
 ```python
 """Enforcement tests for SSO allowed_domains (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import uuid
@@ -893,21 +901,19 @@ Expected: `test_disallowed_domain_is_rejected_on_autoprovision` FAILS (no check 
 In `src/dev_health_ops/api/services/sso.py`, modify the `provision_or_get_user` method (around line 592 after the `provider` lookup). Insert the following block immediately before the `stmt = select(User).where(User.email == email)` line:
 
 ```python
-        allowed = [d.strip().lower() for d in (provider.allowed_domains or []) if d]
-        if allowed:
-            try:
-                _, domain = email.rsplit("@", 1)
-            except ValueError as exc:
-                raise SSOProcessingError("Invalid email from IdP") from exc
-            if domain.lower() not in allowed:
-                logger.warning(
-                    "SSO provision rejected: domain=%s not in allowed_domains for provider=%s",
-                    sanitize_for_log(domain),
-                    provider.id,
-                )
-                raise SSOProcessingError(
-                    "Email domain is not permitted for this SSO provider"
-                )
+allowed = [d.strip().lower() for d in (provider.allowed_domains or []) if d]
+if allowed:
+    try:
+        _, domain = email.rsplit("@", 1)
+    except ValueError as exc:
+        raise SSOProcessingError("Invalid email from IdP") from exc
+    if domain.lower() not in allowed:
+        logger.warning(
+            "SSO provision rejected: domain=%s not in allowed_domains for provider=%s",
+            sanitize_for_log(domain),
+            provider.id,
+        )
+        raise SSOProcessingError("Email domain is not permitted for this SSO provider")
 ```
 
 (`sanitize_for_log` is already imported on line 22.)
@@ -945,6 +951,7 @@ Create `tests/api/test_forwarded_ip_trust.py`:
 
 ```python
 """X-Forwarded-For trust boundary tests (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
@@ -1001,9 +1008,7 @@ def test_trusted_proxies_unset_disables_xff(monkeypatch):
 def test_xff_takes_first_entry(monkeypatch):
     """When trusted, the leftmost XFF entry is the original client."""
     monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.1")
-    req = _make_request(
-        client_host="10.0.0.1", xff="203.0.113.1, 10.0.0.1"
-    )
+    req = _make_request(client_host="10.0.0.1", xff="203.0.113.1, 10.0.0.1")
     assert get_forwarded_ip(req) == "203.0.113.1"
 ```
 
@@ -1072,6 +1077,7 @@ Create `tests/api/queries/test_drilldown_org_check.py`:
 
 ```python
 """Defense-in-depth org_id re-check for drilldown queries (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -1182,9 +1188,7 @@ def _assert_org_id(org_id: str) -> None:
         raise ValueError("org_id is required for drilldown queries")
     ctx = get_current_org_id()
     if ctx is not None and ctx != org_id:
-        raise PermissionError(
-            f"org_id mismatch: contextvar={ctx!r} caller={org_id!r}"
-        )
+        raise PermissionError(f"org_id mismatch: contextvar={ctx!r} caller={org_id!r}")
 ```
 
 Then at the top of both `fetch_pull_requests` (inside the function body, before the `query = f"""..."""`) and `fetch_issues`, add:
@@ -1248,6 +1252,7 @@ Create `tests/api/test_generic_exception_handler.py`:
 
 ```python
 """Generic 500 exception handler returns sanitized JSON (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
@@ -1306,8 +1311,10 @@ async def test_500_logs_original_exception(sanitized_app, caplog):
     ) as ac:
         await ac.get("/boom")
     # The full text must appear in the logs, not the response.
-    assert any("hunter2" in rec.message or "hunter2" in (rec.exc_text or "")
-               for rec in caplog.records)
+    assert any(
+        "hunter2" in rec.message or "hunter2" in (rec.exc_text or "")
+        for rec in caplog.records
+    )
 ```
 
 - [ ] **Step 8.2: Run test — import will fail**
@@ -1320,9 +1327,7 @@ Expected: ImportError for `_generic_exception_handler` (symbol does not exist).
 Edit `src/dev_health_ops/api/main.py`. Immediately after the existing `_validation_error_handler` function (after line 366), add:
 
 ```python
-async def _generic_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all 500 handler that returns a sanitized response.
 
     Logs the real exception with stack trace at ERROR level so operators can
@@ -1380,6 +1385,7 @@ Create `tests/api/test_security_headers.py`:
 
 ```python
 """Security-headers middleware tests (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
@@ -1571,6 +1577,7 @@ Create `tests/api/auth/test_extract_unverified_claims.py`:
 
 ```python
 """Tests for narrowed exception handling in _extract_unverified_org_and_subject."""
+
 from __future__ import annotations
 
 import logging
@@ -1585,10 +1592,7 @@ def test_returns_none_tuple_for_malformed_token(caplog):
     caplog.set_level(logging.DEBUG, logger="dev_health_ops.api.auth.router")
     org, sub = _extract_unverified_org_and_subject("not.a.token")
     assert (org, sub) == (None, None)
-    assert any(
-        "unverified claims" in rec.message.lower()
-        for rec in caplog.records
-    )
+    assert any("unverified claims" in rec.message.lower() for rec in caplog.records)
 
 
 def test_returns_none_tuple_for_empty_token():

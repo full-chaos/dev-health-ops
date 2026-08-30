@@ -298,7 +298,14 @@ down_revision = "0031"
 branch_labels = None
 depends_on = None
 
-__all__ = ["revision", "down_revision", "branch_labels", "depends_on", "upgrade", "downgrade"]
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 _SOURCES_TABLE = "ingest_sources"
 _TOKENS_TABLE = "ingest_tokens"
@@ -314,15 +321,22 @@ def upgrade() -> None:
             sa.Column("instance", sa.Text(), nullable=False),
             sa.Column("display_name", sa.Text(), nullable=True),
             sa.Column("mode", sa.Text(), nullable=False, server_default="disabled"),
-            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "enabled", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             # post-critique CC5: managed-source match resolved at registration time
-            sa.Column("matched_integration_source_id", UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "matched_integration_source_id", UUID(as_uuid=True), nullable=True
+            ),
             sa.Column("created_by_user_id", UUID(as_uuid=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint(
-                "org_id", "system", "instance", name="uq_ingest_sources_org_system_instance"
+                "org_id",
+                "system",
+                "instance",
+                name="uq_ingest_sources_org_system_instance",
             ),
         )
     _create_index_if_missing("ix_ingest_sources_org_id", _SOURCES_TABLE, ["org_id"])
@@ -333,8 +347,10 @@ def upgrade() -> None:
             sa.Column("id", UUID(as_uuid=True), nullable=False),
             sa.Column("org_id", sa.Text(), nullable=False),
             sa.Column(
-                "source_id", UUID(as_uuid=True),
-                sa.ForeignKey(f"{_SOURCES_TABLE}.id"), nullable=True,
+                "source_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey(f"{_SOURCES_TABLE}.id"),
+                nullable=True,
             ),
             sa.Column("name", sa.Text(), nullable=False),
             sa.Column("token_hash", sa.Text(), nullable=False),
@@ -368,7 +384,9 @@ def _table_exists(table_name: str) -> bool:
     return table_name in sa.inspect(bind).get_table_names()
 
 
-def _create_index_if_missing(index_name: str, table_name: str, columns: list[str]) -> None:
+def _create_index_if_missing(
+    index_name: str, table_name: str, columns: list[str]
+) -> None:
     bind = op.get_bind()
     existing = {ix["name"] for ix in sa.inspect(bind).get_indexes(table_name)}
     if index_name not in existing:
@@ -385,13 +403,22 @@ def _create_index_if_missing(index_name: str, table_name: str, columns: list[str
 See docs/architecture/customer-push-authz.md for the one-active-owner and
 token-scoping design rationale.
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import GUID, Base
@@ -417,20 +444,27 @@ class IngestSource(Base):
     system: Mapped[str] = mapped_column(Text, nullable=False)
     instance: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    mode: Mapped[str] = mapped_column(Text, nullable=False, default=IngestSourceMode.DISABLED.value)
+    mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default=IngestSourceMode.DISABLED.value
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        DateTime(timezone=True),
+        nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
     __table_args__ = (
-        UniqueConstraint("org_id", "system", "instance", name="uq_ingest_sources_org_system_instance"),
+        UniqueConstraint(
+            "org_id", "system", "instance", name="uq_ingest_sources_org_system_instance"
+        ),
     )
 
     def is_write_eligible(self) -> bool:
@@ -446,21 +480,29 @@ class IngestToken(Base):
         GUID, ForeignKey("ingest_sources.id"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, index=True
+    )
     token_prefix: Mapped[str] = mapped_column(Text, nullable=False)
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_used_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )
 
-    __table_args__ = (
-        Index("ix_ingest_tokens_org_active", "org_id", "revoked_at"),
-    )
+    __table_args__ = (Index("ix_ingest_tokens_org_active", "org_id", "revoked_at"),)
 
     def is_valid(self, now: datetime) -> bool:
         if self.revoked_at is not None:
@@ -478,6 +520,7 @@ class IngestToken(Base):
 Independent of get_current_user / OrgIdMiddleware: those only understand
 user JWTs. See docs/architecture/customer-push-authz.md.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -493,7 +536,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.services.auth import set_current_org_id, _current_org_id
 from dev_health_ops.db import get_postgres_session
-from dev_health_ops.models.ingest_auth import IngestSource, IngestSourceMode, IngestToken
+from dev_health_ops.models.ingest_auth import (
+    IngestSource,
+    IngestSourceMode,
+    IngestToken,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +592,9 @@ async def resolve_ingest_token(
         raise HTTPException(status_code=401, detail="Missing or invalid ingest token")
 
     token_hash = hash_ingest_token(raw)
-    result = await db.execute(select(IngestToken).where(IngestToken.token_hash == token_hash))
+    result = await db.execute(
+        select(IngestToken).where(IngestToken.token_hash == token_hash)
+    )
     token = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if token is None or not token.is_valid(now):
@@ -561,10 +610,14 @@ async def resolve_ingest_token(
         scopes=frozenset(token.scopes),
         source=source,
     )
-    set_current_org_id(ctx.org_id)  # see Decision 9 — OrgIdMiddleware doesn't do this for us
+    set_current_org_id(
+        ctx.org_id
+    )  # see Decision 9 — OrgIdMiddleware doesn't do this for us
 
     client_ip = request.client.host if request.client else None
-    request.state.ingest_token_id = ctx.token_id  # for diagnostics only, NOT the rate-limit key (Decision 10)
+    request.state.ingest_token_id = (
+        ctx.token_id
+    )  # for diagnostics only, NOT the rate-limit key (Decision 10)
     import asyncio
 
     asyncio.create_task(_bump_last_used(token.id, client_ip))
@@ -573,9 +626,13 @@ async def resolve_ingest_token(
 
 
 def require_scope(scope: str):
-    async def _dep(ctx: IngestAuthContext = Depends(resolve_ingest_token)) -> IngestAuthContext:
+    async def _dep(
+        ctx: IngestAuthContext = Depends(resolve_ingest_token),
+    ) -> IngestAuthContext:
         if scope not in ctx.scopes:
-            raise HTTPException(status_code=403, detail=f"Missing required scope: {scope}")
+            raise HTTPException(
+                status_code=403, detail=f"Missing required scope: {scope}"
+            )
         return ctx
 
     return _dep
@@ -594,9 +651,14 @@ async def require_matching_source(
     """
     source = ctx.source
     if source is None or source.system != system or source.instance != instance:
-        raise HTTPException(status_code=403, detail="Payload source does not match registered source for this token")
+        raise HTTPException(
+            status_code=403,
+            detail="Payload source does not match registered source for this token",
+        )
     if not source.is_write_eligible():
-        raise HTTPException(status_code=403, detail="Source is disabled or not in customer_push mode")
+        raise HTTPException(
+            status_code=403, detail="Source is disabled or not in customer_push mode"
+        )
     return source
 ```
 
@@ -646,10 +708,13 @@ Pydantic sketches (`src/dev_health_ops/api/admin/schemas/customer_push.py`, new,
 
 ```python
 class IngestSourceCreate(BaseModel):
-    system: str = Field(..., min_length=1)            # github|gitlab|jira|linear|custom (validated, not DB enum)
+    system: str = Field(
+        ..., min_length=1
+    )  # github|gitlab|jira|linear|custom (validated, not DB enum)
     instance: str = Field(..., min_length=1)
     display_name: str | None = None
     mode: str = "customer_push"
+
 
 class IngestSourceResponse(BaseModel):
     id: str
@@ -661,33 +726,37 @@ class IngestSourceResponse(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
-    warnings: list[str] = []   # Decision 8 non-blocking managed-sync-conflict warning
+    warnings: list[str] = []  # Decision 8 non-blocking managed-sync-conflict warning
     model_config = ConfigDict(from_attributes=True)
+
 
 class IngestSourcePatch(BaseModel):
     display_name: str | None = None
     mode: str | None = None
     enabled: bool | None = None
 
+
 class IngestTokenCreate(BaseModel):
     name: str = Field(..., min_length=1)
-    scopes: list[str]                        # subset of {schema:read, ingest:write, ingest:status}
+    scopes: list[str]  # subset of {schema:read, ingest:write, ingest:status}
     expires_at: datetime | None = None
     # source_id taken from the path (.../sources/{source_id}/tokens) for the bound case;
     # POST /api/v1/admin/customer-push/tokens (org-wide) omits it -> null, only if
     # scopes has no ingest:write (Decision 7, enforced 400 otherwise)
 
+
 class IngestTokenCreateResponse(BaseModel):
     id: str
     name: str
-    token: str          # PLAINTEXT — present only in this one response, never again
+    token: str  # PLAINTEXT — present only in this one response, never again
     token_prefix: str
     scopes: list[str]
     source_id: str | None
     expires_at: datetime | None
     created_at: datetime
 
-class IngestTokenResponse(BaseModel):   # list/detail views — no `token` field
+
+class IngestTokenResponse(BaseModel):  # list/detail views — no `token` field
     id: str
     org_id: str
     source_id: str | None

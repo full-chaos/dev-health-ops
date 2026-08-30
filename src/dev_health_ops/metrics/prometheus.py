@@ -127,6 +127,16 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    JIRA_PROJECT_DISCOVERY_TOTAL = _prometheus_client_module.Counter(
+        "jira_project_discovery_total",
+        "Jira per-project integration_sources discovery outcomes "
+        "(CHAOS-4584): discovered/created/existing/capped_by_repo_limit/"
+        "recovered_from_repo_limit_cap/superseded_by_scope_change rows per "
+        "run, or a run finding zero projects or no owning planner-managed "
+        "config to tag",
+        ["outcome"],
+    )
+
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _prometheus_client_module.Counter(
         "credential_mapping_rejected_total",
         "Stored credentials a provider resolver refused to build, by the "
@@ -773,6 +783,7 @@ else:
     SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL = _noop_counter()
+    JIRA_PROJECT_DISCOVERY_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()

@@ -83,6 +83,7 @@ from dev_health_ops.sync.datasets import (
     planner_dataset_keys,
     supported_legacy_targets,
 )
+from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
@@ -2276,6 +2277,29 @@ async def create_sync_config(
     except PagerDutyOperationalTargetError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    if _jira_config_materializes_zero_sources(payload.provider, sync_options):
+        # CHAOS-4584: a Jira config with no explicit project scope used to
+        # be stuck at zero sources forever (CHAOS-4582 made that outcome
+        # safe, not real). Run the same discover_repos_for_config seam
+        # github/gitlab use (via the /integrations/{id}/discover endpoint)
+        # right here at creation time so "auto-import everything" actually
+        # materializes real per-project sources immediately. Best-effort: a
+        # discovery failure (bad credential, Jira unreachable) must not fail
+        # config creation -- the config is still valid and can be
+        # re-discovered later via that endpoint once the credential works.
+        try:
+            await session.run_sync(
+                lambda sync_session: discover_sources_for_integration(
+                    sync_session, integration.id
+                )
+            )
+        except Exception:
+            logger.exception(
+                "jira_project_discovery_at_creation_failed",
+                extra={"org_id": org_id, "integration_id": str(integration.id)},
+            )
+
     return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 

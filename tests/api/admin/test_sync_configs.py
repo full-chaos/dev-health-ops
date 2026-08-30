@@ -2454,6 +2454,60 @@ async def test_create_jira_sync_config_without_project_scope_materializes_zero_s
 
 
 @pytest.mark.asyncio
+async def test_create_jira_sync_config_auto_discovers_real_projects_at_creation(
+    client, session_maker
+):
+    """CHAOS-4584: the actual capability gap this ticket closes. Unlike the
+    zero-source case above (no resolvable credential, so nothing to
+    discover), a jira "auto-import everything" config whose credential CAN
+    enumerate real projects gets them materialized as real, planner-tagged
+    ``integration_sources`` rows immediately at creation -- run through the
+    SAME discover_repos_for_config seam github/gitlab use, not a sibling
+    path. Best-effort: creation succeeds even though discovery here is
+    mocked, matching the "must not fail config creation" contract."""
+    ac, _ = client
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-auto",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {"auto_import_projects": True},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None and config.integration_id is not None
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert {s.external_id for s in enabled_sources} == {"SUP", "OPS"}
+        assert {s.source_type for s in enabled_sources} == {"project"}
+        for source in enabled_sources:
+            assert source.metadata_.get("planner_managed_sync_config_id") == config_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
 async def test_batch_create_git_sync_config_is_triggerable_with_units(
     client, session_maker, provider, repo

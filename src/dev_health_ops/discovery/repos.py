@@ -37,7 +37,68 @@ def discover_repos_for_config(
         token = gl_credentials.token if gl_credentials is not None else ""
         gitlab_url = resolve_gitlab_url(sync_options, gl_credentials)
         return discover_gitlab_repos(sync_options, token, gitlab_url=gitlab_url)
+    if provider == "jira":
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        jira_credentials = jira_credentials_from_mapping(credentials)
+        if jira_credentials is None:
+            # No usable credential -> no discovery possible. Matches every
+            # other provider's contract here: an unresolvable credential
+            # yields zero results, never an exception (CHAOS-4584).
+            return []
+        org_id = getattr(config, "org_id", None)
+        return discover_jira_projects(jira_credentials, org_id=org_id)
     return []
+
+
+def discover_jira_projects(
+    jira_credentials: Any, *, org_id: str | None = None
+) -> list[tuple[str, ...]]:
+    """Enumerate every Jira project visible to *jira_credentials*.
+
+    Mirrors ``discover_github_repos``/``discover_gitlab_repos``: a plain
+    credential-scoped enumeration, no ``sync_options``-driven filtering.
+    Chris's ruling (CHAOS-4584): a generic Jira API key should discover
+    ALL projects visible to it (software, service_desk/JSM, business,
+    product_discovery) -- board/sprint reference-data discovery stays
+    gated by ``projectTypeKey`` downstream (CHAOS-4575); this function only
+    materializes work-items-capable ``integration_sources`` rows.
+
+    Returns ``(project_key, project_name, project_type_key)`` tuples using
+    the existing paginated ``GET /rest/api/3/project/search`` client method
+    (``JiraClient.get_all_projects``, already used by the unrelated
+    team/project catalog import in ``providers/teams.py``).
+    """
+    from dev_health_ops.providers.jira.client import (
+        JiraAuth,
+        JiraClient,
+        _normalize_jira_base_url,
+    )
+
+    client = JiraClient(
+        auth=JiraAuth(
+            base_url=_normalize_jira_base_url(jira_credentials.base_url),
+            email=jira_credentials.email,
+            api_token=jira_credentials.api_token,
+        ),
+        org_id=org_id,
+    )
+    try:
+        projects = client.get_all_projects()
+    finally:
+        client.close()
+
+    result: list[tuple[str, ...]] = []
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        key = str(project.get("key") or "").strip()
+        if not key:
+            continue
+        name = str(project.get("name") or key)
+        project_type_key = str(project.get("projectTypeKey") or "").strip().lower()
+        result.append((key, name, project_type_key))
+    return result
 
 
 def _github_token_from_credentials(credentials: dict[str, Any]) -> str:

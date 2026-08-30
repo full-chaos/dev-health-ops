@@ -193,9 +193,94 @@ class TestDiscoverReposForConfig:
     def test_unsupported_provider_returns_empty(self):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
+        config = _make_config(provider="linear")
+        result = discover_repos_for_config(config, {"token": "test"})
+        assert result == []
+
+    @patch("dev_health_ops.discovery.repos.discover_jira_projects")
+    def test_jira_delegates_to_jira_discovery(self, mock_jira):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_jira.return_value = [
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ]
+        config = _make_config(provider="jira", org_id="org-test")
+        result = discover_repos_for_config(
+            config,
+            {
+                "email": "bot@example.com",
+                "api_token": "tok",
+                "base_url": "https://acme.atlassian.net",
+            },
+        )
+        assert result == [
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ]
+        mock_jira.assert_called_once()
+        assert mock_jira.call_args.kwargs["org_id"] == "org-test"
+
+    def test_jira_missing_credentials_returns_empty(self):
+        """CHAOS-4584 (root gap): unlike a real credential returning zero
+        projects, a credential mapping too incomplete to build JiraCredentials
+        (no email/base_url) must not raise -- every other provider's contract
+        here is "unresolvable credential -> []", never an exception."""
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
         config = _make_config(provider="jira")
         result = discover_repos_for_config(config, {"token": "test"})
         assert result == []
+
+
+class TestDiscoverJiraProjects:
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_maps_all_visible_project_types(self, mock_get_all):
+        """Chris's ruling (CHAOS-4584): a generic API key discovers ALL
+        projects visible to it, every project type included -- board/sprint
+        gating by projectTypeKey is a separate, downstream concern
+        (CHAOS-4575)."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"key": "SUP", "name": "Support Desk", "projectTypeKey": "service_desk"},
+            {"key": "OPS", "name": "Platform Ops", "projectTypeKey": "software"},
+            {"key": "BIZ", "name": "Biz Ops", "projectTypeKey": "business"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds, org_id="org-test")
+        assert result == [
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+            ("BIZ", "Biz Ops", "business"),
+        ]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_skips_projects_without_a_key(self, mock_get_all):
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"key": "", "name": "Malformed"},
+            {"name": "No key at all"},
+            {"key": "OK", "name": "Fine", "projectTypeKey": "software"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds)
+        assert result == [("OK", "Fine", "software")]
 
 
 class TestDiscoverGithubRepos:

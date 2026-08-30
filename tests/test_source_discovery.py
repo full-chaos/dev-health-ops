@@ -82,9 +82,52 @@ def gitlab_integration(session: Session) -> Integration:
     return integration
 
 
+@pytest.fixture()
+def jira_integration(session: Session) -> Integration:
+    integration = Integration(
+        id=uuid.uuid4(),
+        org_id="org-test",
+        provider="jira",
+        name="Test Jira",
+        config={"auto_import_projects": True},
+        is_active=True,
+    )
+    session.add(integration)
+    session.commit()
+    return integration
+
+
+@pytest.fixture()
+def jira_planner_config(
+    session: Session, jira_integration: Integration
+) -> SyncConfiguration:
+    """The planner-managed parent ``SyncConfiguration`` every jira
+    integration created via ``_create_planner_managed_config`` gets --
+    freshly discovered jira sources must be tagged with its id (CHAOS-4584)
+    so ``sync/trigger_routing.py::_planner_scoped_source_ids`` picks them up."""
+    config = SyncConfiguration(
+        name="Test Jira",
+        provider="jira",
+        org_id="org-test",
+        sync_targets=["work-items"],
+        sync_options={},
+        is_active=True,
+        integration_id=jira_integration.id,
+        planner_managed=True,
+    )
+    session.add(config)
+    session.commit()
+    return config
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_JIRA_TUPLES: list[tuple[str, ...]] = [
+    ("SUP", "Support Desk", "service_desk"),
+    ("OPS", "Platform Ops", "software"),
+]
 
 _GITHUB_TUPLES: list[tuple[str, ...]] = [
     ("acme", "api"),
@@ -351,6 +394,150 @@ def test_disabled_source_stays_disabled_after_rediscovery(
 # ---------------------------------------------------------------------------
 # Bonus: list_sources respects enabled_only flag
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Jira per-project auto-discovery (CHAOS-4584)
+# ---------------------------------------------------------------------------
+
+
+def test_jira_discovery_upserts_sources_with_planner_tag(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """A jira config with no explicit project scope used to materialize
+    ZERO sources forever (CHAOS-4582/CHAOS-4584's headline gap). Real
+    per-project discovery must now upsert one row per project, shaped like
+    the pre-existing hand-inserted SUP/OPS proof rows: source_type='project',
+    external_id=project key, is_enabled=True, and
+    metadata.planner_managed_sync_config_id set to the owning planner-managed
+    config so the planner actually schedules units for it."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        sources = discover_sources_for_integration(session, jira_integration.id)
+
+    assert len(sources) == 2
+    by_external = {s.external_id: s for s in sources}
+    assert set(by_external.keys()) == {"SUP", "OPS"}
+
+    sup = by_external["SUP"]
+    assert sup.provider == "jira"
+    assert sup.source_type == "project"
+    assert sup.name == "Support Desk"
+    assert sup.full_name == "SUP"
+    assert sup.is_enabled is True
+    assert sup.metadata_ == {
+        "project_type_key": "service_desk",
+        "planner_managed_sync_config_id": str(jira_planner_config.id),
+    }
+
+    ops = by_external["OPS"]
+    assert ops.metadata_["project_type_key"] == "software"
+    assert ops.metadata_["planner_managed_sync_config_id"] == str(
+        jira_planner_config.id
+    )
+
+
+def test_jira_discovery_without_planner_parent_does_not_stamp_tag(
+    session: Session, jira_integration: Integration
+):
+    """No planner-managed parent config exists yet for this integration (a
+    discovery run before config creation finishes, or a config that never
+    got one) -- discovery must still materialize the source rows, just
+    without a tag the planner cannot resolve to anything."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        sources = discover_sources_for_integration(session, jira_integration.id)
+
+    assert len(sources) == 2
+    for source in sources:
+        assert "planner_managed_sync_config_id" not in source.metadata_
+
+
+def test_jira_rediscovery_no_duplicates_and_preserves_disabled(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Idempotent on re-run (chris's ruling): no duplicate rows for existing
+    project keys, and a disabled row -- e.g. the hand-inserted SUP/OPS proof
+    rows chris asked NOT be auto-enabled -- stays disabled."""
+    from dev_health_ops.sync.discovery import (
+        discover_sources_for_integration,
+        set_source_enabled,
+    )
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        first_run = discover_sources_for_integration(session, jira_integration.id)
+
+    sup = next(s for s in first_run if s.external_id == "SUP")
+    set_source_enabled(session, sup.id, enabled=False)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        second_run = discover_sources_for_integration(session, jira_integration.id)
+
+    total = (
+        session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .count()
+    )
+    assert total == 2, "Re-discovery must not duplicate rows for existing project keys"
+
+    by_external = {s.external_id: s for s in second_run}
+    assert by_external["SUP"].is_enabled is False
+    assert by_external["OPS"].is_enabled is True
+    # Re-run still stamps/refreshes the planner tag on the untouched row.
+    assert by_external["SUP"].metadata_["planner_managed_sync_config_id"] == str(
+        jira_planner_config.id
+    )
+
+
+def test_jira_rediscovery_preserves_existing_disabled_hand_inserted_row(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Mirrors the live org 70d529e0 state (lane-jira handoff 2026-08-30):
+    a hand-inserted, disabled SUP row that predates this fix. Discovery
+    finding the same project key must merge in project_type_key/refresh
+    name+full_name, but never flip is_enabled -- discovery must never
+    enable/disable an operator-managed row on its own."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    existing = IntegrationSource(
+        org_id="org-test",
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="SUP",
+        name="SUP",
+        full_name="SUP",
+        metadata_={"chaos": "4582", "proof_only": True},
+        is_enabled=False,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(existing)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        sources = discover_sources_for_integration(session, jira_integration.id)
+
+    by_external = {s.external_id: s for s in sources}
+    sup = by_external["SUP"]
+    assert sup.is_enabled is False, "discovery must never auto-enable an existing row"
+    assert sup.name == "Support Desk"
+    assert sup.metadata_ == {
+        "chaos": "4582",
+        "proof_only": True,
+        "project_type_key": "service_desk",
+        "planner_managed_sync_config_id": str(jira_planner_config.id),
+    }
+    assert by_external["OPS"].is_enabled is True
 
 
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):

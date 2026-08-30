@@ -13,7 +13,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.workers import team_autoimport, team_autoimport_linear
+from dev_health_ops.workers import team_autoimport_linear
 
 
 @dataclass
@@ -263,6 +263,18 @@ def test_linear_org_import_fails_closed_when_roster_read_fails(
 def test_chaos_2547_2544_autoimport_uses_analytics_db_url_with_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """CHAOS-4555: this used to drive the DSN-threading behavior under test
+    through team_autoimport.run_team_autoimport(provider="linear", ...) --
+    the dispatch entry point, not the populator itself. That entry point now
+    refuses linear (CHAOS-4431's Go collector is the sole live writer; this
+    Python writer is unreachable from any live caller). Calls
+    team_autoimport_linear.populate directly instead, replicating exactly
+    what run_team_autoimport used to pass it (analytics_db_url ->
+    scope["analytics_db"], import_categories all-True) -- same as this
+    file's other three tests, and unaffected by CHAOS-4555 since it only
+    guards the dispatch seam, not this module.
+    """
+
     async def discover_linear(self: object, api_key: str) -> list[DiscoveredTeam]:
         return [
             DiscoveredTeam(
@@ -303,15 +315,16 @@ def test_chaos_2547_2544_autoimport_uses_analytics_db_url_with_env_unset(
         CapturingClickHouseSink,
     )
 
-    summary = team_autoimport.run_team_autoimport(
-        provider="linear",
+    summary = team_autoimport_linear.populate(
         org_id="org-1",
         credentials={"api_key": "lin-key"},
-        scope={"mode": "sync_config"},
-        analytics_db_url="clickhouse://config-dsn",
+        scope={
+            "mode": "sync_config",
+            "analytics_db": "clickhouse://config-dsn",
+            "import_categories": {"teams": True, "projects": True, "members": True},
+        },
     )
 
-    assert summary["status"] == "success"
     assert summary["projects_imported"] == 1
     assert summary["members_imported"] == 1
     assert summary["team_memberships_imported"] == 1

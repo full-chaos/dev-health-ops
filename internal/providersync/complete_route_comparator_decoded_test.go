@@ -358,6 +358,84 @@ func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t 
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 }
 
+// TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses
+// pins the CHAOS-4592 narrowing of the overflow shortcut (codex review round
+// 1, P1): an INTERMEDIATE binary -- post-CHAOS-4394, pre-CHAOS-4592 -- could
+// hit its overflow cap marking the three original whole-artifact causes
+// (proving that marker-writing path ran) while never writing a marker for
+// malformed/unreadable at all, because that binary predates those two causes
+// existing. Resuming such a cursor here must still withhold on the unmarked
+// malformed count -- letting the aggregate overflow prove marker-writing ran
+// for a cause it never even knew about would advance over an unidentifiable
+// parse skip with no backfill target, permanently. The identical overflow
+// value must still excuse an unmarked ORIGINAL cause (artifact_unavailable),
+// proving the narrowing is per-cause, not a wholesale removal of the
+// shortcut.
+func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	intermediateBinaryCursor := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 1},
+		},
+		// No marker for either cause -- only the aggregate overflow counter,
+		// exactly what an intermediate binary's cursor decodes as: it wrote
+		// SkippedArtifactsOverflow (CHAOS-4394 machinery) but never a
+		// malformed marker (CHAOS-4592 did not exist yet).
+		SkippedArtifactsOverflow: 1,
+	}
+	batch, err := githubTestsFinalMetadataBatch(claim, intermediateBinaryCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"watermark=%v, want nil -- overflow must not excuse an unmarked malformed skip",
+			batch.Watermark,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// The identical overflow value, with ONLY the original cause present,
+	// must still advance -- proving the narrowing did not also break the
+	// CHAOS-4394 shortcut for the causes it was built for.
+	originalCauseOnly := intermediateBinaryCursor
+	originalCauseOnly.Incomplete = []GitHubTestsIncomplete{
+		{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+	}
+	batch, err = githubTestsFinalMetadataBatch(claim, originalCauseOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- overflow must still excuse an unmarked ORIGINAL cause",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// A marker for malformed specifically, no overflow needed, must advance.
+	malformedMarked := intermediateBinaryCursor
+	malformedMarked.SkippedArtifactsOverflow = 0
+	malformedMarked.SkippedArtifacts = []GitHubTestsSkippedArtifact{
+		{RunID: "42", ArtifactID: "7", Cause: githubTestsArtifactUnavailableCause},
+		{RunID: "42", ArtifactID: "7", Cause: githubTestsMalformedCause},
+	}
+	batch, err = githubTestsFinalMetadataBatch(claim, malformedMarked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- a literal marker must always be sufficient for malformed",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
 // mustCompareGitHubTestsCompletionOK runs the SAME comparator production
 // completion goes through and fails the test if it rejects the batch --
 // batch.Watermark alone is not proof of correctness (codex review round 3,

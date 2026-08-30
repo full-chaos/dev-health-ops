@@ -441,13 +441,28 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // -- round 1's first version checked only "does SkippedArtifacts have ANY
 // entry", which a legacy cursor mixing a marked artifact_oversized skip with
 // an unmarked artifact_unavailable one would satisfy vacuously, advancing on
-// the unmarked cause anyway). SkippedArtifactsOverflow is the one exception,
-// checked in aggregate: it only exists on a THIS-binary cursor (the old
-// binary never wrote it either), so overflow>0 anywhere proves this walk's
-// marker-writing path executed for its full duration, and the sample cap
-// legitimately leaving some individual occurrences unmarked is the SAME
-// sanctioned degradation appendGitHubTestsSkippedArtifact already accepts
-// for a heavy-skip-volume unit -- not evidence of a legacy cursor.
+// the unmarked cause anyway). SkippedArtifactsOverflow is an exception for
+// the three ORIGINAL CHAOS-4394 causes ONLY, checked in aggregate: it only
+// exists on a binary that already wrote markers for oversized/unavailable/
+// unreadable_archive (the old binary never wrote it either), so overflow>0
+// anywhere proves THAT marker-writing path ran for its full duration, and
+// the sample cap legitimately leaving some individual occurrences unmarked
+// is the SAME sanctioned degradation appendGitHubTestsSkippedArtifact
+// already accepts for a heavy-skip-volume unit -- not evidence of a legacy
+// cursor.
+//
+// malformed/unreadable (CHAOS-4592) do NOT get the overflow shortcut (codex
+// review round 1, P1): an intermediate binary -- post-CHAOS-4394, pre-
+// CHAOS-4592 -- could hit its overflow cap on the three original causes
+// (proving ITS marker-writing path ran) while never writing a marker for
+// malformed/unreadable at all, because that binary did not yet know those
+// two causes existed. A cursor from such a binary, resumed by THIS one
+// after a rolling deploy crosses a mid-flight continuation, would otherwise
+// take the aggregate overflow shortcut and advance over an unidentifiable
+// parse-time skip with no backfill target -- permanent report loss, the
+// exact upgrade-boundary gap this whole function exists to close, one
+// binary version later. These two causes therefore always require their
+// own literal marker; overflow never substitutes for one.
 //
 // This can fire at most once per unit -- the checkpoint this guards against
 // is deleted the moment the unit terminalizes (repository_postgres.go's
@@ -457,9 +472,6 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 func githubTestsReportMemberSkippedWithoutDurableMarker(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact, overflow int,
 ) bool {
-	if overflow > 0 {
-		return false
-	}
 	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
 	for _, marker := range skippedArtifacts {
 		if cause := githubTestsSkippedArtifactCause(marker); cause != "" {
@@ -470,9 +482,15 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
 			continue
 		}
-		if _, marked := markedCauses[observation.Cause]; !marked {
-			return true
+		if _, marked := markedCauses[observation.Cause]; marked {
+			continue
 		}
+		if overflow > 0 &&
+			observation.Cause != githubTestsMalformedCause &&
+			observation.Cause != githubTestsUnreadableCause {
+			continue
+		}
+		return true
 	}
 	return false
 }

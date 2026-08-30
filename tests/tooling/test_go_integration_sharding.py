@@ -1158,7 +1158,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # scanning every production jira_*.go file for the retired path).
     # Neither is integration-tagged.
     # 1277 -> 1279 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1279
+    #
+    # CHAOS-4592 (github tests/cicd watermark pinned at last_synced_at=
+    # 2026-08-08 for weeks: report_member's report-parse-time causes,
+    # malformed/unreadable, were never added to githubTestsWatermarkAdvancingPairs
+    # when CHAOS-4394 fixed the three whole-artifact causes for the identical
+    # reason -- an immutable historical CI artifact's bytes parse the same
+    # way on every re-attempt). Codex review round 1 (P1) found the aggregate
+    # SkippedArtifactsOverflow shortcut in
+    # githubTestsReportMemberSkippedWithoutDurableMarker could let an
+    # intermediate binary's cursor (post-CHAOS-4394, pre-CHAOS-4592) advance
+    # over an unmarked malformed/unreadable skip during a rolling upgrade;
+    # narrowed the shortcut to the three original causes only. Added 1 new
+    # ordinary top-level test in complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses.
+    # None are integration-tagged.
+    # 1279 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1280
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1175,7 +1191,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1279
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1280
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1236,7 +1252,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1279
+    assert len(selected_tests) == len(set(selected_tests)) == 1280
     assert set(selected_tests) == expected_tests
 
 

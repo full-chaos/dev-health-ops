@@ -477,6 +477,55 @@ func TestDiscoverJiraFallsBackToLegacyProjectEndpoint(t *testing.T) {
 	}
 }
 
+// TestDiscoverJiraDoesNotFallBackOnAuthenticationOrRateLimitErrors proves the
+// codex round-2 P2 fix's OTHER half: only a 404/405/410 (the enhanced-search
+// endpoint itself is unsupported) triggers the legacy fallback. A 401/429 is
+// a real failure -- retrying against the legacy endpoint could silently
+// succeed against a DIFFERENT, wrong project list, or mask a credential
+// problem behind an apparently-successful discovery. The prior fallback
+// test only covered the POSITIVE (404 falls back) case.
+func TestDiscoverJiraDoesNotFallBackOnAuthenticationOrRateLimitErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+	}{
+		{"401 unauthorized", http.StatusUnauthorized},
+		{"429 rate limited", http.StatusTooManyRequests},
+		{"500 server error", http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &sequencedSourceDiscoveryDoer{
+				t:        t,
+				statuses: []int{test.status, http.StatusOK},
+				bodies: []string{
+					`{"errorMessages":["nope"]}`,
+					`[{"id":"10001","key":"CHAOS","name":"Chaos Engineering"}]`,
+				},
+			}
+			credential, err := providerfoundation.Credential{Provider: "jira"}.WithEphemeralSecret("email", secrets.NewValue("bot@example.com"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential, err = credential.WithEphemeralSecret("api_token", secrets.NewValue("jira-token"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential, err = credential.WithEphemeralSecret("base_url", secrets.NewValue("https://acme.atlassian.net"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+			_, err = service.discoverJira(context.Background(), credential)
+			if err == nil {
+				t.Fatalf("discoverJira() with a %d response = nil error, want the classified failure surfaced, not silently retried", test.status)
+			}
+			if len(doer.paths) != 1 {
+				t.Fatalf("discoverJira() requested paths = %v, want exactly 1 (no legacy fallback call for a %d)", doer.paths, test.status)
+			}
+		})
+	}
+}
+
 // TestDiscoverSkipsExplicitScopeAndUnknownProviders proves the two
 // no-network, no-DB early-outs: an explicit-scope config, and any provider
 // outside sourceDiscoveryProviders. Neither reaches the credential resolver

@@ -723,8 +723,31 @@ async def test_dual_run_investment_breakdown_worktype_argmax_null_skip_diverges(
         f"expected Python's plain argMax to report the STALE work_unit_type "
         f"'feature_delivery' (the null-skip bug) -- got {py_keys}"
     )
+    # codex round 3 P3 (2026-08-30, repro'd by hand before this fix, not
+    # taken on the pasted claim): the two asserts below this comment did
+    # not exist yet, so "feature_delivery" not in go_keys alone is
+    # ALSO satisfied by Go silently returning items=[] (a swallowed
+    # execute error, or any other regression that drops the row
+    # entirely) -- the expected-divergence value and a total-failure
+    # value were indistinguishable. Manually simulated go_items=[] against
+    # the assertions as they stood: every assertion up to this point
+    # still passed. Fixed by asserting the SPECIFIC corrected value is
+    # present, not merely that the stale one is absent.
+    assert len(go_items) >= 1, (
+        f"expected at least one Go breakdown item (the CHAOS-4547-fixed "
+        f"NULL-work_unit_type bucket) -- got an EMPTY list, which is "
+        f"indistinguishable from a swallowed execute error without this "
+        f"check. go_payload={go_payload}"
+    )
     assert "feature_delivery" not in go_keys, (
         f"expected Go's tuple-wrap fix to NOT report the stale value -- got {go_keys}"
+    )
+    assert "" in go_keys, (
+        f"expected Go's breakdown to report the CORRECTED value: an empty-string "
+        f"dimension_value key (the Nullable(String)-scanned-into-*string zero "
+        f"value for the genuinely-NULL work_unit_type, per clickhouse-go/v2's "
+        f"Nullable.ScanRow) -- got {go_keys}, which could also be produced by an "
+        f"unrelated failure, not just the expected fix"
     )
 
     assert await _proof_run_count(registry_postgres["async"]) >= 1

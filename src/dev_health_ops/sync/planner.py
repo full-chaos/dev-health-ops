@@ -1490,10 +1490,18 @@ def _is_non_project_jira_source(session: Session, source: IntegrationSource) -> 
     1. ``metadata_.explicit_project_scope`` -- the writer's own marker
        (``_non_git_source_rows``) for a NEW row created from an explicit
        ``project_key``/``project_id``. Always wins: never suppress it.
-    2. ``metadata_.org_wide_placeholder`` -- the SAME typed marker Linear's
+    2. ``metadata_.discovered_project`` (CHAOS-4584 round 5, P2) -- the
+       real Jira project-discovery writer's own marker
+       (``sync/discovery.py::_map_jira_tuple``), set on EVERY row it
+       creates or updates regardless of what the project's key happens to
+       be. Without this, a real project whose key is literally "JIRA" (an
+       edge case, but real Jira instances can have one) would fall through
+       to signal 3 below and get misclassified as the legacy placeholder,
+       silently planning zero units for a real, discovered project.
+    3. ``metadata_.org_wide_placeholder`` -- the SAME typed marker Linear's
        writer already sets for ITS org-wide mode; recognized here in case a
        future writer ever legitimately reuses it for jira.
-    3. If ``external_id`` equals the provider name itself
+    4. If ``external_id`` equals the provider name itself
        (case-insensitive) -- the exact literal ("JIRA") the pre-fix writer
        fell back to when a config had no explicit project scope (live
        evidence, org 70d529e0, CHAOS-4582) -- look up the LEGACY row's own
@@ -1515,6 +1523,8 @@ def _is_non_project_jira_source(session: Session, source: IntegrationSource) -> 
     """
     metadata = getattr(source, "metadata_", None) or {}
     if metadata.get("explicit_project_scope"):
+        return False
+    if metadata.get("discovered_project"):
         return False
     if metadata.get("org_wide_placeholder"):
         return True

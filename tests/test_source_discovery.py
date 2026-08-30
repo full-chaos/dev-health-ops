@@ -443,6 +443,7 @@ def test_jira_discovery_upserts_sources_with_planner_tag(
     assert sup.metadata_ == {
         "project_type_key": "service_desk",
         "planner_managed_sync_config_id": str(jira_planner_config.id),
+        "discovered_project": True,
     }
 
     ops = by_external["OPS"]
@@ -564,6 +565,7 @@ def test_jira_rediscovery_preserves_existing_disabled_hand_inserted_row(
         "proof_only": True,
         "project_type_key": "service_desk",
         "planner_managed_sync_config_id": str(jira_planner_config.id),
+        "discovered_project": True,
     }
     assert by_external["OPS"].is_enabled is True
 
@@ -671,6 +673,123 @@ def test_jira_discovery_prefers_current_planner_config_sync_options(
 
     passed_config = mock_discover.call_args.args[0]
     assert passed_config.sync_options == {"project_key": "NEW"}
+
+
+def test_jira_discovery_falls_back_to_env_credentials(
+    session: Session,
+    jira_integration: Integration,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Codex review (CHAOS-4584 round 5, P1): an integration with no stored
+    credential_id must still discover via JIRA_BASE_URL/JIRA_EMAIL/
+    JIRA_API_TOKEN env vars -- every other jira credential-resolution path
+    in this codebase already supports this, so an env-configured jira
+    integration must not silently discover zero projects forever."""
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok")
+
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    assert jira_integration.credential_id is None
+    with patch(DISCOVERY_PATH) as mock_discover:
+        mock_discover.return_value = []
+        discover_sources_for_integration(session, jira_integration.id)
+
+    passed_credentials = mock_discover.call_args.args[1]
+    assert passed_credentials == {
+        "base_url": "https://acme.atlassian.net",
+        "email": "bot@example.com",
+        "api_token": "tok",
+    }
+
+
+def test_jira_discovery_no_credential_no_env_returns_empty_credentials(
+    session: Session,
+    jira_integration: Integration,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No stored credential AND no env vars set -> the same '{}'  contract
+    as before (no exception, discover_repos_for_config's own
+    jira_credentials_from_mapping(None-ish) handles the rest)."""
+    monkeypatch.delenv("JIRA_BASE_URL", raising=False)
+    monkeypatch.delenv("JIRA_EMAIL", raising=False)
+    monkeypatch.delenv("JIRA_API_TOKEN", raising=False)
+
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH) as mock_discover:
+        mock_discover.return_value = []
+        discover_sources_for_integration(session, jira_integration.id)
+
+    assert mock_discover.call_args.args[1] == {}
+
+
+def test_jira_discovery_project_id_wins_identity_over_project_key(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 5, P2): when BOTH project_id and
+    project_key are set, _non_git_explicit_source_id's precedence is
+    project_id first -- discovery's identity choice must match exactly, or
+    a config scoped this way gets a duplicate key-based row on every
+    rediscovery."""
+    from dev_health_ops.discovery.repos import discover_jira_projects
+
+    creds = type(
+        "C",
+        (),
+        {"base_url": "https://acme.atlassian.net", "email": "e", "api_token": "t"},
+    )()
+    with patch(
+        "dev_health_ops.providers.jira.client.JiraClient.get_all_projects",
+        return_value=[{"id": "10002", "key": "ENG", "name": "Engineering"}],
+    ):
+        result = discover_jira_projects(
+            creds, sync_options={"project_id": "10002", "project_key": "ENG"}
+        )
+    assert result == [("10002", "Engineering", "")]
+
+
+def test_jira_discovery_whitespace_scope_treated_as_unscoped(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 5, P2): a whitespace-only project_key
+    must be treated as "no explicit scope" consistently -- both by
+    discover_jira_projects's own filtering (already true) and by the
+    scope-supersession guard, or supersession would disable the
+    whitespace-keyed row while treating every real project as in-scope,
+    silently expanding from "one malformed scope" to "sync everything"."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    existing = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="   ",
+        name="   ",
+        full_name="   ",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(existing)
+    jira_planner_config.sync_options = {"project_key": "   "}
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):  # SUP, OPS
+        discover_sources_for_integration(session, jira_integration.id)
+
+    session.refresh(existing)
+    assert existing.is_enabled is True, (
+        "whitespace-keyed row must not be superseded -- the guard treats "
+        "whitespace scope as unscoped, matching discover_jira_projects"
+    )
 
 
 def test_jira_discovery_caps_and_recovers_against_repo_limit(
@@ -1119,6 +1238,52 @@ def test_set_source_enabled_clears_cap_marker_on_manual_enable(
     updated = set_source_enabled(session, source.id, enabled=True)
     assert updated.is_enabled is True
     assert "capped_by_repo_limit" not in updated.metadata_
+
+
+def test_set_source_enabled_clears_superseded_marker_on_manual_disable(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 5, P2): an operator's explicit
+    disable must clear superseded_by_scope_change too -- otherwise
+    reverting the scope back to this project later force-re-enables it
+    (round 4's fix), overriding the operator's own decision."""
+    from dev_health_ops.sync.discovery import set_source_enabled
+
+    source = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="OLD",
+        name="Old Project",
+        full_name="OLD",
+        metadata_={
+            "planner_managed_sync_config_id": str(jira_planner_config.id),
+            "superseded_by_scope_change": True,
+        },
+        is_enabled=False,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(source)
+    session.commit()
+
+    updated = set_source_enabled(session, source.id, enabled=False)
+    assert "superseded_by_scope_change" not in updated.metadata_
+
+    # Now scope reverts to OLD -- must stay disabled (operator's decision),
+    # not force-re-enabled by round 4's "reconfirmed scope" fix.
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    jira_planner_config.sync_options = {"project_key": "OLD"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("OLD", "Old Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    session.refresh(source)
+    assert source.is_enabled is False, "operator's explicit disable must survive"
 
 
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):

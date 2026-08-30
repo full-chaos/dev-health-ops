@@ -102,17 +102,16 @@ def discover_jira_projects(
 
     explicit_key = str((sync_options or {}).get("project_key") or "").strip().lower()
     explicit_id = str((sync_options or {}).get("project_id") or "").strip()
-    # codex review (CHAOS-4584 round 4, P2): a config scoped by project_id
-    # (not project_key) has its existing IntegrationSource keyed by that
-    # numeric id (_non_git_source_rows uses whichever of project_id/
-    # project_key/team_id/repo was given, verbatim). Emitting the project
-    # KEY here instead would silently change that row's identity on
-    # rediscovery -- a new key-based row gets created and the original
-    # id-based row gets disabled, abandoning its source_external_id
-    # watermark and sync history. Only fall back to id-based identity when
-    # id is the ONLY explicit scope given; project_key (or no scope at all)
-    # keeps the human-readable key as identity, matching every other case.
-    identity_is_project_id = bool(explicit_id) and not explicit_key
+    # codex review (CHAOS-4584 round 4 P2 + round 5 P2): a config scoped by
+    # project_id has its existing IntegrationSource keyed by that numeric id
+    # (_non_git_source_rows' precedence is project_id > project_key > ... --
+    # id wins whenever BOTH are present, verbatim). Emitting the project KEY
+    # here instead would silently change that row's identity on rediscovery
+    # -- a new key-based row gets created and the original id-based row
+    # gets disabled, abandoning its source_external_id watermark and sync
+    # history. Mirror that exact precedence: project_id present at all (even
+    # alongside project_key) means id-based identity.
+    identity_is_project_id = bool(explicit_id)
 
     result: list[tuple[str, ...]] = []
     for project in projects:

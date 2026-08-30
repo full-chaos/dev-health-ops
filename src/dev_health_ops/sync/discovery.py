@@ -44,13 +44,18 @@ def _resolve_credentials(integration: Integration) -> dict[str, Any]:
     - If the integration has a ``credential_id``, load the
       ``IntegrationCredential`` row and decrypt it via
       ``workers.task_utils._credential_mapping``.
-    - Otherwise return an empty dict (anonymous / env-var-based auth).
+    - Otherwise fall back to provider-specific environment variables (codex
+      review, CHAOS-4584 round 5 P1): every other jira credential-resolution
+      path in this codebase (``resolve_credentials_sync(...,
+      allow_env_fallback=True)``, ``JiraClient.from_env``) already supports
+      env-var auth, so an env-configured jira integration with no stored
+      credential must not silently discover zero projects forever.
 
     The session is not passed here because credential loading is synchronous
     and the caller already holds a sync session.
     """
     if integration.credential_id is None:
-        return {}
+        return _env_credentials_mapping(integration.provider)
 
     # Lazy import to avoid circular deps and heavy imports at module load time.
     from dev_health_ops.db import get_postgres_session_sync
@@ -67,8 +72,26 @@ def _resolve_credentials(integration: Integration) -> dict[str, Any]:
             .one_or_none()
         )
     if credential is None:
-        return {}
+        return _env_credentials_mapping(integration.provider)
     return _credential_mapping(credential)
+
+
+def _env_credentials_mapping(provider: str | None) -> dict[str, Any]:
+    """Provider-specific environment-variable credential fallback, used when
+    no stored credential is linked. Only jira is implemented here (the
+    provider CHAOS-4584 added discovery for); github/gitlab's own env
+    fallback, if any, is a separate pre-existing concern this ticket does
+    not touch."""
+    import os
+
+    if (provider or "").lower() != "jira":
+        return {}
+    base_url = os.getenv("JIRA_BASE_URL")
+    email = os.getenv("JIRA_EMAIL")
+    api_token = os.getenv("JIRA_API_TOKEN")
+    if base_url and email and api_token:
+        return {"base_url": base_url, "email": email, "api_token": api_token}
+    return {}
 
 
 def _build_config_shim(integration: Integration, planner_config: Any | None) -> Any:
@@ -169,8 +192,21 @@ def _map_jira_tuple(
     fields, shaped like the pre-existing hand-inserted proof rows (SUP/OPS,
     org 70d529e0): ``source_type='project'``, ``metadata.planner_managed_sync_config_id``
     set to the owning planner-managed config so the planner
-    (``sync/trigger_routing.py::_planner_scoped_source_ids``) picks the row up."""
-    metadata: dict[str, Any] = {"project_type_key": project_type_key}
+    (``sync/trigger_routing.py::_planner_scoped_source_ids``) picks the row up.
+
+    ``metadata.discovered_project`` (codex review, CHAOS-4584 round 5 P2):
+    unconditionally true for every row THIS function creates, regardless of
+    the actual project key. Without it, a real project whose key happens to
+    be "JIRA" (an edge case, but a real Jira instance can have one) gets
+    misclassified by ``sync/planner.py::_is_non_project_jira_source`` as the
+    CHAOS-4582 legacy placeholder shape (external_id=="jira") and the
+    planner silently plans zero units for it -- a marker this function
+    controls proves a real discovery run created the row, independent of
+    what the key happens to be."""
+    metadata: dict[str, Any] = {
+        "project_type_key": project_type_key,
+        "discovered_project": True,
+    }
     if planner_managed_sync_config_id:
         metadata["planner_managed_sync_config_id"] = planner_managed_sync_config_id
     return {
@@ -494,7 +530,19 @@ def _supersede_stale_scoped_jira_sources(
     result is trusted enough to supersede anything.
     """
     sync_options = getattr(config_shim, "sync_options", None) or {}
-    if not (sync_options.get("project_key") or sync_options.get("project_id")):
+    # codex review (CHAOS-4584 round 5, P2): normalize the SAME way
+    # discover_jira_projects does (str().strip()) -- a whitespace-only
+    # project_key/project_id must mean "no explicit scope" HERE too, or
+    # this guard disagrees with discover_jira_projects's own explicit-scope
+    # detection (which already treats it as unscoped) and ends up
+    # superseding the whitespace-keyed row while every real project is
+    # freshly discovered, silently expanding an intentionally-narrow (if
+    # malformed) scope into "sync everything".
+    has_explicit_scope = bool(
+        str(sync_options.get("project_key") or "").strip()
+        or str(sync_options.get("project_id") or "").strip()
+    )
+    if not has_explicit_scope:
         return
     if not discovered_external_ids_lower:
         return
@@ -610,6 +658,12 @@ def _active_repo_usage_count_for_limit(session: Session, org_id: str) -> int:
 
 
 _CAP_MARKER_KEY = "capped_by_repo_limit"
+_SUPERSEDED_MARKER_KEY = "superseded_by_scope_change"
+# Every system-driven auto-recovery marker: an explicit operator
+# enable/disable clears ALL of them (codex review, CHAOS-4584 round 4 P1 +
+# round 5 P2) -- from that point the row's state is the operator's decision,
+# not something a later discovery run's bookkeeping should ever revisit.
+_SYSTEM_MARKER_KEYS = (_CAP_MARKER_KEY, _SUPERSEDED_MARKER_KEY)
 
 
 def _rebalance_jira_sources_against_repo_limit(
@@ -825,14 +879,18 @@ def set_source_enabled(
     if source is None:
         raise ValueError(f"IntegrationSource not found: {source_id}")
     source.is_enabled = enabled
-    if (source.metadata_ or {}).get(_CAP_MARKER_KEY):
+    metadata = source.metadata_ or {}
+    if any(metadata.get(key) for key in _SYSTEM_MARKER_KEYS):
         # ANY explicit operator enable/disable (codex review, CHAOS-4584
-        # round 3 P2 + round 4 P1) supersedes the automatic-recovery
-        # bookkeeping -- from this point it's an operator decision, not
-        # something discovery's own repo-limit rebalancing should ever
-        # touch again, in either direction.
+        # round 3 P2, round 4 P1, round 5 P2) supersedes ALL automatic
+        # discovery bookkeeping (repo-limit cap AND scope-change
+        # supersession) -- from this point it's an operator decision, not
+        # something a later discovery run should ever revisit in either
+        # direction. Without clearing superseded_by_scope_change too, an
+        # operator disabling a system-superseded row would get silently
+        # overridden the next time the scope reverts back to it.
         source.metadata_ = {
-            k: v for k, v in (source.metadata_ or {}).items() if k != _CAP_MARKER_KEY
+            k: v for k, v in metadata.items() if k not in _SYSTEM_MARKER_KEYS
         }
     session.flush()
     return source

@@ -346,9 +346,16 @@ const (
 // way every time, so withholding recovered nothing and pinned since_at
 // forever, exactly the CHAOS-4394 outage one cause short of being fully
 // fixed. A durable GitHubTestsSkippedArtifact marker is required for these
-// two now too (github_tests_chunked_route.go, github_tests_route.go), same
-// as the three whole-artifact causes, so githubTestsReportMemberSkippedWithoutDurableMarker
-// still refuses an advance with no targeted-backfill evidence behind it.
+// two now too, same as the three whole-artifact causes, so
+// githubTestsReportMemberSkippedWithoutDurableMarker still refuses an advance
+// with no targeted-backfill evidence behind it. parseGitHubTestsArtifact
+// (below) builds the marker at the one call site both the chunked route and
+// the non-chunked oracle share; the oracle never forwards it into a
+// GitHubTestsSkippedArtifact list at all (github_tests_route.go), an
+// existing, documented, intentional divergence predating this change (see
+// that route's own comment) -- the oracle stays conservative for
+// malformed/unreadable exactly as it already was for the three whole-artifact
+// causes.
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},

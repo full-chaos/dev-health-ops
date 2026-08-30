@@ -1074,3 +1074,17 @@ def test_jira_populate_skips_board_discovery_for_a_non_software_project_under_st
     assert set(summary["reference_team_keys"]) == {"SUP", "OPS"}
     assert summary["sprints_imported"] == 1
     assert summary["reference_sprint_ids"] == ["601"]
+
+    # CHAOS-4575 (chris 19:37): the skip is BOARDS-only, not project-level --
+    # SUP still gets its project row and native team_project_ownership row,
+    # same as any other project. Board discovery being skipped for a
+    # service_desk project must never mean the project itself, or its
+    # ownership, silently disappears from the org's catalog.
+    assert ("org-1", "jira", "org-1:jira:SUP") in sink.projects
+    assert (
+        "org-1",
+        "jira",
+        "org-1:jira:SUP",
+        "SUP",
+        "native",
+    ) in sink.ownership

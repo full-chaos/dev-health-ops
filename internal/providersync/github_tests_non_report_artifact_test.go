@@ -78,15 +78,12 @@ func (doer *githubTestsNonReportArtifactDoer) Do(request *http.Request) (*http.R
 		id := githubTestsArtifactIDFromPath(doer.t, path)
 		doer.downloadIDs = append(doer.downloadIDs, strconv.Itoa(id))
 		name := doer.names[id-1]
-		if githubTestsIsNonReportArtifact(name) {
-			// Real observed shape (see githubTestsDockerBuildGzipPayload):
-			// raw gzip, no outer zip wrapper, 2xx.
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": {"application/zip"}},
-				Body:       io.NopCloser(bytes.NewReader(githubTestsDockerBuildGzipPayload)),
-				Request:    request,
-			}, nil
+		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+			// The selection seam must run BEFORE any download -- an excluded
+			// name reaching here at all is the regression this doer exists to
+			// catch, whichever of the two closed reasons excluded it.
+			doer.t.Fatalf("artifact %q (excluded: %s) was downloaded; selection must happen before download", name, reason)
+			return nil, nil
 		}
 		archive := githubTestsZip(doer.t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)})
 		return &http.Response{
@@ -147,6 +144,76 @@ func TestGitHubTestsDockerBuildArtifactsExcludedBeforeDownload(t *testing.T) {
 	}
 	if complete, ok := walk.final.Result["reports_complete"].(bool); !ok || !complete {
 		t.Fatalf("reports_complete=%v, want true: nothing readable was actually lost", walk.final.Result["reports_complete"])
+	}
+}
+
+// Companion to the suffix test above: "digests-*" artifacts (this repo's own
+// docker-images.yml uploads one per build target, e.g. "digests-api-3") are
+// real, valid, tiny zips -- unlike ".dockerbuild" they would parse cleanly if
+// downloaded, just contributing zero report rows. Excluded by the SAME
+// selection seam on a different closed reason
+// (githubTestsExclusionReasonPrefix), also proven never-downloaded. Also
+// exercises the seam's own durable bookkeeping (CHAOS-4591 prep):
+// ExcludedNonReportSuffix/Prefix count by reason, and ExcludedArtifactSample
+// carries "name (reason)" for both kinds in one run.
+func TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping(t *testing.T) {
+	doer := &githubTestsNonReportArtifactDoer{
+		t: t,
+		names: []string{
+			"full-chaos~dev-health-ops~BV20PU.dockerbuild",
+			"digests-api-3",
+			"digests-go-worker-0",
+			"integration-junit",
+		},
+	}
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if err != nil {
+		t.Fatalf("digest/dockerbuild artifacts sank the unit: err=%v, want them excluded, not fatal", err)
+	}
+	if len(doer.downloadIDs) != 1 || doer.downloadIDs[0] != "4" {
+		t.Fatalf(
+			"downloaded artifact ids=%v, want exactly [4]: digests-* artifacts must never be "+
+				"requested either, exactly like .dockerbuild",
+			doer.downloadIDs,
+		)
+	}
+	if walk.cursor.Suites != 1 {
+		t.Fatalf("committed %d suites, want 1 from the real report artifact", walk.cursor.Suites)
+	}
+	if walk.cursor.ExcludedNonReportSuffix != 1 {
+		t.Fatalf("ExcludedNonReportSuffix=%d, want 1 (the one .dockerbuild artifact)", walk.cursor.ExcludedNonReportSuffix)
+	}
+	if walk.cursor.ExcludedNonReportPrefix != 2 {
+		t.Fatalf("ExcludedNonReportPrefix=%d, want 2 (the two digests-* artifacts)", walk.cursor.ExcludedNonReportPrefix)
+	}
+	if len(walk.cursor.ExcludedArtifactSample) != 3 {
+		t.Fatalf("ExcludedArtifactSample=%v, want 3 entries (one per excluded artifact, under the cap)", walk.cursor.ExcludedArtifactSample)
+	}
+	want := map[string]bool{
+		"full-chaos~dev-health-ops~BV20PU.dockerbuild (non_report_artifact_suffix)": true,
+		"digests-api-3 (non_report_artifact_prefix)":                                true,
+		"digests-go-worker-0 (non_report_artifact_prefix)":                          true,
+	}
+	for _, entry := range walk.cursor.ExcludedArtifactSample {
+		if !want[entry] {
+			t.Errorf("unexpected excluded-sample entry %q", entry)
+		}
+		delete(want, entry)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing excluded-sample entries: %v", want)
+	}
+	// Nothing readable was lost, and no report_member skip occurred -- these
+	// exclusions are not "incomplete" data, distinct from the durable
+	// per-artifact result fields the CHAOS-4591 admin view will read.
+	if len(walk.cursor.Incomplete) != 0 {
+		t.Fatalf("incomplete=%+v, want none", walk.cursor.Incomplete)
+	}
+	if got := walk.final.Result["excluded_non_report_suffix"]; got != 1 {
+		t.Errorf("final.Result[excluded_non_report_suffix]=%v, want 1", got)
+	}
+	if got := walk.final.Result["excluded_non_report_prefix"]; got != 2 {
+		t.Errorf("final.Result[excluded_non_report_prefix]=%v, want 2", got)
 	}
 }
 

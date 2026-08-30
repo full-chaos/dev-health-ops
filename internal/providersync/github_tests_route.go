@@ -194,37 +194,68 @@ type githubTestsArtifactPayload struct {
 	Name    string      `json:"name"`
 }
 
-// githubTestsNonReportArtifactSuffixes names GitHub-generated artifact kinds
-// that are never report_member candidates, matched case-insensitively by
-// suffix. ".dockerbuild" bundles are created automatically by GitHub's
-// Docker Build Summary integration (docker/build-push-action with
+// githubTestsNonReportArtifactSuffixes/Prefixes name GitHub/CI-generated
+// artifact kinds that are never report_member candidates, matched
+// case-insensitively. ".dockerbuild" bundles are created automatically by
+// GitHub's Docker Build Summary integration (docker/build-push-action with
 // attestations) for every matrix target in docker-images.yml -- outside any
 // actions/upload-artifact step -- and, unlike an ordinary uploaded artifact,
 // the classic archive_download_url for one is NOT zip-wrapped: it is the raw
 // gzip payload (CHAOS-4588, verified byte-for-byte against a real
 // full-chaos/dev-health-ops run: magic bytes 1f 8b, `file` reports "gzip
 // compressed data"). zip.NewReader correctly refuses it -- the reader is not
-// the bug. Feeding these to the report parser wastes a download+parse on
-// every dev-health-ops CI run AND, worse, lets them consume
-// githubTestsMaxArtifacts ahead of any real report artifact in the same run
-// list: a docker-images.yml run regularly carries 30+ dockerbuild/digest
-// artifacts, over the 25-item cap, so every encounter recorded a
-// window-blocking run_artifacts per_run_cap (CHAOS-4142) and pinned this
-// repo's tests watermark since 2026-08-08. Treated exactly like a routine
-// 404/410 artifact: excluded before any request, not counted toward seen,
-// unreadable, or the per-run cap, and not logged -- it is not evidence about
-// whether the read channel is broken, just a provider artifact type this
-// route was never meant to read.
+// the bug. "digests-" artifacts are real, valid, tiny zips (this repo's own
+// docker-images.yml uploads one empty touch-file per build target) that
+// parse cleanly and contribute zero report rows -- harmless to read, but a
+// wasted download+parse on every run all the same.
+//
+// Feeding either kind to the report parser wastes a download+parse on every
+// dev-health-ops CI run AND, worse, lets them consume githubTestsMaxArtifacts
+// ahead of any real report artifact in the same run list: a docker-images.yml
+// run regularly carries 30+ dockerbuild/digest artifacts, over the 25-item
+// cap, so every encounter recorded a window-blocking run_artifacts
+// per_run_cap (CHAOS-4142) and pinned this repo's tests watermark since
+// 2026-08-08. Treated exactly like a routine 404/410 artifact: excluded
+// before any request, not counted toward seen, unreadable, or the per-run
+// cap, and not part of the closed report_member Incomplete vocabulary -- it
+// is not evidence about whether the read channel is broken, just a provider
+// artifact type this route was never meant to read. Recorded on a SEPARATE
+// bounded durable marker (GitHubTestsExcludedArtifact) purely for operator
+// visibility and CHAOS-4591 (per-sync-config selectable artifact ingestion).
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild"}
+var githubTestsNonReportArtifactPrefixes = []string{"digests-"}
 
-func githubTestsIsNonReportArtifact(name string) bool {
+const (
+	githubTestsExclusionReasonSuffix = "non_report_artifact_suffix"
+	githubTestsExclusionReasonPrefix = "non_report_artifact_prefix"
+)
+
+// githubTestsArtifactSelectionSeam is the ONE place that decides whether a
+// candidate artifact is worth downloading for report_member parsing at all.
+// Both routes call it BEFORE any download and BEFORE the per-run artifact
+// cap is applied (CHAOS-4588) -- selection must happen ahead of the cap, or
+// non-report noise crowds out real report artifacts exactly the way it did
+// before this fix.
+//
+// This is a fixed closed-list implementation today. CHAOS-4591 (per-sync-
+// config selectable artifact ingestion) is expected to replace the body of
+// this one function with a config-driven predicate (an org/repo-scoped
+// include/exclude list) without moving either call site or changing the
+// (selected, reason) contract -- `reason` is already the closed vocabulary
+// an admin view would show next to each excluded artifact.
+func githubTestsArtifactSelectionSeam(name string) (selected bool, reason string) {
 	lower := strings.ToLower(name)
 	for _, suffix := range githubTestsNonReportArtifactSuffixes {
 		if strings.HasSuffix(lower, suffix) {
-			return true
+			return false, githubTestsExclusionReasonSuffix
 		}
 	}
-	return false
+	for _, prefix := range githubTestsNonReportArtifactPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return false, githubTestsExclusionReasonPrefix
+		}
+	}
+	return true, ""
 }
 
 type githubTestsRequiredPayload struct {
@@ -430,7 +461,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if decoder.Decode(&artifact) != nil || artifact.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
-			if githubTestsIsNonReportArtifact(artifact.Name) {
+			if selected, _ := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
 				continue
 			}
 			artifacts = append(artifacts, artifact)
@@ -528,7 +559,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// One summary line per unit, same as the chunked production route
 	// (githubTestsLogArtifactSkipSummary, CHAOS-4588) -- kept symmetric so the
 	// oracle/comparator path never drifts from what production actually logs.
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete)
+	// This route never builds SkippedArtifacts or the excluded-artifact
+	// counters -- it has no persisted, resumable cursor to hang them off
+	// (same divergence as skippedArtifacts above; see the oversized-artifact
+	// doc comment).
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, 0, 0, nil)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,

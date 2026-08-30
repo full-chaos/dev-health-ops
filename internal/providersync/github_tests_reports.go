@@ -514,12 +514,27 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // earlier legacy-only-covered one). The sentinel is stamped once, at
 // decode, from the cursor's RAW shape (decodeGitHubTestsChunkCursor), so it
 // reflects what the cursor looked like BEFORE this attempt, and persists
-// through every later copy-then-add. When present, aggregate overflow can
-// only ever have come from the three original CHAOS-4394 causes
-// (oversized/unavailable/unreadable_archive) -- no binary before this one
-// ever attempted a malformed/unreadable marker, dropped or not -- so the
-// fallback explicitly excludes those two causes rather than covering them
-// by coincidence of a shared counter that never represented them.
+// through every later copy-then-add.
+//
+// The sentinel covers artifact_oversized ONLY, not artifact_unavailable or
+// unreadable_archive too (codex review round 7, P1 -- round 3's version
+// covered all three original CHAOS-4394 causes, on the assumption that any
+// raw overflow with no per-cause ledger could only have come from the
+// CHAOS-4394 binary that shared one aggregate counter across all three).
+// That assumption misses an EARLIER era: CHAOS-4315 gave artifact_oversized
+// ITS OWN marker-and-overflow tracking before CHAOS-4394 extended the same
+// mechanism to artifact_unavailable/unreadable_archive -- a cursor written
+// in that CHAOS-4315-to-pre-CHAOS-4394 window can carry real
+// SkippedArtifactsOverflow (from oversized markers alone) while
+// artifact_unavailable/unreadable_archive had NO overflow tracking
+// whatsoever, not even in aggregate. A decoded cursor's raw shape cannot
+// distinguish that era from the later CHAOS-4394-through-pre-CHAOS-4592 one
+// where the counter was genuinely shared -- so the fallback trusts only
+// what is true in EVERY era that could have produced this shape:
+// artifact_oversized is the one cause whose overflow-tracking predates all
+// the others, the other two are trusted only through a literal marker or
+// normalizeLegacyGitHubTestsSkippedArtifacts's precise per-cause
+// attribution, never through this blanket fallback.
 //
 // This can fire at most once per unit -- the checkpoint this guards against
 // is deleted the moment the unit terminalizes (repository_postgres.go's
@@ -547,8 +562,7 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 			continue
 		}
 		if causeOverflow[githubTestsLegacyReportOverflowSentinel] && overflow > 0 &&
-			observation.Cause != githubTestsMalformedCause &&
-			observation.Cause != githubTestsUnreadableCause {
+			observation.Cause == githubTestsArtifactOversizedCause {
 			continue
 		}
 		return true

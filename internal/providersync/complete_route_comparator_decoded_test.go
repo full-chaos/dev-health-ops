@@ -259,22 +259,57 @@ func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t 
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 
-	// The overflow-only case: the marker sample was capped but the overflow
-	// counter proves this binary's code path actually ran.
-	withOverflow := legacy
-	withOverflow.SkippedArtifactsOverflow = 1
+	// The overflow-only case, for artifact_oversized specifically: the
+	// marker sample was capped but the overflow counter proves this cause's
+	// own tracking (CHAOS-4315, the earliest of the three) actually ran.
 	// The sentinel is what decodeGitHubTestsChunkCursor would have stamped
 	// on exactly this raw shape (overflow>0, no per-cause ledger at all) --
 	// see githubTestsLegacyReportOverflowSentinel (CHAOS-4592 codex review
 	// round 3, P2). Constructing the cursor by hand here bypasses decode, so
 	// the fixture sets it explicitly to stay representative of production.
-	withOverflow.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
+	withOverflow := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{{
+			Component: githubTestsReportMemberComponent,
+			Cause:     githubTestsArtifactOversizedCause, Count: 1,
+		}},
+		SkippedArtifactsOverflow:     1,
+		SkippedArtifactCauseOverflow: map[string]bool{githubTestsLegacyReportOverflowSentinel: true},
+	}
 	batch, err = githubTestsFinalMetadataBatch(claim, withOverflow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
-		t.Fatalf("watermark=%v, want %v once overflow proves this binary wrote the evidence", batch.Watermark, claim.BeforeAt)
+		t.Fatalf("watermark=%v, want %v once overflow proves artifact_oversized's own tracking ran", batch.Watermark, claim.BeforeAt)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// RED before codex review round 7, P1: the SAME raw shape (overflow>0,
+	// no per-cause ledger), but for artifact_unavailable, must still
+	// withhold. artifact_oversized got its own marker-and-overflow tracking
+	// under CHAOS-4315, BEFORE CHAOS-4394 extended the same mechanism to
+	// artifact_unavailable/unreadable_archive; a cursor written in that
+	// CHAOS-4315-to-pre-CHAOS-4394 window can carry real
+	// SkippedArtifactsOverflow from oversized markers alone while
+	// artifact_unavailable had NO overflow tracking whatsoever. Decode
+	// cannot tell that era apart from the later one where the counter was
+	// genuinely shared across all three causes, so aggregate overflow must
+	// never excuse artifact_unavailable/unreadable_archive -- only a
+	// literal marker, or normalizeLegacyGitHubTestsSkippedArtifacts's
+	// precise per-cause attribution, can.
+	withOverflowUnavailable := legacy
+	withOverflowUnavailable.SkippedArtifactsOverflow = 1
+	withOverflowUnavailable.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
+	batch, err = githubTestsFinalMetadataBatch(claim, withOverflowUnavailable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"watermark=%v, want nil -- aggregate overflow must not excuse artifact_unavailable, only artifact_oversized",
+			batch.Watermark,
+		)
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 
@@ -418,12 +453,16 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 
-	// The identical overflow value, with ONLY the original cause present,
+	// The identical overflow value, with ONLY artifact_oversized present,
 	// must still advance -- proving the narrowing did not also break the
-	// CHAOS-4394 shortcut for the causes it was built for.
+	// CHAOS-4315 shortcut for the one cause it can actually prove (codex
+	// review round 7, P1: aggregate overflow with no per-cause ledger only
+	// safely covers artifact_oversized, the cause whose overflow-tracking
+	// predates the other two -- see githubTestsReportMemberSkippedWithoutDurableMarker's
+	// doc comment).
 	originalCauseOnly := intermediateBinaryCursor
 	originalCauseOnly.Incomplete = []GitHubTestsIncomplete{
-		{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+		{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactOversizedCause, Count: 1},
 	}
 	batch, err = githubTestsFinalMetadataBatch(claim, originalCauseOnly)
 	if err != nil {
@@ -431,7 +470,7 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 	}
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf(
-			"watermark=%v, want %v -- overflow must still excuse an unmarked ORIGINAL cause",
+			"watermark=%v, want %v -- overflow must still excuse an unmarked artifact_oversized",
 			batch.Watermark, claim.BeforeAt,
 		)
 	}
@@ -531,6 +570,13 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 // causeOverflow stops being empty. Round 2's fix gated the fallback on
 // "causeOverflow has zero entries", which this exact sequence would have
 // broken the instant the second, unrelated overflow landed.
+//
+// Uses artifact_oversized as the legacy-covered cause (codex review round 7,
+// P1 narrowed the sentinel fallback to that cause only -- see
+// githubTestsReportMemberSkippedWithoutDurableMarker's doc comment): it is
+// the one cause whose overflow-tracking (CHAOS-4315) predates all others, so
+// it is the only one a bare "overflow>0, no ledger" raw shape can safely
+// prove ran.
 func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *testing.T) {
 	claim := nativeTestClaim("github", "cicd")
 
@@ -538,7 +584,7 @@ func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *t
 	// per-cause ledger at all, exactly a pre-CHAOS-4592 binary's JSON -- and
 	// confirm decode stamps the sentinel.
 	legacyRaw := `{"phase":"artifacts","repo":"acme/api","next_url":"x",` +
-		`"incomplete":[{"component":"report_member","cause":"artifact_unavailable","count":1}],` +
+		`"incomplete":[{"component":"report_member","cause":"artifact_oversized","count":1}],` +
 		`"skipped_artifacts_overflow":1}`
 	decoded, err := decodeGitHubTestsChunkCursor(legacyRaw)
 	if err != nil {
@@ -575,7 +621,7 @@ func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *t
 		t.Fatal("this attempt's own overflow was not recorded for unreadable_archive")
 	}
 
-	// The unit finalizes: the EARLIER, legacy-only-covered artifact_unavailable
+	// The unit finalizes: the EARLIER, legacy-only-covered artifact_oversized
 	// skip must still advance the watermark, exactly as it would have before
 	// this attempt's own marker-writing ran at all -- and so must the NEW
 	// unreadable_archive skip, covered by its own precise entry.
@@ -586,7 +632,7 @@ func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *t
 	}
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf(
-			"watermark=%v, want %v -- legacy overflow evidence for artifact_unavailable must survive a later unrelated overflow",
+			"watermark=%v, want %v -- legacy overflow evidence for artifact_oversized must survive a later unrelated overflow",
 			batch.Watermark, claim.BeforeAt,
 		)
 	}

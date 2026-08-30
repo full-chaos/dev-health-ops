@@ -1337,8 +1337,19 @@ def _is_non_project_jira_source(source: IntegrationSource) -> bool:
     stamps ``metadata_.explicit_project_scope`` for exactly that case, and
     that marker always wins over the external_id heuristic below, so a
     deliberately-scoped project is never suppressed.
+
+    ``getattr`` (CI red, live-python-oracle): the Go-Python scheduler parity
+    oracle (``internal/scheduler/sync/planner_oracle_test.go``) round-trips
+    a source through a deliberately narrow JSON contract
+    (id/external_id/provider/full_name only, the CUT-20 comparator
+    philosophy every port-parity oracle in this repo follows) and
+    reconstructs it as a bare ``SimpleNamespace`` on the Python side -- it
+    has no ``metadata_`` attribute at all, unlike a real ORM
+    ``IntegrationSource`` row. A real row's ``metadata_`` is always at least
+    present (mapped column, defaults to ``None``); a fixture that never
+    needed it should read the same as "no metadata", not crash.
     """
-    metadata = source.metadata_ or {}
+    metadata = getattr(source, "metadata_", None) or {}
     if metadata.get("explicit_project_scope"):
         return False
     if metadata.get("org_wide_placeholder"):

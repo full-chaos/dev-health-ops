@@ -2177,6 +2177,44 @@ def test_jira_non_project_source_plans_zero_work_item_units(db_session):
     assert work_item_units == []
 
 
+def test_jira_discovered_project_literally_named_jira_still_plans_units(db_session):
+    """Codex review (CHAOS-4584 round 5, P2): a REAL Jira project whose key
+    happens to be "JIRA" (an edge case, but real Jira instances can have
+    one) must still plan units -- source_discovery's own
+    metadata.discovered_project marker (sync/discovery.py::_map_jira_tuple)
+    proves this row came from a genuine discovery run, distinct from the
+    CHAOS-4582 legacy placeholder shape the previous test covers."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"project_type_key": "software", "discovered_project": True},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units != [], (
+        "a real discovered project named JIRA must still plan units"
+    )
+
+
 def test_zero_unit_jira_plan_stamps_credentials_for_strict_discovery(db_session):
     """CHAOS-4593: a zero-unit jira plan (every IntegrationSource disabled)
     must still stamp run-level credentials, unlike other providers.

@@ -4,10 +4,34 @@ import fnmatch
 from typing import Any
 
 
+def jira_key_norm(value: str | None) -> str:
+    """Canonical form for every Jira provider-name and project-key
+    comparison across the discovery/sync-discovery seam (codex review,
+    CHAOS-4584 gate round 4, P1x2/P2): ``.strip().lower()``, exactly once,
+    in one place.
+
+    Before this, three sites each grew their own ad hoc case handling and
+    quietly diverged: ``_build_config_shim`` compared ``Integration.provider``
+    unmodified (round 4 P1 -- a mixed-case ``"JIRA"`` integration silently
+    read stale ``Integration.config`` instead of the planner-managed
+    config's current ``sync_options``), the case-variant self-repair chose
+    its survivor by exact-case match regardless of which candidate was
+    actually enabled (round 4 P1 -- could disable the only active source),
+    and two ``source.provider == "jira"`` checks in the enable-time
+    repo-limit enforcement (``sync/discovery.py::set_source_enabled``,
+    ``api/services/integrations.py::IntegrationSourceService.set_enabled``)
+    skipped the entitlement check entirely for the same mixed-case rows.
+    Every comparison against the literal string ``"jira"``, and every
+    project-key match, must go through this function -- no site-local
+    ``.lower()`` left.
+    """
+    return (value or "").strip().lower()
+
+
 def discover_repos_for_config(
     config, credentials: dict[str, Any]
 ) -> list[tuple[str, ...]]:
-    provider = (config.provider or "").lower()
+    provider = jira_key_norm(config.provider)
     sync_options = dict(config.sync_options or {})
 
     if provider == "github":
@@ -37,7 +61,123 @@ def discover_repos_for_config(
         token = gl_credentials.token if gl_credentials is not None else ""
         gitlab_url = resolve_gitlab_url(sync_options, gl_credentials)
         return discover_gitlab_repos(sync_options, token, gitlab_url=gitlab_url)
+    if provider == "jira":
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+
+        jira_credentials = jira_credentials_from_mapping(credentials)
+        if jira_credentials is None:
+            # No usable credential -> no discovery possible. Matches every
+            # other provider's contract here: an unresolvable credential
+            # yields zero results, never an exception (CHAOS-4584).
+            return []
+        org_id = getattr(config, "org_id", None)
+        return discover_jira_projects(
+            jira_credentials, org_id=org_id, sync_options=sync_options
+        )
     return []
+
+
+def discover_jira_projects(
+    jira_credentials: Any,
+    *,
+    org_id: str | None = None,
+    sync_options: dict[str, Any] | None = None,
+) -> list[tuple[str, ...]]:
+    """Enumerate Jira projects visible to *jira_credentials*.
+
+    Chris's ruling (CHAOS-4584): a generic Jira API key should discover
+    ALL projects visible to it (software, service_desk/JSM, business,
+    product_discovery) when the caller has NO explicit project scope --
+    board/sprint reference-data discovery stays gated by ``projectTypeKey``
+    downstream (CHAOS-4575); this function only materializes
+    work-items-capable ``integration_sources`` rows.
+
+    When *sync_options* carries an explicit ``project_key``/``project_id``
+    (codex review, CHAOS-4584 round 1 P1: an integration configured for one
+    named project must never silently expand to every visible project just
+    because a discovery run was triggered), results are filtered down to
+    that single project -- matching the existing bounded-scope contract
+    ``_non_git_explicit_source_id``/``_non_git_source_rows`` already enforce
+    at config-creation time.
+
+    Returns ``(identity, project_name, project_type_key, jira_project_id)``
+    tuples using the existing paginated ``GET /rest/api/3/project/search``
+    client method (``JiraClient.get_all_projects``, already used by the
+    unrelated team/project catalog import in ``providers/teams.py``).
+    ``identity`` is the project key, except when the config was explicitly
+    scoped by ``project_id`` (then it's that id); ``jira_project_id`` is
+    ALWAYS Jira's own immutable numeric id, regardless of which one
+    ``identity`` uses, so callers can detect a project key rename.
+    """
+    from dev_health_ops.providers.jira.client import (
+        JiraAuth,
+        JiraClient,
+        _normalize_jira_base_url,
+    )
+
+    client = JiraClient(
+        auth=JiraAuth(
+            base_url=_normalize_jira_base_url(jira_credentials.base_url),
+            email=jira_credentials.email,
+            api_token=jira_credentials.api_token,
+        ),
+        org_id=org_id,
+    )
+    try:
+        projects = client.get_all_projects()
+    finally:
+        client.close()
+
+    explicit_key = jira_key_norm((sync_options or {}).get("project_key"))
+    explicit_id = str((sync_options or {}).get("project_id") or "").strip()
+    # codex review (CHAOS-4584 round 4 P2 + round 5 P2): a config scoped by
+    # project_id has its existing IntegrationSource keyed by that numeric id
+    # (_non_git_source_rows' precedence is project_id > project_key > ... --
+    # id wins whenever BOTH are present, verbatim). Emitting the project KEY
+    # here instead would silently change that row's identity on rediscovery
+    # -- a new key-based row gets created and the original id-based row
+    # gets disabled, abandoning its source_external_id watermark and sync
+    # history. Mirror that exact precedence: project_id present at all (even
+    # alongside project_key) means id-based identity.
+    identity_is_project_id = bool(explicit_id)
+
+    result: list[tuple[str, ...]] = []
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        key = str(project.get("key") or "").strip()
+        if not key:
+            continue
+        project_id = str(project.get("id") or "").strip()
+        if explicit_id:
+            # codex review (CHAOS-4584 gate round, P2): project_id winning
+            # for IDENTITY but not for FILTERING left a real gap -- if a
+            # config's sync_options carries a STALE project_key alongside a
+            # freshly-PATCHed project_id (e.g. a partial PATCH that updated
+            # only project_id), requiring the key to ALSO match meant no
+            # project could ever satisfy both, discovery returned [],
+            # and the empty-result safeguard (round 4) left the OLD project
+            # enabled forever while the NEW target was never discovered.
+            # project_id, once present, is the ENTIRE scope -- project_key
+            # is ignored, not additionally enforced.
+            if project_id != explicit_id:
+                continue
+        elif explicit_key and jira_key_norm(key) != explicit_key:
+            continue
+        name = str(project.get("name") or key)
+        project_type_key = str(project.get("projectTypeKey") or "").strip().lower()
+        identity = project_id if (identity_is_project_id and project_id) else key
+        # codex review (CHAOS-4584 gate round 2, P2): always carry Jira's
+        # own immutable numeric project id, even when the KEY is the
+        # identity (the unscoped "discover everything" case). A Jira admin
+        # can rename a project's key while its id stays the same; without
+        # this, a rename looked identical to "old project gone, new
+        # project appeared" -- a second, separately-watermarked source got
+        # created under the new key while the old key's row (this
+        # module's own "never auto-disable on absence" policy) stayed
+        # enabled forever, double-syncing the same Jira project.
+        result.append((identity, name, project_type_key, project_id))
+    return result
 
 
 def _github_token_from_credentials(credentials: dict[str, Any]) -> str:

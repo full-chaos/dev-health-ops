@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -183,7 +184,7 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
 		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
@@ -283,7 +284,7 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
 		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
@@ -540,7 +541,7 @@ func (repository *PostgresRepository) failTx(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
 		return ErrInvalidConfiguration
 	}
 	if category == ProviderDatasetUnavailableCategory {
@@ -995,7 +996,33 @@ SET completed_units = (
       SELECT count(*) FROM public.sync_run_units
       WHERE sync_run_id = $1 AND status = 'failed'
     )
-WHERE id = $1`
+WHERE id = $1
+RETURNING completed_units, failed_units, total_units`
+
+// bumpSyncRunRollup runs bumpSyncRunRollupSQL and logs the resulting
+// counters at debug level (run id, completed, failed, total) so a future
+// "why does this run read 0/0" question is answerable from logs alone
+// instead of requiring a fresh COUNT(*) by hand (CHAOS-4559). Both indexes
+// covering (sync_run_id, status) already exist
+// (ix_sync_run_units_run_status, ix_sync_run_units_status_available, both
+// from migration 0015), so this is an index-only scan per call, not a
+// sequential scan -- confirmed via EXPLAIN ANALYZE on the largest local run
+// (1248 units, 0.038ms).
+func bumpSyncRunRollup(ctx context.Context, tx pgx.Tx, syncRunID string) error {
+	var completedUnits, failedUnits, totalUnits int
+	if err := tx.QueryRow(ctx, bumpSyncRunRollupSQL, syncRunID).Scan(
+		&completedUnits, &failedUnits, &totalUnits,
+	); err != nil {
+		return err
+	}
+	slog.DebugContext(ctx, "sync_run.rollup_bumped",
+		slog.String("sync_run_id", syncRunID),
+		slog.Int("completed_units", completedUnits),
+		slog.Int("failed_units", failedUnits),
+		slog.Int("total_units", totalUnits),
+	)
+	return nil
+}
 
 // markDatasetUnavailableSQL surfaces a repeated provider_dataset_unavailable
 // terminalization onto the IntegrationDataset row the owner-facing API

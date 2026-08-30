@@ -1269,7 +1269,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause.
     # Not integration-tagged.
     # 1285 -> 1286 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1286
+    # CHAOS-4592/4601 codex review gate round (terra/xhigh, full-base):
+    # single-layer tests for the malformed/unreadable causes never proved the
+    # parser's marker actually reaches the cursor the chunked route builds --
+    # a regression dropping that forwarding loop would leave every existing
+    # test green while recreating CHAOS-4592. Added 1 new ordinary top-level
+    # test in complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd.
+    # Not integration-tagged.
+    # 1286 -> 1287 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1287
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1286,7 +1295,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1286
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1287
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1347,7 +1356,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1286
+    assert len(selected_tests) == len(set(selected_tests)) == 1287
     assert set(selected_tests) == expected_tests
 
 

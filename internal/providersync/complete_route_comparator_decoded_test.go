@@ -1,6 +1,8 @@
 package providersync
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -633,6 +635,111 @@ func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *t
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf(
 			"watermark=%v, want %v -- legacy overflow evidence for artifact_oversized must survive a later unrelated overflow",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
+// TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd pins
+// the CHAOS-4592 gate-round finding (codex review, terra/xhigh full-base
+// round): every prior test for the malformed/unreadable causes checked only
+// ONE layer -- either parseGitHubTestsArtifact's Incomplete counts
+// (TestGitHubTestsArtifactSkipsMalformedMemberWithoutDroppingValidReports /
+// ...UnreadableMemberWithoutDroppingValidReports in github_tests_reports_test.go)
+// or a hand-built cursor's watermark decision
+// (TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers).
+// None of them proved the CROSS-LAYER wiring: that a real parser output's
+// GitHubTestsSkippedArtifact marker actually reaches the cursor and is what
+// lets githubTestsFinalMetadataBatch advance. A regression that dropped the
+// marker-forwarding loop at github_tests_chunked_route.go (the
+// `for _, marker := range rows.SkippedArtifacts { cursor.SkippedArtifacts, ... =
+// appendGitHubTestsSkippedArtifact(...) }` block right after the parse call)
+// would leave every single-layer test green while silently recreating
+// CHAOS-4592 in production: the Incomplete cause would be recorded, but with
+// no marker behind it, so the durable-marker guard would withhold forever.
+//
+// This test drives parseGitHubTestsArtifact on real malformed and unreadable
+// fixtures, then reproduces the EXACT wiring the chunked route performs
+// immediately after that call (mergeGitHubTestsIncomplete +
+// appendGitHubTestsSkippedArtifact, in that order, per report member) rather
+// than hand-constructing a cursor -- so a break in either the parser's marker
+// population or the route's forwarding loop fails this test.
+func TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+
+	malformedRows, err := parseGitHubTestsArtifact(
+		githubTestsZip(t, map[string]string{
+			"bad.xml": `<!DOCTYPE x [<!ENTITY x "boom">]><testsuite>&x;</testsuite>`,
+		}),
+		"artifact-1", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9001", claim.OrgID,
+		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(malformedRows.SkippedArtifacts) != 1 || malformedRows.SkippedArtifacts[0].Cause != githubTestsMalformedCause {
+		t.Fatalf("parser did not populate a malformed marker: %+v", malformedRows.SkippedArtifacts)
+	}
+
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	header := &zip.FileHeader{Name: "reports/bad.xml", Method: zip.Store}
+	member, err := writer.CreateHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := member.Write([]byte(`<testsuite name="corrupt"><testcase name="lost"/></testsuite>`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := buffer.Bytes()
+	marker := []byte(`<testsuite name="corrupt">`)
+	index := bytes.Index(archive, marker)
+	if index < 0 {
+		t.Fatal("corrupt member payload not found")
+	}
+	archive[index] ^= 0x01
+
+	unreadableRows, err := parseGitHubTestsArtifact(
+		archive, "artifact-2", "c7198fbc-1945-3717-05d8-eb78866b4e79", "9002", claim.OrgID,
+		nil, nil, time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unreadableRows.SkippedArtifacts) != 1 || unreadableRows.SkippedArtifacts[0].Cause != githubTestsUnreadableCause {
+		t.Fatalf("parser did not populate an unreadable marker: %+v", unreadableRows.SkippedArtifacts)
+	}
+
+	// Reproduce github_tests_chunked_route.go's exact post-parse wiring: merge
+	// Incomplete first, then append each real marker -- for BOTH artifacts, so
+	// the cursor ends up exactly as a two-run unit's would.
+	cursor := githubTestsChunkCursor{Phase: "done", Repo: "acme/api"}
+	for _, rows := range []githubTestsReportRows{malformedRows, unreadableRows} {
+		reportIncomplete, optional := rows.optionalIncomplete()
+		if !optional {
+			t.Fatalf("rows unexpectedly unsafe: %+v", rows)
+		}
+		for _, observation := range reportIncomplete {
+			cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
+		}
+		for _, marker := range rows.SkippedArtifacts {
+			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+				cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, marker,
+			)
+		}
+	}
+
+	batch, err := githubTestsFinalMetadataBatch(claim, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- a real parser-populated malformed+unreadable marker pair must advance end-to-end",
 			batch.Watermark, claim.BeforeAt,
 		)
 	}

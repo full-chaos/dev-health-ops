@@ -657,7 +657,7 @@ async def test_dual_run_investment_breakdown_worktype_argmax_null_skip_diverges(
             use_investment=True,
         )
         python_result = await resolve_analytics(
-            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
             batch,
         )
         go_payload = _post_graphql(
@@ -815,7 +815,7 @@ async def test_dual_run_investment_full_sankey_control_case_matches(
             use_investment=True,
         )
         python_result = await resolve_analytics(
-            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
             batch,
         )
         go_payload = _post_graphql(
@@ -845,6 +845,29 @@ async def test_dual_run_investment_full_sankey_control_case_matches(
         sink.close()
 
     assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+
+    # Sort nodes by id on BOTH sides before comparing. Root cause traced
+    # against the real templates, not assumed: sankey_nodes_template
+    # (sql/templates.py:97-136) and CompileSankey's identical port
+    # (sankey.go) both build the nodes query as `UNION ALL` of one
+    # per-dimension branch, each internally `ORDER BY value DESC, node_id
+    # ASC LIMIT ...` -- but NEITHER plane wraps the union in an outer
+    # ORDER BY, so the order in which ClickHouse interleaves the UNION
+    # ALL branches across dimensions is unspecified by both the SQL
+    # standard and this port -- this is a pre-existing characteristic of
+    # BOTH planes (confirmed identical in Python's own template), not a
+    # divergence CHAOS-4547 or this PR introduced. A first, unsorted run
+    # of this control case observed Python return `[REPO, WORK_TYPE]` and
+    # Go return `[WORK_TYPE, REPO]` -- same 2 nodes, same values, only the
+    # cross-dimension order differed. Normalizing by a stable key here is
+    # a fix to THIS TEST's comparison, not a claim that either plane
+    # needs an outer ORDER BY (CHAOS-4381's tie-order rule governs order
+    # WITHIN one dimension's own LIMIT boundary, which each branch's own
+    # `ORDER BY value DESC, node_id ASC` already provides and this test
+    # does not touch).
+    assert python_result.sankey is not None, "expected a non-nil SankeyResult"
+    python_result.sankey.nodes.sort(key=lambda n: n.id)
+    go_payload["data"]["analytics"]["sankey"]["nodes"].sort(key=lambda n: n["id"])
 
     baseline = _sankey_python_snapshot(python_result)
     candidate = _go_snapshot(go_payload)

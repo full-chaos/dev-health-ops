@@ -122,8 +122,8 @@ func investmentMembershipScopeStateSource() string {
                     dateDiff('second', latest_run_completed_at, latest_investment_computed_at)
                 )
             )) AS lag_seconds
-        FROM %s
-        CROSS JOIN %s
+        FROM %s AS lcmr
+        CROSS JOIN %s AS lic
     )`, latestCompleteMembershipRunSource(), latestInvestmentClockSource())
 }
 

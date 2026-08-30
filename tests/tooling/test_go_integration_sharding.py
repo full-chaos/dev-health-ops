@@ -30,7 +30,6 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
     "cmd/query-api",
-    "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -218,12 +217,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # canary's HTTP-level reachability test
     # (query_route_integration_test.go) is proved against a real Postgres
     # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
-    # CHAOS-4506 added cmd/query-api/internal/analytics (32 -> 33): the
-    # NaN-class live proof (nan_class_live_test.go) is proved against a
-    # real ClickHouse container -- the analytics package's first
-    # -tags integration file.
-    assert "33 package(s) discovered, 0 denylisted, 33 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 33 package(s)" in result.stdout
+    assert "32 package(s) discovered, 0 denylisted, 32 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 32 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -249,7 +244,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 33
+    assert len(flattened) == len(set(flattened)) == 32
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -982,8 +977,94 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the fix that ties the identity predicate to each row's OWN org_id
     # (startsWith(id, concat(org_id, ':linear:'))) instead of a bare
     # substring test anywhere in id. 1246 -> 1247 top-level; 145 unchanged.
-    assert len(expected_provider_tests) == 1247
-    assert len(expected_integration_tests) == 145
+    #
+    # CHAOS-4537 added 1 new `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipAtAll,
+    # the ClickHouse-loading Derive() method's own red-first proof for the
+    # ticket's redirect: a Linear work item with native_team_key resolves
+    # even when team_project_ownership has zero rows for the org (Derive's
+    # early return used to gate on team_project_ownership alone before
+    # loading work_items at all -- fixed in the same change). 1247 -> 1248
+    # top-level; 145 -> 146 integration-tagged.
+    #
+    # Codex review round 1 on this PR (P1, confirmed real) found the same
+    # change had removed a SEPARATE, still-necessary guard along with the
+    # one above: if work_items/dependencyEdges/issuePRLinks are all empty
+    # regardless of team_project_ownership's state (a transient partial-sync
+    # snapshot, the OPPOSITE ordering from the test above), proceeding
+    # anyway would retract every previously-derived row for the org. Fixed
+    # by restoring that guard (unchanged from before this ticket) while
+    # still removing only the projectLinks-only one. Added 1 more
+    # `//go:build integration` top-level test, deliberately GitHub-shaped
+    # per AGENTS.md's provider-matrix rule:
+    # TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap.
+    # 1248 -> 1249 top-level; 146 -> 147 integration-tagged.
+    #
+    # Codex review round 2 on this PR (P1, confirmed real) found
+    # resolveWorkItemTeamID's linear_team_key arm unconditionally trusted a
+    # Linear work item's native_team_key with no validation against the org's
+    # CURRENT team catalog -- diverging from the established "native_team"
+    # resolution contract every other native-team lookup in this codebase
+    # follows (compute_work_items.py's _native_team_candidate;
+    # github_work_items_derivation_context.go's nativeTeamCandidate). Fixed
+    # by adding a knownTeams input (loaded from `teams`) and validating
+    # NativeTeamKey against it before trusting the value. Added 1 new
+    # ordinary top-level test in team_repo_ownership_derivation_test.go:
+    # TestLinearTeamKeyArmRejectsUnknownNativeTeamKey, and 1 new
+    # `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey.
+    # 1249 -> 1251 top-level; 147 -> 148 integration-tagged.
+    #
+    # Codex review round 3 (final) on this PR found 2 more findings against
+    # round 2's own fix. (P1, confirmed real) the projectLinks-empty guard
+    # round 1 removed unconditionally reopened the identical retraction
+    # hazard round 1 itself fixed, mirrored onto the opposite input
+    # combination (team_project_ownership transiently empty for a
+    # NON-Linear org, or a Linear org with no native_team_key signal) --
+    # fixed with a new hasResolvableLinearNativeTeamKey helper and a
+    # conditional guard. (P2 raised, verified NOT applicable to this
+    # codebase: both the live Go writer and the retired Python writer stamp
+    # `teams.id` and `teams.native_team_key` from the exact same value,
+    # always -- executed-read proof, not asserted) native keys are not
+    # separately resolved to a canonical team id; documented instead of
+    # adding unreachable-case handling, plus a pinning test guarding the
+    # verified invariant against future drift. Added 3 new tests:
+    # TestHasResolvableLinearNativeTeamKey and
+    # TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey (both ordinary,
+    # team_repo_ownership_derivation_test.go), and
+    # TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIsTransientlyEmptyForANonLinearOrg
+    # (`//go:build integration`, team_repo_ownership_derivation_integration_test.go).
+    # 1251 -> 1254 top-level; 148 -> 149 integration-tagged.
+    #
+    # A delta-only re-review of round 3's own fix (the final allowed codex
+    # pass per the round cap -- its finding gets a minimal fix, no further
+    # round) found a second real P1: diffTeamRepoOwnershipRetractions is a
+    # single GLOBAL diff over the whole org, not scoped per resolution arm.
+    # Round 3's hasResolvableLinearNativeTeamKey guard let a cycle proceed
+    # with projectLinks empty on ONE Linear item's valid native key, but
+    # `derived` can never reproduce a project_id-arm-derived pair in that
+    # state -- retracting would wrongly wipe every previously-good
+    # project_id-arm row for a MIXED org. Fixed: skip retraction entirely
+    # whenever projectLinks is empty (still derive/write new linear_team_key
+    # rows). Added 1 new `//go:build integration` top-level test in
+    # team_repo_ownership_derivation_integration_test.go:
+    # TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg.
+    # 1254 -> 1255 top-level; 149 -> 150 integration-tagged.
+    #
+    # CHAOS-4557 (duplicate_natural_key detail never survived a worker
+    # restart -- only the bare category reached sync_run_units). Added 2 new
+    # ordinary top-level tests in
+    # github_tests_cross_artifact_key_collision_test.go:
+    # TestDuplicateNaturalKeyDetailFromExtractsTableAndFields and
+    # TestDuplicateNaturalKeyDetailFromIsBounded, and 1 new
+    # `//go:build integration` top-level test in
+    # repository_postgres_metrics_integration_test.go:
+    # TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey.
+    # 1255 -> 1258 top-level; 150 -> 151 integration-tagged.
+    assert len(expected_provider_tests) == 1258
+    assert len(expected_integration_tests) == 151
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -999,7 +1080,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1247
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1258
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1043,7 +1124,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 32
+    assert len(selected_packages) == len(set(selected_packages)) == 31
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -1060,7 +1141,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1247
+    assert len(selected_tests) == len(set(selected_tests)) == 1258
     assert set(selected_tests) == expected_tests
 
 

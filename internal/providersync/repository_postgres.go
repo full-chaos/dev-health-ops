@@ -466,6 +466,49 @@ func (repository *PostgresRepository) Fail(
 	startedAt time.Time,
 	completedAt time.Time,
 ) error {
+	return repository.failTx(ctx, claim, category, nil, startedAt, completedAt)
+}
+
+// FailWithDuplicateKeyDetail is Fail plus a bounded, structured record of the
+// colliding natural key (CHAOS-4557): before this, a duplicate_natural_key
+// termination persisted nothing but the bare category to sync_run_units, and
+// the actual destination table + colliding field values lived only in the
+// worker's stdout log via lifecycleErrorDetail -- gone the moment the
+// container restarted. table and fields are expected to already be bounded
+// (see providersync.DuplicateNaturalKeyDetailFrom); this method bounds the
+// FIELD COUNT again defensively so a caller that skips that helper still
+// cannot write an unbounded result document.
+func (repository *PostgresRepository) FailWithDuplicateKeyDetail(
+	ctx context.Context,
+	claim Claim,
+	category string,
+	table string,
+	fields []DuplicateNaturalKeyField,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	limit := len(fields)
+	if limit > duplicateNaturalKeyDetailMaxFields {
+		limit = duplicateNaturalKeyDetailMaxFields
+	}
+	keyFields := make(map[string]string, limit)
+	for index := 0; index < limit; index++ {
+		keyFields[fields[index].Name] = fields[index].Value
+	}
+	detail := map[string]any{"table": table, "fields": keyFields}
+	return repository.failTx(ctx, claim, category, detail, startedAt, completedAt)
+}
+
+// failTx is Fail's implementation, parameterized on an optional extra
+// natural-key detail so both entrypoints share one durable-write path.
+func (repository *PostgresRepository) failTx(
+	ctx context.Context,
+	claim Claim,
+	category string,
+	naturalKeyDetail map[string]any,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || category == "" || len(category) > 64 ||
 		startedAt.IsZero() || completedAt.Before(startedAt) {
@@ -476,7 +519,11 @@ func (repository *PostgresRepository) Fail(
 		return ErrInvalidConfiguration
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	result, marshalErr := json.Marshal(map[string]any{"error_category": category})
+	resultDoc := map[string]any{"error_category": category}
+	if naturalKeyDetail != nil {
+		resultDoc["duplicate_key"] = naturalKeyDetail
+	}
+	result, marshalErr := json.Marshal(resultDoc)
 	if marshalErr != nil {
 		return ErrInvalidConfiguration
 	}

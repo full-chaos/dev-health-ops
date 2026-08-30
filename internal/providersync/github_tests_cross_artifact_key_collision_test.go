@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -519,5 +520,90 @@ func TestGitHubTestsSameArtifactSiblingSuitesSameNameCollide(t *testing.T) {
 			"CHAOS-4487: WriteEffect rejected the sibling-suite batch as a duplicate natural key, "+
 				"exactly the prod terminal failure: %v", err,
 		)
+	}
+}
+
+// TestDuplicateNaturalKeyDetailFromExtractsTableAndFields pins CHAOS-4557: a
+// recordGitHubTestsKey rejection's destination table and colliding
+// natural-key fields must be extractable in STRUCTURED form (not re-parsed
+// from Error() prose) so a caller can persist them past the worker's stdout
+// log, which does not survive a container restart. Before this fix
+// DuplicateNaturalKeyDetailFrom did not exist at all.
+func TestDuplicateNaturalKeyDetailFromExtractsTableAndFields(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	row := testCaseResultRow{
+		OrgID: claim.OrgID, RepoID: "7b9583ee-4d24-2be7-4d09-34f815bebdd7", RunID: "33248832747",
+		SuiteID:    "39e6a65dcda47e162038d43836b45a156ff06a315b32bcf344a94aadf754f35b",
+		CaseID:     "00785b22f65e05dd2a7b4741d0cb288890317956440b1dc8fde05ffac989d8c9",
+		LastSynced: now,
+	}
+	effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, []testCaseResultRow{row, row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := TestOpsClickHouseEffects{
+		Conn:  &githubTestsDuplicateKeyConn{},
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	writeErr := sink.WriteEffect(context.Background(), claim, effect)
+	if !errors.Is(writeErr, ErrDuplicateNaturalKey) {
+		t.Fatalf("WriteEffect error=%v, want ErrDuplicateNaturalKey", writeErr)
+	}
+
+	table, fields, ok := DuplicateNaturalKeyDetailFrom(writeErr)
+	if !ok {
+		t.Fatal("DuplicateNaturalKeyDetailFrom returned ok=false for a genuine ErrDuplicateNaturalKey")
+	}
+	if table != "test_case_results" {
+		t.Fatalf("table=%q, want test_case_results", table)
+	}
+	want := map[string]string{
+		"org_id": row.OrgID, "repo_id": row.RepoID, "run_id": row.RunID,
+		"suite_id": row.SuiteID, "case_id": row.CaseID,
+	}
+	if len(fields) != len(want) {
+		t.Fatalf("fields=%+v, want %d entries matching %+v", fields, len(want), want)
+	}
+	for _, field := range fields {
+		if got, known := want[field.Name]; !known || got != field.Value {
+			t.Fatalf("field %s=%q unexpected or wrong, want one of %+v", field.Name, field.Value, want)
+		}
+	}
+
+	// A plain ErrDuplicateNaturalKey with no structured detail (e.g. built
+	// directly, not through duplicateNaturalKeyError) must report ok=false
+	// rather than panic or fabricate a table.
+	if _, _, ok := DuplicateNaturalKeyDetailFrom(ErrDuplicateNaturalKey); ok {
+		t.Fatal("DuplicateNaturalKeyDetailFrom reported ok=true for a bare ErrDuplicateNaturalKey with no detail")
+	}
+	if _, _, ok := DuplicateNaturalKeyDetailFrom(nil); ok {
+		t.Fatal("DuplicateNaturalKeyDetailFrom reported ok=true for a nil error")
+	}
+}
+
+// TestDuplicateNaturalKeyDetailFromIsBounded pins the defensive size bound: a
+// future call site cannot make this detail an unbounded persistence payload.
+func TestDuplicateNaturalKeyDetailFromIsBounded(t *testing.T) {
+	fields := make([]string, 0, 40)
+	longValue := strings.Repeat("x", 500)
+	for index := 0; index < 20; index++ {
+		fields = append(fields, "field"+strconv.Itoa(index), longValue)
+	}
+	err := duplicateNaturalKeyError("some_table", fields...)
+	table, got, ok := DuplicateNaturalKeyDetailFrom(err)
+	if !ok {
+		t.Fatal("ok=false for a genuine duplicateNaturalKeyError")
+	}
+	if len(table) > duplicateNaturalKeyDetailMaxFieldLen {
+		t.Fatalf("table len=%d, want <= %d", len(table), duplicateNaturalKeyDetailMaxFieldLen)
+	}
+	if len(got) > duplicateNaturalKeyDetailMaxFields {
+		t.Fatalf("fields count=%d, want <= %d", len(got), duplicateNaturalKeyDetailMaxFields)
+	}
+	for _, field := range got {
+		if len(field.Value) > duplicateNaturalKeyDetailMaxFieldLen {
+			t.Fatalf("field %s value len=%d, want <= %d", field.Name, len(field.Value), duplicateNaturalKeyDetailMaxFieldLen)
+		}
 	}
 }

@@ -326,6 +326,61 @@ func (handler *Handler) observeAllArtifactsUnreadable(claim providersync.Claim, 
 	handler.ProviderMetrics.RecordAllArtifactsUnreadable(claim.Provider, claim.Dataset)
 }
 
+// observeDuplicateNaturalKeyCollision reports one cicd/tests effect batch
+// recordGitHubTestsKey rejected outright with ErrDuplicateNaturalKey
+// (CHAOS-4557), labeled by the destination table so the counter distinguishes
+// test_case_results from ci_job_runs etc. rather than collapsing every
+// collision into one series. Call it only AFTER the durable Fail transition
+// succeeds, for the identical over-counting reason
+// observeAllArtifactsUnreadable documents: a retried attempt that re-detects
+// the same condition must not increment this again.
+func (handler *Handler) observeDuplicateNaturalKeyCollision(claim providersync.Claim, category string, cause error) {
+	if handler == nil || category != DuplicateNaturalKeyCategory {
+		return
+	}
+	table, _, ok := providersync.DuplicateNaturalKeyDetailFrom(cause)
+	if !ok {
+		return
+	}
+	handler.ProviderMetrics.RecordDuplicateNaturalKeyCollision(claim.Provider, claim.Dataset, table)
+}
+
+// DuplicateKeyDetailRepository is optional so existing repository test
+// doubles and older rolling binaries remain source-compatible, exactly like
+// ChunkContinuationRepository and RateLimitDeferralRepository above.
+// Production's PostgresRepository implements it (CHAOS-4557): it persists the
+// colliding destination table and natural-key fields alongside the bare
+// category, so a duplicate_natural_key termination survives a worker restart
+// in Postgres rather than living only in the stdout log line
+// lifecycleErrorDetail already carries (which does not survive one).
+type DuplicateKeyDetailRepository interface {
+	FailWithDuplicateKeyDetail(
+		ctx context.Context, claim providersync.Claim, category string,
+		table string, fields []providersync.DuplicateNaturalKeyField,
+		startedAt, completedAt time.Time,
+	) error
+}
+
+// failTerminal persists a unit's terminal category, and -- when err carries a
+// structured duplicate-natural-key detail and the repository supports it --
+// the colliding table and key fields too. Falls back to the plain Fail for
+// every other category, and for a duplicate-key error against a repository
+// (or test double) that does not implement DuplicateKeyDetailRepository, so
+// this is purely additive: no existing caller's behavior changes.
+func (handler *Handler) failTerminal(
+	ctx context.Context, claim providersync.Claim, category string, err error,
+	startedAt, completedAt time.Time,
+) error {
+	if table, fields, ok := providersync.DuplicateNaturalKeyDetailFrom(err); ok {
+		if repository, supported := handler.Repository.(DuplicateKeyDetailRepository); supported {
+			return repository.FailWithDuplicateKeyDetail(
+				context.WithoutCancel(ctx), claim, category, table, fields, startedAt, completedAt,
+			)
+		}
+	}
+	return handler.Repository.Fail(context.WithoutCancel(ctx), claim, category, startedAt, completedAt)
+}
+
 // observeCicdPartialSuccess reports a github cicd/tests unit that advanced
 // its watermark despite carrying non-empty incomplete evidence (CHAOS-4394).
 // Call it only from the branch where Repository.Complete has ALREADY
@@ -691,10 +746,7 @@ func (handler *Handler) Work(
 		// outcome while the category never persisted and run finalization
 		// never armed, leaving the run nonterminal. Stay retryable so a later
 		// attempt can record it, exactly as the route-reconciliation path does.
-		if failErr := handler.Repository.Fail(
-			context.WithoutCancel(ctx), session.Claim, category,
-			startedAt, completedAt,
-		); failErr != nil {
+		if failErr := handler.failTerminal(ctx, session.Claim, category, err, startedAt, completedAt); failErr != nil {
 			return jobruntime.Retryable(failErr)
 		}
 		// Only AFTER the durable transition, for the same reason
@@ -704,6 +756,7 @@ func (handler *Handler) Work(
 		// exact series an operator would use to judge how bad CHAOS-4130 is.
 		handler.observeTerminalWithCommittedRows(session.Claim, result, category, err)
 		handler.observeAllArtifactsUnreadable(session.Claim, category)
+		handler.observeDuplicateNaturalKeyCollision(session.Claim, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		return jobruntime.Permanent(err)

@@ -2291,6 +2291,16 @@ def test_zero_unit_jira_plan_credential_stamp_telemetry_not_counted_on_rollback(
     )._value.get()
     assert after_count == before_count
 
+    # CHAOS-4593 codex round 2, P2: rollback must also deregister the
+    # deferred listener -- a `once=True` after_commit hook alone stays armed
+    # on a reused session and would fire on this NEXT, wholly unrelated
+    # commit, misattributing telemetry to the rolled-back plan.
+    db_session.commit()
+    after_unrelated_commit_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_unrelated_commit_count == before_count
+
 
 def test_zero_unit_backfill_jira_plan_also_stamps_credentials(db_session):
     """CHAOS-4593: the admin backfill trigger nulls ``source_ids`` back to

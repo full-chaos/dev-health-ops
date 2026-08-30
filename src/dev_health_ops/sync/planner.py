@@ -612,15 +612,30 @@ def _defer_zero_unit_credential_stamp_telemetry(
     (the admin router, the scheduler, ``create_sync_execution_trigger``)
     commits ``session`` on its own, sometime after this function returns --
     so an inline increment would survive a later rollback and publish a
-    stamp for a plan that was never actually persisted. SQLAlchemy's
-    ``after_commit`` session event fires exactly once per real commit
-    regardless of which caller issues it, which is what lets a callee this
-    deep defer safely without every call site having to thread a return
-    value through (codex review, CHAOS-4593 round 1, P2).
+    stamp for a plan that was never actually persisted.
+
+    Codex review (CHAOS-4593 round 2, P2): a plain ``once=True`` listener on
+    ``after_commit`` is not enough -- if THIS plan's transaction rolls back
+    instead of committing, that listener stays armed on the (likely reused,
+    e.g. request-scoped) ``session`` and would fire on some LATER, entirely
+    unrelated commit, misattributing telemetry to a plan that was never
+    persisted. So this also arms an ``after_rollback`` listener that cancels
+    the pending emit via a shared flag -- NOT via ``event.remove()`` from
+    inside either handler, which crashes ("deque mutated during iteration",
+    caught by the round-2 regression test below) because SQLAlchemy is still
+    iterating that same listener collection while dispatching it. Both
+    listeners are registered ``once=True`` so each safely self-unregisters
+    (SQLAlchemy's own internal machinery, not a manual ``event.remove``)
+    the first time IT fires; the flag is what makes them mutually
+    cancelling regardless of which one that is.
     """
     from sqlalchemy import event
 
+    cancelled = {"flag": False}
+
     def _emit(_session: Session) -> None:
+        if cancelled["flag"]:
+            return
         from dev_health_ops.metrics.prometheus import (
             SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
         )
@@ -636,7 +651,11 @@ def _defer_zero_unit_credential_stamp_telemetry(
             },
         )
 
+    def _cancel(_session: Session) -> None:
+        cancelled["flag"] = True
+
     event.listen(session, "after_commit", _emit, once=True)
+    event.listen(session, "after_rollback", _cancel, once=True)
 
 
 def _zero_unit_plan_needs_credential_stamp(integration: Integration) -> bool:

@@ -457,6 +457,22 @@ def test_jira_discovery_without_planner_parent_does_not_stamp_tag(
         assert "planner_managed_sync_config_id" not in source.metadata_
 
 
+def test_jira_discovery_passes_org_id_to_discover_repos_for_config(
+    session: Session, jira_integration: Integration
+):
+    """Codex review (CHAOS-4584 round 1, P2): the config-shim discovery
+    builds from an Integration must carry org_id so the jira branch of
+    discover_repos_for_config can scope its rate-limit gate per org instead
+    of collapsing every org on the same Jira host onto one shared key."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES) as mock_discover:
+        discover_sources_for_integration(session, jira_integration.id)
+
+    passed_config = mock_discover.call_args.args[0]
+    assert passed_config.org_id == "org-test"
+
+
 def test_jira_rediscovery_no_duplicates_and_preserves_disabled(
     session: Session,
     jira_integration: Integration,

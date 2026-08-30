@@ -47,22 +47,34 @@ def discover_repos_for_config(
             # yields zero results, never an exception (CHAOS-4584).
             return []
         org_id = getattr(config, "org_id", None)
-        return discover_jira_projects(jira_credentials, org_id=org_id)
+        return discover_jira_projects(
+            jira_credentials, org_id=org_id, sync_options=sync_options
+        )
     return []
 
 
 def discover_jira_projects(
-    jira_credentials: Any, *, org_id: str | None = None
+    jira_credentials: Any,
+    *,
+    org_id: str | None = None,
+    sync_options: dict[str, Any] | None = None,
 ) -> list[tuple[str, ...]]:
-    """Enumerate every Jira project visible to *jira_credentials*.
+    """Enumerate Jira projects visible to *jira_credentials*.
 
-    Mirrors ``discover_github_repos``/``discover_gitlab_repos``: a plain
-    credential-scoped enumeration, no ``sync_options``-driven filtering.
     Chris's ruling (CHAOS-4584): a generic Jira API key should discover
     ALL projects visible to it (software, service_desk/JSM, business,
-    product_discovery) -- board/sprint reference-data discovery stays
-    gated by ``projectTypeKey`` downstream (CHAOS-4575); this function only
-    materializes work-items-capable ``integration_sources`` rows.
+    product_discovery) when the caller has NO explicit project scope --
+    board/sprint reference-data discovery stays gated by ``projectTypeKey``
+    downstream (CHAOS-4575); this function only materializes
+    work-items-capable ``integration_sources`` rows.
+
+    When *sync_options* carries an explicit ``project_key``/``project_id``
+    (codex review, CHAOS-4584 round 1 P1: an integration configured for one
+    named project must never silently expand to every visible project just
+    because a discovery run was triggered), results are filtered down to
+    that single project -- matching the existing bounded-scope contract
+    ``_non_git_explicit_source_id``/``_non_git_source_rows`` already enforce
+    at config-creation time.
 
     Returns ``(project_key, project_name, project_type_key)`` tuples using
     the existing paginated ``GET /rest/api/3/project/search`` client method
@@ -88,12 +100,19 @@ def discover_jira_projects(
     finally:
         client.close()
 
+    explicit_key = str((sync_options or {}).get("project_key") or "").strip().lower()
+    explicit_id = str((sync_options or {}).get("project_id") or "").strip()
+
     result: list[tuple[str, ...]] = []
     for project in projects:
         if not isinstance(project, dict):
             continue
         key = str(project.get("key") or "").strip()
         if not key:
+            continue
+        if explicit_key and key.lower() != explicit_key:
+            continue
+        if explicit_id and str(project.get("id") or "").strip() != explicit_id:
             continue
         name = str(project.get("name") or key)
         project_type_key = str(project.get("projectTypeKey") or "").strip().lower()

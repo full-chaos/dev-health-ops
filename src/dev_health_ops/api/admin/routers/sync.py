@@ -2288,19 +2288,108 @@ async def create_sync_config(
         # discovery failure (bad credential, Jira unreachable) must not fail
         # config creation -- the config is still valid and can be
         # re-discovered later via that endpoint once the credential works.
+        #
+        # Runs inside a SAVEPOINT (codex review, CHAOS-4584 round 1 P2): a
+        # discovery-time DB failure (e.g. a concurrent unique-key race) must
+        # only unwind the savepoint, never poison the outer session -- the
+        # dependency's commit-at-teardown would otherwise hit
+        # PendingRollbackError and turn a "best-effort, never fails
+        # creation" path into a 500 that rolls back the config too.
+        discovery_ok = False
         try:
-            await session.run_sync(
-                lambda sync_session: discover_sources_for_integration(
-                    sync_session, integration.id
+            async with session.begin_nested():
+                await session.run_sync(
+                    lambda sync_session: discover_sources_for_integration(
+                        sync_session, integration.id
+                    )
                 )
-            )
+            discovery_ok = True
         except Exception:
             logger.exception(
                 "jira_project_discovery_at_creation_failed",
                 extra={"org_id": org_id, "integration_id": str(integration.id)},
             )
 
+        if discovery_ok:
+            # Deliberately OUTSIDE the savepoint above: TierLimitService's
+            # own DB-tier-limits lookup detects an ambient nested
+            # transaction and skips its own missing-table fallback in that
+            # case (assumes the CALLER owns recovery), so nesting it inside
+            # our savepoint would surface a raw OperationalError on any env
+            # without a tier_limits table yet. The repo-limit preflight
+            # above charged 0 for this config
+            # (_jira_config_materializes_zero_sources), but real discovery
+            # can enable more sources than the org's max_repos allows if the
+            # credential exposes more projects than the remaining allowance
+            # (codex review, CHAOS-4584 round 1 P1) -- the advisory lock
+            # acquired earlier in this request
+            # (_acquire_repo_limit_create_lock) is still held for the rest
+            # of this transaction, so this re-check is race-free. Also
+            # best-effort: a failure here must not fail config creation.
+            try:
+                await _cap_jira_discovery_to_repo_limit(session, org_id, integration.id)
+            except Exception:
+                logger.exception(
+                    "jira_project_discovery_repo_limit_cap_failed",
+                    extra={"org_id": org_id, "integration_id": str(integration.id)},
+                )
+
     return _sync_config_to_response(config, credential_id=integration.credential_id)
+
+
+async def _cap_jira_discovery_to_repo_limit(
+    session: AsyncSession, org_id: str, integration_id: uuid.UUID
+) -> None:
+    """Disable newly-discovered Jira sources beyond the org's ``max_repos``
+    allowance (codex review, CHAOS-4584 round 1 P1).
+
+    Only ever touches sources on *integration_id* -- a jira integration this
+    request just created, so every enabled source on it at this point came
+    from the discovery run just above. Deterministic order (external_id,
+    descending) so which specific projects get disabled doesn't depend on
+    discovery response ordering; a re-run of discovery later can re-enable
+    the capped ones once the org's allowance grows.
+    """
+
+    def _get_max_repos(sync_session) -> int | float | None:
+        return TierLimitService(sync_session).get_limit(uuid.UUID(org_id), "max_repos")
+
+    max_repos = await session.run_sync(_get_max_repos)
+    if max_repos is None:
+        return
+
+    current_count = await _active_repo_usage_count_for_limit(session, org_id)
+    overflow = int(current_count) - int(max_repos)
+    if overflow <= 0:
+        return
+
+    result = await session.execute(
+        select(IntegrationSource)
+        .where(
+            IntegrationSource.org_id == org_id,
+            IntegrationSource.integration_id == integration_id,
+            IntegrationSource.is_enabled.is_(True),
+        )
+        .order_by(IntegrationSource.external_id.desc())
+        .limit(overflow)
+    )
+    capped = list(result.scalars().all())
+    for source in capped:
+        source.is_enabled = False
+    await session.flush()
+
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+
+    JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="capped_by_repo_limit").inc(len(capped))
+    logger.warning(
+        "jira_project_discovery_capped_by_repo_limit",
+        extra={
+            "org_id": org_id,
+            "integration_id": str(integration_id),
+            "capped_count": len(capped),
+            "max_repos": max_repos,
+        },
+    )
 
 
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)

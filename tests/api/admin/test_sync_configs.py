@@ -2508,6 +2508,72 @@ async def test_create_jira_sync_config_auto_discovers_real_projects_at_creation(
 
 
 @pytest.mark.asyncio
+async def test_create_jira_sync_config_caps_discovery_at_repo_limit(
+    client, session_maker
+):
+    """Codex review (CHAOS-4584 round 1, P1): the repo-limit preflight
+    charges 0 for a no-scope jira create (correctly --
+    _jira_config_materializes_zero_sources), so real discovery finding more
+    projects than the org's max_repos allows must not silently exceed the
+    entitlement. 3 discovered projects, max_repos=2 -> exactly 2 stay
+    enabled, 1 gets disabled, deterministically (external_id desc)."""
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(OrgLicense).where(OrgLicense.org_id == uuid.UUID(org_id))
+        )
+        license_row = result.scalar_one_or_none()
+        if license_row is None:
+            license_row = OrgLicense(org_id=uuid.UUID(org_id), tier="pro")
+            session.add(license_row)
+        license_row.limits_override = {"max_repos": 2}
+        await session.commit()
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-capped",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {"auto_import_projects": True},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_external = {s.external_id: s for s in sources}
+        assert len(by_external) == 3, "capping disables rows, never deletes them"
+        assert by_external["AAA"].is_enabled is True
+        assert by_external["BBB"].is_enabled is True
+        assert by_external["CCC"].is_enabled is False, (
+            "CCC sorts last (external_id desc) -- it's the one over the cap"
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
 async def test_batch_create_git_sync_config_is_triggerable_with_units(
     client, session_maker, provider, repo

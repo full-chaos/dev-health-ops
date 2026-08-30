@@ -77,6 +77,11 @@ def _build_config_shim(integration: Integration) -> Any:
     ``discover_repos_for_config`` expects an object with:
     - ``.provider`` (str)
     - ``.sync_options`` (dict | None)
+    - ``.org_id`` (str | None) -- used only by the jira branch, to scope its
+      per-host rate-limit gate to this org (codex review, CHAOS-4584 round 1
+      P2: without it every org sharing a Jira host collapses onto the same
+      ``rate_limit:jira:_:<host>`` key, so one org's 429 backoff throttles
+      every other org on that host).
 
     The ``Integration.config`` column carries the same options that
     ``SyncConfiguration.sync_options`` used to carry (owner, search,
@@ -86,10 +91,12 @@ def _build_config_shim(integration: Integration) -> Any:
     class _Shim:
         provider: str
         sync_options: dict[str, Any]
+        org_id: str
 
     shim = _Shim()
     shim.provider = integration.provider or ""
     shim.sync_options = dict(integration.config or {})
+    shim.org_id = integration.org_id
     return shim
 
 

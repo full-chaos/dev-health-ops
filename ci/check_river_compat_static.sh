@@ -116,7 +116,7 @@ jq -e '
   and (.gate_truth_table | keys) == ["direct", "poll_only", "session"]
   and .nested_n_minus_1.status == "pass"
   and (.nested_n_minus_1.phases | length) == 2
-  and .versions.go == "go1.27.0"
+  and .versions.go == "go1.25.9"
   and .versions.river == "v0.40.0"
   and .versions.river_driver == "v0.40.0"
   and .versions.pgx == "v5.10.0"

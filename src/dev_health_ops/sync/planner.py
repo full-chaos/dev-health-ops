@@ -332,21 +332,23 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         credential_id, credential_fp, auth_source = _resolve_credential_stamp(
             session, integration
         )
-        from dev_health_ops.metrics.prometheus import (
-            SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
-        )
-
-        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
-            provider=str(integration.provider)
-        ).inc()
-        logger.info(
-            "sync.planner.zero_unit_plan_stamped_for_strict_discovery",
-            extra={
-                "org_id": str(integration.org_id),
-                "integration_id": str(integration.id),
-                "provider": str(integration.provider),
-                "mode": mode,
-            },
+        # Codex review (CHAOS-4593, round 1, P2): plan_sync_run does not own
+        # this session's transaction boundary -- every caller commits
+        # separately, sometime after this function returns -- so counting
+        # here, inline, would publish a stamp for a plan that a later flush
+        # or the caller's own commit could still roll back. Mirrors the
+        # ALREADY-existing deferred-increment pattern this codebase uses for
+        # exactly this reason (`workers/sync_units.py`'s
+        # ZERO_UNIT_FINALIZATIONS_TOTAL, "DECIDED here, not incremented
+        # here"): register a one-shot `after_commit` hook instead of
+        # incrementing inline, so a rolled-back transaction never inflates
+        # the counter.
+        _defer_zero_unit_credential_stamp_telemetry(
+            session,
+            org_id=str(integration.org_id),
+            integration_id=str(integration.id),
+            provider=str(integration.provider),
+            mode=mode,
         )
 
     sync_run = SyncRun(
@@ -593,6 +595,48 @@ def _load_integration(
     if integration is None:
         raise ValueError(f"Integration not found for org {org_id}: {integration_id}")
     return integration
+
+
+def _defer_zero_unit_credential_stamp_telemetry(
+    session: Session,
+    *,
+    org_id: str,
+    integration_id: str,
+    provider: str,
+    mode: str,
+) -> None:
+    """Increment the CHAOS-4593 zero-unit credential-stamp counter/log ONLY
+    after this ``session``'s enclosing transaction actually commits.
+
+    ``plan_sync_run`` does not own the transaction boundary -- every caller
+    (the admin router, the scheduler, ``create_sync_execution_trigger``)
+    commits ``session`` on its own, sometime after this function returns --
+    so an inline increment would survive a later rollback and publish a
+    stamp for a plan that was never actually persisted. SQLAlchemy's
+    ``after_commit`` session event fires exactly once per real commit
+    regardless of which caller issues it, which is what lets a callee this
+    deep defer safely without every call site having to thread a return
+    value through (codex review, CHAOS-4593 round 1, P2).
+    """
+    from sqlalchemy import event
+
+    def _emit(_session: Session) -> None:
+        from dev_health_ops.metrics.prometheus import (
+            SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+        )
+
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(provider=provider).inc()
+        logger.info(
+            "sync.planner.zero_unit_plan_stamped_for_strict_discovery",
+            extra={
+                "org_id": org_id,
+                "integration_id": integration_id,
+                "provider": provider,
+                "mode": mode,
+            },
+        )
+
+    event.listen(session, "after_commit", _emit, once=True)
 
 
 def _zero_unit_plan_needs_credential_stamp(integration: Integration) -> bool:

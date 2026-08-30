@@ -2234,11 +2234,62 @@ def test_zero_unit_jira_plan_stamps_credentials_for_strict_discovery(db_session)
     # unconditional strict discovery.
     assert sync_run.auth_source == AUTH_SOURCE_ENVIRONMENT
     assert isinstance(sync_run.credential_fingerprint, str)
-    # Telemetry: the zero-unit credential-stamp path is counted (CHAOS-4593).
+    # Telemetry is deferred to session commit (codex round 1, P2) -- not yet
+    # incremented here, before the caller commits.
+    mid_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert mid_count == before_count
+    db_session.commit()
     after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
         provider="jira"
     )._value.get()
     assert after_count == before_count + 1
+
+
+def test_zero_unit_jira_plan_credential_stamp_telemetry_not_counted_on_rollback(
+    db_session,
+):
+    """CHAOS-4593 codex round 1 (P2): the zero-unit credential-stamp counter
+    must NOT increment if the caller's transaction rolls back instead of
+    committing -- plan_sync_run doesn't own the transaction boundary, so an
+    inline increment would have published a stamp for a plan that was never
+    actually persisted. Mirrors the existing deferred-increment pattern
+    workers/sync_units.py uses for ZERO_UNIT_FINALIZATIONS_TOTAL."""
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    before_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="SUP",
+        provider="jira",
+        is_enabled=False,
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    db_session.rollback()
+
+    after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_count == before_count
 
 
 def test_zero_unit_backfill_jira_plan_also_stamps_credentials(db_session):

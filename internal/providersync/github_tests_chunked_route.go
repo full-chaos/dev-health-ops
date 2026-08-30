@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -106,7 +107,37 @@ func appendGitHubTestsSkippedArtifact(
 	if len(records) >= githubTestsMaxSkippedArtifactRecords {
 		return records, overflow + 1
 	}
+	// Name is provider-supplied and unbounded (CHAOS-4588/CHAOS-4591, codex
+	// round 1, P1): GitHub's own limit is 255 bytes, and up to
+	// githubTestsMaxSkippedArtifactRecords of these live in the same
+	// maxChunkCursorBytes (4KiB) budget as everything else on the cursor.
+	// Truncated here, at the one append site, rather than at each of the
+	// four call sites, so the bound can never be forgotten at a new one.
+	record.Name = githubTestsTruncateArtifactName(record.Name)
 	return append(records, record), overflow
+}
+
+// githubTestsMaxArtifactNameBytes bounds any provider-supplied artifact name
+// stored on the cursor (GitHubTestsSkippedArtifact.Name and
+// ExcludedArtifactSample entries), sized so
+// githubTestsMaxSkippedArtifactRecords records at the cap stay a small
+// fraction of maxChunkCursorBytes -- enough to recognize a pattern (e.g. the
+// ".dockerbuild" or "digests-" run this ticket is about), not to reproduce
+// the full name.
+const githubTestsMaxArtifactNameBytes = 48
+
+// githubTestsTruncateArtifactName bounds a provider-supplied name to
+// githubTestsMaxArtifactNameBytes, byte-safe (never splits a UTF-8
+// codepoint) since a provider name is untrusted input.
+func githubTestsTruncateArtifactName(name string) string {
+	if len(name) <= githubTestsMaxArtifactNameBytes {
+		return name
+	}
+	truncated := name[:githubTestsMaxArtifactNameBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "…"
 }
 
 // bumpGitHubTestsArchiveCounter returns a NEW pointer one greater than the
@@ -365,10 +396,26 @@ func githubTestsLogArtifactSkipSummary(
 	if len(incomplete) == 0 && excludedSuffix == 0 && excludedPrefix == 0 {
 		return
 	}
-	attrs := make([]any, 0, 14+2*len(incomplete))
+	// incomplete mixes THREE different kinds of observation under one closed
+	// vocabulary: whole-artifact report_member skips, run-level
+	// inventory/per-run truncations (run_inventory, run_reports,
+	// run_artifacts), and none of those are "an artifact this unit skipped"
+	// in the sense the WARN's own wording implies (codex round 1, P2).
+	// artifactSkipTotal isolates the report_member subset so the headline
+	// number an operator reads first means what it says; incomplete_total
+	// keeps the full closed-vocabulary count available alongside it, broken
+	// down per (component, cause) in the attrs loop below regardless of kind.
+	artifactSkipTotal := 0
+	for _, observation := range incomplete {
+		if observation.Component == githubTestsReportMemberComponent {
+			artifactSkipTotal += observation.Count
+		}
+	}
+	attrs := make([]any, 0, 16+2*len(incomplete))
 	attrs = append(attrs,
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repo, "skipped_total", githubTestsIncompleteCount(incomplete),
+		"repository", repo, "artifact_skip_total", artifactSkipTotal,
+		"incomplete_total", githubTestsIncompleteCount(incomplete),
 	)
 	for _, observation := range incomplete {
 		attrs = append(attrs, observation.Component+"_"+observation.Cause, observation.Count)
@@ -943,6 +990,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// counters again), rather than risk a false positive from
 				// state a replay can no longer be trusted to represent.
 				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+				// Same reasoning applies to the exclusion bookkeeping
+				// (CHAOS-4588/CHAOS-4591, codex round 1, P2): a re-anchor
+				// re-walks the WHOLE page from index 0, re-evaluating the
+				// selection seam on every artifact it already reflected in
+				// these counters/sample. Reset to a clean baseline rather
+				// than double-count -- these are purely observational (they
+				// never gate the watermark or Incomplete), so zeroing them is
+				// safe and simply means the summary reflects only the
+				// re-walked pass, not a phantom doubled count.
+				cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix = 0, 0
+				cursor.ExcludedArtifactSample = nil
 			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
@@ -990,8 +1048,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.ExcludedNonReportPrefix++
 							}
 							if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+								// Bounded the same way as GitHubTestsSkippedArtifact.Name
+								// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a
+								// provider name is unbounded, and this sample
+								// shares the same cursor byte budget.
 								cursor.ExcludedArtifactSample = append(
-									cursor.ExcludedArtifactSample, artifact.Name+" ("+reason+")",
+									cursor.ExcludedArtifactSample,
+									githubTestsTruncateArtifactName(artifact.Name)+" ("+reason+")",
 								)
 							}
 							continue
@@ -1150,7 +1213,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
 								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 								GitHubTestsSkippedArtifact{
-									RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 									Cause: githubTestsUnreadableArchiveCause,
 								},
 							)

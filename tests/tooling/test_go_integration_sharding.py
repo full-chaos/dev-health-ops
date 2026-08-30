@@ -1107,12 +1107,32 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     #
     # CHAOS-4588 follow-up (CHAOS-4591 prep, per-sync-config selectable
     # artifact ingestion): renamed the artifact-name filter into a named seam
-    # (githubTestsArtifactSelectionSeam) and extended it to also exclude
-    # "digests-*" artifacts, not just ".dockerbuild". Added 1 new ordinary
-    # top-level test in github_tests_non_report_artifact_test.go:
-    # TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping.
+    # (githubTestsArtifactSelectionSeam). Added 1 new ordinary top-level test
+    # in github_tests_non_report_artifact_test.go:
+    # TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping
+    # (later replaced, see below).
     # 1272 -> 1273 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1273
+    #
+    # CHAOS-4588 codex review round 1 (P1/P2 fixes): bounded provider-supplied
+    # artifact names before they reach the cursor (githubTestsTruncateArtifactName,
+    # unbounded growth could exceed maxChunkCursorBytes); fixed a missing
+    # Name on the empty-archive skip marker; reset the new exclusion counters
+    # on a genuine page re-anchor (mirrors the existing ArchivesSeen/Unreadable
+    # reset); split the summary's total into artifact_skip_total vs
+    # incomplete_total so it no longer conflates report_member skips with
+    # run-level truncations; and -- the collision-risk finding -- reverted
+    # "digests-*" out of the default exclusion list (githubTestsNonReportArtifactPrefixes
+    # is now empty by default; unlike ".dockerbuild" it is a plausible real
+    # artifact prefix, so silently excluding it belongs to CHAOS-4591's
+    # config-driven predicate, not a global default). Replaced
+    # TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping with
+    # TestGitHubTestsDockerBuildArtifactExclusionBookkeeping (suffix-only) and
+    # TestGitHubTestsDigestArtifactsAreNotExcludedByDefault (pins the revert
+    # as an executable spec); added TestGitHubTestsTruncateArtifactNameStaysWithinBound
+    # and TestGitHubTestsExcludedArtifactSampleNameIsBounded for the name
+    # truncation fix. Net: -1 removed, +4 added.
+    # 1273 -> 1276 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1276
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1129,7 +1149,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1273
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1276
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1190,7 +1210,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1273
+    assert len(selected_tests) == len(set(selected_tests)) == 1276
     assert set(selected_tests) == expected_tests
 
 

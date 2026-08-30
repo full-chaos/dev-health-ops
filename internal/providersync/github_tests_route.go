@@ -204,26 +204,39 @@ type githubTestsArtifactPayload struct {
 // gzip payload (CHAOS-4588, verified byte-for-byte against a real
 // full-chaos/dev-health-ops run: magic bytes 1f 8b, `file` reports "gzip
 // compressed data"). zip.NewReader correctly refuses it -- the reader is not
-// the bug. "digests-" artifacts are real, valid, tiny zips (this repo's own
-// docker-images.yml uploads one empty touch-file per build target) that
-// parse cleanly and contribute zero report rows -- harmless to read, but a
-// wasted download+parse on every run all the same.
+// the bug.
 //
-// Feeding either kind to the report parser wastes a download+parse on every
-// dev-health-ops CI run AND, worse, lets them consume githubTestsMaxArtifacts
+// Feeding it to the report parser wastes a download+parse on every
+// dev-health-ops CI run AND, worse, lets it consume githubTestsMaxArtifacts
 // ahead of any real report artifact in the same run list: a docker-images.yml
-// run regularly carries 30+ dockerbuild/digest artifacts, over the 25-item
-// cap, so every encounter recorded a window-blocking run_artifacts
-// per_run_cap (CHAOS-4142) and pinned this repo's tests watermark since
-// 2026-08-08. Treated exactly like a routine 404/410 artifact: excluded
-// before any request, not counted toward seen, unreadable, or the per-run
-// cap, and not part of the closed report_member Incomplete vocabulary -- it
-// is not evidence about whether the read channel is broken, just a provider
+// run regularly carries 15+ dockerbuild artifacts, over the 25-item cap
+// combined with an equal count of harmless "digests-*" artifacts (see below),
+// so every encounter recorded a window-blocking run_artifacts per_run_cap
+// (CHAOS-4142) and pinned this repo's tests watermark since 2026-08-08.
+// Treated exactly like a routine 404/410 artifact: excluded before any
+// request, not counted toward seen, unreadable, or the per-run cap, and not
+// part of the closed report_member Incomplete vocabulary -- it is not
+// evidence about whether the read channel is broken, just a provider
 // artifact type this route was never meant to read. Recorded on a SEPARATE
-// bounded durable marker (GitHubTestsExcludedArtifact) purely for operator
-// visibility and CHAOS-4591 (per-sync-config selectable artifact ingestion).
+// bounded set of durable cursor fields (ExcludedNonReportSuffix/Prefix,
+// ExcludedArtifactSample) purely for operator visibility and CHAOS-4591
+// (per-sync-config selectable artifact ingestion).
+//
+// githubTestsNonReportArtifactPrefixes is deliberately EMPTY by default
+// (codex review round 1, P1): "digests-*" artifacts (this repo's own
+// docker-images.yml uploads one empty touch-file per build target) ARE real,
+// valid, tiny zips that parse cleanly and contribute zero report rows --
+// harmless to read, unlike ".dockerbuild", so excluding them is a bandwidth
+// optimization, not a correctness fix. Unlike ".dockerbuild" (a bizarre,
+// non-standard extension no CI tool would choose for a real report archive),
+// "digests-" is a plausible prefix a real report artifact could organically
+// collide with on some other repository -- silently dropping it would mean
+// `reports_complete=true` and the watermark advancing over genuinely lost
+// data. The mechanism stays (this is a prefix list, not a special case) so
+// CHAOS-4591 can populate it per org/repo as an explicit, informed opt-in
+// rather than a global default nobody chose.
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild"}
-var githubTestsNonReportArtifactPrefixes = []string{"digests-"}
+var githubTestsNonReportArtifactPrefixes = []string{}
 
 const (
 	githubTestsExclusionReasonSuffix = "non_report_artifact_suffix"

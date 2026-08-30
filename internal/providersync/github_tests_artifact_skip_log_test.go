@@ -43,8 +43,11 @@ func TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause(t *testing.T) {
 		t.Fatalf("level=%s, want WARN", record.Level)
 	}
 	attrs := membershipLogAttrs(record)
-	if attrs["skipped_total"] != int64(2) {
-		t.Fatalf("skipped_total=%v, want 2", attrs["skipped_total"])
+	if attrs["artifact_skip_total"] != int64(2) {
+		t.Fatalf("artifact_skip_total=%v, want 2", attrs["artifact_skip_total"])
+	}
+	if attrs["incomplete_total"] != int64(2) {
+		t.Fatalf("incomplete_total=%v, want 2", attrs["incomplete_total"])
 	}
 	if attrs["report_member_unreadable_archive"] != int64(2) {
 		t.Fatalf("report_member_unreadable_archive=%v, want 2 (both corrupt artifacts, one cause, one counted line)", attrs["report_member_unreadable_archive"])

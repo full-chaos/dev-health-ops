@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // githubTestsNamedArtifactsFixture is githubTestsArtifactsFixture with
@@ -147,33 +148,24 @@ func TestGitHubTestsDockerBuildArtifactsExcludedBeforeDownload(t *testing.T) {
 	}
 }
 
-// Companion to the suffix test above: "digests-*" artifacts (this repo's own
-// docker-images.yml uploads one per build target, e.g. "digests-api-3") are
-// real, valid, tiny zips -- unlike ".dockerbuild" they would parse cleanly if
-// downloaded, just contributing zero report rows. Excluded by the SAME
-// selection seam on a different closed reason
-// (githubTestsExclusionReasonPrefix), also proven never-downloaded. Also
-// exercises the seam's own durable bookkeeping (CHAOS-4591 prep):
-// ExcludedNonReportSuffix/Prefix count by reason, and ExcludedArtifactSample
-// carries "name (reason)" for both kinds in one run.
-func TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping(t *testing.T) {
+// Exercises the seam's durable bookkeeping (CHAOS-4591 prep):
+// ExcludedNonReportSuffix counts by reason, and ExcludedArtifactSample
+// carries "name (reason)".
+func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 	doer := &githubTestsNonReportArtifactDoer{
 		t: t,
 		names: []string{
 			"full-chaos~dev-health-ops~BV20PU.dockerbuild",
-			"digests-api-3",
-			"digests-go-worker-0",
 			"integration-junit",
 		},
 	}
 	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
 	if err != nil {
-		t.Fatalf("digest/dockerbuild artifacts sank the unit: err=%v, want them excluded, not fatal", err)
+		t.Fatalf("dockerbuild artifact sank the unit: err=%v, want it excluded, not fatal", err)
 	}
-	if len(doer.downloadIDs) != 1 || doer.downloadIDs[0] != "4" {
+	if len(doer.downloadIDs) != 1 || doer.downloadIDs[0] != "2" {
 		t.Fatalf(
-			"downloaded artifact ids=%v, want exactly [4]: digests-* artifacts must never be "+
-				"requested either, exactly like .dockerbuild",
+			"downloaded artifact ids=%v, want exactly [2]: a .dockerbuild artifact must never be requested",
 			doer.downloadIDs,
 		)
 	}
@@ -181,30 +173,17 @@ func TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping(t *test
 		t.Fatalf("committed %d suites, want 1 from the real report artifact", walk.cursor.Suites)
 	}
 	if walk.cursor.ExcludedNonReportSuffix != 1 {
-		t.Fatalf("ExcludedNonReportSuffix=%d, want 1 (the one .dockerbuild artifact)", walk.cursor.ExcludedNonReportSuffix)
+		t.Fatalf("ExcludedNonReportSuffix=%d, want 1", walk.cursor.ExcludedNonReportSuffix)
 	}
-	if walk.cursor.ExcludedNonReportPrefix != 2 {
-		t.Fatalf("ExcludedNonReportPrefix=%d, want 2 (the two digests-* artifacts)", walk.cursor.ExcludedNonReportPrefix)
+	if walk.cursor.ExcludedNonReportPrefix != 0 {
+		t.Fatalf("ExcludedNonReportPrefix=%d, want 0: the default prefix list is empty (codex round 1, P1)", walk.cursor.ExcludedNonReportPrefix)
 	}
-	if len(walk.cursor.ExcludedArtifactSample) != 3 {
-		t.Fatalf("ExcludedArtifactSample=%v, want 3 entries (one per excluded artifact, under the cap)", walk.cursor.ExcludedArtifactSample)
+	want := []string{"full-chaos~dev-health-ops~BV20PU.dockerbuild (non_report_artifact_suffix)"}
+	if len(walk.cursor.ExcludedArtifactSample) != 1 || walk.cursor.ExcludedArtifactSample[0] != want[0] {
+		t.Fatalf("ExcludedArtifactSample=%v, want %v", walk.cursor.ExcludedArtifactSample, want)
 	}
-	want := map[string]bool{
-		"full-chaos~dev-health-ops~BV20PU.dockerbuild (non_report_artifact_suffix)": true,
-		"digests-api-3 (non_report_artifact_prefix)":                                true,
-		"digests-go-worker-0 (non_report_artifact_prefix)":                          true,
-	}
-	for _, entry := range walk.cursor.ExcludedArtifactSample {
-		if !want[entry] {
-			t.Errorf("unexpected excluded-sample entry %q", entry)
-		}
-		delete(want, entry)
-	}
-	if len(want) != 0 {
-		t.Errorf("missing excluded-sample entries: %v", want)
-	}
-	// Nothing readable was lost, and no report_member skip occurred -- these
-	// exclusions are not "incomplete" data, distinct from the durable
+	// Nothing readable was lost, and no report_member skip occurred -- this
+	// exclusion is not "incomplete" data, distinct from the durable
 	// per-artifact result fields the CHAOS-4591 admin view will read.
 	if len(walk.cursor.Incomplete) != 0 {
 		t.Fatalf("incomplete=%+v, want none", walk.cursor.Incomplete)
@@ -212,8 +191,85 @@ func TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping(t *test
 	if got := walk.final.Result["excluded_non_report_suffix"]; got != 1 {
 		t.Errorf("final.Result[excluded_non_report_suffix]=%v, want 1", got)
 	}
-	if got := walk.final.Result["excluded_non_report_prefix"]; got != 2 {
-		t.Errorf("final.Result[excluded_non_report_prefix]=%v, want 2", got)
+}
+
+// Deliberate scoping decision as an executable spec (codex review round 1,
+// P1): "digests-*" artifacts (this repo's own docker-images.yml uploads one
+// per build target, e.g. "digests-api-3") are real, valid, tiny zips that
+// parse cleanly and contribute zero report rows -- unlike ".dockerbuild",
+// excluding them is a bandwidth optimization, not a correctness fix, and
+// "digests-" is a plausible prefix a real report artifact could organically
+// collide with on some other repository. githubTestsNonReportArtifactPrefixes
+// is deliberately empty by default; this test pins that decision so a future
+// change re-adding a global prefix default (rather than routing it through
+// CHAOS-4591's config-driven predicate) fails loudly, not silently.
+func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
+	if selected, reason := githubTestsArtifactSelectionSeam("digests-api-3"); !selected {
+		t.Fatalf(
+			"digests-api-3 was excluded (reason=%s), want it selected: the default prefix list "+
+				"must stay empty (codex round 1, P1) -- digests-* exclusion belongs to CHAOS-4591's "+
+				"config-driven predicate, not a global default",
+			reason,
+		)
+	}
+}
+
+// githubTestsTruncateArtifactName unit tests (codex round 1, P1): a
+// provider-supplied artifact name is unbounded (GitHub's own limit is 255
+// bytes), and up to githubTestsMaxSkippedArtifactRecords of them live in the
+// same maxChunkCursorBytes (4KiB) cursor budget as everything else. Untested,
+// this bound is exactly the kind of thing a later refactor silently drops.
+func TestGitHubTestsTruncateArtifactNameStaysWithinBound(t *testing.T) {
+	short := "digests-api-3"
+	if got := githubTestsTruncateArtifactName(short); got != short {
+		t.Fatalf("truncated a name under the bound: got %q, want unchanged %q", got, short)
+	}
+
+	long := strings.Repeat("a", githubTestsMaxArtifactNameBytes+40)
+	got := githubTestsTruncateArtifactName(long)
+	if len(got) > githubTestsMaxArtifactNameBytes+len("…") {
+		t.Fatalf("truncated name is %d bytes, want <= %d", len(got), githubTestsMaxArtifactNameBytes+len("…"))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("truncated name %q does not end with the ellipsis marker", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated name %q is not valid UTF-8", got)
+	}
+
+	// A multi-byte codepoint sitting exactly on the cut boundary must not be
+	// split -- the byte-safety loop must back off far enough to land on a
+	// valid boundary, not just chop githubTestsMaxArtifactNameBytes bytes.
+	multiByte := strings.Repeat("a", githubTestsMaxArtifactNameBytes-1) + "€€€"
+	gotMultiByte := githubTestsTruncateArtifactName(multiByte)
+	if !utf8.ValidString(gotMultiByte) {
+		t.Fatalf("truncated multi-byte name %q is not valid UTF-8", gotMultiByte)
+	}
+}
+
+// RED on the pre-truncation version of this fix (codex round 1, P1). A
+// dockerbuild-suffixed name far longer than githubTestsMaxArtifactNameBytes
+// must still be excluded (unchanged behavior) AND its ExcludedArtifactSample
+// entry must be bounded, not the full unbounded provider name.
+func TestGitHubTestsExcludedArtifactSampleNameIsBounded(t *testing.T) {
+	longName := "full-chaos~a-repository-name-chosen-to-be-implausibly-long-for-this-test~ABCDEF.dockerbuild"
+	doer := &githubTestsNonReportArtifactDoer{
+		t:     t,
+		names: []string{longName, "integration-junit"},
+	}
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+	if len(walk.cursor.ExcludedArtifactSample) != 1 {
+		t.Fatalf("ExcludedArtifactSample=%v, want exactly 1 entry", walk.cursor.ExcludedArtifactSample)
+	}
+	entry := walk.cursor.ExcludedArtifactSample[0]
+	if len(entry) >= len(longName) {
+		t.Fatalf("excluded-sample entry %q (%d bytes) was not bounded below the raw name %q (%d bytes)", entry, len(entry), longName, len(longName))
+	}
+	if !strings.Contains(entry, "…") {
+		t.Fatalf("excluded-sample entry %q does not show truncation", entry)
 	}
 }
 

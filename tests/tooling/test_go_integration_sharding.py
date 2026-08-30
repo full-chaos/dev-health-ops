@@ -1659,7 +1659,7 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
             "cache-dependency-path": "**/go.sum",
         }
     assert re.search(
-        r"(?m)^go 1\.25\.9$", (ROOT / "go.mod").read_text(encoding="utf-8")
+        r"(?m)^go 1\.27\.0$", (ROOT / "go.mod").read_text(encoding="utf-8")
     )
 
     aggregate = jobs["go-storage-integration"]

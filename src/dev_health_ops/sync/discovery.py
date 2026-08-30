@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from dev_health_ops.discovery.repos import discover_repos_for_config, jira_key_norm
@@ -35,6 +36,32 @@ logger = logging.getLogger(__name__)
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _provider_matches(column: Any, provider_value: str):
+    """SQLAlchemy filter expression comparing a ``provider`` column to
+    *provider_value* through ``jira_key_norm`` (codex review, CHAOS-4584
+    gate round 5, P1) -- the ORM-side counterpart of the Python-side
+    ``jira_key_norm`` comparisons everywhere else in this module.
+
+    Two query filters in this file used to compare
+    ``IntegrationSource.provider`` to a raw literal (``fields["provider"]``,
+    always ``"jira"``, or the string ``"jira"`` itself) with exact ``==``.
+    An ``Integration``/``SyncConfiguration`` row created with a mixed-case
+    ``provider`` (e.g. ``"JIRA"``, which nothing rejects at creation --
+    ``SyncConfigCreate.provider`` has no case validator) stores that same
+    casing verbatim onto every ``IntegrationSource`` this seam's OWN new
+    branches don't touch -- but rows THIS PR's discovery mapper creates
+    always carry the lowercase literal ``"jira"`` (``_map_jira_tuple``).
+    An exact-match filter against either side of that mismatch silently
+    excludes the mixed-case row from the upsert loop's candidate matching
+    (round 5 finding: a pre-existing ``provider="JIRA"`` explicit-scope
+    source became invisible to both rediscovery and scope-supersession).
+
+    Every ``IntegrationSource.provider ==`` query filter reachable from
+    this module's own new code goes through this one helper now, not a
+    site-local ``==``."""
+    return func.lower(column) == jira_key_norm(provider_value)
 
 
 def _resolve_credentials(integration: Integration) -> dict[str, Any]:
@@ -451,7 +478,16 @@ def discover_sources_for_integration(
             base_query = session.query(IntegrationSource).filter(
                 IntegrationSource.org_id == integration.org_id,
                 IntegrationSource.integration_id == integration_id,
-                IntegrationSource.provider == fields["provider"],
+                # codex review (CHAOS-4584 gate round 5, P1): normalized via
+                # _provider_matches, not exact ``==`` -- an
+                # Integration/SyncConfiguration created with a mixed-case
+                # provider stores that casing verbatim, but this seam's own
+                # discovery mapper always emits the lowercase literal
+                # (``fields["provider"]``), so an exact match silently
+                # excluded a mixed-case row's IntegrationSource from every
+                # candidate lookup below. Safe for every provider, not just
+                # jira: it only ADDS tolerance for mixed-case existing rows.
+                _provider_matches(IntegrationSource.provider, fields["provider"]),
             )
             if provider == "jira":
                 # codex review (CHAOS-4584 round 2, P1): Jira project keys
@@ -463,8 +499,6 @@ def discover_sources_for_integration(
                 # case-insensitively here is what makes rediscovery update
                 # that SAME row instead of inserting a case-variant
                 # duplicate that then double-schedules the project.
-                from sqlalchemy import func
-
                 candidates = (
                     base_query.filter(
                         func.lower(IntegrationSource.external_id)
@@ -702,7 +736,11 @@ def _supersede_stale_scoped_jira_sources(
         .filter(
             IntegrationSource.org_id == integration.org_id,
             IntegrationSource.integration_id == integration.id,
-            IntegrationSource.provider == "jira",
+            # codex review (CHAOS-4584 gate round 5, P1): normalized via
+            # _provider_matches -- a mixed-case-provider source was
+            # invisible to this supersession query entirely, so an
+            # explicit-scope change never disabled it.
+            _provider_matches(IntegrationSource.provider, "jira"),
             IntegrationSource.is_enabled.is_(True),
         )
         .all()

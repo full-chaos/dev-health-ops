@@ -44,6 +44,7 @@ from dev_health_ops.api.services.sync_coverage import (
     ensure_utc,
     invalidate_sync_coverage_projection,
 )
+from dev_health_ops.discovery.repos import jira_key_norm
 from dev_health_ops.metrics.prometheus import (
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL,
 )
@@ -2681,7 +2682,7 @@ async def update_sync_config(
 
     updated_integration_id = getattr(updated, "integration_id", None)
     if (
-        str(getattr(updated, "provider", "")).lower() == "jira"
+        jira_key_norm(str(getattr(updated, "provider", ""))) == "jira"
         and updated_integration_id is not None
         and (sync_options_provided or (was_inactive and bool(updated.is_active)))
     ):

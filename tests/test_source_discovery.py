@@ -1274,24 +1274,48 @@ def test_jira_case_normalization_invariant(
     jira_integration: Integration,
     jira_planner_config: SyncConfiguration,
 ):
-    """Codex review (CHAOS-4584 gate round 4): ONE invariant -- every Jira
-    provider-name and project-key comparison in this module goes through
-    ``jira_key_norm`` (``discovery/repos.py``), never a site-local
-    ``.lower()`` or exact-match. Three sub-cases, one per round-4 finding,
-    each red on ``7ad1efaea``:
+    """Codex review (CHAOS-4584 gate rounds 4-5): ONE invariant -- every
+    Jira provider-name and project-key comparison in ``discovery/repos.py``
+    and ``sync/discovery.py`` goes through ``jira_key_norm`` (Python-side)
+    or ``_provider_matches``/a normalized column comparison (SQLAlchemy
+    filters), never a site-local ``.lower()`` or exact-match. Four
+    sub-cases, one per finding, each red on that finding's own gate-round
+    parent tip:
 
     (a) #33 P1 -- a mixed-case ``provider="JIRA"`` integration must still
         read the planner-managed config's CURRENT ``sync_options`` (not
         stale ``Integration.config``) on PATCH-triggered rediscovery.
+        Red on 7ad1efaea.
     (b) #34 P1 -- case-variant self-repair must never end with the project
         having ZERO enabled sources: the already-enabled candidate must
         survive even when a DISABLED row is the exact-case match.
+        Red on 7ad1efaea.
     (c) #35 P2 -- case-variant self-repair must migrate the SyncWatermark
         off the LOSING duplicate onto the survivor, even when the losing
         duplicate (not the exact-case survivor) is the one that actually
-        held it.
+        held it. Red on 7ad1efaea.
+    (d) #36 P1 (gate round 5) -- a PRE-EXISTING source stored with a
+        mixed-case ``provider="JIRA"`` must still be reachable by both the
+        upsert loop's candidate lookup AND explicit-scope supersession --
+        codex's exact repro: pre-existing ``("JIRA", "SUP", enabled)`` +
+        PATCH scope ``SUP -> ENG`` must supersede (disable) SUP, not leave
+        it invisibly enabled forever because its provider casing didn't
+        match the raw-``==`` filter. Red on 87e2e8645.
     """
     from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    # Four sub-cases share this org's max_repos budget (each creates its
+    # own enabled sources on top of the others') -- give it enough headroom
+    # that none of them trips the repo-limit cap, which isn't what any of
+    # these sub-cases are testing.
+    session.add(
+        OrgLicense(
+            org_id=uuid.UUID(_JIRA_ORG_ID),
+            tier="enterprise",
+            limits_override={"max_repos": 100},
+        )
+    )
+    session.commit()
 
     # --- (a) mixed-case provider="JIRA" --------------------------------
     mixed_case_integration = Integration(
@@ -1458,6 +1482,75 @@ def test_jira_case_normalization_invariant(
         "though the LOSING duplicate ('sup') -- not the exact-case "
         "survivor ('SUP') -- was the one that actually held it"
     )
+
+    # --- (d) a pre-existing mixed-case-provider source must still be
+    #     reachable by BOTH the upsert loop AND scope supersession --------
+    scope_change_integration = Integration(
+        id=uuid.uuid4(),
+        org_id=_JIRA_ORG_ID,
+        provider="jira",
+        name="Test Jira Scope Change",
+        config={},
+        is_active=True,
+    )
+    session.add(scope_change_integration)
+    session.commit()
+    scope_change_config = SyncConfiguration(
+        name="Test Jira Scope Change",
+        provider="jira",
+        org_id=_JIRA_ORG_ID,
+        sync_targets=["work-items"],
+        sync_options={"project_key": "SUP"},
+        is_active=True,
+        integration_id=scope_change_integration.id,
+        planner_managed=True,
+    )
+    session.add(scope_change_config)
+    session.commit()
+    # codex's exact repro shape: the pre-existing source's provider is
+    # stored mixed-case ("JIRA"), unlike every row THIS PR's own discovery
+    # mapper creates (always lowercase "jira").
+    preexisting_mixed_case_sup = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=scope_change_integration.id,
+        provider="JIRA",
+        source_type="project",
+        external_id="SUP",
+        name="SUP",
+        full_name="SUP",
+        metadata_={
+            "planner_managed_sync_config_id": str(scope_change_config.id),
+            "explicit_project_scope": True,
+        },
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(preexisting_mixed_case_sup)
+    session.commit()
+
+    # PATCH the scope from SUP to ENG.
+    scope_change_config.sync_options = {"project_key": "ENG"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("ENG", "Engineering", "software")]):
+        discover_sources_for_integration(session, scope_change_integration.id)
+
+    session.refresh(preexisting_mixed_case_sup)
+    assert preexisting_mixed_case_sup.is_enabled is False, (
+        "(d) a mixed-case-provider pre-existing source must still be "
+        "superseded on an explicit scope change -- not invisibly left "
+        "enabled forever because its provider casing didn't match a "
+        "raw-== filter"
+    )
+    eng_row_scope_change = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.integration_id == scope_change_integration.id,
+            IntegrationSource.external_id == "ENG",
+        )
+        .one_or_none()
+    )
+    assert eng_row_scope_change is not None and eng_row_scope_change.is_enabled is True
 
 
 def test_jira_discovery_caps_new_sources_before_preexisting_ones(

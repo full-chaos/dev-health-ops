@@ -263,20 +263,27 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 	}{
 		{component: githubTestsRunInventoryComponent, cause: githubTestsPageBudgetCause, blocking: true},
 		{component: githubTestsArtifactInventoryComponent, cause: githubTestsPageBudgetCause, blocking: true},
-		// Preserved from before CHAOS-4142 rather than reclassified; the
-		// reclassification is CHAOS-4153.
-		{component: githubTestsReportMemberComponent, cause: "malformed", marked: true, blocking: true},
-		{component: githubTestsReportMemberComponent, cause: "unreadable", marked: true, blocking: true},
-		// RED on the pre-CHAOS-4394 baseline for the last two: prod evidence
-		// (sync_watermarks pinned nine days past CHAOS-4315, with the same
-		// artifact_unavailable/unreadable_archive artifacts recurring hourly)
-		// falsified the "transient download attempt" assumption that kept
-		// these two withholding. All three whole-artifact report_member
-		// causes now advance alike, GIVEN a durable marker (marked: true) --
-		// see the legacy-cursor test for the unmarked case.
+		// RED on the pre-CHAOS-4394 baseline for the next three (the whole-
+		// artifact causes): prod evidence (sync_watermarks pinned nine days
+		// past CHAOS-4315, with the same artifact_unavailable/
+		// unreadable_archive artifacts recurring hourly) falsified the
+		// "transient download attempt" assumption that kept these withholding.
 		{component: githubTestsReportMemberComponent, cause: githubTestsArtifactOversizedCause, marked: true, blocking: false},
 		{component: githubTestsReportMemberComponent, cause: githubTestsArtifactUnavailableCause, marked: true, blocking: false},
 		{component: githubTestsReportMemberComponent, cause: githubTestsUnreadableArchiveCause, marked: true, blocking: false},
+		// RED on the pre-CHAOS-4592 baseline for the last two (the
+		// report-parse-time causes, CHAOS-4153): prod evidence (local,
+		// 2026-08-30, org 70d529e0, full-chaos/dev-health-ops) found
+		// sync_watermarks for dataset_key=cicd/tests pinned at
+		// last_synced_at=2026-08-08 for three weeks, with the SAME
+		// {cause: "malformed", count: 77} recurring on every hourly unit even
+		// though job_runs_synced stayed at 6219 (the run-listing walk itself
+		// completed every time). An immutable historical CI artifact's bytes
+		// parse the same way on every re-attempt, so these are exactly as
+		// deterministic as the three whole-artifact causes above, and
+		// withholding on them pinned since_at forever the identical way.
+		{component: githubTestsReportMemberComponent, cause: githubTestsMalformedCause, marked: true, blocking: false},
+		{component: githubTestsReportMemberComponent, cause: githubTestsUnreadableCause, marked: true, blocking: false},
 		// Positively observed item caps advance.
 		{component: githubTestsRunJobsComponent, cause: githubTestsPerRunCapCause, blocking: false},
 		{component: githubTestsRunArtifactsComponent, cause: githubTestsPerRunCapCause, blocking: false},

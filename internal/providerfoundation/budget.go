@@ -281,6 +281,7 @@ type Metrics struct {
 	duplicateNaturalKey            map[string]uint64
 	syncRunRollupBumped            map[string]uint64
 	jiraSearchPages                map[string]uint64
+	chunkContinuation              map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -307,6 +308,7 @@ func NewMetrics() *Metrics {
 		duplicateNaturalKey:            map[string]uint64{},
 		syncRunRollupBumped:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
+		chunkContinuation:              map[string]uint64{},
 	}
 }
 
@@ -506,8 +508,13 @@ var metricCicdPartialSuccessReasonVocabulary = map[string]struct{}{
 	"artifact_oversized":   {},
 	"artifact_unavailable": {},
 	"unreadable_archive":   {},
-	"per_run_cap":          {},
-	"mixed":                {},
+	// malformed/unreadable (CHAOS-4592): report-parse-time causes that now
+	// advance the watermark alongside the three whole-artifact causes above --
+	// see githubTestsWatermarkAdvancingPairs.
+	"malformed":   {},
+	"unreadable":  {},
+	"per_run_cap": {},
+	"mixed":       {},
 }
 
 // MetricCicdPartialSuccessReasonLabel bounds the RecordCicdPartialSuccess
@@ -777,6 +784,32 @@ func (m *Metrics) RecordUnitClaimed(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unitClaimed[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordChunkContinuation counts one chunked-route continuation: a unit that
+// committed as many chunks as its policy allows in one attempt and snoozed to
+// resume from its durable checkpoint (CHAOS-4592), by bounded provider and
+// dataset. This is the ONE shared seam every chunked route's continuation
+// passes through (internal/jobs/providerunit/providerunit.go, at the
+// DeferChunkContinuation call), so it counts github and gitlab tests/cicd
+// alike without route-specific wiring.
+//
+// This is deliberately a durable, monotonic PROCESS counter, not the same
+// number as river_job.metadata->>'snoozes' on any one job row: a job that
+// dies and is re-dispatched starts a new row with its own snoozes count, but
+// every one of its continuations still increments this counter, so an
+// operator comparing "how many continuations has this unit's work needed
+// overall" against a single job row's snooze count (which resets on
+// re-dispatch) is answering two different questions on purpose -- see the
+// CHAOS-4592 investigation note on river_job.attempt vs metadata.snoozes for
+// why the two must not be conflated.
+func (m *Metrics) RecordChunkContinuation(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chunkContinuation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
 // metricUnitFailureReasonVocabulary is the closed set of durable
@@ -1246,6 +1279,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_unit_claimed_total",
 		"Provider units successfully claimed for execution, by bounded provider and dataset (CHAOS-4078).",
 		m.unitClaimed,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_chunk_continuation_total",
+		"Chunked-route continuations (durable checkpoint snoozes), by bounded provider and dataset (CHAOS-4592).",
+		m.chunkContinuation,
 	); err != nil {
 		return err
 	}

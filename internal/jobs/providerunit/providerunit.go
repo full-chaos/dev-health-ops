@@ -682,6 +682,7 @@ func (handler *Handler) Work(
 		); deferErr != nil {
 			return jobruntime.Retryable(deferErr)
 		}
+		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
 		return jobruntime.RetryableAfter(err, delay)

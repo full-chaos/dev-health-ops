@@ -1265,6 +1265,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						for _, observation := range reportIncomplete {
 							cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
 						}
+						// Durable per-report markers (CHAOS-4592): malformed/unreadable
+						// report members now advance the watermark like the three
+						// whole-artifact causes, and githubTestsReportMemberSkippedWithoutDurableMarker
+						// requires one of these for that cause to exist before it will.
+						for _, marker := range rows.SkippedArtifacts {
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, marker,
+							)
+						}
 						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
 						if rows.DuplicateCases > 0 {
 							slog.Info(

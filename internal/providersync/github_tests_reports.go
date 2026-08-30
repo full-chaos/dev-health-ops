@@ -106,6 +106,16 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
+	// SkippedArtifacts carries a durable GitHubTestsSkippedArtifact marker for
+	// every malformed/unreadable report member this artifact skipped
+	// (CHAOS-4592). The caller (github_tests_chunked_route.go,
+	// github_tests_route.go) bounds and merges this into the unit-wide
+	// cursor.SkippedArtifacts via appendGitHubTestsSkippedArtifact, exactly as
+	// it already does for the three whole-artifact causes -- without a
+	// marker, githubTestsReportMemberSkippedWithoutDurableMarker refuses to
+	// let these two causes advance the watermark even though
+	// githubTestsWatermarkAdvancingPairs now allows them.
+	SkippedArtifacts []GitHubTestsSkippedArtifact
 	// DuplicateCases counts within-suite test-case natural-key collisions
 	// this parse disambiguated with an ordinal suffix (CHAOS-4392) -- see
 	// newJUnitCaseRow. Purely observational: the rows themselves are already
@@ -258,6 +268,17 @@ const (
 	// cause could not tell which failure actually happened (CHAOS-4315,
 	// reversing the prior UNIT-level-failure disposition for this bound).
 	githubTestsArtifactOversizedCause = "artifact_oversized"
+	// githubTestsMalformedCause records that ONE report member inside an
+	// otherwise-opened archive could not be parsed as its detected report kind
+	// (JUnit XML or LCOV) -- readZipReport succeeded, parseJUnitRows or
+	// parseGitHubCoverageRow did not. It ADVANCES the watermark as of
+	// CHAOS-4592 -- see githubTestsWatermarkAdvancingPairs for why.
+	githubTestsMalformedCause = "malformed"
+	// githubTestsUnreadableCause records that ONE report member's bytes could
+	// not even be read out of an otherwise-opened archive (readZipReport
+	// itself failed). It ADVANCES the watermark as of CHAOS-4592 -- see
+	// githubTestsWatermarkAdvancingPairs for why.
+	githubTestsUnreadableCause = "unreadable"
 )
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
@@ -283,9 +304,9 @@ const (
 // nothing and pins since_at forever, which is the CHAOS-4142 outage.
 //
 // report_member's three whole-artifact skip causes (artifact_oversized,
-// artifact_unavailable, unreadable_archive) all advance. malformed/unreadable
-// (report-parse-time issues inside an otherwise-read artifact, CHAOS-4153)
-// stay withholding, unchanged.
+// artifact_unavailable, unreadable_archive) all advance, and so do its two
+// report-parse-time causes (malformed, unreadable) as of CHAOS-4592 -- see
+// below.
 //
 // CHAOS-4315 first carved out ONLY githubTestsArtifactOversizedCause, on the
 // theory that the other two causes are properties of ONE download ATTEMPT --
@@ -309,6 +330,25 @@ const (
 // real backstop against a systematically broken repository: it fails the
 // unit outright, before any of this, when EVERY observed artifact was
 // unreadable.
+//
+// CHAOS-4592 carries the identical reasoning one level DEEPER, into the two
+// report-parse-time causes (malformed, unreadable) that CHAOS-4394 explicitly
+// left withholding. Those two are properties of ONE report member's bytes
+// inside an artifact GitHub already returned successfully -- not a download
+// attempt at all, so CHAOS-4394's "maybe a retry observes it differently"
+// theory never applied to them in the first place. Prod evidence (local,
+// 2026-08-30, org 70d529e0, full-chaos/dev-health-ops): sync_watermarks for
+// dataset_key=cicd/tests pinned at last_synced_at=2026-08-08 for three weeks
+// while dozens of hourly units completed a full run-listing walk
+// (job_runs_synced=6219, stable) and reported reports_complete=false with the
+// SAME {cause: "malformed", component: "report_member", count: 77} on every
+// single one -- an immutable historical CI artifact's bytes parse the same
+// way every time, so withholding recovered nothing and pinned since_at
+// forever, exactly the CHAOS-4394 outage one cause short of being fully
+// fixed. A durable GitHubTestsSkippedArtifact marker is required for these
+// two now too (github_tests_chunked_route.go, github_tests_route.go), same
+// as the three whole-artifact causes, so githubTestsReportMemberSkippedWithoutDurableMarker
+// still refuses an advance with no targeted-backfill evidence behind it.
 var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
@@ -317,6 +357,8 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactUnavailableCause: {},
 		githubTestsUnreadableArchiveCause:   {},
+		githubTestsMalformedCause:           {},
+		githubTestsUnreadableCause:          {},
 	},
 }
 
@@ -707,7 +749,10 @@ func parseGitHubTestsArtifact(
 		}
 		body, err := readZipReport(member)
 		if err != nil {
-			result.recordSkipped("unreadable", false)
+			result.recordSkipped(githubTestsUnreadableCause, false)
+			result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+				RunID: runID, ArtifactID: artifactID, Cause: githubTestsUnreadableCause,
+			})
 			continue
 		}
 		expanded += uint64(len(body))
@@ -720,7 +765,10 @@ func parseGitHubTestsArtifact(
 		case "junit":
 			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
 			if err != nil {
-				result.recordSkipped("malformed", false)
+				result.recordSkipped(githubTestsMalformedCause, false)
+				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+				})
 				continue
 			}
 			result.Suites = append(result.Suites, suites...)
@@ -729,7 +777,10 @@ func parseGitHubTestsArtifact(
 		case "coverage":
 			coverage, err := parseGitHubCoverageRow(body, name, artifactID, repoID, runID, orgID, normalizedAt)
 			if err != nil {
-				result.recordSkipped("malformed", false)
+				result.recordSkipped(githubTestsMalformedCause, false)
+				result.SkippedArtifacts = append(result.SkippedArtifacts, GitHubTestsSkippedArtifact{
+					RunID: runID, ArtifactID: artifactID, Cause: githubTestsMalformedCause,
+				})
 				continue
 			}
 			result.Coverage = append(result.Coverage, coverage)

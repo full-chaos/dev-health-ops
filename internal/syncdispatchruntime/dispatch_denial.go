@@ -197,19 +197,76 @@ func invalidClaimReason(provider, dataset string, claimErr error) string {
 	)
 }
 
-// terminalizeInvalidClaimUnits fails claimed units whose persisted
+// invalidClaimTerminalizableStatuses names every pre-terminal status a unit
+// can be in when terminalizeInvalidClaimUnits is asked to fail it: DISPATCHING
+// (a unit claimUnits already claimed this pass -- the ORIGINAL, CHAOS-4550
+// call site) or PLANNED/RETRYING (a unit invalidClaimsAmongDispatchCandidates
+// found and terminalized BEFORE it was ever claimed -- the CHAOS-4556 call
+// site, added so a malformed claim never enters concurrency/budget capacity
+// bookkeeping in the first place). Write-time CAS: whichever status a call
+// site expects, Postgres re-checks it AT THE UPDATE, so a unit a concurrent
+// worker has already moved to RUNNING (or another pass has already
+// terminalized) is never clobbered.
+var invalidClaimTerminalizableStatuses = []string{
+	syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, syncRunUnitStatusDispatching,
+}
+
+// invalidClaimsAmongDispatchCandidates runs providerfamilycontract.ValidateClaim
+// over EVERY unit currently eligible for this dispatch pass -- the identical
+// PLANNED / due-RETRYING / stale-DISPATCHING predicate claimUnits itself
+// applies (dispatchCandidateUnits, the same query BudgetGuard's
+// observeRun/enforceRun already share) -- rather than only over whatever
+// claimUnits ends up actually claiming.
+//
+// CHAOS-4556: authorizeRun's concurrency cap and BudgetGuard's budget/cooldown
+// deferrals are computed from this SAME candidate set, and claimUnits then
+// excludes every id either one decided (claim_units.go:71,88,103, the
+// cappedUnitIDs parameter, built before Dispatch's per-claimed-unit
+// ValidateClaim loop ever runs). Validating only claimUnits' own return value
+// means a malformed/stale claim ordered past a saturated bucket's
+// allowedSlots is deferred every pass without ever reaching ValidateClaim --
+// it stays PLANNED/RETRYING indefinitely under sustained concurrency/budget
+// pressure, all the while still occupying a "counted candidate" slot in the
+// guard's own bucket math. Calling this BEFORE authorizeRun and terminalizing
+// what it finds removes a malformed claim from the candidate set before ANY
+// capacity computation sees it, so it can never be capped in the first place
+// and always terminalizes on the very pass it becomes dispatch-eligible,
+// independent of concurrency/budget pressure.
+func invalidClaimsAmongDispatchCandidates(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) ([]invalidClaimUnit, error) {
+	candidates, err := dispatchCandidateUnits(ctx, tx, syncRunID, nil, now)
+	if err != nil {
+		return nil, err
+	}
+	var invalid []invalidClaimUnit
+	for _, unit := range candidates {
+		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
+			invalid = append(invalid, invalidClaimUnit{
+				unit:   unit,
+				reason: invalidClaimReason(unit.provider, unit.datasetKey, err),
+			})
+		}
+	}
+	return invalid, nil
+}
+
+// terminalizeInvalidClaimUnits fails units whose persisted
 // dataset_key/processor_flags fail providerfamilycontract.ValidateClaim
-// (CHAOS-4550): a claim this malformed can never become dispatchable by
-// itself being retried, so leaving it PLANNED/DISPATCHING re-poisons every
-// future dispatch pass for the whole run (the discard-storm class
-// CHAOS-3990's terminalizeUnroutableUnits already exists to prevent for the
-// no-route case -- this is the same idiom for the malformed-claim case).
-// Write-time CAS on status='dispatching' keeps a concurrent worker's
-// DISPATCHING -> RUNNING claim from being overwritten. Units are grouped by
-// their exact reason string (not just provider/dataset, since two units of
-// the same pair can fail for different reasons) so the durable per-unit
-// reason always names the specific defect, matching CHAOS-3990's own
-// "never a bare category with no reason attached" rule.
+// (CHAOS-4550/CHAOS-4556): a claim this malformed can never become
+// dispatchable by itself being retried, so leaving it PLANNED/RETRYING/
+// DISPATCHING re-poisons every future dispatch pass for the whole run (the
+// discard-storm class CHAOS-3990's terminalizeUnroutableUnits already exists
+// to prevent for the no-route case -- this is the same idiom for the
+// malformed-claim case). Called from two sites now (see
+// invalidClaimTerminalizableStatuses): pre-capacity, over every dispatch
+// candidate regardless of status, and post-claim, as a backstop over
+// whatever claimUnits actually claimed (still needed: a unit can become
+// newly dispatch-eligible, e.g. a RETRYING unit's available_at arriving,
+// between the pre-capacity read and claimUnits' own write inside this same
+// transaction). Units are grouped by their exact reason string (not just
+// provider/dataset, since two units of the same pair can fail for different
+// reasons) so the durable per-unit reason always names the specific defect,
+// matching CHAOS-3990's own "never a bare category with no reason attached"
+// rule.
 func terminalizeInvalidClaimUnits(ctx context.Context, tx pgx.Tx, units []invalidClaimUnit, now time.Time) (int, error) {
 	if len(units) == 0 {
 		return 0, nil
@@ -239,8 +296,8 @@ func terminalizeInvalidClaimUnits(ctx context.Context, tx pgx.Tx, units []invali
 UPDATE public.sync_run_units
 SET status = $2, available_at = NULL, error = $3, last_retry_reason = $4,
     result = $5::json, lease_owner = NULL, lease_expires_at = NULL, updated_at = $6
-WHERE id = ANY($1::uuid[]) AND status = $7`,
-			unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, reason, resultJSON, now, syncRunUnitStatusDispatching)
+WHERE id = ANY($1::uuid[]) AND status = ANY($7::text[])`,
+			unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, reason, resultJSON, now, invalidClaimTerminalizableStatuses)
 		if err != nil {
 			return terminalized, fmt.Errorf("terminalize invalid-claim units: %w", err)
 		}

@@ -606,8 +606,8 @@ func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *t
 	}
 	decoded.SkippedArtifacts = fullSample
 	newSkip := GitHubTestsSkippedArtifact{RunID: "2", ArtifactID: "2", Cause: githubTestsUnreadableArchiveCause}
-	decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
-		decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, newSkip,
+	decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, decoded.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+		decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, decoded.SkippedArtifactCauseCount, newSkip,
 	)
 	decoded.Incomplete = mergeGitHubTestsIncomplete(decoded.Incomplete, GitHubTestsIncomplete{
 		Component: githubTestsReportMemberComponent, Cause: githubTestsUnreadableArchiveCause, Count: 1,
@@ -727,8 +727,8 @@ func TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd(t *tes
 			cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, observation)
 		}
 		for _, marker := range rows.SkippedArtifacts {
-			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
-				cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, marker,
+			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+				cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, marker,
 			)
 		}
 	}
@@ -740,6 +740,65 @@ func TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd(t *tes
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf(
 			"watermark=%v, want %v -- a real parser-populated malformed+unreadable marker pair must advance end-to-end",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
+// TestGitHubTestsChunkedFinalMetadataRequiresFullCountNotMarkerPresence pins
+// the CHAOS-4592 gate round 2, P1 fix. A cursor whose Incomplete count for a
+// report_member cause EXCEEDS what SkippedArtifactCauseCount (or, absent
+// that, the retained SkippedArtifacts sample) can prove must still withhold
+// -- one marker for a cause must not excuse an unrelated remainder of that
+// SAME cause's count that has no evidence behind it at all. This is exactly
+// what a cursor resumed from a binary that predates ANY marker-writing for a
+// cause (true of malformed/unreadable before this ticket) can produce: N
+// unmarked historical skips, plus ONE freshly marked skip after resume.
+func TestGitHubTestsChunkedFinalMetadataRequiresFullCountNotMarkerPresence(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+
+	// 5 malformed skips total, but only 1 durable marker -- exactly what a
+	// cursor straddling the CHAOS-4592 deploy looks like: 4 came from a
+	// pre-deploy binary with zero marker-writing for this cause, 1 came from
+	// this binary after resume.
+	mismatched := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api",
+		Incomplete: []GitHubTestsIncomplete{{
+			Component: githubTestsReportMemberComponent,
+			Cause:     githubTestsMalformedCause, Count: 5,
+		}},
+		SkippedArtifacts: []GitHubTestsSkippedArtifact{
+			{RunID: "9", ArtifactID: "9", Cause: githubTestsMalformedCause},
+		},
+		// No SkippedArtifactCauseCount: this cursor was never touched by a
+		// binary that tracks it, exactly like the marker above being the
+		// ONLY durable evidence for a Count of 5.
+	}
+	batch, err := githubTestsFinalMetadataBatch(claim, mismatched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"1 marker excused a report_member cause with Count=5, watermark=%v, want nil -- marker presence must not stand in for the full count",
+			batch.Watermark,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// The identical scenario, but with causeCount proving THIS binary's own
+	// accumulation accounts for the full 5 (e.g. every occurrence landed
+	// within the sample cap this time), must advance.
+	covered := mismatched
+	covered.SkippedArtifactCauseCount = map[string]int{githubTestsMalformedCause: 5}
+	batch, err = githubTestsFinalMetadataBatch(claim, covered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- an exact causeCount matching the full observed count must advance",
 			batch.Watermark, claim.BeforeAt,
 		)
 	}

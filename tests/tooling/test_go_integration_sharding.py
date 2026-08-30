@@ -1278,7 +1278,27 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd.
     # Not integration-tagged.
     # 1286 -> 1287 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1287
+    # CHAOS-4592/4601 codex review gate round 2 (terra/xhigh, full-base +
+    # .codex-review-context.md): 1 P1 + 2 P2 findings, each fixed with a
+    # regression test. P1 -- the durable-marker guard checked cause PRESENCE
+    # not COUNT, so one marker could excuse an unrelated remainder of that
+    # same cause's Incomplete count with zero evidence (a cursor straddling
+    # this deploy could carry N unmarked pre-deploy skips + 1 post-deploy
+    # marked one, advancing over all N+1). Fixed with an exact per-cause
+    # SkippedArtifactCauseCount field, tested by
+    # TestGitHubTestsChunkedFinalMetadataRequiresFullCountNotMarkerPresence
+    # (complete_route_comparator_decoded_test.go). P2 #1 -- per-cause marker
+    # overflow was durable but not observable in the summary log line,
+    # tested by TestGitHubTestsSkipSummaryLogsOverflowedCauses
+    # (github_tests_artifact_skip_log_test.go). P2 #2 -- the prior round's
+    # end-to-end test reimplemented the route's forwarding loop instead of
+    # exercising it, tested by
+    # TestGitHubTestsMemberLevelSkipAdvancesWatermarkThroughRealRoute
+    # (github_tests_artifact_skip_log_test.go), which drives the real
+    # chunked route through an HTTP-mocked walk. 3 new ordinary top-level
+    # tests, none integration-tagged.
+    # 1287 -> 1290 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1290
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1295,7 +1315,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1287
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1290
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1356,7 +1376,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1287
+    assert len(selected_tests) == len(set(selected_tests)) == 1290
     assert set(selected_tests) == expected_tests
 
 

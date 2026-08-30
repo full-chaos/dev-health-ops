@@ -566,7 +566,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// divergence (CHAOS-4315 already diverges the two routes on the
 	// oversized disposition itself; production dispatch always executes
 	// CollectChunks, never this route, per execution_registry.go).
-	if githubTestsBlocksWatermark(incomplete, nil, 0, nil) {
+	if githubTestsBlocksWatermark(incomplete, nil, 0, nil, nil) {
 		watermark = nil
 	}
 	// One summary line per unit, same as the chunked production route
@@ -576,7 +576,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// counters -- it has no persisted, resumable cursor to hang them off
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, 0, 0, nil)
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, nil, 0, 0, nil)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,

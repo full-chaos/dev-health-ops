@@ -438,7 +438,7 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 // what makes the invariant hold again.
 func githubTestsBlocksWatermark(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
-	overflow int, causeOverflow map[string]bool,
+	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
 ) bool {
 	for _, observation := range incomplete {
 		causes, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]
@@ -449,7 +449,7 @@ func githubTestsBlocksWatermark(
 			return true
 		}
 	}
-	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow, causeOverflow)
+	return githubTestsReportMemberSkippedWithoutDurableMarker(incomplete, skippedArtifacts, overflow, causeOverflow, causeCount)
 }
 
 // githubTestsSkippedArtifactCause returns a marker's cause, recognizing a
@@ -541,21 +541,51 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // deletePreparedChunkStateTx, inside the same transaction as Complete), so
 // the unit simply retries next window: today's status quo, no data lost, no
 // permanent stall, not a new outage class.
+//
+// causeCount, when tracked for a cause, is authoritative and takes priority
+// over every signal below it (codex review gate round 2, P1): a marker's
+// mere PRESENCE for a cause -- the check this function used from round 1
+// through round 7 -- proves only that SOME occurrence of that cause is
+// durably evidenced, never that the FULL observation.Count is. A cursor
+// resumed from a binary that predates ANY marker-writing for a cause (true
+// of malformed/unreadable before this ticket: Incomplete-tracking for them
+// existed long before CHAOS-4592 added markers) can carry
+// Incomplete{malformed, Count:5} with zero markers; the moment THIS binary
+// appends just one new marker for that cause, a presence check would treat
+// all 5 as covered. causeCount (SkippedArtifactCauseCount) is incremented
+// unconditionally by appendGitHubTestsSkippedArtifact on every call,
+// independent of the bounded sample cap, so it is an EXACT count of what
+// THIS binary's own accumulation can prove -- requiring it be >=
+// observation.Count closes the gap. When causeCount is tracked but falls
+// short, nothing below it can rescue the observation: sampleCount and
+// causeOverflow are both signals causeCount already dominates (every
+// occurrence counted in either is also counted in causeCount).
+//
+// sampleCount/causeOverflow/the legacy sentinel remain the fallback for a
+// cause causeCount does not track at all -- a cursor decoded before this
+// field existed, or one this attempt has not itself touched for that cause
+// yet -- preserving every prior round's behavior for that case unchanged.
 func githubTestsReportMemberSkippedWithoutDurableMarker(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
-	overflow int, causeOverflow map[string]bool,
+	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
 ) bool {
-	markedCauses := make(map[string]struct{}, len(skippedArtifacts))
+	sampleCount := make(map[string]int, len(skippedArtifacts))
 	for _, marker := range skippedArtifacts {
 		if cause := githubTestsSkippedArtifactCause(marker); cause != "" {
-			markedCauses[cause] = struct{}{}
+			sampleCount[cause]++
 		}
 	}
 	for _, observation := range incomplete {
 		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
 			continue
 		}
-		if _, marked := markedCauses[observation.Cause]; marked {
+		if count, tracked := causeCount[observation.Cause]; tracked {
+			if count >= observation.Count {
+				continue
+			}
+			return true
+		}
+		if sampleCount[observation.Cause] >= observation.Count {
 			continue
 		}
 		if causeOverflow[observation.Cause] {

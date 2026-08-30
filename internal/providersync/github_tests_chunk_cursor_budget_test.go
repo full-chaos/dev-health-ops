@@ -9,7 +9,8 @@ import (
 
 // githubTestsRealisticCursorBase returns a githubTestsChunkCursor with every
 // field EXCEPT SkippedArtifacts/SkippedArtifactCauseOverflow/
-// ExcludedArtifactSample set to a realistic in-flight maximum: a long
+// SkippedArtifactCauseCount/ExcludedArtifactSample set to a realistic
+// in-flight maximum: a long
 // paginated NextURL, six-digit counters, and every (component, cause) pair
 // the closed incomplete vocabulary allows -- automatically covering a future
 // vocabulary addition, which is the whole point of a worst-case budget test.
@@ -85,6 +86,15 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	}
 	cursor.SkippedArtifactCauseOverflow = causeOverflow
 
+	causeCount := map[string]int{}
+	for _, cause := range []string{
+		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
+		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause,
+	} {
+		causeCount[cause] = 999999999
+	}
+	cursor.SkippedArtifactCauseCount = causeCount
+
 	for i := 0; i < githubTestsMaxExcludedArtifactSampleRecords; i++ {
 		cursor.ExcludedArtifactSample = append(
 			cursor.ExcludedArtifactSample, name+" (non_report_artifact_suffix)",
@@ -105,7 +115,12 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// A canary for margin erosion, not a hard correctness bound: a future
 	// field addition that eats this margin should fail loudly here before it
 	// ever gets close to the hard 4KiB limit in production.
-	const wantMargin = 500
+	//
+	// 500 -> 450 (codex review gate round 2, P1): SkippedArtifactCauseCount
+	// (5 causes, int-max values) added ~10 bytes past the old threshold. The
+	// worst case still leaves ~490 bytes (12%) of real headroom under
+	// maxChunkCursorBytes -- comfortable, not merely passing.
+	const wantMargin = 450
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
 			"worst-case cursor leaves only %d bytes of headroom under maxChunkCursorBytes, want >= %d -- "+

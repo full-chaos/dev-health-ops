@@ -131,6 +131,29 @@ func decodeOptionalGitHubTestsSkippedArtifactCauseOverflow(result map[string]any
 	return causeOverflow
 }
 
+// decodeOptionalGitHubTestsSkippedArtifactCauseCount is
+// decodeOptionalGitHubTestsSkippedArtifacts's twin for the exact per-cause
+// skip count (codex review gate round 2, P1): an absent key means "no exact
+// ledger" (a completion batch written before this field existed, or a
+// synthetic test batch), which githubTestsReportMemberSkippedWithoutDurableMarker
+// treats as its own backward-compat case, not a validation failure -- see
+// githubTestsChunkCursor.SkippedArtifactCauseCount.
+func decodeOptionalGitHubTestsSkippedArtifactCauseCount(result map[string]any) map[string]int {
+	value, present := result["skipped_artifact_cause_count"]
+	if !present {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var causeCount map[string]int
+	if json.Unmarshal(encoded, &causeCount) != nil {
+		return nil
+	}
+	return causeCount
+}
+
 func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error {
 	var complete bool
 	var skipped int
@@ -143,6 +166,7 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 	skippedArtifacts := decodeOptionalGitHubTestsSkippedArtifacts(batch.Result)
 	skippedArtifactsOverflow := decodeOptionalGitHubTestsSkippedArtifactsOverflow(batch.Result)
 	skippedArtifactCauseOverflow := decodeOptionalGitHubTestsSkippedArtifactCauseOverflow(batch.Result)
+	skippedArtifactCauseCount := decodeOptionalGitHubTestsSkippedArtifactCauseCount(batch.Result)
 	if skipped < 0 || githubTestsIncompleteCount(incomplete) != skipped {
 		return ErrInvalidConfiguration
 	}
@@ -167,7 +191,7 @@ func validateGitHubTestsCompletion(claim Claim, batch CompleteRouteBatch) error 
 	// identically on every future window, so demanding a nil watermark there
 	// pins since_at forever -- which is exactly what left three sources at zero
 	// cicd coverage for four days.
-	if githubTestsBlocksWatermark(incomplete, skippedArtifacts, skippedArtifactsOverflow, skippedArtifactCauseOverflow) {
+	if githubTestsBlocksWatermark(incomplete, skippedArtifacts, skippedArtifactsOverflow, skippedArtifactCauseOverflow, skippedArtifactCauseCount) {
 		if batch.Watermark != nil {
 			return ErrInvalidConfiguration
 		}

@@ -61,6 +61,47 @@ func TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsSkipSummaryLogsOverflowedCauses pins the CHAOS-4592 gate
+// round 2, P2 fix. Per-cause marker overflow (SkippedArtifactCauseOverflow)
+// was durably tracked on the cursor since round 2, but the ONE line an
+// operator actually reads (githubTestsLogArtifactSkipSummary) never
+// mentioned it -- an operator would see the sample's counts and have no way
+// to know a cause's markers were also being dropped past the cap without
+// separately inspecting completion JSON. This drives the summary logger
+// directly (unit-level, not through a full HTTP-mocked walk) with a
+// causeOverflow map and asserts the line surfaces it, sorted and excluding
+// the internal legacy sentinel.
+func TestGitHubTestsSkipSummaryLogsOverflowedCauses(t *testing.T) {
+	records := captureMembershipLogs(t)
+	claim := nativeTestClaim("github", "cicd")
+	incomplete := []GitHubTestsIncomplete{
+		{Component: githubTestsReportMemberComponent, Cause: githubTestsUnreadableArchiveCause, Count: 9},
+	}
+	causeOverflow := map[string]bool{
+		githubTestsUnreadableArchiveCause:       true,
+		githubTestsLegacyReportOverflowSentinel: true, // must NOT appear in the surfaced list
+	}
+	githubTestsLogArtifactSkipSummary(claim, "acme/api", incomplete, nil, causeOverflow, 0, 0, nil)
+
+	var summaries []slog.Record
+	for _, record := range *records {
+		if record.Message == "provider artifacts skipped this unit; inventory continued" {
+			summaries = append(summaries, record)
+		}
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("got %d skip-summary log records, want exactly 1", len(summaries))
+	}
+	attrs := membershipLogAttrs(summaries[0])
+	overflowed, ok := attrs["skipped_sample_cause_overflow"].([]string)
+	if !ok || len(overflowed) != 1 || overflowed[0] != githubTestsUnreadableArchiveCause {
+		t.Fatalf(
+			"skipped_sample_cause_overflow=%v (ok=%t), want exactly [%s], sentinel excluded",
+			attrs["skipped_sample_cause_overflow"], ok, githubTestsUnreadableArchiveCause,
+		)
+	}
+}
+
 // The other half: a fully healthy unit must log nothing about skips. A line
 // on every sync regardless of content is noise operators learn to filter,
 // which is the same reasoning githubProjectV2's membership_skips log follows
@@ -154,6 +195,53 @@ func TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsMemberLevelSkipAdvancesWatermarkThroughRealRoute pins the
+// CHAOS-4592 gate round 2, P2 fix. The earlier
+// TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd
+// (complete_route_comparator_decoded_test.go) drives the real parser but
+// REIMPLEMENTS github_tests_chunked_route.go's post-parse forwarding loop
+// (mergeGitHubTestsIncomplete + appendGitHubTestsSkippedArtifact) inline --
+// a regression that broke or deleted the ACTUAL loop in the production route
+// would leave that test green, since it never calls into that code at all.
+// This test closes that gap: walkGitHubTestsChunksResult drives the real,
+// unmodified chunked route (HTTP mocked, everything downstream of the
+// transport is production code) against githubTestsMixedMemberArtifactDoer's
+// one-malformed-one-healthy artifact, and asserts the FINAL watermark this
+// real walk emits -- through githubTestsFinalMetadataBatch, the same
+// function production calls -- actually advances. Deleting the forwarding
+// loop in github_tests_chunked_route.go fails THIS test (nil watermark,
+// since the marker never reaches the cursor) while leaving the reimplemented
+// test green, proving the two are complementary, not redundant.
+func TestGitHubTestsMemberLevelSkipAdvancesWatermarkThroughRealRoute(t *testing.T) {
+	doer := &githubTestsMixedMemberArtifactDoer{t: t}
+
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+	if walk.cursor.Suites != 1 {
+		t.Fatalf("premise failed: committed %d suites, want 1 from the healthy member", walk.cursor.Suites)
+	}
+	observation := githubTestsSkipObservation(t, walk.cursor.Incomplete, githubTestsReportMemberComponent)
+	if observation.Cause != githubTestsMalformedCause || observation.Count != 1 {
+		t.Fatalf("premise failed: observation=%+v, want cause=%s count=1", observation, githubTestsMalformedCause)
+	}
+	skippedArtifacts, ok := walk.final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
+	if !ok || len(skippedArtifacts) != 1 || skippedArtifacts[0].Cause != githubTestsMalformedCause {
+		t.Fatalf(
+			"premise failed: the real route's own forwarding loop did not carry the parser's marker onto the final batch: skipped_artifacts=%#v",
+			walk.final.Result["skipped_artifacts"],
+		)
+	}
+	want := nativeTestClaim("github", "cicd").BeforeAt
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*want) {
+		t.Fatalf(
+			"watermark=%v, want %v -- a malformed report member must advance the watermark end-to-end through the real route (CHAOS-4592)",
+			walk.final.Watermark, want,
+		)
+	}
+}
+
 // RED before this fix (CHAOS-4592 codex review, on merged CHAOS-4588 code):
 // githubTestsLogArtifactSkipSummary's gate was `len(incomplete) == 0`, but
 // incomplete ALSO carries run-level page-budget truncations that never
@@ -173,7 +261,7 @@ func TestGitHubTestsRunLevelTruncationDoesNotLogArtifactSkipSummary(t *testing.T
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
 	if !githubTestsBlocksWatermark(
 		walk.cursor.Incomplete, walk.cursor.SkippedArtifacts,
-		walk.cursor.SkippedArtifactsOverflow, walk.cursor.SkippedArtifactCauseOverflow,
+		walk.cursor.SkippedArtifactsOverflow, walk.cursor.SkippedArtifactCauseOverflow, walk.cursor.SkippedArtifactCauseCount,
 	) {
 		t.Fatalf("premise failed: want an inventory truncation, incomplete=%+v", walk.cursor.Incomplete)
 	}

@@ -11,6 +11,7 @@ called from the admin router's request/response cycle.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -292,3 +293,78 @@ async def test_await_materialized_returns_pending_on_deadline_never_an_error(
     assert outcome.awaiting_materialization is True
     assert outcome.quarantined is False
     assert outcome.occurrence_id == minted.occurrence_id
+
+
+@pytest.mark.asyncio
+async def test_await_materialized_never_blocks_the_event_loop(
+    sqlite_session, monkeypatch
+):
+    """CHAOS-4602 fork 2 ruling: the poll must be genuinely async
+    (asyncio.sleep), never a blocking time.sleep -- this function runs
+    inside the admin router's real request/response cycle, where a
+    blocking sleep would stall EVERY concurrent request for the whole
+    await window, not just this one.
+
+    Proof, by WALL-CLOCK time, not raw tick count: asyncio timers are never
+    dropped, only delayed, so a concurrent ticker task eventually completes
+    its fixed number of ticks regardless of whether the other task blocked
+    the loop in between -- a tick-count assertion alone cannot tell a
+    genuinely concurrent run from a blocking one that merely finishes
+    later. What DOES tell them apart is total elapsed time: run the bounded
+    await (a never-completing occurrence, so it always runs its full
+    deadline) CONCURRENTLY with an independent ticker task on a shorter,
+    unrelated interval. A genuinely async poll overlaps the two, so total
+    elapsed is close to max(poll deadline, ticker duration). A blocking
+    time.sleep serializes them instead (each of the poll's blocking slices
+    delays the ticker's queued wakeups), so elapsed drifts toward roughly
+    their SUM. Empirically measured: ~0.28s genuinely async, ~0.49s with a
+    known-bad time.sleep() substituted in -- asserting well under the
+    sum (which would be ~0.45s here) is a tight, real discriminator.
+    """
+    monkeypatch.setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "0.2")
+    config = _seed_planner_managed_config(sqlite_session)
+    from dev_health_ops.sync.execution_trigger import (
+        _create_go_manual_sync_execution_trigger,
+    )
+    from dev_health_ops.sync.planner import SyncPlanRequest
+
+    request = SyncPlanRequest(
+        integration_id=str(config.integration_id),
+        org_id="org-a",
+        mode="incremental",
+        triggered_by="manual",
+    )
+    minted = _create_go_manual_sync_execution_trigger(
+        sqlite_session, config, "org-a", request
+    )
+    assert minted.occurrence_id is not None
+    sqlite_session.commit()
+
+    ticks = 0
+
+    async def _ticker() -> None:
+        nonlocal ticks
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            ticks += 1
+
+    started = asyncio.get_event_loop().time()
+    outcome, _ = await asyncio.gather(
+        await_sync_execution_trigger_materialized(
+            cast(Any, _FakeAsyncSession(sqlite_session)),
+            minted.occurrence_id,
+            poll_interval=0.02,
+        ),
+        _ticker(),
+    )
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert outcome.awaiting_materialization is True
+    assert ticks == 50, f"ticker only completed {ticks}/50 ticks"
+    # ticker alone needs ~0.25s (50 * 0.005s); the poll's deadline is 0.2s.
+    # Concurrent: elapsed ~= max(0.25, 0.2) ~= 0.25-0.3s. Serialized behind
+    # a blocking sleep: elapsed drifts toward the SUM, ~0.45-0.5s.
+    assert elapsed < 0.4, (
+        f"elapsed={elapsed:.3f}s is close to the serialized sum (~0.45s), "
+        "not the concurrent max (~0.25-0.3s) -- the event loop was blocked"
+    )

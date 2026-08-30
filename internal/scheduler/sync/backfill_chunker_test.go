@@ -65,36 +65,30 @@ func TestChunkDateRangeRejectsNonPositiveChunkDays(t *testing.T) {
 	}
 }
 
-// TestChunkDateRangeAcceptsTheTrueMaxSafeChunkDays is the codex gate-round-9
-// P2 fix: maxChunkDays was validating chunkDays directly, one short of the
-// true safe maximum -- the value that can actually overflow is
-// chunkDays-1 (this function's own `span := time.Duration(chunkDays-1) *
-// 24 * time.Hour`), so chunkDays itself can safely reach one more than the
-// prior constant. Python accepts LINEAR_BACKFILL_MAX_WINDOW_DAYS=maxChunkDays
-// without complaint (no upper bound there at all); Go must too, for any
-// requested range narrow enough that maxChunkDays never forces more than
-// one chunk (a realistic backfill window, unlike this constant itself).
-func TestChunkDateRangeAcceptsTheTrueMaxSafeChunkDays(t *testing.T) {
+// TestChunkDateRangeAcceptsAnUnboundedChunkDaysLikePython is the codex
+// gate-round-10 fix (a recurring finding across rounds 2/3/9/10, finally
+// closed at the class): Python's LINEAR_BACKFILL_MAX_WINDOW_DAYS has no
+// upper bound at all, only `value > 0`. Every prior fix here picked a new
+// finite "largest safe" constant (3650 -> 106751 -> 106752), and each one
+// was still a ceiling some Python-accepted value could exceed -- codex
+// gate round 10 found exactly that: 106753 (one more than the round-9
+// fix's own boundary) was Python-valid, Go-rejected. Switching
+// ChunkDateRange to time.Time.AddDate (day-count arithmetic, no
+// int64-nanosecond ceiling) removed the finite bound entirely instead of
+// chasing it again; this proves Go now accepts values far beyond every
+// previous "boundary" this bug has had, including the exact codex-round-9
+// (106752) and round-10 (106753) repro values, and an arbitrary, far
+// larger one for good measure.
+func TestChunkDateRangeAcceptsAnUnboundedChunkDaysLikePython(t *testing.T) {
 	since := date(2026, 8, 1)
 	before := date(2026, 8, 20)
-	got, err := ChunkDateRange(since, before, maxChunkDays)
-	if err != nil {
-		t.Fatalf("ChunkDateRange() with chunkDays=maxChunkDays (%d) error = %v, want nil", maxChunkDays, err)
-	}
-	want := []DateWindow{{Since: since, Before: before}}
-	assertDateWindowsEqual(t, got, want)
-}
-
-func TestChunkDateRangeRejectsChunkDaysThatWouldOverflowDuration(t *testing.T) {
-	// Codex review (round 2, P2): a chunkDays value large enough that
-	// (chunkDays-1)*24h overflows time.Duration's int64-nanosecond range
-	// must be rejected outright, not silently wrap into a negative span
-	// that walks the cursor backward forever.
-	for _, chunkDays := range []int{maxChunkDays + 1, 1 << 30} {
-		_, err := ChunkDateRange(date(2026, 1, 1), date(2026, 1, 10), chunkDays)
-		if !errors.Is(err, ErrInvalidChunkDays) {
-			t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want ErrInvalidChunkDays", chunkDays, err)
+	for _, chunkDays := range []int{106752, 106753, 1 << 30} {
+		got, err := ChunkDateRange(since, before, chunkDays)
+		if err != nil {
+			t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want nil", chunkDays, err)
 		}
+		want := []DateWindow{{Since: since, Before: before}}
+		assertDateWindowsEqual(t, got, want)
 	}
 }
 

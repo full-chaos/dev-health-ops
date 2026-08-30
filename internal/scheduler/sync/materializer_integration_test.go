@@ -1936,3 +1936,78 @@ VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s
 		t.Fatalf("sync_run_units source_ids=%v, want exactly the good PROJ source, never %s", sourceIDs, badSourceID)
 	}
 }
+
+// TestNativeMaterializerPlansWorkItemsForARealDiscoveredJiraProjectNamedJira
+// is TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource's
+// sibling for the opposite, previously-unproven direction (codex gate-round-10
+// P2): a REAL Jira project whose key genuinely IS "jira" (a live edge case,
+// per Python's own _is_non_project_jira_source docstring) must still plan
+// work-items units when it was actually discovered (metadata.discovered_project,
+// this session's discoverJira -- CHAOS-4584 round 5's own marker on the
+// Python side) -- external_id alone can never disambiguate this from the
+// legacy pre-fix writer's fallback shape, which is exactly why this marker
+// exists.
+func TestNativeMaterializerPlansWorkItemsForARealDiscoveredJiraProjectNamedJira(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk: <7 days
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const (
+		jiraConfigID = "00000000-0000-4000-8000-000000002001"
+		realSourceID = "00000000-0000-4000-8000-000000002008"
+	)
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+INSERT INTO integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s'::uuid),
+        'jira','project','jira','JIRA','JIRA',TRUE,
+        '{"planner_managed_sync_config_id":"%s","discovered_project":true}'::jsonb,now(),now())`,
+		jiraConfigID, jiraConfigID,
+	), realSourceID, occurrence.OrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both the good "PROJ" source (from startBackfillTriggerFixture) and
+	// this genuinely-discovered "jira" project contribute a work-items
+	// unit each.
+	if plan.PlannedUnits != 2 {
+		t.Fatalf("plan.PlannedUnits = %d, want 2 (PROJ + the real discovered jira project): %+v", plan.PlannedUnits, plan)
+	}
+
+	rows, err := fixture.pool.Query(context.Background(),
+		`SELECT source_id::text FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`,
+		plan.SyncRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sourceIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, id := range sourceIDs {
+		if strings.EqualFold(id, realSourceID) {
+			found = true
+		}
+	}
+	if len(sourceIDs) != 2 || !found {
+		t.Fatalf("sync_run_units source_ids=%v, want both PROJ and %s (the real discovered jira project)", sourceIDs, realSourceID)
+	}
+}

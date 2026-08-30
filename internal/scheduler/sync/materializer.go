@@ -1491,27 +1491,37 @@ ORDER BY src.full_name, src.id`, orgID, integrationID, idFilter, plannerManaged,
 }
 
 // isNonProjectJiraSource ports Python's _is_non_project_jira_source
-// (src/dev_health_ops/sync/planner.py, CHAOS-4582) verbatim, in precedence
-// order:
+// (src/dev_health_ops/sync/planner.py, CHAOS-4582 + CHAOS-4584 round 5)
+// verbatim, in precedence order:
 //
 //  1. metadata["explicit_project_scope"] truthy -> NOT bad (the writer's
 //     own marker for a NEW row created from an explicit project_key/id).
 //     Always wins.
-//  2. metadata["org_wide_placeholder"] truthy -> IS bad (Linear's org-wide
+//  2. metadata["discovered_project"] truthy -> NOT bad (codex review, gate
+//     round 10, P2: the real Jira project-discovery writer's own marker,
+//     set on EVERY row it creates or updates regardless of what the
+//     project's key happens to be -- without this, a real project whose
+//     key is literally "JIRA" would fall through to signal 5 below and
+//     get misclassified as the legacy placeholder, silently planning zero
+//     units for a real, discovered project).
+//  3. metadata["org_wide_placeholder"] truthy -> IS bad (Linear's org-wide
 //     marker, recognized in case a future jira writer reuses it).
-//  3. external_id (case-insensitive) != "jira" -> NOT bad: a real project
+//  4. external_id (case-insensitive) != "jira" -> NOT bad: a real project
 //     legitimately named something else.
-//  4. external_id == "jira": look at the REFERENCED config's own
+//  5. external_id == "jira": look at the REFERENCED config's own
 //     sync_options (already resolved by loadPlanSources' LEFT JOIN) for an
 //     explicit project_id/project_key/team_id/repo, in that precedence --
 //     if that value itself is (case-insensitively) "jira", this really is a
 //     project named "JIRA", not the fallback. syncOptions is nil when the
 //     source's planner_managed_sync_config_id doesn't resolve (dangling
 //     reference), matching Python's `if config is not None:` guard.
-//  5. Otherwise -> IS bad: the known-bad legacy shape (live evidence, org
+//  6. Otherwise -> IS bad: the known-bad legacy shape (live evidence, org
 //     70d529e0, CHAOS-4582).
 func isNonProjectJiraSource(externalID string, metadata, syncOptions map[string]any) bool {
 	if jsonTruthy(metadata["explicit_project_scope"]) {
+		return false
+	}
+	if jsonTruthy(metadata["discovered_project"]) {
 		return false
 	}
 	if jsonTruthy(metadata["org_wide_placeholder"]) {

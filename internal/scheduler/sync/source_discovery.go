@@ -726,7 +726,19 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		}
 		result = append(result, discoveredSource{
 			ExternalID: project.Key, SourceType: "project", Name: fullName, FullName: fullName,
-			Metadata: map[string]any{"project_id": project.ID},
+			// Codex review (gate round 10, P2): "discovered_project" mirrors
+			// Python's own real-discovery marker (_map_jira_tuple,
+			// CHAOS-4584 round 5) -- set on EVERY row this discovers,
+			// regardless of what its key happens to be. Without it, a real
+			// project whose key is literally "JIRA" (a live edge case) has
+			// no explicit_project_scope (it wasn't explicitly configured,
+			// it was discovered) and no project_key/project_id in an
+			// unbounded config's sync_options, so isNonProjectJiraSource
+			// falls through to the external_id=="jira" legacy-placeholder
+			// check and wrongly classifies a real, validly-discovered
+			// project as the known-bad shape, silently planning zero units
+			// for it.
+			Metadata: map[string]any{"project_id": project.ID, "discovered_project": true},
 		})
 	}
 	return result, nil

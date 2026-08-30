@@ -26,44 +26,32 @@ type DateWindow struct {
 	Before time.Time
 }
 
-// maxChunkDays bounds chunkDays to the largest value that can never
-// overflow time.Duration's int64-nanosecond range when multiplied by 24h
-// (codex review round 2, P2: an unbounded chunkDays above ~106,752
-// overflows into a NEGATIVE span, which turns the loop below into one that
-// emits invalid windows and walks its cursor backward instead of forward).
-//
-// Deliberately the REAL overflow boundary, not an arbitrary smaller "far
-// beyond any real backfill window" round number: a codex review finding
-// (round 3) caught that an earlier value here (3650) rejected a configured
-// LINEAR_BACKFILL_MAX_WINDOW_DAYS override Python accepts without
-// complaint (Python's own _linear_backfill_max_window_days has no upper
-// bound at all, only `value > 0`) -- a valid, if unusually wide, operator
-// override failed ONLY on the Go side. This constant exists solely to
-// prevent genuine overflow, not to second-guess an operator's configured
-// window width, so it must sit as close to that boundary as safely
-// possible instead of picking a smaller number that merely "seems" far
-// enough.
-//
-// The value that can actually overflow is chunkDays-1 (ChunkDateRange's
-// own `span := time.Duration(chunkDays-1) * 24 * time.Hour`), not
-// chunkDays itself -- codex review (gate round 9, P2) caught that this
-// constant was validating chunkDays directly, one short of the true safe
-// maximum: floor(math.MaxInt64 / (24h in nanoseconds)) = 106751 bounds
-// chunkDays-1, so chunkDays itself can safely reach 106751+1 = 106752
-// (confirmed: Python accepts LINEAR_BACKFILL_MAX_WINDOW_DAYS=106752
-// without complaint, and 106751*(24h in ns) has ~1 day of headroom below
-// math.MaxInt64, so chunkDays=106752 is genuinely safe, not just
-// Python-permitted).
-const maxChunkDays = 106752
-
 // ChunkDateRange ports chunk_date_range verbatim: an inclusive [since,
 // before] date range split into chunkDays-day windows (Python's default is
 // 7), each chunk itself inclusive at both ends, the last chunk truncated to
 // `before` rather than overrunning it. since/before are truncated to their
 // UTC calendar date first -- matching Python's `date` parameter type, which
 // carries no time-of-day component to lose.
+//
+// Codex review (gate rounds 2/3/9/10, P2, a recurring finding this round
+// finally closes at the CLASS instead of another layer patch): earlier
+// versions computed the chunk width as a single time.Duration
+// (chunkDays-1)*24h, bounded by int64 nanoseconds -- genuinely overflowing
+// above ~106,752 days. Each fix so far picked a new hardcoded
+// "largest-safe" constant (3650 -> 106751 -> 106752), and each one was
+// STILL a finite ceiling that some Python-accepted
+// LINEAR_BACKFILL_MAX_WINDOW_DAYS value (Python's own
+// _linear_backfill_max_window_days has no upper bound at all, only `value
+// > 0`) could exceed -- there is no finite constant that can ever achieve
+// byte-for-byte parity with an unbounded contract. time.Time.AddDate takes
+// a plain int day count, not a time.Duration, so it has no such ceiling
+// (Go's own time.Time range is bounded by year, not day-count, many orders
+// of magnitude beyond any realistic or adversarial chunkDays); switching
+// to it removes the overflow risk BY CONSTRUCTION instead of chasing its
+// boundary, so the upper-bound check can be dropped entirely and Go
+// matches Python's contract exactly: only chunkDays > 0 is required.
 func ChunkDateRange(since, before time.Time, chunkDays int) ([]DateWindow, error) {
-	if chunkDays <= 0 || chunkDays > maxChunkDays {
+	if chunkDays <= 0 {
 		return nil, ErrInvalidChunkDays
 	}
 	sinceDate := truncateToUTCDate(since)
@@ -71,12 +59,11 @@ func ChunkDateRange(since, before time.Time, chunkDays int) ([]DateWindow, error
 	if sinceDate.After(beforeDate) {
 		return nil, ErrInvalidDateRange
 	}
-	span := time.Duration(chunkDays-1) * 24 * time.Hour
 	const oneDay = 24 * time.Hour
 	var chunks []DateWindow
 	cursor := sinceDate
 	for !cursor.After(beforeDate) {
-		chunkEnd := cursor.Add(span)
+		chunkEnd := cursor.AddDate(0, 0, chunkDays-1)
 		if chunkEnd.After(beforeDate) {
 			chunkEnd = beforeDate
 		}

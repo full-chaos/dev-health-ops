@@ -3,6 +3,10 @@ package sync
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"strings"
@@ -227,6 +231,79 @@ func TestDiscoverGitHubAllReposListsUserReposAndFiltersByNamespace(t *testing.T)
 	}
 	if len(doer.paths) != 1 || doer.paths[0] != "/user/repos" {
 		t.Fatalf("discoverGitHub() all_repos requested paths = %v, want /user/repos", doer.paths)
+	}
+}
+
+// TestDiscoverGitHubAppAuthUsesInstallationRepositoriesEndpoint proves the
+// codex round-2 P2 fix: an all_repos GitHub App-authenticated credential (no
+// "token" secret at all) must list via /installation/repositories, never
+// /user/repos (which 401s for an App installation token -- it has no
+// authenticated-USER surface). This fix previously had NO test coverage at
+// all; added closing that gap (team-lead review, CHAOS-4602 proof ledger).
+func TestDiscoverGitHubAppAuthUsesInstallationRepositoriesEndpoint(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("app_id", secrets.NewValue("1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("private_key", secrets.NewValue(privateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("installation_id", secrets.NewValue("2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Call 1: GitHubAppAuth minting its installation token. Call 2: the
+	// actual /installation/repositories listing, wrapped in a
+	// "repositories" key (unlike /user/repos' bare array).
+	doer := &sequencedSourceDiscoveryDoer{t: t,
+		statuses: []int{http.StatusOK, http.StatusOK},
+		bodies: []string{
+			`{"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}`,
+			`{"repositories":[{"name":"api","full_name":"acme/api","owner":{"login":"acme"}}]}`,
+		},
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].FullName != "acme/api" {
+		t.Fatalf("discoverGitHub() app-auth all_repos = %#v, want the one repo", sources)
+	}
+	if len(doer.paths) != 2 || doer.paths[1] != "/installation/repositories" {
+		t.Fatalf("discoverGitHub() app-auth requested paths = %v, want [.../access_tokens, /installation/repositories]", doer.paths)
+	}
+}
+
+// TestFnmatchLikeTranslatesBracketNegationAndEmptyPattern proves the codex
+// round-2 P2 fixes: fnmatch's "[!abc]" bracket-negation syntax (path.Match's
+// own is "[^abc]"), and an EMPTY pattern matching only an empty name
+// (Go's path.Match already gets this right on its own -- the bug was an
+// earlier version of this function's own special-casing that incorrectly
+// treated "" as "match everything"). Neither fix previously had a dedicated
+// test.
+func TestFnmatchLikeTranslatesBracketNegationAndEmptyPattern(t *testing.T) {
+	for _, test := range []struct {
+		name, pattern, candidate string
+		want                     bool
+	}{
+		{"bracket negation excludes listed chars", "[!ab]*", "cathedral", true},
+		{"bracket negation matches a listed char is false", "[!ab]*", "apple", false},
+		{"empty pattern matches only empty name", "", "", true},
+		{"empty pattern does not match a non-empty name", "", "anything", false},
+		{"star matches everything", "*", "anything", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := fnmatchLike(test.pattern, test.candidate); got != test.want {
+				t.Errorf("fnmatchLike(%q, %q) = %v, want %v", test.pattern, test.candidate, got, test.want)
+			}
+		})
 	}
 }
 

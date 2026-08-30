@@ -958,3 +958,113 @@ def test_jira_populate_reraises_a_board_listing_400_under_strict_reference_disco
             },
             sink=sink,
         )
+
+
+class _FakePermissionDeniedBoardListingJiraClient:
+    """project_key='SUP' answers Jira's documented permission-denial 400 on
+    board LISTING; project_key='OPS' lists boards normally. CHAOS-4575
+    (reproduced live on org 70d529e0, 2026-08-30): a credential missing
+    Browse Projects on one project must not fail every OTHER project's
+    reference discovery, let alone the whole org's."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def iter_boards(self, *, project_key: str):
+        if project_key == "SUP":
+            response = requests.Response()
+            response.status_code = 400
+            response._content = json.dumps(
+                {
+                    "errorMessages": [
+                        "You must have the browse project permission to view this project."
+                    ]
+                }
+            ).encode()
+            raise requests.HTTPError(
+                "400 Client Error: Bad Request for url: "
+                ".../rest/agile/1.0/board?projectKeyOrId=SUP",
+                response=response,
+            )
+            yield  # pragma: no cover - generator shape only
+        yield {"id": 91}
+
+    def iter_board_sprints(self, *, board_id: int):
+        yield {"id": 601, "name": "Sprint 1", "state": "active"}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_skips_a_permission_denied_board_listing_400_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4575: Jira's documented "browse project permission" 400 on
+    board LISTING is unambiguous (unlike a bare errorMessages 400, which
+    CHAOS-4357 round 2 correctly left non-skippable) -- the project exists,
+    the request was well-formed, the credential simply lacks access to it.
+    That must skip just this project's boards, not abort strict reference
+    discovery for the entire org (live evidence: org 70d529e0's Jira sync
+    failed 100% of the time over exactly this, for a single project named
+    'SUP')."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="SUP",
+                name="Support",
+                associations={"project_keys": ["SUP"]},
+            ),
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            ),
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakePermissionDeniedBoardListingJiraClient
+    )
+
+    sink = _fake_sink()
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_reference_discovery", "strict_reference_discovery": True},
+        sink=sink,
+    )
+
+    # The whole populate must succeed (no raise): OPS's board/sprint still
+    # land, SUP's boards are simply absent rather than poisoning the run.
+    assert summary["teams_imported"] == 2
+    assert set(summary["reference_team_keys"]) == {"SUP", "OPS"}
+    assert summary["sprints_imported"] == 1
+    assert summary["reference_sprint_ids"] == ["601"]

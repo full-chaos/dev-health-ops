@@ -461,14 +461,14 @@ SET status = $2, lease_owner = NULL, lease_expires_at = NULL, last_heartbeat_at 
     completed_at = $3, error = $4, result = $5::json, updated_at = $3
 WHERE id = $1::uuid AND status = $6 AND lease_owner = $7 AND lease_expires_at > $3`,
 		ledgerID, discoveryStatusFailed, now, referenceDiscoveryErrorMessage,
-		discoveryFailureResultJSON(retryable, attempts), discoveryStatusRunning, leaseOwner)
+		discoveryFailureResultJSON(retryable, attempts, discoverErr), discoveryStatusRunning, leaseOwner)
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}
 	if tag.RowsAffected() == 0 {
 		return tx.Commit(ctx)
 	}
-	if err := failNonterminalUnits(ctx, tx, runID, now, referenceDiscoveryErrorMessage); err != nil {
+	if err := failNonterminalUnits(ctx, tx, runID, now, referenceDiscoveryErrorMessage, discoverErr); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE public.sync_runs SET error = $2 WHERE id = $1::uuid`,
@@ -488,16 +488,39 @@ func commitOrUnavailable(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-func discoveryFailureResultJSON(retryable bool, attempts int) []byte {
+func discoveryFailureResultJSON(retryable bool, attempts int, discoverErr error) []byte {
 	encoded, err := json.Marshal(map[string]any{
 		"error_category": referenceDiscoveryErrorCategory,
 		"retryable":      retryable,
 		"attempts":       attempts,
+		"detail":         discoveryErrorDetail(discoverErr),
 	})
 	if err != nil {
 		return []byte(`{}`)
 	}
 	return encoded
+}
+
+// discoveryErrorDetail extracts the underlying failure text (e.g. "sync
+// dispatch bridge request failed: status=500", "context deadline exceeded")
+// so the terminal ledger/unit rows carry WHY discovery failed, not just the
+// fixed "reference_discovery_failed" category every terminal failure shares
+// regardless of cause (CHAOS-4575: this exact gap turned a one-line Jira
+// permission error into a docker-logs/live-repro investigation because
+// neither the ledger nor the unit rows recorded anything beyond the
+// category). Bounded to keep a pathological error message from bloating the
+// result column; never includes the discoverErr for a nil error (the
+// lost-lease/no-op branches never reach this function).
+func discoveryErrorDetail(discoverErr error) string {
+	if discoverErr == nil {
+		return ""
+	}
+	detail := discoverErr.Error()
+	const maxDetailLen = 500
+	if len(detail) > maxDetailLen {
+		detail = detail[:maxDetailLen]
+	}
+	return detail
 }
 
 // ledgerLeaseIsOwnedAndLive ports _ledger_lease_is_owned_and_live.
@@ -512,8 +535,11 @@ func ledgerLeaseIsOwnedAndLive(status string, leaseExpiresAt *time.Time, ownedBy
 }
 
 // failNonterminalUnits ports _fail_nonterminal_units.
-func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time.Time, message string) error {
-	resultJSON, err := json.Marshal(map[string]any{"error_category": referenceDiscoveryErrorCategory})
+func failNonterminalUnits(ctx context.Context, tx pgx.Tx, runID string, now time.Time, message string, discoverErr error) error {
+	resultJSON, err := json.Marshal(map[string]any{
+		"error_category": referenceDiscoveryErrorCategory,
+		"detail":         discoveryErrorDetail(discoverErr),
+	})
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}

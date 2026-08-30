@@ -149,7 +149,7 @@ def test_help_completes_and_documents_every_public_verb() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     # The Go toolchain directive may fetch a newer patch release on a cold
-    # cache and announces it on stderr ("go: downloading go1.25.9 ...").
+    # cache and announces it on stderr ("go: downloading go1.27.0 ...").
     # That is environment noise, not help output — anything else on stderr
     # still fails.
     unexpected_stderr = [

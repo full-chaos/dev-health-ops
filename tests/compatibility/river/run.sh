@@ -13,7 +13,7 @@ PYTHON_CLI="${SCRIPT_DIR}/python_enqueue.py"
 PYTHON_BIN="${RIVER_COMPAT_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 
 SAMPLES=20
-GO_TOOLCHAIN="go1.25.9"
+GO_TOOLCHAIN="go1.27.0"
 PYTHON_VERSION="3.13.14"
 RIVERQUEUE_PYTHON_VERSION="0.7.0"
 SQLALCHEMY_VERSION="2.0.49"
@@ -462,7 +462,7 @@ assert_matrix() {
     --argjson samples "${SAMPLES}" '
       .status == "ok"
       and .mode == $mode
-      and .go_version == "go1.25.9"
+      and .go_version == "go1.27.0"
       and .pgx_version == "v5.10.0"
       and .river_driver_version == "v0.44.0"
       and .river_version == "v0.44.0"
@@ -630,7 +630,7 @@ assert_external_consume() {
     --argjson expected_max_attempts "${expected_max_attempts}" '
       .status == "ok"
       and .mode == $mode
-      and .go_version == "go1.25.9"
+      and .go_version == "go1.27.0"
       and .pgx_version == "v5.10.0"
       and .river_driver_version == "v0.44.0"
       and .river_version == "v0.44.0"
@@ -926,7 +926,7 @@ run_nested_n_minus_one() {
         .schema_version == 1
         and .status == "ok"
         and .operation == "migrate"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.9.2"
         and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
@@ -948,7 +948,7 @@ run_nested_n_minus_one() {
         .schema_version == 1
         and .status == "ok"
         and .operation == "work"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.9.2"
         and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
@@ -1004,7 +1004,7 @@ run_nested_n_minus_one() {
         .schema_version == 1
         and .status == "ok"
         and .operation == "insert"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.9.2"
         and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"
@@ -1031,7 +1031,7 @@ run_nested_n_minus_one() {
       jq -e --arg queue "${queue}" '
         .status == "ok"
         and .mode == "direct"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.10.0"
         and .river_driver_version == "v0.44.0"
         and .river_version == "v0.44.0"
@@ -1056,7 +1056,7 @@ run_nested_n_minus_one() {
       jq -e --arg queue "${queue}" '
         .status == "ok"
         and .mode == "direct"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.10.0"
         and .river_driver_version == "v0.44.0"
         and .river_version == "v0.44.0"
@@ -1082,7 +1082,7 @@ run_nested_n_minus_one() {
         .schema_version == 1
         and .status == "ok"
         and .operation == "work"
-        and .go_version == "go1.25.9"
+        and .go_version == "go1.27.0"
         and .pgx_version == "v5.9.2"
         and .river_driver_version == "v0.39.0"
         and .river_version == "v0.39.0"

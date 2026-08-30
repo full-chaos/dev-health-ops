@@ -240,7 +240,7 @@ def test_flagged_entries_were_not_silently_dropped() -> None:
             "(CHAOS-4026) deliberately kept it."
         )
     # dispatch_external_ingest_recompute_bridge is registered via a whole-module
-    # import (`import ...external_ingest_recompute  # noqa: F401` in tasks.py),
+    # import (`import ...external_ingest_recompute` with a lint waiver in tasks.py),
     # not an individual export -- it was never in tasks.__all__, before or
     # after this PR. The rest are.
     for name in set(_FLAGGED_SURVIVING_TASK_NAMES) - {

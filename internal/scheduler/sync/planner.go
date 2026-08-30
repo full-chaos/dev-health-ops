@@ -126,11 +126,15 @@ type WatermarkKey struct {
 // PlannerInput contains only already-authorized, enabled rows. Loading and
 // locking those rows remains the PostgreSQL materializer's responsibility.
 type PlannerInput struct {
-	OrgID                string
-	IntegrationID        string
-	Mode                 string
-	Now                  time.Time
-	Before               *time.Time
+	OrgID         string
+	IntegrationID string
+	Mode          string
+	Now           time.Time
+	Before        *time.Time
+	// Since is required (alongside Before) only for BuildBackfillPlan --
+	// BuildScheduledPlan never reads it. Mirrors SyncPlanRequest.since
+	// (planner.py:186), the requested backfill range's lower bound.
+	Since                *time.Time
 	IntegrationDepthDays *int
 	TierBackfillDaysCap  *int
 	WatermarkOverlap     time.Duration

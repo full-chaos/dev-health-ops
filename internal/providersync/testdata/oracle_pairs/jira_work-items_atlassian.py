@@ -4,7 +4,7 @@ The transport is deterministic, but the provider method, canonical models,
 identity resolver, worklog/sprint normalizers, reference-sprint guard, and
 ProviderBatch boundary are all loaded from this checkout's production source.
 """
-# noqa: SIZE_OK — one producer oracle keeps transport patches and provenance checks together.
+# SIZE-OK: one producer oracle keeps transport patches and provenance checks together.
 
 from __future__ import annotations
 

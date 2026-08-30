@@ -10,6 +10,7 @@ import (
 	"time"
 
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,6 +49,7 @@ CREATE TABLE sync_runs (
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
  dataset_key text NOT NULL, source_id uuid NULL, status text NOT NULL,
+ cost_class text NOT NULL DEFAULT 'standard',
  available_at timestamptz NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
  error text NULL, result json NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -227,6 +229,287 @@ func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 	if runError != testFeatureDisabledMessage {
 		t.Fatalf("sync_runs.error=%q want=%q", runError, testFeatureDisabledMessage)
 	}
+}
+
+// TestTerminalizeFeatureDisabledRunWaitsForAConcurrentRollupWriterThenSeesItsResult
+// pins codex round 10's P1 fix (CHAOS-4586): terminalizeFeatureDisabledRun
+// now locks the sync_runs row (syncrunrollup.LockRun) before counting unit
+// statuses. Without that lock, a concurrent syncrunrollup.Bump-style
+// writer on the SAME run that commits between this function's counting
+// read and its own later sync_runs write would have its fresh counts
+// silently overwritten by this function's now-stale ones -- neither write
+// is a compare-and-swap, so whichever commits last wins outright.
+//
+// This is a genuine concurrency proof, not a source-text scan or a
+// same-transaction lock probe (which cannot distinguish "locked before
+// counting" from "locked implicitly by this function's own later UPDATE",
+// since by the time terminalizeFeatureDisabledRun returns it has already
+// written sync_runs regardless of whether the fix is present). It holds a
+// producer transaction's lock on the run's sync_runs row, starts
+// terminalizeFeatureDisabledRun concurrently in a second transaction,
+// confirms via pg_stat_activity (deterministic polling, same technique as
+// TestRollbackBlocksOnAnOpenProducerTransactionAndUnblocksOnCommit) that
+// it is ACTUALLY BLOCKED waiting for that exact lock -- proving the lock
+// call happens before anything else, not just eventually -- then commits
+// the producer's own unit completion and asserts the unblocked call's
+// count reflects it.
+func TestTerminalizeFeatureDisabledRunWaitsForAConcurrentRollupWriterThenSeesItsResult(t *testing.T) {
+	ctx, pool := startFeatureDisabledPool(t)
+	createFeatureDisabledTables(t, ctx, pool)
+	// total_units=2: one PLANNED unit that already exists (the consumer's
+	// own phase-1 bulk update fails it) and one the PRODUCER inserts,
+	// already 'success', only after confirming the consumer is blocked.
+	// The producer's unit does not exist yet when the consumer runs its
+	// own phase-1/phase-2 unit writes, so there is no sync_run_units row
+	// lock contention between them -- the ONLY resource they contend on
+	// is the sync_runs row itself, which is the property this test exists
+	// to isolate.
+	seedFeatureDisabledRun(t, ctx, pool, 2)
+	plannedUnit := "00000000-0000-4000-8000-0000000001c2"
+	producerUnit := "00000000-0000-4000-8000-0000000001c1"
+	insertFeatureDisabledUnit(t, ctx, pool, plannedUnit, "planned", nil)
+
+	producerTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A pgx.Tx that is never committed nor rolled back holds its
+	// connection (and any row locks) forever -- including through an
+	// early t.Fatal unwinding this goroutine. Without this, a failure
+	// anywhere below would leave the consumer goroutine permanently
+	// blocked on the still-held lock, wedging the whole test binary.
+	defer func() { _ = producerTx.Rollback(ctx) }()
+	if err := syncrunrollup.LockRun(ctx, producerTx, featureDisabledTestRun); err != nil {
+		t.Fatalf("producer LockRun: %v", err)
+	}
+
+	type consumerResult struct {
+		transition FeatureDisabledRunTransition
+		err        error
+	}
+	consumerDone := make(chan consumerResult, 1)
+	go func() {
+		consumerTx, err := pool.Begin(ctx)
+		if err != nil {
+			consumerDone <- consumerResult{err: err}
+			return
+		}
+		defer func() { _ = consumerTx.Rollback(ctx) }()
+		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
+		transition, err := terminalizeFeatureDisabledRun(ctx, consumerTx, run, testFeatureDisabledMessage, time.Now().UTC())
+		if err == nil {
+			err = consumerTx.Commit(ctx)
+		}
+		consumerDone <- consumerResult{transition: transition, err: err}
+	}()
+	waitForBlockedSyncRunsLock(t, ctx, pool, "terminalizeFeatureDisabledRun")
+
+	// The consumer is provably blocked right now (waitForBlockedSyncRunsLock
+	// only returns once Postgres itself reports a lock-waiter on this
+	// exact row) -- by construction, this means its OWN phase-1/phase-2
+	// unit writes (which run before it ever calls LockRun) have already
+	// executed, touching only plannedUnit. Only after the producer commits
+	// may it proceed.
+	select {
+	case result := <-consumerDone:
+		t.Fatalf("terminalizeFeatureDisabledRun completed before the producer's transaction committed "+
+			"(result=%+v) -- it is not locking the run before counting (codex round 10, CHAOS-4586)", result)
+	default:
+	}
+
+	// The producer's unit is inserted as PART of producerTx (not a
+	// separate auto-committing statement) so it becomes visible to the
+	// blocked consumer ONLY once producerTx's own commit below succeeds --
+	// exactly the ordering this test exists to prove terminalizeFeatureDisabledRun
+	// now respects. It never existed before this point, so it was invisible
+	// to (and untouched by) the consumer's own earlier phase-1/phase-2 writes.
+	if _, err := producerTx.Exec(ctx, `
+INSERT INTO sync_run_units (id, org_id, sync_run_id, provider, dataset_key, status)
+VALUES ($1, $2, $3, 'github', 'prs', 'success')`,
+		producerUnit, featureDisabledTestOrg, featureDisabledTestRun); err != nil {
+		t.Fatalf("producer insert on its own transaction: %v", err)
+	}
+	if err := producerTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case result := <-consumerDone:
+		if result.err != nil {
+			t.Fatalf("terminalizeFeatureDisabledRun (after producer commit) = %v, want nil", result.err)
+		}
+		// 1 failed (the planned unit this call itself terminalizes); the
+		// producer's unit is success, not failed. If this call's counting
+		// query had run BEFORE the producer's lock released, the producer's
+		// unit would not exist yet at all, but that would make its OWN
+		// write (below) wrong at the sync_runs row, not this in-memory
+		// value -- the real assertion is the sync_runs row check after.
+		if result.transition.FailedUnits != 1 {
+			t.Fatalf("FailedUnits=%d want=1 (only the planned unit)", result.transition.FailedUnits)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("terminalizeFeatureDisabledRun never unblocked after the producer committed")
+	}
+
+	var completedUnits, failedUnits int
+	if err := pool.QueryRow(ctx, `SELECT completed_units, failed_units FROM sync_runs WHERE id = $1`, featureDisabledTestRun).
+		Scan(&completedUnits, &failedUnits); err != nil {
+		t.Fatal(err)
+	}
+	if completedUnits != 1 || failedUnits != 1 {
+		t.Fatalf("sync_runs completed_units=%d failed_units=%d, want 1,1 -- the producer's concurrent "+
+			"success was invisible to (or overwritten by) a stale count (codex round 10, CHAOS-4586)", completedUnits, failedUnits)
+	}
+}
+
+// TestTerminalizeFeatureDisabledRunAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite
+// pins codex round 11's P1: terminalizeFeatureDisabledRun's own bulk UPDATE
+// (planned/retrying/dispatching, a bare status-IN predicate with no
+// explicit row-lock order -- Postgres locks matching rows in whatever
+// order its plan finds them) and its per-unit running-lease loop are a
+// FIFTH bulk/multi-row writer of sync_run_units, alongside dispatch's
+// claimUnits, AuthorizeRun's hard-cap denial writes, LeaseRepair.Step and
+// UnreclaimableSweep.Step -- all four of which already take the SAME
+// sorted per-(orgID, provider, costClass) advisory lock before touching
+// any row, precisely because Postgres gives no row-lock-order guarantee
+// across independently evolving code paths that never agree on one row
+// order between them. This function never did, until now: round 4's
+// UnreclaimableSweep.Step fix (deterministic ascending-unit-id row
+// locking) can put this function's own unordered bulk scan in the
+// OPPOSITE row order from the sweep's, for the same two units -- a
+// genuine ABBA deadlock Postgres detects and aborts one side of.
+//
+// This is a genuine concurrency proof, not a source-text scan (same class
+// as this PR's other two concurrency proofs, both in this file and in
+// budget_chokepoint_integration_test.go): a holder transaction takes the
+// SAME bucket's advisory lock this function's own fix now takes first, and
+// holds it; terminalizeFeatureDisabledRun is started concurrently and MUST
+// block on it, confirmed via pg_stat_activity polling (the blocked
+// session's own query text is the literal pg_advisory_xact_lock call, the
+// same technique waitForBlockedSyncRunsLock above uses for a row lock).
+// Once confirmed blocked, the holder releases, and the call proceeds to
+// completion normally -- proving both that the lock is acquired at all,
+// and that it does not wedge a run that has no actual contender.
+func TestTerminalizeFeatureDisabledRunAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *testing.T) {
+	ctx, pool := startFeatureDisabledPool(t)
+	createFeatureDisabledTables(t, ctx, pool)
+	seedFeatureDisabledRun(t, ctx, pool, 1)
+	unitID := "00000000-0000-4000-8000-0000000001c3"
+	// insertFeatureDisabledUnit hardcodes provider='github'; cost_class
+	// defaults to 'standard' (schema default) -- this unit's bucket is
+	// therefore (featureDisabledTestOrg, "github", "standard").
+	insertFeatureDisabledUnit(t, ctx, pool, unitID, "planned", nil)
+	bucketKey := bucketAdvisoryLockKey(dispatchBucket{
+		orgID: featureDisabledTestOrg, provider: "github", costClass: "standard",
+	})
+
+	holderTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holderTx.Rollback(ctx) }()
+	if _, err := holderTx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bucketKey); err != nil {
+		t.Fatalf("holder acquire bucket lock: %v", err)
+	}
+
+	type consumerResult struct {
+		transition FeatureDisabledRunTransition
+		err        error
+	}
+	consumerDone := make(chan consumerResult, 1)
+	go func() {
+		consumerTx, err := pool.Begin(ctx)
+		if err != nil {
+			consumerDone <- consumerResult{err: err}
+			return
+		}
+		defer func() { _ = consumerTx.Rollback(ctx) }()
+		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
+		transition, err := terminalizeFeatureDisabledRun(ctx, consumerTx, run, testFeatureDisabledMessage, time.Now().UTC())
+		if err == nil {
+			err = consumerTx.Commit(ctx)
+		}
+		consumerDone <- consumerResult{transition: transition, err: err}
+	}()
+
+	waitForBlockedAdvisoryLock(t, ctx, pool, "terminalizeFeatureDisabledRun")
+
+	select {
+	case result := <-consumerDone:
+		t.Fatalf("terminalizeFeatureDisabledRun completed (result=%+v) before the holder released the bucket "+
+			"advisory lock -- it is not acquiring the lock at all (codex round 11, CHAOS-4586)", result)
+	default:
+	}
+
+	if err := holderTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case result := <-consumerDone:
+		if result.err != nil {
+			t.Fatalf("terminalizeFeatureDisabledRun (after the bucket lock released): %v", result.err)
+		}
+		if !result.transition.RunTerminal {
+			t.Fatalf("transition.RunTerminal=false, want true")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("terminalizeFeatureDisabledRun never unblocked after the bucket advisory lock was released")
+	}
+}
+
+// waitForBlockedAdvisoryLock polls pg_stat_activity for a session blocked
+// on ANY pg_advisory_xact_lock call -- the literal query text
+// acquireBucketAdvisoryLocks sends is `SELECT pg_advisory_xact_lock($1)`,
+// matched here the same way waitForBlockedSyncRunsLock matches LockRun's
+// row-lock SELECT. Each test using this starts its own dedicated Postgres
+// container (startFeatureDisabledPool), so there is no cross-test
+// contamination to disambiguate by lock key.
+func waitForBlockedAdvisoryLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, waiterDescription string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'
+			  AND query LIKE '%pg_advisory_xact_lock%'`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s never blocked on the held bucket advisory lock", waiterDescription)
+}
+
+// waitForBlockedSyncRunsLock polls pg_stat_activity, deterministically (no
+// sleep-and-hope): it returns the instant Postgres itself reports a
+// session waiting on syncrunrollup.LockRun's own SELECT ... FOR UPDATE
+// statement against sync_runs, or fails the test after a bounded deadline
+// if that never happens. Same technique as
+// native_dispatch_sync_run_rollback_fence_integration_test.go's own
+// waitForBlockedOutboxLock.
+func waitForBlockedSyncRunsLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, waiterDescription string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+			  AND query LIKE '%FROM public.sync_runs WHERE id = $1 FOR UPDATE%'`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s never blocked on the held sync_runs row lock", waiterDescription)
 }
 
 // TestTerminalizeFeatureDisabledRunLeavesGenuinelyNonterminalStateAlone pins

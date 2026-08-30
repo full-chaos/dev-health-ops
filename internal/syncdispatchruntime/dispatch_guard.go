@@ -109,6 +109,107 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 		return guardDecision{}, err
 	}
 
+	// CHAOS-4586 (codex round 6, P1): the bucket-lock acquisition below
+	// USED to sit after the total-unit-cap check, so a run over cap
+	// returned "denied" before ever reaching it -- denyRun's subsequent
+	// hasActive branch then bulk-updates this run's sync_run_units
+	// (failPlannedUnits/failStaleDispatchingUnits, both plain WHERE
+	// sync_run_id=$1 predicates matching potentially many rows, with NO
+	// explicit row-lock order of their own) with NO bucket lock held at
+	// all. UnreclaimableSweep.Step's own bucket lock (round 5) only
+	// protects against dispatch passes that reach THIS lock; it protects
+	// nothing against a hard-cap denial that returns before this. Moving
+	// bucket-lock acquisition here, before EVERY early return
+	// (including the hard-cap one below), makes it unconditional for the
+	// whole function: whichever guardDecision this returns, the caller's
+	// SAME transaction already holds every bucket this run's units belong
+	// to, for the rest of that transaction -- covering denyRun's bulk
+	// writes too, not just the allowed-path's own claimUnits.
+	//
+	// candidatesByBucket/deferredBuckets/allBuckets do not depend on
+	// totalCap or anything computed below this line -- only on units,
+	// orgID and now -- so this reordering changes no computed value, only
+	// when the (harmless, already-idempotent) lock acquisition happens.
+	staleCutoff := now.Add(-staleDispatchSeconds())
+
+	// CHAOS-4586 (codex round 7, P2; round 8, P2 narrowed this): the lock
+	// set must cover every bucket a MUTATING status could touch -- broader
+	// than candidatesByBucket/deferredBuckets below, which apply
+	// eligibility filters that exist for the CONCURRENCY-CAP decision loop
+	// further down, not for locking completeness. Round 7 fixed this by
+	// locking EVERY unit's bucket unconditionally; round 8 found that
+	// over-broad -- a run with terminal (success/failed) or live RUNNING
+	// units in one bucket and pending work in another held BOTH buckets
+	// for this whole transaction, needlessly blocking unrelated runs on
+	// the never-touched bucket, since neither denyRun's bulk writes nor
+	// claimUnits ever mutate a terminal or RUNNING row.
+	//
+	// lockBucketsByUnit is therefore built in the SAME loop as
+	// candidatesByBucket/deferredBuckets, adding a unit to it exactly when
+	// some later write in THIS transaction could touch that row:
+	//   - PLANNED: claimUnits' plain-claim UPDATE, and denyRun's
+	//     failPlannedUnits (`status IN (planned, retrying)`, no other
+	//     condition).
+	//   - DISPATCHING, stale: claimUnits' stale-reclaim UPDATE, and
+	//     denyRun's failStaleDispatchingUnits (`status = dispatching AND
+	//     updated_at <= staleCutoff`). Fresh DISPATCHING is a capacity
+	//     consumer ONLY -- neither write ever matches it -- so it does NOT
+	//     need a lock.
+	//   - RETRYING, ANY available_at (including nil): denyRun's
+	//     failPlannedUnits matches every retrying row with NO available_at
+	//     condition at all, so this must be locked regardless of whether
+	//     it is a concurrency-cap candidate, a not-yet-due deferral, or
+	//     the anomalous nil-available_at shape codex round 7 caught
+	//     candidatesByBucket/deferredBuckets silently dropping.
+	//   - RUNNING and terminal (SUCCESS/FAILED): never written by
+	//     anything in this transaction -- no lock needed.
+	lockBucketsByUnit := map[dispatchBucket][]dispatchGuardUnit{}
+	candidatesByBucket := map[dispatchBucket][]dispatchGuardUnit{}
+	deferredBuckets := map[dispatchBucket]bool{}
+	for _, unit := range units {
+		bucket := dispatchBucket{orgID: orgID, provider: unit.provider, costClass: unit.costClass}
+		switch unit.status {
+		case syncRunUnitStatusPlanned:
+			candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
+			lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
+		case syncRunUnitStatusDispatching:
+			if !unit.updatedAt.After(staleCutoff) {
+				candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
+				lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
+			}
+			// Fresh DISPATCHING -> consumer only (counted in active-count
+			// below), never written by this pass -- no lock needed.
+		case syncRunUnitStatusRetrying:
+			lockBucketsByUnit[bucket] = append(lockBucketsByUnit[bucket], unit)
+			if unit.availableAt != nil {
+				if !unit.availableAt.After(now) {
+					candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
+				} else {
+					deferredBuckets[bucket] = true
+				}
+			}
+			// availableAt == nil: lock-worthy (above, codex round 7) but
+			// not a concurrency-cap candidate or deferred bucket -- an
+			// anomalous row shape denyRun could still write.
+			// RUNNING (any age) -> capacity consumer only, never a candidate (F2)
+			// and never written by anything in this transaction -- no lock needed.
+			// SUCCESS / FAILED -> terminal, ignored, never written again.
+		}
+	}
+
+	if err := acquireBucketAdvisoryLocks(ctx, tx, sortedDispatchBuckets(lockBucketsByUnit, nil)); err != nil {
+		return guardDecision{}, err
+	}
+
+	// allBuckets stays scoped to candidatesByBucket/deferredBuckets on
+	// purpose: it drives the per-bucket CONCURRENCY-CAP decision loop
+	// below, which must only ever consider eligible buckets -- locking
+	// completeness (above) and concurrency-cap eligibility (here) are
+	// different concerns with different correct scopes; conflating them
+	// would either under-lock (the round-7 bug) or over-restrict slot
+	// accounting to buckets that were never real candidates.
+	allBuckets := sortedDispatchBuckets(candidatesByBucket, deferredBuckets)
+
 	// Python: any resolution failure (missing org, missing tier_limits
 	// table, a malformed override) falls back to the env default
 	// unconditionally (CHAOS-2580) -- ResolveMaxSyncUnitsCap's own doc
@@ -131,38 +232,6 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 	}
 
 	concurrencyCap := syncUnitConcurrencyPerBucket()
-	staleCutoff := now.Add(-staleDispatchSeconds())
-
-	candidatesByBucket := map[dispatchBucket][]dispatchGuardUnit{}
-	deferredBuckets := map[dispatchBucket]bool{}
-	for _, unit := range units {
-		bucket := dispatchBucket{orgID: orgID, provider: unit.provider, costClass: unit.costClass}
-		switch unit.status {
-		case syncRunUnitStatusPlanned:
-			candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-		case syncRunUnitStatusDispatching:
-			if !unit.updatedAt.After(staleCutoff) {
-				candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-			}
-		case syncRunUnitStatusRetrying:
-			if unit.availableAt != nil {
-				if !unit.availableAt.After(now) {
-					candidatesByBucket[bucket] = append(candidatesByBucket[bucket], unit)
-				} else {
-					deferredBuckets[bucket] = true
-				}
-			}
-			// RUNNING (any age) -> capacity consumer only, never a candidate (F2).
-			// Fresh DISPATCHING -> consumer only (counted in active-count below).
-			// SUCCESS / FAILED -> terminal, ignored.
-		}
-	}
-
-	allBuckets := sortedDispatchBuckets(candidatesByBucket, deferredBuckets)
-	if err := acquireBucketAdvisoryLocks(ctx, tx, allBuckets); err != nil {
-		return guardDecision{}, err
-	}
-
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	for _, bucket := range allBuckets {
@@ -329,6 +398,28 @@ func bucketAdvisoryLockKey(bucket dispatchBucket) int64 {
 	digest := sha256.Sum256(raw)
 	keyUint := binary.BigEndian.Uint64(digest[:8])
 	return int64(keyUint & ((1 << 63) - 1))
+}
+
+// BucketAdvisoryLockKeyForTest exposes bucketAdvisoryLockKey's exact
+// formula across the package boundary, for ONE purpose only: a
+// cross-package contract test in internal/syncreconciler
+// (bucket_advisory_lock_contract_test.go, CHAOS-4586 codex round 5) proving
+// that package's two independent copies of this same formula
+// (leaseRepairBucketAdvisoryID, unreclaimableBucketAdvisoryID) compute the
+// IDENTICAL numeric key this package does, for the same (orgID, provider,
+// costClass) -- the shared invariant that lets LeaseRepair.Step,
+// UnreclaimableSweep.Step and this package's own AuthorizeRun achieve
+// mutual exclusion on a bucket via pg_advisory_xact_lock, despite living in
+// separate Go packages with no shared symbol (Python needs no such test:
+// guard.py's _bucket_advisory_lock_key is ONE function, imported and
+// reused by both dispatch and lease-repair there -- only the Go ports
+// duplicated it, once per package, because dispatchBucket's fields are
+// unexported and Go has no equivalent of "import one private helper").
+// Every real caller in this package still goes through the unexported
+// bucketAdvisoryLockKey(dispatchBucket) above; this wrapper exists only so
+// the test does not need dispatchBucket exported too.
+func BucketAdvisoryLockKeyForTest(orgID, provider, costClass string) int64 {
+	return bucketAdvisoryLockKey(dispatchBucket{orgID: orgID, provider: provider, costClass: costClass})
 }
 
 // acquireBucketAdvisoryLocks ports _acquire_bucket_advisory_locks. Buckets

@@ -3,14 +3,18 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -301,11 +305,18 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 			t.Fatalf("strandedUnit status=%q, want failed", strandedStatus)
 		}
 		var runStatus string
-		if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runStatus); err != nil {
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT status, failed_units FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runStatus, &runFailedUnits); err != nil {
 			t.Fatal(err)
 		}
 		if runStatus == syncRunStatusFailed {
 			t.Fatal("run status must NOT be failed yet -- an active (running) unit means the run isn't terminal")
+		}
+		// CHAOS-4586: the run stays active (the sibling unit is still
+		// RUNNING), so without the rollup fix failed_units stayed 0 here no
+		// matter how many units this branch stranded and failed.
+		if runFailedUnits != 1 {
+			t.Fatalf("sync_runs.failed_units=%d, want 1 (CHAOS-4586: denyRun's active-units branch must recompute the rollup, not leave it stale until finalize)", runFailedUnits)
 		}
 		var finalizeCount int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind=$2`,
@@ -314,6 +325,233 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 		}
 		if finalizeCount != 1 {
 			t.Fatalf("got %d finalize wakeups, want 1", finalizeCount)
+		}
+	})
+}
+
+// TestDispatchDeniesWithActiveUnitsRecordsTheRollupBumpMetric pins codex
+// round 10's P2: the existing Dispatch-path integration tests (this file)
+// never construct their service WITH metrics wired
+// (newTestDispatchService never calls .WithMetrics), and the pure unit
+// tests that DO exercise RecordSyncRunRollupBumped/the path vocabulary
+// either compare constants or inject the metric call manually -- none of
+// them go through a REAL Dispatch() call end to end. Removing Dispatch's
+// post-commit flushRollupBumpTally call would leave every one of those
+// tests green while dev_health_sync_run_rollup_bumped_total stayed at
+// zero for all five Dispatch-path values in production. This is the SAME
+// scenario as TestDispatchDeniesWithActiveUnitsFailsOnlyStrandedOnes, with
+// a real *providerfoundation.Metrics wired via WithMetrics (mirroring
+// cmd/dev-health-worker/sync_dispatch.go's own
+// `dispatchSyncRun.WithMetrics(syncCoordinatorMetrics)` production call),
+// asserting the counter via the SAME WritePrometheus a real /metrics
+// scrape would render.
+func TestDispatchDeniesWithActiveUnitsRecordsTheRollupBumpMetric(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		strandedUnit := "00000000-0000-4000-8000-0000000000fb"
+		runningUnit := "00000000-0000-4000-8000-0000000000fc"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$5),
+       ($4,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$5)`,
+			strandedUnit, discoveryTestOrg, discoveryTestRun, runningUnit, now); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SYNC_RUN_MAX_UNITS", "1")
+
+		service := newTestDispatchService(t, pool)
+		metrics := providerfoundation.NewMetrics()
+		service.WithMetrics(metrics)
+
+		// dev_health_sync_run_rollup_bumped_total is a process-wide
+		// singleton (CHAOS-4586, codex round 1): other integration tests
+		// in this package's shared test binary bump the SAME series, so a
+		// before/after delta is the only assertion that is not sensitive
+		// to test execution order -- same technique as
+		// providersync's repository_postgres_metrics_integration_test.go.
+		before := rollupBumpedCount(t, "denied")
+
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		if got, want := rollupBumpedCount(t, "denied"), before+1; got != want {
+			t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"denied\"} = %d after a real "+
+				"Dispatch() denial, want %d (before=%d) -- WithMetrics is wired but flushRollupBumpTally never ran "+
+				"(codex round 10, CHAOS-4586)", got, want, before)
+		}
+	})
+}
+
+// rollupBumpedCount reads the current value of the process-wide
+// dev_health_sync_run_rollup_bumped_total{outcome="failed",path=<path>}
+// series directly off the real singleton every Dispatch/reference-discovery
+// call in this binary shares (never off the per-instance metrics a test's
+// own service.WithMetrics wires, which never renders this metric name at
+// all post-CHAOS-4586 -- see providerfoundation.SyncRunRollupBumpedMetricsSource's
+// own doc comment). Missing reads as 0, matching Prometheus's own
+// "absent == zero" convention.
+func rollupBumpedCount(t *testing.T, path string) uint64 {
+	t.Helper()
+	var rendered bytes.Buffer
+	if err := providerfoundation.SyncRunRollupBumpedMetricsSource().WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf(`dev_health_sync_run_rollup_bumped_total{outcome="failed",path=%q} `, path)
+	for _, line := range strings.Split(rendered.String(), "\n") {
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			var count uint64
+			if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &count); err != nil {
+				t.Fatalf("parse counter value from %q: %v", line, err)
+			}
+			return count
+		}
+	}
+	return 0
+}
+
+// TestDispatchTerminalizesAPermanentlyOversizedUnitRecordsTheRollupBumpMetric
+// is TestEnforceRunTerminalizesAnExhaustedPermanentMisfit's fixture
+// (budget_enforce_integration_test.go), adapted to go through a REAL
+// Dispatch() call end to end (that test calls enforceRun directly, which
+// never installs withRollupBumpTally -- only Dispatch/denyRun/handleFailure
+// do), with real metrics wired (codex round 10, P2). newTestDispatchService
+// hard-codes an empty *fakeBudgetEstimator, so this constructs the service
+// manually with one seeded to make this unit's own estimate alone exceed
+// its bucket's limit -- a permanent, not transient, misfit.
+func TestDispatchTerminalizesAPermanentlyOversizedUnitRecordsTheRollupBumpMetric(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		t.Setenv("SYNC_BUDGET_DEFAULT_LIMIT", "100")
+		// The host shell may have SYNC_BUDGET_BUCKET_LIMITS set for local
+		// dev convenience (a real per-bucket override) -- neutralize it so
+		// this test's math is deterministic regardless of the ambient
+		// environment (same as TestEnforceRunTerminalizesAnExhaustedPermanentMisfit).
+		t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000ff"
+		// CHAOS-4556 (landed on main, picked up by this rebase): Dispatch()
+		// now validates every dispatch-eligible unit's provider-family claim
+		// BEFORE budget capacity is ever computed (invalidClaimsAmongDispatchCandidates,
+		// "phase=pre_capacity") -- a github/work-items claim is
+		// AtomicCanonical and requires ALL FIVE family_dataset_* flags set,
+		// or ValidateClaim rejects it as invalid_claim before this test's own
+		// oversized-estimate path is ever reached.
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at,budget_deferrals,result)
+VALUES ($1,$2,$3,'github','work-items',
+        '{"family_dataset_work_items":true,"family_dataset_work_item_labels":true,"family_dataset_work_item_projects":true,"family_dataset_work_item_history":true,"family_dataset_work_item_comments":true}'::json,
+        '00000000-0000-4000-8000-0000000000ed','planned',$4,$5,'{"error_category":"budget_deferred"}'::json)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now, budgetMaxDeferrals()); err != nil {
+			t.Fatal(err)
+		}
+
+		registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{
+			jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+		}}
+		producer, err := joboutbox.NewProducer(pool, registry)
+		if err != nil {
+			t.Fatalf("joboutbox.NewProducer: %v", err)
+		}
+		estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{
+			unitID: estimateFor(500, "github", "rest_core", "work-items"), // alone exceeds the 100 limit -- permanent
+		}}
+		service, err := NewNativeDispatchSyncRunService(pool, nil, estimator, producer, registry)
+		if err != nil {
+			t.Fatalf("NewNativeDispatchSyncRunService: %v", err)
+		}
+		metrics := providerfoundation.NewMetrics()
+		service.WithMetrics(metrics)
+		before := rollupBumpedCount(t, "budget_exhausted")
+
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		var unitStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&unitStatus); err != nil {
+			t.Fatal(err)
+		}
+		if unitStatus != syncRunUnitStatusFailed {
+			t.Fatalf("unit status=%q, want failed (permanently oversized -- exhausted, not deferred again)", unitStatus)
+		}
+		if got, want := rollupBumpedCount(t, "budget_exhausted"), before+1; got != want {
+			t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"budget_exhausted\"} = %d after a "+
+				"real Dispatch() budget-exhaustion termination, want %d (before=%d) -- WithMetrics is wired but "+
+				"flushRollupBumpTally never ran (codex round 10, CHAOS-4586)", got, want, before)
+		}
+	})
+}
+
+// TestDispatchTerminalizesAFeatureDisabledRunRecordsTheRollupBumpMetric is
+// TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled's fixture
+// shape (domain_role_statement_privileges_integration_test.go's
+// feature_flags+org_feature_overrides seeding, same technique), adapted to
+// reach Dispatch()'s OWN feature-gate-denial branch (terminalizeFeatureDisabled
+// in native_dispatch_sync_run_service.go, called before the reference-
+// discovery gate even runs) with real metrics wired. This is the codex
+// round 10 P1 fix's own dedicated metric test: round 10 fixed
+// terminalizeFeatureDisabled's missing flushRollupBumpTally call after its
+// own tx.Commit, and fixed the mislabeled "already correct" registry
+// exemption on terminalizeFeatureDisabledRun -- neither fix had an
+// end-to-end metric assertion of its own until now (only the concurrency
+// test TestTerminalizeFeatureDisabledRunWaitsForAConcurrentRollupWriterThenSeesItsResult,
+// which proves the rollup WRITE is lock-protected, not that the counter
+// increments).
+func TestDispatchTerminalizesAFeatureDisabledRunRecordsTheRollupBumpMetric(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		featureID := "00000000-0000-4000-8000-0000000000e7"
+		unitID := "00000000-0000-4000-8000-0000000000e8"
+		for _, statement := range []string{
+			`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+			 VALUES ('` + unitID + `','` + discoveryTestOrg + `','` + discoveryTestRun + `','pagerduty','incidents',
+			         '00000000-0000-4000-8000-0000000000ec','planned',now())`,
+			`INSERT INTO feature_flags (id,key,min_tier,is_enabled)
+			 VALUES ('` + featureID + `','canonical_incident_ingestion','enterprise',true)`,
+			`INSERT INTO org_feature_overrides (id,org_id,feature_id,is_enabled,expires_at)
+			 VALUES ('00000000-0000-4000-8000-0000000000ee','` + discoveryTestOrg + `','` + featureID + `',false,NULL)`,
+		} {
+			if _, err := pool.Exec(ctx, statement); err != nil {
+				t.Fatalf("seed %s: %v", statement, err)
+			}
+		}
+
+		service := newTestDispatchService(t, pool)
+		metrics := providerfoundation.NewMetrics()
+		service.WithMetrics(metrics)
+		before := rollupBumpedCount(t, "feature_disabled")
+
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		if got, want := rollupBumpedCount(t, "feature_disabled"), before+1; got != want {
+			t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"feature_disabled\"} = %d "+
+				"after a real Dispatch() feature-gate denial, want %d (before=%d) -- WithMetrics is wired but "+
+				"terminalizeFeatureDisabled's own flushRollupBumpTally never ran (codex round 10, CHAOS-4586)",
+				got, want, before)
+		}
+
+		var unitStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&unitStatus); err != nil {
+			t.Fatal(err)
+		}
+		if unitStatus != syncRunUnitStatusFailed {
+			t.Fatalf("unit status=%q, want failed -- the feature-disabled path did not terminalize", unitStatus)
+		}
+		var runStatus string
+		var failedUnits, completedUnits int
+		if err := pool.QueryRow(ctx, `SELECT status, failed_units, completed_units FROM sync_runs WHERE id=$1`,
+			discoveryTestRun).Scan(&runStatus, &failedUnits, &completedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runStatus != syncRunStatusFailed || failedUnits != 1 || completedUnits != 0 {
+			t.Fatalf("run status=%q failed_units=%d completed_units=%d, want failed/1/0",
+				runStatus, failedUnits, completedUnits)
 		}
 	})
 }
@@ -443,6 +681,15 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 		if unitStatus != syncRunUnitStatusFailed {
 			t.Fatalf("unit status=%q, want failed (terminalized as unroutable)", unitStatus)
 		}
+		// CHAOS-4586: terminalizeUnroutableUnits must recompute sync_runs'
+		// rollup, not leave it stale until finalize.
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != 1 {
+			t.Fatalf("sync_runs.failed_units=%d, want 1", runFailedUnits)
+		}
 		var outboxCount int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox`).Scan(&outboxCount); err != nil {
 			t.Fatal(err)
@@ -457,6 +704,42 @@ VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0
 		}
 		if finalizeWakeups != 1 {
 			t.Fatalf("got %d finalize wakeups, want 1 -- nothing left pending, so finalize must be armed", finalizeWakeups)
+		}
+	})
+}
+
+// TestDispatchTerminalizesAnUnroutableUnitRecordsTheRollupBumpMetric is
+// TestDispatchTerminalizesAnUnroutableUnitAndArmsFinalize's fixture, with
+// real metrics wired (codex round 10, P2: no existing Dispatch-path test
+// wires WithMetrics -- see TestDispatchDeniesWithActiveUnitsRecordsTheRollupBumpMetric's
+// own doc comment for the full rationale and the process-wide-singleton
+// delta-assertion technique).
+func TestDispatchTerminalizesAnUnroutableUnitRecordsTheRollupBumpMetric(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000fd"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'unknown-provider','unknown-dataset','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+
+		service := newTestDispatchService(t, pool)
+		metrics := providerfoundation.NewMetrics()
+		service.WithMetrics(metrics)
+		before := rollupBumpedCount(t, "unroutable")
+
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		if got, want := rollupBumpedCount(t, "unroutable"), before+1; got != want {
+			t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"unroutable\"} = %d after a real "+
+				"Dispatch() unroutable termination, want %d (before=%d) -- WithMetrics is wired but flushRollupBumpTally "+
+				"never ran (codex round 10, CHAOS-4586)", got, want, before)
 		}
 	})
 }
@@ -513,6 +796,15 @@ VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000
 		if errorCategory != invalidProviderFamilyClaimErrorCategory {
 			t.Fatalf("error_category=%q, want %q", errorCategory, invalidProviderFamilyClaimErrorCategory)
 		}
+		// CHAOS-4586: terminalizeInvalidClaimUnits must recompute sync_runs'
+		// rollup, not leave it stale until finalize.
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != 1 {
+			t.Fatalf("sync_runs.failed_units=%d, want 1", runFailedUnits)
+		}
 		var finalizeWakeups int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id=$1 AND kind=$2`,
 			discoveryTestRun, outboxKindFinalizeSyncRun).Scan(&finalizeWakeups); err != nil {
@@ -520,6 +812,39 @@ VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000
 		}
 		if finalizeWakeups != 1 {
 			t.Fatalf("got %d finalize wakeups, want 1 -- nothing left pending, so finalize must be armed", finalizeWakeups)
+		}
+	})
+}
+
+// TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasRecordsTheRollupBumpMetric
+// is TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasAndArmsFinalize's
+// fixture, with real metrics wired (codex round 10, P2).
+func TestDispatchTerminalizesANonCanonicalAtomicFamilyAliasRecordsTheRollupBumpMetric(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000fe"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','work-item-labels','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+
+		service := newTestDispatchService(t, pool)
+		metrics := providerfoundation.NewMetrics()
+		service.WithMetrics(metrics)
+		before := rollupBumpedCount(t, "invalid_claim")
+
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		if got, want := rollupBumpedCount(t, "invalid_claim"), before+1; got != want {
+			t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"invalid_claim\"} = %d after a real "+
+				"Dispatch() invalid-claim termination, want %d (before=%d) -- WithMetrics is wired but "+
+				"flushRollupBumpTally never ran (codex round 10, CHAOS-4586)", got, want, before)
 		}
 	})
 }
@@ -564,6 +889,15 @@ VALUES ($1,$2,$3,'linear','work-items','{"family_dataset_work_items": true}'::js
 		}
 		if errorCategory != invalidProviderFamilyClaimErrorCategory {
 			t.Fatalf("error_category=%q, want %q", errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+		// CHAOS-4586: terminalizeInvalidClaimUnits must recompute sync_runs'
+		// rollup, not leave it stale until finalize.
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != 1 {
+			t.Fatalf("sync_runs.failed_units=%d, want 1", runFailedUnits)
 		}
 
 		// The discard-storm regression check: a SECOND dispatch pass must

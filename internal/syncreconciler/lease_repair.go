@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -112,6 +113,57 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 	if err := acquireLeaseRepairBucketLocks(ctx, tx, candidates); err != nil {
 		return LeaseRepairResult{}, err
 	}
+	// CHAOS-4586 (codex round 4, P1): lock every candidate's OWN unit row
+	// up front, before this transaction ever calls syncrunrollup.Bump
+	// (which locks a run row and holds it for the rest of the
+	// transaction). Without this, a pass with two candidates in the SAME
+	// run locks that run after its first candidate's write, then tries to
+	// lock the second candidate's unit row WHILE holding the run lock --
+	// run-before-unit for that one candidate, inverted against every
+	// single-run terminal writer elsewhere. See lockSyncRunUnitsAscending's
+	// doc comment for the full ABBA scenario and why this generalizes
+	// round 3's per-candidate unit-then-run ordering to the whole
+	// transaction at once.
+	unitIDs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		unitIDs = append(unitIDs, candidate.id)
+	}
+	if err := lockSyncRunUnitsAscending(ctx, tx, unitIDs); err != nil {
+		return LeaseRepairResult{}, ErrUnavailable
+	}
+	// CHAOS-4586 (codex round 2, P1; round 3, P1 corrected this): this
+	// pass's candidates can span MULTIPLE sync_run_ids, and the loop below
+	// calls syncrunrollup.Bump per failed candidate -- each one locking its
+	// own run AFTER this iteration's markExpiredLease... write already
+	// locked that candidate's sync_run_units row. UnreclaimableSweep.Step
+	// does the identical unit-then-run sequence but selects its own
+	// candidates in a DIFFERENT order (created_at vs this function's
+	// lease_expires_at), so two concurrent reconciler replicas -- one in
+	// each stage -- touching overlapping runs could lock the RUN halves of
+	// that pair in opposite order and deadlock.
+	//
+	// Round 2 tried to fix this by pre-locking every candidate's run, all
+	// at once, before any unit write -- but that inverts the lock order
+	// (run before unit) against EVERY single-run terminal writer elsewhere
+	// in the codebase (PostgresRepository.Fail, terminalizeUnroutableUnits,
+	// etc.), which all lock their one sync_run_units row first and then
+	// call Bump. A concurrent single-run writer already holding a unit-row
+	// lock and waiting on that run's row, against this transaction already
+	// holding the run's row (via the round-2 pre-lock) and waiting on that
+	// same unit row, is exactly the ABBA cycle codex caught.
+	//
+	// The fix that does not require touching every other terminal writer:
+	// keep this function's own per-candidate order unit-write-then-Bump
+	// (so it agrees with every single-run caller), but make the RUN ids
+	// this transaction touches, across its OWN candidates, come in the
+	// SAME fixed order (ascending sync_run_id) that UnreclaimableSweep.Step
+	// now also uses -- so the two reconciler paths can no longer walk an
+	// overlapping run set in opposite order. Sorting is stable so ties
+	// (multiple candidates in the same run) keep their original relative
+	// order.
+	sort.SliceStable(candidates, func(left, right int) bool {
+		return candidates[left].syncRunID < candidates[right].syncRunID
+	})
 	result := LeaseRepairResult{Selected: len(candidates)}
 	for _, candidate := range candidates {
 		decision := decideExpiredLeaseRepair(candidate, repair.config)
@@ -125,6 +177,21 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 			affected, err = markExpiredLeaseFailed(ctx, tx, candidate, decision.exhausted, now)
 			if err == nil && affected == 1 {
 				result.Failed++
+				// CHAOS-4586: this terminalizes one sync_run_units row while
+				// its run commonly stays active (other units unaffected by
+				// this expired-lease repair pass), so sync_runs.failed_units
+				// must be recomputed in the SAME transaction through the
+				// shared seam every other terminal-status write in this
+				// codebase uses -- never a local copy of its SQL.
+				if _, _, _, bumpErr := syncrunrollup.Bump(ctx, tx, candidate.syncRunID); bumpErr != nil {
+					// Normalized to ErrUnavailable, matching every other
+					// database failure in this function (codex round 1, P2):
+					// callers branch on errors.Is(err, ErrUnavailable), and a
+					// raw driver error here would bypass that stable
+					// classification the same way an unwrapped error would
+					// anywhere else in this package.
+					return LeaseRepairResult{}, ErrUnavailable
+				}
 			}
 		}
 		if err != nil {

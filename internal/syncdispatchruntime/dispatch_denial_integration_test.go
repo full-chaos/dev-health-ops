@@ -172,9 +172,9 @@ func TestTerminalizeUnroutableUnitsGroupsByPairAndNamesEachReason(t *testing.T) 
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: alreadyRunning, status: syncRunUnitStatusRunning, updatedAt: now})
 
 		units := []budgetUnit{
-			{id: aliasUnit, provider: "github", datasetKey: "work-item-labels"},
-			{id: matrixUnit, provider: "unknown-provider", datasetKey: "unknown-dataset"},
-			{id: alreadyRunning, provider: "github", datasetKey: "work-item-labels"},
+			{id: aliasUnit, syncRunID: budgetCandidatesRunID, provider: "github", datasetKey: "work-item-labels"},
+			{id: matrixUnit, syncRunID: budgetCandidatesRunID, provider: "unknown-provider", datasetKey: "unknown-dataset"},
+			{id: alreadyRunning, syncRunID: budgetCandidatesRunID, provider: "github", datasetKey: "work-item-labels"},
 		}
 
 		tx, err := pool.Begin(ctx)
@@ -224,6 +224,16 @@ func TestTerminalizeUnroutableUnitsGroupsByPairAndNamesEachReason(t *testing.T) 
 		if runningStatus != syncRunUnitStatusRunning {
 			t.Fatalf("alreadyRunning status=%q, want unchanged (running) -- CAS must exclude a row no longer DISPATCHING", runningStatus)
 		}
+
+		// CHAOS-4586: terminalizeUnroutableUnits must recompute sync_runs'
+		// rollup in the same transaction, not leave it stale until finalize.
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM public.sync_runs WHERE id=$1`, budgetCandidatesRunID).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != 2 {
+			t.Fatalf("sync_runs.failed_units=%d, want 2 (the two terminalized units)", runFailedUnits)
+		}
 	})
 }
 
@@ -238,9 +248,9 @@ func TestTerminalizeUnroutableUnitsNeverSilentlyDropsAnUnroutableUnit(t *testing
 	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		units := []budgetUnit{
-			{id: "00000000-0000-4000-8000-000000000741", provider: "github", datasetKey: "work-item-labels"},
-			{id: "00000000-0000-4000-8000-000000000742", provider: "unknown-a", datasetKey: "unknown-a-dataset"},
-			{id: "00000000-0000-4000-8000-000000000743", provider: "unknown-b", datasetKey: "unknown-b-dataset"},
+			{id: "00000000-0000-4000-8000-000000000741", syncRunID: budgetCandidatesRunID, provider: "github", datasetKey: "work-item-labels"},
+			{id: "00000000-0000-4000-8000-000000000742", syncRunID: budgetCandidatesRunID, provider: "unknown-a", datasetKey: "unknown-a-dataset"},
+			{id: "00000000-0000-4000-8000-000000000743", syncRunID: budgetCandidatesRunID, provider: "unknown-b", datasetKey: "unknown-b-dataset"},
 		}
 		for _, unit := range units {
 			insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unit.id, status: syncRunUnitStatusDispatching, updatedAt: now})
@@ -274,6 +284,16 @@ func TestTerminalizeUnroutableUnitsNeverSilentlyDropsAnUnroutableUnit(t *testing
 			if reason == "" {
 				t.Fatalf("unit %s has no operator-facing reason -- a bare category with no reason is the OTHER half of the same incident (an operator can't act on it)", unit.id)
 			}
+		}
+
+		// CHAOS-4586: all three units terminalized while the run stays
+		// active; sync_runs.failed_units must reflect that now.
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM public.sync_runs WHERE id=$1`, budgetCandidatesRunID).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != len(units) {
+			t.Fatalf("sync_runs.failed_units=%d, want %d", runFailedUnits, len(units))
 		}
 	})
 }
@@ -326,7 +346,7 @@ func TestTerminalizeInvalidClaimUnitsDoesNotClobberAConcurrentlyClaimedUnit(t *t
 		}
 
 		invalid := []invalidClaimUnit{{
-			unit:   budgetUnit{id: unitID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
+			unit:   budgetUnit{id: unitID, syncRunID: budgetCandidatesRunID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
 			reason: "provider-family claim for linear/work-items is invalid: test fixture",
 		}}
 
@@ -368,7 +388,7 @@ func TestTerminalizeInvalidClaimUnitsTerminalizesAGenuinelyStillPlannedUnit(t *t
 		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
 
 		invalid := []invalidClaimUnit{{
-			unit:   budgetUnit{id: unitID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
+			unit:   budgetUnit{id: unitID, syncRunID: budgetCandidatesRunID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusPlanned},
 			reason: "provider-family claim for linear/work-items is invalid: test fixture",
 		}}
 
@@ -395,6 +415,156 @@ func TestTerminalizeInvalidClaimUnitsTerminalizesAGenuinelyStillPlannedUnit(t *t
 		}
 		if status != syncRunUnitStatusFailed || errorCategory != invalidProviderFamilyClaimErrorCategory {
 			t.Fatalf("status=%q error_category=%q, want failed/%q", status, errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+	})
+}
+
+// TestTerminalizeInvalidClaimUnitsBumpsTheSyncRunRollup pins CHAOS-4586 at
+// the function level (Dispatch-level coverage already exists in
+// native_dispatch_sync_run_service_integration_test.go's
+// TestDispatchTerminalizes*ClaimMissingFamilyFlags/NonCanonicalAtomicFamilyAlias
+// tests): terminalizeInvalidClaimUnits must recompute sync_runs.failed_units
+// in the SAME transaction as the sync_run_units write, not leave it to
+// finalize_sync_run.
+func TestTerminalizeInvalidClaimUnitsBumpsTheSyncRunRollup(t *testing.T) {
+	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		unitA := "00000000-0000-4000-8000-000000000751"
+		unitB := "00000000-0000-4000-8000-000000000752"
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitA, status: syncRunUnitStatusDispatching, updatedAt: now})
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitB, status: syncRunUnitStatusDispatching, updatedAt: now})
+
+		units := []invalidClaimUnit{
+			{unit: budgetUnit{id: unitA, syncRunID: budgetCandidatesRunID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusDispatching}, reason: "missing sibling flags"},
+			{unit: budgetUnit{id: unitB, syncRunID: budgetCandidatesRunID, provider: "linear", datasetKey: "work-items", status: syncRunUnitStatusDispatching}, reason: "missing sibling flags"},
+		}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		n, err := terminalizeInvalidClaimUnits(ctx, tx, units, now)
+		if err != nil {
+			t.Fatalf("terminalizeInvalidClaimUnits: %v", err)
+		}
+		if n != 2 {
+			t.Fatalf("got %d, want 2", n)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, id := range []string{unitA, unitB} {
+			var status string
+			if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, id).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if status != syncRunUnitStatusFailed {
+				t.Fatalf("unit %s status=%q, want failed", id, status)
+			}
+		}
+		var runFailedUnits int
+		if err := pool.QueryRow(ctx, `SELECT failed_units FROM public.sync_runs WHERE id=$1`, budgetCandidatesRunID).Scan(&runFailedUnits); err != nil {
+			t.Fatal(err)
+		}
+		if runFailedUnits != 2 {
+			t.Fatalf("sync_runs.failed_units=%d, want 2", runFailedUnits)
+		}
+	})
+}
+
+// TestTerminalizeInvalidClaimUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite
+// pins codex round 13's P1: terminalizeInvalidClaimUnits has TWO call sites
+// (see its own doc comment) -- a post-claim one that already runs inside
+// Dispatch()'s transaction AFTER authorizeRun's own bucket-lock acquisition,
+// and a pre-capacity one (CHAOS-4556, landed on main independently of this
+// PR) that runs BEFORE authorizeRun ever executes. The pre-capacity call
+// site's bulk UPDATE (`id = ANY($1::uuid[])`, no explicit row-lock order)
+// therefore had NO bucket-lock protection on that path at all -- a genuine
+// ABBA deadlock risk against UnreclaimableSweep.Step's deterministic
+// ascending-unit-id lock order (round 4), confirmed by codex with an
+// isolated Postgres repro reproducing the exact deadlock. Fixed by making
+// this function take its own bucket locks unconditionally, covering BOTH
+// call sites uniformly (pg_advisory_xact_lock is reentrant within one
+// session/transaction, so this is a harmless no-op for the already-covered
+// post-claim call site).
+//
+// This is a genuine concurrency proof, not a source-text scan (same class
+// as this PR's other bucket-lock mechanism proofs): a holder takes the
+// unit's bucket advisory lock and holds it; terminalizeInvalidClaimUnits is
+// started concurrently and MUST block on it, confirmed via pg_stat_activity
+// polling (waitForBlockedAdvisoryLock, shared with the feature-disabled and
+// reference-discovery mechanism proofs). Once confirmed blocked, the holder
+// releases, and the call proceeds to completion normally.
+func TestTerminalizeInvalidClaimUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *testing.T) {
+	withBudgetCandidatesPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-000000000753"
+		insertCandidateUnit(t, ctx, pool, candidateUnitFixture{id: unitID, status: syncRunUnitStatusPlanned, updatedAt: now})
+		// insertCandidateUnit hardcodes org_id='org-1', provider='github',
+		// cost_class='rest_core' -- this unit's bucket.
+		bucketKey := bucketAdvisoryLockKey(dispatchBucket{orgID: "org-1", provider: "github", costClass: "rest_core"})
+
+		holderTx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holderTx.Rollback(ctx) }()
+		if _, err := holderTx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bucketKey); err != nil {
+			t.Fatalf("holder acquire bucket lock: %v", err)
+		}
+
+		type consumerResult struct {
+			n   int
+			err error
+		}
+		consumerDone := make(chan consumerResult, 1)
+		go func() {
+			consumerTx, err := pool.Begin(ctx)
+			if err != nil {
+				consumerDone <- consumerResult{err: err}
+				return
+			}
+			defer func() { _ = consumerTx.Rollback(ctx) }()
+			units := []invalidClaimUnit{{
+				unit: budgetUnit{
+					id: unitID, syncRunID: budgetCandidatesRunID,
+					orgID: "org-1", provider: "github", costClass: "rest_core",
+					status: syncRunUnitStatusPlanned,
+				},
+				reason: "test fixture",
+			}}
+			n, err := terminalizeInvalidClaimUnits(ctx, consumerTx, units, now)
+			if err == nil {
+				err = consumerTx.Commit(ctx)
+			}
+			consumerDone <- consumerResult{n: n, err: err}
+		}()
+
+		waitForBlockedAdvisoryLock(t, ctx, pool, "terminalizeInvalidClaimUnits")
+
+		select {
+		case result := <-consumerDone:
+			t.Fatalf("terminalizeInvalidClaimUnits completed (n=%d, err=%v) before the holder released the bucket "+
+				"advisory lock -- it is not acquiring the lock at all (codex round 13, CHAOS-4586)", result.n, result.err)
+		default:
+		}
+
+		if err := holderTx.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case result := <-consumerDone:
+			if result.err != nil {
+				t.Fatalf("terminalizeInvalidClaimUnits (after the bucket lock released): %v", result.err)
+			}
+			if result.n != 1 {
+				t.Fatalf("terminalized %d units, want 1", result.n)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("terminalizeInvalidClaimUnits never unblocked after the bucket advisory lock was released")
 		}
 	})
 }

@@ -13,9 +13,22 @@ import (
 
 func createBudgetCASTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586, round 1):
+	// terminalizeUnit (budget_chokepoint.go) -- reached here via
+	// terminalizeRateLimitExhausted, the only path in this file that
+	// actually terminalizes a unit -- recomputes this row's
+	// completed_units/failed_units in the SAME transaction as the
+	// sync_run_units write. sync_run_id is nullable so every OTHER test
+	// in this file (none of which terminalize a unit, so none reach
+	// bumpSyncRunRollup) can keep inserting via insertBudgetCASUnit
+	// unchanged.
 	_, err := pool.Exec(ctx, `
+CREATE TABLE public.sync_runs (
+ id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
+ failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
+);
 CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, status text NOT NULL, available_at timestamptz NULL,
+ id uuid PRIMARY KEY, sync_run_id uuid NULL, status text NOT NULL, available_at timestamptz NULL,
  updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
  lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
  rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
@@ -28,6 +41,20 @@ CREATE TABLE public.sync_run_units (
 }
 
 const budgetCASTestUnit = "00000000-0000-4000-8000-0000000000f0"
+const budgetCASTestRunID = "00000000-0000-4000-8000-0000000000f1"
+
+// seedBudgetCASRun inserts the sync_runs row and links budgetCASTestUnit to
+// it -- only needed by a test that actually terminalizes the unit (reaches
+// bumpSyncRunRollup), not every test in this file.
+func seedBudgetCASRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, total_units) VALUES ($1::uuid, 1)`, budgetCASTestRunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET sync_run_id=$1::uuid WHERE id=$2::uuid`, budgetCASTestRunID, budgetCASTestUnit); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func withBudgetCASPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
 	t.Helper()
@@ -231,8 +258,13 @@ func TestResolveCooldownBlockedUnitTerminalizesAnExhaustedEpisode(t *testing.T) 
 		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET rate_limit_deferrals=$1 WHERE id=$2`, rateLimitMaxDeferralsBudget, budgetCASTestUnit); err != nil {
 			t.Fatal(err)
 		}
+		// This is the only test in this file that actually terminalizes the
+		// unit (an exhausted episode), so it is the only one that reaches
+		// bumpSyncRunRollup and needs a linked sync_runs row.
+		seedBudgetCASRun(t, ctx, pool)
 		unit := budgetUnit{
 			id:                 budgetCASTestUnit,
+			syncRunID:          budgetCASTestRunID,
 			result:             map[string]any{"error_category": rateLimitEpisodeErrorCategory},
 			rateLimitDeferrals: rateLimitMaxDeferralsBudget,
 		}

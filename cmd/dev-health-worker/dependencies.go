@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -247,11 +248,17 @@ type workerFamily struct {
 	// coverage must treat them as owned, so they have to survive composition
 	// rather than being consumed by a per-family rescue call.
 	ownedKinds []string
-	// metricsSource is an additional Prometheus fragment this family owns
-	// (e.g. providerfoundation's dev_health_provider_* family), registered
-	// with the health.Registry alongside "worker_runtime" once construction
-	// finishes. Most families leave this nil.
-	metricsSource health.MetricsSource
+	// metricsSource holds each additional Prometheus fragment this family
+	// owns (e.g. providerfoundation's dev_health_provider_* family, keyed
+	// "provider_foundation"), registered with the health.Registry alongside
+	// "worker_runtime" once construction finishes. Keyed by name rather than
+	// a single value (CHAOS-4586): the sync coordinator family gained its
+	// own fragment (dev_health_sync_run_rollup_bumped_total's syncdispatchruntime
+	// path labels, keyed "sync_coordinator") alongside provider_sync's, and
+	// composeWorkerFamily merges these maps rather than failing closed the
+	// moment two families each own one -- see its own doc comment. Most
+	// families leave this nil/empty.
+	metricsSource map[string]health.MetricsSource
 }
 
 type workerFamilyBuilder func(
@@ -554,6 +561,19 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	// CHAOS-4586 (codex round 1, P1): dev_health_sync_run_rollup_bumped_total
+	// is a process-wide singleton for the SAME reason as the two above --
+	// but ALSO because it must not be a per-family field on
+	// providerfoundation.Metrics: buildProviderSyncWorker and
+	// buildSyncCoordinatorWorker each construct their own Metrics instance,
+	// so a worker group running both queues would otherwise register this
+	// metric name TWICE, which most Prometheus parsers reject outright as a
+	// malformed scrape (duplicate HELP/TYPE for one metric name), not just a
+	// duplicate series. Registered here, once, unconditionally.
+	if err := registry.RegisterMetrics("sync_run_rollup_bumped", providerfoundation.SyncRunRollupBumpedMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	// worker_database_pool_acquire_seconds needs the collector, which is why
 	// this happens here rather than at pool construction: NewRuntimePools
 	// freezes its pgxpool tracer before dependencies.metrics exists.
@@ -708,8 +728,8 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, dependencyUnavailable("worker_family_composition_failed")
 	}
-	if active.metricsSource != nil {
-		if err := registry.RegisterMetrics("provider_foundation", active.metricsSource); err != nil {
+	for name, source := range active.metricsSource {
+		if err := registry.RegisterMetrics(name, source); err != nil {
 			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, err
@@ -924,20 +944,30 @@ func githubProjectsV2StartupReadiness(
 
 func composeWorkerFamily(existing, additional workerFamily) (workerFamily, error) {
 	result := workerFamily{
-		handlers:      append([]jobruntime.HandlerSpec(nil), existing.handlers...),
-		queues:        append([]jobruntime.QueueBudget(nil), existing.queues...),
-		cleanups:      append([]func() error(nil), existing.cleanups...),
-		ownedKinds:    append([]string(nil), existing.ownedKinds...),
-		metricsSource: existing.metricsSource,
+		handlers:   append([]jobruntime.HandlerSpec(nil), existing.handlers...),
+		queues:     append([]jobruntime.QueueBudget(nil), existing.queues...),
+		cleanups:   append([]func() error(nil), existing.cleanups...),
+		ownedKinds: append([]string(nil), existing.ownedKinds...),
+	}
+	if len(existing.metricsSource) > 0 {
+		result.metricsSource = make(map[string]health.MetricsSource, len(existing.metricsSource)+len(additional.metricsSource))
+		for name, source := range existing.metricsSource {
+			result.metricsSource[name] = source
+		}
 	}
 	result.cleanups = append(result.cleanups, additional.cleanups...)
-	if additional.metricsSource != nil {
-		if result.metricsSource != nil {
-			// Two families both claiming an additional metrics fragment would
+	for name, source := range additional.metricsSource {
+		if result.metricsSource == nil {
+			result.metricsSource = make(map[string]health.MetricsSource, len(additional.metricsSource))
+		}
+		if _, duplicate := result.metricsSource[name]; duplicate {
+			// Two families both naming the SAME metrics fragment would
 			// silently drop one of them at registration; fail closed instead.
+			// Two DIFFERENT names from two different families is the normal,
+			// supported case (CHAOS-4586) -- each gets its own registry slot.
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
-		result.metricsSource = additional.metricsSource
+		result.metricsSource[name] = source
 	}
 	seen := make(map[string]struct{}, len(result.handlers)+len(additional.handlers))
 	for _, handler := range result.handlers {

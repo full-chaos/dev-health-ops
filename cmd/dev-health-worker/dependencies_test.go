@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -2051,4 +2053,115 @@ func countLogLines(output string) int {
 		}
 	}
 	return lines
+}
+
+// fakeMetricsFragment is a minimal health.MetricsSource stand-in --
+// TestComposeWorkerFamilyMergesDistinctMetricsSourcesButRejectsADuplicateName
+// only needs identity/distinctness, never real Prometheus output.
+type fakeMetricsFragment struct{ name string }
+
+func (f fakeMetricsFragment) WritePrometheus(io.Writer) error { return nil }
+
+// TestComposeWorkerFamilyMergesDistinctMetricsSourcesButRejectsADuplicateName
+// pins CHAOS-4586's generalization of workerFamily.metricsSource from a
+// single value to a name-keyed map: two families each owning a DIFFERENT
+// named fragment (provider_sync's "provider_foundation", the sync
+// coordinator's "sync_coordinator") must compose into one family carrying
+// BOTH, not fail closed the way a single non-nil-vs-non-nil check once did
+// -- that was the actual defect this ticket's own RISK-NOTES describe
+// hitting first. Two families claiming the SAME name must still fail
+// closed: that is the real collision the original guard existed to catch
+// (silently dropping one fragment at registration).
+func TestComposeWorkerFamilyMergesDistinctMetricsSourcesButRejectsADuplicateName(t *testing.T) {
+	providerFamily := workerFamily{
+		metricsSource: map[string]health.MetricsSource{"provider_foundation": fakeMetricsFragment{"provider"}},
+	}
+	syncCoordinatorFamily := workerFamily{
+		metricsSource: map[string]health.MetricsSource{"sync_coordinator": fakeMetricsFragment{"sync"}},
+	}
+	combined, err := composeWorkerFamily(providerFamily, syncCoordinatorFamily)
+	if err != nil {
+		t.Fatalf("composeWorkerFamily with two DISTINCTLY named fragments: %v, want nil (CHAOS-4586: this must compose, not fail closed)", err)
+	}
+	if len(combined.metricsSource) != 2 {
+		t.Fatalf("combined.metricsSource has %d entries, want 2: %#v", len(combined.metricsSource), combined.metricsSource)
+	}
+	if _, ok := combined.metricsSource["provider_foundation"]; !ok {
+		t.Fatal("combined.metricsSource is missing provider_foundation")
+	}
+	if _, ok := combined.metricsSource["sync_coordinator"]; !ok {
+		t.Fatal("combined.metricsSource is missing sync_coordinator")
+	}
+
+	duplicateFamily := workerFamily{
+		metricsSource: map[string]health.MetricsSource{"provider_foundation": fakeMetricsFragment{"a-second-provider-fragment"}},
+	}
+	if _, err := composeWorkerFamily(combined, duplicateFamily); err == nil {
+		t.Fatal("composeWorkerFamily with a DUPLICATE fragment name = nil error, want an error -- two families silently sharing one registry slot would drop one fragment at registration")
+	}
+}
+
+// TestSyncRunRollupBumpedMetricAppearsExactlyOnceAcrossBothFamilies stands
+// in for a live worker-process swap-and-scrape (CHAOS-4586, codex round 1
+// P1 follow-up): registers the SAME two metrics sources a real worker
+// process registers when both the sync_provider and sync_coordinator
+// queues are selected -- providerfoundation.Metrics under
+// "provider_foundation" (buildProviderSyncWorker's own family, still
+// carrying its ~20 OTHER dev_health_provider_* counters) and
+// providerfoundation.SyncRunRollupBumpedMetricsSource() under
+// "sync_run_rollup_bumped" (registered unconditionally in
+// configureWorkerDependenciesWithSources) -- then records a rollup bump
+// through EACH one's *providerfoundation.Metrics instance (mirroring
+// provider_sync's own recordSyncRunRollupBump and syncdispatchruntime's
+// flushRollupBumpTally, both of which call the SAME method on whichever
+// instance they were given) and scrapes the combined registry exactly the
+// way health.Server's real HTTP handler does.
+//
+// The property under test is the ACTUAL P1 regression: before the fix,
+// dev_health_sync_run_rollup_bumped_total's HELP/TYPE was emitted once per
+// registered providerfoundation.Metrics instance -- two here would mean
+// two blocks, which is what a real Prometheus scraper rejects outright.
+func TestSyncRunRollupBumpedMetricAppearsExactlyOnceAcrossBothFamilies(t *testing.T) {
+	registry := health.NewRegistry(100 * time.Millisecond)
+
+	// providerFoundationFamily: what buildProviderSyncWorker registers.
+	providerFoundationFamily := providerfoundation.NewMetrics()
+	if err := registry.RegisterMetrics("provider_foundation", providerFoundationFamily); err != nil {
+		t.Fatalf("register provider_foundation: %v", err)
+	}
+	// The unconditional, process-wide registration configureWorkerDependenciesWithSources
+	// performs regardless of which queues are selected.
+	if err := registry.RegisterMetrics("sync_run_rollup_bumped", providerfoundation.SyncRunRollupBumpedMetricsSource()); err != nil {
+		t.Fatalf("register sync_run_rollup_bumped: %v", err)
+	}
+
+	// providerFoundationFamily records exactly as providersync's own
+	// recordSyncRunRollupBump does; syncCoordinatorMetrics is a SEPARATE,
+	// NEVER-registered instance, exactly as buildSyncCoordinatorWorker's own
+	// syncCoordinatorMetrics is -- both calls land on the ONE process-wide
+	// singleton regardless.
+	providerFoundationFamily.RecordSyncRunRollupBumped("success", "provider_unit")
+	syncCoordinatorMetrics := providerfoundation.NewMetrics()
+	syncCoordinatorMetrics.RecordSyncRunRollupBumped("failed", "denied")
+
+	var scraped bytes.Buffer
+	if err := registry.WriteMetrics(&scraped); err != nil {
+		t.Fatalf("WriteMetrics: %v", err)
+	}
+	rendered := scraped.String()
+
+	if got := strings.Count(rendered, "# TYPE dev_health_sync_run_rollup_bumped_total counter"); got != 1 {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total TYPE line appears %d times, want exactly 1 (a real Prometheus scraper rejects the whole response on a second declaration):\n%s", got, rendered)
+	}
+	if got := strings.Count(rendered, "# HELP dev_health_sync_run_rollup_bumped_total"); got != 1 {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total HELP line appears %d times, want exactly 1:\n%s", got, rendered)
+	}
+	for _, want := range []string{
+		`dev_health_sync_run_rollup_bumped_total{outcome="success",path="provider_unit"} 1`,
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed",path="denied"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
 }

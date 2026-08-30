@@ -98,6 +98,17 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 		// binary's health.Registry, so this family never reached a live
 		// /metrics response before this change.
 		"dev_health_sync_coverage_datasets_excluded_by_intent_total",
+		// CHAOS-4586 (codex round 9/gate finding): the process-wide rollup
+		// counter (providerfoundation.SyncRunRollupBumpedMetricsSource(),
+		// registered unconditionally in configureWorkerDependenciesWithSources
+		// -- see dependencies.go). Registered directly by a unit test
+		// elsewhere (TestSyncRunRollupBumpedMetricAppearsExactlyOnceAcrossBothFamilies),
+		// which proves the HELP/TYPE-collision property but bypasses this
+		// binary's real production wiring entirely -- deleting the actual
+		// registration call in dependencies.go would leave that test green.
+		// THIS is the test built specifically to catch "registered but never
+		// wired to the real HTTP surface"; it must cover every such family.
+		"dev_health_sync_run_rollup_bumped_total",
 	}
 	for _, family := range wantFamilies {
 		if !strings.Contains(body, family) {

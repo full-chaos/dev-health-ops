@@ -674,6 +674,28 @@ func DecodeGitHubTestsIncomplete(value any) ([]GitHubTestsIncomplete, bool) {
 	return incomplete, true
 }
 
+// DecodeGitHubTestsSkippedArtifactCauseOverflow is DecodeGitHubTestsIncomplete's
+// twin for payload["skipped_artifact_cause_overflow"] (codex review gate
+// round 5, P3): the identical dual-shape problem, for the identical reason
+// -- internal/jobs/providerunit's completion path reloads a chunked unit's
+// final Result through JSONB, so this key too arrives as the generic
+// map[string]any shape, never the live typed map. A nil/absent value
+// (a unit with no overflow at all) is NOT an error -- returns (nil, true).
+func DecodeGitHubTestsSkippedArtifactCauseOverflow(value any) (map[string]bool, bool) {
+	if value == nil {
+		return nil, true
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var causeOverflow map[string]bool
+	if json.Unmarshal(encoded, &causeOverflow) != nil {
+		return nil, false
+	}
+	return causeOverflow, true
+}
+
 // validatePerRunPageBudget refuses a configuration in which a per-run PAGE
 // BUDGET would bind before the per-run ITEM CAP. It serves both the github and
 // gitlab tests routes, because both had the same exposure.

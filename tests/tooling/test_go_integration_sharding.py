@@ -1355,7 +1355,31 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 2/3/5 repros as its three sub-cases, so a 4th recurrence of this
     # pattern fails loudly here instead of needing a round 6 to find it.
     # 1292 -> 1294 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1294
+    # CHAOS-4592/4601 codex review gate round 5's OWN merge-gate re-run
+    # (terra/xhigh, full-base + ledger, THE INVARIANT confirmed closed: "No
+    # additional watermark-advance defect found... the sole boolean legacy
+    # fallback remains limited to artifact_oversized"). Found 1 P2 + 1 P3, a
+    # DIFFERENT class from the invariant (not a watermark-advance defect --
+    # both fixed the same commit). P2: RunID/ArtifactID (json.Number-decoded,
+    # syntactically unbounded) were never length-bounded the way Name was
+    # (round 1's own fix) -- an oversized provider-supplied ID could blow
+    # maxChunkCursorBytes and fail the checkpoint outright, losing progress
+    # instead of degrading into overflow. Fixed with
+    # githubTestsMaxArtifactIDBytes (24) truncation at the same single append
+    # site Name already used; the worst-case budget test's RunID/ArtifactID
+    # values were also fixed to genuinely exercise the new hard bound rather
+    # than realistic-looking-but-short values. P3: per-cause sample overflow
+    # had no metric of its own, only RecordCicdPartialSuccess's single
+    # dominant-reason label (indistinguishable from a single skip) and the
+    # round-2 log line. Added
+    # dev_health_provider_skipped_artifact_cause_overflow_total, wired
+    # through observeCicdPartialSuccess. 1 new ordinary top-level test:
+    # TestGitHubTestsSkippedArtifactAppendTruncatesOversizedID
+    # (github_tests_chunk_cursor_budget_test.go). Not integration-tagged.
+    # TestObserveCicdPartialSuccessRecordsPerCauseOverflow (the P3 fix's
+    # test) is in internal/jobs/providerunit, does not count toward this pin.
+    # 1294 -> 1295 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1295
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1372,7 +1396,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1294
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1295
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1433,7 +1457,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1294
+    assert len(selected_tests) == len(set(selected_tests)) == 1295
     assert set(selected_tests) == expected_tests
 
 

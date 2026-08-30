@@ -265,6 +265,7 @@ type Metrics struct {
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
+	skippedArtifactCauseOverflow   map[string]uint64
 	snapshotDiscarded              map[string]uint64
 	resumeReanchor                 map[string]uint64
 	unitTerminalWithRows           map[string]uint64
@@ -292,6 +293,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
+		skippedArtifactCauseOverflow:   map[string]uint64{},
 		snapshotDiscarded:              map[string]uint64{},
 		resumeReanchor:                 map[string]uint64{},
 		unitTerminalWithRows:           map[string]uint64{},
@@ -496,6 +498,52 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// metricSkippedArtifactCauseOverflowVocabulary bounds the cause label on
+// RecordSkippedArtifactCauseOverflow to the five report_member causes
+// SkippedArtifactCauseOverflow can name (see
+// githubTestsChunkCursor.SkippedArtifactCauseOverflow in providersync) --
+// metricArtifactSkipReasonVocabulary's three whole-artifact causes plus the
+// two report-parse-time ones CHAOS-4592 added. Anything else, including the
+// internal legacy sentinel, collapses to "other" rather than opening the
+// label.
+var metricSkippedArtifactCauseOverflowVocabulary = map[string]struct{}{
+	"artifact_oversized": {}, "artifact_unavailable": {}, "unreadable_archive": {},
+	"malformed": {}, "unreadable": {},
+}
+
+// MetricSkippedArtifactCauseOverflowLabel bounds the
+// RecordSkippedArtifactCauseOverflow cause label the same way
+// MetricArtifactSkipReasonLabel bounds its own.
+func MetricSkippedArtifactCauseOverflowLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricSkippedArtifactCauseOverflowVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordSkippedArtifactCauseOverflow counts ONE completed unit whose bounded
+// SkippedArtifacts sample dropped at least one marker for `cause` (codex
+// review gate round 5, P3): SkippedArtifactCauseOverflow was durable and
+// logged (skipped_sample_cause_overflow) since round 2, but had no bounded
+// metric of its own -- an operator could only see it via
+// RecordCicdPartialSuccess's single reason label, which names ONE dominant
+// cause for the whole unit and cannot distinguish a unit with 9 malformed
+// skips (sample overflowed) from one with a single malformed skip (sample
+// has room). Called once per overflowed cause, not once per dropped record:
+// this is "is the sample for this cause truncated", a presence signal for
+// operator triage, not a count -- githubTestsChunkCursor.SkippedArtifactCauseCount
+// (providersync) is the exact per-cause count when one is needed instead.
+func (m *Metrics) RecordSkippedArtifactCauseOverflow(provider, dataset, cause string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.skippedArtifactCauseOverflow[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricSkippedArtifactCauseOverflowLabel(cause)]++
 }
 
 // metricCicdPartialSuccessReasonVocabulary bounds the reason label on
@@ -1223,6 +1271,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
 		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_skipped_artifact_cause_overflow_total",
+		"Completed units whose bounded per-artifact skip sample dropped at least one marker for the cause, by bounded provider, dataset, and cause (CHAOS-4592).",
+		"cause", m.skippedArtifactCauseOverflow,
 	); err != nil {
 		return err
 	}

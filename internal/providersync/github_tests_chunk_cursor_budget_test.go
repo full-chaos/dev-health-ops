@@ -69,10 +69,17 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	cursor := githubTestsRealisticCursorBase()
 
 	name := strings.Repeat("x", githubTestsMaxArtifactNameBytes)
+	// RunID/ArtifactID at the ACTUAL hard bound (codex review gate round 5,
+	// P2), not a realistic-looking int64 value: githubTestsMaxArtifactIDBytes
+	// is what appendGitHubTestsSkippedArtifact truncates every record down
+	// to, and the point of THIS test is the worst case the truncation
+	// discipline actually allows through, not one that merely happens to be
+	// short today.
+	maxID := strings.Repeat("9", githubTestsMaxArtifactIDBytes)
 	causeOverflow := map[string]bool{}
 	for i := 0; i < githubTestsMaxSkippedArtifactRecords; i++ {
 		cursor.SkippedArtifacts = append(cursor.SkippedArtifacts, GitHubTestsSkippedArtifact{
-			RunID: "33301167231234567", ArtifactID: "9729013072123456", Name: name,
+			RunID: maxID, ArtifactID: maxID, Name: name,
 			Cause: githubTestsUnreadableArchiveCause,
 			// int64 max, the widest possible decimal rendering.
 			SizeBytes: 9223372036854775807, CapBytes: 9223372036854775807,
@@ -120,13 +127,67 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// (5 causes, int-max values) added ~10 bytes past the old threshold. The
 	// worst case still leaves ~490 bytes (12%) of real headroom under
 	// maxChunkCursorBytes -- comfortable, not merely passing.
-	const wantMargin = 450
+	//
+	// 450 -> 300 (codex review gate round 5, P2): RunID/ArtifactID were
+	// previously unbounded (any syntactically valid json.Number), letting an
+	// adversarial or corrupted provider response blow the budget outright;
+	// this test used realistic-looking 17/16-digit values that never
+	// exercised that hazard at all. Now bounded to
+	// githubTestsMaxArtifactIDBytes (24, TWO ID fields per record), and this
+	// test uses the actual worst case the bound allows through rather than a
+	// value that merely happens to be short today. Real headroom is now
+	// ~370 bytes (9%) -- smaller, but a genuine worst case rather than an
+	// unrepresentative one.
+	const wantMargin = 300
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
 			"worst-case cursor leaves only %d bytes of headroom under maxChunkCursorBytes, want >= %d -- "+
 				"the byte budget this file's caps were sized against has eroded",
 			remaining, wantMargin,
 		)
+	}
+}
+
+// TestGitHubTestsSkippedArtifactAppendTruncatesOversizedID pins the CHAOS-4592
+// gate round 5, P2 fix. RunID/ArtifactID are decoded via json.Number, which
+// accepts any syntactically valid JSON number token regardless of length --
+// unlike Name, nothing bounded them before this. A provider response (or a
+// corrupted/adversarial one) carrying a run or artifact ID far longer than
+// any real GitHub int64 ID, alongside enough report-parse skips to fill the
+// bounded sample, could make the very next checkpoint write exceed
+// maxChunkCursorBytes and fail outright -- repeatedly abandoning the current
+// chunk's progress instead of degrading into SkippedArtifactsOverflow the
+// way this whole mechanism exists to do.
+func TestGitHubTestsSkippedArtifactAppendTruncatesOversizedID(t *testing.T) {
+	oversizedID := strings.Repeat("1", githubTestsMaxArtifactIDBytes*4)
+	records, _, _, _ := appendGitHubTestsSkippedArtifact(
+		nil, 0, nil, nil,
+		GitHubTestsSkippedArtifact{RunID: oversizedID, ArtifactID: oversizedID, Cause: githubTestsMalformedCause},
+	)
+	if len(records) != 1 {
+		t.Fatalf("records=%d, want exactly 1", len(records))
+	}
+	if len(records[0].RunID) > githubTestsMaxArtifactIDBytes+len("…") {
+		t.Fatalf("RunID=%q (%d bytes), want truncated to <= %d bytes", records[0].RunID, len(records[0].RunID), githubTestsMaxArtifactIDBytes)
+	}
+	if len(records[0].ArtifactID) > githubTestsMaxArtifactIDBytes+len("…") {
+		t.Fatalf("ArtifactID=%q (%d bytes), want truncated to <= %d bytes", records[0].ArtifactID, len(records[0].ArtifactID), githubTestsMaxArtifactIDBytes)
+	}
+
+	// A cursor built entirely from oversized-ID records, run through the
+	// real production wiring, must still encode within the hard budget.
+	var cursor githubTestsChunkCursor
+	cursor.Phase = "done"
+	cursor.Repo = "acme/api"
+	for i := 0; i < githubTestsMaxSkippedArtifactRecords; i++ {
+		var skip GitHubTestsSkippedArtifact
+		skip.RunID, skip.ArtifactID, skip.Cause = oversizedID, oversizedID, githubTestsMalformedCause
+		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, skip,
+		)
+	}
+	if _, err := encodeGitHubTestsChunkCursor(cursor); err != nil {
+		t.Fatalf("cursor built from %d oversized-ID records failed to encode: %v", githubTestsMaxSkippedArtifactRecords, err)
 	}
 }
 

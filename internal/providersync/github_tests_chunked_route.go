@@ -191,6 +191,20 @@ func appendGitHubTestsSkippedArtifact(
 	// Truncated here, at the one append site, rather than at each of the
 	// four call sites, so the bound can never be forgotten at a new one.
 	record.Name = githubTestsTruncateArtifactName(record.Name)
+	// RunID/ArtifactID are decoded via json.Number (CHAOS-4592 codex review
+	// gate round 5, P2): a JSON number token is syntactically valid at any
+	// length, so nothing upstream bounds it the way Name was already bounded
+	// above -- a provider response (malicious, buggy, or simply corrupted in
+	// transit) carrying an oversized numeric ID alongside a malformed report
+	// member would make the very next checkpoint exceed maxChunkCursorBytes
+	// and fail ErrChunkCheckpointConflict, repeatedly abandoning the current
+	// chunk's progress instead of degrading into SkippedArtifactsOverflow
+	// the way this whole mechanism exists to do. Real GitHub run/artifact
+	// IDs are int64 (<=19 decimal digits); githubTestsMaxArtifactIDBytes
+	// gives comfortable headroom over that without reopening the same
+	// unbounded-budget hazard Name's own fix (round 1, P1) closed.
+	record.RunID = githubTestsTruncateArtifactID(record.RunID)
+	record.ArtifactID = githubTestsTruncateArtifactID(record.ArtifactID)
 	return append(records, record), overflow, causeOverflow, causeCount
 }
 
@@ -228,6 +242,35 @@ func githubTestsTruncateArtifactName(name string) string {
 		return name
 	}
 	truncated := name[:githubTestsMaxArtifactNameBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "…"
+}
+
+// githubTestsMaxArtifactIDBytes bounds GitHubTestsSkippedArtifact.RunID and
+// .ArtifactID (codex review gate round 5, P2). Both are decoded via
+// json.Number, which accepts any syntactically valid JSON number token
+// regardless of length -- unlike Name, nothing upstream bounded them before
+// this. Real GitHub run/artifact IDs are int64 (<=19 decimal digits); 24
+// gives 5 bytes of headroom over that -- the same margin
+// githubTestsMaxArtifactNameBytes uses for its own realistic maximum --
+// without being large enough to reopen the unbounded-budget hazard Name's
+// own fix closed (up to githubTestsMaxSkippedArtifactRecords of these live
+// in the same maxChunkCursorBytes budget as everything else on the cursor;
+// TWO ID fields per record here, versus Name's one, is why this stays
+// exactly at Name's bound rather than above it).
+const githubTestsMaxArtifactIDBytes = 24
+
+// githubTestsTruncateArtifactID bounds a provider-supplied RunID/ArtifactID
+// to githubTestsMaxArtifactIDBytes, byte-safe for the same reason
+// githubTestsTruncateArtifactName is: both are untrusted provider input,
+// even though in practice a json.Number-decoded value is ASCII-only.
+func githubTestsTruncateArtifactID(id string) string {
+	if len(id) <= githubTestsMaxArtifactIDBytes {
+		return id
+	}
+	truncated := id[:githubTestsMaxArtifactIDBytes]
 	for len(truncated) > 0 && !utf8.ValidString(truncated) {
 		truncated = truncated[:len(truncated)-1]
 	}

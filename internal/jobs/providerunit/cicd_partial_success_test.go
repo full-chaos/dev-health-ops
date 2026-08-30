@@ -200,3 +200,58 @@ func TestObserveCicdPartialSuccessCollapsesMixedCauses(t *testing.T) {
 		t.Fatalf("mixed causes were not collapsed to reason=mixed:\n%s", output.String())
 	}
 }
+
+// TestObserveCicdPartialSuccessRecordsPerCauseOverflow pins the CHAOS-4592
+// gate round 5, P3 fix. RecordCicdPartialSuccess names only ONE dominant
+// reason for the whole unit -- indistinguishable from a single skip of that
+// cause -- so a unit whose bounded SkippedArtifacts sample overflowed for
+// one or more causes had no metric of its own, only the durable
+// SkippedArtifactCauseOverflow field and the (round 2) log line. This
+// constructs a production-shaped payload (JSON round-tripped, the same
+// discipline TestObserveCicdPartialSuccessDecodesTheJSONRoundTrippedProductionShape
+// pins for "incomplete") carrying skipped_artifact_cause_overflow for two
+// causes, and asserts both get their own counter series, sorted.
+func TestObserveCicdPartialSuccessRecordsPerCauseOverflow(t *testing.T) {
+	t.Parallel()
+	claim := providersync.Claim{}
+	claim.Provider, claim.Dataset = "github", "cicd"
+	claim.ID = "55555555-5555-4555-8555-555555555555"
+	watermark := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+
+	live := map[string]any{
+		"repo": "acme/api",
+		"incomplete": []providersync.GitHubTestsIncomplete{
+			{Component: "report_member", Cause: "malformed", Count: 9},
+		},
+		"skipped_artifact_cause_overflow": map[string]bool{
+			"malformed": true, "unreadable_archive": false,
+		},
+	}
+	encoded, err := json.Marshal(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var productionShaped map[string]any
+	if err := json.Unmarshal(encoded, &productionShaped); err != nil {
+		t.Fatal(err)
+	}
+
+	metrics := providerfoundation.NewMetrics()
+	handler := &Handler{ProviderMetrics: metrics}
+	handler.observeCicdPartialSuccess(claim, &watermark, productionShaped)
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	want := `dev_health_provider_skipped_artifact_cause_overflow_total{provider="github",dataset="cicd",cause="malformed"} 1`
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("missing %q in:\n%s", want, rendered)
+	}
+	// unreadable_archive was recorded as overflowed=false -- must NOT get a
+	// series at all, not a zero-valued one.
+	if strings.Contains(rendered, `cause="unreadable_archive"`) {
+		t.Fatalf("a false (not-overflowed) cause got its own series:\n%s", rendered)
+	}
+}

@@ -582,6 +582,90 @@ VALUES ($1,$2,$3,'linear','work-items','{"family_dataset_work_items": true}'::js
 	})
 }
 
+// TestDispatchTerminalizesAnInvalidClaimEvenWhenConcurrencyCapped is the
+// CHAOS-4556 reproduction (this ticket was reopened once already: d098ef1f5
+// fixed CHAOS-4550's terminal-vs-abort defect but left THIS ordering gap,
+// confirmed by reading claim_units.go:71,88,103 before writing this test).
+// Two PLANNED units share one dispatch bucket (org, provider=github,
+// cost_class=default): a VALID github/commits unit (ValidateClaim always
+// passes it -- "commits" is not a family-policy dataset) and, sorted after
+// it by id, a MALFORMED github/work-items unit missing its atomic family's
+// sibling family_dataset_* flags (same defect shape as the CHAOS-4550 live
+// incident). SYNC_UNIT_CONCURRENCY_PER_BUCKET=1 forces authorizeRun to cap
+// exactly one of the two -- the second by id, i.e. the malformed one --
+// BEFORE claimUnits or the per-claimed-unit ValidateClaim loop ever run.
+//
+// On origin/main before the CHAOS-4556 fix, cappedUnitIDs (built entirely
+// from concurrency/budget bookkeeping) excludes the malformed unit from all
+// three of claimUnits' claim statements, so it is never claimed and
+// therefore never reaches ValidateClaim: it stays PLANNED, not failed, and
+// no invalid_provider_family_claim error_category is ever recorded --
+// exactly the defect this ticket names ("delaying termination", "occupying
+// a counted candidate slot it can never fill"). The fix validates every
+// dispatch-eligible unit BEFORE authorizeRun runs, so the malformed unit is
+// terminalized on this very pass regardless of the concurrency cap, and the
+// valid unit (which does fit in the one available slot) is still claimed
+// and queued.
+func TestDispatchTerminalizesAnInvalidClaimEvenWhenConcurrencyCapped(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		validUnit := "00000000-0000-4000-8000-0000000000f6"
+		malformedUnit := "00000000-0000-4000-8000-0000000000f7"
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			validUnit, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,processor_flags,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','work-items','{"family_dataset_work_items": true}'::json,'00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			malformedUnit, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+		// Both units share (org, provider=github, cost_class=DEFAULT 'standard')
+		// -- the same dispatchBucket -- and this cap admits only one of them.
+		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+
+		service := newTestDispatchService(t, pool)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		var malformedStatus string
+		var errorCategory *string
+		if err := pool.QueryRow(ctx,
+			`SELECT status, result->>'error_category' FROM sync_run_units WHERE id=$1`, malformedUnit,
+		).Scan(&malformedStatus, &errorCategory); err != nil {
+			t.Fatal(err)
+		}
+		if malformedStatus != syncRunUnitStatusFailed {
+			t.Fatalf("malformed unit status=%q, want failed -- a malformed claim must terminalize even when the concurrency cap defers it, not sit PLANNED under sustained capacity pressure", malformedStatus)
+		}
+		if errorCategory == nil || *errorCategory != invalidProviderFamilyClaimErrorCategory {
+			t.Fatalf("malformed unit error_category=%v, want %q", errorCategory, invalidProviderFamilyClaimErrorCategory)
+		}
+
+		var validStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, validUnit).Scan(&validStatus); err != nil {
+			t.Fatal(err)
+		}
+		if validStatus != syncRunUnitStatusDispatching {
+			t.Fatalf("valid unit status=%q, want dispatching -- it should still take the one available concurrency slot and be claimed/queued", validStatus)
+		}
+		var outboxCount int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`, jobcontract.KindSyncProviderUnit).
+			Scan(&outboxCount); err != nil {
+			t.Fatal(err)
+		}
+		if outboxCount != 1 {
+			t.Fatalf("got %d worker_job_outbox rows, want 1 (only the valid unit)", outboxCount)
+		}
+	})
+}
+
 // TestDispatchFailsClosedWhenTheProviderUnitKindIsNotCheckedInAsExecutable
 // pins the ONLY route-shaped fail-closed check left on Dispatch's write path
 // after the CHAOS-4175 ruling reversal (see NativeDispatchSyncRunService's

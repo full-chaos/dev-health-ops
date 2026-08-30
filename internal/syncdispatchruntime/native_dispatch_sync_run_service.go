@@ -258,6 +258,32 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return tx.Commit(ctx)
 	}
 
+	// --- CHAOS-4556: validate provider-family claims for every dispatch-
+	// eligible unit BEFORE concurrency/budget capacity is computed. Without
+	// this, a malformed/stale claim ordered past a saturated bucket's
+	// allowedSlots (dispatch_guard.go's authorizeRun) is excluded from
+	// claimUnits by cappedUnitIDs on every pass and never reaches the
+	// per-claimed-unit ValidateClaim loop below -- it can wait out sustained
+	// concurrency/budget pressure indefinitely while still occupying a
+	// "counted candidate" slot in the guard's own bucket math. See
+	// invalidClaimsAmongDispatchCandidates for why this must run over the
+	// full candidate set, not just claimUnits' return value.
+	preCapacityNow := service.nowUTC()
+	invalidBeforeCap, err := invalidClaimsAmongDispatchCandidates(ctx, tx, run.id, preCapacityNow)
+	if err != nil {
+		return err
+	}
+	if len(invalidBeforeCap) > 0 {
+		terminalizedBeforeCap, err := terminalizeInvalidClaimUnits(ctx, tx, invalidBeforeCap, service.nowUTC())
+		if err != nil {
+			return err
+		}
+		service.logger.WarnContext(ctx, "dispatch_sync_run.invalid_claim_units_terminalized",
+			slog.String("sync_run_id", run.id), slog.Int("invalid_claim_units", terminalizedBeforeCap),
+			slog.String("error_category", invalidProviderFamilyClaimErrorCategory),
+			slog.String("phase", "pre_capacity"))
+	}
+
 	// --- DispatchGuard: authorize this pass ---
 	decision, err := authorizeRun(ctx, tx, service.logger, run.orgID, run.id, now)
 	if err != nil {
@@ -349,6 +375,14 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// instead -- same CHAOS-3990 idiom the unroutableUnits branch below
 		// already uses, just with its own error_category so an operator can
 		// tell "claim was corrupt/stale" apart from "no route exists".
+		//
+		// CHAOS-4556: invalidClaimsAmongDispatchCandidates above is now the
+		// PRIMARY detection point -- it runs before authorizeRun ever sees
+		// this unit, so almost every malformed claim never reaches this
+		// loop at all. This check stays as a backstop for a real remaining
+		// race: a unit can become newly dispatch-eligible (e.g. a RETRYING
+		// unit's available_at arriving) between that pre-capacity read and
+		// claimUnits' own write, both inside this same transaction.
 		if err := providerfamilycontract.ValidateClaim(unit.provider, unit.datasetKey, unit.processorFlags, true); err != nil {
 			invalidClaimUnits = append(invalidClaimUnits, invalidClaimUnit{
 				unit:   unit,
@@ -398,7 +432,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		}
 		service.logger.WarnContext(ctx, "dispatch_sync_run.invalid_claim_units_terminalized",
 			slog.String("sync_run_id", run.id), slog.Int("invalid_claim_units", terminalizedInvalid),
-			slog.String("error_category", invalidProviderFamilyClaimErrorCategory))
+			slog.String("error_category", invalidProviderFamilyClaimErrorCategory),
+			slog.String("phase", "post_claim"))
 	}
 
 	if len(unroutableUnits) > 0 {

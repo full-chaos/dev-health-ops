@@ -1882,3 +1882,24 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
         "helm migrate job should reuse goWorkers.operationalOrderingContract "
         "(one knob for migrate + every worker), not a second, driftable value"
     )
+
+
+def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
+    """codex review (delta round 4, P1): unlike Compose/Swarm/Helm, the raw
+    Kubernetes manifests have no shell-interpolation surface -- exporting
+    OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
+    nothing, because the ConfigMap value is a literal. The only correct
+    cutover mechanism there is editing the ConfigMap value directly. This
+    guards against the rollout note quietly reverting to a single
+    "export the env var" instruction that is actually false for this one
+    topology.
+    """
+    readme = (_REPO_ROOT / "deploy" / "go-workers" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "no shell-interpolation surface" in readme
+        or "no environment to export into" in readme
+    )
+    assert "dev-health-go-worker-config" in readme
+    assert 'from `"1"` to `"2"`' in readme

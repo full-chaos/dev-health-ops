@@ -173,11 +173,27 @@ make any environment assume contract 2 on its own. Concretely:
    table — either direction fails a canonical-table read/write with
    `operational_old_writer_rejected` or an ordering-contract stale-state
    error, and there is no automatic recovery.
-2. At cutover, export `OPERATIONAL_ORDERING_CONTRACT=2` for the migrate job
+2. At cutover, set `OPERATIONAL_ORDERING_CONTRACT=2` for the migrate job
    **and** every worker process **in the same deploy pass** — not one
    without the other, and not a config-file default forcing it ahead of
    time. Migration 067 itself requires quiescing ingress and draining
-   queued work first (see the doc above).
+   queued work first (see the doc above). **The mechanism differs by
+   topology** (codex review, delta round 4 — the raw Kubernetes manifests
+   have no shell-interpolation surface, so "export it" alone silently does
+   nothing there):
+   - **Compose / Swarm**: export `OPERATIONAL_ORDERING_CONTRACT=2` in the
+     shell/`.env` before `docker compose`/`docker stack deploy` — every
+     `migrate`/worker service in both files references `${OPERATIONAL_ORDERING_CONTRACT:-1}`,
+     so one export reaches all of them.
+   - **Raw Kubernetes manifests**: there is no environment to export into.
+     Edit the literal `OPERATIONAL_ORDERING_CONTRACT` value in the
+     `dev-health-go-worker-config` ConfigMap (`deploy/kubernetes/go-workers.yaml`)
+     from `"1"` to `"2"`, then `kubectl apply -k deploy/kubernetes/` — the
+     migrate Job and every go-* Deployment envFrom that one ConfigMap.
+   - **Helm**: set `--set goWorkers.operationalOrderingContract=2` (or the
+     equivalent `values.yaml` edit) and `helm upgrade` — the migrate Job's
+     template and every worker group's template both read this single
+     values key, so one flag reaches both.
 3. The Python `api`/`metrics-api` services are **not** wired here on
    purpose. `src/dev_health_ops/storage/operational_current.py` reads the
    same env var for its own reader-shape selection, so once 067 is applied

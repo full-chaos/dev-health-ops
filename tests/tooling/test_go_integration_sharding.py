@@ -1146,7 +1146,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # github_tests_artifact_skip_log_test.go:
     # TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip.
     # 1276 -> 1277 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1277
+    #
+    # CHAOS-4585 (native Go jira work-items route called the retired
+    # GET /rest/api/3/search -- 410 Gone -- instead of the registered
+    # JiraAtlassianRouteHandler's replacement). Added 2 new ordinary
+    # top-level tests: TestJiraAtlassianRouteMigratedFromRetiredSearchEndpoint
+    # (jira_atlassian_search_jql_migration_test.go, red-on-baseline proof
+    # reproducing the live 410 body) and
+    # TestNoGoJiraCallerTargetsTheRetiredSearchEndpoint
+    # (jira_search_endpoint_guard_test.go, registry-level regression guard
+    # scanning every production jira_*.go file for the retired path).
+    # Neither is integration-tagged.
+    # 1277 -> 1279 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1279
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1163,7 +1175,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1277
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1279
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1224,7 +1236,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1277
+    assert len(selected_tests) == len(set(selected_tests)) == 1279
     assert set(selected_tests) == expected_tests
 
 

@@ -849,6 +849,63 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	}
 }
 
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg
+// mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsInvalidOrg
+// for the CHAOS-4548 sibling verb.
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"--org", "not-a-uuid",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExtraArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"unexpected-positional",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipFailsClosedWithoutService(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsUnauthorizedCredential
+// is the same red-first proof as the pseudo-projects sibling: an
+// authenticated-but-unauthorized credential is rejected before anything
+// ClickHouse-related is attempted (a reachable ClickHouse lookup is wired so
+// a regression that reordered the authorize call would dial instead of
+// denying).
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsUnauthorizedCredential(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
+	runtime.lookup = func(string) (string, bool) { return "clickhouse://unreachable-host-for-this-test:9999/default", true }
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouseURI(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = func(string) (string, bool) { return "", false }
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 // TestDispatchMetricsDailyFinalizeRequiresReviewEvidence mirrors
 // TestDispatchMetricsDailyRedriveRequiresReviewEvidence for the CHAOS-4389
 // `metrics daily-finalize` command: no default, no generic hardcoded

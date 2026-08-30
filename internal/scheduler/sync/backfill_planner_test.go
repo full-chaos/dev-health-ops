@@ -208,8 +208,10 @@ func TestBuildBackfillPlanUsesWiderChunkForLinearWorkItemFamily(t *testing.T) {
 // perfectly valid on the Python side. Go's own chunk_date_range port
 // (backfill_chunker.go) used to sit at an arbitrary 3650 -- far below any
 // realistic override -- which rejected this exact, otherwise-legitimate
-// override on the Go path only; ChunkDateRange has since dropped its
-// upper bound entirely (gate round 10) to match Python's contract exactly.
+// override on the Go path only; ChunkDateRange's upper bound (maxChunkDays,
+// gate round 11) now sits at Python's OWN true ceiling -- 1_000_000_000,
+// derived from datetime.timedelta's documented magnitude limit, not an
+// arbitrary Go-side guess -- so 3651 clears it with enormous headroom.
 // Deliberately NOT marked t.Parallel(): it sets a process-global env var
 // via t.Setenv, which panics if used alongside a parallel test.
 func TestBuildBackfillPlanAcceptsAWideLinearBackfillMaxWindowDaysOverride(t *testing.T) {

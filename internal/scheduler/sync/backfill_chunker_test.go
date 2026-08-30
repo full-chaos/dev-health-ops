@@ -65,30 +65,46 @@ func TestChunkDateRangeRejectsNonPositiveChunkDays(t *testing.T) {
 	}
 }
 
-// TestChunkDateRangeAcceptsAnUnboundedChunkDaysLikePython is the codex
-// gate-round-10 fix (a recurring finding across rounds 2/3/9/10, finally
-// closed at the class): Python's LINEAR_BACKFILL_MAX_WINDOW_DAYS has no
-// upper bound at all, only `value > 0`. Every prior fix here picked a new
-// finite "largest safe" constant (3650 -> 106751 -> 106752), and each one
-// was still a ceiling some Python-accepted value could exceed -- codex
-// gate round 10 found exactly that: 106753 (one more than the round-9
-// fix's own boundary) was Python-valid, Go-rejected. Switching
-// ChunkDateRange to time.Time.AddDate (day-count arithmetic, no
-// int64-nanosecond ceiling) removed the finite bound entirely instead of
-// chasing it again; this proves Go now accepts values far beyond every
-// previous "boundary" this bug has had, including the exact codex-round-9
-// (106752) and round-10 (106753) repro values, and an arbitrary, far
-// larger one for good measure.
-func TestChunkDateRangeAcceptsAnUnboundedChunkDaysLikePython(t *testing.T) {
+// TestChunkDateRangeAcceptsChunkDaysUpToPythonsOwnCeiling documents the
+// resolved end of a 3-round arc (codex gate rounds 9/10/11) chasing what
+// looked like the same overflow bug at three different depths. Rounds 9/10
+// each picked a new finite Go-side "largest safe" constant (3650 ->
+// 106751 -> 106752 -> "no bound at all"), and round 10's own fix (dropping
+// the upper bound entirely, reasoning Python's LINEAR_BACKFILL_MAX_WINDOW_DAYS
+// validation has none) was ITSELF wrong: round 11 found that
+// chunk_date_range (src/dev_health_ops/backfill/chunker.py) unconditionally
+// builds `timedelta(days=chunk_days-1)` before any clamping, and Python's
+// stdlib datetime.timedelta has a hard, documented ceiling of 999999999
+// days -- independently verified against the live interpreter:
+// datetime.timedelta(days=1_000_000_000) raises OverflowError, and
+// datetime.timedelta(days=999_999_999) succeeds. So chunkDays<=1_000_000_000
+// (maxChunkDays) is Python's OWN true ceiling -- not a Go-derived guess --
+// and round 9/10's repro values (106752, 106753) sit comfortably under it,
+// still asserted here as regression anchors. Above the boundary, team-lead
+// ruling: Go clean-rejects rather than replicating Python's own unhandled
+// OverflowError crash (documented divergence, not crash parity, is the bar
+// for this port).
+func TestChunkDateRangeAcceptsChunkDaysUpToPythonsOwnCeiling(t *testing.T) {
 	since := date(2026, 8, 1)
 	before := date(2026, 8, 20)
-	for _, chunkDays := range []int{106752, 106753, 1 << 30} {
+	for _, chunkDays := range []int{106752, 106753, maxChunkDays} {
 		got, err := ChunkDateRange(since, before, chunkDays)
 		if err != nil {
 			t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want nil", chunkDays, err)
 		}
 		want := []DateWindow{{Since: since, Before: before}}
 		assertDateWindowsEqual(t, got, want)
+	}
+}
+
+// TestChunkDateRangeRejectsChunkDaysAbovePythonsOwnCeiling is the codex
+// gate-round-11 fix: one more than maxChunkDays must be a clean
+// ErrInvalidChunkDays rejection, not a materialized (and silently wrong,
+// relative to Python's crash) plan.
+func TestChunkDateRangeRejectsChunkDaysAbovePythonsOwnCeiling(t *testing.T) {
+	_, err := ChunkDateRange(date(2026, 8, 1), date(2026, 8, 20), maxChunkDays+1)
+	if !errors.Is(err, ErrInvalidChunkDays) {
+		t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want ErrInvalidChunkDays", maxChunkDays+1, err)
 	}
 }
 

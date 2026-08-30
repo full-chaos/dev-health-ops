@@ -112,6 +112,38 @@ func TestGitlabDiscoveryOptions(t *testing.T) {
 	}
 }
 
+// TestIsUnboundedDiscoveryTreatsAnExplicitJiraProjectScopeAsBounded is the
+// codex gate-round-8 P1 fix: a planner-managed Jira config scoped to one
+// project via sync_options.project_key/project_id (no source_id -- only
+// legacy per-source child configs ever get one) must NOT be treated as
+// unconditionally unbounded, or discovery tags every other accessible
+// project too, silently widening the config exactly like an unchecked
+// all_repos would for github/gitlab.
+func TestIsUnboundedDiscoveryTreatsAnExplicitJiraProjectScopeAsBounded(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		options  map[string]any
+		want     bool
+	}{
+		{name: "jira with project_key is bounded", provider: "jira", options: map[string]any{"project_key": "CHAOS"}, want: false},
+		{name: "jira with project_id is bounded", provider: "jira", options: map[string]any{"project_id": "10001"}, want: false},
+		{name: "jira with a numeric (JSON float64) project_id is still bounded", provider: "jira", options: map[string]any{"project_id": float64(10001)}, want: false},
+		{name: "jira with neither is unbounded", provider: "jira", options: map[string]any{}, want: true},
+		{name: "jira with nil options is unbounded", provider: "jira", options: nil, want: true},
+		{name: "github with all_repos=true is unbounded", provider: "github", options: map[string]any{"all_repos": true}, want: true},
+		{name: "github without all_repos is bounded", provider: "github", options: map[string]any{"owner": "acme"}, want: false},
+		{name: "gitlab with all_repos=true is unbounded", provider: "gitlab", options: map[string]any{"all_repos": true}, want: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isUnboundedDiscovery(testCase.provider, testCase.options); got != testCase.want {
+				t.Fatalf("isUnboundedDiscovery(%q, %v) = %v, want %v", testCase.provider, testCase.options, got, testCase.want)
+			}
+		})
+	}
+}
+
 // fakeSourceDiscoveryDoer returns the same canned JSON body for every
 // request, mirroring the existing gitHubRepositoryDoer test convention
 // (internal/providersync/github_repository_route_test.go).

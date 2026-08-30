@@ -378,3 +378,57 @@ func TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig(t *testing.T) 
 		t.Fatalf("NEWPROJ planner_managed_sync_config_id = %q, want %q -- a newly-visible source for an unbounded config must be tagged just like the bootstrap rows, or loadPlanSources will never see it", taggedConfigID, configID)
 	}
 }
+
+// TestUpsertSourcesNeverTagsANewlyVisibleSourceForABoundedJiraConfig is
+// TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig's sibling for
+// the opposite, previously-unproven direction (codex gate-round-8 P1): a
+// Jira config explicitly scoped to ONE project (sync_options.project_key,
+// isUnboundedDiscovery's new jira branch) must NOT tag a later-discovered
+// project it never asked for, exactly like an explicit github/gitlab repo
+// selection already doesn't. CHAOS is already tagged (the config's own
+// explicit scope); PLAT becomes visible on a later discovery pass (a repo
+// jira discovery has no owner/pattern filter to exclude by, unlike
+// github/gitlab, so it is discovered but must stay untagged) and must never
+// become plannable through loadPlanSources' tag-filtered SELECT.
+func TestUpsertSourcesNeverTagsANewlyVisibleSourceForABoundedJiraConfig(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx := context.Background()
+	orgID := fixture.occurrence.OrgID
+	const configID = "00000000-0000-4000-8000-000000002007"
+
+	bootstrap := []discoveredSource{
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
+	}
+	unbounded := isUnboundedDiscovery("jira", map[string]any{"project_key": "CHAOS"})
+	if unbounded {
+		t.Fatal("test setup bug: isUnboundedDiscovery(\"jira\", project_key=\"CHAOS\") = true, want false")
+	}
+	if created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", bootstrap, time.Now().UTC(), configID, true, unbounded); err != nil {
+		t.Fatal(err)
+	} else if created != 1 || existing != 0 {
+		t.Fatalf("bootstrap upsertSources() = created=%d existing=%d, want 1,0", created, existing)
+	}
+
+	// PLAT becomes visible on a later pass -- the credential can now access
+	// it, but this config was never scoped to it.
+	later := []discoveredSource{
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+	}
+	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", later, time.Now().UTC(), configID, true, unbounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || existing != 1 {
+		t.Fatalf("later upsertSources() = created=%d existing=%d, want 1,1", created, existing)
+	}
+
+	var taggedConfigID *string
+	if err := fixture.pool.QueryRow(ctx, `SELECT metadata->>'planner_managed_sync_config_id' FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND external_id='PLAT'`, orgID, integrationID).Scan(&taggedConfigID); err != nil {
+		t.Fatal(err)
+	}
+	if taggedConfigID != nil {
+		t.Fatalf("PLAT planner_managed_sync_config_id = %q, want NULL -- a Jira config explicitly scoped to CHAOS must never widen to a later-discovered project it never asked for", *taggedConfigID)
+	}
+}

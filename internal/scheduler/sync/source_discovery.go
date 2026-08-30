@@ -266,6 +266,33 @@ func (service *NativeSourceDiscoveryService) WritePrometheus(output io.Writer) e
 	return service.telemetry.WritePrometheus(output)
 }
 
+// isUnboundedDiscovery decides whether upsertSources should tag every
+// discovered row for this config (codex review, gate round, P1): "any
+// tagged row already exists" is not a durable signal of "this config's
+// selection is explicit and must never widen" -- it also fires,
+// permanently, for a genuinely unbounded config the FIRST time discovery
+// tags whatever happens to be visible then. A later-discovered new
+// repo/project for that same unbounded config would come back untagged
+// and stay invisible to loadPlanSources forever. Use the config's OWN
+// durable scope instead, the exact field sync.py's own validation already
+// treats as authoritative for this distinction: github/gitlab require
+// either sync_options.all_repos=true or an explicit POST
+// /sync-configs/batch selection (a plain create with neither is rejected
+// there); jira has no all_repos option, but a planner-managed (parent)
+// config CAN be scoped to one project via sync_options.project_key/
+// project_id (_non_git_source_rows, sync.py) with source_id left NULL --
+// only legacy per-source CHILD configs ever get one, so the Discover
+// caller's own source_id-based ExplicitScope check never catches this
+// case (codex review, gate round 8, P1: treating every jira config as
+// unconditionally unbounded silently widened such a config to every
+// accessible project the credential can see).
+func isUnboundedDiscovery(provider string, syncOptions map[string]any) bool {
+	if provider == "jira" {
+		return firstTruthyString(syncOptions, "project_id", "project_key") == ""
+	}
+	return boolOption(syncOptions, "all_repos")
+}
+
 func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args SourceDiscoveryArgs) (SourceDiscoveryReport, error) {
 	provider := strings.ToLower(strings.TrimSpace(args.Provider))
 	if !sourceDiscoveryProviders[provider] {
@@ -309,21 +336,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("discover %s sources: %w", provider, err)
 	}
-	// Codex review (gate round, P1): "any tagged row already exists" is not
-	// a durable signal of "this config's selection is explicit and must
-	// never widen" -- it also fires, permanently, for a genuinely unbounded
-	// config the FIRST time discovery tags whatever happens to be visible
-	// then. A later-discovered new repo/project for that same unbounded
-	// config would come back untagged and stay invisible to
-	// loadPlanSources forever. Use the config's OWN durable scope instead,
-	// the exact field sync.py's own validation already treats as
-	// authoritative for this distinction (github/gitlab require either
-	// sync_options.all_repos=true or an explicit POST /sync-configs/batch
-	// selection; a plain create with neither is rejected there). Jira has
-	// no all_repos option at all in that validation -- a jira config that
-	// reaches this point (not ExplicitScope, handled above) is always
-	// unbounded discovery of every accessible project.
-	unbounded := provider == "jira" || boolOption(args.SyncOptions, "all_repos")
+	unbounded := isUnboundedDiscovery(provider, args.SyncOptions)
 	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded)
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)

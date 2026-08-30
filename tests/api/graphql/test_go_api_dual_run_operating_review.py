@@ -1722,12 +1722,37 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
             f"{python_entries[index]!r}"
         )
         expected_absolute = expected_absolute_by_label[label]
-        assert float(go_token) == pytest.approx(expected_absolute, abs=1e-9), (
+        # The rendered TEXT surface and the raw JSON delta object are two
+        # DIFFERENT surfaces and get two DIFFERENT assertions, deliberately:
+        # the JSON assertion above (_expected_guarded_delta ==
+        # metric["delta"]) compares the RAW, full-precision float and is
+        # what actually pins the value; this one compares the RENDERED
+        # token, because that is the strongest true claim available at a
+        # text surface. Comparing the extracted token against the raw
+        # unrounded `expected_absolute` is not a stricter version of that
+        # claim -- it is an IMPOSSIBLE one that fails for any value not
+        # already exact to one decimal (this was live-caught: it passed
+        # for hotspot_risk_score=0.4, ownership_concentration=0.6, and
+        # complexity_per_kloc=12.5, and only change_failure_rate's
+        # 1/9-shaped 0.111... value exposed the bug in the assertion
+        # itself, not in the guard). `%+.1f` is hardcoded here rather than
+        # imported from deltaSummary/_delta_summary's format spec on
+        # purpose: if production ever changes to `%+.2f`, that is a
+        # wire-visible behaviour change this test SHOULD fail on, which
+        # importing the constant would silently swallow. Residual: this
+        # text check alone cannot distinguish two values that round to the
+        # same one-decimal token (e.g. 0.1111 and 0.1149 both render
+        # "+0.1") -- that is a property of the rendered surface, not a gap
+        # introduced here, and it is exactly what the raw-float JSON
+        # assertion above closes.
+        expected_token = f"{expected_absolute:+.1f}"
+        assert go_token == expected_token, (
             f"expected Go's {label!r} entry in {path_prefix} to render "
-            f"its EXACT delta.absolute ({expected_absolute!r}), got "
-            f"{go_token!r} in {go_entries[index]!r} -- a wrong rendered "
-            f"number would otherwise still pass the numeric-token-only "
-            f"mechanism check above"
+            f"its delta.absolute at the sentence's actual precision "
+            f"({expected_token!r}, from the raw {expected_absolute!r}), "
+            f"got {go_token!r} in {go_entries[index]!r} -- a wrong "
+            f"rendered number would otherwise still pass the "
+            f"numeric-token-only mechanism check above"
         )
         allowed_text_paths.add(f"{path_prefix}[{index}]")
 

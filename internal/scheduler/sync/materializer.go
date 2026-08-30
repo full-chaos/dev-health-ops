@@ -1383,13 +1383,22 @@ func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, confi
 	case explicitSourceIDs != nil:
 		idFilter = explicitSourceIDs
 	}
+	// metadata/sync_options are read here (not on the pure planner's own
+	// path -- it has no DB access at all) purely to resolve
+	// PlanSource.NonProjectJiraSource (CHAOS-4582/CHAOS-4602): a LEFT JOIN
+	// against the config metadata->>'planner_managed_sync_config_id'
+	// references, mirroring Python's _is_non_project_jira_source's own
+	// per-source SyncConfiguration lookup.
 	rows, err := tx.Query(ctx, `
-SELECT id::text, external_id, lower(provider), full_name
-FROM public.integration_sources
-WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
-  AND ($3::text[] IS NULL OR id::text = ANY($3::text[]))
-  AND ($3::text[] IS NOT NULL OR NOT $4 OR metadata->>'planner_managed_sync_config_id'=$5)
-ORDER BY full_name, id`, orgID, integrationID, idFilter, plannerManaged, configID)
+SELECT src.id::text, src.external_id, lower(src.provider), src.full_name,
+       src.metadata::jsonb, cfg.sync_options::jsonb
+FROM public.integration_sources AS src
+LEFT JOIN public.sync_configurations AS cfg
+  ON cfg.id::text = src.metadata->>'planner_managed_sync_config_id'
+WHERE src.org_id = $1 AND src.integration_id = $2::uuid AND src.is_enabled
+  AND ($3::text[] IS NULL OR src.id::text = ANY($3::text[]))
+  AND ($3::text[] IS NOT NULL OR NOT $4 OR src.metadata->>'planner_managed_sync_config_id'=$5)
+ORDER BY src.full_name, src.id`, orgID, integrationID, idFilter, plannerManaged, configID)
 	if err != nil {
 		return nil, fmt.Errorf("load scheduled sync sources: %w", err)
 	}
@@ -1397,12 +1406,102 @@ ORDER BY full_name, id`, orgID, integrationID, idFilter, plannerManaged, configI
 	var result []PlanSource
 	for rows.Next() {
 		var source PlanSource
-		if err := rows.Scan(&source.ID, &source.ExternalID, &source.Provider, &source.FullName); err != nil {
+		var metadataJSON, syncOptionsJSON []byte
+		if err := rows.Scan(
+			&source.ID, &source.ExternalID, &source.Provider, &source.FullName,
+			&metadataJSON, &syncOptionsJSON,
+		); err != nil {
 			return nil, fmt.Errorf("scan scheduled sync source: %w", err)
+		}
+		if source.Provider == "jira" {
+			var metadata, syncOptions map[string]any
+			if len(metadataJSON) > 0 {
+				if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+					return nil, fmt.Errorf("decode source metadata: %w", err)
+				}
+			}
+			if len(syncOptionsJSON) > 0 {
+				if err := json.Unmarshal(syncOptionsJSON, &syncOptions); err != nil {
+					return nil, fmt.Errorf("decode referenced config sync options: %w", err)
+				}
+			}
+			source.NonProjectJiraSource = isNonProjectJiraSource(source.ExternalID, metadata, syncOptions)
 		}
 		result = append(result, source)
 	}
 	return result, rows.Err()
+}
+
+// isNonProjectJiraSource ports Python's _is_non_project_jira_source
+// (src/dev_health_ops/sync/planner.py, CHAOS-4582) verbatim, in precedence
+// order:
+//
+//  1. metadata["explicit_project_scope"] truthy -> NOT bad (the writer's
+//     own marker for a NEW row created from an explicit project_key/id).
+//     Always wins.
+//  2. metadata["org_wide_placeholder"] truthy -> IS bad (Linear's org-wide
+//     marker, recognized in case a future jira writer reuses it).
+//  3. external_id (case-insensitive) != "jira" -> NOT bad: a real project
+//     legitimately named something else.
+//  4. external_id == "jira": look at the REFERENCED config's own
+//     sync_options (already resolved by loadPlanSources' LEFT JOIN) for an
+//     explicit project_id/project_key/team_id/repo, in that precedence --
+//     if that value itself is (case-insensitively) "jira", this really is a
+//     project named "JIRA", not the fallback. syncOptions is nil when the
+//     source's planner_managed_sync_config_id doesn't resolve (dangling
+//     reference), matching Python's `if config is not None:` guard.
+//  5. Otherwise -> IS bad: the known-bad legacy shape (live evidence, org
+//     70d529e0, CHAOS-4582).
+func isNonProjectJiraSource(externalID string, metadata, syncOptions map[string]any) bool {
+	if jsonTruthy(metadata["explicit_project_scope"]) {
+		return false
+	}
+	if jsonTruthy(metadata["org_wide_placeholder"]) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(externalID), "jira") {
+		return false
+	}
+	if explicit := firstTruthyString(syncOptions, "project_id", "project_key", "team_id", "repo"); explicit != "" {
+		if strings.EqualFold(strings.TrimSpace(explicit), "jira") {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonTruthy mirrors Python's bare `if value:` truthiness on a value
+// decoded from JSON: nil/false/""/0/empty-collection are falsy, everything
+// else (including a non-empty string, a non-zero number, `true`) is truthy.
+func jsonTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case float64:
+		return typed != 0
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
+// firstTruthyString mirrors Python's `a.get(k1) or a.get(k2) or ...` chain:
+// the first key (in order) whose value is JSON-truthy, stringified.
+// Returns "" if options is nil or every key is absent/falsy.
+func firstTruthyString(options map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := options[key]; ok && jsonTruthy(value) {
+			return fmt.Sprintf("%v", value)
+		}
+	}
+	return ""
 }
 
 func requestedDatasetKeys(provider string, targets []string, sourceID *string) map[string]bool {

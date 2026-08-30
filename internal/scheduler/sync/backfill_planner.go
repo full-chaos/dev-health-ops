@@ -3,6 +3,7 @@ package sync
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -23,16 +24,16 @@ import (
 // out into MANY chunked windows (one PlannedUnit each) instead of the single
 // watermark-derived window every other mode plans.
 //
-// Known, accepted gap (documented, not silently dropped): Python's
-// _build_work_item_family_units carries a Jira-specific defense-in-depth
-// check, _is_non_project_jira_source (CHAOS-4582), that refuses to plan a
-// work-items unit for a legacy non-project Jira source row. This planner
-// does not port it: CHAOS-4602's own NativeSourceDiscoveryService (this
-// package's source_discovery.go) always stamps a real per-project
-// external_id, so the bad shape _is_non_project_jira_source guards against
-// cannot be produced by the pipeline this planner is wired behind. A
-// pre-existing bad row would still reach the legacy Python path unchanged
-// (fork 1: non-planner-managed/child configs are untouched by this PR).
+// Python's _build_work_item_family_units also carries a Jira-specific
+// defense-in-depth check, _is_non_project_jira_source (CHAOS-4582), that
+// refuses to plan a work-items unit for a legacy non-project Jira source
+// row. Ported here as PlanSource.NonProjectJiraSource, resolved by the
+// materializer (loadPlanSources) and checked in
+// buildBackfillWorkItemFamilyUnits below: pre-existing bad-shape rows
+// predate this ticket's own source discovery (org 70d529e0 alone carries
+// legacy disabled SUP/OPS/JIRA rows) and the planner reads them regardless
+// of who wrote them -- this is NOT a gap this PR's own discovery closes by
+// construction.
 var ErrMismatchedFamilyWindowCounts = errors.New(
 	"work-item-family datasets resolved to mismatched window counts",
 )
@@ -292,6 +293,17 @@ func buildBackfillWorkItemFamilyUnits(
 	family []PlanDataset, familyDatasets []string, prsEnabled bool,
 ) ([]PlannedUnit, error) {
 	if len(family) == 0 {
+		return nil, nil
+	}
+	if provider == "jira" && source.NonProjectJiraSource {
+		// CHAOS-4582 defense-in-depth, ported verbatim (same guard as
+		// buildWorkItemFamilyUnit's scheduled-mode sibling): a pre-existing
+		// non-project Jira source row 400s against Jira on every attempt.
+		slog.Default().Error("sync.plan.jira_source_not_a_project",
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("external_id", source.ExternalID),
+			slog.String("error_category", "jira_source_not_a_project"))
 		return nil, nil
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalWorkItemsDataset)

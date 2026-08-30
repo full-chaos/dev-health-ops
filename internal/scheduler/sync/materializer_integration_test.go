@@ -1592,3 +1592,72 @@ func TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit(t *testing.T) {
 		t.Fatalf("planned_units did not publish %d after commit", committedPlan.PlannedUnits)
 	}
 }
+
+// TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource proves
+// the CHAOS-4582 defense-in-depth guard (ported per team-lead ruling: "your
+// premise that bad shape can't reach it is false" -- org 70d529e0 alone
+// carries pre-existing disabled SUP/OPS/JIRA rows, and the planner reads
+// integration_sources rows regardless of who wrote them). A source whose
+// external_id is literally "jira" -- the pre-fix writer's own fallback
+// literal, with neither an explicit-project-scope marker nor a config that
+// actually names a project called "JIRA" -- must be refused a work-items
+// unit, while a sibling REAL project source on the same config still plans
+// normally.
+func TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk: <7 days
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const (
+		jiraConfigID = "00000000-0000-4000-8000-000000002001"
+		badSourceID  = "00000000-0000-4000-8000-000000002006"
+	)
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+INSERT INTO integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s'::uuid),
+        'jira','project','jira','jira','jira',TRUE,
+        '{"planner_managed_sync_config_id":"%s"}'::jsonb,now(),now())`,
+		jiraConfigID, jiraConfigID,
+	), badSourceID, occurrence.OrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the good "PROJ" source (from startBackfillTriggerFixture)
+	// contributes a work-items unit; the bad-shape "jira" source is
+	// refused, not silently planned against.
+	if plan.PlannedUnits != 1 {
+		t.Fatalf("plan.PlannedUnits = %d, want 1 (only the real PROJ source): %+v", plan.PlannedUnits, plan)
+	}
+
+	rows, err := fixture.pool.Query(context.Background(),
+		`SELECT source_id::text FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`,
+		plan.SyncRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sourceIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sourceIDs) != 1 || strings.EqualFold(sourceIDs[0], badSourceID) {
+		t.Fatalf("sync_run_units source_ids=%v, want exactly the good PROJ source, never %s", sourceIDs, badSourceID)
+	}
+}

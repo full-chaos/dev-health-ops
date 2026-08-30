@@ -369,7 +369,10 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			if test.Route != nil && test.Route.SourceID != nil && source.ID != *test.Route.SourceID {
 				continue
 			}
-			input.Sources = append(input.Sources, PlanSource(source))
+			input.Sources = append(input.Sources, PlanSource{
+				ID: source.ID, ExternalID: source.ExternalID,
+				Provider: source.Provider, FullName: source.FullName,
+			})
 		}
 		for _, dataset := range test.Datasets {
 			if requested != nil && !requested[dataset.DatasetKey] {

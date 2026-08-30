@@ -109,6 +109,16 @@ type PlanSource struct {
 	ExternalID string
 	Provider   string
 	FullName   string
+	// NonProjectJiraSource mirrors Python's _is_non_project_jira_source
+	// (CHAOS-4582 defense-in-depth, ported per team-lead ruling on
+	// CHAOS-4602: pre-existing bad-shape rows predate this ticket's own
+	// source discovery and are read by the planner regardless of who wrote
+	// them). Resolved by the materializer (loadPlanSources), which has the
+	// DB access this check needs (a source's own metadata plus, in the
+	// fallback case, its referencing config's sync_options) -- the pure
+	// planner only ever reads this precomputed bool, never touches the DB
+	// itself. Always false for a non-jira source.
+	NonProjectJiraSource bool
 }
 
 // PlanDataset is the secret-free dataset state consumed by the pure planner.
@@ -351,6 +361,23 @@ func buildWorkItemFamilyUnit(
 	now, before time.Time, family []PlanDataset, familyDatasets []string, prsEnabled bool,
 ) (PlannedUnit, bool) {
 	if len(family) == 0 {
+		return PlannedUnit{}, false
+	}
+	if provider == "jira" && source.NonProjectJiraSource {
+		// CHAOS-4582 defense-in-depth, ported verbatim (CHAOS-4602 team-lead
+		// ruling): Jira's work-items route requires a real per-project
+		// source, unlike Linear's org-wide search mode. A pre-existing
+		// non-project source row (external_id the literal provider name,
+		// with no explicit-project-scope marker and no config that actually
+		// named a project called "JIRA") is guaranteed to 400 against Jira
+		// on every attempt. Refuse to plan a work-items unit for it -- loud,
+		// contained to this one source, never aborting the rest of this
+		// integration's plan.
+		slog.Default().Error("sync.plan.jira_source_not_a_project",
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("external_id", source.ExternalID),
+			slog.String("error_category", "jira_source_not_a_project"))
 		return PlannedUnit{}, false
 	}
 	canonicalDescriptor, known := providersync.Descriptor(

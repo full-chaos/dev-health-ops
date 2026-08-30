@@ -219,31 +219,31 @@ def _skippable_jira_400_detail(exc: Exception) -> str | None:
     return None
 
 
-def _skippable_jira_board_listing_400_detail(exc: Exception) -> str | None:
-    """Whether ``exc`` is Jira's documented 400 for board LISTING when the
-    integration's credential cannot browse the queried project -- narrower
-    than ``_skippable_jira_400_detail`` above, which CHAOS-4357 round 2
-    deliberately did NOT apply to board listing: a bare ``errorMessages``
-    envelope there is ambiguous between "this project has no boards" and "a
-    malformed projectKeyOrId", and swallowing either would let strict
-    discovery silently omit a real project's reference data. A permission
-    denial is not ambiguous in that way -- the project exists, the request
-    was well-formed, the credential's user simply lacks Browse Projects
-    access to it -- so only that specific, unambiguous message text is
-    treated as a per-project skip; every other board-listing 400 (malformed
-    key, or an errorMessages body without this text) still propagates.
+_JIRA_BOARD_CAPABLE_PROJECT_TYPES = frozenset({"software"})
 
-    Reproduced live 2026-08-30 (CHAOS-4575, org 70d529e0): ``GET
+
+def _jira_project_type_key(client: Any, *, project_key: str) -> str:
+    """Look up ``project_key``'s ``projectTypeKey`` ("software",
+    "service_desk", "business") via a single-project GET, so board discovery
+    can gate on project TYPE rather than guessing from a 400's text.
+
+    CHAOS-4575 (live executed evidence, org 70d529e0, 2026-08-30): ``GET
     /rest/agile/1.0/board?projectKeyOrId=SUP`` returned ``400
     {"errorMessages": ["You must have the browse project permission to view
-    this project."]}`` on every attempt, permanently failing strict
-    reference discovery -- and therefore every Jira sync -- for the whole
-    org over one project the credential was never granted access to.
+    this project."]}`` even though the credential is a personal API token
+    with full-workspace access (confirmed with chris) -- ``GET
+    /rest/api/3/project/SUP`` on the SAME credential returned
+    ``projectTypeKey: "service_desk"``. That 400's wording is misleading:
+    the Software Agile Boards API answers it for ANY non-software project
+    regardless of permissions, because boards are a software-project concept
+    -- Service Management and Business (Jira Work Management) projects never
+    have one. Treating the message text as a permission signal (an earlier
+    version of this fix did exactly that) would have been right for the
+    wrong reason and missed every other non-software project whose 400
+    happens to word it differently.
     """
-    detail = _skippable_jira_400_detail(exc)
-    if detail is None or "permission" not in detail.lower():
-        return None
-    return detail
+    project = client.get_project(project_key=project_key)
+    return str((project or {}).get("projectTypeKey") or "").strip().lower()
 
 
 def _member_id(provider: str, provider_identity: str) -> str:
@@ -523,34 +523,33 @@ def populate(
             for project_key in {
                 row.project_key for row in project_rows if row.project_key
             }:
-                # CHAOS-4357 round 2 (codex P1) left board LISTING un-isolated:
-                # a generic 400 there is ambiguous between "this project just
-                # has no boards" and "this projectKeyOrId is malformed", and
-                # swallowing either could silently omit a real project's
-                # reference data while strict discovery still reports
-                # success. CHAOS-4575 narrows that gap instead of reopening
-                # it: only Jira's documented, unambiguous permission-denial
-                # 400 ("browse project" access missing for THIS credential on
-                # THIS project) is skipped per project -- every other
-                # board-listing 400 (malformed key, or any other message)
-                # still propagates to the outer strict/non-strict handler
-                # below, unchanged.
-                try:
-                    boards = list(client.iter_boards(project_key=project_key))
-                except Exception as exc:
-                    detail = _skippable_jira_board_listing_400_detail(exc)
-                    if detail is None:
-                        raise
+                # CHAOS-4357 round 2 (codex P1) left board LISTING
+                # un-isolated: a generic 400 there is ambiguous between
+                # "this project just has no boards" and "this
+                # projectKeyOrId is malformed", and swallowing either could
+                # silently omit a real project's reference data while
+                # strict discovery still reports success. CHAOS-4575 closes
+                # the actual gap without reopening that ambiguity: check the
+                # project's TYPE first (a single, cheap GET) and skip board
+                # discovery only for a project type that structurally never
+                # has Agile boards (service_desk, business) -- a software
+                # project's board-listing 400 (malformed key or anything
+                # else) still propagates to the outer strict/non-strict
+                # handler below, unchanged.
+                project_type = _jira_project_type_key(client, project_key=project_key)
+                if project_type not in _JIRA_BOARD_CAPABLE_PROJECT_TYPES:
                     logging.getLogger(__name__).warning(
-                        "Jira board listing failed for org_id=%s project_key=%s: %s",
+                        "Jira board discovery skipped for org_id=%s project_key=%s: "
+                        "project type %r has no Agile boards",
                         org_id,
                         project_key,
-                        detail,
+                        project_type or "unknown",
                     )
                     record_team_autoimport_reference_subitem_skipped(
                         provider="jira", kind="project_boards"
                     )
                     continue
+                boards = list(client.iter_boards(project_key=project_key))
                 for board in boards:
                     board_id = board.get("id")
                     if board_id is None:

@@ -615,6 +615,9 @@ class _FakeSprintJiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         yield {"id": 81}
         yield {"id": 82}
@@ -792,6 +795,9 @@ class _FakeForbiddenSprintJiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         yield {"id": 81}
 
@@ -880,6 +886,9 @@ class _FakeBoardListing400JiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         response = requests.Response()
         response.status_code = 400
@@ -960,34 +969,29 @@ def test_jira_populate_reraises_a_board_listing_400_under_strict_reference_disco
         )
 
 
-class _FakePermissionDeniedBoardListingJiraClient:
-    """project_key='SUP' answers Jira's documented permission-denial 400 on
-    board LISTING; project_key='OPS' lists boards normally. CHAOS-4575
-    (reproduced live on org 70d529e0, 2026-08-30): a credential missing
-    Browse Projects on one project must not fail every OTHER project's
-    reference discovery, let alone the whole org's."""
+class _FakeServiceDeskAndSoftwareJiraClient:
+    """project_key='SUP' is a Service Management project (no Agile boards
+    at all); project_key='OPS' is a Software project and lists boards
+    normally. CHAOS-4575 (reproduced live on org 70d529e0, 2026-08-30): a
+    non-software project must not fail every OTHER project's reference
+    discovery, let alone the whole org's -- and ``iter_boards`` must never
+    even be CALLED for it (asserted below by raising if it is)."""
 
     def __init__(self, *, auth: object, org_id: str) -> None:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {
+            "SUP": {"projectTypeKey": "service_desk"},
+            "OPS": {"projectTypeKey": "software"},
+        }[project_key]
+
     def iter_boards(self, *, project_key: str):
         if project_key == "SUP":
-            response = requests.Response()
-            response.status_code = 400
-            response._content = json.dumps(
-                {
-                    "errorMessages": [
-                        "You must have the browse project permission to view this project."
-                    ]
-                }
-            ).encode()
-            raise requests.HTTPError(
-                "400 Client Error: Bad Request for url: "
-                ".../rest/agile/1.0/board?projectKeyOrId=SUP",
-                response=response,
+            raise AssertionError(
+                "board listing must not be called for a non-software project"
             )
-            yield  # pragma: no cover - generator shape only
         yield {"id": 91}
 
     def iter_board_sprints(self, *, board_id: int):
@@ -997,17 +1001,19 @@ class _FakePermissionDeniedBoardListingJiraClient:
         self.closed = True
 
 
-def test_jira_populate_skips_a_permission_denied_board_listing_400_under_strict_reference_discovery(
+def test_jira_populate_skips_board_discovery_for_a_non_software_project_under_strict_reference_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHAOS-4575: Jira's documented "browse project permission" 400 on
-    board LISTING is unambiguous (unlike a bare errorMessages 400, which
-    CHAOS-4357 round 2 correctly left non-skippable) -- the project exists,
-    the request was well-formed, the credential simply lacks access to it.
-    That must skip just this project's boards, not abort strict reference
-    discovery for the entire org (live evidence: org 70d529e0's Jira sync
-    failed 100% of the time over exactly this, for a single project named
-    'SUP')."""
+    """CHAOS-4575: the Software Agile Boards API answers a 400 ("You must
+    have the browse project permission to view this project.") for ANY
+    non-software project regardless of credential access -- live-verified
+    (chris's personal API token has full-workspace access; ``GET
+    /rest/api/3/project/SUP`` on that same credential returned
+    ``projectTypeKey: "service_desk"``). Gating on project TYPE (not that
+    400's misleading text) must skip just this project's board discovery,
+    not abort strict reference discovery for the entire org (live evidence:
+    org 70d529e0's Jira sync failed 100% of the time over exactly this, for
+    a single Service Management project named 'SUP')."""
 
     async def discover_jira(
         self: object, email: str, api_token: str, url: str
@@ -1046,7 +1052,7 @@ def test_jira_populate_skips_a_permission_denied_board_listing_400_under_strict_
         discover_members_jira_bulk,
     )
     monkeypatch.setattr(
-        team_autoimport_jira, "JiraClient", _FakePermissionDeniedBoardListingJiraClient
+        team_autoimport_jira, "JiraClient", _FakeServiceDeskAndSoftwareJiraClient
     )
 
     sink = _fake_sink()

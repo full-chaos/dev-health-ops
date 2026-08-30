@@ -597,6 +597,38 @@ def _load_integration(
     return integration
 
 
+_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY = (
+    "_chaos_4593_zero_unit_credential_stamp_pending"
+)
+_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY = (
+    "_chaos_4593_zero_unit_credential_stamp_listeners_installed"
+)
+
+
+def _drain_zero_unit_credential_stamp_telemetry(session: Session) -> None:
+    """``after_commit`` drain: emit + clear whatever is queued in
+    ``session.info``, a no-op when nothing is pending (CHAOS-4593)."""
+    pending = session.info.pop(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, None)
+    if not pending:
+        return
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    for item in pending:
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+            provider=item["provider"]
+        ).inc()
+        logger.info(
+            "sync.planner.zero_unit_plan_stamped_for_strict_discovery", extra=item
+        )
+
+
+def _cancel_zero_unit_credential_stamp_telemetry(session: Session) -> None:
+    """``after_rollback`` drain: discard whatever is queued, unemitted."""
+    session.info.pop(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, None)
+
+
 def _defer_zero_unit_credential_stamp_telemetry(
     session: Session,
     *,
@@ -612,50 +644,52 @@ def _defer_zero_unit_credential_stamp_telemetry(
     (the admin router, the scheduler, ``create_sync_execution_trigger``)
     commits ``session`` on its own, sometime after this function returns --
     so an inline increment would survive a later rollback and publish a
-    stamp for a plan that was never actually persisted.
+    stamp for a plan that was never actually persisted, and (if the
+    rollback's listener is never cleared) could misattribute telemetry to a
+    later, unrelated commit on a reused session.
 
-    Codex review (CHAOS-4593 round 2, P2): a plain ``once=True`` listener on
-    ``after_commit`` is not enough -- if THIS plan's transaction rolls back
-    instead of committing, that listener stays armed on the (likely reused,
-    e.g. request-scoped) ``session`` and would fire on some LATER, entirely
-    unrelated commit, misattributing telemetry to a plan that was never
-    persisted. So this also arms an ``after_rollback`` listener that cancels
-    the pending emit via a shared flag -- NOT via ``event.remove()`` from
-    inside either handler, which crashes ("deque mutated during iteration",
-    caught by the round-2 regression test below) because SQLAlchemy is still
-    iterating that same listener collection while dispatching it. Both
-    listeners are registered ``once=True`` so each safely self-unregisters
-    (SQLAlchemy's own internal machinery, not a manual ``event.remove``)
-    the first time IT fires; the flag is what makes them mutually
-    cancelling regardless of which one that is.
+    Two codex review rounds (CHAOS-4593) landed on this final shape after
+    two unsafe attempts:
+
+    * Round 2 attempt: each handler called ``event.remove()`` on itself from
+      inside its own dispatch -- crashes SQLAlchemy with "deque mutated
+      during iteration" (regression test below pins this).
+    * Round 3 attempt: a shared cancelled-flag with both listeners
+      registered ``once=True`` avoided that crash and the misattribution,
+      but ``once=True`` in SQLAlchemy 2.0 only gates re-EXECUTION -- it does
+      NOT deregister the listener (verified empirically:
+      ``event.contains()`` still returns ``True`` after the one-shot fires).
+      Every zero-unit plan on a long-lived, reused session would therefore
+      permanently grow that session's listener list by two closures.
+
+    This shape installs at most ONE (non-``once``) ``after_commit`` /
+    ``after_rollback`` pair PER SESSION, EVER -- guarded by a sentinel in
+    ``session.info`` that is never cleared -- and every call just appends a
+    plain dict to a ``session.info`` list. The listener count is therefore
+    bounded at 2 regardless of how many zero-unit plans that session plans;
+    the drain functions are idempotent no-ops when nothing is pending, so
+    firing on an unrelated commit/rollback is harmless by construction
+    (there is nothing of THIS plan's left to emit or cancel incorrectly).
     """
+    pending = session.info.setdefault(_ZERO_UNIT_CREDENTIAL_STAMP_PENDING_KEY, [])
+    pending.append(
+        {
+            "org_id": org_id,
+            "integration_id": integration_id,
+            "provider": provider,
+            "mode": mode,
+        }
+    )
+    if session.info.get(_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY):
+        return
+    session.info[_ZERO_UNIT_CREDENTIAL_STAMP_LISTENERS_INSTALLED_KEY] = True
+
     from sqlalchemy import event
 
-    cancelled = {"flag": False}
-
-    def _emit(_session: Session) -> None:
-        if cancelled["flag"]:
-            return
-        from dev_health_ops.metrics.prometheus import (
-            SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
-        )
-
-        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(provider=provider).inc()
-        logger.info(
-            "sync.planner.zero_unit_plan_stamped_for_strict_discovery",
-            extra={
-                "org_id": org_id,
-                "integration_id": integration_id,
-                "provider": provider,
-                "mode": mode,
-            },
-        )
-
-    def _cancel(_session: Session) -> None:
-        cancelled["flag"] = True
-
-    event.listen(session, "after_commit", _emit, once=True)
-    event.listen(session, "after_rollback", _cancel, once=True)
+    event.listen(session, "after_commit", _drain_zero_unit_credential_stamp_telemetry)
+    event.listen(
+        session, "after_rollback", _cancel_zero_unit_credential_stamp_telemetry
+    )
 
 
 def _zero_unit_plan_needs_credential_stamp(integration: Integration) -> bool:

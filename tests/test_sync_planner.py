@@ -2291,15 +2291,80 @@ def test_zero_unit_jira_plan_credential_stamp_telemetry_not_counted_on_rollback(
     )._value.get()
     assert after_count == before_count
 
-    # CHAOS-4593 codex round 2, P2: rollback must also deregister the
-    # deferred listener -- a `once=True` after_commit hook alone stays armed
-    # on a reused session and would fire on this NEXT, wholly unrelated
-    # commit, misattributing telemetry to the rolled-back plan.
+    # CHAOS-4593 codex round 2, P2: a rollback must also clear whatever was
+    # pending -- the drain listeners are permanent and idempotent, so this
+    # NEXT, wholly unrelated commit must not resurrect and emit the
+    # rolled-back plan's telemetry.
     db_session.commit()
     after_unrelated_commit_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
         provider="jira"
     )._value.get()
     assert after_unrelated_commit_count == before_count
+
+
+def test_zero_unit_jira_plan_credential_stamp_listeners_are_bounded_per_session(
+    db_session,
+):
+    """CHAOS-4593 codex round 3, P2: `once=True` gates re-execution but does
+    NOT deregister a SQLAlchemy session listener (verified empirically --
+    `event.contains()` stays True after the one-shot fires), so a naive
+    once=True-per-call design would grow a long-lived, reused session's
+    after_commit/after_rollback listener lists without bound, one pair per
+    zero-unit jira plan. The fix installs at most one (non-once) listener
+    pair per session, EVER, gated by a `session.info` sentinel, and queues
+    each plan's payload in a plain list instead. Prove the listener count
+    stays at exactly 1 (each event) across several plans mixing commits and
+    rollbacks on the SAME reused session, and that the counter still tracks
+    only the committed plans."""
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    before_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+
+    def _listener_count(event_name: str) -> int:
+        return len(list(getattr(db_session.dispatch, event_name).listeners))
+
+    def _plan_zero_unit_jira() -> None:
+        integration = _create_integration(db_session, provider="jira")
+        _create_source(
+            db_session,
+            integration,
+            external_id="SUP",
+            provider="jira",
+            is_enabled=False,
+        )
+        for dataset_key in _FAMILY_DATASETS:
+            _create_dataset(db_session, integration, dataset_key)
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+            ),
+        )
+
+    _plan_zero_unit_jira()
+    db_session.rollback()
+    _plan_zero_unit_jira()
+    db_session.commit()
+    _plan_zero_unit_jira()
+    db_session.rollback()
+    _plan_zero_unit_jira()
+    db_session.commit()
+
+    assert _listener_count("after_commit") == 1
+    assert _listener_count("after_rollback") == 1
+    # Exactly the two committed plans (2nd and 4th) were counted; the two
+    # rolled-back ones (1st and 3rd) were not.
+    after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_count == before_count + 2
 
 
 def test_zero_unit_backfill_jira_plan_also_stamps_credentials(db_session):

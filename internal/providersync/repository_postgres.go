@@ -184,7 +184,7 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, repository.Metrics, claim.SyncRunID, "success"); err != nil {
 		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
@@ -284,7 +284,7 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, repository.Metrics, claim.SyncRunID, "success"); err != nil {
 		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
@@ -541,7 +541,7 @@ func (repository *PostgresRepository) failTx(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	if err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID); err != nil {
+	if err := bumpSyncRunRollup(ctx, tx, repository.Metrics, claim.SyncRunID, "failed"); err != nil {
 		return ErrInvalidConfiguration
 	}
 	if category == ProviderDatasetUnavailableCategory {
@@ -1008,15 +1008,19 @@ RETURNING completed_units, failed_units, total_units`
 // from migration 0015), so this is an index-only scan per call, not a
 // sequential scan -- confirmed via EXPLAIN ANALYZE on the largest local run
 // (1248 units, 0.038ms).
-func bumpSyncRunRollup(ctx context.Context, tx pgx.Tx, syncRunID string) error {
+func bumpSyncRunRollup(
+	ctx context.Context, tx pgx.Tx, metrics *providerfoundation.Metrics, syncRunID, outcome string,
+) error {
 	var completedUnits, failedUnits, totalUnits int
 	if err := tx.QueryRow(ctx, bumpSyncRunRollupSQL, syncRunID).Scan(
 		&completedUnits, &failedUnits, &totalUnits,
 	); err != nil {
 		return err
 	}
+	metrics.RecordSyncRunRollupBumped(outcome)
 	slog.DebugContext(ctx, "sync_run.rollup_bumped",
 		slog.String("sync_run_id", syncRunID),
+		slog.String("outcome", outcome),
 		slog.Int("completed_units", completedUnits),
 		slog.Int("failed_units", failedUnits),
 		slog.Int("total_units", totalUnits),

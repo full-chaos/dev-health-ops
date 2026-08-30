@@ -279,6 +279,7 @@ type Metrics struct {
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
 	duplicateNaturalKey            map[string]uint64
+	syncRunRollupBumped            map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -303,6 +304,7 @@ func NewMetrics() *Metrics {
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
 		duplicateNaturalKey:            map[string]uint64{},
+		syncRunRollupBumped:            map[string]uint64{},
 	}
 }
 
@@ -856,6 +858,26 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 	m.allArtifactsUnreadable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// RecordSyncRunRollupBumped counts one sync_runs.completed_units/failed_units
+// live recompute (CHAOS-4559), by outcome ("success"/"failed" -- which
+// terminal stamp triggered it). Before this, those columns were written only
+// at run finalization, so a run mid-dispatch read 0/0 no matter how many of
+// its units had already finished; a flat line here on an org with sync
+// activity is the same "measurement never happened" shape RecordUnitClaimed
+// exists to catch for claims.
+func (m *Metrics) RecordSyncRunRollupBumped(outcome string) {
+	if m == nil {
+		return
+	}
+	lowered := strings.ToLower(strings.TrimSpace(outcome))
+	if lowered != "success" && lowered != "failed" {
+		lowered = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncRunRollupBumped[lowered]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1231,6 +1253,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_cicd_partial_success_total",
 		"cicd/tests units that advanced their watermark despite non-empty incomplete evidence, by the report_member/per-run cause that made it partial (CHAOS-4394). Not labeled by repo -- see RecordCicdPartialSuccess's doc comment; find the repo in the structured log line the caller emits alongside this counter.",
 		"reason", m.cicdPartialSuccess,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_sync_run_rollup_bumped_total",
+		"sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it (CHAOS-4559).",
+		"outcome", m.syncRunRollupBumped,
 	); err != nil {
 		return err
 	}

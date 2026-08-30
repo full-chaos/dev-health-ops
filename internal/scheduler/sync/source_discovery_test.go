@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -718,5 +719,41 @@ func TestSourceDiscoveryTelemetryWritesPrometheus(t *testing.T) {
 	// so an operator can alert on the series existing at all.
 	if !strings.Contains(output, `provider_source_discovery_total{provider="gitlab",outcome="error"} 0`) {
 		t.Fatalf("WritePrometheus() output missing pre-seeded gitlab/error=0:\n%s", output)
+	}
+}
+
+// TestRecordSourceDiscoveryOutcomeObservesAZeroResultAsExisting is the codex
+// gate-round P3 case: a successful discovery run that finds zero sources
+// (created=0, existing=0 -- a legitimate outcome, not an error) must still
+// move the telemetry series, or it is indistinguishable from "discovery
+// never ran at all". Before the fix, both observe loops were empty for this
+// case and nothing was recorded.
+func TestRecordSourceDiscoveryOutcomeObservesAZeroResultAsExisting(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		created, existing int
+		wantCreated       uint64
+		wantExisting      uint64
+	}{
+		{name: "created and existing rows", created: 2, existing: 3, wantCreated: 2, wantExisting: 3},
+		{name: "zero sources found (P3 case)", created: 0, existing: 0, wantCreated: 0, wantExisting: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			telemetry := newSourceDiscoveryTelemetry()
+			recordSourceDiscoveryOutcome(telemetry, "jira", test.created, test.existing)
+			var buffer bytes.Buffer
+			if err := telemetry.WritePrometheus(&buffer); err != nil {
+				t.Fatal(err)
+			}
+			output := buffer.String()
+			wantCreatedLine := fmt.Sprintf(`provider_source_discovery_total{provider="jira",outcome="created"} %d`, test.wantCreated)
+			wantExistingLine := fmt.Sprintf(`provider_source_discovery_total{provider="jira",outcome="existing"} %d`, test.wantExisting)
+			if !strings.Contains(output, wantCreatedLine) {
+				t.Fatalf("output missing %q:\n%s", wantCreatedLine, output)
+			}
+			if !strings.Contains(output, wantExistingLine) {
+				t.Fatalf("output missing %q -- a successful zero-source run must be distinguishable from discovery never running:\n%s", wantExistingLine, output)
+			}
+		})
 	}
 }

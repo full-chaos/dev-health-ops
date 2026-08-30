@@ -434,7 +434,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	loaded, err := loadMaterializationPlan(ctx, coordinatorTx, occurrence, materializer.watermarkOverlap, materializer.defaultUnitCap, materializer.sourceDiscovery)
+	loaded, err := loadMaterializationPlan(ctx, coordinatorTx, materializer.domainPool, occurrence, materializer.watermarkOverlap, materializer.defaultUnitCap, materializer.sourceDiscovery)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -557,7 +557,7 @@ type integrationOptions struct {
 	InitialSyncDepth int `json:"initial_sync_depth"`
 }
 
-func loadMaterializationPlan(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence, watermarkOverlap time.Duration, defaultUnitCap int, discovery SourceDiscoveryExecutor) (loadedMaterializationPlan, error) {
+func loadMaterializationPlan(ctx context.Context, tx pgx.Tx, domainPool *pgxpool.Pool, occurrence PendingOccurrence, watermarkOverlap time.Duration, defaultUnitCap int, discovery SourceDiscoveryExecutor) (loadedMaterializationPlan, error) {
 	var integrationID, orgID, provider string
 	var credentialID *string
 	var sourceID *string
@@ -733,7 +733,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
-		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID, explicitDatasetKeys)
+		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, domainPool, orgID, integrationID, provider, targets, sourceID, explicitDatasetKeys)
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
@@ -1584,7 +1584,7 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 // NO auto security-forcing, matching _load_enabled_datasets' plain
 // dataset_key IN (...) filter exactly -- an explicit selector states
 // precisely what it wants, and does not get security silently added.
-func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string, explicitDatasetKeys []string) ([]PlanDataset, bool, error) {
+func loadPlanDatasets(ctx context.Context, tx pgx.Tx, domainPool *pgxpool.Pool, orgID, integrationID, provider string, targets []string, sourceID *string, explicitDatasetKeys []string) ([]PlanDataset, bool, error) {
 	var requested map[string]bool
 	securityRequested := false
 	if explicitDatasetKeys != nil {
@@ -1597,29 +1597,37 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 			// `if not dataset_keys: return []` in _load_enabled_datasets.
 			return nil, false, nil
 		}
-		// codex review finding: Python's _reconcile_explicit_requested_datasets
-		// (planner.py:858-904) enables any explicitly requested dataset that
-		// has no integration_datasets row yet -- "every dataset ... is
-		// opt-in and reconciled uniformly here: a caller (operator,
-		// backfill, or scheduled trigger) must name a dataset in
-		// request.dataset_keys for it to be created/enabled." Without this,
-		// a manual/backfill selector naming a dataset the config has never
-		// enabled before silently plans ZERO units for it instead of
-		// creating the requested work. ON CONFLICT DO NOTHING is safe here
-		// (no savepoint needed, unlike applyDomainPlanMutations' security-
-		// dataset case): this row's id is a fresh random UUID per attempt,
-		// never deterministic, so a concurrent replay can only ever
-		// conflict on the (org_id,integration_id,dataset_key) unique
-		// constraint the ON CONFLICT clause already arbitrates.
+		// codex review finding (gate round): Python's
+		// _reconcile_explicit_requested_datasets (planner.py:858-904)
+		// enables any explicitly requested dataset that has no
+		// integration_datasets row yet -- "every dataset ... is opt-in and
+		// reconciled uniformly here: a caller (operator, backfill, or
+		// scheduled trigger) must name a dataset in request.dataset_keys
+		// for it to be created/enabled." Without this, a manual/backfill
+		// selector naming a dataset the config has never enabled before
+		// silently plans ZERO units for it instead of creating the
+		// requested work.
+		//
+		// MUST run on domainPool, never on tx (the COORDINATOR
+		// transaction): the coordinator role's grant on integration_datasets
+		// is SELECT-only (domain_authorization.go's coordinatorPosture --
+		// domain has INSERT+UPDATE; coordinator does not), so an INSERT
+		// here on tx would hit a Postgres insufficient-privilege error in
+		// production, invisible in this package's own single-role test
+		// fixtures. Matches upsertSources' own existing pattern
+		// (source_discovery.go): a short-lived, separately committed
+		// domain-pool transaction, ON CONFLICT DO NOTHING (no savepoint
+		// needed -- this row's id is a fresh random UUID per attempt, never
+		// deterministic, so a concurrent replay can only ever conflict on
+		// the (org_id,integration_id,dataset_key) unique constraint the ON
+		// CONFLICT clause already arbitrates). Committed before the
+		// SELECT below (still on tx, coordinator-side, SELECT-only is
+		// sufficient there) runs, so it sees the newly ensured row.
 		for key := range requested {
 			if _, ok := datasetSpecification(provider, key); !ok {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `
-INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
-VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,'{}'::jsonb)
-ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`,
-				uuid.New().String(), orgID, integrationID, key); err != nil {
+			if err := ensureExplicitlyRequestedDataset(ctx, domainPool, orgID, integrationID, key); err != nil {
 				return nil, false, fmt.Errorf("reconcile explicitly requested dataset %s: %w", key, err)
 			}
 		}
@@ -1676,6 +1684,38 @@ ORDER BY dataset_key`, orgID, integrationID)
 		result = append(result, PlanDataset{Key: "security"})
 	}
 	return result, ensureSecurity, nil
+}
+
+// ensureExplicitlyRequestedDataset inserts one enabled integration_datasets
+// row for an explicitly requested dataset key that has no row yet,
+// idempotently, on domainPool -- never on the coordinator transaction (see
+// loadPlanDatasets' own call site comment for why: coordinatorPosture grants
+// integration_datasets SELECT only). Uses its own short-lived transaction,
+// separate from and committed before the caller's coordinator transaction
+// continues, so that transaction's own SELECT sees this row.
+func ensureExplicitlyRequestedDataset(ctx context.Context, domainPool *pgxpool.Pool, orgID, integrationID, datasetKey string) error {
+	domainTx, err := domainPool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin ensure-dataset domain transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = domainTx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+	if _, err := domainTx.Exec(ctx, `
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
+VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,'{}'::jsonb)
+ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`,
+		uuid.New().String(), orgID, integrationID, datasetKey); err != nil {
+		return err
+	}
+	if err := domainTx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ensure-dataset domain transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func loadPlanWatermarks(ctx context.Context, tx pgx.Tx, orgID string, sources []PlanSource, datasets []PlanDataset) (map[WatermarkKey]time.Time, error) {

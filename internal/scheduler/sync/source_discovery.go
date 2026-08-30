@@ -309,22 +309,56 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("discover %s sources: %w", provider, err)
 	}
-	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged)
+	// Codex review (gate round, P1): "any tagged row already exists" is not
+	// a durable signal of "this config's selection is explicit and must
+	// never widen" -- it also fires, permanently, for a genuinely unbounded
+	// config the FIRST time discovery tags whatever happens to be visible
+	// then. A later-discovered new repo/project for that same unbounded
+	// config would come back untagged and stay invisible to
+	// loadPlanSources forever. Use the config's OWN durable scope instead,
+	// the exact field sync.py's own validation already treats as
+	// authoritative for this distinction (github/gitlab require either
+	// sync_options.all_repos=true or an explicit POST /sync-configs/batch
+	// selection; a plain create with neither is rejected there). Jira has
+	// no all_repos option at all in that validation -- a jira config that
+	// reaches this point (not ExplicitScope, handled above) is always
+	// unbounded discovery of every accessible project.
+	unbounded := provider == "jira" || boolOption(args.SyncOptions, "all_repos")
+	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded)
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("upsert %s sources: %w", provider, err)
 	}
-	for i := 0; i < created; i++ {
-		service.telemetry.observe(provider, SourceDiscoveryOutcomeCreated)
-	}
-	for i := 0; i < existing; i++ {
-		service.telemetry.observe(provider, SourceDiscoveryOutcomeExisting)
-	}
+	recordSourceDiscoveryOutcome(service.telemetry, provider, created, existing)
 	outcome := SourceDiscoveryOutcomeExisting
 	if created > 0 {
 		outcome = SourceDiscoveryOutcomeCreated
 	}
 	return SourceDiscoveryReport{Outcome: outcome, Created: created, Existing: existing}, nil
+}
+
+// recordSourceDiscoveryOutcome observes one telemetry point per created/
+// existing row, plus (codex review, gate round, P3) exactly one more when
+// BOTH counts are zero. A successful listing that finds zero sources
+// (created==0, existing==0 -- a valid, legitimate outcome, e.g. a brand-new
+// all_repos config whose owner genuinely has no repos yet) would otherwise
+// leave both loops empty and observe NOTHING at all, making a
+// successful-but-empty run indistinguishable, in telemetry, from "this
+// occurrence's discovery step never executed" -- Discover's caller
+// (materializer.go) only logs on error, so nothing else would surface it
+// either. The zero-count observation uses the same outcome the returned
+// report itself claims (SourceDiscoveryOutcomeExisting, see Discover's own
+// outcome selection), so the pre-seeded zero baseline actually moves.
+func recordSourceDiscoveryOutcome(telemetry *sourceDiscoveryTelemetry, provider string, created, existing int) {
+	for i := 0; i < created; i++ {
+		telemetry.observe(provider, SourceDiscoveryOutcomeCreated)
+	}
+	for i := 0; i < existing; i++ {
+		telemetry.observe(provider, SourceDiscoveryOutcomeExisting)
+	}
+	if created == 0 && existing == 0 {
+		telemetry.observe(provider, SourceDiscoveryOutcomeExisting)
+	}
 }
 
 func (service *NativeSourceDiscoveryService) nowUTC() time.Time {
@@ -742,7 +776,7 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 // version for an existing row.
 func (service *NativeSourceDiscoveryService) upsertSources(
 	ctx context.Context, orgID, integrationID, provider string, sources []discoveredSource, now time.Time,
-	configID string, plannerManaged bool,
+	configID string, plannerManaged, unbounded bool,
 ) (created, existing int, err error) {
 	if len(sources) == 0 {
 		return 0, 0, nil
@@ -768,29 +802,20 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 	// selection (batch-created with specific repos/projects an operator
 	// chose, tagged by a mechanism outside this file entirely) into
 	// "everything visible" -- a config that selected one repo would
-	// suddenly plan all of them. The fix only auto-tags when this
-	// integration+provider has NO existing tagged row at all: that is
-	// "truly unbounded discovery", CHAOS-4602's own reported case (a config
-	// that has never had a single source selected, planning zero units
-	// because nothing exists to select from). Once at least one row is
-	// already tagged, this pass never adds the tag to a newly discovered
-	// row -- it only refreshes name/full_name/metadata on rows the merge
-	// below finds already tagged, via EXCLUDED.metadata simply lacking the
-	// key so the jsonb merge preserves whatever the existing row already
-	// had.
-	stampNewRows := plannerManaged && configID != ""
-	if stampNewRows {
-		var alreadySelected bool
-		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM public.integration_sources
-  WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3
-    AND metadata::jsonb ? 'planner_managed_sync_config_id'
-)`, orgID, integrationID, provider).Scan(&alreadySelected); err != nil {
-			return 0, 0, fmt.Errorf("check existing %s source selection: %w", provider, err)
-		}
-		stampNewRows = !alreadySelected
-	}
+	// suddenly plan all of them.
+	//
+	// Codex review (gate round, P1) on THAT fix: gating on "does any
+	// tagged row already exist" instead of on the config's own declared
+	// scope broke a genuinely unbounded config the same way -- the first
+	// discovery pass tags whatever is visible then, and every later pass
+	// (a new repo/project becomes visible) sees an already-tagged row and
+	// permanently stops tagging, hiding the new source from planning
+	// forever. `unbounded` (the caller's provider-aware read of the
+	// config's own sync_options.all_repos, or "always" for jira, which has
+	// no such option) is a durable, config-level signal instead: it never
+	// changes based on what has or hasn't been tagged before, so it can't
+	// regress once any row happens to already carry the tag.
+	stampNewRows := plannerManaged && configID != "" && unbounded
 	for _, source := range sources {
 		metadata := source.Metadata
 		if stampNewRows {

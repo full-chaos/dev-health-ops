@@ -273,7 +273,7 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
 	}
 	const configID = "00000000-0000-4000-8000-000000002001"
-	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", first, time.Now().UTC(), configID, true)
+	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", first, time.Now().UTC(), configID, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
 		{ExternalID: "PLAT", SourceType: "project", Name: "Platform Renamed", FullName: "Platform Renamed", Metadata: map[string]any{"project_id": "2"}},
 	}
-	created, existing, err = service.upsertSources(ctx, orgID, integrationID, "jira", second, time.Now().UTC(), configID, true)
+	created, existing, err = service.upsertSources(ctx, orgID, integrationID, "jira", second, time.Now().UTC(), configID, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,5 +326,55 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 	}
 	if total != 2 {
 		t.Fatalf("total integration_sources rows = %d, want 2 (idempotent -- no duplicate rows from re-discovery)", total)
+	}
+}
+
+// TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig is the codex
+// gate-round P1 case ledger row 8's original test did not prove: for a
+// genuinely unbounded (all_repos-equivalent) config, CHAOS and PLAT are
+// already tagged from an earlier pass, then a THIRD project (NEWPROJ)
+// becomes visible on a later discovery pass. Gating the tag decision on
+// "does any tagged row already exist" (the round-2 fix) would leave NEWPROJ
+// untagged forever, invisible to loadPlanSources' tag-filtered SELECT even
+// though it was validly discovered. Gating on the caller's durable
+// `unbounded` signal instead must tag it.
+func TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx := context.Background()
+	orgID := fixture.occurrence.OrgID
+	const configID = "00000000-0000-4000-8000-000000002002"
+
+	bootstrap := []discoveredSource{
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+	}
+	if created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", bootstrap, time.Now().UTC(), configID, true, true); err != nil {
+		t.Fatal(err)
+	} else if created != 2 || existing != 0 {
+		t.Fatalf("bootstrap upsertSources() = created=%d existing=%d, want 2,0", created, existing)
+	}
+
+	// A new project becomes visible on a later pass. CHAOS/PLAT are already
+	// tagged; NEWPROJ is not.
+	later := []discoveredSource{
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "NEWPROJ", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "3"}},
+	}
+	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", later, time.Now().UTC(), configID, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || existing != 2 {
+		t.Fatalf("later upsertSources() = created=%d existing=%d, want 1,2", created, existing)
+	}
+
+	var taggedConfigID string
+	if err := fixture.pool.QueryRow(ctx, `SELECT metadata->>'planner_managed_sync_config_id' FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND external_id='NEWPROJ'`, orgID, integrationID).Scan(&taggedConfigID); err != nil {
+		t.Fatal(err)
+	}
+	if taggedConfigID != configID {
+		t.Fatalf("NEWPROJ planner_managed_sync_config_id = %q, want %q -- a newly-visible source for an unbounded config must be tagged just like the bootstrap rows, or loadPlanSources will never see it", taggedConfigID, configID)
 	}
 }

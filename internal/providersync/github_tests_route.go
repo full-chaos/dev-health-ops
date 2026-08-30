@@ -566,7 +566,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// divergence (CHAOS-4315 already diverges the two routes on the
 	// oversized disposition itself; production dispatch always executes
 	// CollectChunks, never this route, per execution_registry.go).
-	if githubTestsBlocksWatermark(incomplete, nil, 0) {
+	if githubTestsBlocksWatermark(incomplete, nil, 0, nil) {
 		watermark = nil
 	}
 	// One summary line per unit, same as the chunked production route

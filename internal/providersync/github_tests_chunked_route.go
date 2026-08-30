@@ -78,6 +78,23 @@ type githubTestsChunkCursor struct {
 	// every skip regardless of the cap.
 	SkippedArtifacts         []GitHubTestsSkippedArtifact `json:"skipped_artifacts,omitempty"`
 	SkippedArtifactsOverflow int                          `json:"skipped_artifacts_overflow,omitempty"`
+	// SkippedArtifactCauseOverflow records WHICH report_member causes had at
+	// least one marker dropped by the githubTestsMaxSkippedArtifactRecords
+	// cap (CHAOS-4592 codex review round 2, P1). SkippedArtifactsOverflow
+	// above is a single aggregate count shared by every cause recorded
+	// through appendGitHubTestsSkippedArtifact, so "overflow>0" alone cannot
+	// prove any SPECIFIC cause's marker-writing path ran to completion: a
+	// heavy run of one cause filling the shared 20-record sample can make an
+	// UNRELATED unmarked cause look excused (over-permissive), and
+	// symmetrically a heavy run of the three original causes can starve a
+	// later malformed/unreadable skip out of ever landing in the sample,
+	// permanently withholding on that one unit even under this binary
+	// (over-restrictive -- recreating the exact permanent-stall class this
+	// ticket exists to close, just narrower). This is the per-cause ledger
+	// githubTestsReportMemberSkippedWithoutDurableMarker actually needs; see
+	// markGitHubTestsSkippedArtifactCauseOverflow for why it is never
+	// mutated in place.
+	SkippedArtifactCauseOverflow map[string]bool `json:"skipped_artifact_cause_overflow,omitempty"`
 	// ExcludedNonReportSuffix/Prefix count artifacts the selection seam
 	// (githubTestsArtifactSelectionSeam, CHAOS-4588/CHAOS-4591) excluded
 	// BEFORE any download -- never counted toward ArchivesSeen/Unreadable,
@@ -96,16 +113,36 @@ type githubTestsChunkCursor struct {
 	ExcludedArtifactSample  []string `json:"excluded_artifact_sample,omitempty"`
 }
 
+// markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
+// marked true, never mutating existing. githubTestsChunkCursor is copied by
+// value throughout this route (before := cursor; after := cursor), and Go
+// maps are reference types, so mutating a shared map in place would corrupt
+// an earlier snapshot that still holds the same map -- the identical hazard
+// bumpGitHubTestsArchiveCounter's own doc comment describes for its pointer
+// field.
+func markGitHubTestsSkippedArtifactCauseOverflow(existing map[string]bool, cause string) map[string]bool {
+	next := make(map[string]bool, len(existing)+1)
+	for key, value := range existing {
+		next[key] = value
+	}
+	next[cause] = true
+	return next
+}
+
 // appendGitHubTestsSkippedArtifact records ONE oversized-artifact marker,
 // capping the retained sample at githubTestsMaxSkippedArtifactRecords and
 // counting the rest via overflow rather than growing the list unbounded
 // (CHAOS-4315 -- see the cap's own doc comment for why this must stay
-// bounded).
+// bounded). causeOverflow tracks per-cause overflow (CHAOS-4592 codex round
+// 2, P1) alongside the aggregate overflow count -- see
+// githubTestsChunkCursor.SkippedArtifactCauseOverflow for why both must
+// exist.
 func appendGitHubTestsSkippedArtifact(
-	records []GitHubTestsSkippedArtifact, overflow int, record GitHubTestsSkippedArtifact,
-) ([]GitHubTestsSkippedArtifact, int) {
+	records []GitHubTestsSkippedArtifact, overflow int, causeOverflow map[string]bool,
+	record GitHubTestsSkippedArtifact,
+) ([]GitHubTestsSkippedArtifact, int, map[string]bool) {
 	if len(records) >= githubTestsMaxSkippedArtifactRecords {
-		return records, overflow + 1
+		return records, overflow + 1, markGitHubTestsSkippedArtifactCauseOverflow(causeOverflow, record.Cause)
 	}
 	// Name is provider-supplied and unbounded (CHAOS-4588/CHAOS-4591, codex
 	// round 1, P1): GitHub's own limit is 255 bytes, and up to
@@ -114,7 +151,7 @@ func appendGitHubTestsSkippedArtifact(
 	// Truncated here, at the one append site, rather than at each of the
 	// four call sites, so the bound can never be forgotten at a new one.
 	record.Name = githubTestsTruncateArtifactName(record.Name)
-	return append(records, record), overflow
+	return append(records, record), overflow, causeOverflow
 }
 
 // githubTestsMaxArtifactNameBytes bounds any provider-supplied artifact name
@@ -617,6 +654,13 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	excludedArtifactSample := append(
 		make([]string, 0, len(cursor.ExcludedArtifactSample)), cursor.ExcludedArtifactSample...,
 	)
+	// Same typed-nil-to-empty-map normalization, same CHAOS-3940 reason: a
+	// cursor that never overflowed the skipped-artifact sample carries a nil
+	// SkippedArtifactCauseOverflow.
+	causeOverflow := make(map[string]bool, len(cursor.SkippedArtifactCauseOverflow))
+	for cause, overflowed := range cursor.SkippedArtifactCauseOverflow {
+		causeOverflow[cause] = overflowed
+	}
 	githubTestsLogArtifactSkipSummary(
 		claim, cursor.Repo, incomplete, skippedArtifacts,
 		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedArtifactSample,
@@ -637,6 +681,12 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			// tracked separately rather than silently dropped.
 			"skipped_artifacts":          skippedArtifacts,
 			"skipped_artifacts_overflow": cursor.SkippedArtifactsOverflow,
+			// Per-cause overflow ledger (CHAOS-4592 codex review round 2,
+			// P1): which report_member causes had a marker dropped by the
+			// cap, so githubTestsReportMemberSkippedWithoutDurableMarker can
+			// tell overflow apart per cause instead of trusting the single
+			// aggregate count above for every cause uniformly.
+			"skipped_artifact_cause_overflow": causeOverflow,
 			// Pre-download exclusions (CHAOS-4588/CHAOS-4591): artifacts the
 			// selection seam never even requested. Not part of "incomplete" --
 			// nothing readable was lost -- surfaced separately so CHAOS-4591's
@@ -660,7 +710,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			// evidence, or a legacy cursor that correctly withholds here
 			// fails comparator validation instead of completing safely
 			// (codex review round 3, P1).
-			if githubTestsBlocksWatermark(incomplete, skippedArtifacts, cursor.SkippedArtifactsOverflow) {
+			if githubTestsBlocksWatermark(incomplete, skippedArtifacts, cursor.SkippedArtifactsOverflow, causeOverflow) {
 				return nil
 			}
 			return claim.BeforeAt
@@ -1113,8 +1163,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								// watermark): an operator needs the run/artifact id
 								// to target a backfill regardless of which of the
 								// three causes skipped it.
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
-									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow,
 									GitHubTestsSkippedArtifact{
 										RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 										Cause: githubTestsArtifactUnavailableCause,
@@ -1152,8 +1202,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								)
 								var sizeErr *githubTestsArtifactOversizedError
 								if errors.As(downloadErr, &sizeErr) {
-									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
-										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow,
 										GitHubTestsSkippedArtifact{
 											RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 											Cause:     githubTestsArtifactOversizedCause,
@@ -1221,8 +1271,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// Durable per-artifact marker (CHAOS-4394): see the
 							// identical comment on the artifact_unavailable branch
 							// above.
-							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow,
 								GitHubTestsSkippedArtifact{
 									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 									Cause: githubTestsUnreadableArchiveCause,
@@ -1246,8 +1296,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								// Durable per-artifact marker (CHAOS-4394): see the
 								// identical comment on the artifact_unavailable
 								// branch above.
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
-									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow,
 									GitHubTestsSkippedArtifact{
 										RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 										Cause: githubTestsUnreadableArchiveCause,
@@ -1270,8 +1320,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						// whole-artifact causes, and githubTestsReportMemberSkippedWithoutDurableMarker
 						// requires one of these for that cause to exist before it will.
 						for _, marker := range rows.SkippedArtifacts {
-							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
-								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, marker,
+							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, marker,
 							)
 						}
 						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)

@@ -359,18 +359,29 @@ func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t 
 }
 
 // TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses
-// pins the CHAOS-4592 narrowing of the overflow shortcut (codex review round
-// 1, P1): an INTERMEDIATE binary -- post-CHAOS-4394, pre-CHAOS-4592 -- could
-// hit its overflow cap marking the three original whole-artifact causes
-// (proving that marker-writing path ran) while never writing a marker for
-// malformed/unreadable at all, because that binary predates those two causes
-// existing. Resuming such a cursor here must still withhold on the unmarked
-// malformed count -- letting the aggregate overflow prove marker-writing ran
-// for a cause it never even knew about would advance over an unidentifiable
-// parse skip with no backfill target, permanently. The identical overflow
-// value must still excuse an unmarked ORIGINAL cause (artifact_unavailable),
-// proving the narrowing is per-cause, not a wholesale removal of the
-// shortcut.
+// pins two rounds of the CHAOS-4592 overflow-shortcut fix.
+//
+// Round 1, P1: an INTERMEDIATE binary -- post-CHAOS-4394, pre-CHAOS-4592 --
+// could hit its overflow cap marking the three original whole-artifact
+// causes (proving that marker-writing path ran) while never writing a
+// marker for malformed/unreadable at all, because that binary predates
+// those two causes existing. Resuming such a cursor here must still
+// withhold on the unmarked malformed count -- letting the aggregate
+// overflow prove marker-writing ran for a cause it never even knew about
+// would advance over an unidentifiable parse skip with no backfill target,
+// permanently. The identical overflow value must still excuse an unmarked
+// ORIGINAL cause (artifact_unavailable), proving the narrowing is
+// per-cause, not a wholesale removal of the shortcut.
+//
+// Round 2, P1: round 1's fix still shared ONE aggregate int across every
+// cause, so it could not tell WHICH cause actually overflowed -- one
+// cause's overflow could wrongly excuse an unrelated unmarked cause
+// (over-permissive), or a heavy run of the original causes could
+// permanently starve a later malformed/unreadable skip out of ever
+// counting as covered (over-restrictive, recreating the exact
+// permanent-stall class this ticket exists to close). Per-cause
+// SkippedArtifactCauseOverflow fixes both directions -- see the last two
+// sub-cases below.
 func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses(t *testing.T) {
 	claim := nativeTestClaim("github", "cicd")
 	intermediateBinaryCursor := githubTestsChunkCursor{
@@ -430,6 +441,65 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf(
 			"watermark=%v, want %v -- a literal marker must always be sufficient for malformed",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// RED before codex review round 2, P2: a THIS-binary cursor whose 20-slot
+	// marker sample filled up entirely on malformed skips must not let its
+	// aggregate SkippedArtifactsOverflow (which round 1 introduced, shared by
+	// every cause) excuse an UNRELATED unmarked cause. Per-cause
+	// SkippedArtifactCauseOverflow only names "malformed" as overflowed, so
+	// artifact_unavailable -- present, unmarked, un-overflowed -- must still
+	// block.
+	overflowedOnlyForOneCause := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 20},
+		},
+		SkippedArtifactsOverflow:     1,
+		SkippedArtifactCauseOverflow: map[string]bool{githubTestsMalformedCause: true},
+	}
+	batch, err = githubTestsFinalMetadataBatch(claim, overflowedOnlyForOneCause)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"watermark=%v, want nil -- malformed's overflow must not excuse an unrelated unmarked artifact_unavailable",
+			batch.Watermark,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+
+	// RED before codex review round 2, P1: a heavy-skip-volume unit under
+	// THIS binary, whose shared 20-slot sample is entirely consumed by the
+	// three original causes, must not permanently withhold on a later
+	// malformed/unreadable skip that never got a marker slot -- exactly the
+	// permanent-stall class this ticket exists to close, recreated one level
+	// narrower. Per-cause overflow marks malformed as covered directly (this
+	// binary attempted its marker and found the sample full), independent of
+	// which OTHER cause also overflowed.
+	everyCauseOverflowedUnderCurrentBinary := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsUnreadableArchiveCause, Count: 20},
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 1},
+		},
+		SkippedArtifactsOverflow: 21,
+		SkippedArtifactCauseOverflow: map[string]bool{
+			githubTestsUnreadableArchiveCause: true, githubTestsMalformedCause: true,
+		},
+	}
+	batch, err = githubTestsFinalMetadataBatch(claim, everyCauseOverflowedUnderCurrentBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- a heavy-skip unit must not permanently stall once ITS malformed overflow is recorded",
 			batch.Watermark, claim.BeforeAt,
 		)
 	}

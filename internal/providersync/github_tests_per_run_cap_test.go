@@ -236,7 +236,10 @@ func TestGitHubTestsInventoryTruncationStillWithholdsTheWatermark(t *testing.T) 
 	claim := nativeTestClaim("github", "tests")
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
 
-	if !githubTestsBlocksWatermark(walk.cursor.Incomplete, walk.cursor.SkippedArtifacts, walk.cursor.SkippedArtifactsOverflow) {
+	if !githubTestsBlocksWatermark(
+		walk.cursor.Incomplete, walk.cursor.SkippedArtifacts,
+		walk.cursor.SkippedArtifactsOverflow, walk.cursor.SkippedArtifactCauseOverflow,
+	) {
 		t.Fatalf("inventory observations %+v must block the watermark", walk.cursor.Incomplete)
 	}
 	if walk.final.Watermark != nil {
@@ -307,7 +310,7 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		}
 		got := githubTestsBlocksWatermark([]GitHubTestsIncomplete{
 			{Component: testCase.component, Cause: testCase.cause, Count: 1},
-		}, markers, 0)
+		}, markers, 0, nil)
 		if got != testCase.blocking {
 			t.Fatalf("%s/%s blocks watermark=%v, want %v",
 				testCase.component, testCase.cause, got, testCase.blocking)
@@ -318,7 +321,7 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
 		{Component: githubTestsRunInventoryComponent, Cause: githubTestsPageBudgetCause, Count: 1},
 	}
-	if !githubTestsBlocksWatermark(mixed, nil, 0) {
+	if !githubTestsBlocksWatermark(mixed, nil, 0, nil) {
 		t.Fatal("a mixed slice containing an inventory observation must withhold the watermark")
 	}
 	// And the per-run page budget dominates its own component's item cap.
@@ -326,7 +329,7 @@ func TestGitHubTestsWatermarkBlockingClassification(t *testing.T) {
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunCapCause, Count: 1},
 		{Component: githubTestsRunJobsComponent, Cause: githubTestsPerRunPageBudgetCause, Count: 1},
 	}
-	if !githubTestsBlocksWatermark(sameComponent, nil, 0) {
+	if !githubTestsBlocksWatermark(sameComponent, nil, 0, nil) {
 		t.Fatal("a page-budget observation must withhold even alongside an item-cap one")
 	}
 }

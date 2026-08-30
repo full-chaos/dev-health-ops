@@ -191,7 +191,42 @@ type githubTestsArtifactsPayload struct {
 type githubTestsArtifactPayload struct {
 	ID      json.Number `json:"id"`
 	Expired bool        `json:"expired"`
+	Name    string      `json:"name"`
 }
+
+// githubTestsNonReportArtifactSuffixes names GitHub-generated artifact kinds
+// that are never report_member candidates, matched case-insensitively by
+// suffix. ".dockerbuild" bundles are created automatically by GitHub's
+// Docker Build Summary integration (docker/build-push-action with
+// attestations) for every matrix target in docker-images.yml -- outside any
+// actions/upload-artifact step -- and, unlike an ordinary uploaded artifact,
+// the classic archive_download_url for one is NOT zip-wrapped: it is the raw
+// gzip payload (CHAOS-4588, verified byte-for-byte against a real
+// full-chaos/dev-health-ops run: magic bytes 1f 8b, `file` reports "gzip
+// compressed data"). zip.NewReader correctly refuses it -- the reader is not
+// the bug. Feeding these to the report parser wastes a download+parse on
+// every dev-health-ops CI run AND, worse, lets them consume
+// githubTestsMaxArtifacts ahead of any real report artifact in the same run
+// list: a docker-images.yml run regularly carries 30+ dockerbuild/digest
+// artifacts, over the 25-item cap, so every encounter recorded a
+// window-blocking run_artifacts per_run_cap (CHAOS-4142) and pinned this
+// repo's tests watermark since 2026-08-08. Treated exactly like a routine
+// 404/410 artifact: excluded before any request, not counted toward seen,
+// unreadable, or the per-run cap, and not logged -- it is not evidence about
+// whether the read channel is broken, just a provider artifact type this
+// route was never meant to read.
+var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild"}
+
+func githubTestsIsNonReportArtifact(name string) bool {
+	lower := strings.ToLower(name)
+	for _, suffix := range githubTestsNonReportArtifactSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 type githubTestsRequiredPayload struct {
 	Contexts []any `json:"contexts"`
 	Checks   []struct {
@@ -387,9 +422,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// this cap. It survives as the oracle/comparison implementation. If a
 		// fixture ever crosses this cap, mirror recordGitHubTestsPerRunTruncation
 		// here rather than treating the refusal as intended behavior.
-		if artPage.PageBudgetExhausted || len(artPage.Items) > maxArtifacts {
-			return CompleteRouteBatch{}, ErrPaginationCapExceeded
-		}
+		artifacts := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
 		for _, artifactRaw := range artPage.Items {
 			var artifact githubTestsArtifactPayload
 			decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
@@ -397,6 +430,15 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if decoder.Decode(&artifact) != nil || artifact.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
+			if githubTestsIsNonReportArtifact(artifact.Name) {
+				continue
+			}
+			artifacts = append(artifacts, artifact)
+		}
+		if artPage.PageBudgetExhausted || len(artifacts) > maxArtifacts {
+			return CompleteRouteBatch{}, ErrPaginationCapExceeded
+		}
+		for _, artifact := range artifacts {
 			if artifact.Expired {
 				continue
 			}
@@ -483,6 +525,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if githubTestsBlocksWatermark(incomplete, nil, 0) {
 		watermark = nil
 	}
+	// One summary line per unit, same as the chunked production route
+	// (githubTestsLogArtifactSkipSummary, CHAOS-4588) -- kept symmetric so the
+	// oracle/comparator path never drifts from what production actually logs.
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,

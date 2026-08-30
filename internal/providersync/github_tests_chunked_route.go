@@ -308,15 +308,46 @@ func recordGitHubTestsSkippedArtifact(
 	if client != nil {
 		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, cause)
 	}
-	// The run id is provider-supplied and unbounded, so it belongs in the log
-	// line, never in the durable observation.
-	slog.Warn(
-		"provider artifact skipped; inventory continued",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repo, "component", githubTestsReportMemberComponent,
-		"cause", cause, "run", runID,
-	)
+	// CHAOS-4588: this used to slog.Warn once per artifact here -- for a repo
+	// whose runs mix many non-report artifacts, that fired ~14 times per unit
+	// attempt at ~300ms intervals, a log storm with no per-line information
+	// an operator could act on beyond "one more". The run id/artifact id an
+	// operator actually needs for backfill still lands in the bounded durable
+	// marker (GitHubTestsSkippedArtifact, appended by the caller just below
+	// this return) and in the dev_health_provider_artifact_skipped_total{cause}
+	// counter (RecordArtifactSkipped above) -- both unchanged. What is gone is
+	// ONLY the per-artifact log line; it is replaced by one summary line per
+	// unit at finalization (githubTestsLogArtifactSkipSummary), built from
+	// this same accumulated `incomplete` slice, once the whole walk's counts
+	// by cause are known.
 	return incomplete
+}
+
+// githubTestsLogArtifactSkipSummary emits AT MOST ONE structured log line per
+// unit attempt, replacing the per-artifact "provider artifact skipped;
+// inventory continued" WARN that recordGitHubTestsSkippedArtifact used to
+// emit on every call (CHAOS-4588: 297 lines/30min locally, 14 per unit
+// attempt, ~300ms apart, for a repository whose CI runs mix report artifacts
+// with GitHub-generated non-report ones). Silent when nothing was skipped --
+// a line on every healthy sync is noise operators learn to filter, which
+// costs the counter the attention it exists to buy (same principle as
+// githubProjectV2's membership_skips log). The bounded per-artifact evidence
+// (GitHubTestsSkippedArtifact markers) and the
+// dev_health_provider_artifact_skipped_total{cause} counter are untouched --
+// this is presentation only, not a reduction in observability.
+func githubTestsLogArtifactSkipSummary(claim Claim, repo string, incomplete []GitHubTestsIncomplete) {
+	if len(incomplete) == 0 {
+		return
+	}
+	attrs := make([]any, 0, 6+2*len(incomplete))
+	attrs = append(attrs,
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repo, "skipped_total", githubTestsIncompleteCount(incomplete),
+	)
+	for _, observation := range incomplete {
+		attrs = append(attrs, observation.Component+"_"+observation.Cause, observation.Count)
+	}
+	slog.Warn("provider artifacts skipped this unit; inventory continued", attrs...)
 }
 
 // The two phases whose resume cursors carry a positional index. Closed set:
@@ -460,6 +491,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	skippedArtifacts := append(
 		make([]GitHubTestsSkippedArtifact, 0, len(cursor.SkippedArtifacts)), cursor.SkippedArtifacts...,
 	)
+	githubTestsLogArtifactSkipSummary(claim, cursor.Repo, incomplete)
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
@@ -856,7 +888,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// never fire here and the item cap is necessarily
 					// len-based. MaxPages is 1, so PageBudgetExhausted means a
 					// second artifact page existed and was never fetched.
-					artifactItems := artPage.Items
+					// Decode-then-filter BEFORE the per-run cap: a name-filtered
+					// non-report artifact (CHAOS-4588) must not consume the
+					// cap ahead of a real report artifact in the same run.
+					artifactItems := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
+					for _, artifactRaw := range artPage.Items {
+						var artifact githubTestsArtifactPayload
+						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
+						decoder.UseNumber()
+						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+							return providerfoundation.ErrNormalizationInvalid
+						}
+						if githubTestsIsNonReportArtifact(artifact.Name) {
+							continue
+						}
+						artifactItems = append(artifactItems, artifact)
+					}
 					switch {
 					case len(artifactItems) > maxArtifacts:
 						artifactItems = artifactItems[:maxArtifacts]
@@ -870,13 +917,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
 						)
 					}
-					for _, artifactRaw := range artifactItems {
-						var artifact githubTestsArtifactPayload
-						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-						decoder.UseNumber()
-						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
-							return providerfoundation.ErrNormalizationInvalid
-						}
+					for _, artifact := range artifactItems {
 						if artifact.Expired {
 							continue
 						}

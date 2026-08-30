@@ -61,8 +61,8 @@ func TestRedactTextCatchesBareCredentialShapedText(t *testing.T) {
 		input  string
 		secret string
 	}{
-		{"authorization header", "rejected: Authorization: Bearer sk-abcdef0123456789", "sk-abcdef0123456789"},
-		{"bare bearer token", "upstream sent Bearer eyJhbGciOiJIUzI1NiJ9.secret.sig", "eyJhbGciOiJIUzI1NiJ9.secret.sig"},
+		{"authorization header", "rejected: Authorization: Bearer not-a-real-token-fixture-value", "not-a-real-token-fixture-value"},
+		{"bare bearer token", "upstream sent Bearer not-a-real-token-fixture-value", "not-a-real-token-fixture-value"},
 		{"bare token= pair", "config error: token=super-secret-value rejected", "super-secret-value"},
 		{"bare access_token= pair", "oauth failed access_token=abc123secret", "abc123secret"},
 	}

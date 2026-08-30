@@ -131,6 +131,16 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 // skip -- fails ErrChunkCheckpointConflict outright: during a rolling
 // deploy, a unit resuming a pre-upgrade cursor loses its committed progress
 // instead of degrading gracefully.
+//
+// Also carries the OLD githubTestsMaxExcludedArtifactSampleRecords (5)
+// excluded-artifact-sample entries at the OLD 48-byte name bound (codex
+// review round 5, P2, a third variant of the same class: "20 skipped-
+// artifact markers and at least five excluded artifacts... about 4.45KB in
+// a realistic case"). ExcludedArtifactSample's record COUNT never changed
+// (still 5), and its entries are pre-formatted "name (reason)" strings
+// decodeGitHubTestsChunkCursor does not re-truncate -- normalizing
+// SkippedArtifacts alone must still leave enough margin to absorb these
+// untouched, over-length entries too.
 func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testing.T) {
 	const legacyRecords = 20           // the OLD githubTestsMaxSkippedArtifactRecords
 	oldName := strings.Repeat("x", 48) // the OLD githubTestsMaxArtifactNameBytes
@@ -141,6 +151,11 @@ func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testi
 			Name: oldName, Cause: githubTestsArtifactOversizedCause,
 			SizeBytes: 9223372036854775807, CapBytes: 9223372036854775807,
 		})
+	}
+	for i := 0; i < githubTestsMaxExcludedArtifactSampleRecords; i++ {
+		legacyCursor.ExcludedArtifactSample = append(
+			legacyCursor.ExcludedArtifactSample, oldName+" (non_report_artifact_suffix)",
+		)
 	}
 
 	raw, err := json.Marshal(legacyCursor)
@@ -188,7 +203,16 @@ func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testi
 		t.Fatalf("legacy overflow did not stamp the legacy sentinel: %+v", decoded.SkippedArtifactCauseOverflow)
 	}
 
-	if _, err := encodeGitHubTestsChunkCursor(decoded); err != nil {
-		t.Fatalf("normalized legacy cursor still fails to encode: %v", err)
+	reencoded, err := encodeGitHubTestsChunkCursor(decoded)
+	if err != nil {
+		t.Fatalf(
+			"normalized legacy cursor still fails to encode: %v (codex round 5, P2: the untouched "+
+				"legacy-shaped ExcludedArtifactSample entries alone must not undo the SkippedArtifacts "+
+				"normalization's margin)",
+			err,
+		)
+	}
+	if len(reencoded) > maxChunkCursorBytes {
+		t.Fatalf("normalized legacy cursor is %d bytes, want <= %d (maxChunkCursorBytes)", len(reencoded), maxChunkCursorBytes)
 	}
 }

@@ -71,7 +71,7 @@ def _resolve_credentials(integration: Integration) -> dict[str, Any]:
     return _credential_mapping(credential)
 
 
-def _build_config_shim(integration: Integration) -> Any:
+def _build_config_shim(integration: Integration, planner_config: Any | None) -> Any:
     """Build a minimal config-shim that ``discover_repos_for_config`` accepts.
 
     ``discover_repos_for_config`` expects an object with:
@@ -85,7 +85,14 @@ def _build_config_shim(integration: Integration) -> Any:
 
     The ``Integration.config`` column carries the same options that
     ``SyncConfiguration.sync_options`` used to carry (owner, search,
-    all_repos, group, gitlab_url, etc.).
+    all_repos, group, gitlab_url, etc.) -- normally identical to
+    *planner_config*'s at creation time. For jira specifically, prefer
+    *planner_config*'s CURRENT ``sync_options`` when available: codex review
+    (CHAOS-4584 round 2, P1) -- ``PATCH /sync-configs/{id}`` only writes
+    ``SyncConfiguration.sync_options`` (``Integration.config`` is kept in
+    sync only for github, as a provider-specific special case), so an
+    operator changing an explicitly-scoped jira project's ``project_key``
+    would otherwise have discovery keep filtering by the stale value.
     """
 
     class _Shim:
@@ -97,6 +104,8 @@ def _build_config_shim(integration: Integration) -> Any:
     shim.provider = integration.provider or ""
     shim.sync_options = dict(integration.config or {})
     shim.org_id = integration.org_id
+    if shim.provider == "jira" and planner_config is not None:
+        shim.sync_options = dict(getattr(planner_config, "sync_options", None) or {})
     return shim
 
 
@@ -215,16 +224,16 @@ def _tuples_to_source_dicts(
     return result
 
 
-def _planner_managed_config_id_for_integration(
+def _planner_managed_config_for_integration(
     session: Session, integration_id: uuid.UUID
-) -> str | None:
-    """The owning planner-managed parent ``SyncConfiguration`` id for
+) -> Any | None:
+    """The owning planner-managed parent ``SyncConfiguration`` for
     *integration_id*, or ``None``. Every integration has at most one such
     parent (``_assert_single_planner_parent_for_integration`` in
     ``api/admin/routers/sync.py`` enforces the invariant at write time)."""
     from dev_health_ops.models.settings import SyncConfiguration
 
-    config = (
+    return (
         session.query(SyncConfiguration)
         .filter(
             SyncConfiguration.integration_id == integration_id,
@@ -233,7 +242,6 @@ def _planner_managed_config_id_for_integration(
         )
         .one_or_none()
     )
-    return str(config.id) if config is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -278,19 +286,23 @@ def discover_sources_for_integration(
     if integration is None:
         raise ValueError(f"Integration not found: {integration_id}")
 
-    config_shim = _build_config_shim(integration)
+    provider = (integration.provider or "").lower()
+    planner_config = (
+        _planner_managed_config_for_integration(session, integration_id)
+        if provider == "jira"
+        else None
+    )
+    planner_managed_sync_config_id = (
+        str(planner_config.id) if planner_config is not None else None
+    )
+
+    config_shim = _build_config_shim(integration, planner_config)
     credentials = _resolve_credentials(integration)
 
     raw_tuples: list[tuple[str, ...]] = discover_repos_for_config(
         config_shim, credentials
     )
 
-    provider = (integration.provider or "").lower()
-    planner_managed_sync_config_id = (
-        _planner_managed_config_id_for_integration(session, integration_id)
-        if provider == "jira"
-        else None
-    )
     source_dicts = _tuples_to_source_dicts(
         provider,
         raw_tuples,
@@ -303,46 +315,72 @@ def discover_sources_for_integration(
     upserted: list[IntegrationSource] = []
     created_count = 0
 
-    for fields in source_dicts:
-        external_id = fields["external_id"]
+    # codex review (CHAOS-4584 round 1, P2): isolate the upsert loop in a
+    # SAVEPOINT so a DB failure partway through (e.g. a concurrent
+    # unique-key race) only unwinds this savepoint -- never poisons the
+    # caller's outer transaction. A caller invoking this via
+    # ``AsyncSession.run_sync`` inside a "best-effort, must not fail"
+    # request path (create_sync_config) can then catch the propagated
+    # exception and continue using its session normally afterward.
+    with session.begin_nested():
+        for fields in source_dicts:
+            external_id = fields["external_id"]
 
-        existing = (
-            session.query(IntegrationSource)
-            .filter(
+            existing_query = session.query(IntegrationSource).filter(
                 IntegrationSource.org_id == integration.org_id,
                 IntegrationSource.integration_id == integration_id,
                 IntegrationSource.provider == fields["provider"],
-                IntegrationSource.external_id == external_id,
             )
-            .one_or_none()
-        )
+            if provider == "jira":
+                # codex review (CHAOS-4584 round 2, P1): Jira project keys
+                # are case-insensitive server-side (always canonicalized to
+                # uppercase in API responses), but an explicitly-scoped
+                # config's source can carry whatever casing the operator
+                # originally typed into ``project_key``
+                # (``_non_git_source_rows`` stores it verbatim). Matching
+                # case-insensitively here is what makes rediscovery update
+                # that SAME row instead of inserting a case-variant
+                # duplicate that then double-schedules the project.
+                from sqlalchemy import func
 
-        if existing is not None:
-            # Update mutable fields; preserve is_enabled and discovered_at.
-            existing.last_seen_at = now
-            existing.name = fields["name"]
-            existing.full_name = fields["full_name"]
-            existing.metadata_ = {**(existing.metadata_ or {}), **fields["metadata_"]}
-            upserted.append(existing)
-        else:
-            source = IntegrationSource(
-                org_id=fields["org_id"],
-                integration_id=fields["integration_id"],
-                provider=fields["provider"],
-                source_type=fields["source_type"],
-                external_id=external_id,
-                name=fields["name"],
-                full_name=fields["full_name"],
-                metadata_=fields["metadata_"],
-                is_enabled=auto_enable,
-                discovered_at=now,
-                last_seen_at=now,
-            )
-            session.add(source)
-            upserted.append(source)
-            created_count += 1
+                existing_query = existing_query.filter(
+                    func.lower(IntegrationSource.external_id) == external_id.lower()
+                )
+            else:
+                existing_query = existing_query.filter(
+                    IntegrationSource.external_id == external_id
+                )
+            existing = existing_query.one_or_none()
 
-    session.flush()
+            if existing is not None:
+                # Update mutable fields; preserve is_enabled and discovered_at.
+                existing.last_seen_at = now
+                existing.name = fields["name"]
+                existing.full_name = fields["full_name"]
+                existing.metadata_ = {
+                    **(existing.metadata_ or {}),
+                    **fields["metadata_"],
+                }
+                upserted.append(existing)
+            else:
+                source = IntegrationSource(
+                    org_id=fields["org_id"],
+                    integration_id=fields["integration_id"],
+                    provider=fields["provider"],
+                    source_type=fields["source_type"],
+                    external_id=external_id,
+                    name=fields["name"],
+                    full_name=fields["full_name"],
+                    metadata_=fields["metadata_"],
+                    is_enabled=auto_enable,
+                    discovered_at=now,
+                    last_seen_at=now,
+                )
+                session.add(source)
+                upserted.append(source)
+                created_count += 1
+
+        session.flush()
 
     if provider == "jira":
         existing_count = len(source_dicts) - created_count
@@ -354,8 +392,161 @@ def discover_sources_for_integration(
             existing_count=existing_count,
             has_planner_tag=planner_managed_sync_config_id is not None,
         )
+        # codex review (CHAOS-4584 round 2, P1): the repo-limit cap must
+        # apply to EVERY discovery entry point, not just config-creation
+        # time -- enforcing it here means create_sync_config's inline
+        # discovery call and the standalone
+        # POST /integrations/{id}/discover endpoint both get it automatically.
+        _rebalance_jira_sources_against_repo_limit(session, integration)
 
     return upserted
+
+
+def _active_repo_usage_count_for_limit(session: Session, org_id: str) -> int:
+    """Sync-session mirror of ``api/admin/routers/sync.py``'s async
+    ``_active_repo_usage_count_for_limit`` -- same org-wide "legacy active
+    configs + enabled planner-managed sources" count, needed here because
+    this module only ever holds a synchronous ``Session``."""
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    active_configs = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.org_id == org_id,
+            SyncConfiguration.is_active.is_(True),
+        )
+        .all()
+    )
+    planner_parent_ids = {
+        config.id
+        for config in active_configs
+        if config.parent_id is None
+        and bool(config.planner_managed)
+        and config.integration_id is not None
+    }
+    planner_integration_ids = {
+        config.integration_id
+        for config in active_configs
+        if config.id in planner_parent_ids
+    }
+    legacy_count = sum(
+        1 for config in active_configs if config.id not in planner_parent_ids
+    )
+    if not planner_integration_ids:
+        return legacy_count
+
+    source_count = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.org_id == org_id,
+            IntegrationSource.integration_id.in_(planner_integration_ids),
+            IntegrationSource.is_enabled.is_(True),
+        )
+        .count()
+    )
+    return legacy_count + int(source_count or 0)
+
+
+_CAP_MARKER_KEY = "capped_by_repo_limit"
+
+
+def _rebalance_jira_sources_against_repo_limit(
+    session: Session, integration: Integration
+) -> None:
+    """Keep this jira integration's enabled source count within the org's
+    ``max_repos`` allowance after a discovery run (codex review, CHAOS-4584
+    round 1 P1 + round 2 P1/P2).
+
+    Only ever touches sources on *integration* -- never another provider's
+    or another integration's rows. Disabling is marked with
+    ``metadata_.capped_by_repo_limit`` so a later run -- once the org's
+    allowance grows (a tier change, a higher ``limits_override``, or other
+    sources on the org being disabled) -- can tell a cap-disabled row apart
+    from one an operator deliberately disabled, and re-enable it (round 2
+    P2: capped rows must be able to recover automatically, not require a
+    manual enable operation).
+    """
+    from dev_health_ops.api.services.licensing import TierLimitService
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+
+    org_id = integration.org_id
+    max_repos = TierLimitService(session).get_limit(uuid.UUID(org_id), "max_repos")
+
+    if max_repos is not None:
+        overflow = _active_repo_usage_count_for_limit(session, org_id) - int(max_repos)
+        if overflow > 0:
+            capped = (
+                session.query(IntegrationSource)
+                .filter(
+                    IntegrationSource.org_id == org_id,
+                    IntegrationSource.integration_id == integration.id,
+                    IntegrationSource.is_enabled.is_(True),
+                )
+                .order_by(IntegrationSource.external_id.desc())
+                .limit(overflow)
+                .all()
+            )
+            for source in capped:
+                source.is_enabled = False
+                source.metadata_ = {
+                    **(source.metadata_ or {}),
+                    _CAP_MARKER_KEY: True,
+                }
+            if capped:
+                session.flush()
+                JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="capped_by_repo_limit").inc(
+                    len(capped)
+                )
+                logger.warning(
+                    "jira_project_discovery_capped_by_repo_limit",
+                    extra={
+                        "org_id": org_id,
+                        "integration_id": str(integration.id),
+                        "capped_count": len(capped),
+                        "max_repos": max_repos,
+                    },
+                )
+            return
+
+    # Either unlimited (max_repos is None) or there's headroom: recover any
+    # previously cap-disabled rows on THIS integration, up to that headroom.
+    capped_rows = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.org_id == org_id,
+            IntegrationSource.integration_id == integration.id,
+            IntegrationSource.is_enabled.is_(False),
+        )
+        .order_by(IntegrationSource.external_id.asc())
+        .all()
+    )
+    recoverable = [r for r in capped_rows if (r.metadata_ or {}).get(_CAP_MARKER_KEY)]
+    if not recoverable:
+        return
+
+    if max_repos is not None:
+        headroom = int(max_repos) - _active_repo_usage_count_for_limit(session, org_id)
+        recoverable = recoverable[: max(0, headroom)]
+    if not recoverable:
+        return
+
+    for source in recoverable:
+        source.is_enabled = True
+        source.metadata_ = {
+            k: v for k, v in (source.metadata_ or {}).items() if k != _CAP_MARKER_KEY
+        }
+    session.flush()
+    JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="recovered_from_repo_limit_cap").inc(
+        len(recoverable)
+    )
+    logger.info(
+        "jira_project_discovery_recovered_from_repo_limit_cap",
+        extra={
+            "org_id": org_id,
+            "integration_id": str(integration.id),
+            "recovered_count": len(recoverable),
+        },
+    )
 
 
 def _record_jira_project_discovery(

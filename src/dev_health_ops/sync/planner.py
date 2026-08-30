@@ -318,10 +318,35 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
     credential_fp: str | None = None
     auth_source: str | None = None
     if planned_units:
-        # Freeze auth only for executable work. A zero-unit plan has no later
-        # phase that can consume credentials, so it must not hydrate secrets.
         credential_id, credential_fp, auth_source = _resolve_credential_stamp(
             session, integration
+        )
+    elif _zero_unit_plan_needs_credential_stamp(integration):
+        # Freeze auth for a zero-unit jira plan whose UNCONDITIONAL
+        # reference-discovery ledger row (seeded below by
+        # seed_reference_discovery_ledger for every mode, backfill included)
+        # will still make a real, credential-requiring Jira API call
+        # (CHAOS-4593; see _zero_unit_plan_needs_credential_stamp for the
+        # full root cause and why this stays jira-only rather than every
+        # provider, and for the pinned tests/carve-outs this preserves).
+        credential_id, credential_fp, auth_source = _resolve_credential_stamp(
+            session, integration
+        )
+        from dev_health_ops.metrics.prometheus import (
+            SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+        )
+
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+            provider=str(integration.provider)
+        ).inc()
+        logger.info(
+            "sync.planner.zero_unit_plan_stamped_for_strict_discovery",
+            extra={
+                "org_id": str(integration.org_id),
+                "integration_id": str(integration.id),
+                "provider": str(integration.provider),
+                "mode": mode,
+            },
         )
 
     sync_run = SyncRun(
@@ -568,6 +593,46 @@ def _load_integration(
     if integration is None:
         raise ValueError(f"Integration not found for org {org_id}: {integration_id}")
     return integration
+
+
+def _zero_unit_plan_needs_credential_stamp(integration: Integration) -> bool:
+    """Whether a ZERO-unit :func:`plan_sync_run` plan should still resolve
+    its credential stamp (CHAOS-4593).
+
+    ``seed_reference_discovery_ledger`` arms a reference-discovery job
+    unconditionally -- for every mode, including a zero-unit plan (e.g. every
+    ``IntegrationSource`` temporarily disabled). The original ``if
+    planned_units:`` gate assumed a zero-unit plan "has no later phase that
+    can consume credentials" -- true for most providers' best-effort
+    (non-strict) discovery, which skips cleanly on missing credentials, but
+    false for Jira: ``workers/team_autoimport_jira.py``'s ``populate()``
+    raises on missing credentials even with zero import categories selected
+    (it still resolves dispatch-blocking sprint keys unconditionally in
+    strict mode). A zero-unit jira plan that skips this stamp leaves
+    ``auth_source`` NULL, ``_load_discovery_context`` resolves ``{}``
+    credentials, and the strict populate() raises "missing Jira credentials
+    for strict reference discovery" on every attempt -- the run never
+    leaves PLANNED, retrying until it exhausts attempts (live-reproduced,
+    org 70d529e0, run 527271e6-ac3d-4c24-af35-2147bde8d59c).
+
+    Scoped to jira only, NOT every provider: GitHub's populate()
+    (``workers/team_autoimport_github.py``) has the identical
+    strict-mode-raises-on-missing-credentials shape, so it plausibly carries
+    the same latent bug for a zero-unit GitHub plan -- but that is unproven
+    here and out of THIS ticket's scope (flagged as a follow-up, parent
+    CHAOS-4198, rather than folded in speculatively). Widening this beyond
+    jira would also break the existing pinned
+    ``test_disabled_source_produces_zero_units_without_hydrating_credentials``
+    /``test_disabled_dataset_produces_zero_units_without_hydrating_credentials``
+    (both use the default "github" provider and assert NO credential
+    hydration for a zero-unit plan) and PagerDuty's credential-less carve-out
+    (CHAOS-4498 codex round 2, P1 --
+    ``test_load_discovery_context_preserves_credential_free_zero_unit_planner_run``:
+    ``_resolve_credential_stamp`` itself raises for a NULL ``credential_id``
+    there, and that raise must stay reachable only for executable
+    (``planned_units > 0``) runs).
+    """
+    return str(integration.provider).lower() == "jira"
 
 
 def _resolve_credential_stamp(

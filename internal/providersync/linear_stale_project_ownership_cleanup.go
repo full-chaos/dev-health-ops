@@ -53,7 +53,19 @@ import (
 // that predicate's own-org_id prefix-match discipline (codex review on
 // linear_pseudo_project_cleanup.go, 2026-08-29, P2): the exclusion ties the
 // ":linear:" marker to THIS ROW'S OWN org_id, never a bare substring test.
-const linearStaleProjectOwnershipPredicate = `provider = 'linear' AND project_key IS NOT NULL AND NOT startsWith(project_id, concat(org_id, ':linear:'))`
+//
+// The trailing (org_id, project_id) IN (...) clause is a codex review P1
+// (2026-08-30): an org that has never re-synced since CHAOS-4530's writer
+// fix went live has ONLY the stale CHAOS-keyed row for a real project --
+// deleting it unconditionally would remove the ONLY team_project_ownership
+// signal loadTeamRepoOwnershipProjectLinks (and load_team_attribution_
+// context) read for that project, since those readers select by
+// (project_id, team_id) regardless of project_key. Requiring a sibling row
+// for the SAME (org_id, project_id) with project_key IS NULL to already
+// exist proves the fixed writer has already produced a replacement before
+// the old row is removed -- never delete a project's only ownership
+// signal.
+const linearStaleProjectOwnershipPredicate = `provider = 'linear' AND project_key IS NOT NULL AND NOT startsWith(project_id, concat(org_id, ':linear:')) AND (org_id, project_id) IN (SELECT org_id, project_id FROM team_project_ownership WHERE provider = 'linear' AND project_key IS NULL)`
 
 const linearStaleProjectOwnershipSelectQuery = `SELECT org_id, project_id, project_key, team_id FROM team_project_ownership WHERE ` + linearStaleProjectOwnershipPredicate
 
@@ -94,6 +106,12 @@ type LinearStaleProjectOwnershipOutcome struct {
 // ALTER TABLE DELETE. Idempotent: a second call after a real delete finds
 // (and would delete) nothing, since the SELECT and the DELETE share the
 // exact same predicate.
+//
+// Never deletes a project's ONLY ownership row: the predicate requires a
+// sibling project_key IS NULL row for the same (org_id, project_id) to
+// already exist -- proof the fixed writer has re-synced that project --
+// before a stale row is even considered a candidate. An org that has not
+// re-synced since CHAOS-4530 keeps its only signal untouched.
 //
 // Never touches the {org_id}:linear:{team_key} pseudo-identity row: the
 // predicate explicitly excludes any project_id shaped that way, so

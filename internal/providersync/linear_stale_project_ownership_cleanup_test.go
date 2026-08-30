@@ -181,3 +181,16 @@ func TestLinearStaleProjectOwnershipPredicateExcludesThePseudoIdentityRow(t *tes
 		t.Fatalf("predicate must scope to provider='linear', got: %s", linearStaleProjectOwnershipPredicate)
 	}
 }
+
+// TestLinearStaleProjectOwnershipPredicateRequiresAReplacementRow is the
+// red-first proof for codex review P1 (2026-08-30): an org that has not
+// re-synced since CHAOS-4530's writer fix has ONLY the stale CHAOS-keyed
+// row for a real project -- deleting it unconditionally would remove that
+// project's only team_project_ownership signal. The predicate must require
+// a sibling project_key IS NULL row for the SAME (org_id, project_id)
+// before a stale row is even a candidate.
+func TestLinearStaleProjectOwnershipPredicateRequiresAReplacementRow(t *testing.T) {
+	if !strings.Contains(linearStaleProjectOwnershipPredicate, "(org_id, project_id) IN (SELECT org_id, project_id FROM team_project_ownership WHERE provider = 'linear' AND project_key IS NULL)") {
+		t.Fatalf("predicate must require a project_key IS NULL sibling row for the same (org_id, project_id) before matching, got: %s", linearStaleProjectOwnershipPredicate)
+	}
+}

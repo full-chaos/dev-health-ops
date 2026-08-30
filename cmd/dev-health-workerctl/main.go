@@ -1302,6 +1302,24 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
+	// An explicitly-provided EMPTY --org (e.g. `--org "$UNSET_VAR"` from a
+	// caller's shell scripting mistake) must never be silently treated the
+	// same as omitting the flag entirely (codex review, 2026-08-30, P1):
+	// this is a physically destructive command, and the difference between
+	// "operator omitted --org on purpose" and "operator's script passed an
+	// empty value by accident" must not collapse into the same global-scope
+	// outcome. flags.Visit only reports flags Parse actually saw on the
+	// command line, so this distinguishes the two cases the default value
+	// alone cannot.
+	orgFlagWasSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "org" {
+			orgFlagWasSet = true
+		}
+	})
+	if orgFlagWasSet && *org == "" {
+		return writeError(stderr, "invalid_request")
+	}
 	// Canonicalize, never pass the raw flag value onward (same reasoning as
 	// retire-linear-pseudo-projects): ClickHouse's org_id comparison is
 	// case-sensitive string equality, so an uppercase --org would otherwise

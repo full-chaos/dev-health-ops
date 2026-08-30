@@ -862,6 +862,23 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg(
 	}
 }
 
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExplicitlyEmptyOrg
+// is the red-first proof for codex review P1 (2026-08-30): `--org ""`
+// (explicitly provided, e.g. from a caller's unset shell variable) must be
+// rejected rather than silently collapsing into the same global-scope
+// outcome as omitting --org entirely -- exercised with a nil runtime so a
+// regression that let this through would panic reaching the ClickHouse
+// dial instead of silently authorizing the global "*" scope.
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExplicitlyEmptyOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"--org", "",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExtraArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{

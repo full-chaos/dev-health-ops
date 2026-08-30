@@ -130,9 +130,18 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		seamCoveredMarker: `recordRollupBump(ctx, rollupPathUnroutable)`,
 	},
 	{
+		// codex round 12 (post-rebase): main's own CHAOS-4556 landed a
+		// write-time-CAS fix here (units grouped by (reason, unit.status)
+		// rather than a blanket ANY(planned,retrying,dispatching)) between
+		// this registry's own last edit and this rebase, changing this
+		// line's exact text (`reason` -> `key.reason`,
+		// `syncRunUnitStatusDispatching` -> `key.status`) without this
+		// registry's snippet being updated to match -- caught by
+		// TestCrossPackageRollupSeamRegistryIsComplete going red on the
+		// rebased tip. Re-pinned to the current source.
 		pkgDir:            "../syncdispatchruntime",
 		file:              "dispatch_denial.go",
-		snippet:           `unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, reason, resultJSON, now, syncRunUnitStatusDispatching)`,
+		snippet:           `unitIDs, syncRunUnitStatusFailed, invalidProviderFamilyClaimErrorCategory, key.reason, resultJSON, now, key.status)`,
 		seamCoveredPkgDir: "../syncdispatchruntime",
 		seamCoveredFile:   "dispatch_denial.go",
 		seamCoveredMarker: `recordRollupBump(ctx, rollupPathInvalidClaim)`,
@@ -187,6 +196,26 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		seamCoveredPkgDir: "../syncdispatchruntime",
 		seamCoveredFile:   "native_reference_discovery.go",
 		seamCoveredMarker: `recordRollupBump(ctx, rollupPathReferenceDiscoveryFailed)`,
+	},
+	{
+		// codex round 12 (post-rebase): failNonterminalUnits' own NEW
+		// bucket-discovery SELECT (codex round 11 follow-up, CHAOS-4586:
+		// query the distinct buckets to lock BEFORE the bulk UPDATE two
+		// entries above) closes with the SAME two status constants as a
+		// plain read-only WHERE predicate, not a write --
+		// isPlausibleTerminalStatusWrite has no SQL/AST awareness by
+		// design (its own doc comment: "a heuristic, not a SQL/AST
+		// parse"), so it cannot tell this SELECT's argument list from an
+		// UPDATE's and flags it anyway. This entry documents the false
+		// positive rather than widening the shared heuristic (a bigger,
+		// riskier change to a guard every package in this registry
+		// relies on) for one line. Not seam-covered because it writes
+		// nothing at all -- the actual terminal-status write this
+		// precedes is the separate, already seam-covered entry above.
+		pkgDir:       "../syncdispatchruntime",
+		file:         "native_reference_discovery.go",
+		snippet:      `runID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed)`,
+		exemptReason: "read-only bucket-discovery SELECT (SELECT DISTINCT org_id, provider, cost_class ... for the bucket-lock-first fix) -- writes nothing; matches the heuristic only because it passes the same two status constants a real write nearby also does",
 	},
 	// --- syncreconciler (CHAOS-4586, chris: "the guard must be the thing
 	// that would have caught line 1144") ---

@@ -591,6 +591,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		if _, discoverErr := discovery.Discover(ctx, SourceDiscoveryArgs{
 			OrgID: orgID, IntegrationID: integrationID, CredentialID: credentialID,
 			Provider: provider, SyncOptions: syncOptionsMap, ExplicitScope: false,
+			ConfigID: occurrence.ConfigID, PlannerManaged: plannerManaged,
 		}); discoverErr != nil {
 			slog.Default().Warn("sync.materializer.source_discovery_failed",
 				slog.String("provider", provider),

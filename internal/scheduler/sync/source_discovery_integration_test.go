@@ -49,7 +49,13 @@ func startSourceDiscoveryPostgres(t *testing.T) (materializerFixture, string) {
 		{`INSERT INTO integrations VALUES ($1::uuid,$2,'jira',NULL,TRUE,'{}'::jsonb)`, []any{integrationID, orgID}},
 		{`INSERT INTO organizations VALUES ($1::uuid,'community')`, []any{orgID}},
 		{`INSERT INTO feature_flags VALUES ('00000000-0000-4000-8000-000000002007','canonical_incident_ingestion','community',TRUE)`, nil},
-		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["work-items"]'::jsonb,'{"schedule_cron":"0 * * * *"}'::jsonb,$3::uuid,TRUE,NULL,FALSE,'jira',now())`, []any{configID, orgID, integrationID}},
+		// planner_managed=TRUE: a REAL scheduled occurrence always has this
+		// true (Materialize's own eligibility gate requires
+		// occurrence.ConfigPlannerManaged), and it is exactly the condition
+		// under which loadPlanSources' metadata.planner_managed_sync_config_id
+		// filter applies (codex review round 1, P1) -- planner_managed=FALSE
+		// here would have silently bypassed that filter and hidden the bug.
+		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["work-items"]'::jsonb,'{"schedule_cron":"0 * * * *"}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{configID, orgID, integrationID}},
 		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{datasetID, orgID, integrationID}},
 		{`INSERT INTO scheduled_jobs VALUES ($1::uuid)`, []any{jobID}},
 	}
@@ -97,7 +103,16 @@ func (fake *fakeSourceDiscoveryExecutor) Discover(ctx context.Context, args Sour
 	}
 	created := 0
 	for i := 0; i < fake.sourcesToSeed; i++ {
-		metadata, _ := json.Marshal(map[string]any{})
+		// Mirrors NativeSourceDiscoveryService.upsertSources' own
+		// planner_managed_sync_config_id stamping (codex review round 1,
+		// P1): without it, loadPlanSources would never see these rows for a
+		// planner-managed occurrence and the "units get planned" assertion
+		// below would fail even though sources exist.
+		metadataFields := map[string]any{}
+		if args.PlannerManaged && args.ConfigID != "" {
+			metadataFields["planner_managed_sync_config_id"] = args.ConfigID
+		}
+		metadata, _ := json.Marshal(metadataFields)
 		if _, err := fake.pool.Exec(ctx, `
 INSERT INTO public.integration_sources
  (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
@@ -120,7 +135,8 @@ func TestMaterializeRunsSourceDiscoveryBeforeUnitPlanningAndCreatesSources(t *te
 	fake := &fakeSourceDiscoveryExecutor{t: t, pool: fixture.pool, sourcesToSeed: 3}
 	materializer.WithSourceDiscovery(fake)
 
-	if _, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence); err != nil {
+	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,6 +146,9 @@ func TestMaterializeRunsSourceDiscoveryBeforeUnitPlanningAndCreatesSources(t *te
 	call := fake.calls[0]
 	if call.Provider != "jira" || call.IntegrationID != integrationID || call.ExplicitScope {
 		t.Fatalf("Discover args = %#v", call)
+	}
+	if !call.PlannerManaged || call.ConfigID != fixture.occurrence.ConfigID {
+		t.Fatalf("Discover args PlannerManaged/ConfigID = %v/%q, want true/%q", call.PlannerManaged, call.ConfigID, fixture.occurrence.ConfigID)
 	}
 	// The core CHAOS-4602 ordering claim: at the moment Discover ran, this
 	// occurrence's integration had ZERO integration_sources rows -- discovery
@@ -145,6 +164,19 @@ func TestMaterializeRunsSourceDiscoveryBeforeUnitPlanningAndCreatesSources(t *te
 	}
 	if sourceCount != 3 {
 		t.Fatalf("integration_sources count after Materialize = %d, want 3 (the discovery step's own creations)", sourceCount)
+	}
+
+	// The assertion codex review (round 1, P1) proved missing: sources
+	// existing is not the same as sources being PLANNABLE. Without the
+	// planner_managed_sync_config_id tag, loadPlanSources would see 3 rows
+	// in integration_sources and still plan ZERO units for this
+	// planner-managed occurrence.
+	var unitCount int
+	if err := fixture.pool.QueryRow(context.Background(), `SELECT count(*) FROM public.sync_run_units WHERE sync_run_id=$1::uuid`, plan.SyncRunID).Scan(&unitCount); err != nil {
+		t.Fatal(err)
+	}
+	if unitCount == 0 {
+		t.Fatal("sync_run_units count = 0 after Materialize -- discovered sources exist but were never planned (the planner_managed_sync_config_id tagging bug this test exists to catch)")
 	}
 }
 
@@ -224,12 +256,22 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
 		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
 	}
-	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", first, time.Now().UTC())
+	const configID = "00000000-0000-4000-8000-000000002001"
+	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", first, time.Now().UTC(), configID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created != 2 || existing != 0 {
 		t.Fatalf("first upsertSources() = created=%d existing=%d, want 2,0", created, existing)
+	}
+	// Codex review (round 1, P1): loadPlanSources only admits a
+	// planner-managed parent's sources tagged with its own config id.
+	var taggedConfigID string
+	if err := fixture.pool.QueryRow(ctx, `SELECT metadata->>'planner_managed_sync_config_id' FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND external_id='CHAOS'`, orgID, integrationID).Scan(&taggedConfigID); err != nil {
+		t.Fatal(err)
+	}
+	if taggedConfigID != configID {
+		t.Fatalf("planner_managed_sync_config_id = %q, want %q -- a planner-managed parent's own loadPlanSources query would never see this row", taggedConfigID, configID)
 	}
 
 	// Simulate an operator disabling one of the two discovered sources.
@@ -242,7 +284,7 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
 		{ExternalID: "PLAT", SourceType: "project", Name: "Platform Renamed", FullName: "Platform Renamed", Metadata: map[string]any{"project_id": "2"}},
 	}
-	created, existing, err = service.upsertSources(ctx, orgID, integrationID, "jira", second, time.Now().UTC())
+	created, existing, err = service.upsertSources(ctx, orgID, integrationID, "jira", second, time.Now().UTC(), configID, true)
 	if err != nil {
 		t.Fatal(err)
 	}

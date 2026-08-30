@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"path"
 	"sort"
@@ -19,6 +20,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrSourceDiscoveryTruncated marks a discovery pass that hit the page
+// budget (sourceDiscoveryMaxPages) before the provider ran out of pages.
+// Codex review (round 1, P2): silently upserting a partial listing as if it
+// were complete would leave the remainder invisible with no signal at all
+// -- an integration with more than sourceDiscoveryMaxPages*sourceDiscoveryPerPage
+// (5,000) repos/projects would have the tail silently omitted forever.
+// Surfaced as an ordinary discovery error (outcome=error, logged, never
+// fails the occurrence) rather than a partial commit.
+var ErrSourceDiscoveryTruncated = errors.New("provider source discovery hit its page budget before completing")
 
 // Provider source (repo/project) discovery, native Go (CHAOS-4602).
 //
@@ -113,6 +124,18 @@ type SourceDiscoveryArgs struct {
 	// already-known IntegrationSource (config.source_id IS NOT NULL) --
 	// exactly the sourceID loadPlanSources already branches on.
 	ExplicitScope bool
+	// ConfigID and PlannerManaged identify the sync config whose occurrence
+	// is running discovery. Codex review (round 1, P1): loadPlanSources only
+	// admits a planner-managed parent's sources whose
+	// metadata.planner_managed_sync_config_id equals ConfigID
+	// (materializer.go's loadPlanSources SQL) -- a newly discovered source
+	// with no such tag is invisible to unit planning even though the row
+	// exists. Discover stamps this tag on every upserted row when
+	// PlannerManaged is true; it is a no-op (and ConfigID may be empty) for
+	// a non-planner-managed config, which loadPlanSources never gates on
+	// this key at all.
+	ConfigID       string
+	PlannerManaged bool
 }
 
 // SourceDiscoveryReport summarizes one Discover call for the caller's own
@@ -252,12 +275,22 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeSkipped)
 		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
 	}
-	credentialID := ""
-	if args.CredentialID != nil {
-		credentialID = *args.CredentialID
+	if args.CredentialID == nil {
+		// Codex review (round 1, P1): a NULL Integration.credential_id means
+		// this config uses environment-variable auth (the planner stamps
+		// AUTH_SOURCE_ENVIRONMENT for it, resolveCredentialStamp in
+		// materializer.go) -- resolving an empty CredentialID against
+		// PostgresCredentialRepository does NOT mean "environment", it means
+		// "the org's default stored credential", which can be a wrong,
+		// unrelated account. There is no environment-credential resolution
+		// path in this Go resolver, so discovery is skipped rather than
+		// risk discovering against the wrong account; already-existing
+		// sources still plan normally.
+		service.telemetry.observe(provider, SourceDiscoveryOutcomeSkipped)
+		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
 	}
 	credential, err := service.credentials.Resolve(ctx, sourceDiscoveryLease{}, providerfoundation.TenantScope{
-		OrgID: args.OrgID, Provider: provider, IntegrationID: args.IntegrationID, CredentialID: credentialID,
+		OrgID: args.OrgID, Provider: provider, IntegrationID: args.IntegrationID, CredentialID: *args.CredentialID,
 	})
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
@@ -276,7 +309,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("discover %s sources: %w", provider, err)
 	}
-	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC())
+	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged)
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("upsert %s sources: %w", provider, err)
@@ -301,66 +334,111 @@ func (service *NativeSourceDiscoveryService) nowUTC() time.Time {
 	return service.now().UTC()
 }
 
-// githubDiscoveryScope mirrors discover_github_repos' owner/search
-// resolution for the common PAT case: an explicit owner always wins; a
-// "owner/pattern"-shaped search fills in whichever half is missing; a bare
-// search with no owner becomes the owner with an unbounded pattern.
+// githubDiscoveryOptions mirrors discover_github_repos' owner/search/all_repos
+// resolution exactly (src/dev_health_ops/discovery/repos.py):
 //
+//   - all_repos + a "/"-shaped search: the half before "/" becomes the
+//     namespace filter (unless owner already set it), the half after is the
+//     name pattern.
+//   - all_repos + a bare search: the whole thing is the name pattern; the
+//     namespace filter stays whatever owner already resolved to (may be "").
+//   - NOT all_repos, "/" in search (regardless of any existing owner): the
+//     search is split on the FIRST "/" into owner/pattern, overwriting owner.
+//   - NOT all_repos, bare search, no owner: owner becomes the search, pattern
+//     is unbounded.
+//   - otherwise: pattern is unbounded, owner/namespace as already resolved.
+//
+// Codex review (round 1, P1) caught two bugs in the prior version: all_repos
+// was never read at all, and the NOT-all_repos / no-owner case listed
+// EVERYTHING instead of Python's explicit "return []" (discoverGitHub turns
+// an empty owner in the non-all_repos case into no discovery at all, not an
+// unbounded /user/repos listing).
+func githubDiscoveryOptions(options map[string]any) (allRepos bool, owner, pattern, namespace string) {
+	owner = stringOption(options, "owner")
+	search := stringOption(options, "search")
+	allRepos = boolOption(options, "all_repos")
+	if allRepos {
+		namespace = owner
+	}
+	switch {
+	case allRepos && search != "":
+		if idx := strings.Index(search, "/"); idx >= 0 {
+			if namespace == "" {
+				namespace = search[:idx]
+			}
+			pattern = search[idx+1:]
+		} else {
+			pattern = search
+		}
+	case strings.Contains(search, "/"):
+		idx := strings.Index(search, "/")
+		owner = search[:idx]
+		pattern = search[idx+1:]
+	case search != "" && owner == "":
+		owner = search
+		pattern = "*"
+	default:
+		pattern = "*"
+	}
+	return allRepos, owner, pattern, namespace
+}
+
 // Deliberately NOT ported: the all_repos GitHub-App installation-listing
 // branch (discover_github_repos' _discover_github_app_installation_repos).
 // NewGitHubClient already mints and applies an App installation token
 // transparently for an App-auth credential, so an App-authenticated config
-// still discovers via the same /orgs or /user listing below -- only the
+// still discovers via the same /user or /orgs listing below -- only the
 // installation-repository-list SHORTCUT (bypassing the owner/search scope
 // entirely) is out of scope for this step. Tracked as a follow-up, not a
 // silent gap: see this PR's ticket.
-func githubDiscoveryScope(options map[string]any) (owner, pattern string) {
-	owner = stringOption(options, "owner")
-	search := stringOption(options, "search")
-	if search == "" {
-		return owner, "*"
-	}
-	if idx := strings.Index(search, "/"); idx >= 0 {
-		if owner == "" {
-			owner = search[:idx]
-		}
-		return owner, search[idx+1:]
-	}
-	if owner == "" {
-		return search, "*"
-	}
-	return owner, search
-}
-
 func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context, credential providerfoundation.Credential, options map[string]any) ([]discoveredSource, error) {
 	client, err := providerfoundation.NewGitHubClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
 	if err != nil {
 		return nil, err
 	}
-	owner, pattern := githubDiscoveryScope(options)
-	requestPath := "/user/repos"
-	query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "affiliation": {"owner,collaborator,organization_member"}}
-	if owner != "" {
-		requestPath = "/orgs/" + url.PathEscape(owner) + "/repos"
-		query = url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
-	}
-	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: requestPath, Query: query, MaxPages: sourceDiscoveryMaxPages,
-	})
-	if err != nil && owner != "" {
-		// Python's discover_github_repos falls back from org to user lookup
-		// (an owner that is a user account, not an org, 404s under
-		// /orgs/{owner}/repos). Retry once under /users/ before giving up.
-		userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+	allRepos, owner, pattern, namespace := githubDiscoveryOptions(options)
+	var page providerfoundation.PageCollection
+	if allRepos {
+		// Python: g.get_user().get_repos() -- the AUTHENTICATED USER's own
+		// accessible repos (not org-scoped), filtered client-side below by
+		// namespace (exact owner match) and name pattern.
+		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+			Path: "/user/repos",
+			Query: url.Values{
+				"per_page":    {strconv.Itoa(sourceDiscoveryPerPage)},
+				"affiliation": {"owner,collaborator,organization_member"},
+			},
+			MaxPages: sourceDiscoveryMaxPages,
 		})
-		if userErr == nil {
-			page, err = userPage, nil
+	} else if owner == "" {
+		// Python: `if not owner: return []` -- no scope resolved at all, no
+		// API call, no sources. NOT the same as all_repos with no namespace.
+		return nil, nil
+	} else {
+		query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
+		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+			Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+		})
+		if err != nil {
+			// Python's discover_github_repos falls back from org to user
+			// lookup (an owner that is a user account, not an org, 404s
+			// under /orgs/{owner}/repos). Retry once under /users/ before
+			// giving up.
+			userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+				Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+			})
+			if userErr == nil {
+				page, err = userPage, nil
+			}
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
+	if page.PageBudgetExhausted {
+		return nil, fmt.Errorf("github: %w", ErrSourceDiscoveryTruncated)
+	}
+	normalizedNamespace := strings.ToLower(namespace)
 	result := make([]discoveredSource, 0, len(page.Items))
 	for _, raw := range page.Items {
 		var repo struct {
@@ -381,6 +459,9 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 				continue
 			}
 		}
+		if normalizedNamespace != "" && strings.ToLower(repo.Owner.Login) != normalizedNamespace {
+			continue
+		}
 		fullName := repo.FullName
 		if fullName == "" {
 			fullName = repo.Owner.Login + "/" + repo.Name
@@ -393,52 +474,93 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 	return result, nil
 }
 
-// gitlabDiscoveryScope mirrors discover_gitlab_repos' group/owner/search
-// resolution: an explicit group (or owner, used as a group path fallback)
-// always wins; a "group/pattern"-shaped search (split on the LAST slash, so
-// nested GitLab subgroups resolve correctly) fills in whichever half is
-// missing; a bare search with no group becomes the group with an unbounded
-// pattern.
-func gitlabDiscoveryScope(options map[string]any) (group, pattern string) {
-	group = stringOption(options, "group")
-	if group == "" {
-		group = stringOption(options, "owner")
+// gitlabDiscoveryOptions mirrors discover_gitlab_repos' group/owner/search/
+// all_repos resolution exactly, including the ONE deliberate asymmetry
+// Python itself has: the all_repos branch splits a "/"-shaped search on the
+// LAST slash (nested-subgroup-safe), while the non-all_repos branch splits
+// on the FIRST slash. Codex review (round 1, P1) caught this file using
+// LastIndex unconditionally, which is wrong for the non-all_repos case.
+func gitlabDiscoveryOptions(options map[string]any) (allRepos bool, groupPath, pattern, namespace string) {
+	groupPath = stringOption(options, "group")
+	owner := stringOption(options, "owner")
+	allRepos = boolOption(options, "all_repos")
+	if allRepos {
+		if groupPath != "" {
+			namespace = groupPath
+		} else if owner != "" {
+			namespace = owner
+		}
 	}
 	search := stringOption(options, "search")
-	if search == "" {
-		return group, "*"
-	}
-	if idx := strings.LastIndex(search, "/"); idx >= 0 {
-		if group == "" {
-			group = search[:idx]
+	switch {
+	case allRepos && search != "":
+		if idx := strings.LastIndex(search, "/"); idx >= 0 {
+			if namespace == "" {
+				namespace = search[:idx]
+			}
+			pattern = search[idx+1:]
+		} else {
+			pattern = search
 		}
-		return group, search[idx+1:]
+	case strings.Contains(search, "/"):
+		idx := strings.Index(search, "/")
+		groupPath = search[:idx]
+		pattern = search[idx+1:]
+	case search != "" && groupPath == "":
+		groupPath = search
+		pattern = "*"
+	default:
+		pattern = "*"
 	}
-	if group == "" {
-		return search, "*"
-	}
-	return group, search
+	return allRepos, groupPath, pattern, namespace
 }
 
 func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context, credential providerfoundation.Credential, options map[string]any) ([]discoveredSource, error) {
-	client, err := providerfoundation.NewGitLabClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
+	// Codex review (round 1, P1): sync_options.gitlab_url names a self-hosted
+	// instance (persisted by the batch admin API,
+	// api/admin/routers/sync.py:1846-1865) and must be honored over the
+	// credential's own base URL -- otherwise self-hosted discovery silently
+	// queries gitlab.com (or wherever the credential itself points) instead.
+	var client *providerfoundation.HTTPClient
+	var err error
+	if gitlabURL := stringOption(options, "gitlab_url"); gitlabURL != "" {
+		token, _ := credential.Secret("token")
+		client, err = providerfoundation.NewHTTPClient(
+			"gitlab", gitlabURL, service.doer,
+			providerfoundation.TokenAuth("PRIVATE-TOKEN", "", token),
+			service.retry, sourceDiscoveryLease{},
+		)
+	} else {
+		client, err = providerfoundation.NewGitLabClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
+	}
 	if err != nil {
 		return nil, err
 	}
-	group, pattern := gitlabDiscoveryScope(options)
-	requestPath := "/api/v4/projects"
-	query := url.Values{"membership": {"true"}}
-	if group != "" {
-		requestPath = "/api/v4/groups/" + url.PathEscape(group) + "/projects"
-		query = url.Values{"include_subgroups": {"true"}}
+	allRepos, groupPath, pattern, namespace := gitlabDiscoveryOptions(options)
+	var page providerfoundation.PageCollection
+	if allRepos {
+		page, err = providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+			Path: "/api/v4/projects", Query: url.Values{"membership": {"true"}},
+			PerPage: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
+		})
+	} else if groupPath == "" {
+		// Python: `if not group_path: return []`.
+		return nil, nil
+	} else {
+		// Python's non-all_repos branch does NOT pass include_subgroups --
+		// it lists exactly one group's own projects.
+		page, err = providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+			Path: "/api/v4/groups/" + url.PathEscape(groupPath) + "/projects", Query: url.Values{},
+			PerPage: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
+		})
 	}
-	page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-		Path: requestPath, Query: query, PerPage: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
-	})
 	if err != nil {
 		return nil, err
 	}
-	normalizedGroup := strings.ToLower(group)
+	if page.PageBudgetExhausted {
+		return nil, fmt.Errorf("gitlab: %w", ErrSourceDiscoveryTruncated)
+	}
+	normalizedNamespace := strings.ToLower(namespace)
 	result := make([]discoveredSource, 0, len(page.Items))
 	for _, raw := range page.Items {
 		var project struct {
@@ -452,9 +574,9 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 		if project.ID.String() == "" || project.PathWithNamespace == "" {
 			continue
 		}
-		if normalizedGroup != "" {
+		if normalizedNamespace != "" {
 			candidate := strings.ToLower(project.PathWithNamespace)
-			if candidate != normalizedGroup && !strings.HasPrefix(candidate, normalizedGroup+"/") {
+			if candidate != normalizedNamespace && !strings.HasPrefix(candidate, normalizedNamespace+"/") {
 				continue
 			}
 		}
@@ -480,10 +602,16 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 }
 
 // discoverJira lists every Jira project visible to the credential via
-// GET /rest/api/3/project/search. There is no Python precedent to match
-// byte-for-byte (discover_repos_for_config's jira branch does not exist on
-// main as of this PR -- CHAOS-4584 is still in flight): external_id is the
-// project KEY, matching the "project_key" scope vocabulary this ticket and
+// GET /rest/api/3/project/search, falling back to the legacy unpaginated
+// GET /rest/api/3/project when the enhanced search endpoint 404/405/410s
+// (some older/JSM-only Jira deployments don't serve it) -- codex review
+// (round 1, P2), mirroring the existing Python client's own fallback
+// (src/dev_health_ops/providers/jira/client.py:552-579).
+//
+// There is no Python precedent to match byte-for-byte for the primary path
+// (discover_repos_for_config's jira branch does not exist on main as of this
+// PR -- CHAOS-4584 is still in flight): external_id is the project KEY,
+// matching the "project_key" scope vocabulary this ticket and
 // team_autoimport_jira.py's own ownership resolution already use, not the
 // numeric project id (which fetchJiraProject/resolveJiraProjectCatalog in
 // jira_work_items_route.go resolve FROM the key, the reverse direction).
@@ -497,7 +625,14 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		MaxResults: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if err != nil {
-		return nil, err
+		legacyItems, legacyErr := discoverJiraLegacyProjects(ctx, client)
+		if legacyErr != nil {
+			return nil, err
+		}
+		page = providerfoundation.PageCollection{Items: legacyItems}
+	}
+	if page.PageBudgetExhausted {
+		return nil, fmt.Errorf("jira: %w", ErrSourceDiscoveryTruncated)
 	}
 	result := make([]discoveredSource, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -524,6 +659,29 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 	return result, nil
 }
 
+// discoverJiraLegacyProjects is the unpaginated GET /rest/api/3/project
+// fallback: a plain JSON array of every project, no query params, no
+// pagination envelope.
+func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.HTTPClient) ([]json.RawMessage, error) {
+	response, err := client.Do(ctx, http.MethodGet, "/rest/api/3/project", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("legacy jira project listing: unexpected status %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return items, nil
+}
+
 // upsertSources idempotently upserts every discovered row keyed on the
 // EXACT unique constraint discover_sources_for_integration already uses
 // (org_id,integration_id,provider,external_id). is_enabled and
@@ -536,6 +694,7 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 // version for an existing row.
 func (service *NativeSourceDiscoveryService) upsertSources(
 	ctx context.Context, orgID, integrationID, provider string, sources []discoveredSource, now time.Time,
+	configID string, plannerManaged bool,
 ) (created, existing int, err error) {
 	if len(sources) == 0 {
 		return 0, 0, nil
@@ -551,7 +710,23 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 		}
 	}()
 	for _, source := range sources {
-		metadataJSON, marshalErr := json.Marshal(source.Metadata)
+		// Codex review (round 1, P1): loadPlanSources only admits a
+		// planner-managed parent's sources whose own
+		// metadata.planner_managed_sync_config_id equals the config
+		// currently planning -- a freshly discovered row with no such tag
+		// is invisible to unit planning even though it exists. Stamp it
+		// here, on the same payload the merge below writes, so the
+		// occurrence that just discovered a source can also plan it.
+		metadata := source.Metadata
+		if plannerManaged && configID != "" {
+			tagged := make(map[string]any, len(metadata)+1)
+			for key, value := range metadata {
+				tagged[key] = value
+			}
+			tagged["planner_managed_sync_config_id"] = configID
+			metadata = tagged
+		}
+		metadataJSON, marshalErr := json.Marshal(metadata)
 		if marshalErr != nil {
 			return 0, 0, fmt.Errorf("encode %s source metadata: %w", provider, marshalErr)
 		}
@@ -594,4 +769,9 @@ RETURNING (xmax = 0)`,
 func stringOption(options map[string]any, key string) string {
 	value, _ := options[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func boolOption(options map[string]any, key string) bool {
+	value, _ := options[key].(bool)
+	return value
 }

@@ -42,47 +42,65 @@ func TestEveryProviderDatasetFamilyHasADecidedSourceDiscoveryStance(t *testing.T
 	}
 }
 
-func TestGithubDiscoveryScope(t *testing.T) {
+func TestGithubDiscoveryOptions(t *testing.T) {
 	cases := []struct {
-		name        string
-		options     map[string]any
-		wantOwner   string
-		wantPattern string
+		name          string
+		options       map[string]any
+		wantAllRepos  bool
+		wantOwner     string
+		wantPattern   string
+		wantNamespace string
 	}{
-		{name: "empty options discovers everything visible", options: map[string]any{}, wantOwner: "", wantPattern: "*"},
-		{name: "explicit owner only", options: map[string]any{"owner": "acme"}, wantOwner: "acme", wantPattern: "*"},
-		{name: "owner/pattern search fills pattern", options: map[string]any{"owner": "acme", "search": "acme/api-*"}, wantOwner: "acme", wantPattern: "api-*"},
-		{name: "bare search with no owner becomes the owner", options: map[string]any{"search": "acme"}, wantOwner: "acme", wantPattern: "*"},
-		{name: "search supplies both halves when owner is unset", options: map[string]any{"search": "acme/api-*"}, wantOwner: "acme", wantPattern: "api-*"},
+		{name: "empty options: no owner, no API call (see discoverGitHub)", options: map[string]any{}, wantAllRepos: false, wantOwner: "", wantPattern: "*", wantNamespace: ""},
+		{name: "explicit owner only", options: map[string]any{"owner": "acme"}, wantAllRepos: false, wantOwner: "acme", wantPattern: "*", wantNamespace: ""},
+		{name: "owner/pattern search OVERWRITES owner even when set", options: map[string]any{"owner": "ignored", "search": "acme/api-*"}, wantAllRepos: false, wantOwner: "acme", wantPattern: "api-*", wantNamespace: ""},
+		{name: "bare search with no owner becomes the owner", options: map[string]any{"search": "acme"}, wantAllRepos: false, wantOwner: "acme", wantPattern: "*", wantNamespace: ""},
+		{name: "all_repos with owner sets namespace, no search", options: map[string]any{"all_repos": true, "owner": "acme"}, wantAllRepos: true, wantOwner: "acme", wantPattern: "*", wantNamespace: "acme"},
+		{name: "all_repos with bare search is a pattern only, namespace stays whatever owner resolved", options: map[string]any{"all_repos": true, "search": "api-*"}, wantAllRepos: true, wantOwner: "", wantPattern: "api-*", wantNamespace: ""},
+		{name: "all_repos with owner/pattern search fills namespace+pattern", options: map[string]any{"all_repos": true, "search": "acme/api-*"}, wantAllRepos: true, wantOwner: "", wantPattern: "api-*", wantNamespace: "acme"},
+		{name: "all_repos with no owner/search: unbounded, no namespace filter", options: map[string]any{"all_repos": true}, wantAllRepos: true, wantOwner: "", wantPattern: "*", wantNamespace: ""},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			owner, pattern := githubDiscoveryScope(testCase.options)
-			if owner != testCase.wantOwner || pattern != testCase.wantPattern {
-				t.Fatalf("githubDiscoveryScope(%v) = (%q,%q), want (%q,%q)", testCase.options, owner, pattern, testCase.wantOwner, testCase.wantPattern)
+			allRepos, owner, pattern, namespace := githubDiscoveryOptions(testCase.options)
+			if allRepos != testCase.wantAllRepos || owner != testCase.wantOwner || pattern != testCase.wantPattern || namespace != testCase.wantNamespace {
+				t.Fatalf("githubDiscoveryOptions(%v) = (%v,%q,%q,%q), want (%v,%q,%q,%q)",
+					testCase.options, allRepos, owner, pattern, namespace,
+					testCase.wantAllRepos, testCase.wantOwner, testCase.wantPattern, testCase.wantNamespace)
 			}
 		})
 	}
 }
 
-func TestGitlabDiscoveryScope(t *testing.T) {
+func TestGitlabDiscoveryOptions(t *testing.T) {
 	cases := []struct {
-		name        string
-		options     map[string]any
-		wantGroup   string
-		wantPattern string
+		name          string
+		options       map[string]any
+		wantAllRepos  bool
+		wantGroup     string
+		wantPattern   string
+		wantNamespace string
 	}{
-		{name: "empty options discovers everything visible", options: map[string]any{}, wantGroup: "", wantPattern: "*"},
-		{name: "explicit group only", options: map[string]any{"group": "acme"}, wantGroup: "acme", wantPattern: "*"},
-		{name: "owner falls back as group", options: map[string]any{"owner": "acme"}, wantGroup: "acme", wantPattern: "*"},
-		{name: "nested subgroup search splits on the LAST slash", options: map[string]any{"search": "acme/platform/api-*"}, wantGroup: "acme/platform", wantPattern: "api-*"},
-		{name: "bare search with no group becomes the group", options: map[string]any{"search": "acme"}, wantGroup: "acme", wantPattern: "*"},
+		{name: "empty options: no group, no API call (see discoverGitLab)", options: map[string]any{}, wantAllRepos: false, wantGroup: "", wantPattern: "*", wantNamespace: ""},
+		{name: "explicit group only", options: map[string]any{"group": "acme"}, wantAllRepos: false, wantGroup: "acme", wantPattern: "*", wantNamespace: ""},
+		// Python's discover_gitlab_repos only reads sync_options.owner as a
+		// NAMESPACE FILTER inside the all_repos branch -- the non-all_repos
+		// branch has no owner-falls-back-to-group behavior at all (unlike
+		// github, where owner IS the scope). owner alone here resolves to
+		// no group, so discoverGitLab makes no API call at all.
+		{name: "owner alone (non-all_repos) does not become the group", options: map[string]any{"owner": "acme"}, wantAllRepos: false, wantGroup: "", wantPattern: "*", wantNamespace: ""},
+		{name: "non-all_repos nested search splits on the FIRST slash, unlike all_repos", options: map[string]any{"search": "acme/platform/api-*"}, wantAllRepos: false, wantGroup: "acme", wantPattern: "platform/api-*", wantNamespace: ""},
+		{name: "bare search with no group becomes the group", options: map[string]any{"search": "acme"}, wantAllRepos: false, wantGroup: "acme", wantPattern: "*", wantNamespace: ""},
+		{name: "all_repos nested subgroup search splits on the LAST slash", options: map[string]any{"all_repos": true, "search": "acme/platform/api-*"}, wantAllRepos: true, wantGroup: "", wantPattern: "api-*", wantNamespace: "acme/platform"},
+		{name: "all_repos with group sets namespace, no search", options: map[string]any{"all_repos": true, "group": "acme"}, wantAllRepos: true, wantGroup: "acme", wantPattern: "*", wantNamespace: "acme"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			group, pattern := gitlabDiscoveryScope(testCase.options)
-			if group != testCase.wantGroup || pattern != testCase.wantPattern {
-				t.Fatalf("gitlabDiscoveryScope(%v) = (%q,%q), want (%q,%q)", testCase.options, group, pattern, testCase.wantGroup, testCase.wantPattern)
+			allRepos, group, pattern, namespace := gitlabDiscoveryOptions(testCase.options)
+			if allRepos != testCase.wantAllRepos || group != testCase.wantGroup || pattern != testCase.wantPattern || namespace != testCase.wantNamespace {
+				t.Fatalf("gitlabDiscoveryOptions(%v) = (%v,%q,%q,%q), want (%v,%q,%q,%q)",
+					testCase.options, allRepos, group, pattern, namespace,
+					testCase.wantAllRepos, testCase.wantGroup, testCase.wantPattern, testCase.wantNamespace)
 			}
 		})
 	}
@@ -95,15 +113,42 @@ type fakeSourceDiscoveryDoer struct {
 	t     *testing.T
 	body  string
 	paths []string
+	urls  []string
 }
 
 func (doer *fakeSourceDiscoveryDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
 	doer.paths = append(doer.paths, request.URL.Path)
+	doer.urls = append(doer.urls, request.URL.String())
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(doer.body)),
+		Request:    request,
+	}, nil
+}
+
+// sequencedSourceDiscoveryDoer returns one canned (status, body) pair per
+// call, in order, holding the last one for any further calls -- used to
+// simulate a primary endpoint failing and a fallback succeeding.
+type sequencedSourceDiscoveryDoer struct {
+	t        *testing.T
+	statuses []int
+	bodies   []string
+	paths    []string
+}
+
+func (doer *sequencedSourceDiscoveryDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.paths = append(doer.paths, request.URL.Path)
+	index := len(doer.paths) - 1
+	if index >= len(doer.statuses) {
+		index = len(doer.statuses) - 1
+	}
+	return &http.Response{
+		StatusCode: doer.statuses[index],
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(doer.bodies[index])),
 		Request:    request,
 	}, nil
 }
@@ -141,10 +186,57 @@ func TestDiscoverGitHubMapsRepositoriesAndFiltersByPattern(t *testing.T) {
 	}
 }
 
-func TestDiscoverGitLabMapsProjectsAndAppliesGroupScope(t *testing.T) {
+func TestDiscoverGitHubNonAllReposWithNoOwnerMakesNoAPICall(t *testing.T) {
+	// Python's discover_github_repos: `if not owner: return []` -- no scope
+	// resolved at all is an explicit empty result, never an unbounded
+	// /user/repos listing (codex review round 1, P1).
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[]`}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 0 {
+		t.Fatalf("discoverGitHub() = %#v, want no sources", sources)
+	}
+	if len(doer.paths) != 0 {
+		t.Fatalf("discoverGitHub() made %d API calls with no owner and no all_repos, want 0: %v", len(doer.paths), doer.paths)
+	}
+}
+
+func TestDiscoverGitHubAllReposListsUserReposAndFiltersByNamespace(t *testing.T) {
 	doer := &fakeSourceDiscoveryDoer{t: t, body: `[
-		{"id":101,"name":"api","path_with_namespace":"acme/api"},
-		{"id":102,"name":"other","path_with_namespace":"other-group/other"}
+		{"name":"api","full_name":"acme/api","owner":{"login":"acme"}},
+		{"name":"other","full_name":"other-owner/other","owner":{"login":"other-owner"}}
+	]`}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true, "owner": "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].FullName != "acme/api" {
+		t.Fatalf("discoverGitHub() all_repos = %#v, want only the acme-owned repo", sources)
+	}
+	if len(doer.paths) != 1 || doer.paths[0] != "/user/repos" {
+		t.Fatalf("discoverGitHub() all_repos requested paths = %v, want /user/repos", doer.paths)
+	}
+}
+
+func TestDiscoverGitLabNonAllReposListsOneGroupWithoutIncludeSubgroups(t *testing.T) {
+	// The real /api/v4/groups/{group}/projects endpoint is already scoped
+	// server-side, so this test's fixture returns only what that endpoint
+	// would realistically return -- no client-side namespace filter is
+	// applied (or needed) for the non-all_repos path, unlike all_repos below.
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[
+		{"id":101,"name":"api","path_with_namespace":"acme/api"}
 	]`}
 	credential, err := providerfoundation.Credential{Provider: "gitlab"}.WithEphemeralSecret("token", secrets.NewValue("gl-token"))
 	if err != nil {
@@ -156,7 +248,7 @@ func TestDiscoverGitLabMapsProjectsAndAppliesGroupScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(sources) != 1 {
-		t.Fatalf("discoverGitLab() = %#v, want only the acme-namespaced project", sources)
+		t.Fatalf("discoverGitLab() = %#v, want the one group project", sources)
 	}
 	got := sources[0]
 	if got.ExternalID != "101" || got.SourceType != "project" || got.Name != "api" || got.FullName != "acme/api" {
@@ -164,6 +256,71 @@ func TestDiscoverGitLabMapsProjectsAndAppliesGroupScope(t *testing.T) {
 	}
 	if got.Metadata["path_with_namespace"] != "acme/api" {
 		t.Fatalf("discoverGitLab() metadata = %#v", got.Metadata)
+	}
+	if len(doer.urls) != 1 || !strings.HasPrefix(doer.paths[0], "/api/v4/groups/acme/projects") {
+		t.Fatalf("discoverGitLab() requested paths = %v, want /api/v4/groups/acme/projects", doer.paths)
+	}
+	if strings.Contains(doer.urls[0], "include_subgroups") {
+		t.Fatalf("discoverGitLab() non-all_repos request included include_subgroups, Python's non-all_repos branch never does: %s", doer.urls[0])
+	}
+}
+
+func TestDiscoverGitLabNonAllReposWithNoGroupMakesNoAPICall(t *testing.T) {
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[]`}
+	credential, err := providerfoundation.Credential{Provider: "gitlab"}.WithEphemeralSecret("token", secrets.NewValue("gl-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitLab(context.Background(), credential, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 0 {
+		t.Fatalf("discoverGitLab() = %#v, want no sources", sources)
+	}
+	if len(doer.paths) != 0 {
+		t.Fatalf("discoverGitLab() made %d API calls with no group and no all_repos, want 0: %v", len(doer.paths), doer.paths)
+	}
+}
+
+func TestDiscoverGitLabAllReposFiltersByNamespaceClientSide(t *testing.T) {
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[
+		{"id":101,"name":"api","path_with_namespace":"acme/api"},
+		{"id":102,"name":"other","path_with_namespace":"other-group/other"}
+	]`}
+	credential, err := providerfoundation.Credential{Provider: "gitlab"}.WithEphemeralSecret("token", secrets.NewValue("gl-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverGitLab(context.Background(), credential, map[string]any{"all_repos": true, "group": "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].FullName != "acme/api" {
+		t.Fatalf("discoverGitLab() all_repos = %#v, want only the acme-namespaced project", sources)
+	}
+	if len(doer.paths) != 1 || doer.paths[0] != "/api/v4/projects" {
+		t.Fatalf("discoverGitLab() all_repos requested paths = %v, want /api/v4/projects", doer.paths)
+	}
+}
+
+func TestDiscoverGitLabHonorsSyncOptionsGitlabURL(t *testing.T) {
+	doer := &fakeSourceDiscoveryDoer{t: t, body: `[]`}
+	credential, err := providerfoundation.Credential{Provider: "gitlab"}.WithEphemeralSecret("token", secrets.NewValue("gl-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	_, err = service.discoverGitLab(context.Background(), credential, map[string]any{
+		"group": "acme", "gitlab_url": "https://gitlab.example.internal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.urls) != 1 || !strings.HasPrefix(doer.urls[0], "https://gitlab.example.internal/") {
+		t.Fatalf("discoverGitLab() request URL = %v, want it to target sync_options.gitlab_url, not gitlab.com", doer.urls)
 	}
 }
 
@@ -204,6 +361,45 @@ func TestDiscoverJiraMapsProjectsByKey(t *testing.T) {
 	}
 }
 
+// TestDiscoverJiraFallsBackToLegacyProjectEndpoint proves the CHAOS-4602
+// codex round 1 (P2) fix: a Jira deployment that 404s the enhanced
+// /rest/api/3/project/search endpoint still discovers projects via the
+// legacy, unpaginated /rest/api/3/project, mirroring the existing Python
+// client's own fallback.
+func TestDiscoverJiraFallsBackToLegacyProjectEndpoint(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusNotFound, http.StatusOK},
+		bodies: []string{
+			`{"errorMessages":["not found"]}`,
+			`[{"id":"10001","key":"CHAOS","name":"Chaos Engineering"}]`,
+		},
+	}
+	credential, err := providerfoundation.Credential{Provider: "jira"}.WithEphemeralSecret("email", secrets.NewValue("bot@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("api_token", secrets.NewValue("jira-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("base_url", secrets.NewValue("https://acme.atlassian.net"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	sources, err := service.discoverJira(context.Background(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].ExternalID != "CHAOS" {
+		t.Fatalf("discoverJira() legacy fallback = %#v, want the CHAOS project", sources)
+	}
+	if len(doer.paths) != 2 || doer.paths[0] != "/rest/api/3/project/search" || doer.paths[1] != "/rest/api/3/project" {
+		t.Fatalf("discoverJira() requested paths = %v, want [search, legacy]", doer.paths)
+	}
+}
+
 // TestDiscoverSkipsExplicitScopeAndUnknownProviders proves the two
 // no-network, no-DB early-outs: an explicit-scope config, and any provider
 // outside sourceDiscoveryProviders. Neither reaches the credential resolver
@@ -227,6 +423,25 @@ func TestDiscoverSkipsExplicitScopeAndUnknownProviders(t *testing.T) {
 	}
 	if report.Outcome != SourceDiscoveryOutcomeSkipped {
 		t.Fatalf("non-source-type-scope provider Discover() outcome = %q, want skipped", report.Outcome)
+	}
+}
+
+// TestDiscoverSkipsWhenCredentialIDIsNil proves the CHAOS-4602 codex round 1
+// (P1) fix: a NULL Integration.credential_id (environment auth) must never
+// resolve to the org's unrelated default stored credential. Discover must
+// return before ever calling the (nil, on this service) credential
+// resolver, which a panic here would prove it didn't.
+func TestDiscoverSkipsWhenCredentialIDIsNil(t *testing.T) {
+	service := &NativeSourceDiscoveryService{telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+
+	report, err := service.Discover(context.Background(), SourceDiscoveryArgs{
+		Provider: "github", CredentialID: nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Outcome != SourceDiscoveryOutcomeSkipped {
+		t.Fatalf("nil-CredentialID Discover() outcome = %q, want skipped", report.Outcome)
 	}
 }
 

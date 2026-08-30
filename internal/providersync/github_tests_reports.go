@@ -157,9 +157,14 @@ type GitHubTestsIncomplete struct {
 type GitHubTestsSkippedArtifact struct {
 	RunID      string `json:"run_id"`
 	ArtifactID string `json:"artifact_id"`
-	Cause      string `json:"cause"`
-	SizeBytes  int64  `json:"size_bytes,omitempty"`
-	CapBytes   int64  `json:"cap_bytes,omitempty"`
+	// Name is the provider-supplied artifact name (CHAOS-4588/CHAOS-4591):
+	// additive, optional -- a legacy marker written before this field existed
+	// decodes it as "", which callers must treat as "unknown", never as a
+	// real empty name.
+	Name      string `json:"name,omitempty"`
+	Cause     string `json:"cause"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	CapBytes  int64  `json:"cap_bytes,omitempty"`
 }
 
 // githubTestsMaxSkippedArtifactRecords bounds how many GitHubTestsSkippedArtifact
@@ -177,6 +182,15 @@ type GitHubTestsSkippedArtifact struct {
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
 const githubTestsMaxSkippedArtifactRecords = 20
+
+// githubTestsMaxExcludedArtifactSampleRecords bounds
+// githubTestsChunkCursor.ExcludedArtifactSample, kept well under
+// githubTestsMaxSkippedArtifactRecords for the same cursor-byte-budget reason
+// (CHAOS-4588/CHAOS-4591): exclusion volume can be much higher than skip
+// volume on a docker-build-heavy repository, and the sample only needs to be
+// large enough to identify the PATTERN, not every occurrence -- the total
+// count already lives on ExcludedNonReportSuffix/Prefix.
+const githubTestsMaxExcludedArtifactSampleRecords = 5
 
 const (
 	// githubTestsReportMemberComponent is the original vocabulary: one member

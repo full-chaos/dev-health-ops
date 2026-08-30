@@ -190,6 +190,14 @@ spec:
                   {{- end }}
                   key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
                   optional: true
+            # CHAOS-4587 (codex delta round 2, P1): migration 067 checks
+            # this same variable to decide whether to apply the
+            # ordering-contract cutover -- reuses goWorkers.operationalOrderingContract
+            # (go-workers.yaml) so there is exactly one values.yaml knob
+            # that moves this Job and every go-* worker together, rather
+            # than two that could drift out of sync at cutover.
+            - name: OPERATIONAL_ORDERING_CONTRACT
+              value: {{ .Values.goWorkers.operationalOrderingContract | default "1" | quote }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

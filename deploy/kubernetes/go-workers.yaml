@@ -18,6 +18,15 @@ data:
   # stream-* are excluded: they run a separate role with their own /healthz
   # and never register worker_instances presence.
   EXPECTED_WORKER_GROUPS: "heavy,ops,sync,sync-provider"
+  # CHAOS-4587: every Deployment below reads a canonical operational table
+  # through the ordering-contract guard (dora_native_clickhouse.go,
+  # pagerduty_services_effects_clickhouse.go) and refuses to start against a
+  # contract-2 (post-067) table without this set. Scoped to this go-worker
+  # ConfigMap (not the shared dev-health-config api/worker one) because the
+  # Python api's own ordering-contract awareness is a separate, out-of-scope
+  # concern -- see deploy/go-workers/README.md's rollout note. Omitted
+  # defaults to contract 1 (rollout-safe).
+  OPERATIONAL_ORDERING_CONTRACT: "1"
 ---
 apiVersion: v1
 kind: Service
@@ -51,7 +60,7 @@ spec:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
           args: ["--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -77,7 +86,7 @@ spec:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
           args: ["--queues=coverage,heartbeat,retention,webhooks", "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4", "--worker-group=ops", "--shutdown-timeout=960s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -103,7 +112,7 @@ spec:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
           args: ["--queues=sync", "--queue-concurrency=sync=4", "--worker-group=sync", "--shutdown-timeout=960s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -129,7 +138,7 @@ spec:
         - name: worker
           image: ghcr.io/full-chaos/dev-health-go-worker:latest
           args: ["--queues=sync_provider", "--queue-concurrency=sync_provider=2", "--worker-group=sync-provider", "--shutdown-timeout=960s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -152,7 +161,7 @@ spec:
         - name: reconciler
           image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
           args: ["--shutdown-timeout=60s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -175,7 +184,7 @@ spec:
         - name: scheduler
           image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
           args: ["--shutdown-timeout=60s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
@@ -198,7 +207,7 @@ spec:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
           args: ["--profile=external", "--shutdown-timeout=60s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -221,7 +230,7 @@ spec:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
           args: ["--profile=ingest", "--shutdown-timeout=60s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
@@ -244,7 +253,7 @@ spec:
         - name: stream-runner
           image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
           args: ["--profile=pagerduty", "--shutdown-timeout=60s", "--http-addr=:8080"]
-          envFrom: [{configMapRef: {name: dev-health-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
+          envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}

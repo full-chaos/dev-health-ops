@@ -1703,24 +1703,28 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_go_worker_process_registry_declares_operational_ordering_contract() -> None:
-    """Registry-level source of truth: every process in deployment.json must
-    require OPERATIONAL_ORDERING_CONTRACT in its config_env.
-
-    Red on origin/main 2b3032b63: no process declares a config_env key at
-    all (this key did not exist), so this fails with every process name
-    listed as missing.
+def test_go_worker_process_registry_matches_ordering_contract_coverage_maps() -> None:
+    """deployment.json's `processes` list is the single source of truth for
+    which Go binaries exist -- `internal/deploymentcontract` decodes it with
+    `DisallowUnknownFields`, so this registry intentionally carries no
+    `config_env`/ordering-contract field of its own (adding one is a Go
+    schema + validation change, out of scope for this config-only ticket).
+    Cross-mechanism enumeration below instead keys off `processes[].name`,
+    an already-existing field. This guard makes sure that if a process is
+    ever added, removed, or renamed in the registry, the per-mechanism name
+    maps this module hardcodes are caught out of sync in the same PR,
+    instead of the other mechanism tests silently checking a stale subset.
     """
-    processes = _load_yaml(_DEPLOYMENT_JSON)["processes"]
-    assert processes, "deployment.json must declare at least one process"
-    missing = {
-        process["name"]
-        for process in processes
-        if "OPERATIONAL_ORDERING_CONTRACT" not in (process.get("config_env") or [])
-    }
-    assert not missing, (
-        "processes missing OPERATIONAL_ORDERING_CONTRACT in config_env: "
-        f"{sorted(missing)}"
+    names = {p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]}
+    assert names, "deployment.json must declare at least one process"
+    assert names == set(_SPLIT_COMPOSE_SERVICE_BY_PROCESS), (
+        f"deployment.json processes {sorted(names)} do not match "
+        f"_SPLIT_COMPOSE_SERVICE_BY_PROCESS keys "
+        f"{sorted(_SPLIT_COMPOSE_SERVICE_BY_PROCESS)}"
+    )
+    assert names == set(_K8S_DEPLOYMENT_BY_PROCESS), (
+        f"deployment.json processes {sorted(names)} do not match "
+        f"_K8S_DEPLOYMENT_BY_PROCESS keys {sorted(_K8S_DEPLOYMENT_BY_PROCESS)}"
     )
 
 

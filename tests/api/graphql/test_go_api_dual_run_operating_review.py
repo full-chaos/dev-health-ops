@@ -1277,13 +1277,68 @@ REQUIRED_GUARDED_SUFFIX = "priorValue"
 # for these paths), so a length or order divergence still fails loudly
 # via the comparator's own mismatch, never absorbed here.
 _NUMERIC_TOKEN_RE = re.compile(r"[+-]?(?:nan|\d+\.?\d*)", re.IGNORECASE)
+_NUMERIC_TOKEN_CAPTURE_RE = re.compile(r"([+-]?(?:nan|\d+\.?\d*))", re.IGNORECASE)
 
 
 def _normalize_numeric_tokens(s: str) -> str:
     """Collapse every signed decimal / nan token to one placeholder, so
     two sentences differing ONLY in a rendered numeric value compare
-    equal."""
+    equal. Answers "did ONLY the number differ" -- never "was the number
+    CORRECT" (that is `_extract_numeric_token` + an exact expected-value
+    compare, below); codex R2 P2 flagged that this normalization alone
+    would let Go render an outright WRONG number and still pass, since a
+    wrong number collapses to the same placeholder as the right one."""
     return _NUMERIC_TOKEN_RE.sub("#", s)
+
+
+def _extract_numeric_token(s: str) -> str:
+    """Extracts the single rendered numeric/nan token from a
+    deltaSummary/_delta_summary sentence (e.g.
+    `"...worsened by +0.4 score week-over-week."` -> `"+0.4"`) so a
+    caller can verify WHICH number rendered, not merely that a number-
+    shaped thing did."""
+    m = _NUMERIC_TOKEN_CAPTURE_RE.search(s)
+    assert m, f"no numeric token found in {s!r}"
+    return m.group(1)
+
+
+def _is_nan_token(token: str) -> bool:
+    return token.lstrip("+-").lower() == "nan"
+
+
+def _expected_guarded_delta(value: float) -> dict:
+    """Mirrors buildMetric (operatingreview.go:1398-1440) / _metric
+    (metrics/operating_review.py:700-735) verbatim for the ONE case
+    CHAOS-4563's guard produces: prior is always the guard's finite
+    0.0 fallback (see GUARDED_DELTA_PATH_PREFIXES's doc comment above),
+    and all four guarded metrics (hotspot_risk_score,
+    ownership_concentration, complexity_per_kloc, change_failure_rate)
+    share the same LOWER_IS_BETTER direction. Computing the expected
+    delta from the formula -- given the two known inputs, this metric's
+    own reported `value` and the guard's already-proven `priorValue`
+    of 0.0 -- closes codex R2 P2: a blanket "the whole `delta`
+    sub-object may differ" prefix would let an UNRELATED bug in
+    `.value`/`.status`/`.percent` for one of these four metrics pass
+    silently as "not stray", since nothing checked those sub-fields
+    were computed the way the guard is actually supposed to produce
+    them.
+    """
+    prior = 0.0
+    delta_value = value - prior
+    percent = None if delta_value != 0 else 0.0
+    if abs(delta_value) < 0.000001:
+        status = "unchanged"
+    elif delta_value < 0:  # LOWER_IS_BETTER: negative delta improves
+        status = "improved"
+    else:
+        status = "worsened"
+    return {
+        "value": value,
+        "priorValue": prior,
+        "absolute": delta_value,
+        "percent": percent,
+        "status": status,
+    }
 
 
 def _assert_text_list_diverges_only_by_numeric_token(
@@ -1419,26 +1474,39 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
         "expected a clean Go response under CHAOS-4563's known_count "
         f"guard, got GraphQL errors: {go_payload}"
     )
+    # For each guarded metric, assert the ENTIRE delta sub-object equals
+    # the EXACT value `_expected_guarded_delta` computes from this
+    # metric's own (unguarded, current-period) `value` and the guard's
+    # proven `priorValue=0.0` fallback -- not merely that `priorValue`
+    # looks right while `.absolute`/`.percent`/`.status` go unchecked.
     go_sections = go_payload["data"]["operatingReview"]["sections"]
-    for i in RISK_GUARDED_METRIC_INDICES:
-        prior_value = go_sections[RISK_SECTION_INDEX]["metrics"][i]["delta"][
-            "priorValue"
-        ]
-        assert prior_value == 0.0, (
-            f"expected the known_count guard to nil the zero-row "
-            f"prior-period row at risk metric index {i}, then avgF's "
-            f"empty-average-is-0.0 fallback (operatingreview.go:232) to "
-            f"surface a finite 0.0 on the wire, got {prior_value!r} at "
-            f"sections[{RISK_SECTION_INDEX}].metrics[{i}].delta.priorValue"
+    guarded_metric_positions = tuple(
+        zip(
+            (RISK_SECTION_INDEX,) * len(RISK_GUARDED_METRIC_INDICES),
+            RISK_GUARDED_METRIC_INDICES,
+            ("Hotspot risk", "Ownership concentration", "Complexity"),
         )
-    reliability_prior_value = go_sections[RELIABILITY_SECTION_INDEX]["metrics"][
-        RELIABILITY_GUARDED_METRIC_INDEX
-    ]["delta"]["priorValue"]
-    assert reliability_prior_value == 0.0, (
-        "expected the known_count guard's finite-0.0 fallback at the "
-        f"reliability section's change_failure_rate, got "
-        f"{reliability_prior_value!r}"
+    ) + (
+        (
+            RELIABILITY_SECTION_INDEX,
+            RELIABILITY_GUARDED_METRIC_INDEX,
+            "Change failure rate",
+        ),
     )
+    expected_absolute_by_label: dict[str, float] = {}
+    for section_index, metric_index, label in guarded_metric_positions:
+        metric = go_sections[section_index]["metrics"][metric_index]
+        expected = _expected_guarded_delta(metric["value"])
+        assert metric["delta"] == expected, (
+            f"expected the guarded metric {label!r} "
+            f"(sections[{section_index}].metrics[{metric_index}]) to "
+            f"have delta EXACTLY {expected!r} -- computed from "
+            f"buildMetric's own formula given its known value="
+            f"{metric['value']!r} and the guard's proven priorValue=0.0 "
+            f"(operatingreview.go:232's avgF empty-average-is-0.0 "
+            f"fallback), got {metric['delta']!r}"
+        )
+        expected_absolute_by_label[label] = expected["absolute"]
 
     # (b) Python: encode the SAME response envelope the real production
     # endpoint would build, through the SAME encoder
@@ -1638,6 +1706,28 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
             f"CHAOS-4563's guard stopped perturbing this metric's "
             f"delta.absolute: python={python_entries[index]!r} "
             f"go={go_entries[index]!r}"
+        )
+        # codex R2 P2: numeric-token normalization alone (above) only
+        # proves "some number differs from nan" -- Go rendering an
+        # outright WRONG number (e.g. +0.6 instead of the real +0.4)
+        # would still pass that check, since both collapse to the same
+        # placeholder. Extract the actual tokens and verify EXACTLY:
+        # Python's is nan, Go's equals this metric's own proven
+        # delta.absolute (asserted exactly above, reused here).
+        python_token = _extract_numeric_token(python_entries[index])
+        go_token = _extract_numeric_token(go_entries[index])
+        assert _is_nan_token(python_token), (
+            f"expected Python's {label!r} entry in {path_prefix} to "
+            f"render a nan token, got {python_token!r} in "
+            f"{python_entries[index]!r}"
+        )
+        expected_absolute = expected_absolute_by_label[label]
+        assert float(go_token) == pytest.approx(expected_absolute, abs=1e-9), (
+            f"expected Go's {label!r} entry in {path_prefix} to render "
+            f"its EXACT delta.absolute ({expected_absolute!r}), got "
+            f"{go_token!r} in {go_entries[index]!r} -- a wrong rendered "
+            f"number would otherwise still pass the numeric-token-only "
+            f"mechanism check above"
         )
         allowed_text_paths.add(f"{path_prefix}[{index}]")
 

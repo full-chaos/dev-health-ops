@@ -35,6 +35,12 @@ const (
 	// OccurrenceErrorPlannerError means materialization failed for any other
 	// reason.
 	OccurrenceErrorPlannerError = "planner_error"
+	// OccurrenceErrorInvalidPlan means Materialize returned ErrInvalidPlan: a
+	// deterministic failure of the occurrence's own data (an unsupported
+	// mode, a unit-cap overflow, a malformed manual selector). It is never
+	// retried for the same reason OccurrenceErrorIdentityConflict is not --
+	// every future attempt reproduces the identical error.
+	OccurrenceErrorInvalidPlan = "invalid_plan"
 	// OccurrenceErrorRetryExhausted is written when the attempt budget runs out.
 	OccurrenceErrorRetryExhausted = "retry_exhausted"
 )
@@ -382,6 +388,21 @@ func (reconciler *OccurrenceReconciler) reconcileOne(
 		_ = tx.Rollback(rollbackCtx)
 		cancel()
 		committed = true
+		// Codex review (gate round 6, P2): ErrInvalidPlan describes a
+		// deterministic failure of THIS occurrence's own data (an
+		// unsupported mode, a unit-cap overflow, a malformed manual
+		// selector) -- every one of these produces the identical error on
+		// every future attempt, so deferOccurrence's retry-with-backoff
+		// (60s/120s/240s/480s before quarantine on attempt 5, ~15 minutes)
+		// only delays reaching the exact same terminal state fork 2
+		// already requires ("Go-plan-failure surfaced... never silent
+		// pending"). For a malformed source_id/dataset_key, Python rejects
+		// the equivalent request synchronously (planner.py's _coerce_uuid);
+		// quarantining immediately here closes most of that latency gap
+		// for every ErrInvalidPlan case, not just this one.
+		if errors.Is(materializeErr, ErrInvalidPlan) {
+			return reconciler.quarantineInvalidPlan(ctx, now, occurrence)
+		}
 		code := OccurrenceErrorPlannerError
 		if errors.Is(materializeErr, ErrOccurrenceIneligible) {
 			code = OccurrenceErrorIneligible
@@ -487,6 +508,46 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 		return OccurrenceReconcileQuarantined, nil
 	}
 	return OccurrenceReconcileRetry, nil
+}
+
+// quarantineInvalidPlan immediately quarantines an occurrence whose
+// Materialize call returned ErrInvalidPlan, skipping deferOccurrence's
+// retry-with-backoff entirely -- the same tx.Rollback-then-fresh-transaction
+// shape deferOccurrence itself uses, since Materialize's own tx was already
+// rolled back by the caller. Mirrors the identity-conflict quarantine path's
+// reasoning: a deterministic failure of this occurrence's own data
+// reproduces identically on every future attempt, so there is nothing a
+// retry could accomplish.
+func (reconciler *OccurrenceReconciler) quarantineInvalidPlan(
+	ctx context.Context, now time.Time, occurrence PendingOccurrence,
+) (string, error) {
+	tx, err := reconciler.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin invalid-plan quarantine transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	applied, err := quarantineOccurrence(ctx, tx, occurrence, now, OccurrenceErrorInvalidPlan)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit invalid-plan quarantine: %w", err)
+	}
+	committed = true
+	if !applied {
+		// The compare-and-swap on attempt count lost to a concurrent writer,
+		// same reasoning as deferOccurrence's own check.
+		return "", nil
+	}
+	return OccurrenceReconcileQuarantined, nil
 }
 
 // occurrenceBackoff reproduces the checked Python ladder exactly: 60s, 120s,

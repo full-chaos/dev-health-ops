@@ -1414,10 +1414,15 @@ func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, confi
 		// here instead, the same way, so the error takes the existing
 		// Materialize -> quarantine path (matching fork 2's "Go-plan-failure
 		// surfaced, never silent pending" requirement) rather than a silent
-		// no-op plan.
+		// no-op plan. Wrapped in ErrInvalidPlan (codex review, gate round 6)
+		// so occurrence_reconciler.go's quarantineInvalidPlan skips
+		// deferOccurrence's retry-with-backoff entirely -- this occurrence's
+		// selector will never become valid on retry, so quarantining
+		// immediately closes most of the latency gap against Python's
+		// synchronous _coerce_uuid rejection.
 		for _, id := range explicitSourceIDs {
 			if _, err := uuid.Parse(id); err != nil {
-				return nil, fmt.Errorf("invalid source_id: %s", id)
+				return nil, fmt.Errorf("%w: invalid source_id: %s", ErrInvalidPlan, id)
 			}
 		}
 		idFilter = explicitSourceIDs

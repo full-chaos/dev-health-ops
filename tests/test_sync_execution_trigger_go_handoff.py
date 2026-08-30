@@ -148,6 +148,41 @@ def test_go_handoff_disabled_by_default_even_for_planner_managed_config(
     )
 
 
+def test_go_handoff_never_intercepts_an_ordinary_scheduled_cron_tick(
+    sqlite_session, monkeypatch
+):
+    """Codex review (gate round 9, P1): create_sync_execution_trigger is
+    also the ordinary scheduled-cron path's call target --
+    create_scheduled_sync_execution_trigger (sync_scheduler.py) passes
+    triggered_by="schedule" straight through. Before this fix, the Go
+    hand-off branch checked only config.planner_managed and the rollout
+    flag, with no check on triggered_by at all -- flipping the flag on for
+    an org would ALSO route every regular scheduled cron tick for a
+    planner-managed config into the Go hand-off, which writes
+    triggered_by verbatim into sync_manual_triggers.triggered_by, a value
+    the CHECK constraint (settings.py, 'manual'/'backfill' only) rejects
+    outright. This must take the legacy in-process path instead, exactly
+    like the flag-off case, regardless of the flag."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true")
+    config = _seed_planner_managed_config(sqlite_session)
+
+    result = create_sync_execution_trigger(
+        sqlite_session, config, "org-a", triggered_by="schedule", mode="incremental"
+    )
+
+    assert result is not None
+    assert result.occurrence_id is None
+    assert result.awaiting_materialization is False
+    assert sqlite_session.query(SyncManualTrigger).count() == 0, (
+        "an ordinary scheduled cron tick must never mint a sync_manual_triggers "
+        "row, even with the rollout flag on -- it would violate "
+        "ck_sync_manual_triggers_triggered_by ('manual'/'backfill' only)"
+    )
+    assert sqlite_session.query(ScheduledSyncOccurrence).count() == 0, (
+        "the Go hand-off's own occurrence row must not be minted either"
+    )
+
+
 @pytest.mark.asyncio
 async def test_await_materialized_returns_immediately_when_already_completed(
     sqlite_session,
@@ -367,6 +402,76 @@ async def test_await_materialized_never_blocks_the_event_loop(
     assert elapsed < 0.4, (
         f"elapsed={elapsed:.3f}s is close to the serialized sum (~0.45s), "
         "not the concurrent max (~0.25-0.3s) -- the event loop was blocked"
+    )
+
+
+def test_manual_trigger_await_seconds_rejects_non_finite_values(monkeypatch):
+    """Codex review (gate round 9, P2): float("inf")/"nan" both parse
+    successfully via float(raw), and "inf" > 0 is True, so the old check
+    (value > 0) alone accepted them -- an infinite deadline breaks the
+    bounded-await contract fork 2 requires: the poll loop's own
+    `time.monotonic() >= deadline` check can never become true, so it
+    would hang the admin request's coroutine/connection indefinitely on an
+    occurrence that never completes."""
+    from dev_health_ops.sync.execution_trigger import (
+        _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS,
+        _manual_trigger_await_seconds,
+    )
+
+    for non_finite in ("inf", "-inf", "Infinity", "nan"):
+        monkeypatch.setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", non_finite)
+        assert (
+            _manual_trigger_await_seconds() == _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS
+        ), (
+            f"SYNC_MANUAL_TRIGGER_AWAIT_SECONDS={non_finite!r} must fall back "
+            "to the default, not produce a deadline that never elapses"
+        )
+
+
+@pytest.mark.asyncio
+async def test_await_materialized_respects_a_configured_bound_shorter_than_the_poll_interval(
+    sqlite_session, monkeypatch
+):
+    """Codex review (gate round 9, P2): the poll loop slept the full
+    poll_interval unconditionally, so a configured deadline shorter than
+    it overshot by up to one whole poll cycle (measured: 0.05s configured,
+    ~0.252s actual with the default 0.25s poll_interval -- 5x over the
+    promised bound). The sleep must be capped at whatever time actually
+    remains until the deadline."""
+    monkeypatch.setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "0.05")
+    config = _seed_planner_managed_config(sqlite_session)
+    from dev_health_ops.sync.execution_trigger import (
+        _create_go_manual_sync_execution_trigger,
+    )
+    from dev_health_ops.sync.planner import SyncPlanRequest
+
+    request = SyncPlanRequest(
+        integration_id=str(config.integration_id),
+        org_id="org-a",
+        mode="incremental",
+        triggered_by="manual",
+    )
+    minted = _create_go_manual_sync_execution_trigger(
+        sqlite_session, config, "org-a", request
+    )
+    assert minted.occurrence_id is not None
+    sqlite_session.commit()
+
+    started = asyncio.get_event_loop().time()
+    outcome = await await_sync_execution_trigger_materialized(
+        cast(Any, _FakeAsyncSession(sqlite_session)),
+        minted.occurrence_id,
+        # Deliberately the DEFAULT poll_interval (0.25s), not a small
+        # override -- this is exactly the shape that overshot before the
+        # fix (a caller's configured deadline is shorter than the fixed
+        # poll granularity).
+    )
+    elapsed = asyncio.get_event_loop().time() - started
+
+    assert outcome.awaiting_materialization is True
+    assert elapsed < 0.15, (
+        f"elapsed={elapsed:.3f}s, want close to the configured 0.05s bound, "
+        "not the ~0.25s+ a full unconditional poll_interval sleep would produce"
     )
 
 

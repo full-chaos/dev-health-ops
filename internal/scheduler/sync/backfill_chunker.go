@@ -32,10 +32,9 @@ type DateWindow struct {
 // overflows into a NEGATIVE span, which turns the loop below into one that
 // emits invalid windows and walks its cursor backward instead of forward).
 //
-// Deliberately the REAL overflow boundary (106751 = floor(math.MaxInt64 /
-// (24h in nanoseconds)) - 1, not an arbitrary smaller "far beyond any real
-// backfill window" round number: a codex review finding (round 3) caught
-// that an earlier value here (3650) rejected a configured
+// Deliberately the REAL overflow boundary, not an arbitrary smaller "far
+// beyond any real backfill window" round number: a codex review finding
+// (round 3) caught that an earlier value here (3650) rejected a configured
 // LINEAR_BACKFILL_MAX_WINDOW_DAYS override Python accepts without
 // complaint (Python's own _linear_backfill_max_window_days has no upper
 // bound at all, only `value > 0`) -- a valid, if unusually wide, operator
@@ -44,7 +43,18 @@ type DateWindow struct {
 // window width, so it must sit as close to that boundary as safely
 // possible instead of picking a smaller number that merely "seems" far
 // enough.
-const maxChunkDays = 106751
+//
+// The value that can actually overflow is chunkDays-1 (ChunkDateRange's
+// own `span := time.Duration(chunkDays-1) * 24 * time.Hour`), not
+// chunkDays itself -- codex review (gate round 9, P2) caught that this
+// constant was validating chunkDays directly, one short of the true safe
+// maximum: floor(math.MaxInt64 / (24h in nanoseconds)) = 106751 bounds
+// chunkDays-1, so chunkDays itself can safely reach 106751+1 = 106752
+// (confirmed: Python accepts LINEAR_BACKFILL_MAX_WINDOW_DAYS=106752
+// without complaint, and 106751*(24h in ns) has ~1 day of headroom below
+// math.MaxInt64, so chunkDays=106752 is genuinely safe, not just
+// Python-permitted).
+const maxChunkDays = 106752
 
 // ChunkDateRange ports chunk_date_range verbatim: an inclusive [since,
 // before] date range split into chunkDays-day windows (Python's default is

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import time
 import uuid
@@ -66,7 +67,15 @@ def _manual_trigger_await_seconds() -> float:
     if raw is not None:
         try:
             value = float(raw)
-            if value > 0:
+            # Codex review (gate round 9, P2): float("inf")/"nan" both parse
+            # successfully and "inf" > 0 is True, so the old check alone
+            # accepted them -- an infinite deadline breaks the "bounded
+            # await" contract fork 2 requires (a deadline that never
+            # elapses means await_sync_execution_trigger_materialized's
+            # poll loop never returns "pending", hanging the admin
+            # request's coroutine/connection indefinitely on an occurrence
+            # that never completes).
+            if value > 0 and math.isfinite(value):
                 return value
         except ValueError:
             pass
@@ -356,14 +365,26 @@ def create_sync_execution_trigger(
     elif since is not None or before is not None:
         request = replace(request, since=since, before=before)
 
-    # CHAOS-4602 fork 1: Go pickup only for planner-managed configs, and
-    # only when the rollout flag is on. Every non-planner-managed or
-    # child config, and every planner-managed config while the flag is
-    # off, falls through UNCHANGED to the pre-existing in-process
+    # CHAOS-4602 fork 1: Go pickup only for planner-managed configs, only
+    # when the rollout flag is on, AND only for a genuine manual/backfill
+    # trigger (codex review, gate round 9, P1): this function is also the
+    # ordinary scheduled-cron path's call target
+    # (create_scheduled_sync_execution_trigger passes triggered_by="schedule"
+    # straight through from sync_scheduler.py). Without this check, an
+    # eligible cron occurrence on a flag-enabled planner-managed config
+    # would ALSO route into _create_go_manual_sync_execution_trigger, which
+    # writes triggered_by verbatim into SyncManualTrigger -- a value the
+    # ck_sync_manual_triggers_triggered_by CHECK constraint (settings.py,
+    # 'manual'/'backfill' only) rejects outright, failing every regular
+    # scheduled sync for that config the moment the flag is turned on.
+    # Every non-planner-managed/child config, every planner-managed config
+    # while the flag is off, and every ordinary scheduled tick (regardless
+    # of the flag) falls through UNCHANGED to the pre-existing in-process
     # plan_sync_run call below.
     if (
         bool(getattr(config, "planner_managed", False))
         and _go_manual_backfill_planner_enabled()
+        and triggered_by in ("manual", "backfill")
     ):
         return _create_go_manual_sync_execution_trigger(
             session, config, org_id, request
@@ -625,7 +646,8 @@ async def await_sync_execution_trigger_materialized(
                     quarantined=True,
                 )
         await session.commit()
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             _record("pending")
             return SyncExecutionTriggerResult(
                 sync_run_id="",
@@ -634,7 +656,14 @@ async def await_sync_execution_trigger_materialized(
                 occurrence_id=occurrence_id,
                 awaiting_materialization=True,
             )
-        await asyncio.sleep(poll_interval)
+        # Codex review (gate round 9, P2): sleeping the full poll_interval
+        # unconditionally overshoots a configured deadline shorter than it
+        # (e.g. SYNC_MANUAL_TRIGGER_AWAIT_SECONDS=0.05 with the default
+        # 0.25s poll_interval measured returning ~5x late) -- cap the sleep
+        # at whatever time actually remains, so the next deadline check
+        # fires close to the promised bound instead of after one more full
+        # poll cycle.
+        await asyncio.sleep(min(poll_interval, remaining))
 
 
 def _require_locked_scheduled_eligibility(

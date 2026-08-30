@@ -156,7 +156,16 @@ func resolveBackfillWindows(since, before time.Time, provider, dataset string) (
 	chunkDays := backfillChunkDays(provider, dataset)
 	chunks, err := ChunkDateRange(since, before, chunkDays)
 	if err != nil {
-		return nil, err
+		// Codex review (gate round 9, P2): ChunkDateRange's errors are
+		// deterministic given the same config/request (chunkDays comes
+		// from LINEAR_BACKFILL_MAX_WINDOW_DAYS or a provider default,
+		// since/before from the request itself) -- retrying can never
+		// produce a different outcome, exactly the class ErrInvalidPlan
+		// exists for. Without this wrap, occurrence_reconciler.go's generic
+		// error path deferred it with retry-with-backoff instead of
+		// quarantining immediately, so the API reported "pending" through
+		// the whole bounded await before eventually failing.
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPlan, err)
 	}
 	windows := make([]DateWindow, 0, len(chunks))
 	for _, chunk := range chunks {

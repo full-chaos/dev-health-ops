@@ -116,7 +116,6 @@ from dev_health_ops.sync.datasets import (
     WatermarkBehavior,
     get_dataset_spec,
 )
-from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_DISCOVERY,
     upsert_outbox_wakeup,
@@ -140,9 +139,6 @@ from dev_health_ops.sync.guard import _resolve_total_unit_cap
 from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
 )
-from dev_health_ops.sync.source_discovery_telemetry import (
-    PROVIDER_SOURCE_DISCOVERY_TOTAL,
-)
 from dev_health_ops.sync.watermarks import (
     _watermark_overlap_seconds,
     get_watermark_with_overlap,
@@ -156,16 +152,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_DAY = 86_400
-
-# CHAOS-4602: providers whose sources (repos for github/gitlab, projects for
-# jira) are discovered from the provider's own API and upserted into
-# integration_sources, rather than added only by hand through the admin API.
-# Mirrors internal/scheduler/sync/source_discovery.go's sourceDiscoveryProviders
-# exactly -- this is the Python-side seam for every trigger plan_sync_run
-# serves (manual "Sync Now", admin API backfill, the operator backfill tool);
-# the Go-native materializer (scheduled occurrences only) has its own
-# equivalent seam and its own copy of this same set.
-_SOURCE_DISCOVERY_PROVIDERS = frozenset({"github", "gitlab", "jira"})
 
 # Recovery lookback when a stored watermark is found AHEAD of now (corrupt).
 # Small on purpose: the goal is to get ONE unit planned so the success path can
@@ -304,7 +290,6 @@ def plan_sync_run(session: Session, request: SyncPlanRequest) -> SyncRunPlan:
         (str(dataset.dataset_key) for dataset in gate_datasets),
     ):
         require_canonical_incident_feature_sync(session, integration.org_id)
-    _run_source_discovery_if_needed(session, integration, request)
     sources = _load_enabled_sources(session, integration, request.source_ids)
     datasets = _load_enabled_datasets(session, integration, request.dataset_keys)
     now = datetime.now(timezone.utc)
@@ -815,95 +800,6 @@ def _resolve_credential_stamp(
         integration_id=integration_id,
     )
     return integration.credential_id, fingerprint, AUTH_SOURCE_INTEGRATION_CREDENTIAL
-
-
-def _run_source_discovery_if_needed(
-    session: Session,
-    integration: Integration,
-    request: SyncPlanRequest,
-) -> None:
-    """CHAOS-4602: discover and upsert this integration's sources before
-    ``_load_enabled_sources`` reads them, for every trigger ``plan_sync_run``
-    serves -- manual "Sync Now", admin API backfill, and the operator
-    backfill tool. The Go-native materializer (scheduled occurrences only,
-    ``internal/scheduler/sync/source_discovery.go``) has its own equivalent
-    seam with the identical guards; together the two cover every trigger
-    path (see the ledger's "Provider source discovery" section).
-
-    Skipped when ``request.source_ids`` is set (explicit scope -- the config
-    is pinned to already-known sources, the exact same branch
-    ``_load_enabled_sources`` takes just below) or when the provider has no
-    source-type scope. Calls the EXISTING ``discover_sources_for_integration``
-    (``sync/discovery.py``) rather than reimplementing discovery in this
-    module -- this is the same one-shot config-creation-time function,
-    now also reachable from every plan. A discovery failure is logged loud
-    but never fails planning: already-existing sources are still enough to
-    plan against.
-
-    jira coverage is currently a no-op in practice: ``discover_repos_for_config``
-    (``discovery/repos.py``) has no jira branch yet on this branch's base
-    (CHAOS-4584, in flight, not merged -- its files are deliberately untouched
-    here) and returns ``[]`` for jira, so this call upserts zero jira sources
-    until that lands and this branch rebases onto it. github/gitlab are fully
-    covered today.
-    """
-    provider = str(integration.provider).lower()
-    if provider not in _SOURCE_DISCOVERY_PROVIDERS:
-        return
-    if request.source_ids is not None:
-        PROVIDER_SOURCE_DISCOVERY_TOTAL.labels(
-            provider=provider, outcome="skipped"
-        ).inc()
-        return
-    before_external_ids = {
-        row.external_id
-        for row in session.query(IntegrationSource.external_id)
-        .filter(
-            IntegrationSource.org_id == integration.org_id,
-            IntegrationSource.integration_id == integration.id,
-            IntegrationSource.provider == provider,
-        )
-        .all()
-    }
-    try:
-        upserted = discover_sources_for_integration(session, integration.id)
-    except Exception as exc:  # noqa: BLE001 - discovery must never fail planning
-        logger.warning(
-            "sync.planner.source_discovery_failed",
-            extra={
-                "provider": provider,
-                "org_id": integration.org_id,
-                "integration_id": str(integration.id),
-                "triggered_by": request.triggered_by,
-                "error": str(exc),
-            },
-        )
-        PROVIDER_SOURCE_DISCOVERY_TOTAL.labels(provider=provider, outcome="error").inc()
-        return
-    created = sum(
-        1 for source in upserted if source.external_id not in before_external_ids
-    )
-    existing = len(upserted) - created
-    logger.info(
-        "sync.planner.source_discovery",
-        extra={
-            "provider": provider,
-            "org_id": integration.org_id,
-            "integration_id": str(integration.id),
-            "triggered_by": request.triggered_by,
-            "sources_upserted": len(upserted),
-            "sources_created": created,
-            "sources_existing": existing,
-        },
-    )
-    for _ in range(created):
-        PROVIDER_SOURCE_DISCOVERY_TOTAL.labels(
-            provider=provider, outcome="created"
-        ).inc()
-    for _ in range(existing):
-        PROVIDER_SOURCE_DISCOVERY_TOTAL.labels(
-            provider=provider, outcome="existing"
-        ).inc()
 
 
 def _load_enabled_sources(

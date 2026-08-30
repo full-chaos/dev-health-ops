@@ -233,7 +233,11 @@ def _compose_pagerduty_services(path: Path) -> dict[str, dict]:
 
 def _kubernetes_env_sources() -> dict[tuple[str, str], set[str]]:
     sources: dict[tuple[str, str], set[str]] = {}
-    for path in (_KUBERNETES_CONFIGMAP, _KUBERNETES_SECRETS):
+    # CHAOS-4587: dev-health-go-worker-config (OPERATIONAL_ORDERING_CONTRACT)
+    # is defined inside go-workers.yaml itself, not the shared configmap.yaml
+    # -- scoped there on purpose so the Python api's own ordering-contract
+    # posture isn't silently changed by a go-worker-only key.
+    for path in (_KUBERNETES_CONFIGMAP, _KUBERNETES_SECRETS, _GO_KUBERNETES):
         for document in _load_yaml_documents(path):
             if document["kind"] == "ConfigMap":
                 sources[("configMapRef", document["metadata"]["name"])] = set(
@@ -1023,7 +1027,12 @@ def test_kubernetes_migration_wiring_matches_contract() -> None:
         for source in container["envFrom"]
         if "secretRef" in source
     }
-    assert config_refs == {"dev-health-config"}
+    # CHAOS-4587: also envFroms dev-health-go-worker-config, deliberately --
+    # migration 067 checks OPERATIONAL_ORDERING_CONTRACT (defined there) to
+    # decide whether to apply the ordering-contract cutover; without this
+    # reference, bumping that ConfigMap's value at cutover would move every
+    # go-* worker but never this Job (see deploy/go-workers/README.md).
+    assert config_refs == {"dev-health-config", "dev-health-go-worker-config"}
     assert secret_refs == {
         "dev-health-migration-secrets",
     }

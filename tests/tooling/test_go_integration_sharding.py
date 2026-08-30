@@ -1063,8 +1063,108 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # repository_postgres_metrics_integration_test.go:
     # TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey.
     # 1255 -> 1258 top-level; 150 -> 151 integration-tagged.
-    assert len(expected_provider_tests) == 1258
-    assert len(expected_integration_tests) == 151
+    #
+    # CHAOS-4559 (sync_runs.completed_units/failed_units read 0/0 while units
+    # actually succeeded -- the per-unit terminal commit never touched the
+    # parent row). A codex adversarial review round 1 found a real
+    # concurrency race in the fix's own recompute (uncorrelated COUNT(*)
+    # subqueries plan as InitPlans, evaluated once at statement start, so a
+    # second concurrent completion blocked on the row lock could resume
+    # using its stale pre-wait count). Added 1 new
+    # `//go:build integration` top-level test in
+    # repository_postgres_integration_test.go:
+    # TestPostgresRollupCountsBothUnitsUnderConcurrentCompletion (mutation-
+    # tested: reverting the lock-before-recompute fix made it fail 19/20
+    # runs).
+    # 1258 -> 1259 top-level; 151 -> 152 integration-tagged.
+    #
+    # CHAOS-4548 (stale project_key='CHAOS' team_project_ownership rows for
+    # real Linear projects, superseded by NULL-keyed rows but never
+    # collapsed by ReplacingMergeTree). Added 9 new ordinary top-level tests
+    # in linear_stale_project_ownership_cleanup_test.go: TestRetireStale
+    # LinearProjectOwnershipRowsRejectsNilConn, ...DryRunFindsButNever
+    # Deletes, ...RealRunDeletesAndReportsCounts, ...RealRunFindsNothing
+    # SkipsMutation, ...ScopedByOrgAddsThePredicate, ...PropagatesQuery
+    # Failure, ...PropagatesDeleteFailureButStillReportsFoundRows,
+    # TestLinearStaleProjectOwnershipPredicateExcludesThePseudoIdentityRow,
+    # and TestLinearStaleProjectOwnershipPredicateRequiresAReplacementRow
+    # (codex review P1: never delete a project's only ownership signal).
+    # None are integration-tagged (they use a fake driver.Conn, no real
+    # ClickHouse needed).
+    # 1259 -> 1268 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4588 (every report_member artifact of full-chaos/dev-health-ops CI
+    # runs skipped as unreadable_archive -- GitHub's auto-generated
+    # ".dockerbuild" Docker Build Summary artifacts are raw gzip, not a
+    # zip-wrapped container like an ordinary actions/upload-artifact
+    # artifact, and the walk never filtered candidate artifacts by name at
+    # all; also found this crowds the per-run artifact cap ahead of real
+    # report artifacts, which is window-blocking and pinned the repo's real
+    # `tests` watermark since 2026-08-08). Added 4 new ordinary top-level
+    # tests: TestGitHubTestsDockerBuildArtifactsExcludedBeforeDownload and
+    # TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap in
+    # github_tests_non_report_artifact_test.go, and
+    # TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause and
+    # TestGitHubTestsHealthyUnitLogsNoSkipSummary in
+    # github_tests_artifact_skip_log_test.go (the log-storm collapse half of
+    # the fix). None are integration-tagged.
+    # 1268 -> 1272 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4588 follow-up (CHAOS-4591 prep, per-sync-config selectable
+    # artifact ingestion): renamed the artifact-name filter into a named seam
+    # (githubTestsArtifactSelectionSeam). Added 1 new ordinary top-level test
+    # in github_tests_non_report_artifact_test.go:
+    # TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping
+    # (later replaced, see below).
+    # 1272 -> 1273 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4588 codex review round 1 (P1/P2 fixes): bounded provider-supplied
+    # artifact names before they reach the cursor (githubTestsTruncateArtifactName,
+    # unbounded growth could exceed maxChunkCursorBytes); fixed a missing
+    # Name on the empty-archive skip marker; reset the new exclusion counters
+    # on a genuine page re-anchor (mirrors the existing ArchivesSeen/Unreadable
+    # reset); split the summary's total into artifact_skip_total vs
+    # incomplete_total so it no longer conflates report_member skips with
+    # run-level truncations; and -- the collision-risk finding -- reverted
+    # "digests-*" out of the default exclusion list (githubTestsNonReportArtifactPrefixes
+    # is now empty by default; unlike ".dockerbuild" it is a plausible real
+    # artifact prefix, so silently excluding it belongs to CHAOS-4591's
+    # config-driven predicate, not a global default). Replaced
+    # TestGitHubTestsDigestArtifactsExcludedBeforeDownloadWithBookkeeping with
+    # TestGitHubTestsDockerBuildArtifactExclusionBookkeeping (suffix-only) and
+    # TestGitHubTestsDigestArtifactsAreNotExcludedByDefault (pins the revert
+    # as an executable spec); added TestGitHubTestsTruncateArtifactNameStaysWithinBound
+    # and TestGitHubTestsExcludedArtifactSampleNameIsBounded for the name
+    # truncation fix. Net: -1 removed, +4 added.
+    # 1273 -> 1276 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4588 codex review round 2 (P2 fixes): artifact_skip_total counted
+    # member-level malformed/unreadable causes as if the whole artifact were
+    # skipped; narrowed to the three whole-artifact-skip causes only
+    # (artifact_oversized/artifact_unavailable/unreadable_archive). Reverted
+    # round 1's exclusion-counter reset on page re-anchor -- it discarded
+    # EARLIER pages' legitimate totals, not just the replayed page's; the
+    # counters are a cursor-wide running total, not a per-walk gate input
+    # like ArchivesSeen/Unreadable, so leaving them alone (accepting a bounded,
+    # purely cosmetic double-count on the rare re-anchor) is safer than
+    # silently undercounting. Added 1 new ordinary top-level test in
+    # github_tests_artifact_skip_log_test.go:
+    # TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip.
+    # 1276 -> 1277 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4585 (native Go jira work-items route called the retired
+    # GET /rest/api/3/search -- 410 Gone -- instead of the registered
+    # JiraAtlassianRouteHandler's replacement). Added 2 new ordinary
+    # top-level tests: TestJiraAtlassianRouteMigratedFromRetiredSearchEndpoint
+    # (jira_atlassian_search_jql_migration_test.go, red-on-baseline proof
+    # reproducing the live 410 body) and
+    # TestNoGoJiraCallerTargetsTheRetiredSearchEndpoint
+    # (jira_search_endpoint_guard_test.go, registry-level regression guard
+    # scanning every production jira_*.go file for the retired path).
+    # Neither is integration-tagged.
+    # 1277 -> 1279 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1279
+    assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1080,7 +1180,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1258
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1279
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1141,7 +1241,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1258
+    assert len(selected_tests) == len(set(selected_tests)) == 1279
     assert set(selected_tests) == expected_tests
 
 

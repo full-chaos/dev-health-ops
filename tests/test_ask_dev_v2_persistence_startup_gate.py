@@ -107,7 +107,7 @@ async def test_application_schema_status_ancestor_walk(scratch_database) -> None
     await asyncio.to_thread(_upgrade_to, sync_url, "application_schema@head")
     satisfied, heads = await application_schema_status(async_url)
     assert satisfied is True
-    assert heads == ("0117",)
+    assert heads == ("0118",)
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -77,6 +78,22 @@ type githubTestsChunkCursor struct {
 	// every skip regardless of the cap.
 	SkippedArtifacts         []GitHubTestsSkippedArtifact `json:"skipped_artifacts,omitempty"`
 	SkippedArtifactsOverflow int                          `json:"skipped_artifacts_overflow,omitempty"`
+	// ExcludedNonReportSuffix/Prefix count artifacts the selection seam
+	// (githubTestsArtifactSelectionSeam, CHAOS-4588/CHAOS-4591) excluded
+	// BEFORE any download -- never counted toward ArchivesSeen/Unreadable,
+	// never part of the closed Incomplete vocabulary, never watermark-
+	// blocking. Plain counters, not a GitHubTestsSkippedArtifact-shaped
+	// bounded list: the reason is always one of exactly two closed values, so
+	// nothing is lost by not keeping a per-record Cause. ExcludedArtifactSample
+	// is a SMALL bounded sample of "name (reason)" strings (cap
+	// githubTestsMaxExcludedArtifactSampleRecords, well under
+	// githubTestsMaxSkippedArtifactRecords) purely so an operator or a future
+	// CHAOS-4591 admin view can see WHICH artifacts were excluded, not just
+	// how many -- kept deliberately small against the same maxChunkCursorBytes
+	// budget GitHubTestsSkippedArtifact's own doc comment describes.
+	ExcludedNonReportSuffix int      `json:"excluded_non_report_suffix,omitempty"`
+	ExcludedNonReportPrefix int      `json:"excluded_non_report_prefix,omitempty"`
+	ExcludedArtifactSample  []string `json:"excluded_artifact_sample,omitempty"`
 }
 
 // appendGitHubTestsSkippedArtifact records ONE oversized-artifact marker,
@@ -90,7 +107,37 @@ func appendGitHubTestsSkippedArtifact(
 	if len(records) >= githubTestsMaxSkippedArtifactRecords {
 		return records, overflow + 1
 	}
+	// Name is provider-supplied and unbounded (CHAOS-4588/CHAOS-4591, codex
+	// round 1, P1): GitHub's own limit is 255 bytes, and up to
+	// githubTestsMaxSkippedArtifactRecords of these live in the same
+	// maxChunkCursorBytes (4KiB) budget as everything else on the cursor.
+	// Truncated here, at the one append site, rather than at each of the
+	// four call sites, so the bound can never be forgotten at a new one.
+	record.Name = githubTestsTruncateArtifactName(record.Name)
 	return append(records, record), overflow
+}
+
+// githubTestsMaxArtifactNameBytes bounds any provider-supplied artifact name
+// stored on the cursor (GitHubTestsSkippedArtifact.Name and
+// ExcludedArtifactSample entries), sized so
+// githubTestsMaxSkippedArtifactRecords records at the cap stay a small
+// fraction of maxChunkCursorBytes -- enough to recognize a pattern (e.g. the
+// ".dockerbuild" or "digests-" run this ticket is about), not to reproduce
+// the full name.
+const githubTestsMaxArtifactNameBytes = 48
+
+// githubTestsTruncateArtifactName bounds a provider-supplied name to
+// githubTestsMaxArtifactNameBytes, byte-safe (never splits a UTF-8
+// codepoint) since a provider name is untrusted input.
+func githubTestsTruncateArtifactName(name string) string {
+	if len(name) <= githubTestsMaxArtifactNameBytes {
+		return name
+	}
+	truncated := name[:githubTestsMaxArtifactNameBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "…"
 }
 
 // bumpGitHubTestsArchiveCounter returns a NEW pointer one greater than the
@@ -308,15 +355,119 @@ func recordGitHubTestsSkippedArtifact(
 	if client != nil {
 		client.Metrics.RecordArtifactSkipped(claim.Provider, claim.Dataset, cause)
 	}
-	// The run id is provider-supplied and unbounded, so it belongs in the log
-	// line, never in the durable observation.
-	slog.Warn(
-		"provider artifact skipped; inventory continued",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repo, "component", githubTestsReportMemberComponent,
-		"cause", cause, "run", runID,
-	)
+	// CHAOS-4588: this used to slog.Warn once per artifact here -- for a repo
+	// whose runs mix many non-report artifacts, that fired ~14 times per unit
+	// attempt at ~300ms intervals, a log storm with no per-line information
+	// an operator could act on beyond "one more". The run id/artifact id an
+	// operator actually needs for backfill still lands in the bounded durable
+	// marker (GitHubTestsSkippedArtifact, appended by the caller just below
+	// this return) and in the dev_health_provider_artifact_skipped_total{cause}
+	// counter (RecordArtifactSkipped above) -- both unchanged. What is gone is
+	// ONLY the per-artifact log line; it is replaced by one summary line per
+	// unit at finalization (githubTestsLogArtifactSkipSummary), built from
+	// this same accumulated `incomplete` slice, once the whole walk's counts
+	// by cause are known.
 	return incomplete
+}
+
+// githubTestsLogArtifactSkipSummary emits AT MOST ONE structured log line per
+// unit attempt, replacing the per-artifact "provider artifact skipped;
+// inventory continued" WARN that recordGitHubTestsSkippedArtifact used to
+// emit on every call (CHAOS-4588: 297 lines/30min locally, 14 per unit
+// attempt, ~300ms apart, for a repository whose CI runs mix report artifacts
+// with GitHub-generated non-report ones). Silent when nothing was skipped --
+// a line on every healthy sync is noise operators learn to filter, which
+// costs the counter the attention it exists to buy (same principle as
+// githubProjectV2's membership_skips log). The bounded per-artifact evidence
+// (GitHubTestsSkippedArtifact markers) and the
+// dev_health_provider_artifact_skipped_total{cause} counter are untouched --
+// this is presentation only, not a reduction in observability.
+//
+// Extended (CHAOS-4591 prep): also folds in the pre-download exclusion
+// counters/sample from the selection seam and a small name/size/cause sample
+// from the durable SkippedArtifacts markers, so the one line an operator
+// already reads carries name+size+selected-or-skipped+reason for CHAOS-4591's
+// admin view to reuse without a second data source.
+func githubTestsLogArtifactSkipSummary(
+	claim Claim, repo string, incomplete []GitHubTestsIncomplete,
+	skippedArtifacts []GitHubTestsSkippedArtifact,
+	excludedSuffix, excludedPrefix int, excludedSample []string,
+) {
+	if len(incomplete) == 0 && excludedSuffix == 0 && excludedPrefix == 0 {
+		return
+	}
+	// incomplete mixes several different kinds of observation under one
+	// closed vocabulary (codex round 1 P2, round 2 P2): run-level
+	// inventory/per-run truncations (run_inventory, run_reports,
+	// run_artifacts) are not artifact skips at all; and even within
+	// report_member, "malformed"/"unreadable" mean ONE MEMBER inside an
+	// otherwise-valid, fully-read archive was skipped -- the artifact itself
+	// was not. Only artifact_oversized/artifact_unavailable/unreadable_archive
+	// mean the WHOLE artifact was skipped. artifactSkipTotal isolates exactly
+	// that closed set so the headline number an operator reads first means
+	// what it says; incomplete_total keeps the full closed-vocabulary count
+	// available alongside it, broken down per (component, cause) in the
+	// attrs loop below regardless of kind.
+	artifactSkipTotal := 0
+	for _, observation := range incomplete {
+		if observation.Component != githubTestsReportMemberComponent {
+			continue
+		}
+		switch observation.Cause {
+		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause:
+			artifactSkipTotal += observation.Count
+		}
+	}
+	attrs := make([]any, 0, 16+2*len(incomplete))
+	attrs = append(attrs,
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repo, "artifact_skip_total", artifactSkipTotal,
+		"incomplete_total", githubTestsIncompleteCount(incomplete),
+	)
+	for _, observation := range incomplete {
+		attrs = append(attrs, observation.Component+"_"+observation.Cause, observation.Count)
+	}
+	if excludedSuffix > 0 || excludedPrefix > 0 {
+		attrs = append(attrs,
+			"excluded_total", excludedSuffix+excludedPrefix,
+			"excluded_"+githubTestsExclusionReasonSuffix, excludedSuffix,
+			"excluded_"+githubTestsExclusionReasonPrefix, excludedPrefix,
+		)
+		if len(excludedSample) > 0 {
+			attrs = append(attrs, "excluded_sample", excludedSample)
+		}
+	}
+	if sample := githubTestsSkippedArtifactLogSample(skippedArtifacts); len(sample) > 0 {
+		attrs = append(attrs, "skipped_sample", sample)
+	}
+	slog.Warn("provider artifacts skipped this unit; inventory continued", attrs...)
+}
+
+// githubTestsSkippedArtifactLogSample formats a small, bounded
+// "name (cause, sizeB)" sample from the durable SkippedArtifacts marker list
+// for the per-unit summary line, capped the same as
+// githubTestsMaxExcludedArtifactSampleRecords -- CHAOS-4591 wants
+// name/size/reason visible in the line an operator already reads, not only
+// in the durable JSON.
+func githubTestsSkippedArtifactLogSample(markers []GitHubTestsSkippedArtifact) []string {
+	limit := githubTestsMaxExcludedArtifactSampleRecords
+	if len(markers) < limit {
+		limit = len(markers)
+	}
+	sample := make([]string, 0, limit)
+	for _, marker := range markers[:limit] {
+		name := marker.Name
+		if name == "" {
+			name = "unknown"
+		}
+		entry := name + " (" + marker.Cause
+		if marker.SizeBytes > 0 {
+			entry += ", " + strconv.FormatInt(marker.SizeBytes, 10) + "B"
+		}
+		entry += ")"
+		sample = append(sample, entry)
+	}
+	return sample
 }
 
 // The two phases whose resume cursors carry a positional index. Closed set:
@@ -460,6 +611,16 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	skippedArtifacts := append(
 		make([]GitHubTestsSkippedArtifact, 0, len(cursor.SkippedArtifacts)), cursor.SkippedArtifacts...,
 	)
+	// Same typed-nil-to-empty-slice normalization, same reason (CHAOS-3940
+	// discipline): a cursor that never excluded a non-report artifact carries
+	// a nil ExcludedArtifactSample.
+	excludedArtifactSample := append(
+		make([]string, 0, len(cursor.ExcludedArtifactSample)), cursor.ExcludedArtifactSample...,
+	)
+	githubTestsLogArtifactSkipSummary(
+		claim, cursor.Repo, incomplete, skippedArtifacts,
+		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedArtifactSample,
+	)
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: map[string]any{
@@ -476,6 +637,14 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 			// tracked separately rather than silently dropped.
 			"skipped_artifacts":          skippedArtifacts,
 			"skipped_artifacts_overflow": cursor.SkippedArtifactsOverflow,
+			// Pre-download exclusions (CHAOS-4588/CHAOS-4591): artifacts the
+			// selection seam never even requested. Not part of "incomplete" --
+			// nothing readable was lost -- surfaced separately so CHAOS-4591's
+			// admin view has the same name/reason data the per-unit log line
+			// carries, durably.
+			"excluded_non_report_suffix": cursor.ExcludedNonReportSuffix,
+			"excluded_non_report_prefix": cursor.ExcludedNonReportPrefix,
+			"excluded_artifact_sample":   excludedArtifactSample,
 		},
 		// Only a WINDOW-BLOCKING observation withholds the watermark. An
 		// inventory page cap leaves the old end of a newest-first window
@@ -828,6 +997,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// counters again), rather than risk a false positive from
 				// state a replay can no longer be trusted to represent.
 				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+				// The exclusion bookkeeping (CHAOS-4588/CHAOS-4591) is
+				// DELIBERATELY NOT reset here (codex round 2, P2 -- round 1
+				// had this wrong). ArchivesSeen/Unreadable above are
+				// per-WALK gate inputs where "unknown" is a safe default a
+				// fresh pass can restore; ExcludedNonReportSuffix/Prefix and
+				// ExcludedArtifactSample are a cursor-wide running total
+				// across every page this walk has already completed, not
+				// just the re-anchored one. Zeroing them here would discard
+				// every EARLIER page's legitimate exclusion count along with
+				// the replayed page's, silently undercounting the final
+				// result and summary. Leaving them alone means the replayed
+				// prefix's exclusions can be double-counted on the rare
+				// re-anchor -- a bounded, purely cosmetic over-count (these
+				// never gate the watermark or Incomplete) -- which is a far
+				// safer failure mode than erasing real history.
 			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
@@ -856,7 +1040,38 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// never fire here and the item cap is necessarily
 					// len-based. MaxPages is 1, so PageBudgetExhausted means a
 					// second artifact page existed and was never fetched.
-					artifactItems := artPage.Items
+					// Decode-then-filter BEFORE the per-run cap: a name-filtered
+					// non-report artifact (CHAOS-4588) must not consume the
+					// cap ahead of a real report artifact in the same run.
+					artifactItems := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
+					for _, artifactRaw := range artPage.Items {
+						var artifact githubTestsArtifactPayload
+						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
+						decoder.UseNumber()
+						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+							return providerfoundation.ErrNormalizationInvalid
+						}
+						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
+							switch reason {
+							case githubTestsExclusionReasonSuffix:
+								cursor.ExcludedNonReportSuffix++
+							case githubTestsExclusionReasonPrefix:
+								cursor.ExcludedNonReportPrefix++
+							}
+							if len(cursor.ExcludedArtifactSample) < githubTestsMaxExcludedArtifactSampleRecords {
+								// Bounded the same way as GitHubTestsSkippedArtifact.Name
+								// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a
+								// provider name is unbounded, and this sample
+								// shares the same cursor byte budget.
+								cursor.ExcludedArtifactSample = append(
+									cursor.ExcludedArtifactSample,
+									githubTestsTruncateArtifactName(artifact.Name)+" ("+reason+")",
+								)
+							}
+							continue
+						}
+						artifactItems = append(artifactItems, artifact)
+					}
 					switch {
 					case len(artifactItems) > maxArtifacts:
 						artifactItems = artifactItems[:maxArtifacts]
@@ -870,13 +1085,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							githubTestsPerRunPageBudgetCause, pipeline.RunID, len(artifactItems),
 						)
 					}
-					for _, artifactRaw := range artifactItems {
-						var artifact githubTestsArtifactPayload
-						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-						decoder.UseNumber()
-						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
-							return providerfoundation.ErrNormalizationInvalid
-						}
+					for _, artifact := range artifactItems {
 						if artifact.Expired {
 							continue
 						}
@@ -907,7 +1116,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
 									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 									GitHubTestsSkippedArtifact{
-										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 										Cause: githubTestsArtifactUnavailableCause,
 									},
 								)
@@ -946,7 +1155,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
 										cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 										GitHubTestsSkippedArtifact{
-											RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+											RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 											Cause:     githubTestsArtifactOversizedCause,
 											SizeBytes: sizeErr.SizeBytes, CapBytes: sizeErr.CapBytes,
 										},
@@ -1015,7 +1224,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
 								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 								GitHubTestsSkippedArtifact{
-									RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+									RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 									Cause: githubTestsUnreadableArchiveCause,
 								},
 							)
@@ -1040,7 +1249,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow = appendGitHubTestsSkippedArtifact(
 									cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow,
 									GitHubTestsSkippedArtifact{
-										RunID: pipeline.RunID, ArtifactID: string(artifact.ID),
+										RunID: pipeline.RunID, ArtifactID: string(artifact.ID), Name: artifact.Name,
 										Cause: githubTestsUnreadableArchiveCause,
 									},
 								)

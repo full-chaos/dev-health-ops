@@ -60,6 +60,13 @@ const (
 	// call uses it), so it carries no database CHECK-constraint dependency
 	// the job-route Actions' shared-string comment above warns about.
 	ActionProvidersyncCleanup Action = "providersync.retire_linear_pseudo_projects"
+	// ActionSyncDispatchOutboxClose is CHAOS-4583's backlog reaper (`workerctl
+	// sync-dispatch-outbox close-backlog`): an operator-invoked Postgres
+	// mutation over sync_dispatch_outbox that, like
+	// ActionProvidersyncCleanup, does not go through this service's own
+	// job/route/queue backends and so has no natural Action otherwise. Not
+	// written to worker_operator_audits for the same reason.
+	ActionSyncDispatchOutboxClose Action = "sync_dispatch_outbox.close_terminal_backlog"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -481,6 +488,20 @@ func (service *Service) Inspect(ctx context.Context, principal Principal, jobID 
 // authorizer's decision/denial the same way every other resourceID is.
 func (service *Service) AuthorizeProvidersyncCleanup(ctx context.Context, principal Principal, resourceID string) error {
 	return service.authorize(ctx, principal, ActionProvidersyncCleanup, "providersync_pseudo_project_cleanup", resourceID)
+}
+
+// AuthorizeSyncDispatchOutboxClose authorizes CHAOS-4583's backlog reaper: an
+// operator-invoked Postgres UPDATE over sync_dispatch_outbox (closing
+// 'dispatched' rows whose owner has already gone terminal) that lives
+// outside this service's own job/route/queue backends, mirroring
+// AuthorizeProvidersyncCleanup's reasoning exactly -- a workers:read-only
+// credential must never reach this write either. resourceID is always "*"
+// today: the reaper is not org-scoped (unlike the ClickHouse cleanup verbs),
+// since it only closes rows whose own domain state already proves the close
+// safe, the same bounded pass the production reconciler already runs every
+// tick.
+func (service *Service) AuthorizeSyncDispatchOutboxClose(ctx context.Context, principal Principal, resourceID string) error {
+	return service.authorize(ctx, principal, ActionSyncDispatchOutboxClose, "sync_dispatch_outbox_close_terminal_backlog", resourceID)
 }
 
 // Status authorizes the top-level runtime status view. Composition performs

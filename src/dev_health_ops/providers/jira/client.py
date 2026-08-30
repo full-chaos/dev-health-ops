@@ -476,6 +476,19 @@ class JiraClient:
             params={},
         )
 
+    def get_project(self, *, project_key: str) -> dict[str, Any]:
+        """Fetch one project's metadata, including ``projectTypeKey``
+        ("software", "service_desk", "business") -- used by callers that
+        need to know whether a project even HAS Agile boards before calling
+        the board-listing endpoint (CHAOS-4575: the Software Agile Boards
+        API answers a 400 for a non-software project regardless of
+        permissions, so board discovery must gate on project type, not
+        infer it from that 400's text)."""
+        return self._request_json(
+            path=f"/rest/api/3/project/{project_key}",
+            params={},
+        )
+
     def iter_boards(
         self, *, project_key: str | None = None
     ) -> Iterator[dict[str, Any]]:

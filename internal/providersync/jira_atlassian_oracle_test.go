@@ -162,8 +162,8 @@ func (doer *jiraAtlassianOracleDoer) Do(request *http.Request) (*http.Response, 
 	switch {
 	case request.URL.Path == "/graphql" && doer.graphqlFailure:
 		return &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errors":[{"message":"temporary"}]}`)), Request: request}, nil
-	case request.URL.Path == "/rest/api/3/search":
-		value = map[string]any{"issues": []any{doer.issue}, "startAt": 0, "total": 1}
+	case request.URL.Path == "/rest/api/3/search/jql":
+		value = map[string]any{"issues": []any{doer.issue}, "isLast": true}
 	case strings.HasSuffix(request.URL.Path, "/changelog"):
 		value = map[string]any{"values": []any{}, "total": 0, "isLast": true}
 	case strings.HasSuffix(request.URL.Path, "/worklog"):

@@ -14,6 +14,7 @@ from dev_health_ops.models import (
     IntegrationCredential,
     IntegrationDataset,
     IntegrationSource,
+    SyncConfiguration,
     SyncDispatchOutbox,
     SyncExecutedProofLedger,
     SyncRun,
@@ -80,6 +81,7 @@ def _create_source(
     external_id: str,
     provider: str | None = None,
     is_enabled: bool = True,
+    metadata: dict | None = None,
 ) -> IntegrationSource:
     source_provider = provider or integration.provider
     source = IntegrationSource(
@@ -90,7 +92,7 @@ def _create_source(
         external_id=external_id,
         name=external_id.rsplit("/", 1)[-1],
         full_name=external_id,
-        metadata_={},
+        metadata_=dict(metadata or {}),
         is_enabled=is_enabled,
         discovered_at=datetime.now(timezone.utc),
         last_seen_at=datetime.now(timezone.utc),
@@ -2142,6 +2144,423 @@ def test_work_item_family_collapse_provider_matrix(db_session, provider, externa
     ]
     assert len(work_item_units) == 1
     assert work_item_units[0].dataset_key == "work-items"
+
+
+def test_jira_non_project_source_plans_zero_work_item_units(db_session):
+    """CHAOS-4582: a jira source whose external_id equals the provider name
+    itself ("jira") -- the exact known-bad shape the pre-fix writer produced
+    for an "auto-import everything" config with no explicit project scope
+    (live evidence, org 70d529e0) -- must plan ZERO work-items units, not one
+    that's guaranteed to fail every attempt with `project = 'jira'` JQL
+    against a project that doesn't exist. Case-insensitive: the real bad row
+    was "JIRA"."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="jira")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
+def test_zero_unit_jira_plan_stamps_credentials_for_strict_discovery(db_session):
+    """CHAOS-4593: a zero-unit jira plan (every IntegrationSource disabled)
+    must still stamp run-level credentials, unlike other providers.
+
+    ``seed_reference_discovery_ledger`` arms jira's reference-discovery job
+    unconditionally, regardless of unit count, and jira's ``populate()``
+    (``workers/team_autoimport_jira.py``) is STRICT: it raises "missing Jira
+    credentials for strict reference discovery" when no credentials are
+    resolved, even with zero import categories selected. Before this fix,
+    ``plan_sync_run`` only stamped credentials `if planned_units:`, so a
+    zero-unit jira plan left ``auth_source`` NULL, ``_load_discovery_context``
+    resolved ``{}`` credentials, and the strict populate() raised on every
+    discovery attempt -- the run never left PLANNED/Queued (live-reproduced,
+    org 70d529e0, run 527271e6-ac3d-4c24-af35-2147bde8d59c: api logs showed
+    exactly this ValueError on every retry).
+
+    Red on baseline: ``sync_run.auth_source`` was ``None`` here before the
+    fix in ``_zero_unit_plan_needs_credential_stamp``."""
+    from dev_health_ops.credentials.fingerprint import AUTH_SOURCE_ENVIRONMENT
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    before_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+
+    integration = _create_integration(db_session, provider="jira")  # env auth
+    _create_source(
+        db_session,
+        integration,
+        external_id="SUP",
+        provider="jira",
+        is_enabled=False,
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert plan.total_units == 0
+    assert sync_run is not None
+    assert sync_run.total_units == 0
+    # The fix: credentials ARE stamped despite zero units, so
+    # _load_discovery_context can resolve real credentials for jira's
+    # unconditional strict discovery.
+    assert sync_run.auth_source == AUTH_SOURCE_ENVIRONMENT
+    assert isinstance(sync_run.credential_fingerprint, str)
+    # Telemetry is deferred to session commit (codex round 1, P2) -- not yet
+    # incremented here, before the caller commits.
+    mid_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert mid_count == before_count
+    db_session.commit()
+    after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_count == before_count + 1
+
+
+def test_zero_unit_jira_plan_credential_stamp_telemetry_not_counted_on_rollback(
+    db_session,
+):
+    """CHAOS-4593 codex round 1 (P2): the zero-unit credential-stamp counter
+    must NOT increment if the caller's transaction rolls back instead of
+    committing -- plan_sync_run doesn't own the transaction boundary, so an
+    inline increment would have published a stamp for a plan that was never
+    actually persisted. Mirrors the existing deferred-increment pattern
+    workers/sync_units.py uses for ZERO_UNIT_FINALIZATIONS_TOTAL."""
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    before_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="SUP",
+        provider="jira",
+        is_enabled=False,
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+    db_session.rollback()
+
+    after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_count == before_count
+
+    # CHAOS-4593 codex round 2, P2: a rollback must also clear whatever was
+    # pending -- the drain listeners are permanent and idempotent, so this
+    # NEXT, wholly unrelated commit must not resurrect and emit the
+    # rolled-back plan's telemetry.
+    db_session.commit()
+    after_unrelated_commit_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_unrelated_commit_count == before_count
+
+
+def test_zero_unit_jira_plan_credential_stamp_listeners_are_bounded_per_session(
+    db_session,
+):
+    """CHAOS-4593 codex round 3, P2: `once=True` gates re-execution but does
+    NOT deregister a SQLAlchemy session listener (verified empirically --
+    `event.contains()` stays True after the one-shot fires), so a naive
+    once=True-per-call design would grow a long-lived, reused session's
+    after_commit/after_rollback listener lists without bound, one pair per
+    zero-unit jira plan. The fix installs at most one (non-once) listener
+    pair per session, EVER, gated by a `session.info` sentinel, and queues
+    each plan's payload in a plain list instead. Prove the listener count
+    stays at exactly 1 (each event) across several plans mixing commits and
+    rollbacks on the SAME reused session, and that the counter still tracks
+    only the committed plans."""
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL,
+    )
+
+    before_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+
+    def _listener_count(event_name: str) -> int:
+        return len(list(getattr(db_session.dispatch, event_name).listeners))
+
+    def _plan_zero_unit_jira() -> None:
+        integration = _create_integration(db_session, provider="jira")
+        _create_source(
+            db_session,
+            integration,
+            external_id="SUP",
+            provider="jira",
+            is_enabled=False,
+        )
+        for dataset_key in _FAMILY_DATASETS:
+            _create_dataset(db_session, integration, dataset_key)
+        plan_sync_run(
+            db_session,
+            SyncPlanRequest(
+                integration_id=str(integration.id),
+                org_id=ORG_ID,
+                mode=SyncRunMode.INCREMENTAL.value,
+                triggered_by="manual",
+            ),
+        )
+
+    _plan_zero_unit_jira()
+    db_session.rollback()
+    _plan_zero_unit_jira()
+    db_session.commit()
+    _plan_zero_unit_jira()
+    db_session.rollback()
+    _plan_zero_unit_jira()
+    db_session.commit()
+
+    assert _listener_count("after_commit") == 1
+    assert _listener_count("after_rollback") == 1
+    # Exactly the two committed plans (2nd and 4th) were counted; the two
+    # rolled-back ones (1st and 3rd) were not.
+    after_count = SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL.labels(
+        provider="jira"
+    )._value.get()
+    assert after_count == before_count + 2
+
+
+def test_zero_unit_backfill_jira_plan_also_stamps_credentials(db_session):
+    """CHAOS-4593: the admin backfill trigger nulls ``source_ids`` back to
+    "all enabled" (``execution_trigger.create_sync_execution_trigger``), so
+    a jira backfill with every source disabled ALSO plans zero units --
+    exactly the shape of the reported ticket's stuck run. Must stamp
+    credentials the same as the incremental case above; the bug was never
+    actually mode-specific (an incremental zero-unit jira run,
+    ``4fdd9a03-...``, failed identically in the live evidence)."""
+    from dev_health_ops.credentials.fingerprint import AUTH_SOURCE_ENVIRONMENT
+
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="SUP",
+        provider="jira",
+        is_enabled=False,
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.BACKFILL.value,
+            triggered_by="backfill",
+            backfill_selector=BackfillSelector(
+                since=datetime(2026, 8, 26, tzinfo=timezone.utc),
+                before=datetime(2026, 8, 28, tzinfo=timezone.utc),
+            ),
+        ),
+    )
+
+    sync_run = db_session.get(SyncRun, plan.sync_run_id)
+    assert plan.total_units == 0
+    assert sync_run is not None
+    assert sync_run.auth_source == AUTH_SOURCE_ENVIRONMENT
+
+
+def test_jira_source_named_jira_with_explicit_scope_marker_still_plans(db_session):
+    """Codex review (CHAOS-4582, P2): a caller CAN legitimately name a real
+    Jira project "JIRA" -- the writer stamps
+    metadata_.explicit_project_scope=True for exactly that case
+    (api/admin/routers/sync.py's explicit_external_id branch), and that
+    marker must always win over the external_id=="jira" heuristic, or a
+    genuinely-scoped project gets silently suppressed the same way the
+    known-bad placeholder is."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"explicit_project_scope": True},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+
+
+def test_jira_non_project_source_guard_is_case_insensitive_on_provider(db_session):
+    """Codex review (CHAOS-4582, P3): the writer persists provider casing as
+    supplied (``IntegrationSource(provider=provider)``, no normalization), so
+    a legacy row created with provider="JIRA" (or any other casing) must
+    still trip the planner guard -- comparing the raw, unnormalized casing
+    would let the exact known-bad shape back in for those rows."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="JIRA")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
+def test_jira_legacy_source_named_jira_preserved_via_persisted_sync_config(
+    db_session,
+):
+    """Codex review (CHAOS-4582, P2, round 2): a row created BEFORE this fix
+    shipped has no ``explicit_project_scope`` marker even if a caller
+    legitimately named a real project "JIRA" -- the pre-fix writer produced
+    an identical shape for that case and for the actual bug (no scope at
+    all, fell back to the integration's display name). external_id alone
+    can never disambiguate a legacy row. The persisted
+    ``sync_configurations.sync_options`` it was ACTUALLY created from can:
+    if that config explicitly asked for a project literally named "JIRA",
+    this is that project, not the fallback -- planning must proceed."""
+    integration = _create_integration(db_session, provider="jira")
+    config = SyncConfiguration(
+        name="Legacy Jira config",
+        provider="jira",
+        org_id=ORG_ID,
+        sync_options={"project_key": "JIRA"},
+        integration_id=integration.id,
+        planner_managed=True,
+    )
+    db_session.add(config)
+    db_session.flush()
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"planner_managed_sync_config_id": str(config.id)},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+
+
+def test_jira_legacy_source_named_jira_without_a_persisted_config_is_dropped(
+    db_session,
+):
+    """The other half of the same fix: a legacy row whose
+    planner_managed_sync_config_id points at nothing (deleted config) --
+    exactly the live evidence shape from org 70d529e0, whose bad row's
+    config carried no project scope at all -- still trips the guard. The
+    sync_configurations lookup is a narrowing exception, not a blanket
+    amnesty for every "JIRA"-named source."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"planner_managed_sync_config_id": str(uuid.uuid4())},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
 
 
 def test_work_item_family_collapse_backfill_one_composite_per_chunk(

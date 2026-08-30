@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -219,9 +220,43 @@ type ProviderError struct {
 	Class      ErrorClass
 	StatusCode int
 	RetryAfter time.Duration
+	// Path is the request's URL path (no query string -- a query can carry
+	// caller-supplied filter values that do not belong in an error string)
+	// that produced this classification. Empty when the error never reached
+	// an HTTP response (e.g. a rate-limit gate denial before the request
+	// went out).
+	Path string
+	// Body is a bounded, redacted snippet of the response body CHAOS-4582
+	// found was being read (for GitHub/GitLab rate-limit body-sniffing in
+	// ClassifyHTTPWithMessage) and then silently discarded -- every
+	// downstream consumer (job lifecycle logs, sync_run_units.result) saw
+	// only the generic Class, never why the provider actually rejected the
+	// request. Redacted with the same logging.RedactText pass job lifecycle
+	// logging already applies to err.Error() (defense in depth, not a
+	// replacement for it), and capped well short of maxProviderErrorBody so
+	// a large body can't bloat a durable result column.
+	Body string
 }
 
-func (e *ProviderError) Error() string { return fmt.Sprintf("provider request failed: %s", e.Class) }
+const maxProviderErrorBodyInMessage = 500
+
+func (e *ProviderError) Error() string {
+	message := fmt.Sprintf("provider request failed: %s", e.Class)
+	if e.StatusCode != 0 {
+		message += fmt.Sprintf(" status=%d", e.StatusCode)
+	}
+	if e.Path != "" {
+		message += fmt.Sprintf(" path=%s", e.Path)
+	}
+	if e.Body != "" {
+		body := logging.RedactText(e.Body)
+		if len(body) > maxProviderErrorBodyInMessage {
+			body = body[:maxProviderErrorBodyInMessage]
+		}
+		message += fmt.Sprintf(" body=%q", body)
+	}
+	return message
+}
 
 func (e *ProviderError) Retryable() bool {
 	return e.Class == ErrorTransient || e.Class == ErrorRateLimited

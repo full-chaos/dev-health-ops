@@ -34,6 +34,9 @@ var checkedInPoolComposition = map[string][]string{
 	// sync_run_reference_discoveries and sync_run_post_dispatches are
 	// coordinator-exclusive.
 	"syncreconciler.NewMaterializer": {"coordinatorPool"},
+	// CHAOS-4583: joins sync_run_reference_discoveries, which the queue role
+	// has no grant on at all -- same pool as Materializer, same reasoning.
+	"syncreconciler.NewTerminalOutboxClose": {"coordinatorPool"},
 	// River job tables live under the queue role.
 	"syncreconciler.NewTerminalDeliveryRepair": {"queuePool"},
 	"riverpgxv5.New": {"queuePool"},
@@ -52,6 +55,7 @@ var checkedInPoolComposition = map[string][]string{
 var componentsTheCommentMustName = map[string]string{
 	"buildUnreclaimableSweep":                  "UnreclaimableSweep",
 	"syncreconciler.NewMaterializer":           "Materializer",
+	"syncreconciler.NewTerminalOutboxClose":    "TerminalOutboxClose",
 	"syncreconciler.NewTerminalDeliveryRepair": "TerminalDeliveryRepair",
 	"syncreconciler.NewLeaseRepair":            "LeaseRepair",
 	"syncreconciler.NewObserver":               "Observer",

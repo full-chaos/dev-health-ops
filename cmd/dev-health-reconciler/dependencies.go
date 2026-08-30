@@ -232,6 +232,13 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //
 //   - Materializer: COORDINATOR pool. It reads sync_run_reference_discoveries
 //     and sync_run_post_dispatches, both coordinator-exclusive.
+//   - TerminalOutboxClose (CHAOS-4583): COORDINATOR pool. Its
+//     reference_discovery close JOINs sync_run_reference_discoveries, which
+//     the queue role has no grant on at all -- only domain and coordinator
+//     can read it. Reuses Materializer's exact pool rather than the domain
+//     pool because it is the identical read-then-UPDATE shape over the
+//     identical table set (sync_dispatch_outbox, sync_runs,
+//     sync_run_reference_discoveries) Materializer already runs there.
 //   - UnreclaimableSweep: ALL THREE pools, and it is the only component here
 //     that spans three. Its durable route read of worker_job_routes is
 //     coordinator-exclusive, so that statement takes the coordinator pool and
@@ -277,6 +284,13 @@ func buildSyncMutationPipeline(
 		return nil, err
 	}
 	materializer, err := syncreconciler.NewMaterializer(coordinatorPool)
+	if err != nil {
+		return nil, err
+	}
+	// CHAOS-4583: the terminal-closer runs on the same coordinator pool as
+	// Materializer -- both read/write public.sync_dispatch_outbox and join
+	// public.sync_runs / public.sync_run_reference_discoveries.
+	outboxClose, err := syncreconciler.NewTerminalOutboxClose(coordinatorPool)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +346,7 @@ func buildSyncMutationPipeline(
 		publish,
 		nil,
 		sweep,
+		outboxClose,
 		pipelineConfig,
 	)
 }
@@ -696,7 +711,7 @@ func buildReconcilerDependencies(
 	syncLoopConfig := syncreconciler.DefaultLoopConfig(registry)
 	// CHAOS-4239: DefaultLoopConfig's flat 2s default suits a Stepper that is
 	// genuinely one bounded call (Shadow's single indexed read). The mutation
-	// pipeline is a 7-stage, 3-pool composition where each stage now carries
+	// pipeline is an 8-stage, 3-pool composition where each stage now carries
 	// its own budget (syncreconciler.DefaultStageBudgets); the loop's outer
 	// envelope is derived from that composition -- the stage budgets' sum
 	// plus a fixed scheduling-overhead margin -- rather than an independently

@@ -219,6 +219,45 @@ def _skippable_jira_400_detail(exc: Exception) -> str | None:
     return None
 
 
+_JIRA_BOARD_CAPABLE_PROJECT_TYPES = frozenset({"software"})
+
+# Jira Cloud's own three project template families, plus Product Discovery
+# (a fourth, newer template) -- all confirmed to have no Agile boards.
+# Codex review (CHAOS-4575, P2): an UNKNOWN or missing projectTypeKey must
+# NOT be treated the same as a confirmed non-board-capable type -- that
+# would silently skip a possibly board-capable project's real data under
+# strict discovery's guaranteed-complete-or-raise contract (AGENTS.md
+# checkpoint 12: "missing is not healthy"). Only this explicit, evidence-
+# backed allowlist is skippable; anything else propagates.
+_JIRA_NO_BOARD_PROJECT_TYPES = frozenset(
+    {"service_desk", "business", "product_discovery"}
+)
+
+
+def _jira_project_type_key(client: Any, *, project_key: str) -> str:
+    """Look up ``project_key``'s ``projectTypeKey`` ("software",
+    "service_desk", "business") via a single-project GET, so board discovery
+    can gate on project TYPE rather than guessing from a 400's text.
+
+    CHAOS-4575 (live executed evidence, org 70d529e0, 2026-08-30): ``GET
+    /rest/agile/1.0/board?projectKeyOrId=SUP`` returned ``400
+    {"errorMessages": ["You must have the browse project permission to view
+    this project."]}`` even though the credential is a personal API token
+    with full-workspace access (confirmed with chris) -- ``GET
+    /rest/api/3/project/SUP`` on the SAME credential returned
+    ``projectTypeKey: "service_desk"``. That 400's wording is misleading:
+    the Software Agile Boards API answers it for ANY non-software project
+    regardless of permissions, because boards are a software-project concept
+    -- Service Management and Business (Jira Work Management) projects never
+    have one. Treating the message text as a permission signal (an earlier
+    version of this fix did exactly that) would have been right for the
+    wrong reason and missed every other non-software project whose 400
+    happens to word it differently.
+    """
+    project = client.get_project(project_key=project_key)
+    return str((project or {}).get("projectTypeKey") or "").strip().lower()
+
+
 def _member_id(provider: str, provider_identity: str) -> str:
     return f"{provider}:{provider_identity.strip().lower()}"
 
@@ -496,18 +535,52 @@ def populate(
             for project_key in {
                 row.project_key for row in project_rows if row.project_key
             }:
-                # CHAOS-4357 round 2 (codex P1): NOT wrapped in a per-project
-                # skip. Unlike the per-board sprint endpoint below, a 400 from
-                # board LISTING has no documented benign shape -- Jira's
-                # generic error envelope (an ``errorMessages`` array) covers
-                # both "this project just has no boards" and "this
-                # projectKeyOrId is malformed", and the two are
-                # indistinguishable from the response alone. Isolating this
-                # per project would risk silently omitting a real project's
-                # reference data and still reporting strict discovery
-                # complete. Any failure here propagates to the outer
-                # strict/non-strict handler below, exactly as it did before
-                # this whole board/sprint block existed.
+                # CHAOS-4357 round 2 (codex P1) left board LISTING
+                # un-isolated: a generic 400 there is ambiguous between
+                # "this project just has no boards" and "this
+                # projectKeyOrId is malformed", and swallowing either could
+                # silently omit a real project's reference data while
+                # strict discovery still reports success. CHAOS-4575 closes
+                # the actual gap without reopening that ambiguity: check the
+                # project's TYPE first (a single, cheap GET) and skip board
+                # discovery only for a project type on the explicit
+                # confirmed-no-boards allowlist (_JIRA_NO_BOARD_PROJECT_TYPES)
+                # -- an unrecognized type raises instead of silently skipping
+                # (codex P2), and a software project's board-listing 400
+                # (malformed key or anything else) still propagates to the
+                # outer strict/non-strict handler below, unchanged.
+                project_type = _jira_project_type_key(client, project_key=project_key)
+                if project_type in _JIRA_NO_BOARD_PROJECT_TYPES:
+                    # Codex review (CHAOS-4575, delta round): this is NOT a
+                    # sub-item that failed or is incomplete -- a service_desk/
+                    # business/product_discovery project structurally has no
+                    # boards, by design, every time. Incrementing
+                    # reference_subitem_skipped_total here (as the sprint-
+                    # listing 400 branch below correctly does for a REAL
+                    # failure) would corrupt that counter's meaning ("data
+                    # for this sub-item is incomplete") with routine,
+                    # complete-by-design non-applicability. Log at INFO, not
+                    # WARNING, for the same reason.
+                    logging.getLogger(__name__).info(
+                        "Jira board discovery not applicable for org_id=%s "
+                        "project_key=%s: project type %r has no Agile boards",
+                        org_id,
+                        project_key,
+                        project_type,
+                    )
+                    continue
+                if project_type not in _JIRA_BOARD_CAPABLE_PROJECT_TYPES:
+                    # Codex review (CHAOS-4575, P2): an unrecognized or
+                    # missing projectTypeKey is NOT the same as a confirmed
+                    # non-board-capable type -- assuming "no boards" here
+                    # could silently drop a real software project's data.
+                    # Strict discovery's guaranteed-complete-or-raise
+                    # contract requires this to propagate as a failure, not
+                    # a silent skip.
+                    raise RuntimeError(
+                        "unrecognized Jira project type "
+                        f"{project_type or 'unknown'!r} for project_key={project_key!r}"
+                    )
                 boards = list(client.iter_boards(project_key=project_key))
                 for board in boards:
                     board_id = board.get("id")

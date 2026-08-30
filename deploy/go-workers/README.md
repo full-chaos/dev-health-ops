@@ -141,6 +141,66 @@ queue when River claim sharing and the combined capacity budget are reviewed.
 Both queues and all provider routes remain Celery-owned unless a reviewed route
 release says otherwise.
 
+### `OPERATIONAL_ORDERING_CONTRACT` rollout: export it for the migrate job AND every worker, in the same deploy pass (CHAOS-4587)
+
+**Incident this closes:** `go-worker-heavy` crash-looped locally (RestartCount
+6, observed 2026-08-30 08:31Z) after ClickHouse migration 067 flipped
+`operational_incidents` to ordering-contract 2 while no deploy artifact in
+this tree set `OPERATIONAL_ORDERING_CONTRACT` for any Go runtime process. The
+migrate step ran with `OPERATIONAL_ORDERING_CONTRACT=2` exported by hand
+(applying 067), but no worker service *referenced* that variable at all —
+Compose only forwards a shell/`.env` variable into a container when a service
+explicitly names it, so every worker fell back to the binary's own omitted
+default (contract 1) and refused to start against the now-contract-2 table.
+Two Go call sites enforce this refusal
+(`internal/jobs/metrics/remaining/dora_native_clickhouse.go`,
+`internal/providersync/pagerduty_services_effects_clickhouse.go`); there is no
+ClickHouse-side downgrade path once the shadow-exchange in 067 has run.
+
+Every deploy artifact in this directory tree now *references*
+`OPERATIONAL_ORDERING_CONTRACT` for every long-running Go process that can
+read a canonical operational table (`heavy`, `ops`, `sync`, `sync-provider`,
+`reconciler`, `scheduler`, and all three stream-runner profiles — the full
+`processes` list in `deployment.json`), so an explicit export now actually
+reaches them. **The default stays `1`** (rollout-safe, matching the binary's
+own omitted default per
+`.github/docs-legacy/architecture/canonical-operational-model.md`,
+"Ordering-contract rollout and recovery") — this PR does not, and must not,
+make any environment assume contract 2 on its own. Concretely:
+
+1. **Never restart a contract-1 binary against a contract-2 (post-067)
+   table**, and never restart a contract-2 binary against a contract-1
+   table — either direction fails a canonical-table read/write with
+   `operational_old_writer_rejected` or an ordering-contract stale-state
+   error, and there is no automatic recovery.
+2. At cutover, set `OPERATIONAL_ORDERING_CONTRACT=2` for the migrate job
+   **and** every worker process **in the same deploy pass** — not one
+   without the other, and not a config-file default forcing it ahead of
+   time. Migration 067 itself requires quiescing ingress and draining
+   queued work first (see the doc above). **The mechanism differs by
+   topology** (codex review, delta round 4 — the raw Kubernetes manifests
+   have no shell-interpolation surface, so "export it" alone silently does
+   nothing there):
+   - **Compose / Swarm**: export `OPERATIONAL_ORDERING_CONTRACT=2` in the
+     shell/`.env` before `docker compose`/`docker stack deploy` — every
+     `migrate`/worker service in both files references `${OPERATIONAL_ORDERING_CONTRACT:-1}`,
+     so one export reaches all of them.
+   - **Raw Kubernetes manifests**: there is no environment to export into.
+     Edit the literal `OPERATIONAL_ORDERING_CONTRACT` value in the
+     `dev-health-go-worker-config` ConfigMap (`deploy/kubernetes/go-workers.yaml`)
+     from `"1"` to `"2"`, then `kubectl apply -k deploy/kubernetes/` — the
+     migrate Job and every go-* Deployment envFrom that one ConfigMap.
+   - **Helm**: set `--set goWorkers.operationalOrderingContract=2` (or the
+     equivalent `values.yaml` edit) and `helm upgrade` — the migrate Job's
+     template and every worker group's template both read this single
+     values key, so one flag reaches both.
+3. The Python `api`/`metrics-api` services are **not** wired here on
+   purpose. `src/dev_health_ops/storage/operational_current.py` reads the
+   same env var for its own reader-shape selection, so once 067 is applied
+   in an environment where those services must see the v2 shape, that is a
+   separate, tracked follow-up — do not fold it into this Go-only wiring
+   without its own review.
+
 ### Health is a work-receipt, not process liveness (CHAOS-4029)
 
 **Incident this closes:** on 2026-08-20 every Go worker answered `/readyz`

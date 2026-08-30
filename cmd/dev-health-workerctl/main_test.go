@@ -849,6 +849,160 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	}
 }
 
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg
+// mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsInvalidOrg
+// for the CHAOS-4548 sibling verb.
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"--org", "not-a-uuid",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExplicitlyEmptyOrg
+// is the red-first proof for codex review P1 (2026-08-30): `--org ""`
+// (explicitly provided, e.g. from a caller's unset shell variable) must be
+// rejected rather than silently collapsing into the same global-scope
+// outcome as omitting --org entirely -- exercised with a nil runtime so a
+// regression that let this through would panic reaching the ClickHouse
+// dial instead of silently authorizing the global "*" scope.
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExplicitlyEmptyOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"--org", "",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExtraArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, []string{
+		"unexpected-positional",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipFailsClosedWithoutService(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsUnauthorizedCredential
+// is the same red-first proof as the pseudo-projects sibling: an
+// authenticated-but-unauthorized credential is rejected before anything
+// ClickHouse-related is attempted (a reachable ClickHouse lookup is wired so
+// a regression that reordered the authorize call would dial instead of
+// denying).
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsUnauthorizedCredential(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
+	runtime.lookup = func(string) (string, bool) { return "clickhouse://unreachable-host-for-this-test:9999/default", true }
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouseURI(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = func(string) (string, bool) { return "", false }
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchSyncDispatchOutboxUnknownSubcommandIsInvalidRequest mirrors
+// TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest for the CHAOS-4583
+// `sync-dispatch-outbox` verb group.
+func TestDispatchSyncDispatchOutboxUnknownSubcommandIsInvalidRequest(t *testing.T) {
+	for _, args := range [][]string{{}, {"not-a-real-subcommand"}} {
+		var stdout, stderr bytes.Buffer
+		code := dispatchSyncDispatchOutbox(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+		if code != 1 || stderr.String() != invalidRequestJSON {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+}
+
+// TestDispatchSyncDispatchOutboxCloseBacklogRejectsExtraArgs pins the shared
+// quietFlags contract, same as every other verb in this binary.
+func TestDispatchSyncDispatchOutboxCloseBacklogRejectsExtraArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), &operatorRuntime{}, []string{
+		"unexpected-positional",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchSyncDispatchOutboxCloseBacklogRejectsOutOfRangeBatchSize pins
+// that a malformed --batch-size is rejected before ever touching the
+// authorizer or the coordinator pool -- exercised with a bare
+// operatorRuntime{} (no service, no pools), so a regression that let this
+// through would panic reaching either instead of silently accepting it.
+func TestDispatchSyncDispatchOutboxCloseBacklogRejectsOutOfRangeBatchSize(t *testing.T) {
+	for _, batchSize := range []string{"0", "-1", "101", "5000"} {
+		var stdout, stderr bytes.Buffer
+		code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), &operatorRuntime{}, []string{
+			"--batch-size", batchSize,
+		}, &stdout, &stderr)
+		if code != 1 || stderr.String() != invalidRequestJSON {
+			t.Fatalf("batch-size=%s code=%d stderr=%q", batchSize, code, stderr.String())
+		}
+	}
+}
+
+// TestDispatchSyncDispatchOutboxCloseBacklogFailsClosedWithoutService mirrors
+// the providersync cleanup verbs' same guard.
+func TestDispatchSyncDispatchOutboxCloseBacklogFailsClosedWithoutService(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchSyncDispatchOutboxCloseBacklogRejectsUnauthorizedCredential is
+// the same red-first proof as the providersync cleanup verbs: an
+// authenticated-but-unauthorized credential is rejected before the
+// coordinator pool is ever touched -- exercised with runtime.pools left nil,
+// so a regression that reordered the authorize call would reach the nil-pool
+// check (operator_backend_unavailable) instead of denying (unauthorized).
+func TestDispatchSyncDispatchOutboxCloseBacklogRejectsUnauthorizedCredential(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchSyncDispatchOutboxCloseBacklogRequiresCoordinatorPool pins that
+// an AUTHORIZED call with no coordinator pool wired is
+// operator_backend_unavailable, not a nil-pointer panic against
+// runtime.pools.Coordinator.
+func TestDispatchSyncDispatchOutboxCloseBacklogRequiresCoordinatorPool(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, nil, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
 // TestDispatchMetricsDailyFinalizeRequiresReviewEvidence mirrors
 // TestDispatchMetricsDailyRedriveRequiresReviewEvidence for the CHAOS-4389
 // `metrics daily-finalize` command: no default, no generic hardcoded

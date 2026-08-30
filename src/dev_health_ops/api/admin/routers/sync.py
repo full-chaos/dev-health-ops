@@ -1457,6 +1457,21 @@ def _non_git_source_rows(
         or sync_options.get("repo")
     )
     is_linear_org_wide = provider.lower() == "linear" and not explicit_external_id
+    if provider.lower() == "jira" and not explicit_external_id:
+        # CHAOS-4582: unlike Linear, Jira's work-items route has no org-wide
+        # search mode for a planner-created unit -- it requires a real
+        # per-project source (see metrics/job_work_items.py's
+        # WorkItemUnitMissingSource("jira", "project_keys") check, the same
+        # design contract github/gitlab/linear already enforce for their own
+        # required source). Falling through to `name` here used to
+        # materialize a project-SHAPED source keyed on the integration's
+        # display name (e.g. "JIRA"), which the work-items route then fed
+        # straight into `project = '<name>'` JQL -- a project that doesn't
+        # exist, failing every attempt. Zero sources -> the planner plans
+        # zero units for this config (this function's own docstring), which
+        # is the correct outcome until real per-project Jira source
+        # discovery lands (CHAOS-4198).
+        return []
     external_id = str(
         explicit_external_id or (provider.lower() if is_linear_org_wide else name)
     )

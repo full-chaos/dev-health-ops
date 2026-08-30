@@ -2144,6 +2144,37 @@ def test_work_item_family_collapse_provider_matrix(db_session, provider, externa
     assert work_item_units[0].dataset_key == "work-items"
 
 
+def test_jira_non_project_source_plans_zero_work_item_units(db_session):
+    """CHAOS-4582: a jira source whose external_id equals the provider name
+    itself ("jira") -- the exact known-bad shape the pre-fix writer produced
+    for an "auto-import everything" config with no explicit project scope
+    (live evidence, org 70d529e0) -- must plan ZERO work-items units, not one
+    that's guaranteed to fail every attempt with `project = 'jira'` JQL
+    against a project that doesn't exist. Case-insensitive: the real bad row
+    was "JIRA"."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="jira")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
 def test_work_item_family_collapse_backfill_one_composite_per_chunk(
     db_session, monkeypatch
 ):

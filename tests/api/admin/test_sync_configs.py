@@ -2404,6 +2404,56 @@ async def test_create_non_git_sync_config_is_integration_native_and_triggerable(
 
 
 @pytest.mark.asyncio
+async def test_create_jira_sync_config_without_project_scope_materializes_zero_sources(
+    client, session_maker
+):
+    """CHAOS-4582: a Jira config created with "auto-import everything" and no
+    explicit project_key/project_id (the exact shape org 70d529e0's config
+    used) must NOT materialize a fake project-shaped source keyed on the
+    integration's display name. Unlike Linear (which has a real org-wide
+    search mode and gets an explicit, typed placeholder), Jira's work-items
+    route requires a real per-project source -- zero sources means the
+    planner plans zero units for this config until real per-project Jira
+    source discovery lands, rather than planning a unit that is guaranteed
+    to fail every attempt against a project that doesn't exist."""
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "JIRA",
+            "provider": "jira",
+            "sync_targets": ["work-items"],
+            "sync_options": {
+                "auto_import_teams": True,
+                "auto_import_projects": True,
+                "auto_import_members": True,
+            },
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None
+        assert config.integration_id is not None
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert enabled_sources == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
 async def test_batch_create_git_sync_config_is_triggerable_with_units(
     client, session_maker, provider, repo

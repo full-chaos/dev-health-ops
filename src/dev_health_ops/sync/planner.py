@@ -1318,6 +1318,26 @@ def _build_fold_family_units(
     ]
 
 
+def _is_non_project_jira_source(source: IntegrationSource) -> bool:
+    """Whether ``source`` is the known-bad shape CHAOS-4582 fixed at the
+    writer: a jira ``source_type='project'`` row whose ``external_id`` is
+    not a real per-project key. Two signals, either sufficient:
+
+    - ``metadata_.org_wide_placeholder`` -- the SAME typed marker Linear's
+      writer already sets for ITS org-wide mode (``_non_git_source_rows``);
+      recognized here in case a future writer ever legitimately reuses it
+      for jira.
+    - ``external_id`` equal to the provider name itself (case-insensitive)
+      -- the exact literal ("JIRA") the pre-fix writer fell back to when a
+      config had no explicit project scope (live evidence, org 70d529e0,
+      CHAOS-4582). A real Jira project key is never just "jira".
+    """
+    metadata = source.metadata_ or {}
+    if metadata.get("org_wide_placeholder"):
+        return True
+    return str(source.external_id or "").strip().lower() == "jira"
+
+
 def _build_work_item_family_units(
     *,
     session: Session,
@@ -1333,6 +1353,28 @@ def _build_work_item_family_units(
     """Collapse the enabled work-item-family datasets into ONE composite unit
     per (source, window) (CHAOS-2721, AD-3)."""
     if not family_specs:
+        return []
+
+    if provider == "jira" and _is_non_project_jira_source(source):
+        # CHAOS-4582 (defense-in-depth): the writer (_non_git_source_rows,
+        # api/admin/routers/sync.py) no longer materializes this shape for a
+        # NEW jira config, but a pre-existing row (or a future writer bug of
+        # the same class) could still reach here. Refuse to plan rather than
+        # emit a unit that is guaranteed to fail every attempt -- Jira's
+        # work-items route requires a real per-project source (unlike
+        # Linear's org-wide search mode), so JQL built from a non-project
+        # external_id (e.g. the literal provider name) 400s against Jira
+        # every time. Log loud with the source id so an operator can find
+        # and fix the source, then return zero units -- CONTAINED to this
+        # one source, never aborting the rest of this integration's plan.
+        logger.error(
+            "sync.plan.jira_source_not_a_project org_id=%s source_id=%s "
+            "external_id=%r: refusing to plan a work-items unit for a "
+            "non-project Jira source (error_category=jira_source_not_a_project)",
+            integration.org_id,
+            source.id,
+            source.external_id,
+        )
         return []
 
     canonical_spec = get_dataset_spec(provider, _FAMILY_CANONICAL_DATASET_KEY)

@@ -7,7 +7,16 @@ import (
 	"testing"
 )
 
-func TestCompileBreakdown_RejectsInvestment(t *testing.T) {
+// TestCompileBreakdown_Investment_CompilesInlinedSource is CHAOS-4538's
+// replacement for the retired TestCompileBreakdown_RejectsInvestment --
+// investment path breakdown queries now compile, and this test pins the
+// shape they must have: no leading WITH (dev-health-go v0.4.0 rejects any
+// statement whose first token is not SELECT, clickhouse/client.go:190 --
+// §9 of the brief), plus the CHAOS-4547 tuple-wrap fixes and
+// membership-scope gate this port adds. Same investmentContextFor wiring
+// as CompileTimeseries (breakdown.go's CompileBreakdown doc comment), so
+// this mirrors TestCompileTimeseries_Investment_CompilesInlinedSource.
+func TestCompileBreakdown_Investment_CompilesInlinedSource(t *testing.T) {
 	req := BreakdownRequest{
 		Dimension: DimensionRepo,
 		Measure:   MeasureCount,
@@ -15,9 +24,35 @@ func TestCompileBreakdown_RejectsInvestment(t *testing.T) {
 		EndDate:   mustDate(t, "2026-01-31"),
 		TopN:      10,
 	}
-	_, err := CompileBreakdown(req, "org-1", 30, true, nil)
-	if err == nil {
-		t.Fatal("expected rejection when useInvestment=true")
+	q, err := CompileBreakdown(req, "org-1", 30, true, nil)
+	if err != nil {
+		t.Fatalf("CompileBreakdown error = %v", err)
+	}
+	trimmed := strings.TrimSpace(q.sql)
+	if !strings.HasPrefix(trimmed, "SELECT") {
+		t.Fatalf("investment-path SQL must start with a literal SELECT (dev-health-go client rejects a leading WITH) -- got prefix: %q", trimmed[:min(40, len(trimmed))])
+	}
+	if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
+		t.Errorf("investment-path SQL must never contain a top-level WITH clause, got: %s", q.sql)
+	}
+	// CHAOS-4547 tuple-wrap fix: work_unit_type/work_unit_name/repo_id/
+	// provider are Nullable per DDL and must be wrapped.
+	for _, col := range []string{"work_unit_type", "work_unit_name", "repo_id", "provider"} {
+		wrapped := "(argMax(tuple(" + col + "), computed_at)).1"
+		if !strings.Contains(q.sql, wrapped) {
+			t.Errorf("expected CHAOS-4547 tuple-wrap fix for %s, got: %s", col, q.sql)
+		}
+	}
+	// Non-nullable columns stay plain argMax -- no unnecessary wrap.
+	if !strings.Contains(q.sql, "argMax(effort_value, computed_at) AS effort_value") {
+		t.Errorf("expected plain argMax for non-nullable effort_value, got: %s", q.sql)
+	}
+	if strings.Contains(q.sql, "tuple(effort_value)") {
+		t.Errorf("effort_value is non-nullable Float64 -- tuple-wrapping it misrepresents the CHAOS-4547 audit, got: %s", q.sql)
+	}
+	// Membership-scope gate must be present (investmentmembershipscope.go).
+	if !strings.Contains(q.sql, "scope_enabled") {
+		t.Errorf("expected investment membership scope gate (scope_enabled), got: %s", q.sql)
 	}
 }
 

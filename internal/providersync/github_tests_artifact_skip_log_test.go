@@ -102,6 +102,55 @@ func TestGitHubTestsSkipSummaryLogsOverflowedCauses(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsSkipSummaryLogsOverflowThroughRealRoute pins the CHAOS-4592
+// gate round 3, P3 fix. TestGitHubTestsSkipSummaryLogsOverflowedCauses calls
+// githubTestsLogArtifactSkipSummary directly with a handcrafted causeOverflow
+// map -- it proves the logger CAN render overflow, but not that the real
+// route (githubTestsFinalMetadataBatch) actually FORWARDS its own
+// causeOverflow into that call. A regression dropping that one argument
+// (e.g. passing nil, as the pre-round-2 code always did) would silently omit
+// skipped_sample_cause_overflow in production while that test stayed green,
+// since it never exercises the wiring at all.
+//
+// This drives 10 genuinely unreadable artifacts (exceeding
+// githubTestsMaxSkippedArtifactRecords=8) alongside one healthy one (so the
+// totality-unreadable gate does not trip and short-circuit before the
+// summary log is ever reached) through the real chunked route via
+// walkGitHubTestsChunksResult, so the unit's own overflow tracking actually
+// triggers, and asserts the resulting log line carries it.
+func TestGitHubTestsSkipSummaryLogsOverflowThroughRealRoute(t *testing.T) {
+	records := captureMembershipLogs(t)
+	corrupt := map[int]bool{}
+	for i := 1; i <= 10; i++ {
+		corrupt[i] = true
+	}
+	doer := &githubTestsCorruptArtifactDoer{t: t, artifacts: 11, corrupt: corrupt}
+
+	if _, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4); err != nil {
+		t.Fatalf("walk returned err=%v", err)
+	}
+
+	var summary slog.Record
+	found := false
+	for _, record := range *records {
+		if record.Message == "provider artifacts skipped this unit; inventory continued" {
+			summary, found = record, true
+		}
+	}
+	if !found {
+		t.Fatalf("no skip-summary log record, want one for 10 unreadable artifacts (all records: %+v)", *records)
+	}
+	attrs := membershipLogAttrs(summary)
+	overflowed, ok := attrs["skipped_sample_cause_overflow"].([]string)
+	if !ok || len(overflowed) != 1 || overflowed[0] != githubTestsUnreadableArchiveCause {
+		t.Fatalf(
+			"premise/wiring failed: skipped_sample_cause_overflow=%v (ok=%t), want exactly [%s] -- "+
+				"10 skips of one cause must both trigger real overflow AND reach the log line through the route",
+			attrs["skipped_sample_cause_overflow"], ok, githubTestsUnreadableArchiveCause,
+		)
+	}
+}
+
 // The other half: a fully healthy unit must log nothing about skips. A line
 // on every sync regardless of content is noise operators learn to filter,
 // which is the same reasoning githubProjectV2's membership_skips log follows

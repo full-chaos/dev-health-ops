@@ -262,8 +262,18 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 	}
 	for i := 0; i < legacyRecords; i++ {
 		cursor.SkippedArtifacts = append(cursor.SkippedArtifacts, GitHubTestsSkippedArtifact{
+			// Cause deliberately OMITTED (codex review gate round 3, P2): a
+			// genuinely pre-CHAOS-4394 marker decodes with Cause=="" because
+			// that field did not exist on the binary that wrote it -- SizeBytes
+			// is the only era-appropriate signal, resolved through
+			// githubTestsSkippedArtifactCause's fallback. A test that manufactures
+			// these with Cause already set never exercises that fallback path at
+			// all, so it cannot catch a regression in it (which is exactly what
+			// happened: normalizeLegacyGitHubTestsSkippedArtifacts used
+			// record.Cause directly instead of githubTestsSkippedArtifactCause(record),
+			// attributing migration overflow to the empty string).
 			RunID: "33301167231234567", ArtifactID: strconv.Itoa(9729013072123456 + i),
-			Name: oldName, Cause: githubTestsArtifactOversizedCause,
+			Name:      oldName,
 			SizeBytes: 9223372036854775807, CapBytes: 9223372036854775807,
 		})
 	}

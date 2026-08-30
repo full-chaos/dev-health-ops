@@ -805,6 +805,61 @@ func TestGitHubTestsChunkedFinalMetadataRequiresFullCountNotMarkerPresence(t *te
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 }
 
+// TestGitHubTestsChunkedFinalMetadataCombinesCauseCountWithRetainedMarkers
+// pins the CHAOS-4592 gate round 3, P2 fix. Round 2's first version of
+// githubTestsReportMemberSkippedWithoutDurableMarker treated causeCount as
+// authoritative the MOMENT it was tracked at all for a cause, abandoning
+// sampleCount/causeOverflow as a fallback -- but a cursor can carry fully
+// retained markers from BEFORE causeCount existed (a walk resumed from a
+// pre-round-8 binary) alongside a causeCount THIS binary only just started
+// tracking from a single new skip after resume. That combination made a
+// fully-marked cause (every occurrence backed by a retained marker) wrongly
+// withhold, because causeCount alone (1) fell short of the full observed
+// Count (4) even though the retained SAMPLE covered all 4.
+func TestGitHubTestsChunkedFinalMetadataCombinesCauseCountWithRetainedMarkers(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+	// 3 pre-existing markers, no causeCount at all -- exactly what a cursor
+	// resumed from a binary before SkippedArtifactCauseCount existed looks
+	// like.
+	cursor := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api",
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 3},
+		},
+		SkippedArtifacts: []GitHubTestsSkippedArtifact{
+			{RunID: "1", ArtifactID: "1", Cause: githubTestsMalformedCause},
+			{RunID: "2", ArtifactID: "2", Cause: githubTestsMalformedCause},
+			{RunID: "3", ArtifactID: "3", Cause: githubTestsMalformedCause},
+		},
+	}
+	// This attempt's own binary records ONE more skip of the SAME cause,
+	// through the real production helper -- causeCount now tracks exactly
+	// 1, far short of the eventual Count of 4, even though every one of the
+	// 4 occurrences has a retained marker.
+	newSkip := GitHubTestsSkippedArtifact{RunID: "4", ArtifactID: "4", Cause: githubTestsMalformedCause}
+	cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, newSkip,
+	)
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 1,
+	})
+	if cursor.SkippedArtifactCauseCount[githubTestsMalformedCause] != 1 {
+		t.Fatalf("premise failed: causeCount=%v, want exactly 1 (only this attempt's own skip)", cursor.SkippedArtifactCauseCount)
+	}
+
+	batch, err := githubTestsFinalMetadataBatch(claim, cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- 4 fully-marked skips must advance even though causeCount alone (1) falls short of Count (4)",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
 func mustCompareGitHubTestsCompletionOK(t *testing.T, claim Claim, batch CompleteRouteBatch) {
 	t.Helper()
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(

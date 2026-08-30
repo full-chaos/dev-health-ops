@@ -542,29 +542,35 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // the unit simply retries next window: today's status quo, no data lost, no
 // permanent stall, not a new outage class.
 //
-// causeCount, when tracked for a cause, is authoritative and takes priority
-// over every signal below it (codex review gate round 2, P1): a marker's
-// mere PRESENCE for a cause -- the check this function used from round 1
-// through round 7 -- proves only that SOME occurrence of that cause is
-// durably evidenced, never that the FULL observation.Count is. A cursor
-// resumed from a binary that predates ANY marker-writing for a cause (true
-// of malformed/unreadable before this ticket: Incomplete-tracking for them
+// causeCount proves a cause is fully covered when it alone reaches
+// observation.Count (codex review gate round 2, P1): a marker's mere
+// PRESENCE for a cause -- the check this function used from round 1 through
+// round 7 -- proves only that SOME occurrence of that cause is durably
+// evidenced, never that the FULL observation.Count is. A cursor resumed
+// from a binary that predates ANY marker-writing for a cause (true of
+// malformed/unreadable before this ticket: Incomplete-tracking for them
 // existed long before CHAOS-4592 added markers) can carry
 // Incomplete{malformed, Count:5} with zero markers; the moment THIS binary
 // appends just one new marker for that cause, a presence check would treat
 // all 5 as covered. causeCount (SkippedArtifactCauseCount) is incremented
 // unconditionally by appendGitHubTestsSkippedArtifact on every call,
 // independent of the bounded sample cap, so it is an EXACT count of what
-// THIS binary's own accumulation can prove -- requiring it be >=
-// observation.Count closes the gap. When causeCount is tracked but falls
-// short, nothing below it can rescue the observation: sampleCount and
-// causeOverflow are both signals causeCount already dominates (every
-// occurrence counted in either is also counted in causeCount).
+// THIS binary's own accumulation can prove.
 //
-// sampleCount/causeOverflow/the legacy sentinel remain the fallback for a
-// cause causeCount does not track at all -- a cursor decoded before this
-// field existed, or one this attempt has not itself touched for that cause
-// yet -- preserving every prior round's behavior for that case unchanged.
+// Every signal below -- causeCount, sampleCount, causeOverflow, the legacy
+// sentinel -- is checked UNCONDITIONALLY, not gated on an earlier one being
+// absent (codex review gate round 3, P2, fixing a regression THIS round's
+// own P1 fix introduced): a cursor can carry markers/overflow that predate
+// causeCount's existence (a fully-marked pre-round-8 cursor resuming under
+// this binary) alongside a causeCount this binary itself only just started
+// tracking -- e.g. 3 old, fully-retained markers plus causeCount={cause:1}
+// from ONE new skip after resume. Requiring causeCount alone to prove the
+// full Count the moment it is "tracked" (round 8's first version of this
+// fix) would ignore the 3 still-valid retained markers and wrongly
+// withhold. Each signal here is independently safe (every prior round
+// vetted it in isolation): a cause only "continues" past a given check when
+// that check found genuine positive proof, so taking the first one that
+// succeeds is safe regardless of what any other signal shows.
 func githubTestsReportMemberSkippedWithoutDurableMarker(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
 	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
@@ -579,11 +585,8 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 		if observation.Component != githubTestsReportMemberComponent || observation.Count == 0 {
 			continue
 		}
-		if count, tracked := causeCount[observation.Cause]; tracked {
-			if count >= observation.Count {
-				continue
-			}
-			return true
+		if causeCount[observation.Cause] >= observation.Count {
+			continue
 		}
 		if sampleCount[observation.Cause] >= observation.Count {
 			continue

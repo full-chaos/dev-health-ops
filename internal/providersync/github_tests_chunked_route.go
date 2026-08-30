@@ -794,8 +794,18 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 		// dropped cause (artifact_oversized here) keeps artifact_unavailable
 		// correctly unmarked and unmarked-uncovered.
 		for _, record := range dropped {
+			// githubTestsSkippedArtifactCause, not record.Cause directly
+			// (codex review gate round 3, P2): a genuinely pre-CHAOS-4394
+			// marker's Cause field decodes as "" -- that field did not exist
+			// on the binary that wrote it -- so record.Cause alone would
+			// attribute the drop to the empty string, not artifact_oversized,
+			// leaving githubTestsReportMemberSkippedWithoutDurableMarker's
+			// causeOverflow["artifact_oversized"] check unable to see it and
+			// withholding a unit whose overflow evidence is real, just
+			// mis-keyed.
+			cause := githubTestsSkippedArtifactCause(record)
 			cursor.SkippedArtifactCauseOverflow = markGitHubTestsSkippedArtifactCauseOverflow(
-				cursor.SkippedArtifactCauseOverflow, record.Cause,
+				cursor.SkippedArtifactCauseOverflow, cause,
 			)
 		}
 		kept = kept[:githubTestsMaxSkippedArtifactRecords]

@@ -1298,7 +1298,36 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # chunked route through an HTTP-mocked walk. 3 new ordinary top-level
     # tests, none integration-tagged.
     # 1287 -> 1290 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1290
+    # CHAOS-4592/4601 codex review gate round 3 (terra/xhigh, full-base +
+    # .codex-review-context.md): 2 P2 correctness bugs, both regressions in
+    # round 2's own P1 fix or its supporting normalize path, plus 2 P3 proof
+    # gaps in unrelated-package/test-double wiring. P2 #1 -- causeCount was
+    # treated as authoritative the moment it was tracked at all, abandoning
+    # the sampleCount/causeOverflow fallback -- a cursor with fully retained
+    # markers from BEFORE causeCount existed, resumed under this binary with
+    # ONE new skip, wrongly withheld a fully-marked cause. Fixed by checking
+    # every signal unconditionally (first success wins) instead of gating on
+    # causeCount's presence; tested by
+    # TestGitHubTestsChunkedFinalMetadataCombinesCauseCountWithRetainedMarkers
+    # (complete_route_comparator_decoded_test.go). P2 #2 -- legacy-marker
+    # trim attributed dropped records' overflow to the RAW (often empty)
+    # Cause field instead of resolving it through
+    # githubTestsSkippedArtifactCause's SizeBytes fallback, mis-keying
+    # migration overflow under "" instead of artifact_oversized; the round-6
+    # test that was supposed to cover this manufactured modern-shaped markers
+    # (Cause already set) and never exercised the bug at all -- fixed both the
+    # code and that test's marker construction (no new test func). The 2 P3s
+    # (chunk-continuation metric wiring in internal/jobs/providerunit; the
+    # causeOverflow-to-log-line forwarding through the real route) each get a
+    # new test that exercises the real call path instead of a direct/synthetic
+    # one: TestGitHubTestsSkipSummaryLogsOverflowThroughRealRoute
+    # (github_tests_artifact_skip_log_test.go, providersync package) and
+    # TestChunkContinuationDeferRecordsTheMetric
+    # (chunk_continuation_test.go, internal/jobs/providerunit package --
+    # does NOT count toward this providersync-only pin). 2 new ordinary
+    # top-level providersync tests, none integration-tagged.
+    # 1290 -> 1292 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1292
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1315,7 +1344,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1290
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1292
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1376,7 +1405,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1290
+    assert len(selected_tests) == len(set(selected_tests)) == 1292
     assert set(selected_tests) == expected_tests
 
 

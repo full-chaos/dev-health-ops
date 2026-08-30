@@ -74,6 +74,9 @@ func TestPostgresRepositoryRecordsClaimAndFailMetrics(t *testing.T) {
 	for _, want := range []string{
 		`dev_health_provider_unit_claimed_total{provider="github",dataset="commits"} 1`,
 		`dev_health_provider_unit_failed_total{provider="github",dataset="commits",reason="feature_disabled"} 1`,
+		// CHAOS-4559: Fail's terminal commit must bump the run's live rollup
+		// counter, not just the pre-existing claim/fail-reason counters above.
+		`dev_health_sync_run_rollup_bumped_total{outcome="failed"} 1`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("missing %q in:\n%s", want, rendered)

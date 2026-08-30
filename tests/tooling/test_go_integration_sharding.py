@@ -1058,8 +1058,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # repository_postgres_metrics_integration_test.go:
     # TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey.
     # 1255 -> 1258 top-level; 150 -> 151 integration-tagged.
-    assert len(expected_provider_tests) == 1258
-    assert len(expected_integration_tests) == 151
+    #
+    # CHAOS-4559 (sync_runs.completed_units/failed_units read 0/0 while units
+    # actually succeeded -- the per-unit terminal commit never touched the
+    # parent row). A codex adversarial review round 1 found a real
+    # concurrency race in the fix's own recompute (uncorrelated COUNT(*)
+    # subqueries plan as InitPlans, evaluated once at statement start, so a
+    # second concurrent completion blocked on the row lock could resume
+    # using its stale pre-wait count). Added 1 new
+    # `//go:build integration` top-level test in
+    # repository_postgres_integration_test.go:
+    # TestPostgresRollupCountsBothUnitsUnderConcurrentCompletion (mutation-
+    # tested: reverting the lock-before-recompute fix made it fail 19/20
+    # runs).
+    # 1258 -> 1259 top-level; 151 -> 152 integration-tagged.
+    assert len(expected_provider_tests) == 1259
+    assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1075,7 +1089,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1258
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1259
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1136,7 +1150,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1258
+    assert len(selected_tests) == len(set(selected_tests)) == 1259
     assert set(selected_tests) == expected_tests
 
 

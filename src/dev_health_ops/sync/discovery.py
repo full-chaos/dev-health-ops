@@ -338,11 +338,13 @@ def discover_sources_for_integration(
     session.flush()
 
     if provider == "jira":
+        existing_count = len(source_dicts) - created_count
         _record_jira_project_discovery(
             org_id=integration.org_id,
             integration_id=integration_id,
             discovered_count=len(source_dicts),
             created_count=created_count,
+            existing_count=existing_count,
             has_planner_tag=planner_managed_sync_config_id is not None,
         )
 
@@ -355,13 +357,19 @@ def _record_jira_project_discovery(
     integration_id: uuid.UUID,
     discovered_count: int,
     created_count: int,
+    existing_count: int,
     has_planner_tag: bool,
 ) -> None:
     """Telemetry for Jira per-project source discovery (CHAOS-4584).
 
-    Counts discovered/created outcomes so "Jira has zero sources" is
-    observable going forward instead of silently discovered only via a
-    planner run coming back with ``total_units=0``.
+    Counts discovered/created/existing outcomes so "Jira has zero sources"
+    is observable going forward instead of silently discovered only via a
+    planner run coming back with ``total_units=0``. ``existing`` is a row
+    discovery found that already had a source for that project key (e.g. a
+    hand-inserted proof row, or a prior discovery run) -- team-lead's
+    collision rule: those rows are left exactly as they are (no flip, no
+    duplicate), so this label is what makes that visible without reading
+    the DB.
     """
     from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
 
@@ -370,6 +378,8 @@ def _record_jira_project_discovery(
     else:
         JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="discovered").inc(discovered_count)
         JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="created").inc(created_count)
+        if existing_count:
+            JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="existing").inc(existing_count)
     if not has_planner_tag:
         JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="skipped_no_planner_parent").inc()
 
@@ -380,6 +390,7 @@ def _record_jira_project_discovery(
             "integration_id": str(integration_id),
             "discovered_count": discovered_count,
             "created_count": created_count,
+            "existing_count": existing_count,
             "has_planner_tag": has_planner_tag,
         },
     )

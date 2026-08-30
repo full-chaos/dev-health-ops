@@ -540,6 +540,34 @@ def test_jira_rediscovery_preserves_existing_disabled_hand_inserted_row(
     assert by_external["OPS"].is_enabled is True
 
 
+def test_jira_rediscovery_reports_existing_outcome_telemetry(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Team-lead's collision rule: a project key discovery finds ALREADY has
+    a source (the disabled SUP/OPS proof rows, or any prior run) is counted
+    as ``existing``, distinct from ``created`` -- so the outcome is visible
+    in the counter/log without reading the DB."""
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        discover_sources_for_integration(
+            session, jira_integration.id
+        )  # first run: 2 created
+
+    before = JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="existing")._value.get()
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):
+        discover_sources_for_integration(
+            session, jira_integration.id
+        )  # second run: 2 existing
+
+    after = JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="existing")._value.get()
+    assert after - before == 2
+
+
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):
     from dev_health_ops.sync.discovery import (
         discover_sources_for_integration,

@@ -233,7 +233,11 @@ def _compose_pagerduty_services(path: Path) -> dict[str, dict]:
 
 def _kubernetes_env_sources() -> dict[tuple[str, str], set[str]]:
     sources: dict[tuple[str, str], set[str]] = {}
-    for path in (_KUBERNETES_CONFIGMAP, _KUBERNETES_SECRETS):
+    # CHAOS-4587: dev-health-go-worker-config (OPERATIONAL_ORDERING_CONTRACT)
+    # is defined inside go-workers.yaml itself, not the shared configmap.yaml
+    # -- scoped there on purpose so the Python api's own ordering-contract
+    # posture isn't silently changed by a go-worker-only key.
+    for path in (_KUBERNETES_CONFIGMAP, _KUBERNETES_SECRETS, _GO_KUBERNETES):
         for document in _load_yaml_documents(path):
             if document["kind"] == "ConfigMap":
                 sources[("configMapRef", document["metadata"]["name"])] = set(

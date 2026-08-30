@@ -1097,6 +1097,19 @@ by a separate, one-time operator action -- `dev-health-workerctl providersync
 retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
 `ALTER TABLE projects DELETE`, never a per-sync write.
 
+**CHAOS-4548 (hygiene, not a behavior change): a sibling one-time verb for the `team_project_ownership`
+side.** Every sync cycle before CHAOS-4530's writer fix also stamped the owning team's key onto a REAL
+project's `team_project_ownership.project_key` (not just the `{org_id}:linear:{team_key}` pseudo-identity
+row above) -- those stale rows were never reachable by any reader (this section's `project_id`-keyed
+`linear_team_key`/`project_id` arms never select `project_key`; the acr project-fact join only ever
+matches through `projects.project_key`, which is `NULL` for every real Linear project since CHAOS-4530),
+so this is pure hygiene, confirmed empirically on local org `70d529e0` (every stale row's `team_id` agreed
+with its NULL-keyed replacement before deletion). `dev-health-workerctl providersync
+retire-stale-linear-project-ownership` (`internal/providersync/linear_stale_project_ownership_cleanup.go`)
+deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and explicitly excludes any
+`project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
+separate, still-open concern, not this verb's.
+
 **Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
 prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a

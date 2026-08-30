@@ -1072,7 +1072,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # tested: reverting the lock-before-recompute fix made it fail 19/20
     # runs).
     # 1258 -> 1259 top-level; 151 -> 152 integration-tagged.
-    assert len(expected_provider_tests) == 1259
+    #
+    # CHAOS-4548 (stale project_key='CHAOS' team_project_ownership rows for
+    # real Linear projects, superseded by NULL-keyed rows but never
+    # collapsed by ReplacingMergeTree). Added 9 new ordinary top-level tests
+    # in linear_stale_project_ownership_cleanup_test.go: TestRetireStale
+    # LinearProjectOwnershipRowsRejectsNilConn, ...DryRunFindsButNever
+    # Deletes, ...RealRunDeletesAndReportsCounts, ...RealRunFindsNothing
+    # SkipsMutation, ...ScopedByOrgAddsThePredicate, ...PropagatesQuery
+    # Failure, ...PropagatesDeleteFailureButStillReportsFoundRows,
+    # TestLinearStaleProjectOwnershipPredicateExcludesThePseudoIdentityRow,
+    # and TestLinearStaleProjectOwnershipPredicateRequiresAReplacementRow
+    # (codex review P1: never delete a project's only ownership signal).
+    # None are integration-tagged (they use a fake driver.Conn, no real
+    # ClickHouse needed).
+    # 1259 -> 1268 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1268
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1089,7 +1104,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1259
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1268
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1150,7 +1165,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1259
+    assert len(selected_tests) == len(set(selected_tests)) == 1268
     assert set(selected_tests) == expected_tests
 
 

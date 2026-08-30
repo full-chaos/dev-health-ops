@@ -1195,6 +1195,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 	switch args[0] {
 	case "retire-linear-pseudo-projects":
 		return dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, args[1:], stdout, stderr)
+	case "retire-stale-linear-project-ownership":
+		return dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1270,6 +1272,98 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	}
 	return writeResult(stdout, stderr, map[string]any{
 		"retire_linear_pseudo_projects": outcome,
+	})
+}
+
+// dispatchProvidersyncRetireStaleLinearProjectOwnership handles `providersync
+// retire-stale-linear-project-ownership` (CHAOS-4548): a ONE-TIME,
+// operator-invoked cleanup that physically deletes every
+// team_project_ownership row for a REAL Linear project (project_id is the
+// provider UUID) that still carries the historical team-key project_key
+// stamp (written by every sync cycle before CHAOS-4530's writer fix). Pure
+// hygiene, not a correctness fix: acr's projectOwnershipJoinSQL only ever
+// matches a `projects` row through project_key, and every real Linear
+// project's project_key has been NULL since CHAOS-4530, so these rows were
+// never reachable through that join; the project_id-keyed readers
+// (loadTeamRepoOwnershipProjectLinks, load_team_attribution_context) never
+// select project_key at all. providersync.RetireStaleLinearProjectOwnershipRows
+// does the actual work and explicitly excludes the
+// {org_id}:linear:{team_key} pseudo-identity row -- CHAOS-4560's still-open
+// concern, not this verb's. Mirrors `providersync
+// retire-linear-pseudo-projects`'s shape exactly (lazy CLICKHOUSE_URI
+// resolution, --org/--dry-run, quiet invalid_request on any malformed
+// input, authorize before anything ClickHouse-related is attempted).
+func dispatchProvidersyncRetireStaleLinearProjectOwnership(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync retire-stale-linear-project-ownership")
+	org := flags.String("org", "", "organization id (uuid) -- omit to run across every org")
+	dryRun := flags.Bool("dry-run", false, "report which stale team_project_ownership rows would be deleted, across every org unless --org scopes it, without deleting anything")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	// An explicitly-provided EMPTY --org (e.g. `--org "$UNSET_VAR"` from a
+	// caller's shell scripting mistake) must never be silently treated the
+	// same as omitting the flag entirely (codex review, 2026-08-30, P1):
+	// this is a physically destructive command, and the difference between
+	// "operator omitted --org on purpose" and "operator's script passed an
+	// empty value by accident" must not collapse into the same global-scope
+	// outcome. flags.Visit only reports flags Parse actually saw on the
+	// command line, so this distinguishes the two cases the default value
+	// alone cannot.
+	orgFlagWasSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "org" {
+			orgFlagWasSet = true
+		}
+	})
+	if orgFlagWasSet && *org == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	// Canonicalize, never pass the raw flag value onward (same reasoning as
+	// retire-linear-pseudo-projects): ClickHouse's org_id comparison is
+	// case-sensitive string equality, so an uppercase --org would otherwise
+	// silently match zero rows.
+	scopedOrg := ""
+	if *org != "" {
+		parsedOrg, err := uuid.Parse(*org)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		scopedOrg = parsedOrg.String()
+	}
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	authorizeResource := scopedOrg
+	if authorizeResource == "" {
+		authorizeResource = "*"
+	}
+	// Authorized BEFORE anything ClickHouse-related is even attempted -- same
+	// gate retire-linear-pseudo-projects uses for the same class of action
+	// (a physically destructive ClickHouse mutation outside this service's
+	// own job/route/queue backends).
+	if err := runtime.service.AuthorizeProvidersyncCleanup(ctx, runtime.principal, authorizeResource); err != nil {
+		return writeServiceError(stderr, err)
+	}
+	if runtime.lookup == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	dsn, ok := resolveRequired("CLICKHOUSE_URI", runtime.lookup)
+	if !ok {
+		return writeError(stderr, "configuration_error")
+	}
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	defer func() { _ = conn.Close() }()
+	outcome, err := providersync.RetireStaleLinearProjectOwnershipRows(ctx, conn, scopedOrg, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"retire_stale_linear_project_ownership": outcome,
 	})
 }
 

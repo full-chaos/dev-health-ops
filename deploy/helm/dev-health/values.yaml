@@ -180,6 +180,15 @@ goWorkers:
   #    because the shared secrets.data.CLICKHOUSE_URI carries Python's HTTP URI
   #    and pointing a Go worker at it fails readiness immediately.
   clickhouseURI: ""
+  # CHAOS-4587: every group below reads a canonical operational table through
+  # the ordering-contract guard (dora_native_clickhouse.go,
+  # pagerduty_services_effects_clickhouse.go) and refuses to start against a
+  # contract-2 (post-067) table without this set. Rendered as a per-group
+  # container env (go-workers.yaml), not the shared api/worker ConfigMap --
+  # the Python api's own ordering-contract awareness is a separate,
+  # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
+  # deploy/go-workers/README.md's rollout note before changing this value.
+  operationalOrderingContract: "2"
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot

@@ -141,6 +141,15 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
+            # CHAOS-4587: every group here reads a canonical operational table
+            # through the ordering-contract guard and refuses to start
+            # against a contract-2 (post-067) table without this set. Kept
+            # off the shared api/worker ConfigMap (envFrom below) on
+            # purpose -- the Python api's own ordering-contract awareness is
+            # a separate, out-of-scope concern. Omitted defaults to contract
+            # 1 (rollout-safe); see deploy/go-workers/README.md.
+            - name: OPERATIONAL_ORDERING_CONTRACT
+              value: {{ .Values.goWorkers.operationalOrderingContract | default "2" | quote }}
             {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
             # Explicit env beats the shared Secret mounted via envFrom below,
             # so Go pods get the native port while Python keeps HTTP.

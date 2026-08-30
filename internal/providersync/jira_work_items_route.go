@@ -81,7 +81,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	issues, searchPages, err := collectJiraWorkItemIssues(
-		ctx, client, jql, maxPages, maxRows, perPage,
+		ctx, client, jql, maxPages, maxRows, perPage, true,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -289,11 +289,21 @@ func jiraWorkItemsJQL(claim Claim, projectKey string) string {
 	return fmt.Sprintf("project = '%s' AND (updated >= '%s' OR (statusCategory != Done AND created <= '%s')) ORDER BY updated DESC", projectKey, updatedSince, activeUntil)
 }
 
+// collectJiraWorkItemIssues walks /rest/api/3/search/jql by cursor
+// (nextPageToken/isLast). expandChangelog controls whether the search itself
+// asks Jira to inline each issue's changelog: JiraWorkItemsRouteHandler needs
+// it (it normalizes transitions straight off the search response), but
+// JiraAtlassianRouteHandler.Collect fetches -- and then overwrites
+// issue["changelog"] with -- its OWN separate per-issue changelog read, so an
+// inlined changelog it never reads is pure wasted response bytes that can
+// trip the shared 2MiB per-object cap (nativeMaxObjectBytes) on a
+// history-heavy page and fail an otherwise-healthy sync (CHAOS-4585 review).
 func collectJiraWorkItemIssues(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	jql string,
 	maxPages, maxRows, perPage int,
+	expandChangelog bool,
 ) ([]map[string]any, int, error) {
 	issues := make([]map[string]any, 0)
 	token := ""
@@ -305,7 +315,10 @@ func collectJiraWorkItemIssues(
 		}
 		query := url.Values{
 			"jql": {jql}, "maxResults": {strconv.Itoa(perPage)},
-			"fields": {"*all"}, "expand": {"changelog"},
+			"fields": {"*all"},
+		}
+		if expandChangelog {
+			query.Set("expand", "changelog")
 		}
 		if token != "" {
 			query.Set("nextPageToken", token)

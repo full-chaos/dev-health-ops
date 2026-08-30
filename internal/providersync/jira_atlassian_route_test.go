@@ -128,6 +128,13 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("expand") != "" {
+			// CHAOS-4585 review: this route fetches each issue's changelog
+			// separately (collectJiraAtlassianChangelog) and overwrites
+			// issue["changelog"] with it, so an inlined search-response
+			// changelog is unread bytes that can trip the 2MiB per-object cap.
+			t.Fatalf("Atlassian route's search requested expand=%s -- changelog is fetched separately, not from the search response", parsed.Query().Get("expand"))
+		}
 		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("startAt") != "0" {
 			t.Fatalf("search pagination=%s", raw)
 		}

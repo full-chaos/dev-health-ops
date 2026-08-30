@@ -447,9 +447,14 @@ func cloneJiraSprintRows(rows []jiraSprintRow) []jiraSprintRow {
 // collectJiraWorkItemIssues (jira_work_items_route.go), which already
 // targets /search/jql with cursor paging and is the one this repo's live
 // proof confirmed against real Jira (org 70d529e0, project SUP) -- see
-// CHAOS-4585.
+// CHAOS-4585. expandChangelog=false: this route's own Collect loop fetches
+// each issue's changelog separately (collectJiraAtlassianChangelog) and
+// overwrites issue["changelog"] with it, so an inlined changelog from the
+// search response would be wasted bytes the caller never reads -- and could
+// trip jiraFetchObject's 2MiB per-object cap on a history-heavy page,
+// failing an otherwise-healthy sync (caught in codex review).
 func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string, maxPages, maxRows, perPage int) ([]map[string]any, int, error) {
-	return collectJiraWorkItemIssues(ctx, client, jql, maxPages, maxRows, perPage)
+	return collectJiraWorkItemIssues(ctx, client, jql, maxPages, maxRows, perPage, false)
 }
 
 func collectJiraAtlassianChangelog(ctx context.Context, client *providerfoundation.HTTPClient, issueKey string, maxPages int) ([]any, int, error) {

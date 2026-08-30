@@ -511,11 +511,18 @@ func discoveryFailureResultJSON(retryable bool, attempts int, discoverErr error)
 // category). Bounded to keep a pathological error message from bloating the
 // result column; never includes the discoverErr for a nil error (the
 // lost-lease/no-op branches never reach this function).
+//
+// Run through sanitizeErrorText (codex review, CHAOS-4575): discoverErr can
+// wrap a raw transport failure (bridge.go's `do()` embeds the underlying
+// net/http error verbatim), which is untrusted, unbounded text that may
+// carry an Authorization header, a bearer token, or userinfo from a URL --
+// this is a DURABLE, queryable result column, the same class of leak
+// finalize_sync_run's error path already guards against.
 func discoveryErrorDetail(discoverErr error) string {
 	if discoverErr == nil {
 		return ""
 	}
-	detail := discoverErr.Error()
+	detail := sanitizeErrorText(discoverErr.Error())
 	const maxDetailLen = 500
 	if len(detail) > maxDetailLen {
 		detail = detail[:maxDetailLen]

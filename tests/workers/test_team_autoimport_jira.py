@@ -1088,3 +1088,86 @@ def test_jira_populate_skips_board_discovery_for_a_non_software_project_under_st
         "SUP",
         "native",
     ) in sink.ownership
+
+
+class _FakeUnknownProjectTypeJiraClient:
+    """get_project returns a projectTypeKey this module does not recognize
+    (neither "software" nor a confirmed non-board-capable type)."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "some_future_jira_template"}
+
+    def iter_boards(self, *, project_key: str):
+        raise AssertionError(
+            "board listing must not be called for an unrecognized project type"
+        )
+        yield  # pragma: no cover - generator shape only
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_raises_on_an_unrecognized_project_type_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex review (CHAOS-4575, P2): an unrecognized or missing
+    projectTypeKey is not the same as a confirmed non-board-capable type.
+    Treating it as skippable could silently drop a real software project's
+    board/sprint data under strict discovery's guaranteed-complete-or-raise
+    contract -- only the explicit allowlist may be swallowed; anything else
+    must propagate."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakeUnknownProjectTypeJiraClient
+    )
+
+    sink = _fake_sink()
+
+    with pytest.raises(RuntimeError, match="unrecognized Jira project type"):
+        team_autoimport_jira.populate(
+            org_id="org-1",
+            credentials={
+                "email": "jira@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://jira.example.com",
+            },
+            scope={
+                "mode": "sync_reference_discovery",
+                "strict_reference_discovery": True,
+            },
+            sink=sink,
+        )

@@ -221,6 +221,18 @@ def _skippable_jira_400_detail(exc: Exception) -> str | None:
 
 _JIRA_BOARD_CAPABLE_PROJECT_TYPES = frozenset({"software"})
 
+# Jira Cloud's own three project template families, plus Product Discovery
+# (a fourth, newer template) -- all confirmed to have no Agile boards.
+# Codex review (CHAOS-4575, P2): an UNKNOWN or missing projectTypeKey must
+# NOT be treated the same as a confirmed non-board-capable type -- that
+# would silently skip a possibly board-capable project's real data under
+# strict discovery's guaranteed-complete-or-raise contract (AGENTS.md
+# checkpoint 12: "missing is not healthy"). Only this explicit, evidence-
+# backed allowlist is skippable; anything else propagates.
+_JIRA_NO_BOARD_PROJECT_TYPES = frozenset(
+    {"service_desk", "business", "product_discovery"}
+)
+
 
 def _jira_project_type_key(client: Any, *, project_key: str) -> str:
     """Look up ``project_key``'s ``projectTypeKey`` ("software",
@@ -531,24 +543,37 @@ def populate(
                 # strict discovery still reports success. CHAOS-4575 closes
                 # the actual gap without reopening that ambiguity: check the
                 # project's TYPE first (a single, cheap GET) and skip board
-                # discovery only for a project type that structurally never
-                # has Agile boards (service_desk, business) -- a software
-                # project's board-listing 400 (malformed key or anything
-                # else) still propagates to the outer strict/non-strict
-                # handler below, unchanged.
+                # discovery only for a project type on the explicit
+                # confirmed-no-boards allowlist (_JIRA_NO_BOARD_PROJECT_TYPES)
+                # -- an unrecognized type raises instead of silently skipping
+                # (codex P2), and a software project's board-listing 400
+                # (malformed key or anything else) still propagates to the
+                # outer strict/non-strict handler below, unchanged.
                 project_type = _jira_project_type_key(client, project_key=project_key)
-                if project_type not in _JIRA_BOARD_CAPABLE_PROJECT_TYPES:
+                if project_type in _JIRA_NO_BOARD_PROJECT_TYPES:
                     logging.getLogger(__name__).warning(
                         "Jira board discovery skipped for org_id=%s project_key=%s: "
                         "project type %r has no Agile boards",
                         org_id,
                         project_key,
-                        project_type or "unknown",
+                        project_type,
                     )
                     record_team_autoimport_reference_subitem_skipped(
                         provider="jira", kind="project_boards"
                     )
                     continue
+                if project_type not in _JIRA_BOARD_CAPABLE_PROJECT_TYPES:
+                    # Codex review (CHAOS-4575, P2): an unrecognized or
+                    # missing projectTypeKey is NOT the same as a confirmed
+                    # non-board-capable type -- assuming "no boards" here
+                    # could silently drop a real software project's data.
+                    # Strict discovery's guaranteed-complete-or-raise
+                    # contract requires this to propagate as a failure, not
+                    # a silent skip.
+                    raise RuntimeError(
+                        "unrecognized Jira project type "
+                        f"{project_type or 'unknown'!r} for project_key={project_key!r}"
+                    )
                 boards = list(client.iter_boards(project_key=project_key))
                 for board in boards:
                     board_id = board.get("id")

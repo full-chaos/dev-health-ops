@@ -434,7 +434,17 @@ func (materializer *NativeMaterializer) Materialize(
 	loaded.input.ExecutedProof = materializer.executedProof.Load()
 	var units []PlannedUnit
 	if loaded.terminalReason == "" {
-		units, err = BuildScheduledPlan(loaded.input)
+		// CHAOS-4602: a sync_manual_triggers-backed occurrence (loaded by
+		// loadMaterializationPlan above) can request backfill mode, which
+		// BuildScheduledPlan explicitly rejects (ErrBackfillScheduled) --
+		// route it to BuildBackfillPlan instead. Every other mode (an
+		// ordinary cron tick, or a manual "Sync Now" that is NOT a backfill)
+		// keeps the exact scheduled-planner path it always used.
+		if loaded.input.Mode == SyncModeBackfill {
+			units, err = BuildBackfillPlan(loaded.input)
+		} else {
+			units, err = BuildScheduledPlan(loaded.input)
+		}
 		if err != nil {
 			return PlanResult{}, err
 		}
@@ -476,17 +486,38 @@ func (materializer *NativeMaterializer) Materialize(
 	if err := persistCoordinatorGraph(ctx, coordinatorTx, ids, occurrence, len(units), loaded.terminalReason); err != nil {
 		return PlanResult{}, err
 	}
-	// Recorded only on the success path, deliberately. A pass that FAILED
-	// planned nothing, but it also measured nothing -- publishing a zero for
-	// it would be indistinguishable from a healthy occurrence that genuinely
-	// had no work, and the zero-planned counter exists precisely to be
-	// alertable without that ambiguity.
+	// CHAOS-4603: telemetry is NOT recorded here. coordinatorTx is the
+	// CALLER's transaction (Materialize only ever writes into it; it never
+	// commits it), so anything incremented at this point would fire before
+	// the caller's own commit makes this materialization durable -- exactly
+	// the SAVEPOINT-vs-outer-transaction bug Python's plan_sync_run has at
+	// planner.py:689-692. RecordMaterialized below exists so the caller can
+	// increment only after ITS commit actually succeeds.
+	return PlanResult{JobRunID: ids.JobRunID, SyncRunID: ids.SyncRunID, PlannedUnits: len(units)}, nil
+}
+
+// RecordMaterialized publishes the CHAOS-4124 planning-volume telemetry for
+// one materialization. It is deliberately NOT called from inside Materialize
+// (see the comment on Materialize's return above, CHAOS-4603): the caller
+// must call this only after the transaction it handed to Materialize has
+// itself committed successfully. A rollback of that transaction -- for any
+// reason, at any later point in the caller's own commit sequence -- must
+// leave these counters untouched, exactly as if Materialize had never run.
+//
+// Recorded only on that success path, deliberately. A pass that FAILED
+// planned nothing, but it also measured nothing -- publishing a zero for it
+// would be indistinguishable from a healthy occurrence that genuinely had no
+// work, and the zero-planned counter exists precisely to be alertable
+// without that ambiguity.
+func (materializer *NativeMaterializer) RecordMaterialized(plannedUnits int) {
+	if materializer == nil {
+		return
+	}
 	materializer.materializedOccurrences.Add(1)
-	materializer.plannedUnitsLast.Store(int64(len(units)))
-	if len(units) == 0 {
+	materializer.plannedUnitsLast.Store(int64(plannedUnits))
+	if plannedUnits == 0 {
 		materializer.zeroPlannedOccurrencesTotal.Add(1)
 	}
-	return PlanResult{JobRunID: ids.JobRunID, SyncRunID: ids.SyncRunID}, nil
 }
 
 type loadedMaterializationPlan struct {
@@ -499,6 +530,14 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
+	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
+	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
+	// keeps this value, unconditionally), or the sync_manual_triggers row's
+	// own triggered_by ("manual"/"backfill") when this occurrence came from
+	// one. This is what makes the org 70d529e0 acceptance proof's
+	// `sync_runs.triggered_by='backfill'` observable at all -- persistDomainGraph
+	// used to hardcode 'schedule' unconditionally.
+	triggeredBy string
 }
 
 type syncConfigOptions struct {
@@ -542,24 +581,61 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err := json.Unmarshal(syncOptionsJSON, &options); err != nil {
 		return loadedMaterializationPlan{}, fmt.Errorf("decode sync options: %w", err)
 	}
-	if strings.TrimSpace(options.Schedule) == "" {
-		return loadedMaterializationPlan{}, ErrOccurrenceIneligible
-	}
 	var integrationConfig integrationOptions
 	if err := json.Unmarshal(integrationOptionsJSON, &integrationConfig); err != nil {
 		return loadedMaterializationPlan{}, fmt.Errorf("decode integration options: %w", err)
 	}
+	// CHAOS-4602 design page: an occurrence Python minted for a manual "Sync
+	// Now" or Backfill trigger (fork 1: planner-managed configs only --
+	// occurrence.ConfigPlannerManaged is already asserted by Materialize's
+	// own eligibility gate before this function is ever called) carries a
+	// sync_manual_triggers row keyed by its own occurrence_id. Its mode
+	// (and, for backfill, since/before/source_ids/dataset_keys) is
+	// AUTHORITATIVE over the config's own persisted sync_options -- exactly
+	// as a caller-supplied SyncPlanRequest always overrides a config's
+	// stored defaults on the Python side. Finding no row here means this is
+	// an ordinary cron-scheduled occurrence, and every check below runs
+	// EXACTLY as it did before this table existed.
+	manualTrigger, err := loadManualSyncTrigger(ctx, tx, occurrence.ID)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
+	}
 	mode := SyncModeIncremental
-	if options.Mode == SyncModeBackfill {
-		return loadedMaterializationPlan{}, ErrBackfillScheduled
-	}
-	if options.Mode != "" && options.Mode != SyncModeIncremental && options.Mode != SyncModeFullResync {
-		return loadedMaterializationPlan{}, fmt.Errorf("%w: unsupported scheduled mode %q", ErrInvalidPlan, options.Mode)
-	}
-	if options.FullResync {
-		mode = SyncModeFullResync
-	} else if options.Mode == SyncModeFullResync {
-		mode = SyncModeFullResync
+	triggeredBy := "schedule"
+	var sinceOverride, beforeOverride *time.Time
+	var explicitSourceIDs, explicitDatasetKeys []string
+	if manualTrigger != nil {
+		switch manualTrigger.Mode {
+		case SyncModeIncremental, SyncModeFullResync, SyncModeBackfill:
+			mode = manualTrigger.Mode
+		default:
+			return loadedMaterializationPlan{}, fmt.Errorf(
+				"%w: unsupported manual trigger mode %q", ErrInvalidPlan, manualTrigger.Mode,
+			)
+		}
+		triggeredBy = manualTrigger.TriggeredBy
+		sinceOverride = manualTrigger.Since
+		beforeOverride = manualTrigger.Before
+		explicitSourceIDs = manualTrigger.SourceIDs
+		explicitDatasetKeys = manualTrigger.DatasetKeys
+	} else {
+		// No manual trigger row: this occurrence must have come from the
+		// cron scheduler, which never mints one for an unscheduled config.
+		// Unchanged from pre-CHAOS-4602 behavior.
+		if strings.TrimSpace(options.Schedule) == "" {
+			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+		}
+		if options.Mode == SyncModeBackfill {
+			return loadedMaterializationPlan{}, ErrBackfillScheduled
+		}
+		if options.Mode != "" && options.Mode != SyncModeIncremental && options.Mode != SyncModeFullResync {
+			return loadedMaterializationPlan{}, fmt.Errorf("%w: unsupported scheduled mode %q", ErrInvalidPlan, options.Mode)
+		}
+		if options.FullResync {
+			mode = SyncModeFullResync
+		} else if options.Mode == SyncModeFullResync {
+			mode = SyncModeFullResync
+		}
 	}
 	if err := lockScheduledOrganization(ctx, tx, orgID); err != nil {
 		return loadedMaterializationPlan{}, err
@@ -609,7 +685,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		if reason != "" {
 			return loadedMaterializationPlan{
 				input:    PlannerInput{OrgID: orgID, IntegrationID: integrationID, Mode: mode, Now: occurrence.ScheduledFor.UTC()},
-				provider: provider, totalUnitCap: defaultUnitCap, terminalReason: reason,
+				provider: provider, totalUnitCap: defaultUnitCap, terminalReason: reason, triggeredBy: triggeredBy,
 			}, nil
 		}
 		pagerDutyRepair = repair
@@ -629,11 +705,11 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		sources = []PlanSource{pagerDutyRepair.source}
 		datasets = pagerDutyRepair.datasets
 	} else {
-		sources, err = loadPlanSources(ctx, tx, orgID, integrationID, occurrence.ConfigID, sourceID, plannerManaged)
+		sources, err = loadPlanSources(ctx, tx, orgID, integrationID, occurrence.ConfigID, sourceID, explicitSourceIDs, plannerManaged)
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
-		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID)
+		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID, explicitDatasetKeys)
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
@@ -659,10 +735,20 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if integrationConfig.InitialSyncDepth > 0 {
 		depth = &integrationConfig.InitialSyncDepth
 	}
+	before := pointerTime(occurrence.ScheduledFor.UTC())
+	if beforeOverride != nil {
+		utcBefore := beforeOverride.UTC()
+		before = &utcBefore
+	}
+	var since *time.Time
+	if sinceOverride != nil {
+		utcSince := sinceOverride.UTC()
+		since = &utcSince
+	}
 	return loadedMaterializationPlan{
 		input: PlannerInput{
 			OrgID: orgID, IntegrationID: integrationID, Mode: mode,
-			Now: occurrence.ScheduledFor.UTC(), Before: pointerTime(occurrence.ScheduledFor.UTC()),
+			Now: occurrence.ScheduledFor.UTC(), Before: before, Since: since,
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
 		},
@@ -671,7 +757,46 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		totalUnitCap:           totalUnitCap,
 		ensureSecurityDataset:  ensureSecurityDataset,
 		pagerDutyRepair:        pagerDutyRepair,
+		triggeredBy:            triggeredBy,
 	}, nil
+}
+
+// manualSyncTrigger is the Go read-side mirror of one sync_manual_triggers
+// row (migration 0118): Python is the sole writer (a separate DB login,
+// grants doc'd in domain_authorization.go's coordinatorPosture); Go only
+// ever reads it, by occurrence_id, to learn what a manual "Sync Now" or
+// Backfill trigger actually asked for.
+type manualSyncTrigger struct {
+	Mode        string
+	Since       *time.Time
+	Before      *time.Time
+	SourceIDs   []string
+	DatasetKeys []string
+	// TriggeredBy is the row's own triggered_by ("manual"/"backfill",
+	// CHECK-constrained by migration 0118) -- this is what
+	// persistDomainGraph stamps onto sync_runs.triggered_by, replacing the
+	// hardcoded 'schedule' every non-manual occurrence still gets.
+	TriggeredBy string
+}
+
+// loadManualSyncTrigger returns nil, nil when no row exists for
+// occurrenceID -- an ordinary cron-scheduled occurrence, the overwhelming
+// majority of pickups, never has one.
+func loadManualSyncTrigger(ctx context.Context, tx pgx.Tx, occurrenceID string) (*manualSyncTrigger, error) {
+	var trigger manualSyncTrigger
+	err := tx.QueryRow(ctx, `
+SELECT mode, since, before, source_ids, dataset_keys, triggered_by
+FROM public.sync_manual_triggers
+WHERE occurrence_id = $1`, occurrenceID).Scan(
+		&trigger.Mode, &trigger.Since, &trigger.Before, &trigger.SourceIDs, &trigger.DatasetKeys, &trigger.TriggeredBy,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load sync manual trigger: %w", err)
+	}
+	return &trigger, nil
 }
 
 func lockScheduledOrganization(ctx context.Context, tx pgx.Tx, orgID string) error {
@@ -1239,14 +1364,32 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &licenseFea
 	return false, FeatureDecisionReasonTierRequired, nil
 }
 
-func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, sourceID *string, plannerManaged bool) ([]PlanSource, error) {
+// loadPlanSources loads the enabled sources a plan runs against.
+// explicitSourceIDs is CHAOS-4602's manual/backfill selector
+// (sync_manual_triggers.source_ids, mirroring Python's
+// SyncPlanRequest.source_ids/_load_enabled_sources): nil means "no explicit
+// selection", so every planner-managed source still qualifies; a non-nil
+// (possibly single-element) slice narrows to exactly those ids, matching
+// Python's own "empty selector plans zero sources" semantics when it is
+// non-nil but empty. It is layered UNDER, never combined with, the
+// config's own sourceID scope: a legacy per-source child config's
+// sourceID always wins when set, exactly as it did before this parameter
+// existed.
+func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, sourceID *string, explicitSourceIDs []string, plannerManaged bool) ([]PlanSource, error) {
+	var idFilter []string
+	switch {
+	case sourceID != nil:
+		idFilter = []string{*sourceID}
+	case explicitSourceIDs != nil:
+		idFilter = explicitSourceIDs
+	}
 	rows, err := tx.Query(ctx, `
 SELECT id::text, external_id, lower(provider), full_name
 FROM public.integration_sources
 WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
-  AND ($3::uuid IS NULL OR id=$3::uuid)
-  AND ($3::uuid IS NOT NULL OR NOT $4 OR metadata->>'planner_managed_sync_config_id'=$5)
-ORDER BY full_name, id`, orgID, integrationID, sourceID, plannerManaged, configID)
+  AND ($3::text[] IS NULL OR id::text = ANY($3::text[]))
+  AND ($3::text[] IS NOT NULL OR NOT $4 OR metadata->>'planner_managed_sync_config_id'=$5)
+ORDER BY full_name, id`, orgID, integrationID, idFilter, plannerManaged, configID)
 	if err != nil {
 		return nil, fmt.Errorf("load scheduled sync sources: %w", err)
 	}
@@ -1308,13 +1451,36 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 	return false
 }
 
-func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string) ([]PlanDataset, bool, error) {
-	requested := requestedDatasetKeys(provider, targets, sourceID)
+// loadPlanDatasets loads the enabled datasets a plan runs against.
+// explicitDatasetKeys is CHAOS-4602's manual/backfill selector
+// (sync_manual_triggers.dataset_keys, mirroring Python's
+// SyncPlanRequest.dataset_keys/_load_enabled_datasets): nil falls back to
+// the legacy-target-derived scope requestedDatasetKeys already computed
+// (unchanged behavior for every ordinary scheduled occurrence); a non-nil
+// slice is a direct dataset_key allowlist with NO legacy-target mapping and
+// NO auto security-forcing, matching _load_enabled_datasets' plain
+// dataset_key IN (...) filter exactly -- an explicit selector states
+// precisely what it wants, and does not get security silently added.
+func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string, explicitDatasetKeys []string) ([]PlanDataset, bool, error) {
+	var requested map[string]bool
 	securityRequested := false
-	if provider == "github" || provider == "gitlab" {
-		securityRequested = true
-		if requested != nil {
-			requested["security"] = true
+	if explicitDatasetKeys != nil {
+		requested = make(map[string]bool, len(explicitDatasetKeys))
+		for _, key := range explicitDatasetKeys {
+			requested[strings.ToLower(strings.TrimSpace(key))] = true
+		}
+		if len(requested) == 0 {
+			// Explicit EMPTY selector: plan zero datasets, mirroring Python's
+			// `if not dataset_keys: return []` in _load_enabled_datasets.
+			return nil, false, nil
+		}
+	} else {
+		requested = requestedDatasetKeys(provider, targets, sourceID)
+		if provider == "github" || provider == "gitlab" {
+			securityRequested = true
+			if requested != nil {
+				requested["security"] = true
+			}
 		}
 	}
 	rows, err := tx.Query(ctx, `
@@ -1526,12 +1692,20 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
 	}
+	triggeredByStamp := loaded.triggeredBy
+	if triggeredByStamp == "" {
+		// Defensive default only: every loadMaterializationPlan return path
+		// sets this explicitly. An empty value here would silently persist
+		// an unlabeled sync_runs row rather than the CHAOS-4602 acceptance
+		// proof's required 'schedule'/'manual'/'backfill' stamp.
+		triggeredByStamp = "schedule"
+	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO public.sync_runs
  (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units,
   credential_id, credential_fingerprint, auth_source,completed_at,result,error,created_at)
-VALUES ($1::uuid,$2,$3::uuid,'schedule',$4,$5,$6,0,0,$7::uuid,NULL,$8,$9,$10::jsonb,$11,$12)
-ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.IntegrationID,
+VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,0,0,$8::uuid,NULL,$9,$10,$11::jsonb,$12,$13)
+ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.IntegrationID, triggeredByStamp,
 		loaded.input.Mode, expectedStatus, len(units), loaded.credentialID, loaded.authSource, completedAt, resultJSON, runError, createdAt)
 	if err != nil {
 		return fmt.Errorf("persist scheduled sync run: %w", err)
@@ -1545,7 +1719,7 @@ ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.In
 	if err := tx.QueryRow(ctx, `SELECT org_id,integration_id::text,triggered_by,mode,status,total_units,completed_units,failed_units,credential_id::text,auth_source,credential_fingerprint,started_at,completed_at,result::jsonb,error,created_at FROM public.sync_runs WHERE id=$1::uuid`, ids.SyncRunID).Scan(&org, &integration, &triggeredBy, &mode, &status, &total, &completed, &failed, &credential, &auth, &fingerprint, &persistedStartedAt, &persistedCompletedAt, &persistedResult, &persistedError, &persistedCreatedAt); err != nil {
 		return fmt.Errorf("verify scheduled sync run: %w", err)
 	}
-	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != "schedule" || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || fingerprint != nil || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
+	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != triggeredByStamp || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || fingerprint != nil || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
 		return fmt.Errorf("%w: deterministic sync run identity maps to different state", ErrInvalidPlan)
 	}
 	type expectedUnit struct {

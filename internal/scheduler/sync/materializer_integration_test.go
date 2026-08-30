@@ -139,6 +139,21 @@ CREATE TABLE public.scheduled_sync_occurrences (
  FOREIGN KEY(scheduled_job_id) REFERENCES scheduled_jobs(id),
  FOREIGN KEY(job_run_id) REFERENCES job_runs(id),
  FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id)
+);
+-- CHAOS-4602 migration 0118, mirrored verbatim (including its CHECK
+-- constraints) so a fixture row that would be rejected in production is
+-- rejected here too.
+CREATE TABLE public.sync_manual_triggers (
+ occurrence_id text PRIMARY KEY, mode text NOT NULL,
+ since timestamptz, before timestamptz,
+ source_ids text[], dataset_keys text[],
+ triggered_by text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(occurrence_id) REFERENCES scheduled_sync_occurrences(occurrence_id) ON DELETE CASCADE,
+ CONSTRAINT ck_sync_manual_triggers_mode CHECK (mode IN ('incremental','full_resync','backfill')),
+ CONSTRAINT ck_sync_manual_triggers_triggered_by CHECK (triggered_by IN ('manual','backfill')),
+ CONSTRAINT ck_sync_manual_triggers_backfill_selector
+  CHECK ((mode = 'backfill') = (since IS NOT NULL AND before IS NOT NULL))
 );`
 
 type materializerFixture struct {
@@ -211,6 +226,10 @@ func materializeAndCommit(t *testing.T, fixture materializerFixture, materialize
 	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4603: mirrors occurrence_reconciler.go's reconcileOne -- record
+	// plan-stamped telemetry only now that the transaction Materialize wrote
+	// into has itself committed.
+	materializer.RecordMaterialized(plan.PlannedUnits)
 	return plan, nil
 }
 
@@ -1396,5 +1415,180 @@ func TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart(t *te
 				"picked up the new evidence on its own",
 			got,
 		)
+	}
+}
+
+// startBackfillTriggerFixture installs an UNSCHEDULED (no schedule_cron),
+// planner-managed Jira config -- the exact org 70d529e0 acceptance shape --
+// with a sync_manual_triggers row requesting a backfill, on top of the
+// shared materializer fixture's pool/org. Only a manual trigger row makes
+// such a config eligible at all (loadMaterializationPlan's schedule_cron
+// check is skipped only when one exists).
+func startBackfillTriggerFixture(t *testing.T, fixture materializerFixture, since, before time.Time) PendingOccurrence {
+	t.Helper()
+	ctx := context.Background()
+	const (
+		jiraIntegrationID = "00000000-0000-4000-8000-000000002002"
+		jiraConfigID      = "00000000-0000-4000-8000-000000002001"
+		jiraSourceID      = "00000000-0000-4000-8000-000000002003"
+		jiraDatasetID     = "00000000-0000-4000-8000-000000002004"
+		jiraJobID         = "00000000-0000-4000-8000-000000002005"
+	)
+	orgID := fixture.occurrence.OrgID
+	occurrenceID := "occurrence:v1:backfill"
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO integrations VALUES ($1::uuid,$2,'jira',NULL,TRUE,'{}'::jsonb)`, []any{jiraIntegrationID, orgID}},
+		// Deliberately NO schedule_cron: this config is intentionally
+		// unscheduled, exactly like the live org 70d529e0 Jira config this
+		// ticket's acceptance proof targets.
+		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'[]'::jsonb,'{}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{jiraConfigID, orgID, jiraIntegrationID}},
+		// metadata carries the planner_managed_sync_config_id tag: without
+		// it loadPlanSources' own planner_managed filter (CHAOS-4602 round-1
+		// P1) would never select this row for a planner_managed=TRUE config.
+		{fmt.Sprintf(`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'jira','project','PROJ','PROJ','PROJ',TRUE,'{"planner_managed_sync_config_id":"%s"}'::jsonb,now(),now())`, jiraConfigID), []any{jiraSourceID, orgID, jiraIntegrationID}},
+		// "work-items" (not "incidents"): avoids the canonical-incident
+		// feature-gate entirely, keeping this fixture about the backfill
+		// mode routing itself.
+		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{jiraDatasetID, orgID, jiraIntegrationID}},
+		{`INSERT INTO scheduled_jobs VALUES ($1::uuid)`, []any{jiraJobID}},
+		{`INSERT INTO scheduled_sync_occurrences (occurrence_id,identity_version,org_id,sync_config_id,scheduled_job_id,scheduled_for,reconcile_status) VALUES ($1,$2,$3,$4::uuid,$5::uuid,$6,'pending')`,
+			[]any{occurrenceID, OccurrenceIdentityVersion, orgID, jiraConfigID, jiraJobID, before}},
+		{`INSERT INTO sync_manual_triggers (occurrence_id,mode,since,before,triggered_by) VALUES ($1,'backfill',$2,$3,'backfill')`,
+			[]any{occurrenceID, since, before}},
+	}
+	for _, statement := range statements {
+		if _, err := fixture.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return PendingOccurrence{
+		ID: occurrenceID, IdentityVersion: OccurrenceIdentityVersion,
+		OrgID: orgID, ConfigID: jiraConfigID, JobID: jiraJobID,
+		ScheduledFor: before,
+		ConfigActive: true, ConfigPlannerManaged: true, JobStatus: 0, JobType: "sync",
+	}
+}
+
+// TestNativeMaterializerRoutesBackfillTriggerToBuildBackfillPlan is the
+// CHAOS-4602 acceptance shape at the Go materializer level: an unscheduled,
+// planner-managed Jira config with no explicit source/dataset scope, driven
+// by a sync_manual_triggers row, must (a) be eligible at all despite having
+// no schedule_cron, (b) route through BuildBackfillPlan rather than
+// BuildScheduledPlan (which would reject it outright), (c) plan MULTIPLE
+// units from the chunked backfill range (2026-08-01..2026-08-20 at the
+// default 7-day chunk = 3), and (d) stamp sync_runs.triggered_by='backfill'
+// -- not the 'schedule' every occurrence got before this ticket.
+func TestNativeMaterializerRoutesBackfillTriggerToBuildBackfillPlan(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 3 {
+		t.Fatalf("plan.PlannedUnits = %d, want 3 (7-day chunks of a 20-day range): %+v", plan.PlannedUnits, plan)
+	}
+
+	var triggeredBy, mode string
+	var totalUnits int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT triggered_by, mode, total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&triggeredBy, &mode, &totalUnits); err != nil {
+		t.Fatal(err)
+	}
+	if triggeredBy != "backfill" {
+		t.Errorf("sync_runs.triggered_by = %q, want %q", triggeredBy, "backfill")
+	}
+	if mode != "backfill" {
+		t.Errorf("sync_runs.mode = %q, want %q", mode, "backfill")
+	}
+	if totalUnits != 3 {
+		t.Errorf("sync_runs.total_units = %d, want 3", totalUnits)
+	}
+
+	var unitCount int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`, plan.SyncRunID,
+	).Scan(&unitCount); err != nil {
+		t.Fatal(err)
+	}
+	if unitCount != 3 {
+		t.Errorf("sync_run_units count = %d, want 3 composite work-items units", unitCount)
+	}
+}
+
+// TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit is CHAOS-4603's
+// required proof: a plan that Materialize computed but whose transaction
+// the CALLER then rolls back (any reason, at any later point in its own
+// commit sequence) must leave devhealth_scheduler_materialized_occurrences_total
+// and devhealth_scheduler_planned_units untouched -- exactly as if
+// Materialize had never run. Mirrors the SAVEPOINT-vs-outer-transaction bug
+// codex found in Python's plan_sync_run (planner.py:689-692): telemetry may
+// only fire once the transaction Materialize wrote into is itself durable.
+func TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsContain := func(want string) bool {
+		var metrics bytes.Buffer
+		if err := materializer.WritePrometheus(&metrics); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(metrics.String(), want+"\n")
+	}
+
+	// Rollback path: Materialize succeeds and computes a real plan, but the
+	// transaction it wrote into is rolled back instead of committed (the
+	// deliberate absence of RecordMaterialized here mirrors what
+	// occurrence_reconciler.go's reconcileOne does on every non-success
+	// return between Materialize and its own tx.Commit).
+	rollbackOccurrence := fixture.occurrence
+	rollbackOccurrence.ID = "occurrence:v1:telemetry-rollback"
+	tx, err := fixture.pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializer.Materialize(context.Background(), tx, rollbackOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatalf("plan=%+v want a real (non-zero) plan to roll back", plan)
+	}
+	if err := tx.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if metricsContain("devhealth_scheduler_materialized_occurrences_total 1") {
+		t.Fatal("materialized_occurrences_total incremented for a plan whose transaction was rolled back")
+	}
+	if metricsContain("devhealth_scheduler_planned_units " + fmt.Sprint(plan.PlannedUnits)) {
+		t.Fatal("planned_units published for a plan whose transaction was rolled back")
+	}
+
+	// Commit path: the SAME shape, but the transaction actually commits, so
+	// RecordMaterialized fires -- exactly once.
+	commitOccurrence := fixture.occurrence
+	commitOccurrence.ID = "occurrence:v1:telemetry-commit"
+	committedPlan, err := materializeAndCommit(t, fixture, materializer, commitOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metricsContain("devhealth_scheduler_materialized_occurrences_total 1") {
+		t.Fatal("materialized_occurrences_total did not reach exactly 1 after the first durable commit")
+	}
+	if !metricsContain(fmt.Sprintf("devhealth_scheduler_planned_units %d", committedPlan.PlannedUnits)) {
+		t.Fatalf("planned_units did not publish %d after commit", committedPlan.PlannedUnits)
 	}
 }

@@ -779,7 +779,7 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 SELECT EXISTS (
   SELECT 1 FROM public.integration_sources
   WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3
-    AND metadata ? 'planner_managed_sync_config_id'
+    AND metadata::jsonb ? 'planner_managed_sync_config_id'
 )`, orgID, integrationID, provider).Scan(&alreadySelected); err != nil {
 			return 0, 0, fmt.Errorf("check existing %s source selection: %w", provider, err)
 		}

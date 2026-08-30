@@ -92,6 +92,11 @@ type PendingOccurrence struct {
 type PlanResult struct {
 	JobRunID  string
 	SyncRunID string
+	// PlannedUnits is the unit count Materialize computed, carried out so the
+	// CALLER can record plan-stamped telemetry (materializedRecorder below)
+	// only once ITS OWN transaction -- the one Materialize was handed, not
+	// durable until the caller commits it -- actually commits (CHAOS-4603).
+	PlannedUnits int
 }
 
 // Materializer creates the authoritative run graph for one occurrence. The
@@ -401,7 +406,24 @@ func (reconciler *OccurrenceReconciler) reconcileOne(
 		return "", fmt.Errorf("commit occurrence materialization: %w", err)
 	}
 	committed = true
+	// CHAOS-4603: record plan-stamped telemetry only now that tx -- the exact
+	// transaction Materialize wrote its coordinator graph into -- has itself
+	// committed. Any error return above this line rolls tx back via the
+	// deferred rollback, and this call is never reached, so no counter or log
+	// exists for a plan that never became durable.
+	if recorder, ok := reconciler.materializer.(materializedRecorder); ok {
+		recorder.RecordMaterialized(plan.PlannedUnits)
+	}
 	return OccurrenceReconcileCompleted, nil
+}
+
+// materializedRecorder is the optional CHAOS-4603 telemetry seam a
+// Materializer may implement (NativeMaterializer does). Structurally
+// optional, matching prometheusWriter above: a test double that does not
+// implement it simply never gets an increment call, rather than being
+// forced to grow one to satisfy the Materializer interface.
+type materializedRecorder interface {
+	RecordMaterialized(plannedUnits int)
 }
 
 // deferOccurrence records a bounded retry or the terminal quarantine in its own

@@ -542,35 +542,57 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // the unit simply retries next window: today's status quo, no data lost, no
 // permanent stall, not a new outage class.
 //
-// causeCount proves a cause is fully covered when it alone reaches
-// observation.Count (codex review gate round 2, P1): a marker's mere
-// PRESENCE for a cause -- the check this function used from round 1 through
-// round 7 -- proves only that SOME occurrence of that cause is durably
-// evidenced, never that the FULL observation.Count is. A cursor resumed
-// from a binary that predates ANY marker-writing for a cause (true of
-// malformed/unreadable before this ticket: Incomplete-tracking for them
-// existed long before CHAOS-4592 added markers) can carry
-// Incomplete{malformed, Count:5} with zero markers; the moment THIS binary
-// appends just one new marker for that cause, a presence check would treat
-// all 5 as covered. causeCount (SkippedArtifactCauseCount) is incremented
-// unconditionally by appendGitHubTestsSkippedArtifact on every call,
-// independent of the bounded sample cap, so it is an EXACT count of what
-// THIS binary's own accumulation can prove.
+// THE INVARIANT (codex review gate round 5): the watermark may advance past
+// a report_member observation ONLY when some signal proves the FULL
+// observation.Count -- a MAGNITUDE, not a boolean -- is durably evidenced.
+// No boolean "this cause was touched somehow" signal may ever excuse a
+// magnitude on its own. Three rounds each found the identical defect at a
+// different layer because each fix patched the layer found instead of this
+// invariant:
+//   - round 2, P1: marker PRESENCE (any marker for a cause exists) was
+//     trusted as covering the whole Count. A cursor resumed from a binary
+//     that predates ANY marker-writing for a cause (true of
+//     malformed/unreadable before this ticket) can carry
+//     Incomplete{malformed, Count:5} with zero markers; the moment THIS
+//     binary appends ONE new marker, presence alone would excuse all 5.
+//   - round 3, P2 (a regression IN round 2's fix): the fix above added
+//     causeCount but made it authoritative the MOMENT it was tracked at
+//     all, still a presence check just moved one layer over -- causeCount
+//     merely being non-nil for a cause was trusted, abandoning the
+//     magnitude comparison for that cause entirely if causeCount fell
+//     short. 3 old, fully-retained markers plus causeCount={cause:1} from
+//     ONE new skip after resume wrongly withheld, because 1 was compared
+//     against nothing once causeCount was "tracked", instead of against
+//     Count.
+//   - round 5, P1 found in round 4 (a regression IN round 3's fix): the
+//     remaining causeOverflow[cause] fallback was STILL a boolean --
+//     "did this cause ever overflow" -- with no magnitude behind it, the
+//     exact round-2 defect recurring one layer further out. It is now
+//     PROVABLY REDUNDANT for every legitimate case: causeCount is
+//     incremented UNCONDITIONALLY by appendGitHubTestsSkippedArtifact on
+//     every call, including ones that overflow the bounded sample, so any
+//     cause THIS binary genuinely overflowed already has an exact
+//     causeCount that independently proves coverage via the FIRST check
+//     below. The only case causeOverflow[cause] could still fire in is
+//     exactly the unsafe one: a boolean inherited from a binary that
+//     tracked overflow without tracking count (the round 4-7 era, which had
+//     SkippedArtifactCauseOverflow but not yet SkippedArtifactCauseCount).
+//     Removed entirely rather than patched again.
 //
-// Every signal below -- causeCount, sampleCount, causeOverflow, the legacy
-// sentinel -- is checked UNCONDITIONALLY, not gated on an earlier one being
-// absent (codex review gate round 3, P2, fixing a regression THIS round's
-// own P1 fix introduced): a cursor can carry markers/overflow that predate
-// causeCount's existence (a fully-marked pre-round-8 cursor resuming under
-// this binary) alongside a causeCount this binary itself only just started
-// tracking -- e.g. 3 old, fully-retained markers plus causeCount={cause:1}
-// from ONE new skip after resume. Requiring causeCount alone to prove the
-// full Count the moment it is "tracked" (round 8's first version of this
-// fix) would ignore the 3 still-valid retained markers and wrongly
-// withhold. Each signal here is independently safe (every prior round
-// vetted it in isolation): a cause only "continues" past a given check when
-// that check found genuine positive proof, so taking the first one that
-// succeeds is safe regardless of what any other signal shows.
+// The two signals that remain besides causeCount are still magnitude-based,
+// not boolean, and stay:
+//   - sampleCount: an exact count of markers literally retained in
+//     skippedArtifacts for a cause -- every entry is one concrete,
+//     identified skip event, so comparing it against observation.Count is
+//     a real magnitude check, never a presence shortcut.
+//   - the legacy sentinel (round 7, P1): the ONE exception, and not a
+//     magnitude check either, but proven safe for a different reason --
+//     era analysis, not counting. It fires only for artifact_oversized,
+//     the one cause whose overflow-tracking (CHAOS-4315) predates every
+//     other cause's in EVERY possible binary era that could produce a raw
+//     "overflow>0, no per-cause ledger" cursor shape. See
+//     githubTestsLegacyReportOverflowSentinel's stamping in
+//     decodeGitHubTestsChunkCursor.
 func githubTestsReportMemberSkippedWithoutDurableMarker(
 	incomplete []GitHubTestsIncomplete, skippedArtifacts []GitHubTestsSkippedArtifact,
 	overflow int, causeOverflow map[string]bool, causeCount map[string]int,
@@ -589,9 +611,6 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 			continue
 		}
 		if sampleCount[observation.Cause] >= observation.Count {
-			continue
-		}
-		if causeOverflow[observation.Cause] {
 			continue
 		}
 		if causeOverflow[githubTestsLegacyReportOverflowSentinel] && overflow > 0 &&

@@ -139,6 +139,51 @@ func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow pins the CHAOS-4592
+// gate round 5, P2 fix (the sibling of round 2, P2's fix to
+// githubTestsLogArtifactSkipSummary). The totality-gate failure path
+// (githubTestsCheckAllArtifactsUnreadable) returns BEFORE that summary
+// logger ever runs, so it kept its OWN separate copy of the
+// "skipped_sample"/"skipped_sample_cause_overflow" attrs -- and when round 2
+// added the cause-overflow field to the summary logger's copy, this one was
+// never touched, silently hiding sample truncation from the ONE log line an
+// operator sees on a totality failure. Now both share
+// githubTestsSkippedArtifactMarkerAttrs, so this drives enough unreadable
+// artifacts (10, past githubTestsMaxSkippedArtifactRecords=8) through the
+// real totality-gate path to trigger genuine overflow and asserts the ERROR
+// line carries it.
+func TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsAllUnreadableDoer{t: t, runs: 10}
+	client := githubTestsClient(t, doer)
+
+	if _, err := walkGitHubTestsChunksResult(t, client, 12); !errors.Is(err, ErrGitHubTestsAllArtifactsUnreadable) {
+		t.Fatalf("err=%v, want ErrGitHubTestsAllArtifactsUnreadable", err)
+	}
+
+	var found *slog.Record
+	for index := range *records {
+		if (*records)[index].Level == slog.LevelError &&
+			(*records)[index].Message == "provider unit failing: every observed cicd artifact was unreadable" {
+			found = &(*records)[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no ERROR record with the totality message; got %d records", len(*records))
+	}
+	attrs := membershipLogAttrs(*found)
+	if attrs["seen"] != int64(10) || attrs["unreadable"] != int64(10) {
+		t.Fatalf("premise failed: seen=%v unreadable=%v, want 10/10", attrs["seen"], attrs["unreadable"])
+	}
+	overflowed, ok := attrs["skipped_sample_cause_overflow"].([]string)
+	if !ok || len(overflowed) != 1 || overflowed[0] != githubTestsUnreadableArchiveCause {
+		t.Fatalf(
+			"skipped_sample_cause_overflow=%v (ok=%t), want exactly [%s] on the totality-failure ERROR line",
+			attrs["skipped_sample_cause_overflow"], ok, githubTestsUnreadableArchiveCause,
+		)
+	}
+}
+
 // RED. Sample floor: one repository with one workflow run and one corrupt
 // archive must NOT satisfy totality -- "all observed artifacts" is not
 // evidence of a systematic failure at n=1. This is the false-positive

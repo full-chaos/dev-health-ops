@@ -1327,7 +1327,35 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # does NOT count toward this providersync-only pin). 2 new ordinary
     # top-level providersync tests, none integration-tagged.
     # 1290 -> 1292 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1292
+    # CHAOS-4592/4601 codex review gate round 5 (terra/xhigh, full-base +
+    # ledger, chris's ruling: apply the CLASS fix, not the layer patch).
+    # Round 4 found causeOverflow[cause] was STILL a boolean with no
+    # magnitude check -- the identical defect as round 2's original bug
+    # (marker presence) and round 3's regression (causeCount trusted the
+    # moment it was "tracked"), recurring a 3rd time at a new layer. Deleted
+    # the generic causeOverflow[cause] fallback entirely (now provably
+    # redundant: causeCount is unconditional/exact, so it already covers
+    # every legitimate same-binary overflow via the first check; the
+    # boolean could only ever fire in the unsafe mixed-era gap it was
+    # supposed to guard). Fixed one now-stale sub-case in
+    # TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses
+    # that manufactured a causeOverflow-without-causeCount cursor no real
+    # binary could produce. Also fixed the P2 sibling: the totality-gate
+    # ERROR log had its own separate copy of the skipped-sample attrs that
+    # silently missed skipped_sample_cause_overflow when round 2 added it to
+    # the OTHER copy -- extracted githubTestsSkippedArtifactMarkerAttrs so
+    # both (and any future third caller) share one builder. Added 2 new
+    # ordinary top-level tests, none integration-tagged:
+    # TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow
+    # (github_tests_all_artifacts_unreadable_test.go) and
+    # TestGitHubTestsReportMemberMagnitudeInvariant
+    # (complete_route_comparator_decoded_test.go) -- the latter pins THE
+    # class invariant ("watermark advances only when some signal proves the
+    # FULL Count; no boolean may excuse a magnitude") with the round
+    # 2/3/5 repros as its three sub-cases, so a 4th recurrence of this
+    # pattern fails loudly here instead of needing a round 6 to find it.
+    # 1292 -> 1294 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1294
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1344,7 +1372,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1292
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1294
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1405,7 +1433,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1292
+    assert len(selected_tests) == len(set(selected_tests)) == 1294
     assert set(selected_tests) == expected_tests
 
 

@@ -307,10 +307,12 @@ func githubTestsCheckAllArtifactsUnreadable(cursor githubTestsChunkCursor, claim
 	// runs (codex review round 6, P2), so the run/artifact ids and cap an
 	// operator needs to find the exact unreadable artifacts would otherwise
 	// never reach a log line at all -- the durable SkippedArtifacts markers
-	// still carry them, but nothing here pointed at them.
-	if sample := githubTestsSkippedArtifactLogSample(cursor.SkippedArtifacts); len(sample) > 0 {
-		attrs = append(attrs, "skipped_sample", sample)
-	}
+	// still carry them, but nothing here pointed at them. Shares
+	// githubTestsSkippedArtifactMarkerAttrs with that function (codex review
+	// gate round 5, P2) rather than keeping its own copy, which is exactly
+	// what let this path silently miss "skipped_sample_cause_overflow" when
+	// round 2 added that field to the OTHER copy.
+	attrs = append(attrs, githubTestsSkippedArtifactMarkerAttrs(cursor.SkippedArtifacts, cursor.SkippedArtifactCauseOverflow)...)
 	slog.Error("provider unit failing: every observed cicd artifact was unreadable", attrs...)
 	return fmt.Errorf("%w: seen=%d unreadable=%d", ErrGitHubTestsAllArtifactsUnreadable, seen, unreadable)
 }
@@ -556,6 +558,25 @@ func githubTestsLogArtifactSkipSummary(
 			attrs = append(attrs, "excluded_sample", excludedSample)
 		}
 	}
+	attrs = append(attrs, githubTestsSkippedArtifactMarkerAttrs(skippedArtifacts, causeOverflow)...)
+	slog.Warn("provider artifacts skipped this unit; inventory continued", attrs...)
+}
+
+// githubTestsSkippedArtifactMarkerAttrs builds the "skipped_sample"/
+// "skipped_sample_cause_overflow" attr pair shared by every log line that
+// reports on the durable SkippedArtifacts markers (codex review gate round
+// 5, P2, fixing the sibling of round 2 P2's fix: the totality-unreadable
+// failure path (githubTestsCheckAllArtifactsUnreadable) returns before
+// githubTestsLogArtifactSkipSummary ever runs, so it had its OWN copy of
+// "skipped_sample" that silently never received "skipped_sample_cause_overflow"
+// when that field was added -- two independent copies of the same
+// presentation logic drifted the moment only one of them was updated. A
+// THIRD caller now shares this exact function instead of a third copy, so
+// it cannot drift the same way again.
+func githubTestsSkippedArtifactMarkerAttrs(
+	skippedArtifacts []GitHubTestsSkippedArtifact, causeOverflow map[string]bool,
+) []any {
+	var attrs []any
 	if sample := githubTestsSkippedArtifactLogSample(skippedArtifacts); len(sample) > 0 {
 		attrs = append(attrs, "skipped_sample", sample)
 	}
@@ -576,7 +597,7 @@ func githubTestsLogArtifactSkipSummary(
 			attrs = append(attrs, "skipped_sample_cause_overflow", overflowedCauses)
 		}
 	}
-	slog.Warn("provider artifacts skipped this unit; inventory continued", attrs...)
+	return attrs
 }
 
 // githubTestsSkippedArtifactLogSample formats a small, bounded

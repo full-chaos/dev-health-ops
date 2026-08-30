@@ -530,9 +530,17 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 	// three original causes, must not permanently withhold on a later
 	// malformed/unreadable skip that never got a marker slot -- exactly the
 	// permanent-stall class this ticket exists to close, recreated one level
-	// narrower. Per-cause overflow marks malformed as covered directly (this
-	// binary attempted its marker and found the sample full), independent of
-	// which OTHER cause also overflowed.
+	// narrower. Coverage now comes from causeCount, not causeOverflow (codex
+	// review gate round 5, P1 -- see githubTestsReportMemberSkippedWithoutDurableMarker's
+	// invariant doc comment): SkippedArtifactCauseCount is what appendGitHubTestsSkippedArtifact
+	// ALWAYS increments unconditionally on every call, so a genuine
+	// same-binary overflow always carries it alongside SkippedArtifactCauseOverflow.
+	// A cursor with the overflow flag but no matching causeCount (this
+	// sub-case's ORIGINAL shape) cannot actually be produced by this binary
+	// at all -- it can only decode from a round-4-through-7-era binary that
+	// tracked overflow without tracking count, which is exactly the unsafe
+	// mixed-era case the removed causeOverflow[cause] fallback used to
+	// (wrongly) cover.
 	everyCauseOverflowedUnderCurrentBinary := githubTestsChunkCursor{
 		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2,
 		Incomplete: []GitHubTestsIncomplete{
@@ -542,6 +550,9 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 		SkippedArtifactsOverflow: 21,
 		SkippedArtifactCauseOverflow: map[string]bool{
 			githubTestsUnreadableArchiveCause: true, githubTestsMalformedCause: true,
+		},
+		SkippedArtifactCauseCount: map[string]int{
+			githubTestsUnreadableArchiveCause: 20, githubTestsMalformedCause: 1,
 		},
 	}
 	batch, err = githubTestsFinalMetadataBatch(claim, everyCauseOverflowedUnderCurrentBinary)
@@ -858,6 +869,117 @@ func TestGitHubTestsChunkedFinalMetadataCombinesCauseCountWithRetainedMarkers(t 
 		)
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
+// TestGitHubTestsReportMemberMagnitudeInvariant pins THE invariant behind
+// three successive codex review gate rounds' worth of the identical defect
+// recurring at a different layer each time (see
+// githubTestsReportMemberSkippedWithoutDurableMarker's doc comment for the
+// full account): the watermark may advance past a report_member observation
+// ONLY when some signal proves the FULL observation.Count -- a MAGNITUDE --
+// is durably evidenced. No boolean "this cause was touched somehow" signal
+// may ever excuse a magnitude on its own.
+//
+//   - "5 unmarked, 1 marked" is round 2, P1's original defect: marker
+//     PRESENCE (any marker for a cause exists) trusted as covering the whole
+//     Count.
+//   - "mixed-era resume" is round 3, P2's regression IN round 2's own fix:
+//     causeCount trusted as authoritative the MOMENT it was tracked for a
+//     cause at all -- still a presence check, just moved one layer over.
+//   - "boolean overflow only" is round 5, P1's finding IN round 3's own fix
+//     (round 4's gate): the causeOverflow[cause] boolean -- "did this cause
+//     ever overflow" -- with no magnitude behind it, the exact round-2
+//     defect recurring one layer further out. Now removed entirely rather
+//     than patched again; this case pins that removal.
+func TestGitHubTestsReportMemberMagnitudeInvariant(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+
+	t.Run("5 unmarked, 1 marked must withhold", func(t *testing.T) {
+		cursor := githubTestsChunkCursor{
+			Phase: "done", Repo: "acme/api",
+			Incomplete: []GitHubTestsIncomplete{
+				{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 5},
+			},
+			SkippedArtifacts: []GitHubTestsSkippedArtifact{
+				{RunID: "9", ArtifactID: "9", Cause: githubTestsMalformedCause},
+			},
+		}
+		batch, err := githubTestsFinalMetadataBatch(claim, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if batch.Watermark != nil {
+			t.Fatalf("watermark=%v, want nil -- 1 marker must not excuse the other 4 unmarked skips of the same cause", batch.Watermark)
+		}
+		mustCompareGitHubTestsCompletionOK(t, claim, batch)
+	})
+
+	t.Run("mixed-era resume: retained sample covers the magnitude", func(t *testing.T) {
+		cursor := githubTestsChunkCursor{
+			Phase: "done", Repo: "acme/api",
+			Incomplete: []GitHubTestsIncomplete{
+				{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 3},
+			},
+			SkippedArtifacts: []GitHubTestsSkippedArtifact{
+				{RunID: "1", ArtifactID: "1", Cause: githubTestsMalformedCause},
+				{RunID: "2", ArtifactID: "2", Cause: githubTestsMalformedCause},
+				{RunID: "3", ArtifactID: "3", Cause: githubTestsMalformedCause},
+			},
+		}
+		newSkip := GitHubTestsSkippedArtifact{RunID: "4", ArtifactID: "4", Cause: githubTestsMalformedCause}
+		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, newSkip,
+		)
+		cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+			Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 1,
+		})
+		if cursor.SkippedArtifactCauseCount[githubTestsMalformedCause] != 1 {
+			t.Fatalf("premise failed: causeCount=%v, want exactly 1 (only this attempt's own skip)", cursor.SkippedArtifactCauseCount)
+		}
+		batch, err := githubTestsFinalMetadataBatch(claim, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+			t.Fatalf("watermark=%v, want %v -- the retained sample's magnitude (4) covers Count (4) even though causeCount alone (1) does not", batch.Watermark, claim.BeforeAt)
+		}
+		mustCompareGitHubTestsCompletionOK(t, claim, batch)
+	})
+
+	t.Run("boolean overflow only must withhold", func(t *testing.T) {
+		var sample []GitHubTestsSkippedArtifact
+		for i := 0; i < githubTestsMaxSkippedArtifactRecords; i++ {
+			sample = append(sample, GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "1", Cause: githubTestsArtifactOversizedCause})
+		}
+		cursor := githubTestsChunkCursor{
+			Phase: "done", Repo: "acme/api",
+			Incomplete: []GitHubTestsIncomplete{
+				{Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 5},
+			},
+			SkippedArtifacts: sample,
+		}
+		newSkip := GitHubTestsSkippedArtifact{RunID: "2", ArtifactID: "2", Cause: githubTestsMalformedCause}
+		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
+			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, newSkip,
+		)
+		cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+			Component: githubTestsReportMemberComponent, Cause: githubTestsMalformedCause, Count: 1,
+		})
+		if !cursor.SkippedArtifactCauseOverflow[githubTestsMalformedCause] {
+			t.Fatalf("premise failed: malformed did not overflow the full sample: %+v", cursor.SkippedArtifactCauseOverflow)
+		}
+		if cursor.SkippedArtifactCauseCount[githubTestsMalformedCause] != 1 {
+			t.Fatalf("premise failed: causeCount=%v, want exactly 1", cursor.SkippedArtifactCauseCount)
+		}
+		batch, err := githubTestsFinalMetadataBatch(claim, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if batch.Watermark != nil {
+			t.Fatalf("watermark=%v, want nil -- causeOverflow[cause]=true alone (a boolean) must never excuse the 5 skips it has no magnitude for", batch.Watermark)
+		}
+		mustCompareGitHubTestsCompletionOK(t, claim, batch)
+	})
 }
 
 func mustCompareGitHubTestsCompletionOK(t *testing.T, claim Claim, batch CompleteRouteBatch) {

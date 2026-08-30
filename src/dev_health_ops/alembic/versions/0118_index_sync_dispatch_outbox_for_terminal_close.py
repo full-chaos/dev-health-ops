@@ -50,16 +50,24 @@ depends_on: str | Sequence[str] | None = None
 
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
+# _TABLE and _INDEX are module-level compile-time constants, never operator
+# or request input, so the f-string DDL below carries no injection surface --
+# the nosemgrep suppressions on each op.execute mirror 0111/0113/0089's own
+# identical justification for the identical CONCURRENTLY-index shape (a
+# migration's DDL cannot be parameterized the way a DML statement can; alembic
+# and psycopg2 offer no bind-parameter path for identifiers, and CREATE INDEX
+# CONCURRENTLY additionally cannot run inside the transaction op.execute's
+# parameterized path would open).
 _TABLE = "sync_dispatch_outbox"
 _INDEX = "ix_sync_dispatch_outbox_kind_status_available_at"
 
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}"
         )
-        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"CREATE INDEX CONCURRENTLY {_INDEX} ON public.{_TABLE} "
             "(kind, status, available_at)"
         )
@@ -67,6 +75,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        op.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}"
         )

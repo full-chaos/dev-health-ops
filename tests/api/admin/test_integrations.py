@@ -1111,56 +1111,6 @@ async def test_get_sync_run(client, session_maker, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_get_sync_run_reports_live_unit_counts(
-    client, session_maker, seeded_state
-):
-    """CHAOS-4559: sync_runs.completed_units/failed_units are only written at
-    run finalization, so a run still `dispatching` reads 0/0 on those columns
-    even when most of its units already finished. The status endpoint must
-    report live counts computed from sync_run_units, not the stale columns.
-    """
-    ac, _ = client
-    created = await _create_integration(ac)
-    integration_id = created["id"]
-    source_id = await _seed_source(
-        session_maker, seeded_state["org_id"], integration_id
-    )
-    run_id = await _seed_sync_run(
-        session_maker, seeded_state["org_id"], integration_id, status="dispatching"
-    )
-
-    async with session_maker() as session:
-        for status in ("success", "success", "failed", "dispatching"):
-            unit = SyncRunUnit(
-                org_id=seeded_state["org_id"],
-                sync_run_id=uuid.UUID(run_id),
-                integration_id=uuid.UUID(integration_id),
-                source_id=uuid.UUID(source_id),
-                provider="github",
-                dataset_key="git",
-                cost_class="standard",
-                mode="incremental",
-                status=status,
-                attempts=1,
-            )
-            session.add(unit)
-        await session.commit()
-        result = await session.execute(
-            select(SyncRun).where(SyncRun.id == uuid.UUID(run_id))
-        )
-        run = result.scalar_one()
-        assert run.completed_units == 0
-        assert run.failed_units == 0
-
-    resp = await ac.get(f"/api/v1/admin/sync-runs/{run_id}")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "dispatching"
-    assert data["completed_units"] == 2
-    assert data["failed_units"] == 1
-
-
-@pytest.mark.asyncio
 async def test_get_sync_run_not_found(client):
     ac, _ = client
     resp = await ac.get(f"/api/v1/admin/sync-runs/{uuid.uuid4()}")

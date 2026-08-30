@@ -32,7 +32,6 @@ from dev_health_ops.api.services.integrations import (
     IntegrationSourceService,
     SyncRunService,
 )
-from dev_health_ops.models.integrations import SyncRunUnit, SyncRunUnitStatus
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
 )
@@ -125,43 +124,7 @@ def _dataset_to_response(dataset: object) -> IntegrationDatasetResponse:
     )
 
 
-def _sync_run_to_response(
-    run: object, units: list[SyncRunUnit] | None = None
-) -> SyncRunResponse:
-    """Build the sync-run status response.
-
-    ``sync_runs.completed_units``/``.failed_units`` are only written at run
-    finalization (or an early-termination sweep) -- never incremented per
-    unit while the run is dispatching/running (CHAOS-4559). Reading them
-    directly reports 0/0 for a run that is mostly or entirely done. When
-    ``units`` is supplied, completed/failed are computed live from
-    ``sync_run_units`` status, matching what ``get_sync_run_units`` and
-    ``admin/routers/sync.py``'s ``_sync_run_unit_rollup`` already do; the
-    stale column values remain the fallback for a caller with no units loaded.
-    """
-    stored_completed = int(getattr(run, "completed_units"))
-    stored_failed = int(getattr(run, "failed_units"))
-    if units is None:
-        completed_units, failed_units = stored_completed, stored_failed
-    else:
-        completed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.SUCCESS.value
-        )
-        failed_units = sum(
-            1 for unit in units if unit.status == SyncRunUnitStatus.FAILED.value
-        )
-        if (completed_units, failed_units) != (stored_completed, stored_failed):
-            logger.info(
-                "sync_run.rollup_counters_stale",
-                extra={
-                    "sync_run_id": str(getattr(run, "id")),
-                    "status": str(getattr(run, "status")),
-                    "stored_completed_units": stored_completed,
-                    "stored_failed_units": stored_failed,
-                    "live_completed_units": completed_units,
-                    "live_failed_units": failed_units,
-                },
-            )
+def _sync_run_to_response(run: object) -> SyncRunResponse:
     return SyncRunResponse.model_validate(
         {
             "id": str(getattr(run, "id")),
@@ -171,8 +134,8 @@ def _sync_run_to_response(
             "mode": str(getattr(run, "mode")),
             "status": str(getattr(run, "status")),
             "total_units": int(getattr(run, "total_units")),
-            "completed_units": completed_units,
-            "failed_units": failed_units,
+            "completed_units": int(getattr(run, "completed_units")),
+            "failed_units": int(getattr(run, "failed_units")),
             "started_at": getattr(run, "started_at"),
             "completed_at": getattr(run, "completed_at"),
             "result": getattr(run, "result"),
@@ -621,8 +584,7 @@ async def get_sync_run(
     run = await svc.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Sync run not found")
-    units = await svc.list_units(run_id)
-    return _sync_run_to_response(run, units)
+    return _sync_run_to_response(run)
 
 
 @router.get("/sync-runs/{run_id}/units", response_model=SyncRunUnitSummary)

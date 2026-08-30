@@ -445,6 +445,46 @@ func TestDiscoverSkipsWhenCredentialIDIsNil(t *testing.T) {
 	}
 }
 
+// TestDiscoverRecordsErrorOutcomeTelemetryOnAnyInternalFailure answers a
+// team-lead review question directly: when a codex round-2 fix (3d7285b59)
+// briefly shipped upsertSources' existing-tag check using jsonb's `?`
+// operator against a plain json column (fixed in e3d77a856; "operator does
+// not exist: json ? unknown" on every planner-managed discovery call), did
+// that failure ever go silently unrecorded? No -- Discover's every internal
+// error branch (credential resolution, provider fetch, upsertSources) shares
+// one shape: observe(outcome=error) BEFORE returning the error. This proves
+// that shape for the credential-resolution branch (the cheapest to trigger
+// deterministically, with no real HTTP or Postgres needed: a zero-value
+// CredentialResolver's own Resolve fails closed on nil Repository/Decryptor)
+// -- the upsertSources branch three lines later in the same function is
+// byte-identical in structure. The pre-existing (not new)
+// TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled integration test is
+// what actually caught the `?` bug itself, by calling upsertSources with
+// plannerManaged=true + a real Postgres connection -- exactly the condition
+// that query runs under.
+func TestDiscoverRecordsErrorOutcomeTelemetryOnAnyInternalFailure(t *testing.T) {
+	service := &NativeSourceDiscoveryService{
+		telemetry:   newSourceDiscoveryTelemetry(),
+		credentials: providerfoundation.CredentialResolver{}, // zero value: Resolve fails closed
+		now:         time.Now,
+	}
+	credentialID := "cred-1"
+	_, err := service.Discover(context.Background(), SourceDiscoveryArgs{
+		Provider: "jira", CredentialID: &credentialID,
+		OrgID: "org", IntegrationID: "integration",
+	})
+	if err == nil {
+		t.Fatal("Discover() with an unusable credential resolver = nil error, want a resolve failure")
+	}
+	var buffer bytes.Buffer
+	if err := service.telemetry.WritePrometheus(&buffer); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buffer.String(), `provider_source_discovery_total{provider="jira",outcome="error"} 1`) {
+		t.Fatalf("an internal Discover() failure was NOT recorded as outcome=error -- a silent-failure defect:\n%s", buffer.String())
+	}
+}
+
 func TestSourceDiscoveryTelemetryWritesPrometheus(t *testing.T) {
 	telemetry := newSourceDiscoveryTelemetry()
 	telemetry.observe("jira", SourceDiscoveryOutcomeCreated)

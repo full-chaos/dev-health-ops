@@ -1087,7 +1087,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # None are integration-tagged (they use a fake driver.Conn, no real
     # ClickHouse needed).
     # 1259 -> 1268 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1268
+    #
+    # CHAOS-4588 (every report_member artifact of full-chaos/dev-health-ops CI
+    # runs skipped as unreadable_archive -- GitHub's auto-generated
+    # ".dockerbuild" Docker Build Summary artifacts are raw gzip, not a
+    # zip-wrapped container like an ordinary actions/upload-artifact
+    # artifact, and the walk never filtered candidate artifacts by name at
+    # all; also found this crowds the per-run artifact cap ahead of real
+    # report artifacts, which is window-blocking and pinned the repo's real
+    # `tests` watermark since 2026-08-08). Added 4 new ordinary top-level
+    # tests: TestGitHubTestsDockerBuildArtifactsExcludedBeforeDownload and
+    # TestGitHubTestsDockerBuildArtifactsDoNotConsumePerRunArtifactCap in
+    # github_tests_non_report_artifact_test.go, and
+    # TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause and
+    # TestGitHubTestsHealthyUnitLogsNoSkipSummary in
+    # github_tests_artifact_skip_log_test.go (the log-storm collapse half of
+    # the fix). None are integration-tagged.
+    # 1268 -> 1272 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1272
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1104,7 +1121,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1268
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1272
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1165,7 +1182,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1268
+    assert len(selected_tests) == len(set(selected_tests)) == 1272
     assert set(selected_tests) == expected_tests
 
 

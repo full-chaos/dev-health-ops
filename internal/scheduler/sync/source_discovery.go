@@ -417,14 +417,14 @@ func githubDiscoveryOptions(options map[string]any) (allRepos bool, owner, patte
 	return allRepos, owner, pattern, namespace
 }
 
-// Deliberately NOT ported: the all_repos GitHub-App installation-listing
-// branch (discover_github_repos' _discover_github_app_installation_repos).
 // NewGitHubClient already mints and applies an App installation token
-// transparently for an App-auth credential, so an App-authenticated config
-// still discovers via the same /user or /orgs listing below -- only the
-// installation-repository-list SHORTCUT (bypassing the owner/search scope
-// entirely) is out of scope for this step. Tracked as a follow-up, not a
-// silent gap: see this PR's ticket.
+// transparently for an App-auth credential. The all_repos GitHub-App
+// installation-listing branch (discover_github_repos'
+// _discover_github_app_installation_repos) IS ported below via
+// /installation/repositories (codex review round 2, P2) -- App tokens have
+// no /user/repos surface at all. It is still client-side filtered by the
+// same owner/search/namespace scope as every other branch here, never a
+// bypass-everything shortcut.
 func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context, credential providerfoundation.Credential, options map[string]any) ([]discoveredSource, error) {
 	client, err := providerfoundation.NewGitHubClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
 	if err != nil {

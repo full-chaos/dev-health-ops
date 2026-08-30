@@ -1405,6 +1405,21 @@ func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, confi
 	case sourceID != nil:
 		idFilter = []string{*sourceID}
 	case explicitSourceIDs != nil:
+		// Codex review (gate round 5, P2): Python's _load_enabled_sources
+		// rejects a non-UUID source_id via _coerce_uuid, surfacing a
+		// client-visible error before any occurrence is even materialized.
+		// Comparing the raw string against src.id::text below has no such
+		// validation -- a typo'd source_id matches zero rows, silently
+		// planning zero units instead of surfacing the mistake. Reject it
+		// here instead, the same way, so the error takes the existing
+		// Materialize -> quarantine path (matching fork 2's "Go-plan-failure
+		// surfaced, never silent pending" requirement) rather than a silent
+		// no-op plan.
+		for _, id := range explicitSourceIDs {
+			if _, err := uuid.Parse(id); err != nil {
+				return nil, fmt.Errorf("invalid source_id: %s", id)
+			}
+		}
 		idFilter = explicitSourceIDs
 	}
 	// metadata/sync_options are read here (not on the pure planner's own
@@ -1588,9 +1603,18 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, domainPool *pgxpool.Pool, 
 	var requested map[string]bool
 	securityRequested := false
 	if explicitDatasetKeys != nil {
+		// Codex review (gate round 5, P2): Python's _load_enabled_datasets
+		// does a plain SQL `dataset_key IN (...)` with the selector's raw
+		// strings -- no case-folding, no trimming, anywhere in the chain
+		// from the API schema (BackfillSelectorRequest.dataset_keys) to
+		// here. Lowercasing/trimming here would make Go MORE permissive
+		// than Python for the exact same request (e.g. "COMMITS " would
+		// match and backfill "commits", which Python's exact string
+		// comparison would never select), silently doing work the
+		// operator's actual selector did not ask for.
 		requested = make(map[string]bool, len(explicitDatasetKeys))
 		for _, key := range explicitDatasetKeys {
-			requested[strings.ToLower(strings.TrimSpace(key))] = true
+			requested[key] = true
 		}
 		if len(requested) == 0 {
 			// Explicit EMPTY selector: plan zero datasets, mirroring Python's

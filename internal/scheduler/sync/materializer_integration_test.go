@@ -1697,6 +1697,68 @@ func TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist(
 	}
 }
 
+// TestNativeMaterializerRejectsInvalidSourceIDInBackfillSelector is the
+// codex gate-round-5 P2 fix: Python's _load_enabled_sources rejects a
+// non-UUID source_id via _coerce_uuid, surfacing a client-visible error
+// before anything materializes (planner.py). Before this fix, Go's
+// loadPlanSources only compared the raw string against src.id::text --
+// "not-a-uuid" matches zero rows, so the occurrence would silently plan
+// ZERO units and the route would still report success, instead of
+// surfacing the operator's typo the way Python does.
+func TestNativeMaterializerRejectsInvalidSourceIDInBackfillSelector(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const badSourceID = "not-a-uuid"
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[$1] WHERE occurrence_id = $2`,
+		badSourceID, occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materializeAndCommit(t, fixture, materializer, occurrence)
+	if err == nil {
+		t.Fatal("Materialize() with an invalid source_id = nil error, want a rejection matching Python's _coerce_uuid, not a silent zero-unit plan")
+	}
+	if !strings.Contains(err.Error(), badSourceID) {
+		t.Fatalf("Materialize() error = %q, want it to name the invalid source_id %q", err.Error(), badSourceID)
+	}
+}
+
+// TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized is the
+// codex gate-round-5 P2 fix's sibling: Python's _load_enabled_datasets does
+// a plain SQL `dataset_key IN (...)` with the selector's raw strings, with
+// no case-folding or trimming anywhere in the chain from the API schema.
+// Before this fix, Go lowercased and trimmed every explicit dataset key, so
+// "WORK-ITEMS " (mismatched case + trailing space) would match and
+// backfill the real "work-items" dataset -- work Python's own exact-string
+// selector would never have selected for the same request.
+func TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before, "WORK-ITEMS ")
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- \"WORK-ITEMS \" must not case/whitespace-match the real \"work-items\" dataset, matching Python's exact-string selector semantics", plan.PlannedUnits)
+	}
+}
+
 // TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource proves
 // the CHAOS-4582 defense-in-depth guard (ported per team-lead ruling: "your
 // premise that bad shape can't reach it is false" -- org 70d529e0 alone

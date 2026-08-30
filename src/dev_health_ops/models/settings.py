@@ -723,8 +723,19 @@ class ScheduledSyncOccurrence(Base):
             name="ck_scheduled_sync_occurrence_reconcile_status",
         ),
         CheckConstraint(
+            # 'invalid_plan' added by migrations 0120/0121 (CHAOS-4602 gate
+            # round 6): occurrence_reconciler.go quarantines ErrInvalidPlan
+            # occurrences immediately under this code. This ORM-declared
+            # constraint is what Base.metadata.create_all() uses to build a
+            # SQLite test fixture (unlike a real Postgres DB, which goes
+            # through alembic) -- it must stay in sync with the DB-level
+            # constraint those migrations installed, or a SQLite fixture
+            # cannot represent the quarantined-invalid_plan terminal state
+            # (codex review, gate round 13, P3: EXECUTED repro against an
+            # in-memory SQLite table built from this exact __table_args__).
             "reconcile_error_code IN ('identity_conflict', 'ineligible', "
-            "'planner_error', 'retry_exhausted') OR reconcile_error_code IS NULL",
+            "'planner_error', 'retry_exhausted', 'invalid_plan') "
+            "OR reconcile_error_code IS NULL",
             name="ck_scheduled_sync_occurrence_reconcile_error_code",
         ),
         CheckConstraint(

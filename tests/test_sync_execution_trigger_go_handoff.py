@@ -294,6 +294,61 @@ async def test_await_materialized_reports_quarantined_as_client_visible_failure(
 
 
 @pytest.mark.asyncio
+async def test_await_materialized_reports_invalid_plan_quarantine_as_client_visible_failure(
+    sqlite_session,
+):
+    """`invalid_plan` (occurrence_reconciler.go's fast-quarantine code for
+    ErrInvalidPlan, added by migrations 0120/0121, CHAOS-4602 gate round 6)
+    must be representable in a SQLite fixture built from this model's own
+    __table_args__, not just in a real Postgres DB migrated through
+    alembic. Codex review (gate round 13, P3): the ORM-declared
+    ck_scheduled_sync_occurrence_reconcile_error_code had drifted from what
+    those migrations installed -- EXECUTED repro: inserting this exact row
+    against the pre-fix constraint raised `IntegrityError: CHECK constraint
+    failed: ck_scheduled_sync_occurrence_reconcile_error_code`. Sibling of
+    test_await_materialized_reports_quarantined_as_client_visible_failure
+    above, same shape, different reconcile_error_code."""
+    config = _seed_planner_managed_config(sqlite_session)
+    from dev_health_ops.sync.execution_trigger import (
+        _create_go_manual_sync_execution_trigger,
+    )
+    from dev_health_ops.sync.planner import SyncPlanRequest
+
+    request = SyncPlanRequest(
+        integration_id=str(config.integration_id),
+        org_id="org-a",
+        mode="incremental",
+        triggered_by="manual",
+    )
+    minted = _create_go_manual_sync_execution_trigger(
+        sqlite_session, config, "org-a", request
+    )
+    assert minted.occurrence_id is not None
+    sqlite_session.commit()
+
+    occurrence = (
+        sqlite_session.query(ScheduledSyncOccurrence)
+        .filter(ScheduledSyncOccurrence.occurrence_id == minted.occurrence_id)
+        .one()
+    )
+    occurrence.reconcile_status = SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED
+    occurrence.reconcile_error_code = "invalid_plan"
+    occurrence.reconcile_error_at = datetime.now(timezone.utc)
+    sqlite_session.commit()
+
+    outcome = await await_sync_execution_trigger_materialized(
+        cast(Any, _FakeAsyncSession(sqlite_session)),
+        minted.occurrence_id,
+        poll_interval=0.01,
+    )
+
+    assert outcome.quarantined is True
+    assert outcome.awaiting_materialization is False
+    assert "invalid_plan" in outcome.terminal_reason
+    assert outcome.dispatch_required is False
+
+
+@pytest.mark.asyncio
 async def test_await_materialized_returns_pending_on_deadline_never_an_error(
     sqlite_session, monkeypatch
 ):

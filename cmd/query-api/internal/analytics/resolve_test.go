@@ -186,6 +186,97 @@ func TestResolve_Investment_AuthorDimensionStillRejected(t *testing.T) {
 // FLOW_MATRIX_QUERY traffic sends. This test proves Resolve's top-level
 // `useInvestment` (used only by timeseries/breakdown/sankey) does NOT
 // leak into flowMatrix handling and wrongly reject it.
+// TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT
+// is a RED repro for a codex round-1 P2 finding (2026-08-30), not yet
+// fixed. DO NOT rename this to imply it passes for a good reason -- the
+// all-caps segment is deliberate so it cannot be mistaken for settled
+// behavior.
+//
+// resolve.go's Resolve() calls resolveFlowMatrix(ctx, client, orgID,
+// *batch.FlowMatrix, resolvedFilters) -- NO useInvestment parameter at
+// all, unlike its sibling call one line above,
+// resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment,
+// resolvedFilters), which DOES thread the batch flag through. So
+// compileFlowMatrixInvestmentDimension's resolveUseInvestment(
+// []Dimension{req.Dimension}, req.UseInvestment) only ever sees
+// FlowMatrixRequestInput's OWN nested useInvestment field -- the
+// batch-level flag can never reach it, by construction.
+//
+// Python's analytics.py (verified directly, base e9ea257ff, zero drift
+// to current main per this PR's resume evidence) does NOT have this gap:
+// fm_req.use_investment if fm_req.use_investment is not None else
+// batch.use_investment (analytics.py:944-946) resolves the flag BEFORE
+// calling compile_flow_matrix, so an explicit batch.useInvestment=false
+// with the nested field unset is preserved and compile_flow_matrix's own
+// _get_context_params(force_investment=False, ...) does NOT auto-route
+// THEME to the investment source (compiler.py:153-155: force_investment
+// wins over the dimension auto-route when it is not None).
+//
+// dbColumn (validate.go:166-201) confirms THEME has a REAL non-investment
+// mapping ("investment_area", not an error) -- so the correct behavior on
+// a batch.useInvestment=false + flowMatrix.useInvestment=nil + THEME
+// request is to select "investment_area" from the non-investment source,
+// exactly as Python would. This test seeds BOTH the investment-path THEME
+// column expression and the non-investment one so either shows up in
+// client.calls, and asserts the non-investment one won -- which currently
+// FAILS, because Go silently keeps auto-routing to the investment source
+// regardless of the explicit batch-level false. Repro executed 2026-08-30
+// on tip fccae28d5 (pre-merge codex round tip); do not fix without
+// re-running this test red-then-green.
+func TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT(t *testing.T) {
+	client := &routingFakeClient{}
+	// Investment-path THEME dimension column (validate.go:186-187).
+	const investmentThemeCol = "splitByChar('.', subcategory_kv.1)[1]"
+	// Non-investment THEME dimension column (validate.go:199-200) -- what
+	// Python would use here.
+	const nonInvestmentThemeCol = "investment_area"
+	client.on(investmentThemeCol, &fakeRowScanner{})
+	client.on(nonInvestmentThemeCol, &fakeRowScanner{})
+
+	batch := model.AnalyticsRequestInput{
+		UseInvestment: boolPtr(false), // explicit batch-level FALSE
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension: model.DimensionInputTheme,
+			Measure:   model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:  50,
+			MaxEdges:  200,
+			// UseInvestment left nil deliberately: the nested field is
+			// UNSET, so the batch-level false is the only signal telling
+			// this request not to use the investment source.
+		},
+	}
+	_, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve error = %v", err)
+	}
+
+	usedInvestmentCol := false
+	usedNonInvestmentCol := false
+	for _, c := range client.calls {
+		if c == investmentThemeCol {
+			usedInvestmentCol = true
+		}
+		if c == nonInvestmentThemeCol {
+			usedNonInvestmentCol = true
+		}
+	}
+
+	// This is the assertion that currently FAILS (RED): Go ignores the
+	// explicit batch-level false for flowMatrix and always routes THEME
+	// to the investment source, unlike Python.
+	if usedInvestmentCol {
+		t.Errorf("BUG REPRODUCED: batch.useInvestment=false was ignored for flowMatrix -- "+
+			"query still used the investment-path THEME column (%q). "+
+			"Python would use %q here. client.calls=%v",
+			investmentThemeCol, nonInvestmentThemeCol, client.calls)
+	}
+	if !usedNonInvestmentCol {
+		t.Errorf("expected the non-investment THEME column (%q) to be used, matching Python's "+
+			"resolved use_investment=false -- client.calls=%v", nonInvestmentThemeCol, client.calls)
+	}
+}
+
 func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("work_item_cycle_times AS wct FINAL", &fakeRowScanner{})

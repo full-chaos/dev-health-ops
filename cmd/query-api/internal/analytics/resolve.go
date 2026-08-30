@@ -190,7 +190,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	// it). Same fatal-compile/swallow-execute split.
 	var flowMatrixResult *model.FlowMatrixResult
 	if batch.FlowMatrix != nil {
-		result, err := resolveFlowMatrix(ctx, client, orgID, *batch.FlowMatrix, resolvedFilters)
+		result, err := resolveFlowMatrix(ctx, client, orgID, *batch.FlowMatrix, batch.UseInvestment, resolvedFilters)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: flowMatrix: %w", err)
 		}
@@ -352,10 +352,29 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 // resolveFlowMatrix ports the batch.flow_matrix branch of
 // resolve_analytics (analytics.py:935-963). Same fatal-compile/
 // swallow-execute split as resolveSankey.
-func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, input model.FlowMatrixRequestInput, filters *model.FilterInput) (*model.FlowMatrixResult, error) {
+func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, input model.FlowMatrixRequestInput, batchUseInvestment *bool, filters *model.FilterInput) (*model.FlowMatrixResult, error) {
 	req, err := FlowMatrixRequestFromInput(input)
 	if err != nil {
 		return nil, err
+	}
+	// CHAOS-4538 codex round-1 P2 fix (2026-08-30): same three-state
+	// resolution bug resolveSankey above already carries the scar tissue
+	// for -- see that function's doc comment for the full incident. Before
+	// this fix, req.UseInvestment was left as FlowMatrixRequestFromInput
+	// set it: input.UseInvestment ONLY (the nested flowMatrix.useInvestment
+	// field), so an explicit batch-level `useInvestment: false` with the
+	// nested field unset could never reach compileFlowMatrixInvestmentDimension's
+	// resolveUseInvestment call, and THEME/SUBCATEGORY silently kept
+	// auto-routing to the investment source regardless of the batch flag.
+	// Reproduced red on tip fccae28d5:
+	// TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT.
+	// analytics.py:944-946 resolves this the same way sankey does:
+	// `fm_req.use_investment if fm_req.use_investment is not None else
+	// batch.use_investment`, UNWRAPPED (not bool()'d) so a genuine "both
+	// unset" state still reaches resolveUseInvestment's own dimension
+	// auto-route rather than being collapsed to false here.
+	if req.UseInvestment == nil {
+		req.UseInvestment = batchUseInvestment
 	}
 
 	nodesQuery, edgesQuery, err := CompileFlowMatrix(req, orgID, queryTimeoutSecs, filters)

@@ -63,6 +63,24 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 				return fmt.Errorf("scan col %d: destination *uint64 but fixture holds %T -- ClickHouse returns UInt64 for count()/uniqExact()/SUM(UInt*); the native driver will NOT scan it into another type", i, row[i])
 			}
 			*ptr = v
+		case *int64:
+			// Added for investmentmembershiptelemetry.go's lag_seconds
+			// (a toInt64(...) SQL expression, not the UInt64-producing
+			// count()/uniqExact()/SUM(UInt*) shape every other scan in
+			// this package uses -- it is the only *int64 destination in
+			// the whole port). Verified against the real driver before
+			// adding this case, not assumed: clickhouse-go/v2's
+			// lib/column/column_gen.go has a dedicated generated Int64
+			// column type with `case *int64:` scan destinations
+			// (v2.47.0, this module's pinned version) -- Int64 -> *int64
+			// is a standard supported pairing, unlike UInt64 (which
+			// specifically requires *uint64 because a real UInt64 can
+			// exceed int64's range).
+			v, ok := row[i].(int64)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *int64 but fixture holds %T -- ClickHouse returns Int64 for toInt64(...); the native driver will NOT scan it into another type", i, row[i])
+			}
+			*ptr = v
 		case *float64:
 			v, ok := row[i].(float64)
 			if !ok {
@@ -88,7 +106,7 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			// notably *graphqldate.Date, which has no Scan method and is
 			// therefore not an sql.Scanner. Scan the driver's type
 			// (time.Time) and convert after, as reviewedges.go:152 does.
-			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *float64, *time.Time, sql.Scanner)", i, d)
+			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *int64, *float64, *time.Time, sql.Scanner)", i, d)
 		}
 	}
 	return nil

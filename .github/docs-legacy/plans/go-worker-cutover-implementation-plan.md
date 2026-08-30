@@ -725,7 +725,7 @@ Focused gates should run during each lane. The integration branch must finish
 with:
 
 ```bash
-GOTOOLCHAIN=go1.25.9 GOCACHE=/tmp/chaos3033-go-cache go test ./...
+GOTOOLCHAIN=go1.27.0 GOCACHE=/tmp/chaos3033-go-cache go test ./...
 bash ci/check_go.sh integration
 bash ci/check_go_containers.sh
 pytest tests/workers tests/test_compose_config.py

@@ -258,12 +258,20 @@ func githubTestsCheckAllArtifactsUnreadable(cursor githubTestsChunkCursor, claim
 	if seen < githubTestsAllArtifactsUnreadableFloor || unreadable != seen {
 		return nil
 	}
-	slog.Error(
-		"provider unit failing: every observed cicd artifact was unreadable",
+	attrs := []any{
 		"provider", claim.Provider, "dataset", claim.Dataset,
 		"org", claim.OrgID, "sync_run_id", claim.SyncRunID, "unit", claim.ID,
 		"repository", cursor.Repo, "seen", seen, "unreadable", unreadable,
-	)
+	}
+	// This failure path returns BEFORE githubTestsLogArtifactSkipSummary ever
+	// runs (codex review round 6, P2), so the run/artifact ids and cap an
+	// operator needs to find the exact unreadable artifacts would otherwise
+	// never reach a log line at all -- the durable SkippedArtifacts markers
+	// still carry them, but nothing here pointed at them.
+	if sample := githubTestsSkippedArtifactLogSample(cursor.SkippedArtifacts); len(sample) > 0 {
+		attrs = append(attrs, "skipped_sample", sample)
+	}
+	slog.Error("provider unit failing: every observed cicd artifact was unreadable", attrs...)
 	return fmt.Errorf("%w: seen=%d unreadable=%d", ErrGitHubTestsAllArtifactsUnreadable, seen, unreadable)
 }
 
@@ -534,6 +542,22 @@ func githubTestsSkippedArtifactLogSample(markers []GitHubTestsSkippedArtifact) [
 		entry := name + " (" + marker.Cause
 		if marker.SizeBytes > 0 {
 			entry += ", " + strconv.FormatInt(marker.SizeBytes, 10) + "B"
+			if marker.CapBytes > 0 {
+				entry += "/" + strconv.FormatInt(marker.CapBytes, 10) + "B cap"
+			}
+		}
+		// run/artifact IDs (codex review round 6, P2): the old per-artifact
+		// oversized WARN this summary line replaced (CHAOS-4592) carried the
+		// exact run and artifact id an operator needs as a retry/backfill
+		// target; folding every cause onto one summary line must not lose
+		// that identifying detail, only the per-event log volume. Both are
+		// already on the durable marker (RunID/ArtifactID) -- this renders
+		// what was already collected, not new data.
+		if marker.RunID != "" {
+			entry += ", run=" + marker.RunID
+		}
+		if marker.ArtifactID != "" {
+			entry += ", artifact=" + marker.ArtifactID
 		}
 		entry += ")"
 		sample = append(sample, entry)
@@ -644,6 +668,22 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
+	// A cursor already carrying aggregate overflow with no per-cause ledger
+	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
+	// round 3, P2) -- captured from the RAW decoded shape, BEFORE the
+	// legacy-sample normalization below runs (codex review round 6, P1):
+	// normalization's own trim can turn SkippedArtifactsOverflow from 0 into
+	// a positive number purely as an artifact of THIS migration, which is
+	// not evidence that any binary's marker-writing path for a DIFFERENT,
+	// unrelated cause ever ran or overflowed. Deciding the sentinel from the
+	// pre-normalization signal, then merging it with whatever
+	// normalization's own precise per-cause attribution adds, keeps the two
+	// provenances (genuinely legacy-ambiguous vs migration-trimmed-and-
+	// therefore-precisely-known) from being conflated into one
+	// blanket-covers-everything signal -- see
+	// githubTestsLegacyReportOverflowSentinel and
+	// normalizeLegacyGitHubTestsSkippedArtifacts.
+	rawOverflow, rawCauseOverflow := cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow
 	// A cursor written under EARLIER caps can legally carry a
 	// SkippedArtifacts sample this binary's own githubTestsMaxSkippedArtifactRecords/
 	// githubTestsMaxArtifactNameBytes would never have produced -- normalize
@@ -656,15 +696,10 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	// SkippedArtifactsOverflow the same way appendGitHubTestsSkippedArtifact
 	// already does for a newly appended record.
 	cursor = normalizeLegacyGitHubTestsSkippedArtifacts(cursor)
-	// A cursor already carrying aggregate overflow with no per-cause ledger
-	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
-	// round 3, P2): stamp the sentinel HERE, on the raw decoded shape (after
-	// the legacy-sample normalization above, so overflow that migration
-	// itself introduces is covered too), before this attempt's own marker-
-	// writing can add an unrelated cause and make the map merely non-empty
-	// rather than legacy-shaped -- see githubTestsLegacyReportOverflowSentinel.
-	if cursor.SkippedArtifactsOverflow > 0 && cursor.SkippedArtifactCauseOverflow == nil {
-		cursor.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
+	if rawOverflow > 0 && rawCauseOverflow == nil {
+		cursor.SkippedArtifactCauseOverflow = markGitHubTestsSkippedArtifactCauseOverflow(
+			cursor.SkippedArtifactCauseOverflow, githubTestsLegacyReportOverflowSentinel,
+		)
 	}
 	return cursor, nil
 }
@@ -681,7 +716,31 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) githubTestsChunkCursor {
 	kept := cursor.SkippedArtifacts
 	if len(kept) > githubTestsMaxSkippedArtifactRecords {
-		cursor.SkippedArtifactsOverflow += len(kept) - githubTestsMaxSkippedArtifactRecords
+		dropped := kept[githubTestsMaxSkippedArtifactRecords:]
+		cursor.SkippedArtifactsOverflow += len(dropped)
+		// Mark each DROPPED record's own cause precisely (codex review round
+		// 6, P1), rather than leaving this trim to be covered only by the
+		// generic legacy sentinel below. A pre-CHAOS-4394 cursor can legally
+		// have exactly githubTestsMaxSkippedArtifactRecords(old)=20
+		// artifact_oversized markers with SkippedArtifactsOverflow==0 (never
+		// exceeded the old cap) alongside an UNMARKED artifact_unavailable
+		// observation (that binary never wrote markers for that cause at
+		// all). Trimming those 20 down to the current cap here creates
+		// overflow>0 for the FIRST time -- purely an artifact of THIS
+		// migration, not evidence that any binary's marker-writing path for
+		// artifact_unavailable ever ran or overflowed. If that
+		// migration-only overflow were left aggregate/unattributed, the
+		// legacy-sentinel fallback below would wrongly treat it as
+		// generic proof covering ALL three original causes, letting the
+		// watermark advance over artifact_unavailable with zero durable
+		// backfill evidence for it. Attributing the overflow to the ACTUAL
+		// dropped cause (artifact_oversized here) keeps artifact_unavailable
+		// correctly unmarked and unmarked-uncovered.
+		for _, record := range dropped {
+			cursor.SkippedArtifactCauseOverflow = markGitHubTestsSkippedArtifactCauseOverflow(
+				cursor.SkippedArtifactCauseOverflow, record.Cause,
+			)
+		}
 		kept = kept[:githubTestsMaxSkippedArtifactRecords]
 	}
 	changed := len(kept) != len(cursor.SkippedArtifacts)

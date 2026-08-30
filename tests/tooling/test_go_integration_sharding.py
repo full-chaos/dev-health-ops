@@ -1247,7 +1247,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode.
     # Not integration-tagged.
     # 1284 -> 1285 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1285
+    #
+    # CHAOS-4592 sixth CHAOS-4588 fold-in (codex P1 + P2 on lane-4587's round
+    # 5/6): (P1) the legacy-sample migration bumped SkippedArtifactsOverflow
+    # in aggregate, so the generic legacy sentinel could wrongly cover an
+    # UNRELATED unmarked cause the trimmed records never touched -- a pre-
+    # CHAOS-4394 cursor with exactly 20 artifact_oversized markers
+    # (overflow==0) plus an unmarked artifact_unavailable observation would
+    # advance the watermark for artifact_unavailable with zero durable
+    # evidence for it. normalizeLegacyGitHubTestsSkippedArtifacts now
+    # attributes migration-induced overflow to each dropped record's OWN
+    # cause, and the legacy sentinel is decided from the RAW pre-
+    # normalization signal instead of the post-normalization one, so the two
+    # provenances never conflate. (P2) the folded per-unit summary line
+    # dropped the run/artifact ids and cap the old per-artifact oversized
+    # WARN carried, and the totality-gate failure path (which returns before
+    # the summary ever runs) logged none at all -- both durable-marker
+    # fields, already collected, now render into githubTestsSkippedArtifactLogSample
+    # and the totality-gate ERROR line. Added 1 new ordinary top-level test
+    # in github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause.
+    # Not integration-tagged.
+    # 1285 -> 1286 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1286
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1264,7 +1286,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1285
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1286
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1325,7 +1347,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1285
+    assert len(selected_tests) == len(set(selected_tests)) == 1286
     assert set(selected_tests) == expected_tests
 
 

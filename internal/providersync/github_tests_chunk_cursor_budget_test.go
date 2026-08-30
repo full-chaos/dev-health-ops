@@ -216,3 +216,78 @@ func TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode(t *testi
 		t.Fatalf("normalized legacy cursor is %d bytes, want <= %d (maxChunkCursorBytes)", len(reencoded), maxChunkCursorBytes)
 	}
 }
+
+// TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause
+// pins the CHAOS-4592 codex review finding (P1, round 6): a PRE-CHAOS-4394
+// cursor can legally have exactly the old githubTestsMaxSkippedArtifactRecords
+// (20) artifact_oversized markers with SkippedArtifactsOverflow==0 (it never
+// exceeded the OLD cap) alongside an UNMARKED artifact_unavailable
+// observation -- that binary predates CHAOS-4394 entirely, so it never wrote
+// a marker for artifact_unavailable at all, overflow or not. Trimming the 20
+// oversized markers down to the CURRENT cap creates SkippedArtifactsOverflow
+// > 0 for the first time, purely as an artifact of THIS migration. That
+// migration-only overflow must not be read as generic proof covering ALL
+// three original whole-artifact causes -- it is precise evidence about
+// artifact_oversized specifically (the cause of the records actually
+// dropped), and must leave the unrelated, still-completely-unmarked
+// artifact_unavailable observation blocking exactly as it always has.
+func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t *testing.T) {
+	const legacyRecords = 20 // the OLD githubTestsMaxSkippedArtifactRecords
+	oldName := strings.Repeat("x", 48)
+	cursor := githubTestsChunkCursor{
+		Phase: "done", Repo: "acme/api", Requests: 3, Pages: 2, NextURL: "x",
+		Incomplete: []GitHubTestsIncomplete{
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactOversizedCause, Count: legacyRecords},
+			{Component: githubTestsReportMemberComponent, Cause: githubTestsArtifactUnavailableCause, Count: 1},
+		},
+		// SkippedArtifactsOverflow is deliberately absent (0): a pre-CHAOS-4394
+		// binary never overflowed its OWN cap (20 == 20, exactly at the old
+		// bound) and never wrote a marker OR an overflow count for
+		// artifact_unavailable at all.
+	}
+	for i := 0; i < legacyRecords; i++ {
+		cursor.SkippedArtifacts = append(cursor.SkippedArtifacts, GitHubTestsSkippedArtifact{
+			RunID: "33301167231234567", ArtifactID: strconv.Itoa(9729013072123456 + i),
+			Name: oldName, Cause: githubTestsArtifactOversizedCause,
+			SizeBytes: 9223372036854775807, CapBytes: 9223372036854775807,
+		})
+	}
+
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeGitHubTestsChunkCursor(string(raw))
+	if err != nil {
+		t.Fatalf("decode returned err=%v, want normalization not rejection", err)
+	}
+	if decoded.SkippedArtifactsOverflow <= 0 {
+		t.Fatalf(
+			"premise failed: normalizing 20 records down to the current cap must produce overflow>0 "+
+				"(got %d) or this test proves nothing",
+			decoded.SkippedArtifactsOverflow,
+		)
+	}
+	// The migration-induced overflow must be attributed to the cause it
+	// actually came from, never to the unrelated cause.
+	if !decoded.SkippedArtifactCauseOverflow[githubTestsArtifactOversizedCause] {
+		t.Fatalf("migration overflow was not attributed to artifact_oversized: %+v", decoded.SkippedArtifactCauseOverflow)
+	}
+	if decoded.SkippedArtifactCauseOverflow[githubTestsArtifactUnavailableCause] {
+		t.Fatalf("migration overflow was wrongly attributed to the unrelated artifact_unavailable cause: %+v", decoded.SkippedArtifactCauseOverflow)
+	}
+
+	claim := nativeTestClaim("github", "cicd")
+	batch, err := githubTestsFinalMetadataBatch(claim, decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf(
+			"watermark=%v, want nil -- migration-induced overflow for artifact_oversized must not "+
+				"excuse the completely unrelated, never-marked artifact_unavailable observation",
+			batch.Watermark,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}

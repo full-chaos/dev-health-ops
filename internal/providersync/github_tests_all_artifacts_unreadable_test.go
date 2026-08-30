@@ -123,6 +123,20 @@ func TestGitHubTestsAllArtifactsUnreadableLogsAStructuredLine(t *testing.T) {
 			t.Fatalf("attr %q=%v (%T), want %v (%T)", key, got, got, wantValue, wantValue)
 		}
 	}
+	// RED before this fix (codex review round 6, P2): this failure path
+	// returns BEFORE githubTestsLogArtifactSkipSummary ever runs, so the
+	// run/artifact ids an operator needs to find the exact unreadable
+	// artifacts never reached ANY log line -- the durable SkippedArtifacts
+	// markers had them, but nothing here pointed at them. This unit's
+	// artifacts were skipped as unreadable_archive, which always gets a
+	// durable marker, so a sample must be present.
+	sample, ok := attrs["skipped_sample"].([]string)
+	if !ok || len(sample) == 0 {
+		t.Fatalf("skipped_sample=%#v, want a non-empty sample identifying the unreadable artifacts", attrs["skipped_sample"])
+	}
+	if !strings.Contains(sample[0], "run=") || !strings.Contains(sample[0], "artifact=") {
+		t.Fatalf("skipped_sample[0]=%q, want it to identify the run and artifact", sample[0])
+	}
 }
 
 // RED. Sample floor: one repository with one workflow run and one corrupt

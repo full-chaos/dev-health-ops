@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -159,6 +160,42 @@ func (doer *sequencedSourceDiscoveryDoer) Do(request *http.Request) (*http.Respo
 
 func fastRetry() providerfoundation.RetryPolicy {
 	return providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}
+}
+
+// alwaysNextPageDoer always responds with an empty page and a GitHub-style
+// Link header pointing to itself as "next" -- used to force a pagination
+// loop to hit its MaxPages budget deterministically, without needing 50
+// distinct canned responses.
+type alwaysNextPageDoer struct{ t *testing.T }
+
+func (doer *alwaysNextPageDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	header.Set("Link", `<https://api.github.com/next>; rel="next"`)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(`[]`)),
+		Request:    request,
+	}, nil
+}
+
+// TestDiscoverGitHubSurfacesPageBudgetExhaustionAsAnError proves the round-1
+// P2 fix: a discovery pass that never terminates within
+// sourceDiscoveryMaxPages must surface ErrSourceDiscoveryTruncated, never
+// silently report an (incomplete) empty/partial result as if it were
+// a complete discovery pass.
+func TestDiscoverGitHubSurfacesPageBudgetExhaustionAsAnError(t *testing.T) {
+	doer := &alwaysNextPageDoer{t: t}
+	credential, err := providerfoundation.Credential{Provider: "github"}.WithEphemeralSecret("token", secrets.NewValue("gh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	_, err = service.discoverGitHub(context.Background(), credential, map[string]any{"all_repos": true})
+	if !errors.Is(err, ErrSourceDiscoveryTruncated) {
+		t.Fatalf("discoverGitHub() with an unbounded pagination loop error = %v, want ErrSourceDiscoveryTruncated", err)
+	}
 }
 
 func TestDiscoverGitHubMapsRepositoriesAndFiltersByPattern(t *testing.T) {

@@ -398,7 +398,19 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 	}
 	allRepos, owner, pattern, namespace := githubDiscoveryOptions(options)
 	var page providerfoundation.PageCollection
-	if allRepos {
+	if allRepos && githubCredentialIsAppAuth(credential) {
+		// Codex review (round 2, P2): a GitHub App installation token has
+		// no authenticated-USER surface at all -- /user/repos 401s for it.
+		// The canonical App-compatible listing is /installation/repositories
+		// (paginated the same Link-header way, response wrapped in a
+		// "repositories" key instead of a bare array).
+		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+			Path:     "/installation/repositories",
+			Query:    url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}},
+			DataKey:  "repositories",
+			MaxPages: sourceDiscoveryMaxPages,
+		})
+	} else if allRepos {
 		// Python: g.get_user().get_repos() -- the AUTHENTICATED USER's own
 		// accessible repos (not org-scoped), filtered client-side below by
 		// namespace (exact owner match) and name pattern.
@@ -454,10 +466,8 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 		if repo.Name == "" || repo.Owner.Login == "" {
 			continue
 		}
-		if pattern != "" && pattern != "*" {
-			if matched, matchErr := path.Match(pattern, repo.Name); matchErr != nil || !matched {
-				continue
-			}
+		if !fnmatchLike(pattern, repo.Name) {
+			continue
 		}
 		if normalizedNamespace != "" && strings.ToLower(repo.Owner.Login) != normalizedNamespace {
 			continue
@@ -580,10 +590,8 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 				continue
 			}
 		}
-		if pattern != "" && pattern != "*" {
-			if matched, matchErr := path.Match(pattern, project.Name); matchErr != nil || !matched {
-				continue
-			}
+		if !fnmatchLike(pattern, project.Name) {
+			continue
 		}
 		name := project.Name
 		if name == "" {
@@ -625,6 +633,18 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		MaxResults: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if err != nil {
+		// Codex review (round 2, P2): falling back unconditionally would
+		// hide a 401/403/429/5xx or a malformed response behind a legacy
+		// retry that might mask it entirely (or, worse, succeed against a
+		// DIFFERENT, wrong project list). Inspect the classified
+		// *providerfoundation.ProviderError this same call already
+		// produced and only fall back for 404/405/410 -- exactly the
+		// canonical Python client's own trigger
+		// (providers/jira/client.py:552-579). Every other status/transport
+		// failure surfaces as a real error.
+		if !jiraProjectSearchEndpointUnsupported(err) {
+			return nil, err
+		}
 		legacyItems, legacyErr := discoverJiraLegacyProjects(ctx, client)
 		if legacyErr != nil {
 			return nil, err
@@ -657,6 +677,28 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		})
 	}
 	return result, nil
+}
+
+// jiraProjectSearchEndpointUnsupported inspects the classified
+// *providerfoundation.ProviderError CollectJiraTokenOffsetPages' own
+// client.Do call already produced (see http.go's ClassifyHTTPWithMessage):
+// only a 404/405/410 status means the enhanced-search endpoint itself is
+// unsupported on this Jira deployment (the legacy-fallback trigger, same
+// as the canonical Python client at providers/jira/client.py:552-579);
+// 401/403/429 (ErrorAuthentication/ErrorRateLimited), a 5xx
+// (ErrorTransient), or any other 4xx (ErrorPermanent) is a real failure the
+// caller must see, never silently retried against a different endpoint.
+func jiraProjectSearchEndpointUnsupported(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	switch providerErr.StatusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusGone:
+		return true
+	default:
+		return false
+	}
 }
 
 // discoverJiraLegacyProjects is the unpaginated GET /rest/api/3/project
@@ -709,16 +751,43 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// Codex review (round 1, P1): loadPlanSources only admits a
+	// planner-managed parent's sources whose own
+	// metadata.planner_managed_sync_config_id equals the config currently
+	// planning -- a freshly discovered row with no such tag is invisible to
+	// unit planning even though it exists.
+	//
+	// Codex review (round 2, P1) on the naive fix: tagging EVERY discovered
+	// source unconditionally WIDENS a config that already has an explicit
+	// selection (batch-created with specific repos/projects an operator
+	// chose, tagged by a mechanism outside this file entirely) into
+	// "everything visible" -- a config that selected one repo would
+	// suddenly plan all of them. The fix only auto-tags when this
+	// integration+provider has NO existing tagged row at all: that is
+	// "truly unbounded discovery", CHAOS-4602's own reported case (a config
+	// that has never had a single source selected, planning zero units
+	// because nothing exists to select from). Once at least one row is
+	// already tagged, this pass never adds the tag to a newly discovered
+	// row -- it only refreshes name/full_name/metadata on rows the merge
+	// below finds already tagged, via EXCLUDED.metadata simply lacking the
+	// key so the jsonb merge preserves whatever the existing row already
+	// had.
+	stampNewRows := plannerManaged && configID != ""
+	if stampNewRows {
+		var alreadySelected bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM public.integration_sources
+  WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3
+    AND metadata ? 'planner_managed_sync_config_id'
+)`, orgID, integrationID, provider).Scan(&alreadySelected); err != nil {
+			return 0, 0, fmt.Errorf("check existing %s source selection: %w", provider, err)
+		}
+		stampNewRows = !alreadySelected
+	}
 	for _, source := range sources {
-		// Codex review (round 1, P1): loadPlanSources only admits a
-		// planner-managed parent's sources whose own
-		// metadata.planner_managed_sync_config_id equals the config
-		// currently planning -- a freshly discovered row with no such tag
-		// is invisible to unit planning even though it exists. Stamp it
-		// here, on the same payload the merge below writes, so the
-		// occurrence that just discovered a source can also plan it.
 		metadata := source.Metadata
-		if plannerManaged && configID != "" {
+		if stampNewRows {
 			tagged := make(map[string]any, len(metadata)+1)
 			for key, value := range metadata {
 				tagged[key] = value
@@ -774,4 +843,48 @@ func stringOption(options map[string]any, key string) string {
 func boolOption(options map[string]any, key string) bool {
 	value, _ := options[key].(bool)
 	return value
+}
+
+// githubCredentialIsAppAuth mirrors NewGitHubClient's own PAT-vs-App-auth
+// branch (providerfoundation/clients.go:41): a configured "token" secret
+// means PAT auth; its absence means App auth (NewGitHubClient's own else
+// branch mints an installation token via NewGitHubAppAuth). Codex review
+// round 2, P2: all_repos discovery needs to know this to pick a listing
+// endpoint an App installation token can actually call.
+func githubCredentialIsAppAuth(credential providerfoundation.Credential) bool {
+	token, ok := credential.Secret("token")
+	return !(ok && token.Configured())
+}
+
+// fnmatchLike evaluates a discovery scope pattern the way Python's fnmatch
+// does for the one case that would otherwise silently diverge from Go's
+// path.Match: bracket negation is written "[!abc]" in fnmatch and "[^abc]"
+// in path.Match -- translated below. Every other fnmatch/glob construct
+// (*, ?, a non-negated [seq], and an EMPTY pattern -- which path.Match
+// already treats as "matches only an empty string", exactly fnmatch's own
+// behavior) matches path.Match's grammar directly, so no special-casing is
+// needed for those. Codex review round 2, P2 (both the negation mismatch
+// and an earlier version of this function's own empty-pattern special case,
+// which incorrectly treated "" as "no filter").
+func fnmatchLike(pattern, name string) bool {
+	if pattern == "*" {
+		return true
+	}
+	matched, err := path.Match(translateFnmatchBracketNegation(pattern), name)
+	return err == nil && matched
+}
+
+func translateFnmatchBracketNegation(pattern string) string {
+	var builder strings.Builder
+	builder.Grow(len(pattern))
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == '[' && i+1 < len(pattern) && pattern[i+1] == '!' {
+			builder.WriteByte('[')
+			builder.WriteByte('^')
+			i++
+			continue
+		}
+		builder.WriteByte(pattern[i])
+	}
+	return builder.String()
 }

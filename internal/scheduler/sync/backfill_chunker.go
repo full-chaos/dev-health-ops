@@ -26,6 +26,15 @@ type DateWindow struct {
 	Before time.Time
 }
 
+// maxChunkDays bounds chunkDays to a value that can never overflow
+// time.Duration's int64-nanosecond range when multiplied by 24h (codex
+// review round 2, P2: an unbounded chunkDays above ~106,752 overflows into
+// a NEGATIVE span, which turns the loop below into one that emits invalid
+// windows and walks its cursor backward instead of forward). Far beyond
+// any real backfill window -- Python's own default is 7 -- so this is a
+// safety rail, not a real limit.
+const maxChunkDays = 3650
+
 // ChunkDateRange ports chunk_date_range verbatim: an inclusive [since,
 // before] date range split into chunkDays-day windows (Python's default is
 // 7), each chunk itself inclusive at both ends, the last chunk truncated to
@@ -33,7 +42,7 @@ type DateWindow struct {
 // UTC calendar date first -- matching Python's `date` parameter type, which
 // carries no time-of-day component to lose.
 func ChunkDateRange(since, before time.Time, chunkDays int) ([]DateWindow, error) {
-	if chunkDays <= 0 {
+	if chunkDays <= 0 || chunkDays > maxChunkDays {
 		return nil, ErrInvalidChunkDays
 	}
 	sinceDate := truncateToUTCDate(since)

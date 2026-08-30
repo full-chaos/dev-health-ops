@@ -65,6 +65,19 @@ func TestChunkDateRangeRejectsNonPositiveChunkDays(t *testing.T) {
 	}
 }
 
+func TestChunkDateRangeRejectsChunkDaysThatWouldOverflowDuration(t *testing.T) {
+	// Codex review (round 2, P2): a chunkDays value large enough that
+	// (chunkDays-1)*24h overflows time.Duration's int64-nanosecond range
+	// must be rejected outright, not silently wrap into a negative span
+	// that walks the cursor backward forever.
+	for _, chunkDays := range []int{maxChunkDays + 1, 1 << 30} {
+		_, err := ChunkDateRange(date(2026, 1, 1), date(2026, 1, 10), chunkDays)
+		if !errors.Is(err, ErrInvalidChunkDays) {
+			t.Fatalf("ChunkDateRange() with chunkDays=%d error = %v, want ErrInvalidChunkDays", chunkDays, err)
+		}
+	}
+}
+
 func TestChunkDateRangeTruncatesToUTCCalendarDate(t *testing.T) {
 	// A time-of-day component (as scheduled_for/since/before would carry as
 	// timestamptz values in production, unlike Python's date-only chunker

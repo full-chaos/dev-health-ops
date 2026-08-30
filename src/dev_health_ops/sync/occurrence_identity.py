@@ -64,7 +64,21 @@ def canonical_time(value: datetime) -> str:
     SAME stored instant this function was given -- never independently
     recomputed "now" on the Go side -- so both sides format the identical
     underlying instant.
+
+    Requires a timezone-AWARE ``value``. Codex review (round 2, P2): a
+    naive ``datetime``'s ``.astimezone()`` silently interprets it as the
+    HOST's local timezone, not UTC -- a worker running in a non-UTC
+    timezone would then compute a different occurrence_id for the exact
+    same wall-clock instant than a UTC worker (or than Go's own
+    recomputation off the stored, unambiguous ``timestamptz`` value) would.
+    Rather than guess, this rejects a naive value outright.
     """
+    if value.tzinfo is None:
+        raise ValueError(
+            "canonical_time() requires a timezone-aware datetime; a naive "
+            "value's timezone is ambiguous (astimezone() would silently "
+            "assume the host's local timezone, not UTC)"
+        )
     value = value.astimezone(timezone.utc)
     return value.strftime("%Y-%m-%dT%H:%M:%S") + f".{value.microsecond:06d}000Z"
 

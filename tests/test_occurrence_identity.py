@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from dev_health_ops.sync.occurrence_identity import canonical_time, occurrence_id
 
 _GOLDEN_SCHEDULED_FOR = datetime(2026, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
@@ -55,3 +57,15 @@ def test_canonical_time_matches_go_format():
     # with 3 trailing zeros, matching Go's nanosecond format field-for-field.
     with_micros = _GOLDEN_SCHEDULED_FOR.replace(microsecond=123456)
     assert canonical_time(with_micros) == "2026-01-01T11:00:00.123456000Z"
+
+
+def test_canonical_time_rejects_naive_datetime():
+    """Codex review (round 2, P2): a naive datetime's .astimezone() silently
+    assumes the HOST's local timezone, not UTC -- a non-UTC worker would
+    then compute a different occurrence_id for the same wall-clock instant
+    than Go's own recomputation off the stored timestamptz value. Must fail
+    loud instead.
+    """
+    naive = datetime(2026, 1, 1, 11, 0, 0)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        canonical_time(naive)

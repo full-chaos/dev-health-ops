@@ -551,15 +551,22 @@ def populate(
                 # outer strict/non-strict handler below, unchanged.
                 project_type = _jira_project_type_key(client, project_key=project_key)
                 if project_type in _JIRA_NO_BOARD_PROJECT_TYPES:
-                    logging.getLogger(__name__).warning(
-                        "Jira board discovery skipped for org_id=%s project_key=%s: "
-                        "project type %r has no Agile boards",
+                    # Codex review (CHAOS-4575, delta round): this is NOT a
+                    # sub-item that failed or is incomplete -- a service_desk/
+                    # business/product_discovery project structurally has no
+                    # boards, by design, every time. Incrementing
+                    # reference_subitem_skipped_total here (as the sprint-
+                    # listing 400 branch below correctly does for a REAL
+                    # failure) would corrupt that counter's meaning ("data
+                    # for this sub-item is incomplete") with routine,
+                    # complete-by-design non-applicability. Log at INFO, not
+                    # WARNING, for the same reason.
+                    logging.getLogger(__name__).info(
+                        "Jira board discovery not applicable for org_id=%s "
+                        "project_key=%s: project type %r has no Agile boards",
                         org_id,
                         project_key,
                         project_type,
-                    )
-                    record_team_autoimport_reference_subitem_skipped(
-                        provider="jira", kind="project_boards"
                     )
                     continue
                 if project_type not in _JIRA_BOARD_CAPABLE_PROJECT_TYPES:

@@ -178,6 +178,20 @@ class IntegrationSourceService:
         self, source: IntegrationSource, enabled: bool
     ) -> IntegrationSource:
         source.is_enabled = enabled
+        if (source.metadata_ or {}).get("capped_by_repo_limit"):
+            # ANY explicit operator enable/disable (codex review, CHAOS-4584
+            # round 4 P1) supersedes the automatic repo-limit bookkeeping --
+            # from this point it's an operator decision, not something
+            # discovery's own recovery pass should ever touch again. If the
+            # operator disabled it, discovery must not "helpfully" re-enable
+            # it once headroom appears; if they enabled it, same rule.
+            # Mirrors sync/discovery.py::set_source_enabled, the other
+            # enable/disable entry point for the same rows.
+            source.metadata_ = {
+                k: v
+                for k, v in (source.metadata_ or {}).items()
+                if k != "capped_by_repo_limit"
+            }
         await self._session.flush()
         return source
 

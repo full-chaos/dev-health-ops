@@ -102,6 +102,17 @@ def discover_jira_projects(
 
     explicit_key = str((sync_options or {}).get("project_key") or "").strip().lower()
     explicit_id = str((sync_options or {}).get("project_id") or "").strip()
+    # codex review (CHAOS-4584 round 4, P2): a config scoped by project_id
+    # (not project_key) has its existing IntegrationSource keyed by that
+    # numeric id (_non_git_source_rows uses whichever of project_id/
+    # project_key/team_id/repo was given, verbatim). Emitting the project
+    # KEY here instead would silently change that row's identity on
+    # rediscovery -- a new key-based row gets created and the original
+    # id-based row gets disabled, abandoning its source_external_id
+    # watermark and sync history. Only fall back to id-based identity when
+    # id is the ONLY explicit scope given; project_key (or no scope at all)
+    # keeps the human-readable key as identity, matching every other case.
+    identity_is_project_id = bool(explicit_id) and not explicit_key
 
     result: list[tuple[str, ...]] = []
     for project in projects:
@@ -110,13 +121,15 @@ def discover_jira_projects(
         key = str(project.get("key") or "").strip()
         if not key:
             continue
+        project_id = str(project.get("id") or "").strip()
         if explicit_key and key.lower() != explicit_key:
             continue
-        if explicit_id and str(project.get("id") or "").strip() != explicit_id:
+        if explicit_id and project_id != explicit_id:
             continue
         name = str(project.get("name") or key)
         project_type_key = str(project.get("projectTypeKey") or "").strip().lower()
-        result.append((key, name, project_type_key))
+        identity = project_id if (identity_is_project_id and project_id) else key
+        result.append((identity, name, project_type_key))
     return result
 
 

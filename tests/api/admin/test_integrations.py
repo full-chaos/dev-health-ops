@@ -501,6 +501,41 @@ async def test_patch_source_enable(client, session_maker, seeded_state):
 
 
 @pytest.mark.asyncio
+async def test_patch_source_clears_repo_limit_cap_marker(
+    client, session_maker, seeded_state
+):
+    """Codex review (CHAOS-4584 round 4, P1): an operator's explicit
+    enable/disable via this endpoint must clear metadata.capped_by_repo_limit
+    -- otherwise a later Jira discovery run with available headroom treats
+    the row as still auto-recoverable and can flip it back, overriding the
+    admin's own decision (IntegrationSourceService.set_enabled is the
+    endpoint's own service, a different code path from
+    sync/discovery.py::set_source_enabled)."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    async with session_maker() as session:
+        source = await session.get(IntegrationSource, uuid.UUID(source_id))
+        source.is_enabled = False
+        source.metadata_ = {**source.metadata_, "capped_by_repo_limit": True}
+        await session.commit()
+
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/sources/{source_id}",
+        json={"is_enabled": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_enabled"] is True
+
+    async with session_maker() as session:
+        source = await session.get(IntegrationSource, uuid.UUID(source_id))
+        assert "capped_by_repo_limit" not in source.metadata_
+
+
+@pytest.mark.asyncio
 async def test_patch_source_not_found(client):
     ac, _ = client
     created = await _create_integration(ac)

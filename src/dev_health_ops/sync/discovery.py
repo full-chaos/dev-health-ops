@@ -386,10 +386,23 @@ def discover_sources_for_integration(
                 existing.last_seen_at = now
                 existing.name = fields["name"]
                 existing.full_name = fields["full_name"]
-                existing.metadata_ = {
+                merged_metadata = {
                     **(existing.metadata_ or {}),
                     **fields["metadata_"],
                 }
+                if provider == "jira" and merged_metadata.pop(
+                    "superseded_by_scope_change", None
+                ):
+                    # codex review (CHAOS-4584 round 4, P1): the project this
+                    # row was superseded FOR was itself only a system-driven
+                    # scope-change disable (never an operator's own), so if
+                    # discovery just reconfirmed this external_id as the
+                    # CURRENT scope again (e.g. an operator reverted
+                    # project_key NEW -> OLD), re-enable it -- otherwise
+                    # OLD<->NEW toggling would leave both rows disabled
+                    # forever, producing zero sync units.
+                    existing.is_enabled = True
+                existing.metadata_ = merged_metadata
                 upserted.append(existing)
             else:
                 source = IntegrationSource(
@@ -470,9 +483,20 @@ def _supersede_stale_scoped_jira_sources(
     never auto-disabled there, and that must stay true. Only an explicit,
     single-project scope makes "not the current scope" a durable,
     operator-driven fact rather than a possibly-transient API omission.
+
+    Also does nothing when *discovered_external_ids_lower* is empty (codex
+    review, CHAOS-4584 round 4 P1): a genuinely EMPTY result set here is
+    indistinguishable from a transient credential/API failure -- discovery
+    already returns ``[]`` for an unresolvable credential (CHAOS-4584's own
+    contract), so treating "found nothing" as "confirmed scope change" would
+    silently zero out a previously-working, explicitly-scoped sync on a
+    passing credential hiccup. Only a run that returned at least one real
+    result is trusted enough to supersede anything.
     """
     sync_options = getattr(config_shim, "sync_options", None) or {}
     if not (sync_options.get("project_key") or sync_options.get("project_id")):
+        return
+    if not discovered_external_ids_lower:
         return
 
     enabled_sources = (
@@ -515,6 +539,29 @@ def _supersede_stale_scoped_jira_sources(
                 "superseded_external_ids": [s.external_id for s in superseded],
             },
         )
+
+
+def _acquire_repo_limit_lock(session: Session, org_id: str) -> None:
+    """Sync-session mirror of ``api/admin/routers/sync.py``'s
+    ``_acquire_repo_limit_create_lock`` -- a ``pg_advisory_xact_lock``
+    scoped to *org_id*, held for the remainder of the CALLING transaction
+    (released automatically at commit/rollback, never explicitly). No-op on
+    a non-postgres backend (e.g. the sqlite-backed unit tests)."""
+    import uuid as _uuid
+
+    from sqlalchemy import text
+
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    try:
+        org_int = _uuid.UUID(org_id).int
+    except ValueError:
+        org_int = _uuid.uuid5(_uuid.NAMESPACE_URL, org_id).int
+    lock_key = org_int & ((1 << 63) - 1)
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key}
+    )
 
 
 def _active_repo_usage_count_for_limit(session: Session, org_id: str) -> int:
@@ -597,11 +644,22 @@ def _rebalance_jira_sources_against_repo_limit(
     longer reports (deleted, credential lost access) or the org's tier
     later downgraded past must never be silently re-enabled just because
     some OTHER project's headroom opened up.
+
+    Serializes on the org's repo-limit advisory lock before counting or
+    capping (codex review, CHAOS-4584 round 4 P1): two concurrent Jira
+    discovery runs for DIFFERENT integrations in the same org could
+    otherwise both count the org's pre-run usage before either's insert is
+    visible, both pass the check, and together commit an over-limit source
+    set. The same lock key `create_sync_config`'s repo-limit preflight
+    already uses -- Postgres advisory locks are per-session-reentrant, so a
+    caller that already holds it (creation-time discovery, still inside
+    that same request's transaction) pays no extra cost.
     """
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
 
     org_id = integration.org_id
+    _acquire_repo_limit_lock(session, org_id)
     max_repos = TierLimitService(session).get_limit(uuid.UUID(org_id), "max_repos")
 
     if max_repos is not None:
@@ -767,11 +825,12 @@ def set_source_enabled(
     if source is None:
         raise ValueError(f"IntegrationSource not found: {source_id}")
     source.is_enabled = enabled
-    if enabled and (source.metadata_ or {}).get(_CAP_MARKER_KEY):
-        # An operator explicitly enabling a cap-disabled row (codex review,
-        # CHAOS-4584 round 3 P2) supersedes the automatic-recovery
-        # bookkeeping -- this is now an operator decision, not something
-        # discovery's own repo-limit rebalancing should ever touch again.
+    if (source.metadata_ or {}).get(_CAP_MARKER_KEY):
+        # ANY explicit operator enable/disable (codex review, CHAOS-4584
+        # round 3 P2 + round 4 P1) supersedes the automatic-recovery
+        # bookkeeping -- from this point it's an operator decision, not
+        # something discovery's own repo-limit rebalancing should ever
+        # touch again, in either direction.
         source.metadata_ = {
             k: v for k, v in (source.metadata_ or {}).items() if k != _CAP_MARKER_KEY
         }

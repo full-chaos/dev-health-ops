@@ -311,6 +311,10 @@ class TestDiscoverJiraProjects:
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_explicit_project_id_stays_scoped(self, mock_get_all):
+        """CHAOS-4584 round 4 P2: identity is the project_id itself, not the
+        key -- a project_id-scoped config's existing IntegrationSource is
+        keyed by that numeric id (_non_git_source_rows), so rediscovery must
+        match it by id or it abandons that row's sync watermark."""
         from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
         from dev_health_ops.discovery.repos import discover_jira_projects
 
@@ -326,7 +330,7 @@ class TestDiscoverJiraProjects:
             }
         )
         result = discover_jira_projects(creds, sync_options={"project_id": "10002"})
-        assert result == [("SUP", "Support Desk", "")]
+        assert result == [("10002", "Support Desk", "")]
 
     @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
     def test_skips_projects_without_a_key(self, mock_get_all):

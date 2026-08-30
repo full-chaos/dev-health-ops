@@ -812,6 +812,77 @@ def test_jira_discovery_supersedes_old_source_on_explicit_scope_change(
     assert by_external["NEW"].is_enabled is True
 
 
+def test_jira_discovery_reverting_scope_reenables_the_original_source(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 4, P1): OLD -> NEW -> OLD must land
+    with OLD enabled and NEW disabled -- not both disabled. A prior fix
+    correctly disabled OLD on the first scope change; without also
+    re-enabling a superseded row discovery reconfirms as the current scope,
+    reverting the PATCH would leave zero enabled sources and zero units."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    jira_planner_config.sync_options = {"project_key": "OLD"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("OLD", "Old Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    jira_planner_config.sync_options = {"project_key": "NEW"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("NEW", "New Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    jira_planner_config.sync_options = {"project_key": "OLD"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("OLD", "Old Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    by_external = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    }
+    assert by_external["OLD"].is_enabled is True
+    assert "superseded_by_scope_change" not in by_external["OLD"].metadata_
+    assert by_external["NEW"].is_enabled is False
+    assert by_external["NEW"].metadata_.get("superseded_by_scope_change") is True
+
+
+def test_jira_discovery_empty_result_never_supersedes_scoped_source(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 4, P1): a transient credential/API
+    failure returns []  from discover_repos_for_config -- identical to a
+    genuinely confirmed "project no longer exists" from Jira's own API.
+    An explicitly-scoped config's existing, working source must survive an
+    empty result, not get zeroed out on every credential hiccup."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    jira_planner_config.sync_options = {"project_key": "ENG"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("ENG", "Engineering", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    with patch(DISCOVERY_PATH, return_value=[]):  # credential failure
+        discover_sources_for_integration(session, jira_integration.id)
+
+    eng = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.integration_id == jira_integration.id,
+            IntegrationSource.external_id == "ENG",
+        )
+        .one()
+    )
+    assert eng.is_enabled is True
+    assert "superseded_by_scope_change" not in (eng.metadata_ or {})
+
+
 def test_jira_discovery_never_supersedes_across_full_discovery(
     session: Session,
     jira_integration: Integration,

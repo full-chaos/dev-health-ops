@@ -9,8 +9,10 @@ import (
 
 // CHAOS-4583: TerminalOutboxClose only ever runs FORWARD, on newly-arriving
 // rows, one bounded pass per reconciler tick. It does nothing about the
-// EXISTING backlog -- local read 6568/6568 non-terminal, prod ~19.7k rows
-// across all four kinds, both accumulated since 2026-06-29/2026-06-25. This
+// EXISTING backlog for the three kinds it closes (dispatch_sync_run,
+// finalize_sync_run, reference_discovery -- post_sync is out of scope, see
+// terminal_outbox_close.go) -- local read 6568/6568 non-terminal across all
+// four kinds, prod ~19.7k, both accumulated since 2026-06-29/2026-06-25. This
 // file is the one-time (or as-needed) operator-invoked backlog reaper, wired
 // to `dev-health-workerctl sync-dispatch-outbox close-backlog`, mirroring
 // CHAOS-4548's dry-run-first cleanup verb shape (`providersync
@@ -55,11 +57,13 @@ type TerminalOutboxBacklogOutcome struct {
 	PassLimitReached bool `json:"pass_limit_reached"`
 }
 
-// backlogCandidateCountSQL mirrors the four close*SQLTemplate predicates
+// backlogCandidateCountSQL mirrors the three close*SQLTemplate predicates
 // exactly (kind literal, status='dispatched', owner-terminal check, no live
 // claim) but with no LIMIT and no FOR UPDATE -- a plain read, safe to run
 // against a live production table of any size and safe to run concurrently
-// with a real reconciler tick or a real (non-dry-run) reap pass.
+// with a real reconciler tick or a real (non-dry-run) reap pass. post_sync is
+// deliberately absent -- see TerminalOutboxCloseResult's doc comment
+// (terminal_outbox_close.go) for why closing it is unsafe.
 const backlogCandidateCountSQL = `
 SELECT 'dispatch_sync_run' AS kind, count(*) AS candidates
 FROM public.sync_dispatch_outbox AS outbox
@@ -73,14 +77,6 @@ SELECT 'finalize_sync_run', count(*)
 FROM public.sync_dispatch_outbox AS outbox
 JOIN public.sync_runs AS run ON run.id = outbox.sync_run_id
 WHERE outbox.kind = 'finalize_sync_run'
-	AND outbox.status = 'dispatched'
-	AND run.status IN ('success', 'partial_failed', 'failed')
-	AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
-UNION ALL
-SELECT 'post_sync', count(*)
-FROM public.sync_dispatch_outbox AS outbox
-JOIN public.sync_runs AS run ON run.id = outbox.sync_run_id
-WHERE outbox.kind = 'post_sync'
 	AND outbox.status = 'dispatched'
 	AND run.status IN ('success', 'partial_failed', 'failed')
 	AND (outbox.claim_expires_at IS NULL OR outbox.claim_expires_at <= $1)
@@ -153,7 +149,6 @@ func ReapTerminalOutboxBacklog(
 		outcome.ClosedByKind["dispatch_sync_run"] += result.Dispatch
 		outcome.ClosedByKind["finalize_sync_run"] += result.Finalize
 		outcome.ClosedByKind["reference_discovery"] += result.Discovery
-		outcome.ClosedByKind["post_sync"] += result.PostSync
 		for kind, byOutcome := range result.ClosedByOutcome {
 			total := outcome.ClosedByOutcome[kind]
 			if total == nil {
@@ -164,7 +159,7 @@ func ReapTerminalOutboxBacklog(
 				total[outcomeName] += count
 			}
 		}
-		if result.Dispatch+result.Finalize+result.Discovery+result.PostSync == 0 {
+		if result.Dispatch+result.Finalize+result.Discovery == 0 {
 			return outcome, nil
 		}
 	}

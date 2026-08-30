@@ -134,9 +134,6 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 	seedRun(t, ctx, pool, outboxCloseFinalizeTerminal, "partial_failed", now.Add(-8*time.Hour))
 	seedOutboxCloseDispatchedRow(t, ctx, pool, outboxCloseFinalizeTerminal, "finalize_sync_run", dispatchedAt, nil)
 
-	seedRun(t, ctx, pool, outboxClosePostSyncTerminal, "failed", now.Add(-8*time.Hour))
-	seedOutboxCloseDispatchedRow(t, ctx, pool, outboxClosePostSyncTerminal, "post_sync", dispatchedAt, nil)
-
 	// The exact CHAOS-4583 root-cause row: the RUN is still running (not
 	// terminal), but the reference_discovery LEDGER itself already reached
 	// 'success' via stampSuccess -- gated on the ledger, never on run.status.
@@ -167,17 +164,26 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 	seedRun(t, ctx, pool, outboxClosePending, "success", now.Add(-8*time.Hour))
 	seedOutboxClosePendingRow(t, ctx, pool, outboxClosePending, "dispatch_sync_run", now.Add(-time.Hour))
 
+	// post_sync is EXCLUDED even with a terminal owner (codex review round 1,
+	// P1): its owning run is terminal from the instant its row is dispatched,
+	// so "owner terminal" proves nothing about whether the post-sync fanout
+	// (native_post_sync.go) has actually executed yet -- and that fanout
+	// silently no-ops forever if it finds its own outbox row no longer
+	// 'dispatched' when it finally runs. See TerminalOutboxCloseResult's doc
+	// comment.
+	seedRun(t, ctx, pool, outboxClosePostSyncTerminal, "failed", now.Add(-8*time.Hour))
+	seedOutboxCloseDispatchedRow(t, ctx, pool, outboxClosePostSyncTerminal, "post_sync", dispatchedAt, nil)
+
 	result, err := closer.Step(ctx, now, 100)
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
-	if result.Dispatch != 1 || result.Finalize != 1 || result.PostSync != 1 || result.Discovery != 1 {
-		t.Fatalf("result = %#v, want exactly one close per kind", result)
+	if result.Dispatch != 1 || result.Finalize != 1 || result.Discovery != 1 {
+		t.Fatalf("result = %#v, want exactly one close per kind (three kinds -- post_sync excluded)", result)
 	}
 	wantOutcomes := map[string]map[string]int64{
 		"dispatch_sync_run":   {"success": 1},
 		"finalize_sync_run":   {"partial_failed": 1},
-		"post_sync":           {"failed": 1},
 		"reference_discovery": {"success": 1},
 	}
 	for kind, wantByOutcome := range wantOutcomes {
@@ -191,6 +197,10 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 			}
 		}
 	}
+	if len(result.ClosedByOutcome["post_sync"]) != 0 {
+		t.Fatalf("ClosedByOutcome[post_sync] = %v, want none -- post_sync must never be closed",
+			result.ClosedByOutcome["post_sync"])
+	}
 
 	// Every positive case actually reached 'closed', with the
 	// dispatched_transport/route_generation/transport_job_id/claim_* columns
@@ -199,7 +209,6 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 	for _, seeded := range []struct{ runID, kind string }{
 		{outboxCloseDispatchTerminal, "dispatch_sync_run"},
 		{outboxCloseFinalizeTerminal, "finalize_sync_run"},
-		{outboxClosePostSyncTerminal, "post_sync"},
 		{outboxCloseDiscoveryTerminal, "reference_discovery"},
 	} {
 		status, dispatchedTransport, transportJobID, claimToken := outboxCloseRowState(t, ctx, pool, seeded.runID, seeded.kind)
@@ -218,6 +227,7 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 		{outboxCloseDispatchLiveClaim, "dispatch_sync_run", "dispatched"},
 		{outboxCloseDiscoveryLiveLedger, "reference_discovery", "dispatched"},
 		{outboxClosePending, "dispatch_sync_run", "pending"},
+		{outboxClosePostSyncTerminal, "post_sync", "dispatched"},
 	} {
 		status, _, _, _ := outboxCloseRowState(t, ctx, pool, seeded.runID, seeded.kind)
 		if status != seeded.wantStatus {
@@ -237,7 +247,7 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Step: %v", err)
 	}
-	if second.Dispatch != 0 || second.Finalize != 0 || second.PostSync != 0 || second.Discovery != 0 ||
+	if second.Dispatch != 0 || second.Finalize != 0 || second.Discovery != 0 ||
 		len(second.ClosedByOutcome) != 0 {
 		t.Fatalf("second pass result = %#v, want an all-zero no-op", second)
 	}

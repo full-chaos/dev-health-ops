@@ -8,6 +8,22 @@ import pytest
 from dev_health_ops.workers import team_autoimport
 
 
+def test_resolve_populator_refuses_linear_regardless_of_caller() -> None:
+    """CHAOS-4555, registry-level regression test: the guard lives in
+    _resolve_populator itself, not only in run_team_autoimport(_strict), so
+    it protects every caller -- the three HTTP bridge routes this ticket
+    enumerated (/team-autoimport, /reference-discovery-populate,
+    /reference-discovery), and any future one -- without each needing its
+    own copy of the check. Every other provider is unaffected.
+    """
+    assert team_autoimport._resolve_populator("linear") is None
+    assert team_autoimport._resolve_populator("LINEAR") is None
+    assert team_autoimport._resolve_populator(" linear ") is None
+    assert team_autoimport._resolve_populator("jira") is not None
+    assert team_autoimport._resolve_populator("github") is not None
+    assert team_autoimport._resolve_populator("gitlab") is not None
+
+
 def test_run_team_autoimport_skips_non_capable_provider(caplog) -> None:
     caplog.set_level(logging.INFO)
 
@@ -84,6 +100,36 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
     ]
 
 
+def test_run_team_autoimport_skips_linear_go_native_writer(monkeypatch, caplog) -> None:
+    """CHAOS-4555: CHAOS-4431's Go collector is the sole live writer for
+    Linear team/project/ownership catalog rows. The Python populator must
+    never run for provider=linear, even if a caller (e.g. the
+    /team-autoimport bridge route) reaches this function directly -- it
+    would otherwise recreate the {org}:linear:{team} pseudo-project
+    CHAOS-4530/#2012 deleted (proved live-local: HTTP 200, projects rows
+    0->1, before this guard existed).
+    """
+    caplog.set_level(logging.INFO)
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("linear populator must never be resolved/called")
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    result = team_autoimport.run_team_autoimport(
+        provider="linear",
+        org_id="org-1",
+        credentials={"token": "secret"},
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "provider_writer_is_go_native"
+    assert result["projects_imported"] == 0
+    assert "writer is Go-native" in caplog.text
+
+
 def test_run_team_autoimport_strict_noops_non_capable_provider(caplog) -> None:
     """A provider with no reference tier (e.g. launchdarkly) must NOT fail the
     strict pre-sync discovery stage — it is a successful no-op so the run can
@@ -104,6 +150,33 @@ def test_run_team_autoimport_strict_noops_non_capable_provider(caplog) -> None:
     # discovery ledger is stamped success.
     assert "reference_team_keys" not in result
     assert "reference_sprint_ids" not in result
+
+
+def test_run_team_autoimport_strict_skips_linear_go_native_writer(
+    monkeypatch, caplog
+) -> None:
+    """Same guard, strict path: this is the function the
+    /reference-discovery-populate bridge route (and the Celery-era
+    run_sync_reference_discovery) reach for a Linear sync_run_id."""
+    caplog.set_level(logging.INFO)
+
+    def populate(**kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("linear populator must never be resolved/called")
+
+    monkeypatch.setattr(
+        team_autoimport, "_resolve_populator", lambda provider: populate
+    )
+
+    result = team_autoimport.run_team_autoimport_strict(
+        provider="linear",
+        org_id="org-1",
+        credentials={"token": "secret"},
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "provider_writer_is_go_native"
+    assert result["projects_imported"] == 0
+    assert "writer is" in caplog.text
 
 
 def test_run_team_autoimport_strict_raises_capable_provider_missing_populator(

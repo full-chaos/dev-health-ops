@@ -6,9 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -216,6 +221,229 @@ func TestWeightedAvgF_EmptyReturnsZero(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// knownCountGuard -- CHAOS-4563's port of the shipped known_count guard
+// (resolvers/analytics.py:262-269, base SHA e9ea257ff): `mean=float(mean_value)
+// if mean_value is not None and known_count > 0 else None`. Every test below
+// carries a CONTROL (a populated-count case producing a definitively
+// different, non-nil, EXACT-valued result) alongside the zero-count case --
+// required per this package's own acceptance bar, since "returns nil" here
+// is ALSO exactly what a swallowed error or a totally broken fetch produces;
+// without the control, a test asserting only the zero-count side could not
+// tell a working guard from a bug that nils out everything unconditionally.
+// ---------------------------------------------------------------------------
+
+func TestKnownCountGuard_ZeroCountReturnsNilEvenForNaN(t *testing.T) {
+	// The exact live shape this guard exists for: ClickHouse avg() over a
+	// genuinely empty window returns NaN, never NULL, on a plain
+	// (non-Nullable) Float64 column -- math.NaN() stands in for that here.
+	got := knownCountGuard(context.Background(), "test_field", math.NaN(), 0)
+	if got != nil {
+		t.Fatalf("knownCountGuard(NaN, count=0) = %v, want nil", *got)
+	}
+}
+
+func TestKnownCountGuard_ZeroCountReturnsNilForOrdinaryValueToo(t *testing.T) {
+	// Same gate, a non-NaN raw value. Proves the guard checks the COUNTED
+	// FACT about the rows (knownCount), never a property of the value
+	// itself (e.g. math.IsNaN(raw)) -- exactly the CHAOS-4563 trap: gating
+	// on "is the value NaN" would happen to catch the case above but is
+	// the wrong mechanism, and this case is how a wrong mechanism would be
+	// caught: count is what decides it, unconditionally.
+	got := knownCountGuard(context.Background(), "test_field", 0.4, 0)
+	if got != nil {
+		t.Fatalf("knownCountGuard(0.4, count=0) = %v, want nil (count is the gate, not the value)", *got)
+	}
+}
+
+func TestKnownCountGuard_PositiveCountKeepsTheExactValue(t *testing.T) {
+	// THE CONTROL: a populated window must produce a definitively
+	// different, non-nil result carrying the EXACT scanned value -- this
+	// is what distinguishes "the guard fired correctly" from "a bug nils
+	// out every value regardless of count".
+	got := knownCountGuard(context.Background(), "test_field", 0.4, 5)
+	if got == nil {
+		t.Fatal("knownCountGuard(0.4, count=5) = nil, want a pointer to 0.4")
+	}
+	if *got != 0.4 {
+		t.Errorf("knownCountGuard(0.4, count=5) = %v, want 0.4", *got)
+	}
+}
+
+// TestKnownCountGuardFiredCounter_ConsumedByARealMeterReader is brief §8's
+// "verify something consumes it" requirement, executed literally: a real
+// OTel SDK ManualReader (not a mock, not a bare "counter var is non-nil"
+// check) is installed as the global MeterProvider, knownCountGuard is
+// called once with knownCount=0 (must record) and once with knownCount=5
+// (must NOT record), and the reader's Collect output is inspected for the
+// exact data point -- proving the telemetry is both emitted AND actually
+// reaches a consumer, with the correct "field" attribute and without
+// over-firing on the populated-count call.
+func TestKnownCountGuardFiredCounter_ConsumedByARealMeterReader(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prevProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	defer otel.SetMeterProvider(prevProvider)
+
+	ctx := context.Background()
+	knownCountGuard(ctx, "hotspot_risk_score", math.NaN(), 0) // must fire
+	knownCountGuard(ctx, "hotspot_risk_score", 0.4, 5)        // must NOT fire
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("reader.Collect: %v", err)
+	}
+
+	var sum *metricdata.Sum[int64]
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "devhealth_query_api_operating_review_known_count_guard_fired_total" {
+				if s, ok := m.Data.(metricdata.Sum[int64]); ok {
+					sum = &s
+				}
+			}
+		}
+	}
+	if sum == nil {
+		t.Fatal("devhealth_query_api_operating_review_known_count_guard_fired_total not found in collected metrics -- the reader consumed nothing")
+	}
+	if len(sum.DataPoints) != 1 {
+		t.Fatalf("expected exactly 1 data point (one distinct field attribute, one fire), got %d", len(sum.DataPoints))
+	}
+	dp := sum.DataPoints[0]
+	if dp.Value != 1 {
+		t.Errorf("counter value = %d, want 1 (fired once, not twice -- the populated-count call must not have recorded)", dp.Value)
+	}
+	fieldVal, ok := dp.Attributes.Value("field")
+	if !ok || fieldVal.AsString() != "hotspot_risk_score" {
+		t.Errorf("field attribute = %v (ok=%v), want %q", fieldVal, ok, "hotspot_risk_score")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// fetchHotspotsAgg / fetchComplexityAgg / fetchRepoMetrics -- the three
+// CHAOS-4563 guard sites, exercised through the real fetch functions (scan
+// + guard together, not knownCountGuard in isolation) with the exact
+// single-row shape a live ClickHouse scalar aggregate returns for a
+// genuinely empty window: ClickHouse ALWAYS returns exactly one row for a
+// `SELECT avg(...), count() FROM (...)` query with no outer GROUP BY, even
+// when the inner subquery is empty -- avg() on that row is NaN, count() is
+// 0. Each guard site's test pairs the empty-window case with its own
+// populated-window control, same reasoning as knownCountGuard's tests above.
+// ---------------------------------------------------------------------------
+
+func TestFetchHotspotsAgg_EmptyWindowGuardsNaNToNil(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{math.NaN(), uint64(0)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchHotspotsAgg(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchHotspotsAgg returned error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 row (a live scalar aggregate always returns one), got %d", len(rows))
+	}
+	if rows[0].riskScore != nil {
+		t.Errorf("riskScore = %v, want nil for hotspots_count=0", *rows[0].riskScore)
+	}
+}
+
+func TestFetchHotspotsAgg_PopulatedWindowKeepsExactValue(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{0.4, uint64(5)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchHotspotsAgg(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchHotspotsAgg returned error: %v", err)
+	}
+	if len(rows) != 1 || rows[0].riskScore == nil || *rows[0].riskScore != 0.4 {
+		t.Fatalf("riskScore = %v, want pointer to 0.4 (control: populated window keeps the real value)", rows[0].riskScore)
+	}
+}
+
+func TestFetchComplexityAgg_EmptyWindowGuardsNaNToNil(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{math.NaN(), uint64(0)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchComplexityAgg(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchComplexityAgg returned error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 row, got %d", len(rows))
+	}
+	if rows[0].cyclomaticPerKloc != nil {
+		t.Errorf("cyclomaticPerKloc = %v, want nil for complexity_known_count=0", *rows[0].cyclomaticPerKloc)
+	}
+}
+
+func TestFetchComplexityAgg_PopulatedWindowKeepsExactValue(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{12.5, uint64(3)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchComplexityAgg(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchComplexityAgg returned error: %v", err)
+	}
+	if len(rows) != 1 || rows[0].cyclomaticPerKloc == nil || *rows[0].cyclomaticPerKloc != 12.5 {
+		t.Fatalf("cyclomaticPerKloc = %v, want pointer to 12.5 (control: populated window keeps the real value)", rows[0].cyclomaticPerKloc)
+	}
+}
+
+func TestFetchRepoMetrics_EmptyWindowGuardsNaNToNil(t *testing.T) {
+	// prs_merged=0, pr_first_review_p50_hours=NULL (Nullable column,
+	// unaffected by this guard), single_owner_file_ratio_30d=NaN,
+	// code_ownership_gini=NaN (deliberately un-gated, see repoMetricsRow's
+	// doc comment), bus_factor=0, change_failure_rate=NaN,
+	// mttr_hours=NULL, repo_metrics_known_count=0.
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), math.NaN(), nil, uint64(0)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchRepoMetrics(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchRepoMetrics returned error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 row, got %d", len(rows))
+	}
+	if rows[0].singleOwnerFileRatio30d != nil {
+		t.Errorf("singleOwnerFileRatio30d = %v, want nil for repo_metrics_known_count=0", *rows[0].singleOwnerFileRatio30d)
+	}
+	if rows[0].changeFailureRate != nil {
+		t.Errorf("changeFailureRate = %v, want nil for repo_metrics_known_count=0", *rows[0].changeFailureRate)
+	}
+	// codeOwnershipGini is deliberately un-gated -- still carries the raw
+	// (unused) NaN. Asserting this pins the "no reachable defect, so no
+	// gate" scope decision against an accidental future gate-everything
+	// refactor silently changing it.
+	if !math.IsNaN(rows[0].codeOwnershipGini) {
+		t.Errorf("codeOwnershipGini = %v, want NaN unchanged (deliberately un-gated, unread by any section)", rows[0].codeOwnershipGini)
+	}
+}
+
+func TestFetchRepoMetrics_PopulatedWindowKeepsExactValues(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0, uint64(20)}}}},
+		errs:      make([]error, 1),
+	}
+	rows, err := fetchRepoMetrics(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
+	if err != nil {
+		t.Fatalf("fetchRepoMetrics returned error: %v", err)
+	}
+	if len(rows) != 1 || rows[0].singleOwnerFileRatio30d == nil || *rows[0].singleOwnerFileRatio30d != 0.6 {
+		t.Fatalf("singleOwnerFileRatio30d = %v, want pointer to 0.6 (control: populated window keeps the real value)", rows[0].singleOwnerFileRatio30d)
+	}
+	if rows[0].changeFailureRate == nil || *rows[0].changeFailureRate != 0.1 {
+		t.Fatalf("changeFailureRate = %v, want pointer to 0.1 (control: populated window keeps the real value)", rows[0].changeFailureRate)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // aiGovernanceRatio / aiGovernanceCoverage -- the declared Go-side fix.
 // Ports AIGovernanceCoverageDaily's _ratio (audit/ai_governance/models.py:
 // 156-158) and _ai_governance_coverage (metrics/operating_review.py:
@@ -389,9 +617,9 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	current := []*fakeRowScanner{
 		{rows: [][]any{{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0}}},                   // work_items
 		{rows: [][]any{{"in_review", uint64(6), 3.0, 1.5}}},                                                          // state_durations
-		{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0}}},                                            // repo_metrics
+		{rows: [][]any{{uint64(20), 4.0, 0.6, 0.3, uint32(3), 0.1, 2.0, uint64(20)}}},                                // repo_metrics (+ CHAOS-4563 known_count)
 		{rows: [][]any{{0.4, uint64(5)}}},                                                                            // hotspots
-		{rows: [][]any{{12.5}}},                                                                                      // complexity
+		{rows: [][]any{{12.5, uint64(3)}}},                                                                           // complexity (+ CHAOS-4563 known_count)
 		{rows: [][]any{{uint64(9), uint64(1)}}},                                                                      // deployments
 		{rows: [][]any{{uint64(2), 3.0}}},                                                                            // incidents
 		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                             // investment
@@ -456,6 +684,116 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	if coverageMetric.value <= 0.0 {
 		t.Errorf("ai_governance_coverage = %v, want > 0 (Python would be exactly 0.0 here)", coverageMetric.value)
 	}
+
+	// CHAOS-4563 populated-window control, paired with
+	// TestResolve_EmptyWindowGuardedMetricsAreNotNaN below: a real,
+	// countable window must carry through to the exact scanned value --
+	// hotspots_count=5/complexity_known_count=3/repo_metrics_known_count=20
+	// are all > 0 in this fixture. Without this control, the empty-window
+	// test's "value == 0.0, not NaN" assertion alone could not distinguish
+	// a working guard from a bug that zeroes these metrics unconditionally.
+	riskSec := section("risk")
+	riskMetric := func(key string) float64 {
+		for _, m := range got.Sections[riskSec.idx].Metrics {
+			if m.Key == key {
+				return m.Value
+			}
+		}
+		t.Fatalf("risk metric %q not found", key)
+		return 0
+	}
+	if v := riskMetric("hotspot_risk_score"); v != 0.4 {
+		t.Errorf("hotspot_risk_score = %v, want 0.4 (populated window, hotspots_count=5)", v)
+	}
+	if v := riskMetric("ownership_concentration"); v != 0.6 {
+		t.Errorf("ownership_concentration = %v, want 0.6 (populated window, repo_metrics_known_count=20)", v)
+	}
+	if v := riskMetric("complexity_per_kloc"); v != 12.5 {
+		t.Errorf("complexity_per_kloc = %v, want 12.5 (populated window, complexity_known_count=3)", v)
+	}
+}
+
+// TestResolve_EmptyWindowGuardedMetricsAreNotNaN is CHAOS-4563's core
+// acceptance test: a genuinely empty window (the live ClickHouse shape --
+// one scalar-aggregate row, NaN value, companion count = 0, for EVERY one
+// of the three guard sites at once) must produce Resolve success with
+// well-defined 0.0 metric values, never a NaN that would fail gqlgen
+// marshaling downstream (this package's own boundary is the metric Value
+// float64 field; the actual marshal failure happens one layer further out,
+// in generated resolver wiring this package does not own -- see the package
+// doc comment). Paired with the populated-window control immediately above
+// in TestResolve_HappyPath_ComputesRealPayload: same code path, same three
+// metrics, non-trivially different (non-zero, exact) values there --
+// without that pairing, "value == 0.0, not NaN" here could not distinguish
+// the guard actually firing from a bug that always returns 0 regardless of
+// the input.
+func TestResolve_EmptyWindowGuardedMetricsAreNotNaN(t *testing.T) {
+	responses := emptyScanners(20)
+	// The exact live shape for a scalar aggregate over zero underlying
+	// rows: exactly one row, NaN on the plain-Float64 aggregate, companion
+	// count = 0. Deployments (call index 5) is left at its emptyScanners
+	// zero-row default so change_failure_rate's sum(deployments)==0
+	// branch falls through to the repo_metrics avg guard being tested,
+	// rather than masking it behind the deployments>0 branch.
+	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), math.NaN(), nil, uint64(0)}}} // repo_metrics
+	responses[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // hotspots
+	responses[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // complexity
+
+	client := &fakeClient{responses: responses, errs: make([]error, 20)}
+
+	got, err := Resolve(context.Background(), client, "org1", nil, graphqldate.New(day("2026-08-24")))
+	if err != nil {
+		t.Fatalf("Resolve should succeed on a genuinely empty window, got error: %v", err)
+	}
+
+	riskSec := -1
+	for i, s := range got.Sections {
+		if s.Key == "risk" {
+			riskSec = i
+		}
+	}
+	if riskSec < 0 {
+		t.Fatal("risk section not found")
+	}
+	for _, key := range []string{"hotspot_risk_score", "ownership_concentration", "complexity_per_kloc"} {
+		found := false
+		for _, m := range got.Sections[riskSec].Metrics {
+			if m.Key != key {
+				continue
+			}
+			found = true
+			if math.IsNaN(m.Value) {
+				t.Errorf("%s = NaN, want a finite value (the known_count guard must have gated this out before it ever reached compute)", key)
+			}
+			if m.Value != 0.0 {
+				t.Errorf("%s = %v, want 0.0 (genuinely empty window, matching the same absent-data convention every other field in this port already uses)", key, m.Value)
+			}
+		}
+		if !found {
+			t.Fatalf("metric %q not found in risk section", key)
+		}
+	}
+
+	reliabilitySec := -1
+	for i, s := range got.Sections {
+		if s.Key == "reliability" {
+			reliabilitySec = i
+		}
+	}
+	if reliabilitySec < 0 {
+		t.Fatal("reliability section not found")
+	}
+	for _, m := range got.Sections[reliabilitySec].Metrics {
+		if m.Key != "change_failure_rate" {
+			continue
+		}
+		if math.IsNaN(m.Value) {
+			t.Error("change_failure_rate = NaN, want a finite value")
+		}
+		if m.Value != 0.0 {
+			t.Errorf("change_failure_rate = %v, want 0.0 (deployments empty AND repo_metrics empty)", m.Value)
+		}
+	}
 }
 
 // sectionOut/reviewMetricOut are tiny local helpers so the test above can
@@ -476,7 +814,7 @@ func TestResolve_SwallowsOneTableFailure_DegradesOnlyThatSection(t *testing.T) {
 	// current repo_metrics (call index 2) carries real data so
 	// review_latency_hours (bottleneck section) is provably non-zero,
 	// independent of the swallowed work_items table.
-	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(5), 6.0, 0.2, 0.1, uint32(2), 0.05, 1.0}}}
+	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(5), 6.0, 0.2, 0.1, uint32(2), 0.05, 1.0, uint64(5)}}} // + CHAOS-4563 known_count
 
 	errs := make([]error, 20)
 	errs[0] = errors.New("simulated work_item_metrics_daily failure")

@@ -30,10 +30,11 @@ EVERY real Python response. The Go port fixes this (ratio semantics
 ported from ``AIGovernanceCoverageDaily``,
 ``audit/ai_governance/models.py:125-158``).
 
-**Divergence 2 (a wire-format break, NOT a value fix -- live-discovered
-while proving divergence 1, filed separately)**: ``avg()`` over a
-ClickHouse aggregate query whose window has ZERO underlying rows returns
-``NaN`` for a non-Nullable ``Float64`` column (confirmed live: this hits
+**Divergence 2 (originally a wire-format break; CHAOS-4563 retired the Go
+side of it into a declared VALUE divergence -- live-discovered while
+proving divergence 1, filed separately)**: ``avg()`` over a ClickHouse
+aggregate query whose window has ZERO underlying rows returns ``NaN`` for
+a non-Nullable ``Float64`` column (confirmed live: this hits
 ``repo_metrics``' ``single_owner_file_ratio_30d``/``code_ownership_gini``/
 ``change_failure_rate``, ``hotspots``' ``risk_score``, and ``complexity``'s
 ``cyclomatic_per_kloc`` -- all single-row-aggregate queries with no
@@ -46,13 +47,24 @@ metrics jobs) simply did not run for any repo that week). Python's
 response body) allows NaN by default and emits a literal ``NaN`` token --
 HTTP 200, "successful" by Python's own measure, but NOT valid JSON per
 RFC 8259: confirmed with Node's ``JSON.parse`` (a standard client), which
-REJECTS it outright. Go's `encoding/json` (via gqlgen) correctly refuses
-to marshal NaN and surfaces a real GraphQL error instead. **Neither plane
-is actually right here** -- Python emits a response a spec-compliant
-client cannot parse; Go errors where a user wants a number. This is a
-CLASS of defect (any Go port that averages over a possibly-empty window
-into a non-Nullable float return type hits it), not specific to this
-operation -- flagged for Lane A/Lane C.
+REJECTS it outright. **CHAOS-4563** (chris-approved 2026-08-29 13:56 PT,
+GO-ONLY -- "no more work going into the python graphql or metrics engine")
+ported the shipped ``known_count`` guard (``resolvers/analytics.py:262-269``)
+into the four Go call sites this hits, so Go no longer lets the NaN reach
+``encoding/json``/gqlgen at all: the guard nils the row-level value when
+its companion scanned-count column is 0, and ``avgF``'s empty-average-is-
+``0.0`` fallback (``operatingreview.go:232``) then surfaces a normal,
+finite ``0.0`` on the wire -- a clean response, no GraphQL error. Python
+is untouched (GO-ONLY) and still computes NaN, since its own ``_avg``
+(``operating_review.py:787-790``) has no such guard. **Neither plane is
+actually "right" in an absolute sense** -- Python still emits a response a
+spec-compliant client cannot parse; Go now reports a metric as an
+unremarkable zero rather than surfacing that its input window was empty.
+CHAOS-4534 owns whether Go's "null-safe zero" convention is the platform's
+final answer for this class of defect (any Go port that averages over a
+possibly-empty window into a non-Nullable float return type hits it) --
+this PR narrowly retires Go's crash-on-NaN behaviour for operatingReview's
+four reachable call sites, nothing broader.
 
 Three tests:
 
@@ -77,8 +89,12 @@ Three tests:
   3. ``test_dual_run_zero_row_average_nan_is_a_declared_divergence`` --
      the ORIGINAL single-period fixture (current week only, prior week
      deliberately empty, no ai_governance data either side -- isolating
-     divergence 2 with no divergence-1 noise). Asserts Go's response
-     carries GraphQL errors at exactly the expected NaN paths, AND
+     divergence 2 with no divergence-1 noise). Post-CHAOS-4563, asserts a
+     CLEAN Go response (no errors) with the four guarded metrics'
+     ``delta.priorValue`` at a finite ``0.0``, THEN the comparator finds a
+     MISMATCH confined EXACTLY to those four metrics' ``delta``
+     sub-objects (Python's un-guarded ``_avg`` still produces NaN there --
+     same "confined declared divergence" shape as test 2), AND
      independently proves Python's wire behavior within the test itself
      (not just asserted from source-reading): encoding the same response
      envelope with stdlib ``json.dumps`` -- exactly what
@@ -113,7 +129,9 @@ sides by design, not an error path.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1178,39 +1196,222 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
 
 
 # computeReview's fixed section order (metrics/operating_review.py:388-395)
-# -- the paths test 3 below expects errors/NaN at, for the three
-# single-row-aggregate queries whose non-Nullable Float64 columns hit the
-# zero-row avg() -> NaN case with an empty prior period: risk (index 2:
-# hotspot_risk_score, ownership_concentration, complexity_per_kloc -- ALL
-# THREE of that section's first three metrics) and reliability (index 3:
-# change_failure_rate, metric index 1).
+# -- the paths test 3 below expects the guarded finite-zero/NaN divergence
+# at, for the three single-row-aggregate queries whose non-Nullable
+# Float64 columns hit the zero-row avg() -> NaN case with an empty prior
+# period: risk (index 2: hotspot_risk_score, ownership_concentration,
+# complexity_per_kloc -- ALL THREE of that section's first three metrics)
+# and reliability (index 3: change_failure_rate, metric index 1).
 RISK_SECTION_INDEX = 2
 RELIABILITY_SECTION_INDEX = 3
-NAN_DIVERGENCE_ERROR_PATH_FRAGMENTS = (
-    "sections",
-    str(RISK_SECTION_INDEX),
+RISK_GUARDED_METRIC_INDICES = (
+    0,
+    1,
+    2,
+)  # hotspot_risk_score, ownership_concentration, complexity_per_kloc
+RELIABILITY_GUARDED_METRIC_INDEX = 1  # change_failure_rate
+
+# CHAOS-4563 re-points this declared divergence at the NEW shape. The
+# known_count guard (operatingreview.go:351 knownCountGuard, applied at
+# the four call sites named in the module doc comment's divergence-2
+# paragraph) nils the affected row-level value when its companion
+# scanned-count column is 0; avgF (operatingreview.go:232) then treats
+# "no present values" the same way Python's own _avg/_sum/etc. already
+# treat an empty list -- it returns 0.0, not NaN and not null. So the
+# guarded delta.priorValue on the Go side is always a normal, FINITE 0.0.
+# The divergence from Python survives regardless: Python's _avg
+# (operating_review.py:787-790) has no such guard (GO-ONLY ruling, chris
+# 08-29 06:52 PT) and still averages the raw ClickHouse row, which is
+# itself NaN for a non-Nullable Float64 column over zero rows -- so
+# Python's delta.prior_value for these four metrics stays NaN. This is
+# EXPECTED, not a regression: the Go copy now carries a fix Python lacks,
+# so a comparator MATCH here would mean the fix did not take effect.
+GUARDED_DELTA_PATH_PREFIXES = tuple(
+    f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].metrics[{i}].delta"
+    for i in RISK_GUARDED_METRIC_INDICES
+) + (
+    f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}]"
+    f".metrics[{RELIABILITY_GUARDED_METRIC_INDEX}].delta",
 )
+# The one delta sub-field GUARANTEED to diverge regardless of this
+# fixture's concrete risk/complexity/change-failure-rate numbers: Python's
+# prior_value is NaN (a present float) and Go's is a present, finite 0.0
+# -- NaN never equals anything, so this field always mismatches
+# (go_api_comparator._compare_number's parity-rule-3 "NaN/Infinity is
+# ALWAYS a mismatch" branch fires unconditionally). `.absolute` inherits
+# the same NaN-vs-finite mismatch by construction (value - NaN is NaN);
+# `.percent`/`.status` are a downstream CONSEQUENCE of this fixture's
+# concrete numbers (percent: Python's NaN-present vs Go's `prior == 0`
+# special case -- None/null when delta_value != 0; status: both sides'
+# comparisons against NaN happen to fall through the same "else" branch
+# for this fixture's seeded values, but that is not guaranteed for every
+# possible seed) -- not required coverage, same reasoning as test 2's
+# ai_governance downstream-consequence note below.
+REQUIRED_GUARDED_SUFFIX = "priorValue"
+
+# A SECOND downstream consequence, one level further removed than
+# `.percent`/`.status`: this fixture's seeded values make all four
+# guarded metrics land on status "worsened" on BOTH sides (a real,
+# executed finding, not an assumption -- confirmed by running this test:
+# `.status` itself does NOT appear in the mismatch findings). But
+# `_recommendations_from_sections`/``buildSection``'s `worsened` list
+# render `.absolute` into a TEXT string (`"...worsened by %+.1f ..."`,
+# metrics/operating_review.py:738-745 / operatingreview.go:1451-1460), so
+# Python's `+nan` and Go's real `+0.4`-shaped number produce different
+# STRINGS even though the upstream `.status` enum matches.
+#
+# This is REQUIRED, not merely permitted (confirmed firing by executing
+# this test, not argued from source) -- but the exemption is scoped to
+# the MECHANISM, not the location: a same-sentence/different-rendered-
+# number pair is the ONLY difference this guard is allowed to produce
+# here. `recommendations` in particular is the whole, UNSCOPED array --
+# CHAOS-4381 makes list tie-ordering a comparator rule for this epic, so
+# a dropped/reordered/misattributed recommendation is exactly the class
+# this dual-run exists to catch, and a blanket path-prefix exemption
+# would make this test blind to it. `_assert_text_list_diverges_only_by_
+# numeric_token` below enforces the mechanism directly against the ACTUAL
+# list contents (never Finding.detail's repr'd string, which is the
+# comparator's INTERNAL representation, not a contract this test should
+# depend on) -- the comparator's own list-length/tie-ordering checks
+# still apply first (strict positional compare, no relaxed declaration
+# for these paths), so a length or order divergence still fails loudly
+# via the comparator's own mismatch, never absorbed here.
+_NUMERIC_TOKEN_RE = re.compile(r"[+-]?(?:nan|\d+\.?\d*)", re.IGNORECASE)
+_NUMERIC_TOKEN_CAPTURE_RE = re.compile(r"([+-]?(?:nan|\d+\.?\d*))", re.IGNORECASE)
+
+
+def _normalize_numeric_tokens(s: str) -> str:
+    """Collapse every signed decimal / nan token to one placeholder, so
+    two sentences differing ONLY in a rendered numeric value compare
+    equal. Answers "did ONLY the number differ" -- never "was the number
+    CORRECT" (that is `_extract_numeric_token` + an exact expected-value
+    compare, below); codex R2 P2 flagged that this normalization alone
+    would let Go render an outright WRONG number and still pass, since a
+    wrong number collapses to the same placeholder as the right one."""
+    return _NUMERIC_TOKEN_RE.sub("#", s)
+
+
+def _extract_numeric_token(s: str) -> str:
+    """Extracts the single rendered numeric/nan token from a
+    deltaSummary/_delta_summary sentence (e.g.
+    `"...worsened by +0.4 score week-over-week."` -> `"+0.4"`) so a
+    caller can verify WHICH number rendered, not merely that a number-
+    shaped thing did."""
+    m = _NUMERIC_TOKEN_CAPTURE_RE.search(s)
+    assert m, f"no numeric token found in {s!r}"
+    return m.group(1)
+
+
+def _is_nan_token(token: str) -> bool:
+    return token.lstrip("+-").lower() == "nan"
+
+
+def _expected_guarded_delta(value: float) -> dict:
+    """Mirrors buildMetric (operatingreview.go:1398-1440) / _metric
+    (metrics/operating_review.py:700-735) verbatim for the ONE case
+    CHAOS-4563's guard produces: prior is always the guard's finite
+    0.0 fallback (see GUARDED_DELTA_PATH_PREFIXES's doc comment above),
+    and all four guarded metrics (hotspot_risk_score,
+    ownership_concentration, complexity_per_kloc, change_failure_rate)
+    share the same LOWER_IS_BETTER direction. Computing the expected
+    delta from the formula -- given the two known inputs, this metric's
+    own reported `value` and the guard's already-proven `priorValue`
+    of 0.0 -- closes codex R2 P2: a blanket "the whole `delta`
+    sub-object may differ" prefix would let an UNRELATED bug in
+    `.value`/`.status`/`.percent` for one of these four metrics pass
+    silently as "not stray", since nothing checked those sub-fields
+    were computed the way the guard is actually supposed to produce
+    them.
+    """
+    prior = 0.0
+    delta_value = value - prior
+    percent = None if delta_value != 0 else 0.0
+    if abs(delta_value) < 0.000001:
+        status = "unchanged"
+    elif delta_value < 0:  # LOWER_IS_BETTER: negative delta improves
+        status = "improved"
+    else:
+        status = "worsened"
+    return {
+        "value": value,
+        "priorValue": prior,
+        "absolute": delta_value,
+        "percent": percent,
+        "status": status,
+    }
+
+
+def _assert_text_list_diverges_only_by_numeric_token(
+    python_entries: list[str], go_entries: list[str], *, list_label: str
+) -> set[int]:
+    """Pairwise-compares two lists this operation renders with STRICT
+    positional ordering (no relaxed-tie-ordering declaration for
+    `recommendations`/`sections[N].worsened`, so position i on one side
+    is position i on the other by construction). A length mismatch is a
+    structural divergence, never this guard's text-rendering consequence
+    -- fails loudly here rather than being silently absorbed. Returns the
+    set of indices that differ; every differing index is asserted to
+    differ ONLY by a rendered numeric token -- ANY other kind of
+    per-index difference is a hard failure, not a permitted consequence.
+    """
+    assert len(python_entries) == len(go_entries), (
+        f"{list_label} list LENGTH diverged ({len(python_entries)} vs "
+        f"{len(go_entries)}) -- a structural divergence, not this guard's "
+        f"numeric-token-only text consequence: python={python_entries!r} "
+        f"go={go_entries!r}"
+    )
+    diverged: set[int] = set()
+    for i, (p, g) in enumerate(zip(python_entries, go_entries)):
+        if p == g:
+            continue
+        assert _normalize_numeric_tokens(p) == _normalize_numeric_tokens(g), (
+            f"{list_label}[{i}] diverged by more than a rendered numeric "
+            f"token -- not a permitted consequence of CHAOS-4563's guard: "
+            f"python={p!r} go={g!r}"
+        )
+        diverged.add(i)
+    return diverged
+
+
+def _index_containing(entries: list[str], label: str) -> int:
+    matches = [i for i, e in enumerate(entries) if label in e]
+    assert len(matches) == 1, (
+        f"expected exactly one entry containing {label!r}, got "
+        f"{[entries[i] for i in matches]!r} in {entries!r}"
+    )
+    return matches[0]
 
 
 @pytest.mark.asyncio
 async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """The declared-divergence proof for the zero-row-average NaN break (a
-    WIRE-FORMAT break, NOT a value fix -- live-discovered while proving
+    """The declared-divergence proof for the zero-row-average NaN break
+    (originally a WIRE-FORMAT break; CHAOS-4563 retired the Go side of it
+    into a declared VALUE divergence -- live-discovered while proving
     CHAOS-4527, filed separately; see module doc comment, divergence 2).
     The ORIGINAL single-period fixture: current week only, prior week
     deliberately left empty for repo_metrics/hotspots/complexity, no
     ai_governance data either side (isolating this divergence with no
     divergence-1 noise).
 
-    Asserts TWO things independently, not one inference from the other:
-    (a) Go's response carries GraphQL errors at exactly the expected
-    paths, and (b) Python's ACTUAL wire behavior -- encoding the exact
-    same response envelope with stdlib ``json.dumps``, precisely what
-    ``strawberry/http/base.py:54-55`` does to build the real HTTP body --
-    succeeds and contains a literal ``NaN`` token, proving Python does
-    not error here, it silently emits non-compliant JSON.
+    Post-CHAOS-4563 this test's shape matches
+    ``test_dual_run_ai_governance_fix_is_a_declared_divergence`` above:
+    assert a CLEAN Go response (the known_count guard means the zero-row
+    prior-period average never reaches gqlgen's marshaler as NaN), assert
+    the four guarded metrics' concrete delta.priorValue on the Go side,
+    run the comparator, and confirm the mismatch is CONFINED to those
+    four metrics' delta sub-objects -- never a MATCH (would mean
+    CHAOS-4563's guard did not take effect) and never a stray mismatch
+    elsewhere (the guard, or this fixture, touching something it should
+    not have).
+
+    Independently, this also still proves Python's ACTUAL wire behavior
+    for the un-guarded side -- encoding the same response envelope with
+    stdlib ``json.dumps``, precisely what ``strawberry/http/base.py:54-55``
+    does to build the real HTTP body -- succeeds and contains a literal
+    ``NaN`` token: the GO-ONLY ruling means this PR cannot and does not
+    change Python's own non-compliant-JSON behavior.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
@@ -1265,37 +1466,53 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
         _delete_org_rows(sink, org_id)
         sink.close()
 
-    # (a) Go: real GraphQL errors, at exactly the expected paths -- the
-    # risk section's first three metrics (hotspot_risk_score,
-    # ownership_concentration, complexity_per_kloc) and the reliability
-    # section's change_failure_rate.
-    assert "errors" in go_payload, (
-        "expected Go to surface real GraphQL errors for the zero-row "
-        f"prior-period average case, got a clean response: {go_payload}"
+    # (a) Go: a CLEAN response -- CHAOS-4563's known_count guard means the
+    # zero-row prior-period average no longer reaches gqlgen's marshaler
+    # as NaN. An error here means the guard regressed to the
+    # pre-CHAOS-4563 behaviour this PR exists to retire.
+    assert "errors" not in go_payload, (
+        "expected a clean Go response under CHAOS-4563's known_count "
+        f"guard, got GraphQL errors: {go_payload}"
     )
-    error_paths = [tuple(str(p) for p in e["path"]) for e in go_payload["errors"]]
-    risk_paths = [
-        p for p in error_paths if p[1] == "sections" and p[2] == str(RISK_SECTION_INDEX)
-    ]
-    assert len(risk_paths) >= 3, (
-        f"expected errors at all three risk-section metrics (indices "
-        f"0,1,2 -- hotspot_risk_score/ownership_concentration/"
-        f"complexity_per_kloc), got {error_paths}"
+    # For each guarded metric, assert the ENTIRE delta sub-object equals
+    # the EXACT value `_expected_guarded_delta` computes from this
+    # metric's own (unguarded, current-period) `value` and the guard's
+    # proven `priorValue=0.0` fallback -- not merely that `priorValue`
+    # looks right while `.absolute`/`.percent`/`.status` go unchecked.
+    go_sections = go_payload["data"]["operatingReview"]["sections"]
+    guarded_metric_positions = tuple(
+        zip(
+            (RISK_SECTION_INDEX,) * len(RISK_GUARDED_METRIC_INDICES),
+            RISK_GUARDED_METRIC_INDICES,
+            ("Hotspot risk", "Ownership concentration", "Complexity"),
+        )
+    ) + (
+        (
+            RELIABILITY_SECTION_INDEX,
+            RELIABILITY_GUARDED_METRIC_INDEX,
+            "Change failure rate",
+        ),
     )
-    reliability_paths = [
-        p
-        for p in error_paths
-        if p[1] == "sections" and p[2] == str(RELIABILITY_SECTION_INDEX)
-    ]
-    assert reliability_paths, (
-        f"expected an error at the reliability section's "
-        f"change_failure_rate metric, got {error_paths}"
-    )
+    expected_absolute_by_label: dict[str, float] = {}
+    for section_index, metric_index, label in guarded_metric_positions:
+        metric = go_sections[section_index]["metrics"][metric_index]
+        expected = _expected_guarded_delta(metric["value"])
+        assert metric["delta"] == expected, (
+            f"expected the guarded metric {label!r} "
+            f"(sections[{section_index}].metrics[{metric_index}]) to "
+            f"have delta EXACTLY {expected!r} -- computed from "
+            f"buildMetric's own formula given its known value="
+            f"{metric['value']!r} and the guard's proven priorValue=0.0 "
+            f"(operatingreview.go:232's avgF empty-average-is-0.0 "
+            f"fallback), got {metric['delta']!r}"
+        )
+        expected_absolute_by_label[label] = expected["absolute"]
 
     # (b) Python: encode the SAME response envelope the real production
     # endpoint would build, through the SAME encoder
     # (strawberry/http/base.py:54-55's json.dumps), and prove it succeeds
-    # with a literal NaN token rather than raising.
+    # with a literal NaN token rather than raising -- the GO-ONLY ruling
+    # means this side is untouched by CHAOS-4563 and must still diverge.
     baseline = _python_response_snapshot(python_review)
     encoded = json.dumps(baseline.data)
     assert "NaN" in encoded, (
@@ -1313,10 +1530,294 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     # command's output).
     reparsed = json.loads(encoded)
     assert reparsed is not None
+    # Directly on the Python dataclass too (not just the encoded string):
+    # the guarded metrics' prior_value is a real float NaN, not None --
+    # Python's un-guarded _avg has no known_count concept to null it out.
+    risk = _section(python_review, "risk")
+    for i in RISK_GUARDED_METRIC_INDICES:
+        assert math.isnan(risk.metrics[i].delta.prior_value), (
+            f"expected Python's un-guarded _avg to still produce NaN at "
+            f"risk metric index {i}'s delta.prior_value, got "
+            f"{risk.metrics[i].delta.prior_value!r} -- if this fails, "
+            f"CHAOS-4534/CHAOS-4563's declared divergence needs revisiting"
+        )
+    reliability = _section(python_review, "reliability")
+    assert math.isnan(
+        reliability.metrics[RELIABILITY_GUARDED_METRIC_INDEX].delta.prior_value
+    ), "expected Python's un-guarded change_failure_rate prior_value to be NaN"
+
+    # (c) The comparator: expect a MISMATCH confined EXACTLY to the four
+    # guarded metrics' delta sub-objects. A MATCH here would mean
+    # CHAOS-4563's guard did not take effect on the Go side (Go would
+    # have to be emitting NaN too, which gqlgen cannot even marshal); a
+    # stray mismatch elsewhere means the guard (or this fixture) touched
+    # something it should not have.
+    candidate = _go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
 
     await _record_dual_run_proof(
         registry_postgres["async"],
         document_digest=document_digest,
-        terminal_state="unsupported",
+        terminal_state=comparison.terminal_state,
         org_id=org_id,
+    )
+
+    assert not comparison.is_match, (
+        "expected a MISMATCH -- a MATCH here means CHAOS-4563's "
+        "known_count guard did not take effect (Go would have to be "
+        f"computing NaN too), which is itself a defect: "
+        f"findings={comparison.findings}"
+    )
+
+    mismatch_findings = [f for f in comparison.findings if f.kind == "mismatch"]
+    assert mismatch_findings, "expected at least one mismatch finding"
+
+    # The two downstream TEXT lists: validate the mechanism directly
+    # against the ACTUAL list contents (never Finding.detail's repr'd
+    # string). `_assert_text_list_diverges_only_by_numeric_token` first
+    # confirms EVERY differing index in the whole list (guarded or not)
+    # differs ONLY by a rendered numeric token -- a non-numeric surprise
+    # anywhere in these lists fails loudly right here. Then, per chris's
+    # standard (an expected-divergence list is enumerated PATH BY PATH,
+    # each with the reason it diverges -- never a prefix or a computed
+    # "whatever differed" set that could swallow an unrelated neighbour),
+    # each of the eight specific entries below is named individually by
+    # its guarded-metric label, with its own reason, and is the ONLY
+    # thing `allowed_text_paths` ends up containing -- an extra
+    # numeric-only divergence at some OTHER, unnamed index would still be
+    # caught as a stray finding below, not silently swallowed by however
+    # many indices happened to differ.
+    go_data = candidate.data["operatingReview"]
+    python_data = baseline.data["operatingReview"]
+
+    python_recommendations = python_data["recommendations"]
+    go_recommendations = go_data["recommendations"]
+    recommendations_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        python_recommendations, go_recommendations, list_label="recommendations"
+    )
+
+    risk_worsened_python = python_data["sections"][RISK_SECTION_INDEX]["worsened"]
+    risk_worsened_go = go_data["sections"][RISK_SECTION_INDEX]["worsened"]
+    risk_worsened_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        risk_worsened_python, risk_worsened_go, list_label="sections[risk].worsened"
+    )
+
+    reliability_worsened_python = python_data["sections"][RELIABILITY_SECTION_INDEX][
+        "worsened"
+    ]
+    reliability_worsened_go = go_data["sections"][RELIABILITY_SECTION_INDEX]["worsened"]
+    reliability_worsened_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        reliability_worsened_python,
+        reliability_worsened_go,
+        list_label="sections[reliability].worsened",
+    )
+
+    # ENUMERATED expected-divergence list, path by path, each with its
+    # reason: the sentence template (deltaSummary/_delta_summary) renders
+    # this guarded metric's delta.absolute into a %+.1f-formatted token,
+    # so Python's NaN-derived text and Go's finite-value text differ only
+    # in that token. (label, python_list, go_list, diverged_indices,
+    # json_path_prefix, reason).
+    named_text_divergences = (
+        (
+            "Hotspot risk",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders hotspot_risk_score's delta.absolute",
+        ),
+        (
+            "Ownership concentration",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders ownership_concentration's delta.absolute",
+        ),
+        (
+            "Complexity",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders complexity_per_kloc's delta.absolute",
+        ),
+        (
+            "Change failure rate",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders change_failure_rate's delta.absolute",
+        ),
+        (
+            "Hotspot risk",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders hotspot_risk_score's delta.absolute",
+        ),
+        (
+            "Ownership concentration",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders ownership_concentration's delta.absolute",
+        ),
+        (
+            "Complexity",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders complexity_per_kloc's delta.absolute",
+        ),
+        (
+            "Change failure rate",
+            reliability_worsened_python,
+            reliability_worsened_go,
+            reliability_worsened_diverged,
+            f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}].worsened",
+            "renders change_failure_rate's delta.absolute",
+        ),
+    )
+
+    allowed_text_paths: set[str] = set()
+    for (
+        label,
+        python_entries,
+        go_entries,
+        diverged_indices,
+        path_prefix,
+        reason,
+    ) in named_text_divergences:
+        index = _index_containing(python_entries, label)
+        assert index == _index_containing(go_entries, label), (
+            f"{label!r} entry moved position between Python and Go in "
+            f"{path_prefix} -- a structural (ordering) divergence, not "
+            f"this guard's consequence ({reason})"
+        )
+        assert index in diverged_indices, (
+            f"expected the {label!r} entry in {path_prefix} (index "
+            f"{index}) to diverge -- {reason}; if this fails, "
+            f"CHAOS-4563's guard stopped perturbing this metric's "
+            f"delta.absolute: python={python_entries[index]!r} "
+            f"go={go_entries[index]!r}"
+        )
+        # codex R2 P2: numeric-token normalization alone (above) only
+        # proves "some number differs from nan" -- Go rendering an
+        # outright WRONG number (e.g. +0.6 instead of the real +0.4)
+        # would still pass that check, since both collapse to the same
+        # placeholder. Extract the actual tokens and verify EXACTLY:
+        # Python's is nan, Go's equals this metric's own proven
+        # delta.absolute (asserted exactly above, reused here).
+        python_token = _extract_numeric_token(python_entries[index])
+        go_token = _extract_numeric_token(go_entries[index])
+        assert _is_nan_token(python_token), (
+            f"expected Python's {label!r} entry in {path_prefix} to "
+            f"render a nan token, got {python_token!r} in "
+            f"{python_entries[index]!r}"
+        )
+        expected_absolute = expected_absolute_by_label[label]
+        # The rendered TEXT surface and the raw JSON delta object are two
+        # DIFFERENT surfaces and get two DIFFERENT assertions, deliberately:
+        # the JSON assertion above (_expected_guarded_delta ==
+        # metric["delta"]) compares the RAW, full-precision float and is
+        # what actually pins the value; this one compares the RENDERED
+        # token, because that is the strongest true claim available at a
+        # text surface. Comparing the extracted token against the raw
+        # unrounded `expected_absolute` is not a stricter version of that
+        # claim -- it is an IMPOSSIBLE one that fails for any value not
+        # already exact to one decimal (this was live-caught: it passed
+        # for hotspot_risk_score=0.4, ownership_concentration=0.6, and
+        # complexity_per_kloc=12.5, and only change_failure_rate's
+        # 1/9-shaped 0.111... value exposed the bug in the assertion
+        # itself, not in the guard). `%+.1f` is hardcoded here rather than
+        # imported from deltaSummary/_delta_summary's format spec on
+        # purpose: if production ever changes to `%+.2f`, that is a
+        # wire-visible behaviour change this test SHOULD fail on, which
+        # importing the constant would silently swallow. Residual: this
+        # text check alone cannot distinguish two values that round to the
+        # same one-decimal token (e.g. 0.1111 and 0.1149 both render
+        # "+0.1") -- that is a property of the rendered surface, not a gap
+        # introduced here, and it is exactly what the raw-float JSON
+        # assertion above closes.
+        expected_token = f"{expected_absolute:+.1f}"
+        assert go_token == expected_token, (
+            f"expected Go's {label!r} entry in {path_prefix} to render "
+            f"its delta.absolute at the sentence's actual precision "
+            f"({expected_token!r}, from the raw {expected_absolute!r}), "
+            f"got {go_token!r} in {go_entries[index]!r} -- a wrong "
+            f"rendered number would otherwise still pass the "
+            f"numeric-token-only mechanism check above"
+        )
+        allowed_text_paths.add(f"{path_prefix}[{index}]")
+
+    # No UNNAMED index differs -- every divergence in these three lists
+    # is one of the eight enumerated, justified entries above.
+    assert recommendations_diverged == {
+        _index_containing(python_recommendations, label)
+        for label in (
+            "Hotspot risk",
+            "Ownership concentration",
+            "Complexity",
+            "Change failure rate",
+        )
+    }, (
+        f"recommendations diverged at unnamed indices too: "
+        f"{recommendations_diverged}, expected only the four enumerated "
+        f"guarded-metric entries"
+    )
+    assert risk_worsened_diverged == {
+        _index_containing(risk_worsened_python, label)
+        for label in ("Hotspot risk", "Ownership concentration", "Complexity")
+    }, (
+        f"sections[risk].worsened diverged at unnamed indices too: "
+        f"{risk_worsened_diverged}, expected only the three enumerated "
+        f"guarded-metric entries"
+    )
+    assert reliability_worsened_diverged == {
+        _index_containing(reliability_worsened_python, "Change failure rate")
+    }, (
+        f"sections[reliability].worsened diverged at unnamed indices "
+        f"too: {reliability_worsened_diverged}, expected only the one "
+        f"enumerated change_failure_rate entry"
+    )
+
+    # Now the comparator's own findings: confined EXACTLY to the four
+    # guarded metrics' delta sub-objects, plus the eight named,
+    # individually-justified recommendations/worsened-list paths above --
+    # never a blanket allowance for either list. A MATCH would mean
+    # CHAOS-4563's guard did not take effect; a stray mismatch anywhere
+    # else means the guard (or this fixture) touched something it should
+    # not have.
+    stray = [
+        f
+        for f in mismatch_findings
+        if not f.path.startswith(GUARDED_DELTA_PATH_PREFIXES)
+        and f.path not in allowed_text_paths
+    ]
+    assert not stray, (
+        f"mismatch findings outside the four guarded metrics' delta "
+        f"sub-objects and the exact recommendations/worsened-list "
+        f"indices already proven to differ only by a numeric token -- "
+        f"the guard (or this fixture) leaked into fields it should not "
+        f"have touched: {stray}"
+    )
+
+    covered = {
+        prefix: any(
+            f.path == f"{prefix}.{REQUIRED_GUARDED_SUFFIX}" for f in mismatch_findings
+        )
+        for prefix in GUARDED_DELTA_PATH_PREFIXES
+    }
+    assert all(covered.values()), (
+        f"expected ALL FOUR guarded metrics to actually diverge at "
+        f"delta.{REQUIRED_GUARDED_SUFFIX} (the one sub-field guaranteed "
+        f"to differ regardless of this fixture's concrete numbers -- "
+        f"Python's NaN never equals Go's finite 0.0), got "
+        f"coverage={covered} findings={mismatch_findings}"
     )

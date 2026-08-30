@@ -178,14 +178,37 @@ func formatDay(t time.Time) string {
 // as absent; every numeric column this package scans is already a Go
 // float64 (widened at scan time, matching Python's own unconditional
 // float() widen) or nil for a genuinely SQL-NULL/Nullable(Float64) column
-// -- nil is Python's None, a non-nil pointer is Python's "present" value,
-// including a NaN one (avg()/sum() over zero underlying ClickHouse rows in
-// a non-Nullable Float64 column returns NaN, not NULL; Python's float(nan)
-// does not raise either, so that value flows through unfiltered on both
-// planes -- a pre-existing property of the Python system this port
-// reproduces rather than "fixes"; see the package doc comment's ORDER BY
-// section for the same "verified, not silently patched" treatment of a
-// different residual-risk finding).
+// -- nil is Python's None, a non-nil pointer is Python's "present" value.
+//
+// Zero-row average guard (CHAOS-4563, GO-ONLY -- Python is UNCHANGED, see
+// CHAOS-4534): avg()/sum() over zero underlying ClickHouse rows in a
+// non-Nullable Float64 column returns NaN, not NULL. Earlier revisions of
+// this file let that NaN flow through unfiltered as Python's own
+// `float(nan)` does (a "reproduce, don't fix" call at the time) -- but a
+// bare NaN reaching gqlgen's marshaler is a hard GraphQL error where the
+// Python side merely emits invalid-but-200 JSON (CHAOS-4534's full
+// analysis), so this port now closes it for the THREE call sites where the
+// query is a scalar aggregate over a window that can genuinely be empty --
+// hotspotsAggRow.riskScore, complexityAggRow.cyclomaticPerKloc,
+// repoMetricsRow.{singleOwnerFileRatio30d,changeFailureRate} -- via
+// knownCountGuard, porting the shipped `known_count` pattern from
+// resolvers/analytics.py:262-269 (EvidenceQualityStats.mean/stddev, base
+// SHA e9ea257ff): a companion count() column from the SAME query decides
+// nil vs. present, never a math.IsNaN check on the value itself (gating on
+// a property of the value, rather than the counted fact about the rows, is
+// the exact failure mode CHAOS-4563 exists to avoid -- an `is not None`-only
+// port would compile, pass every fixture-based test, and still emit NaN).
+// Every OTHER *float64 column in this package was already nil-safe before
+// this fix (their underlying DDL columns are themselves Nullable(Float64),
+// so ClickHouse's own Nullable-aware avg() already returns real NULL, not
+// NaN, over zero rows -- verified per-column against every CREATE
+// TABLE/ALTER TABLE in src/dev_health_ops/migrations/clickhouse/ before
+// picking the three guard sites, so as not to "attempt a general NaN
+// policy" outside operatingReview's own reachable defect surface, which
+// CHAOS-4534 owns). repoMetricsRow.codeOwnershipGini shares the identical
+// NaN-risk shape but is deliberately left un-gated: it is scanned but never
+// read by any section builder below, so a NaN there can never reach
+// marshaling -- see its own doc comment.
 // ---------------------------------------------------------------------------
 
 func presentValues(vals []*float64) []float64 {
@@ -288,6 +311,49 @@ func pluck[T any](rows []T, get func(T) *float64) []*float64 {
 }
 
 func f(v float64) *float64 { return &v }
+
+// knownCountGuard ports the shipped `known_count` guard
+// (resolvers/analytics.py:262-269, cited at this port's base SHA
+// e9ea257ff -- EvidenceQualityStats.mean/stddev):
+//
+//	known_count = int(row.get("quality_known_count") or 0)
+//	mean_value = row.get("quality_mean")
+//	...
+//	mean=float(mean_value) if mean_value is not None and known_count > 0 else None,
+//
+// into this package, CHAOS-4563. Python's guard checks BOTH `mean_value is
+// not None` AND `known_count > 0` -- but the second clause is the one that
+// actually matters here, and porting only the first (an `is not None` /
+// Go nil-check analogue) would NOT catch this port's failure mode: NaN is
+// not None. ClickHouse `avg()` over a plain (non-Nullable) Float64 column
+// returns NaN, never NULL, when the underlying window has zero rows --
+// see the package doc comment's "Zero-row average guard" section for the
+// full defect (CHAOS-4534) this closes. Gating on `knownCount > 0` (a
+// property of the ROWS ClickHouse actually scanned, via a companion
+// count() in the SAME query -- never a math.IsNaN check on the aggregate
+// value itself, which would be gating on a property of the VALUE, the
+// exact anti-pattern CHAOS-4563 warns against) makes the NaN case
+// unreachable: when knownCount is 0, raw (whatever NaN or otherwise
+// ClickHouse happened to compute) is discarded and nil returned instead,
+// exactly mirroring Python's `None`. avgF/presentValues already treat a
+// nil *float64 as absent (matching Python's `_avg`'s `v is not None`
+// filter, metrics/operating_review.py:772-780) -- no further change needed
+// once a field is nil-gated at the fetch boundary.
+//
+// field identifies which GraphQL metric key this guard call is protecting
+// (a closed vocabulary: "hotspot_risk_score", "ownership_concentration",
+// "complexity_per_kloc", "change_failure_rate") -- recorded on
+// knownCountGuardFiredCounter ONLY when the guard actually fires, per
+// brief §8 ("emit its decision basis... that the guard fired, and on what
+// counted basis"), never unconditionally (an unconditional emit would
+// record a decision that was never made).
+func knownCountGuard(ctx context.Context, field string, raw float64, knownCount uint64) *float64 {
+	if knownCount == 0 {
+		knownCountGuardFiredCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("field", field)))
+		return nil
+	}
+	return f(raw)
+}
 
 // discardOnError drops a fetcher's PARTIAL result on a mid-stream failure --
 // codex review round 1 (PR #2008, P2), verified against source before this
@@ -459,17 +525,35 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
 }
 
 type repoMetricsRow struct {
-	prsMerged               float64
-	prFirstReviewP50Hours   *float64
-	singleOwnerFileRatio30d float64
+	prsMerged             float64
+	prFirstReviewP50Hours *float64
+	// singleOwnerFileRatio30d and changeFailureRate are nil when the
+	// query's companion count is 0 -- the same CHAOS-4563 known_count
+	// guard as hotspotsAggRow.riskScore/complexityAggRow.cyclomaticPerKloc
+	// above. Both underlying columns are plain (non-Nullable) Float64
+	// (repo_metrics_daily.single_owner_file_ratio_30d,
+	// migrations/clickhouse/004_quality_delivery_metrics.sql:8;
+	// .change_failure_rate, migrations/clickhouse/001_metrics_v2.sql:22),
+	// so an empty window's avg() is NaN -- CHAOS-4534's
+	// "ownership_concentration" and "change_failure_rate" reachable cases.
+	// codeOwnershipGini below is DELIBERATELY left un-gated (still plain
+	// float64): it is scanned but never read by any section builder in
+	// this package (grepped -- no reference outside this struct/scan), so
+	// a NaN there can never reach GraphQL marshaling; gating it would be
+	// exactly the "attempt a general NaN policy" CHAOS-4563 is scoped
+	// against, for a field with no reachable defect to fix.
+	singleOwnerFileRatio30d *float64
 	codeOwnershipGini       float64
 	busFactor               float64
-	changeFailureRate       float64
+	changeFailureRate       *float64
 	mttrHours               *float64
 }
 
 // fetchRepoMetrics ports the "repo_metrics" query verbatim
-// (metrics/operating_review.py:183-211). No team_filter/team_group --
+// (metrics/operating_review.py:183-211), plus the CHAOS-4563 known_count
+// guard: `count() AS repo_metrics_known_count` added to the outer SELECT
+// (not present in the Python source -- see repoMetricsRow's doc comment;
+// CHAOS-4534: neither plane is correct today). No team_filter/team_group --
 // repo_metrics_daily has no team_id column, matching the Python query
 // (which does not splice either f-string placeholder into this one).
 func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]repoMetricsRow, error) {
@@ -481,7 +565,8 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
           avg(code_ownership_gini) AS code_ownership_gini,
           min(bus_factor) AS bus_factor,
           avg(change_failure_rate) AS change_failure_rate,
-          avg(mttr_hours) AS mttr_hours
+          avg(mttr_hours) AS mttr_hours,
+          count() AS repo_metrics_known_count
         FROM (
           SELECT
             day,
@@ -514,16 +599,17 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 		var busFactor uint32
 		var changeFailureRate float64
 		var mttrHours *float64
-		if scanErr := rows.Scan(&prsMerged, &prFirstReviewP50, &singleOwnerRatio, &codeOwnershipGini, &busFactor, &changeFailureRate, &mttrHours); scanErr != nil {
+		var knownCount uint64
+		if scanErr := rows.Scan(&prsMerged, &prFirstReviewP50, &singleOwnerRatio, &codeOwnershipGini, &busFactor, &changeFailureRate, &mttrHours, &knownCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: repo_metrics scan: %w", scanErr)
 		}
 		out = append(out, repoMetricsRow{
 			prsMerged:               float64(prsMerged),
 			prFirstReviewP50Hours:   prFirstReviewP50,
-			singleOwnerFileRatio30d: singleOwnerRatio,
+			singleOwnerFileRatio30d: knownCountGuard(ctx, "ownership_concentration", singleOwnerRatio, knownCount),
 			codeOwnershipGini:       codeOwnershipGini,
 			busFactor:               float64(busFactor),
-			changeFailureRate:       changeFailureRate,
+			changeFailureRate:       knownCountGuard(ctx, "change_failure_rate", changeFailureRate, knownCount),
 			mttrHours:               mttrHours,
 		})
 	}
@@ -531,7 +617,17 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 }
 
 type hotspotsAggRow struct {
-	riskScore     float64
+	// riskScore is nil when hotspotsCount == 0 -- CHAOS-4563's known_count
+	// guard, see this package doc comment's "Zero-row average guard"
+	// section. avg(latest_risk_score) is a plain (non-Nullable) Float64
+	// aggregate (file_hotspot_daily.risk_score Float64,
+	// migrations/clickhouse/007_complexity_investment_issues.sql:48), so
+	// ClickHouse returns NaN, not NULL, when the HAVING-filtered inner
+	// subquery is empty -- the exact CHAOS-4534 "hotspot_risk_score"
+	// reachable case. hotspotsCount (count() in the SAME query, already
+	// present before this fix) is the scanned-count companion column that
+	// decides it -- never a math.IsNaN check on riskScore itself.
+	riskScore     *float64
 	hotspotsCount float64
 }
 
@@ -570,20 +666,33 @@ func fetchHotspotsAgg(ctx context.Context, client QueryClient, orgID string, sta
 		if scanErr := rows.Scan(&riskScore, &hotspotsCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: hotspots scan: %w", scanErr)
 		}
-		out = append(out, hotspotsAggRow{riskScore: riskScore, hotspotsCount: float64(hotspotsCount)})
+		out = append(out, hotspotsAggRow{riskScore: knownCountGuard(ctx, "hotspot_risk_score", riskScore, hotspotsCount), hotspotsCount: float64(hotspotsCount)})
 	}
 	return out, rows.Err()
 }
 
 type complexityAggRow struct {
-	cyclomaticPerKloc float64
+	// cyclomaticPerKloc is nil when the query's companion count is 0 --
+	// same CHAOS-4563 known_count guard as hotspotsAggRow.riskScore above.
+	// repo_complexity_daily.cyclomatic_per_kloc is a plain Float64
+	// (migrations/clickhouse/007_complexity_investment_issues.sql:28), so
+	// an empty window's avg() is NaN, matching CHAOS-4534's
+	// "complexity_per_kloc" reachable case. Unlike hotspotsAggRow, this
+	// query had no pre-existing count() column -- one is added below
+	// (`complexity_known_count`) purely to carry the guard; it is not a
+	// Python source line, since Python's own query has no such guard
+	// either (CHAOS-4534: neither plane is correct today).
+	cyclomaticPerKloc *float64
 }
 
 // fetchComplexityAgg ports the "complexity" query verbatim
-// (metrics/operating_review.py:230-245).
+// (metrics/operating_review.py:230-245), plus the CHAOS-4563
+// known_count guard: `count() AS complexity_known_count` added to the
+// outer SELECT (not present in the Python source -- see cyclomaticPerKloc's
+// doc comment).
 func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]complexityAggRow, error) {
 	query := `
-        SELECT avg(cyclomatic_per_kloc) AS cyclomatic_per_kloc
+        SELECT avg(cyclomatic_per_kloc) AS cyclomatic_per_kloc, count() AS complexity_known_count
         FROM (
           SELECT
             day,
@@ -605,10 +714,11 @@ func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, s
 	var out []complexityAggRow
 	for rows.Next() {
 		var cyclomaticPerKloc float64
-		if scanErr := rows.Scan(&cyclomaticPerKloc); scanErr != nil {
+		var knownCount uint64
+		if scanErr := rows.Scan(&cyclomaticPerKloc, &knownCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: complexity scan: %w", scanErr)
 		}
-		out = append(out, complexityAggRow{cyclomaticPerKloc: cyclomaticPerKloc})
+		out = append(out, complexityAggRow{cyclomaticPerKloc: knownCountGuard(ctx, "complexity_per_kloc", cyclomaticPerKloc, knownCount)})
 	}
 	return out, rows.Err()
 }
@@ -1155,6 +1265,35 @@ func mustSwallowCounter() metric.Int64Counter {
 	return counter
 }
 
+// knownCountGuardFiredCounter counts every CHAOS-4563 known_count guard
+// trip -- i.e. every time knownCountGuard discarded a raw scanned value
+// (NaN on the live path) in favor of nil because its query's companion
+// count was 0 -- tagged by `field`, a closed vocabulary of the three guard
+// sites' GraphQL metric keys (hotspot_risk_score, ownership_concentration,
+// complexity_per_kloc, change_failure_rate -- singleOwnerFileRatio30d and
+// changeFailureRate share the repo_metrics query and its one count, so both
+// can fire together). This is telemetry FOR THE GUARD ITSELF -- distinct
+// from fetchSwallowedCounter above, which counts a whole TABLE's query
+// failing; this counts one FIELD's average being genuinely absent, which
+// is not a failure at all, just a decision the guard is now making
+// observable (brief §8: "emit its decision basis... that the guard fired,
+// and on what counted basis"). Same mustSwallowCounter shape: an
+// Int64Counter never returns nil even on error, so a broken meter provider
+// must not panic a resolver it instruments.
+var knownCountGuardFiredCounter = mustKnownCountGuardFiredCounter()
+
+func mustKnownCountGuardFiredCounter() metric.Int64Counter {
+	meter := otel.Meter("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview")
+	counter, err := meter.Int64Counter(
+		"devhealth_query_api_operating_review_known_count_guard_fired_total",
+		metric.WithDescription("operatingReview CHAOS-4563 known_count guard: a zero-row average was gated to null instead of NaN, by metric field key"),
+	)
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter("devhealth_query_api_operating_review_known_count_guard_fired_total")
+	}
+	return counter
+}
+
 // errSwallow logs a per-table fetch failure AND increments
 // fetchSwallowedCounter (tagged by table key) -- the Go analogue of
 // Python's `logger.exception("Failed to fetch operating review rows for
@@ -1370,14 +1509,17 @@ func recommendationsFromSections(sections []reviewSection) []string {
 }
 
 // changeFailureRate ports _change_failure_rate
-// (metrics/operating_review.py:819-824) verbatim.
+// (metrics/operating_review.py:819-824) verbatim, except the fallback avg
+// now reads repoMetricsRow.changeFailureRate's own CHAOS-4563 known_count
+// guard (nil, not a raw NaN, when the period's repo_metrics window is
+// empty) -- see repoMetricsRow's doc comment.
 func changeFailureRate(current periodRows) float64 {
 	deployments := sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) }))
 	failed := sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.failedDeploymentsCount) }))
 	if deployments > 0 {
 		return failed / deployments
 	}
-	return avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.changeFailureRate) }))
+	return avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.changeFailureRate }))
 }
 
 // aiAdoptionRatio ports _ai_adoption_ratio (metrics/operating_review.py:
@@ -1640,16 +1782,16 @@ func bottleneckSection(current, prior periodRows) reviewSection {
 func riskSection(current, prior periodRows) reviewSection {
 	return buildSection("risk", "Risk", []reviewMetric{
 		buildMetric("hotspot_risk_score", "Hotspot risk",
-			avgF(pluck(current.hotspots, func(r hotspotsAggRow) *float64 { return f(r.riskScore) })),
-			avgF(pluck(prior.hotspots, func(r hotspotsAggRow) *float64 { return f(r.riskScore) })),
+			avgF(pluck(current.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
+			avgF(pluck(prior.hotspots, func(r hotspotsAggRow) *float64 { return r.riskScore })),
 			"score", lowerIsBetter),
 		buildMetric("ownership_concentration", "Ownership concentration",
-			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.singleOwnerFileRatio30d) })),
-			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.singleOwnerFileRatio30d) })),
+			avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
+			avgF(pluck(prior.repoMetrics, func(r repoMetricsRow) *float64 { return r.singleOwnerFileRatio30d })),
 			"ratio", lowerIsBetter),
 		buildMetric("complexity_per_kloc", "Complexity",
-			avgF(pluck(current.complexity, func(r complexityAggRow) *float64 { return f(r.cyclomaticPerKloc) })),
-			avgF(pluck(prior.complexity, func(r complexityAggRow) *float64 { return f(r.cyclomaticPerKloc) })),
+			avgF(pluck(current.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
+			avgF(pluck(prior.complexity, func(r complexityAggRow) *float64 { return r.cyclomaticPerKloc })),
 			"cyclomatic/KLOC", lowerIsBetter),
 		buildMetric("bus_factor", "Bus factor",
 			minF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return f(r.busFactor) })),

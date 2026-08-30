@@ -131,6 +131,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1257,18 +1258,73 @@ REQUIRED_GUARDED_SUFFIX = "priorValue"
 # render `.absolute` into a TEXT string (`"...worsened by %+.1f ..."`,
 # metrics/operating_review.py:738-745 / operatingreview.go:1451-1460), so
 # Python's `+nan` and Go's real `+0.4`-shaped number produce different
-# STRINGS even though the upstream `.status` enum matches. Like
-# `.percent`/`.status` above, this is a consequence of this fixture's
-# concrete numbers, not a guaranteed occurrence -- permitted when it
-# fires, never required.
-DOWNSTREAM_TEXT_PATH_PREFIXES = (
-    "$.data.operatingReview.recommendations",
-    f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
-    f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}].worsened",
-)
-ALLOWED_MISMATCH_PATH_PREFIXES = (
-    GUARDED_DELTA_PATH_PREFIXES + DOWNSTREAM_TEXT_PATH_PREFIXES
-)
+# STRINGS even though the upstream `.status` enum matches.
+#
+# This is REQUIRED, not merely permitted (confirmed firing by executing
+# this test, not argued from source) -- but the exemption is scoped to
+# the MECHANISM, not the location: a same-sentence/different-rendered-
+# number pair is the ONLY difference this guard is allowed to produce
+# here. `recommendations` in particular is the whole, UNSCOPED array --
+# CHAOS-4381 makes list tie-ordering a comparator rule for this epic, so
+# a dropped/reordered/misattributed recommendation is exactly the class
+# this dual-run exists to catch, and a blanket path-prefix exemption
+# would make this test blind to it. `_assert_text_list_diverges_only_by_
+# numeric_token` below enforces the mechanism directly against the ACTUAL
+# list contents (never Finding.detail's repr'd string, which is the
+# comparator's INTERNAL representation, not a contract this test should
+# depend on) -- the comparator's own list-length/tie-ordering checks
+# still apply first (strict positional compare, no relaxed declaration
+# for these paths), so a length or order divergence still fails loudly
+# via the comparator's own mismatch, never absorbed here.
+_NUMERIC_TOKEN_RE = re.compile(r"[+-]?(?:nan|\d+\.?\d*)", re.IGNORECASE)
+
+
+def _normalize_numeric_tokens(s: str) -> str:
+    """Collapse every signed decimal / nan token to one placeholder, so
+    two sentences differing ONLY in a rendered numeric value compare
+    equal."""
+    return _NUMERIC_TOKEN_RE.sub("#", s)
+
+
+def _assert_text_list_diverges_only_by_numeric_token(
+    python_entries: list[str], go_entries: list[str], *, list_label: str
+) -> set[int]:
+    """Pairwise-compares two lists this operation renders with STRICT
+    positional ordering (no relaxed-tie-ordering declaration for
+    `recommendations`/`sections[N].worsened`, so position i on one side
+    is position i on the other by construction). A length mismatch is a
+    structural divergence, never this guard's text-rendering consequence
+    -- fails loudly here rather than being silently absorbed. Returns the
+    set of indices that differ; every differing index is asserted to
+    differ ONLY by a rendered numeric token -- ANY other kind of
+    per-index difference is a hard failure, not a permitted consequence.
+    """
+    assert len(python_entries) == len(go_entries), (
+        f"{list_label} list LENGTH diverged ({len(python_entries)} vs "
+        f"{len(go_entries)}) -- a structural divergence, not this guard's "
+        f"numeric-token-only text consequence: python={python_entries!r} "
+        f"go={go_entries!r}"
+    )
+    diverged: set[int] = set()
+    for i, (p, g) in enumerate(zip(python_entries, go_entries)):
+        if p == g:
+            continue
+        assert _normalize_numeric_tokens(p) == _normalize_numeric_tokens(g), (
+            f"{list_label}[{i}] diverged by more than a rendered numeric "
+            f"token -- not a permitted consequence of CHAOS-4563's guard: "
+            f"python={p!r} go={g!r}"
+        )
+        diverged.add(i)
+    return diverged
+
+
+def _index_containing(entries: list[str], label: str) -> int:
+    matches = [i for i, e in enumerate(entries) if label in e]
+    assert len(matches) == 1, (
+        f"expected exactly one entry containing {label!r}, got "
+        f"{[entries[i] for i in matches]!r} in {entries!r}"
+    )
+    return matches[0]
 
 
 @pytest.mark.asyncio
@@ -1448,16 +1504,193 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     mismatch_findings = [f for f in comparison.findings if f.kind == "mismatch"]
     assert mismatch_findings, "expected at least one mismatch finding"
 
+    # The two downstream TEXT lists: validate the mechanism directly
+    # against the ACTUAL list contents (never Finding.detail's repr'd
+    # string). `_assert_text_list_diverges_only_by_numeric_token` first
+    # confirms EVERY differing index in the whole list (guarded or not)
+    # differs ONLY by a rendered numeric token -- a non-numeric surprise
+    # anywhere in these lists fails loudly right here. Then, per chris's
+    # standard (an expected-divergence list is enumerated PATH BY PATH,
+    # each with the reason it diverges -- never a prefix or a computed
+    # "whatever differed" set that could swallow an unrelated neighbour),
+    # each of the eight specific entries below is named individually by
+    # its guarded-metric label, with its own reason, and is the ONLY
+    # thing `allowed_text_paths` ends up containing -- an extra
+    # numeric-only divergence at some OTHER, unnamed index would still be
+    # caught as a stray finding below, not silently swallowed by however
+    # many indices happened to differ.
+    go_data = candidate.data["operatingReview"]
+    python_data = baseline.data["operatingReview"]
+
+    python_recommendations = python_data["recommendations"]
+    go_recommendations = go_data["recommendations"]
+    recommendations_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        python_recommendations, go_recommendations, list_label="recommendations"
+    )
+
+    risk_worsened_python = python_data["sections"][RISK_SECTION_INDEX]["worsened"]
+    risk_worsened_go = go_data["sections"][RISK_SECTION_INDEX]["worsened"]
+    risk_worsened_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        risk_worsened_python, risk_worsened_go, list_label="sections[risk].worsened"
+    )
+
+    reliability_worsened_python = python_data["sections"][RELIABILITY_SECTION_INDEX][
+        "worsened"
+    ]
+    reliability_worsened_go = go_data["sections"][RELIABILITY_SECTION_INDEX]["worsened"]
+    reliability_worsened_diverged = _assert_text_list_diverges_only_by_numeric_token(
+        reliability_worsened_python,
+        reliability_worsened_go,
+        list_label="sections[reliability].worsened",
+    )
+
+    # ENUMERATED expected-divergence list, path by path, each with its
+    # reason: the sentence template (deltaSummary/_delta_summary) renders
+    # this guarded metric's delta.absolute into a %+.1f-formatted token,
+    # so Python's NaN-derived text and Go's finite-value text differ only
+    # in that token. (label, python_list, go_list, diverged_indices,
+    # json_path_prefix, reason).
+    named_text_divergences = (
+        (
+            "Hotspot risk",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders hotspot_risk_score's delta.absolute",
+        ),
+        (
+            "Ownership concentration",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders ownership_concentration's delta.absolute",
+        ),
+        (
+            "Complexity",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders complexity_per_kloc's delta.absolute",
+        ),
+        (
+            "Change failure rate",
+            python_recommendations,
+            go_recommendations,
+            recommendations_diverged,
+            "$.data.operatingReview.recommendations",
+            "renders change_failure_rate's delta.absolute",
+        ),
+        (
+            "Hotspot risk",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders hotspot_risk_score's delta.absolute",
+        ),
+        (
+            "Ownership concentration",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders ownership_concentration's delta.absolute",
+        ),
+        (
+            "Complexity",
+            risk_worsened_python,
+            risk_worsened_go,
+            risk_worsened_diverged,
+            f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+            "renders complexity_per_kloc's delta.absolute",
+        ),
+        (
+            "Change failure rate",
+            reliability_worsened_python,
+            reliability_worsened_go,
+            reliability_worsened_diverged,
+            f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}].worsened",
+            "renders change_failure_rate's delta.absolute",
+        ),
+    )
+
+    allowed_text_paths: set[str] = set()
+    for (
+        label,
+        python_entries,
+        go_entries,
+        diverged_indices,
+        path_prefix,
+        reason,
+    ) in named_text_divergences:
+        index = _index_containing(python_entries, label)
+        assert index == _index_containing(go_entries, label), (
+            f"{label!r} entry moved position between Python and Go in "
+            f"{path_prefix} -- a structural (ordering) divergence, not "
+            f"this guard's consequence ({reason})"
+        )
+        assert index in diverged_indices, (
+            f"expected the {label!r} entry in {path_prefix} (index "
+            f"{index}) to diverge -- {reason}; if this fails, "
+            f"CHAOS-4563's guard stopped perturbing this metric's "
+            f"delta.absolute: python={python_entries[index]!r} "
+            f"go={go_entries[index]!r}"
+        )
+        allowed_text_paths.add(f"{path_prefix}[{index}]")
+
+    # No UNNAMED index differs -- every divergence in these three lists
+    # is one of the eight enumerated, justified entries above.
+    assert recommendations_diverged == {
+        _index_containing(python_recommendations, label)
+        for label in (
+            "Hotspot risk",
+            "Ownership concentration",
+            "Complexity",
+            "Change failure rate",
+        )
+    }, (
+        f"recommendations diverged at unnamed indices too: "
+        f"{recommendations_diverged}, expected only the four enumerated "
+        f"guarded-metric entries"
+    )
+    assert risk_worsened_diverged == {
+        _index_containing(risk_worsened_python, label)
+        for label in ("Hotspot risk", "Ownership concentration", "Complexity")
+    }, (
+        f"sections[risk].worsened diverged at unnamed indices too: "
+        f"{risk_worsened_diverged}, expected only the three enumerated "
+        f"guarded-metric entries"
+    )
+    assert reliability_worsened_diverged == {
+        _index_containing(reliability_worsened_python, "Change failure rate")
+    }, (
+        f"sections[reliability].worsened diverged at unnamed indices "
+        f"too: {reliability_worsened_diverged}, expected only the one "
+        f"enumerated change_failure_rate entry"
+    )
+
+    # Now the comparator's own findings: confined EXACTLY to the four
+    # guarded metrics' delta sub-objects, plus the eight named,
+    # individually-justified recommendations/worsened-list paths above --
+    # never a blanket allowance for either list. A MATCH would mean
+    # CHAOS-4563's guard did not take effect; a stray mismatch anywhere
+    # else means the guard (or this fixture) touched something it should
+    # not have.
     stray = [
         f
         for f in mismatch_findings
-        if not f.path.startswith(ALLOWED_MISMATCH_PATH_PREFIXES)
+        if not f.path.startswith(GUARDED_DELTA_PATH_PREFIXES)
+        and f.path not in allowed_text_paths
     ]
     assert not stray, (
         f"mismatch findings outside the four guarded metrics' delta "
-        f"sub-objects (and their permitted recommendations/worsened-list "
-        f"text-rendering consequence) -- the guard (or this fixture) "
-        f"leaked into fields it should not have touched: {stray}"
+        f"sub-objects and the exact recommendations/worsened-list "
+        f"indices already proven to differ only by a numeric token -- "
+        f"the guard (or this fixture) leaked into fields it should not "
+        f"have touched: {stray}"
     )
 
     covered = {

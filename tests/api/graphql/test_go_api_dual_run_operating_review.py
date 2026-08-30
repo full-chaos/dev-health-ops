@@ -30,10 +30,11 @@ EVERY real Python response. The Go port fixes this (ratio semantics
 ported from ``AIGovernanceCoverageDaily``,
 ``audit/ai_governance/models.py:125-158``).
 
-**Divergence 2 (a wire-format break, NOT a value fix -- live-discovered
-while proving divergence 1, filed separately)**: ``avg()`` over a
-ClickHouse aggregate query whose window has ZERO underlying rows returns
-``NaN`` for a non-Nullable ``Float64`` column (confirmed live: this hits
+**Divergence 2 (originally a wire-format break; CHAOS-4563 retired the Go
+side of it into a declared VALUE divergence -- live-discovered while
+proving divergence 1, filed separately)**: ``avg()`` over a ClickHouse
+aggregate query whose window has ZERO underlying rows returns ``NaN`` for
+a non-Nullable ``Float64`` column (confirmed live: this hits
 ``repo_metrics``' ``single_owner_file_ratio_30d``/``code_ownership_gini``/
 ``change_failure_rate``, ``hotspots``' ``risk_score``, and ``complexity``'s
 ``cyclomatic_per_kloc`` -- all single-row-aggregate queries with no
@@ -46,13 +47,24 @@ metrics jobs) simply did not run for any repo that week). Python's
 response body) allows NaN by default and emits a literal ``NaN`` token --
 HTTP 200, "successful" by Python's own measure, but NOT valid JSON per
 RFC 8259: confirmed with Node's ``JSON.parse`` (a standard client), which
-REJECTS it outright. Go's `encoding/json` (via gqlgen) correctly refuses
-to marshal NaN and surfaces a real GraphQL error instead. **Neither plane
-is actually right here** -- Python emits a response a spec-compliant
-client cannot parse; Go errors where a user wants a number. This is a
-CLASS of defect (any Go port that averages over a possibly-empty window
-into a non-Nullable float return type hits it), not specific to this
-operation -- flagged for Lane A/Lane C.
+REJECTS it outright. **CHAOS-4563** (chris-approved 2026-08-29 13:56 PT,
+GO-ONLY -- "no more work going into the python graphql or metrics engine")
+ported the shipped ``known_count`` guard (``resolvers/analytics.py:262-269``)
+into the four Go call sites this hits, so Go no longer lets the NaN reach
+``encoding/json``/gqlgen at all: the guard nils the row-level value when
+its companion scanned-count column is 0, and ``avgF``'s empty-average-is-
+``0.0`` fallback (``operatingreview.go:232``) then surfaces a normal,
+finite ``0.0`` on the wire -- a clean response, no GraphQL error. Python
+is untouched (GO-ONLY) and still computes NaN, since its own ``_avg``
+(``operating_review.py:787-790``) has no such guard. **Neither plane is
+actually "right" in an absolute sense** -- Python still emits a response a
+spec-compliant client cannot parse; Go now reports a metric as an
+unremarkable zero rather than surfacing that its input window was empty.
+CHAOS-4534 owns whether Go's "null-safe zero" convention is the platform's
+final answer for this class of defect (any Go port that averages over a
+possibly-empty window into a non-Nullable float return type hits it) --
+this PR narrowly retires Go's crash-on-NaN behaviour for operatingReview's
+four reachable call sites, nothing broader.
 
 Three tests:
 
@@ -77,8 +89,12 @@ Three tests:
   3. ``test_dual_run_zero_row_average_nan_is_a_declared_divergence`` --
      the ORIGINAL single-period fixture (current week only, prior week
      deliberately empty, no ai_governance data either side -- isolating
-     divergence 2 with no divergence-1 noise). Asserts Go's response
-     carries GraphQL errors at exactly the expected NaN paths, AND
+     divergence 2 with no divergence-1 noise). Post-CHAOS-4563, asserts a
+     CLEAN Go response (no errors) with the four guarded metrics'
+     ``delta.priorValue`` at a finite ``0.0``, THEN the comparator finds a
+     MISMATCH confined EXACTLY to those four metrics' ``delta``
+     sub-objects (Python's un-guarded ``_avg`` still produces NaN there --
+     same "confined declared divergence" shape as test 2), AND
      independently proves Python's wire behavior within the test itself
      (not just asserted from source-reading): encoding the same response
      envelope with stdlib ``json.dumps`` -- exactly what
@@ -113,6 +129,7 @@ sides by design, not an error path.
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import socket
@@ -1178,39 +1195,90 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
 
 
 # computeReview's fixed section order (metrics/operating_review.py:388-395)
-# -- the paths test 3 below expects errors/NaN at, for the three
-# single-row-aggregate queries whose non-Nullable Float64 columns hit the
-# zero-row avg() -> NaN case with an empty prior period: risk (index 2:
-# hotspot_risk_score, ownership_concentration, complexity_per_kloc -- ALL
-# THREE of that section's first three metrics) and reliability (index 3:
-# change_failure_rate, metric index 1).
+# -- the paths test 3 below expects the guarded finite-zero/NaN divergence
+# at, for the three single-row-aggregate queries whose non-Nullable
+# Float64 columns hit the zero-row avg() -> NaN case with an empty prior
+# period: risk (index 2: hotspot_risk_score, ownership_concentration,
+# complexity_per_kloc -- ALL THREE of that section's first three metrics)
+# and reliability (index 3: change_failure_rate, metric index 1).
 RISK_SECTION_INDEX = 2
 RELIABILITY_SECTION_INDEX = 3
-NAN_DIVERGENCE_ERROR_PATH_FRAGMENTS = (
-    "sections",
-    str(RISK_SECTION_INDEX),
+RISK_GUARDED_METRIC_INDICES = (
+    0,
+    1,
+    2,
+)  # hotspot_risk_score, ownership_concentration, complexity_per_kloc
+RELIABILITY_GUARDED_METRIC_INDEX = 1  # change_failure_rate
+
+# CHAOS-4563 re-points this declared divergence at the NEW shape. The
+# known_count guard (operatingreview.go:351 knownCountGuard, applied at
+# the four call sites named in the module doc comment's divergence-2
+# paragraph) nils the affected row-level value when its companion
+# scanned-count column is 0; avgF (operatingreview.go:232) then treats
+# "no present values" the same way Python's own _avg/_sum/etc. already
+# treat an empty list -- it returns 0.0, not NaN and not null. So the
+# guarded delta.priorValue on the Go side is always a normal, FINITE 0.0.
+# The divergence from Python survives regardless: Python's _avg
+# (operating_review.py:787-790) has no such guard (GO-ONLY ruling, chris
+# 08-29 06:52 PT) and still averages the raw ClickHouse row, which is
+# itself NaN for a non-Nullable Float64 column over zero rows -- so
+# Python's delta.prior_value for these four metrics stays NaN. This is
+# EXPECTED, not a regression: the Go copy now carries a fix Python lacks,
+# so a comparator MATCH here would mean the fix did not take effect.
+GUARDED_DELTA_PATH_PREFIXES = tuple(
+    f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].metrics[{i}].delta"
+    for i in RISK_GUARDED_METRIC_INDICES
+) + (
+    f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}]"
+    f".metrics[{RELIABILITY_GUARDED_METRIC_INDEX}].delta",
 )
+# The one delta sub-field GUARANTEED to diverge regardless of this
+# fixture's concrete risk/complexity/change-failure-rate numbers: Python's
+# prior_value is NaN (a present float) and Go's is a present, finite 0.0
+# -- NaN never equals anything, so this field always mismatches
+# (go_api_comparator._compare_number's parity-rule-3 "NaN/Infinity is
+# ALWAYS a mismatch" branch fires unconditionally). `.absolute` inherits
+# the same NaN-vs-finite mismatch by construction (value - NaN is NaN);
+# `.percent`/`.status` are a downstream CONSEQUENCE of this fixture's
+# concrete numbers (percent: Python's NaN-present vs Go's `prior == 0`
+# special case -- None/null when delta_value != 0; status: both sides'
+# comparisons against NaN happen to fall through the same "else" branch
+# for this fixture's seeded values, but that is not guaranteed for every
+# possible seed) -- not required coverage, same reasoning as test 2's
+# ai_governance downstream-consequence note below.
+REQUIRED_GUARDED_SUFFIX = "priorValue"
 
 
 @pytest.mark.asyncio
 async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """The declared-divergence proof for the zero-row-average NaN break (a
-    WIRE-FORMAT break, NOT a value fix -- live-discovered while proving
+    """The declared-divergence proof for the zero-row-average NaN break
+    (originally a WIRE-FORMAT break; CHAOS-4563 retired the Go side of it
+    into a declared VALUE divergence -- live-discovered while proving
     CHAOS-4527, filed separately; see module doc comment, divergence 2).
     The ORIGINAL single-period fixture: current week only, prior week
     deliberately left empty for repo_metrics/hotspots/complexity, no
     ai_governance data either side (isolating this divergence with no
     divergence-1 noise).
 
-    Asserts TWO things independently, not one inference from the other:
-    (a) Go's response carries GraphQL errors at exactly the expected
-    paths, and (b) Python's ACTUAL wire behavior -- encoding the exact
-    same response envelope with stdlib ``json.dumps``, precisely what
-    ``strawberry/http/base.py:54-55`` does to build the real HTTP body --
-    succeeds and contains a literal ``NaN`` token, proving Python does
-    not error here, it silently emits non-compliant JSON.
+    Post-CHAOS-4563 this test's shape matches
+    ``test_dual_run_ai_governance_fix_is_a_declared_divergence`` above:
+    assert a CLEAN Go response (the known_count guard means the zero-row
+    prior-period average never reaches gqlgen's marshaler as NaN), assert
+    the four guarded metrics' concrete delta.priorValue on the Go side,
+    run the comparator, and confirm the mismatch is CONFINED to those
+    four metrics' delta sub-objects -- never a MATCH (would mean
+    CHAOS-4563's guard did not take effect) and never a stray mismatch
+    elsewhere (the guard, or this fixture, touching something it should
+    not have).
+
+    Independently, this also still proves Python's ACTUAL wire behavior
+    for the un-guarded side -- encoding the same response envelope with
+    stdlib ``json.dumps``, precisely what ``strawberry/http/base.py:54-55``
+    does to build the real HTTP body -- succeeds and contains a literal
+    ``NaN`` token: the GO-ONLY ruling means this PR cannot and does not
+    change Python's own non-compliant-JSON behavior.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
@@ -1265,37 +1333,40 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
         _delete_org_rows(sink, org_id)
         sink.close()
 
-    # (a) Go: real GraphQL errors, at exactly the expected paths -- the
-    # risk section's first three metrics (hotspot_risk_score,
-    # ownership_concentration, complexity_per_kloc) and the reliability
-    # section's change_failure_rate.
-    assert "errors" in go_payload, (
-        "expected Go to surface real GraphQL errors for the zero-row "
-        f"prior-period average case, got a clean response: {go_payload}"
+    # (a) Go: a CLEAN response -- CHAOS-4563's known_count guard means the
+    # zero-row prior-period average no longer reaches gqlgen's marshaler
+    # as NaN. An error here means the guard regressed to the
+    # pre-CHAOS-4563 behaviour this PR exists to retire.
+    assert "errors" not in go_payload, (
+        "expected a clean Go response under CHAOS-4563's known_count "
+        f"guard, got GraphQL errors: {go_payload}"
     )
-    error_paths = [tuple(str(p) for p in e["path"]) for e in go_payload["errors"]]
-    risk_paths = [
-        p for p in error_paths if p[1] == "sections" and p[2] == str(RISK_SECTION_INDEX)
-    ]
-    assert len(risk_paths) >= 3, (
-        f"expected errors at all three risk-section metrics (indices "
-        f"0,1,2 -- hotspot_risk_score/ownership_concentration/"
-        f"complexity_per_kloc), got {error_paths}"
-    )
-    reliability_paths = [
-        p
-        for p in error_paths
-        if p[1] == "sections" and p[2] == str(RELIABILITY_SECTION_INDEX)
-    ]
-    assert reliability_paths, (
-        f"expected an error at the reliability section's "
-        f"change_failure_rate metric, got {error_paths}"
+    go_sections = go_payload["data"]["operatingReview"]["sections"]
+    for i in RISK_GUARDED_METRIC_INDICES:
+        prior_value = go_sections[RISK_SECTION_INDEX]["metrics"][i]["delta"][
+            "priorValue"
+        ]
+        assert prior_value == 0.0, (
+            f"expected the known_count guard to nil the zero-row "
+            f"prior-period row at risk metric index {i}, then avgF's "
+            f"empty-average-is-0.0 fallback (operatingreview.go:232) to "
+            f"surface a finite 0.0 on the wire, got {prior_value!r} at "
+            f"sections[{RISK_SECTION_INDEX}].metrics[{i}].delta.priorValue"
+        )
+    reliability_prior_value = go_sections[RELIABILITY_SECTION_INDEX]["metrics"][
+        RELIABILITY_GUARDED_METRIC_INDEX
+    ]["delta"]["priorValue"]
+    assert reliability_prior_value == 0.0, (
+        "expected the known_count guard's finite-0.0 fallback at the "
+        f"reliability section's change_failure_rate, got "
+        f"{reliability_prior_value!r}"
     )
 
     # (b) Python: encode the SAME response envelope the real production
     # endpoint would build, through the SAME encoder
     # (strawberry/http/base.py:54-55's json.dumps), and prove it succeeds
-    # with a literal NaN token rather than raising.
+    # with a literal NaN token rather than raising -- the GO-ONLY ruling
+    # means this side is untouched by CHAOS-4563 and must still diverge.
     baseline = _python_response_snapshot(python_review)
     encoded = json.dumps(baseline.data)
     assert "NaN" in encoded, (
@@ -1313,10 +1384,69 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     # command's output).
     reparsed = json.loads(encoded)
     assert reparsed is not None
+    # Directly on the Python dataclass too (not just the encoded string):
+    # the guarded metrics' prior_value is a real float NaN, not None --
+    # Python's un-guarded _avg has no known_count concept to null it out.
+    risk = _section(python_review, "risk")
+    for i in RISK_GUARDED_METRIC_INDICES:
+        assert math.isnan(risk.metrics[i].delta.prior_value), (
+            f"expected Python's un-guarded _avg to still produce NaN at "
+            f"risk metric index {i}'s delta.prior_value, got "
+            f"{risk.metrics[i].delta.prior_value!r} -- if this fails, "
+            f"CHAOS-4534/CHAOS-4563's declared divergence needs revisiting"
+        )
+    reliability = _section(python_review, "reliability")
+    assert math.isnan(
+        reliability.metrics[RELIABILITY_GUARDED_METRIC_INDEX].delta.prior_value
+    ), "expected Python's un-guarded change_failure_rate prior_value to be NaN"
+
+    # (c) The comparator: expect a MISMATCH confined EXACTLY to the four
+    # guarded metrics' delta sub-objects. A MATCH here would mean
+    # CHAOS-4563's guard did not take effect on the Go side (Go would
+    # have to be emitting NaN too, which gqlgen cannot even marshal); a
+    # stray mismatch elsewhere means the guard (or this fixture) touched
+    # something it should not have.
+    candidate = _go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
 
     await _record_dual_run_proof(
         registry_postgres["async"],
         document_digest=document_digest,
-        terminal_state="unsupported",
+        terminal_state=comparison.terminal_state,
         org_id=org_id,
+    )
+
+    assert not comparison.is_match, (
+        "expected a MISMATCH -- a MATCH here means CHAOS-4563's "
+        "known_count guard did not take effect (Go would have to be "
+        f"computing NaN too), which is itself a defect: "
+        f"findings={comparison.findings}"
+    )
+
+    mismatch_findings = [f for f in comparison.findings if f.kind == "mismatch"]
+    assert mismatch_findings, "expected at least one mismatch finding"
+
+    stray = [
+        f
+        for f in mismatch_findings
+        if not f.path.startswith(GUARDED_DELTA_PATH_PREFIXES)
+    ]
+    assert not stray, (
+        f"mismatch findings outside the four guarded metrics' delta "
+        f"sub-objects -- the guard (or this fixture) leaked into fields "
+        f"it should not have touched: {stray}"
+    )
+
+    covered = {
+        prefix: any(
+            f.path == f"{prefix}.{REQUIRED_GUARDED_SUFFIX}" for f in mismatch_findings
+        )
+        for prefix in GUARDED_DELTA_PATH_PREFIXES
+    }
+    assert all(covered.values()), (
+        f"expected ALL FOUR guarded metrics to actually diverge at "
+        f"delta.{REQUIRED_GUARDED_SUFFIX} (the one sub-field guaranteed "
+        f"to differ regardless of this fixture's concrete numbers -- "
+        f"Python's NaN never equals Go's finite 0.0), got "
+        f"coverage={covered} findings={mismatch_findings}"
     )

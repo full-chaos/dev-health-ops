@@ -902,6 +902,15 @@ func coordinatorPosture() RolePosture {
 			{"worker_job_routes", false, true, false},
 			{"scheduled_jobs", false, true, false},
 			{"scheduled_sync_occurrences", true, true, false},
+			// sync_manual_triggers (CHAOS-4602): SELECT-only. This table's
+			// only writer is Python's create_sync_execution_trigger, on its
+			// own separate application DB login -- not this Go role system
+			// at all. The coordinator only ever reads it, joined by
+			// occurrence_id, to learn the mode/BackfillSelector override for
+			// a manual/backfill occurrence before materializing it
+			// (loadMaterializationPlan). No Go process ever inserts,
+			// updates, or deletes a row here.
+			{"sync_manual_triggers", false, false, false},
 			{"fixed_schedule_occurrences", true, true, false},
 			// The fixed-schedule report producer (internal/scheduler/fixed/reports.go)
 			// runs entirely on the coordinator pool, so every table its SQL touches

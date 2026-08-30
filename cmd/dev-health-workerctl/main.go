@@ -35,6 +35,7 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -579,6 +580,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchJobRoutes(ctx, runtime, args[1:], stdout, stderr)
 	case "providersync":
 		return dispatchProvidersync(ctx, runtime, args[1:], stdout, stderr)
+	case "sync-dispatch-outbox":
+		return dispatchSyncDispatchOutbox(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -1364,6 +1367,69 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	}
 	return writeResult(stdout, stderr, map[string]any{
 		"retire_stale_linear_project_ownership": outcome,
+	})
+}
+
+// dispatchSyncDispatchOutbox handles the `sync-dispatch-outbox` verb group.
+func dispatchSyncDispatchOutbox(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	switch args[0] {
+	case "close-backlog":
+		return dispatchSyncDispatchOutboxCloseBacklog(ctx, runtime, args[1:], stdout, stderr)
+	default:
+		return writeError(stderr, "invalid_request")
+	}
+}
+
+// dispatchSyncDispatchOutboxCloseBacklog handles `sync-dispatch-outbox
+// close-backlog` (CHAOS-4583): the one-time/as-needed operator verb that
+// drains the EXISTING sync_dispatch_outbox backlog TerminalOutboxClose's own
+// reconciler stage only prevents from growing further (it runs forward, one
+// bounded pass per tick, on newly-arriving rows). Mirrors `providersync
+// retire-stale-linear-project-ownership`'s shape (--dry-run reports without
+// writing, authorize before anything is attempted) but runs against Postgres
+// via the coordinator pool -- the same pool TerminalOutboxClose itself
+// requires, see its doc comment -- rather than ClickHouse, and is not
+// org-scoped: it only closes rows whose own domain state already proves the
+// close safe, the same unscoped bounded pass the production reconciler
+// already runs every tick.
+func dispatchSyncDispatchOutboxCloseBacklog(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("sync-dispatch-outbox close-backlog")
+	dryRun := flags.Bool("dry-run", false, "report the exact backlog size per kind that a real pass would close, without writing anything")
+	batchSize := flags.Int("batch-size", 100, "rows closed per kind per pass when not --dry-run (1-100); a real run loops passes until the backlog is drained or the pass cap is hit")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	// Bounds-checked here rather than left to ReapTerminalOutboxBacklog's own
+	// validation: that call is unwrapped syncreconciler.ErrInvalidConfiguration,
+	// not a *joboperator.ServiceError, so writeServiceError would otherwise
+	// fall through to the generic "operator_request_failed" instead of the
+	// "invalid_request" every other malformed-flag path in this binary reports.
+	if *batchSize < 1 || *batchSize > 100 {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	// Authorized BEFORE anything Postgres-related is even attempted -- same
+	// gate the providersync cleanup verbs use for the same class of action: a
+	// workers:read-only credential must never reach this write.
+	if err := runtime.service.AuthorizeSyncDispatchOutboxClose(ctx, runtime.principal, "*"); err != nil {
+		return writeServiceError(stderr, err)
+	}
+	if runtime.pools == nil || runtime.pools.Coordinator == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	outcome, err := syncreconciler.ReapTerminalOutboxBacklog(ctx, runtime.pools.Coordinator, time.Now().UTC(), *batchSize, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"sync_dispatch_outbox_close_backlog": outcome,
 	})
 }
 

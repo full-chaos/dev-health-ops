@@ -141,6 +141,7 @@ type MutationPipeline struct {
 	publish      AtLeastOncePublisher
 	postSync     PostSyncHandoff
 	sweep        UnreclaimableSweepStepper
+	outboxClose  TerminalOutboxCloseStepper
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
@@ -166,9 +167,14 @@ func NewMutationPipeline(
 	publish AtLeastOncePublisher,
 	postSync PostSyncHandoff,
 	sweep UnreclaimableSweepStepper,
+	outboxClose TerminalOutboxCloseStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
-	if repair == nil || terminal == nil || materializer == nil || kernel == nil || observer == nil || !config.valid() {
+	// outboxClose is REQUIRED, unlike sweep -- see TerminalOutboxCloseStepper's
+	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
+	// the way the sweep's terminalization did.
+	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
+		observer == nil || outboxClose == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -180,6 +186,7 @@ func NewMutationPipeline(
 		publish:      publish,
 		postSync:     postSync,
 		sweep:        sweep,
+		outboxClose:  outboxClose,
 		config:       config,
 		stages:       newStageTelemetry(),
 	}
@@ -239,7 +246,7 @@ var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
 var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
 
 // runStage bounds one stage call to its own budget instead of letting it
-// share the whole tick's envelope with its five siblings (CHAOS-4239), and
+// share the whole tick's envelope with its seven siblings (CHAOS-4239), and
 // records the outcome unconditionally: a stage that runs to completion inside
 // its budget still gets its duration recorded, so the gauge is never silently
 // empty for a healthy stage.
@@ -552,6 +559,27 @@ func (pipeline *MutationPipeline) Step(
 		}
 	}
 
+	// CHAOS-4583: closes a 'dispatched' outbox row once its owning domain
+	// state has itself gone terminal (see terminal_outbox_close.go's package
+	// doc). A read-adjacent safety net over largely disjoint state from lease
+	// repair and the kernel's claim-and-deliver path, so -- like sweep and
+	// terminal delivery repair above -- its failure is absorbed rather than
+	// aborting the rest of this tick's mutation work.
+	if !aborted {
+		var closed TerminalOutboxCloseResult
+		closeErr := pipeline.runStage(ctx, StageTerminalOutboxClose, func(stageCtx context.Context) error {
+			var stepErr error
+			closed, stepErr = pipeline.outboxClose.Step(stageCtx, now, limit)
+			return stepErr
+		})
+		if closeErr != nil && ctx.Err() != nil {
+			return recovered, closeErr
+		}
+		if closeErr == nil {
+			pipeline.stages.recordOutboxClosed(closed.ClosedByOutcome)
+		}
+	}
+
 	var materialized MaterializerResult
 	var materializerErr error
 	if !aborted {
@@ -757,6 +785,10 @@ func stageSQLState(err error) string {
 	if errors.As(err, &sweepErr) {
 		return sweepErr.sqlState
 	}
+	var outboxCloseErr terminalOutboxCloseStepError
+	if errors.As(err, &outboxCloseErr) {
+		return outboxCloseErr.sqlState
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code
@@ -818,6 +850,14 @@ type stageTelemetry struct {
 	// holds for every caller that branches on it -- this is additional,
 	// non-replacing classification surfaced only here, in metrics.
 	cancellations map[StageName]map[string]uint64
+
+	// outboxClosed is CHAOS-4583's own counter: lifetime sync_dispatch_outbox
+	// rows closed, keyed [kind][outcome] -> count. Unlike every other field on
+	// this struct (all keyed by StageName), this one is keyed by the outbox
+	// row's own kind -- there is exactly one stage (StageTerminalOutboxClose)
+	// but four kinds, and dev_health_sync_dispatch_outbox_closed_total's own
+	// HELP text promises a {kind,outcome} breakdown, not a per-stage one.
+	outboxClosed map[string]map[string]uint64
 }
 
 func newStageTelemetry() stageTelemetry {
@@ -835,7 +875,45 @@ func newStageTelemetry() stageTelemetry {
 		overruns:      make(map[StageName]uint64, len(orderedStages)),
 		histograms:    histograms,
 		cancellations: make(map[StageName]map[string]uint64, len(orderedStages)),
+		outboxClosed:  make(map[string]map[string]uint64, 4),
 	}
+}
+
+// recordOutboxClosed accumulates one pass's CHAOS-4583 closes into the
+// lifetime counter. closedThisPass is [kind][outcome] -> count for the pass
+// that just committed; a nil or empty map (nothing closed) is a valid no-op.
+func (telemetry *stageTelemetry) recordOutboxClosed(closedThisPass map[string]map[string]int64) {
+	if len(closedThisPass) == 0 {
+		return
+	}
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	for kind, byOutcome := range closedThisPass {
+		total := telemetry.outboxClosed[kind]
+		if total == nil {
+			total = make(map[string]uint64, len(byOutcome))
+			telemetry.outboxClosed[kind] = total
+		}
+		for outcome, count := range byOutcome {
+			if count > 0 {
+				total[outcome] += uint64(count)
+			}
+		}
+	}
+}
+
+func (telemetry *stageTelemetry) outboxClosedSnapshot() map[string]map[string]uint64 {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	snapshot := make(map[string]map[string]uint64, len(telemetry.outboxClosed))
+	for kind, byOutcome := range telemetry.outboxClosed {
+		copied := make(map[string]uint64, len(byOutcome))
+		for outcome, count := range byOutcome {
+			copied[outcome] = count
+		}
+		snapshot[kind] = copied
+	}
+	return snapshot
 }
 
 // markRunning records that a stage's call has started. Call this BEFORE
@@ -1088,6 +1166,30 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 		for _, sqlstate := range sqlstates {
 			fmt.Fprintf(&text, "dev_health_reconciler_stage_cancelled_total{stage=%q,sqlstate=%q} %d\n",
 				name, sqlstate, byState[sqlstate])
+		}
+	}
+	// CHAOS-4583: rows this pipeline has terminal-closed, lifetime, broken out
+	// by outbox kind and by the owning domain state's terminal value that
+	// licensed the close. Keyed by (kind, outcome) rather than by StageName --
+	// there is one stage (terminal_outbox_close) but four outbox kinds, and
+	// this counter's whole purpose is telling them apart.
+	outboxClosed := pipeline.stages.outboxClosedSnapshot()
+	text.WriteString("# HELP dev_health_sync_dispatch_outbox_closed_total sync_dispatch_outbox rows terminal-closed by the CHAOS-4583 reconciler step: a 'dispatched' row whose owning domain state (sync_runs, or for reference_discovery the sync_run_reference_discoveries ledger) had itself already reached a terminal outcome. Labeled by outbox kind and by that owning outcome.\n# TYPE dev_health_sync_dispatch_outbox_closed_total counter\n")
+	kinds := make([]string, 0, len(outboxClosed))
+	for kind := range outboxClosed {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		byOutcome := outboxClosed[kind]
+		outcomes := make([]string, 0, len(byOutcome))
+		for outcome := range byOutcome {
+			outcomes = append(outcomes, outcome)
+		}
+		sort.Strings(outcomes)
+		for _, outcome := range outcomes {
+			fmt.Fprintf(&text, "dev_health_sync_dispatch_outbox_closed_total{kind=%q,outcome=%q} %d\n",
+				kind, outcome, byOutcome[outcome])
 		}
 	}
 	_, err := io.WriteString(output, text.String())

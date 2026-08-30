@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -563,8 +564,9 @@ func seedProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		  VALUES ($1, 'org-acme', $2, 'commits', '{"include_archived":false}')`,
 			[]any{uuid.NewString(), firstIntegrationID}},
 		{`INSERT INTO public.sync_runs
-		  (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source)
-		  VALUES ($1, 'org-acme', $2, 'running', $3, 'safe-fingerprint', 'integration_credential')`,
+		  (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
+		   total_units, completed_units, failed_units)
+		  VALUES ($1, 'org-acme', $2, 'running', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0)`,
 			[]any{firstRunID, firstIntegrationID, firstCredentialID}},
 		{`INSERT INTO public.sync_run_units (
 			id, org_id, sync_run_id, integration_id, source_id, provider,
@@ -601,6 +603,108 @@ const workItemsFamilyUnitID = "66666666-6666-4666-8666-666666666666"
 // PostgresRepository.Complete -- against the real completion SQL, and asserts
 // the observable effect: the unit is terminal and all five alias watermarks
 // carry the window's close.
+// TestPostgresRollupCountsBothUnitsUnderConcurrentCompletion pins CHAOS-4559
+// codex round 1 P1: bumpSyncRunRollupSQL's two COUNT(*) subqueries reference
+// only the run id, so Postgres plans them as InitPlans -- evaluated ONCE
+// per statement, using the snapshot at statement start, not a fresh one per
+// row. Without locking the run row FIRST (in its own statement), a second
+// concurrent Complete blocked on the first's row lock would resume and
+// overwrite with its own STALE pre-wait count, silently dropping the first
+// unit's contribution until finalization recomputes unconditionally. Two
+// units of the SAME run are completed from two goroutines, synchronized to
+// start as close together as possible so their transactions are likely to
+// contend for the sync_runs row lock; the final rollup must count both
+// regardless of which one actually won the lock first.
+func TestPostgresRollupCountsBothUnitsUnderConcurrentCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+
+	secondUnitID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_run_units (
+	id, org_id, sync_run_id, integration_id, source_id, provider,
+	dataset_key, cost_class, mode, since_at, before_at, status,
+	processor_flags, updated_at
+) VALUES (
+	$1, 'org-acme', $2, $3, $4, 'github', 'commits', 'medium',
+	'incremental', '2026-07-22T12:00:00Z', '2026-07-23T12:00:00Z',
+	'dispatching', '{"sync_git":true,"sync_commits":true}', NOW()
+)`, secondUnitID, firstRunID, firstIntegrationID, firstSourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	firstClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondClaim, err := repository.Claim(ctx, ClaimRequest{
+		UnitID: secondUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+		LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, claim := range []Claim{firstClaim, secondClaim} {
+		claim := claim
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			completedAt := now.Add(time.Second)
+			errs <- repository.Complete(ctx, claim, map[string]any{"records": 1}, nil, now, completedAt)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Complete: %v", err)
+		}
+	}
+
+	var completedUnits, failedUnits, totalUnits int
+	if err := pool.QueryRow(ctx, `
+SELECT completed_units, failed_units, total_units FROM public.sync_runs WHERE id = $1`,
+		firstRunID).Scan(&completedUnits, &failedUnits, &totalUnits); err != nil {
+		t.Fatal(err)
+	}
+	if completedUnits != 2 || failedUnits != 0 {
+		t.Fatalf("sync_runs rollup after two concurrent completions: completed_units=%d failed_units=%d, want 2/0 (a race would drop one)",
+			completedUnits, failedUnits)
+	}
+}
+
 func TestPostgresCompleteLandsGitHubWorkItemsFamilyWatermarks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()

@@ -287,6 +287,21 @@ WHERE unit.id = $1`, firstUnitID).Scan(&status, &persistedWatermark); err != nil
 			"unit's window end and must be clamped to it)",
 			status, persistedWatermark, wantWatermark, watermark)
 	}
+	// CHAOS-4559: sync_runs.completed_units/failed_units used to be written
+	// only by finalize_sync_run's own recompute -- Complete had no effect on
+	// them at all -- so a run mid-dispatch read 0/0 no matter how many of its
+	// units had already succeeded. The run is still 'running' here (only one
+	// of its units has completed), so this fails on the pre-fix behavior.
+	var runCompletedUnits, runFailedUnits int
+	if err := pool.QueryRow(ctx, `
+SELECT completed_units, failed_units FROM public.sync_runs WHERE id = $1`,
+		firstRunID).Scan(&runCompletedUnits, &runFailedUnits); err != nil {
+		t.Fatal(err)
+	}
+	if runCompletedUnits != 1 || runFailedUnits != 0 {
+		t.Fatalf("sync_runs rollup after one unit completed: completed_units=%d failed_units=%d, want 1/0",
+			runCompletedUnits, runFailedUnits)
+	}
 	var finalizeCount int
 	var persistedClaimToken string
 	var persistedClaimExpiry, availableAt time.Time

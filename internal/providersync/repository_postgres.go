@@ -183,6 +183,9 @@ func (repository *PostgresRepository) Complete(
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+		return ErrInvalidConfiguration
+	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
 	// the persisted row -- not `encoded` -- with the identical predicate the
@@ -279,6 +282,9 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+		return ErrInvalidConfiguration
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -533,6 +539,9 @@ func (repository *PostgresRepository) failTx(
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
+	}
+	if _, err := tx.Exec(ctx, bumpSyncRunRollupSQL, claim.SyncRunID); err != nil {
+		return ErrInvalidConfiguration
 	}
 	if category == ProviderDatasetUnavailableCategory {
 		if _, err := tx.Exec(ctx, markDatasetUnavailableSQL,
@@ -958,6 +967,35 @@ WHERE unit.id = $1::uuid
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
+
+// bumpSyncRunRollupSQL keeps sync_runs.completed_units/failed_units live
+// (CHAOS-4559). Before this, those columns were written only by
+// finalize_sync_run's own aggregate recompute and by the early-termination
+// paths (dispatch_denial.go, feature_disabled_termination.go) -- never by the
+// normal per-unit success/failure commit here, so a run mid-dispatch read
+// 0/0 no matter how many of its units had already finished. Multiple readers
+// (the admin sync-run API, the web SyncJobHistory/SyncProgressBar views)
+// consume that column directly with no live-unit fallback, so the fix
+// belongs at the source of truth rather than in each reader.
+//
+// This recomputes both counters from a fresh COUNT rather than incrementing,
+// which is what makes it safe to call on every terminal commit: a unit's
+// status is mutable (dispatching -> running -> failed/success, with retries
+// cycling back through dispatching/running before a FINAL terminal stamp),
+// so a blind "+1" could double-count a unit that was previously counted
+// under a different terminal status. COUNT(*) WHERE status=X is idempotent
+// no matter how many times this call happens to run for the same unit.
+const bumpSyncRunRollupSQL = `
+UPDATE public.sync_runs
+SET completed_units = (
+      SELECT count(*) FROM public.sync_run_units
+      WHERE sync_run_id = $1 AND status = 'success'
+    ),
+    failed_units = (
+      SELECT count(*) FROM public.sync_run_units
+      WHERE sync_run_id = $1 AND status = 'failed'
+    )
+WHERE id = $1`
 
 // markDatasetUnavailableSQL surfaces a repeated provider_dataset_unavailable
 // terminalization onto the IntegrationDataset row the owner-facing API

@@ -67,6 +67,25 @@ spec:
           envFrom:
             - configMapRef:
                 name: dev-health-config
+            # CHAOS-4587 (codex delta round 2/3, P1): migration 067 checks
+            # OPERATIONAL_ORDERING_CONTRACT (defined in this ConfigMap, see
+            # go-workers.yaml) to decide whether to apply the
+            # ordering-contract cutover -- without this reference, bumping
+            # the ConfigMap's value at cutover would move every go-* worker
+            # but never this Job, so 067 would silently defer while workers
+            # started against a still-contract-1 table. Reuses the same
+            # go-worker ConfigMap deliberately (not the shared
+            # dev-health-config one) so there is exactly one place to bump
+            # this value, not two that could drift. `optional: true` because
+            # this file's own header documents applying it standalone
+            # ("kubectl apply -k deploy/kubernetes/ # or apply this file
+            # alone") on a fresh/partial cluster where go-workers.yaml --
+            # and therefore this ConfigMap -- may not exist yet; a required
+            # ref there would leave the Job in CreateContainerConfigError
+            # and no migrations would run at all.
+            - configMapRef:
+                name: dev-health-go-worker-config
+                optional: true
             - secretRef:
                 name: dev-health-migration-secrets
           env:

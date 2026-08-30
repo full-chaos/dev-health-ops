@@ -76,6 +76,14 @@ _module(
     Integration=_Placeholder,
     IntegrationDataset=_Placeholder,
     IntegrationSource=_Placeholder,
+    # CHAOS-4582: planner.py's non-project-jira guard looks up a source's
+    # linked SyncConfiguration by id when it needs to disambiguate a legacy
+    # row. No oracle case ever sets metadata_ (the stub IntegrationSource
+    # has no such attribute at all), so that lookup path is never actually
+    # exercised here -- this placeholder only needs to exist so the plain
+    # `from dev_health_ops.models import (..., SyncConfiguration, ...)` at
+    # import time resolves against this stub module.
+    SyncConfiguration=_Placeholder,
     SyncRun=_Placeholder,
     SyncRunMode=_SyncRunMode,
     SyncRunReferenceDiscovery=_Placeholder,

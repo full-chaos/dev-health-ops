@@ -555,8 +555,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "team_autoimport_linear.py": {
         "category": "a",
-        "evidence": "imported by team_autoimport.py; ported CHAOS-4431 (`27bef7286`, Done) — the previously-unwired Go route (CHAOS-3716) is now registered in `nativeTeamCatalogCollectors`, so a Linear sync run's post-sync/reference-discovery dispatch never calls the bridge. CHAOS-4498 (this PR): the backfill path no longer calls `run_team_autoimport_strict` directly either — same routing story as `team_autoimport_github.py` above. `populate()` in this file is no longer reachable from any live production or operator call path; deletion is CHAOS-4435's scope, now unblocked",
-        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed)",
+        "evidence": "imported by team_autoimport.py; ported CHAOS-4431 (`27bef7286`, Done) — the previously-unwired Go route (CHAOS-3716) is now registered in `nativeTeamCatalogCollectors`, so a Linear sync run's post-sync/reference-discovery dispatch never calls the bridge. CHAOS-4498 (this PR): the backfill path no longer calls `run_team_autoimport_strict` directly either — same routing story as `team_autoimport_github.py` above. `populate()` in this file is no longer reachable from any live production or operator call path. CHAOS-4555 (2026-08-30): unlike github/gitlab, this unreachability is no longer just an emergent property of caller wiring — `team_autoimport._resolve_populator` (`team_autoimport.py:103-111`) refuses provider=linear outright, so no current or future caller (of `run_team_autoimport`/`run_team_autoimport_strict`, or of `_resolve_populator` directly) can import this module at all; deletion is CHAOS-4435's scope, now unblocked",
+        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed, reachability closed by CHAOS-4555)",
     },
     "team_autoimport.py": {
         "category": "a",

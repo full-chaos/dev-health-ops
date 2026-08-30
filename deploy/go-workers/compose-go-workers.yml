@@ -271,6 +271,13 @@ services:
       WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
       WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: ${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}
       DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      # CHAOS-4587: this queues the `sync` group, which never itself reads
+      # operational_incidents, but every long-running Go binary in this
+      # overlay is wired identically so a future queue reassignment (or the
+      # registry-level test in tests/test_compose_config.py) cannot silently
+      # leave one unset. Omitted defaults to contract 1 (rollout-safe); see
+      # deploy/go-workers/README.md's rollout note.
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
     depends_on:
       go-worker-migrate:
         condition: service_completed_successfully
@@ -321,6 +328,13 @@ services:
       WORKER_DATABASE_MAX_CONNS: ${WORKER_DATABASE_MAX_CONNS:-2}
       WORKER_COORDINATOR_DATABASE_MAX_CONNS: ${WORKER_COORDINATOR_DATABASE_MAX_CONNS:-2}
       DEV_HEALTH_LOG_LEVEL: ${LOG_LEVEL:-info}
+      # CHAOS-4587: the reconciler relays worker_job_outbox rows and its
+      # provider-sync effects touch canonical operational tables
+      # (internal/providersync/pagerduty_services_effects_clickhouse.go),
+      # which refuse to start against a contract-2 (post-067) table without
+      # this set. Omitted defaults to contract 1 (rollout-safe); see
+      # deploy/go-workers/README.md's rollout note.
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
     depends_on:
       go-worker-migrate:
         condition: service_completed_successfully

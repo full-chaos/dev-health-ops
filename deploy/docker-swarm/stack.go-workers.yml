@@ -58,6 +58,12 @@ x-go-worker: &go-worker
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
     WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
     AUTO_RUN_MIGRATIONS: "false"
+    # CHAOS-4587: mirrors compose.go-workers.yml's go-worker-env-base -- every
+    # process here reads a canonical operational table through the
+    # ordering-contract guard and refuses to start against a contract-2
+    # (post-067) table without this set. Omitted defaults to contract 1
+    # (rollout-safe); see deploy/go-workers/README.md's rollout note.
+    OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
   networks: [dev-health-internal]
   deploy: &go-worker-deploy
     mode: replicated

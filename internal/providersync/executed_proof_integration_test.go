@@ -69,8 +69,9 @@ func TestQueryExecutedProofEvidenceDistinguishesRealFromEmptySuccess(t *testing.
 	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO public.sync_runs
-		 (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source)
-		 VALUES ($1, 'org-acme', $2, 'success', $3, 'safe-fingerprint', 'integration_credential')`,
+		 (id, org_id, integration_id, status, credential_id, credential_fingerprint, auth_source,
+		  total_units, completed_units, failed_units)
+		 VALUES ($1, 'org-acme', $2, 'success', $3, 'safe-fingerprint', 'integration_credential', 0, 0, 0)`,
 		runID, integrationID, credentialID,
 	); err != nil {
 		t.Fatal(err)

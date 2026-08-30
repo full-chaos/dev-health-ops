@@ -61,6 +61,22 @@ _CREDENTIALS = frozenset(
 # any Go binary, so it is not part of the worker configuration surface.
 _NON_WORKER_ENV = frozenset({"AUTO_RUN_MIGRATIONS"})
 
+# CHAOS-4587: OPERATIONAL_ORDERING_CONTRACT IS read directly by Go binaries
+# (internal/jobs/metrics/remaining/dora_native_clickhouse.go,
+# internal/providersync/pagerduty_services_effects_clickhouse.go via
+# os.LookupEnv), but deliberately outside internal/platform/config's flag
+# registry -- it gates admission against the *stored ClickHouse table
+# contract*, a deploy-time/data-migration coordination concern (see
+# .github/docs-legacy/architecture/canonical-operational-model.md
+# "Ordering-contract rollout and recovery"), not a per-process runtime
+# behavior a flag would suit. Registering it as a flag would still leave the
+# same value needing to travel from the deploy layer's `${...:-2}` default
+# into a flag's own default, without changing the CHAOS-4020 typo-safety
+# property this test enforces for the ~85-variable surface that motivated
+# it. Carved out like _NON_WORKER_ENV, for a different reason: this key is
+# CHAOS-4020-surface-exempt, not Go-binary-exempt.
+_ORDERING_CONTRACT_ENV = frozenset({"OPERATIONAL_ORDERING_CONTRACT"})
+
 
 def _go_flag_names() -> frozenset[str]:
     """Every long flag the option registry offers, including aliases."""
@@ -185,7 +201,7 @@ def test_compose_surfaces_keep_only_credentials_in_the_environment(
     assert services, f"{path.name} declares no Go worker services"
     for name, service in services.items():
         environment = set(service.get("environment") or {})
-        leaked = environment - _CREDENTIALS - _NON_WORKER_ENV
+        leaked = environment - _CREDENTIALS - _NON_WORKER_ENV - _ORDERING_CONTRACT_ENV
         assert not leaked, (
             f"{path.name}:{name} still configures {sorted(leaked)} through the "
             "environment; pass them as flags in command: instead"
@@ -207,7 +223,7 @@ def test_kubernetes_workers_keep_only_credentials_in_inline_env() -> None:
     for document in documents:
         container = document["spec"]["template"]["spec"]["containers"][0]
         inline = {item["name"] for item in container.get("env") or []}
-        leaked = inline - _CREDENTIALS - _NON_WORKER_ENV
+        leaked = inline - _CREDENTIALS - _NON_WORKER_ENV - _ORDERING_CONTRACT_ENV
         assert not leaked, (
             f"{document['metadata']['name']} still configures {sorted(leaked)} "
             "through inline env; pass them as args instead"

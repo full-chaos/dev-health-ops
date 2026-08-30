@@ -615,6 +615,9 @@ class _FakeSprintJiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         yield {"id": 81}
         yield {"id": 82}
@@ -792,6 +795,9 @@ class _FakeForbiddenSprintJiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         yield {"id": 81}
 
@@ -880,6 +886,9 @@ class _FakeBoardListing400JiraClient:
         self.org_id = org_id
         self.closed = False
 
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "software"}
+
     def iter_boards(self, *, project_key: str):
         response = requests.Response()
         response.status_code = 400
@@ -945,6 +954,210 @@ def test_jira_populate_reraises_a_board_listing_400_under_strict_reference_disco
     sink = _fake_sink()
 
     with pytest.raises(requests.HTTPError):
+        team_autoimport_jira.populate(
+            org_id="org-1",
+            credentials={
+                "email": "jira@example.com",
+                "api_token": "jira-token",
+                "base_url": "https://jira.example.com",
+            },
+            scope={
+                "mode": "sync_reference_discovery",
+                "strict_reference_discovery": True,
+            },
+            sink=sink,
+        )
+
+
+class _FakeServiceDeskAndSoftwareJiraClient:
+    """project_key='SUP' is a Service Management project (no Agile boards
+    at all); project_key='OPS' is a Software project and lists boards
+    normally. CHAOS-4575 (reproduced live on org 70d529e0, 2026-08-30): a
+    non-software project must not fail every OTHER project's reference
+    discovery, let alone the whole org's -- and ``iter_boards`` must never
+    even be CALLED for it (asserted below by raising if it is)."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def get_project(self, *, project_key: str):
+        return {
+            "SUP": {"projectTypeKey": "service_desk"},
+            "OPS": {"projectTypeKey": "software"},
+        }[project_key]
+
+    def iter_boards(self, *, project_key: str):
+        if project_key == "SUP":
+            raise AssertionError(
+                "board listing must not be called for a non-software project"
+            )
+        yield {"id": 91}
+
+    def iter_board_sprints(self, *, board_id: int):
+        yield {"id": 601, "name": "Sprint 1", "state": "active"}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_skips_board_discovery_for_a_non_software_project_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-4575: the Software Agile Boards API answers a 400 ("You must
+    have the browse project permission to view this project.") for ANY
+    non-software project regardless of credential access -- live-verified
+    (chris's personal API token has full-workspace access; ``GET
+    /rest/api/3/project/SUP`` on that same credential returned
+    ``projectTypeKey: "service_desk"``). Gating on project TYPE (not that
+    400's misleading text) must skip just this project's board discovery,
+    not abort strict reference discovery for the entire org (live evidence:
+    org 70d529e0's Jira sync failed 100% of the time over exactly this, for
+    a single Service Management project named 'SUP')."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="SUP",
+                name="Support",
+                associations={"project_keys": ["SUP"]},
+            ),
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            ),
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakeServiceDeskAndSoftwareJiraClient
+    )
+
+    sink = _fake_sink()
+
+    summary = team_autoimport_jira.populate(
+        org_id="org-1",
+        credentials={
+            "email": "jira@example.com",
+            "api_token": "jira-token",
+            "base_url": "https://jira.example.com",
+        },
+        scope={"mode": "sync_reference_discovery", "strict_reference_discovery": True},
+        sink=sink,
+    )
+
+    # The whole populate must succeed (no raise): OPS's board/sprint still
+    # land, SUP's boards are simply absent rather than poisoning the run.
+    assert summary["teams_imported"] == 2
+    assert set(summary["reference_team_keys"]) == {"SUP", "OPS"}
+    assert summary["sprints_imported"] == 1
+    assert summary["reference_sprint_ids"] == ["601"]
+
+    # CHAOS-4575 (chris 19:37): the skip is BOARDS-only, not project-level --
+    # SUP still gets its project row and native team_project_ownership row,
+    # same as any other project. Board discovery being skipped for a
+    # service_desk project must never mean the project itself, or its
+    # ownership, silently disappears from the org's catalog.
+    assert ("org-1", "jira", "org-1:jira:SUP") in sink.projects
+    assert (
+        "org-1",
+        "jira",
+        "org-1:jira:SUP",
+        "SUP",
+        "native",
+    ) in sink.ownership
+
+
+class _FakeUnknownProjectTypeJiraClient:
+    """get_project returns a projectTypeKey this module does not recognize
+    (neither "software" nor a confirmed non-board-capable type)."""
+
+    def __init__(self, *, auth: object, org_id: str) -> None:
+        self.org_id = org_id
+        self.closed = False
+
+    def get_project(self, *, project_key: str):
+        return {"projectTypeKey": "some_future_jira_template"}
+
+    def iter_boards(self, *, project_key: str):
+        raise AssertionError(
+            "board listing must not be called for an unrecognized project type"
+        )
+        yield  # pragma: no cover - generator shape only
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_jira_populate_raises_on_an_unrecognized_project_type_under_strict_reference_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex review (CHAOS-4575, P2): an unrecognized or missing
+    projectTypeKey is not the same as a confirmed non-board-capable type.
+    Treating it as skippable could silently drop a real software project's
+    board/sprint data under strict discovery's guaranteed-complete-or-raise
+    contract -- only the explicit allowlist may be swallowed; anything else
+    must propagate."""
+
+    async def discover_jira(
+        self: object, email: str, api_token: str, url: str
+    ) -> list[DiscoveredTeam]:
+        return [
+            DiscoveredTeam(
+                provider_type="jira",
+                provider_team_id="OPS",
+                name="Ops Project",
+                associations={"project_keys": ["OPS"]},
+            )
+        ]
+
+    async def discover_members_jira_bulk(
+        self: object,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+    ) -> list[DiscoveredMember]:
+        return []
+
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamDiscoveryService, "discover_jira", discover_jira
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira.TeamMembershipService,
+        "discover_members_jira_bulk",
+        discover_members_jira_bulk,
+    )
+    monkeypatch.setattr(
+        team_autoimport_jira, "JiraClient", _FakeUnknownProjectTypeJiraClient
+    )
+
+    sink = _fake_sink()
+
+    with pytest.raises(RuntimeError, match="unrecognized Jira project type"):
         team_autoimport_jira.populate(
             org_id="org-1",
             credentials={

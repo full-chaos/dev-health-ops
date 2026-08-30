@@ -325,6 +325,7 @@ func pipelineWithSweep(t *testing.T, sweep UnreclaimableSweepStepper) *MutationP
 		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		sweep,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -673,6 +674,7 @@ func TestPipelineStepReportsAnUnavailableRunawayReport(t *testing.T) {
 		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -744,6 +746,7 @@ func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testi
 		staticSweep{result: UnreclaimableSweepResult{
 			Mode: SweepModeActive, Candidates: 6, Terminalized: 4,
 		}},
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -793,6 +796,7 @@ func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing
 		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -847,6 +851,7 @@ func TestPipelineStepCarriesSweepFiguresPastATerminalRepairFailure(t *testing.T)
 		staticSweep{result: UnreclaimableSweepResult{
 			Mode: SweepModeActive, Candidates: 3, Terminalized: 3,
 		}},
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -906,6 +911,7 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1016,6 +1022,7 @@ func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
 		AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
+		noopTerminalOutboxClose(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1072,6 +1079,7 @@ func TestTerminalRepairFailureStillDeliversTheReport(t *testing.T) {
 				AtLeastOncePublisher(func(contextT, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
 				PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 				nil,
+				noopTerminalOutboxClose(),
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {

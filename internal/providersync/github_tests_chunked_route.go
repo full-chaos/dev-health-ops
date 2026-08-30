@@ -610,6 +610,15 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
+	// A cursor already carrying aggregate overflow with no per-cause ledger
+	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
+	// round 3, P2): stamp the sentinel HERE, on the raw decoded shape,
+	// before this attempt's own marker-writing can add an unrelated cause
+	// and make the map merely non-empty rather than legacy-shaped -- see
+	// githubTestsLegacyReportOverflowSentinel.
+	if cursor.SkippedArtifactsOverflow > 0 && cursor.SkippedArtifactCauseOverflow == nil {
+		cursor.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
+	}
 	return cursor, nil
 }
 

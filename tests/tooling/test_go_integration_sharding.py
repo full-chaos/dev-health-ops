@@ -1174,7 +1174,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses.
     # None are integration-tagged.
     # 1279 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1280
+    #
+    # CHAOS-4592 codex review round 2 (P1): round 1's overflow-shortcut
+    # narrowing still shared ONE aggregate SkippedArtifactsOverflow int
+    # across every report_member cause, so it could not prove which cause
+    # actually overflowed -- one cause's overflow could wrongly excuse an
+    # unrelated unmarked cause, or a heavy run of the three original causes
+    # could permanently starve a later malformed/unreadable skip out of ever
+    # counting as covered. Added SkippedArtifactCauseOverflow (per-cause).
+    # No new top-level tests (extended the existing overflow test in place).
+    # 1280 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 codex review round 3 (P2): round 2's per-cause fix gated its
+    # legacy-cursor fallback on "causeOverflow has zero entries", which a
+    # walk straddling this exact deploy would break the instant its own
+    # post-upgrade marker-writing touched even one unrelated cause. Added
+    # githubTestsLegacyReportOverflowSentinel, stamped once at decode from
+    # the cursor's raw shape, to distinguish legacy-shaped provenance from
+    # "merely non-empty". Added 1 new ordinary top-level test in
+    # complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume.
+    # None are integration-tagged.
+    # 1280 -> 1281 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1281
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1191,7 +1213,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1280
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1281
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1252,7 +1274,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1280
+    assert len(selected_tests) == len(set(selected_tests)) == 1281
     assert set(selected_tests) == expected_tests
 
 

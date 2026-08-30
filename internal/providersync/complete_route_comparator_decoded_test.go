@@ -263,6 +263,12 @@ func TestGitHubTestsChunkedFinalMetadataWithholdsOnLegacyCursorWithoutMarkers(t 
 	// counter proves this binary's code path actually ran.
 	withOverflow := legacy
 	withOverflow.SkippedArtifactsOverflow = 1
+	// The sentinel is what decodeGitHubTestsChunkCursor would have stamped
+	// on exactly this raw shape (overflow>0, no per-cause ledger at all) --
+	// see githubTestsLegacyReportOverflowSentinel (CHAOS-4592 codex review
+	// round 3, P2). Constructing the cursor by hand here bypasses decode, so
+	// the fixture sets it explicitly to stay representative of production.
+	withOverflow.SkippedArtifactCauseOverflow = map[string]bool{githubTestsLegacyReportOverflowSentinel: true}
 	batch, err = githubTestsFinalMetadataBatch(claim, withOverflow)
 	if err != nil {
 		t.Fatal(err)
@@ -395,6 +401,10 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 		// SkippedArtifactsOverflow (CHAOS-4394 machinery) but never a
 		// malformed marker (CHAOS-4592 did not exist yet).
 		SkippedArtifactsOverflow: 1,
+		// What decodeGitHubTestsChunkCursor would stamp on exactly this raw
+		// shape (CHAOS-4592 codex review round 3, P2) -- constructing the
+		// cursor by hand bypasses decode, so set it explicitly.
+		SkippedArtifactCauseOverflow: map[string]bool{githubTestsLegacyReportOverflowSentinel: true},
 	}
 	batch, err := githubTestsFinalMetadataBatch(claim, intermediateBinaryCursor)
 	if err != nil {
@@ -512,6 +522,77 @@ func TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCause
 // P1): the comparator independently re-derives the blocking verdict from
 // batch.Result and must reach the identical answer, or a route that computed
 // a "correct" Watermark still fails to complete in production.
+// TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume pins
+// the CHAOS-4592 codex review round 3, P2 fix. A walk that starts on a
+// pre-CHAOS-4592 binary (aggregate SkippedArtifactsOverflow, no per-cause
+// ledger at all) and then resumes mid-flight on THIS binary -- whose own
+// marker-writing later overflows an UNRELATED cause -- must not lose the
+// earlier legacy-covered cause's watermark-advancing evidence the moment
+// causeOverflow stops being empty. Round 2's fix gated the fallback on
+// "causeOverflow has zero entries", which this exact sequence would have
+// broken the instant the second, unrelated overflow landed.
+func TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume(t *testing.T) {
+	claim := nativeTestClaim("github", "cicd")
+
+	// Step 1: decode a raw legacy-shaped checkpoint -- overflow>0, no
+	// per-cause ledger at all, exactly a pre-CHAOS-4592 binary's JSON -- and
+	// confirm decode stamps the sentinel.
+	legacyRaw := `{"phase":"artifacts","repo":"acme/api","next_url":"x",` +
+		`"incomplete":[{"component":"report_member","cause":"artifact_unavailable","count":1}],` +
+		`"skipped_artifacts_overflow":1}`
+	decoded, err := decodeGitHubTestsChunkCursor(legacyRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.SkippedArtifactCauseOverflow[githubTestsLegacyReportOverflowSentinel] {
+		t.Fatalf("decode did not stamp the legacy sentinel on a raw overflow>0/no-ledger cursor: %+v", decoded)
+	}
+
+	// Step 2: simulate THIS attempt's own marker-writing overflowing an
+	// UNRELATED cause (unreadable_archive) after resume -- the shared
+	// 20-record sample is already full of unrelated markers, so the next
+	// skip for that cause overflows instead of getting a slot.
+	fullSample := make([]GitHubTestsSkippedArtifact, githubTestsMaxSkippedArtifactRecords)
+	for index := range fullSample {
+		fullSample[index] = GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "1", Cause: githubTestsUnreadableArchiveCause}
+	}
+	decoded.SkippedArtifacts = fullSample
+	newSkip := GitHubTestsSkippedArtifact{RunID: "2", ArtifactID: "2", Cause: githubTestsUnreadableArchiveCause}
+	decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow = appendGitHubTestsSkippedArtifact(
+		decoded.SkippedArtifacts, decoded.SkippedArtifactsOverflow, decoded.SkippedArtifactCauseOverflow, newSkip,
+	)
+	decoded.Incomplete = mergeGitHubTestsIncomplete(decoded.Incomplete, GitHubTestsIncomplete{
+		Component: githubTestsReportMemberComponent, Cause: githubTestsUnreadableArchiveCause, Count: 1,
+	})
+
+	// The sentinel must have survived the copy-then-add, alongside the new
+	// unreadable_archive entry -- causeOverflow is no longer "empty", but it
+	// must still carry the legacy evidence.
+	if !decoded.SkippedArtifactCauseOverflow[githubTestsLegacyReportOverflowSentinel] {
+		t.Fatal("the legacy sentinel did not survive this attempt's own overflow append")
+	}
+	if !decoded.SkippedArtifactCauseOverflow[githubTestsUnreadableArchiveCause] {
+		t.Fatal("this attempt's own overflow was not recorded for unreadable_archive")
+	}
+
+	// The unit finalizes: the EARLIER, legacy-only-covered artifact_unavailable
+	// skip must still advance the watermark, exactly as it would have before
+	// this attempt's own marker-writing ran at all -- and so must the NEW
+	// unreadable_archive skip, covered by its own precise entry.
+	decoded.Phase = "done"
+	batch, err := githubTestsFinalMetadataBatch(claim, decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf(
+			"watermark=%v, want %v -- legacy overflow evidence for artifact_unavailable must survive a later unrelated overflow",
+			batch.Watermark, claim.BeforeAt,
+		)
+	}
+	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
 func mustCompareGitHubTestsCompletionOK(t *testing.T, claim Claim, batch CompleteRouteBatch) {
 	t.Helper()
 	if _, err := (ProductionContractComparator{}).CompareCompleteRoute(

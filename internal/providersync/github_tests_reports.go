@@ -281,6 +281,25 @@ const (
 	githubTestsUnreadableCause = "unreadable"
 )
 
+// githubTestsLegacyReportOverflowSentinel is a reserved
+// SkippedArtifactCauseOverflow key -- never a real report_member cause, so it
+// can never collide with one -- marking that a cursor already carried
+// aggregate SkippedArtifactsOverflow before per-cause tracking existed
+// (CHAOS-4592 codex review round 3, P2). decodeGitHubTestsChunkCursor sets
+// it exactly once, from the RAW decoded shape, before this attempt's own
+// marker-writing has touched the map at all, and it survives every
+// subsequent copy-then-add in markGitHubTestsSkippedArtifactCauseOverflow.
+// Without it, a walk that starts on a pre-CHAOS-4592 binary and then, mid-
+// flight, resumes on this one loses the earlier un-attributed overflow
+// evidence the moment this attempt's OWN marker-writing first touches an
+// UNRELATED cause: causeOverflow stops being empty, the plain
+// "len(causeOverflow)==0" fallback this ticket's earlier rounds used
+// disables itself, and an earlier original-cause skip that was only ever
+// covered by the legacy aggregate count incorrectly withholds the
+// watermark -- not a permanent stall (the very next attempt's OWN full walk
+// would cover it), but an avoidable re-run this sentinel exists to skip.
+const githubTestsLegacyReportOverflowSentinel = "\x00legacy"
+
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
 // pairs that may advance the watermark. It is an allowlist rather than a
 // blocklist on purpose: anything not named here withholds, so a future
@@ -459,15 +478,21 @@ func githubTestsSkippedArtifactCause(marker GitHubTestsSkippedArtifact) string {
 // githubTestsChunkCursor.SkippedArtifactCauseOverflow and
 // appendGitHubTestsSkippedArtifact.
 //
-// The bare overflow int survives ONLY as a narrow backward-compat fallback
-// for a cursor written before SkippedArtifactCauseOverflow existed at all
-// (len(causeOverflow)==0): such a cursor predates CHAOS-4592, so its
-// aggregate overflow can only ever have come from the three original
-// CHAOS-4394 causes (oversized/unavailable/unreadable_archive) -- no binary
-// before this one ever attempted a malformed/unreadable marker, dropped or
-// not -- so the fallback explicitly excludes those two causes rather than
-// covering them by coincidence of a shared counter that never represented
-// them.
+// The bare overflow int survives ONLY as a narrow backward-compat fallback,
+// gated on githubTestsLegacyReportOverflowSentinel rather than on
+// causeOverflow being empty (CHAOS-4592 codex review round 3, P2 -- round
+// 2's version gated on len(causeOverflow)==0, which a walk straddling THIS
+// deploy would silently disable the moment its own post-upgrade marker-
+// writing touched even one unrelated cause, incorrectly withholding on an
+// earlier legacy-only-covered one). The sentinel is stamped once, at
+// decode, from the cursor's RAW shape (decodeGitHubTestsChunkCursor), so it
+// reflects what the cursor looked like BEFORE this attempt, and persists
+// through every later copy-then-add. When present, aggregate overflow can
+// only ever have come from the three original CHAOS-4394 causes
+// (oversized/unavailable/unreadable_archive) -- no binary before this one
+// ever attempted a malformed/unreadable marker, dropped or not -- so the
+// fallback explicitly excludes those two causes rather than covering them
+// by coincidence of a shared counter that never represented them.
 //
 // This can fire at most once per unit -- the checkpoint this guards against
 // is deleted the moment the unit terminalizes (repository_postgres.go's
@@ -494,7 +519,7 @@ func githubTestsReportMemberSkippedWithoutDurableMarker(
 		if causeOverflow[observation.Cause] {
 			continue
 		}
-		if len(causeOverflow) == 0 && overflow > 0 &&
+		if causeOverflow[githubTestsLegacyReportOverflowSentinel] && overflow > 0 &&
 			observation.Cause != githubTestsMalformedCause &&
 			observation.Cause != githubTestsUnreadableCause {
 			continue

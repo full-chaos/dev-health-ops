@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -157,12 +158,13 @@ type compiledQuery struct {
 	bindings []clickhouse.Binding
 }
 
-// CompileFlowMatrix ports compile_flow_matrix's TEAM/REPO/WORK_TYPE branch
-// (compiler.py:450-534) for the three same-dimension flow-matrix
-// dimensions with FIXED query templates -- the AUTHOR/THEME/SUBCATEGORY
-// "else" branch (compiler.py:519-533, which reuses sankey_nodes_template/
-// sankey_edges_template over the investment-CTE machinery) is NOT YET
-// PORTED; see the analytics package doc comment.
+// CompileFlowMatrix ports compile_flow_matrix (compiler.py:450-534,
+// e9ea257ff) in full: TEAM/REPO/WORK_TYPE's fixed-template branch below,
+// AND the AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:519-533,
+// CHAOS-4538), which reuses the same sankey_nodes_template/
+// sankey_edges_template shape sankey.go's CompileSankey builds, over
+// investmentContextFor's investment machinery -- see
+// compileFlowMatrixInvestmentDimension below.
 //
 // Deliberately mirrors Python's error-boundary shape: everything in this
 // function (dimension/measure validation, plus the filtered-flow-matrix
@@ -185,8 +187,7 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 					"remove filters or use theme/subcategory.", req.Dimension)
 		}
 	default:
-		return compiledQuery{}, compiledQuery{}, fmt.Errorf(
-			"analytics: CompileFlowMatrix: dimension %q not yet ported (investment-CTE path)", req.Dimension)
+		return compileFlowMatrixInvestmentDimension(req, orgID, timeoutSeconds, filters)
 	}
 
 	common := []clickhouse.Binding{
@@ -226,6 +227,117 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 		}
 	}
 	return nodes, edges, nil
+}
+
+// compileFlowMatrixInvestmentDimension ports compile_flow_matrix's
+// AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:519-533,
+// e9ea257ff) -- CHAOS-4538's flow-matrix scope item. Python reuses
+// sankey_nodes_template([dimension], ...) and
+// sankey_edges_template(dimension, dimension, ...) (source==target: a
+// same-dimension self-join, the flow-matrix "chord" shape) over
+// _get_context_params's investment machinery, unlike TEAM/REPO/WORK_TYPE
+// above, which use fixed hand-written templates that never read
+// use_investment at all -- the split this whole package's doc comments
+// call "by DIMENSION, not by the flag" (CHAOS-4538 brief §2).
+//
+// useInvestment here is resolveUseInvestment's per-request resolution
+// (req.UseInvestment, i.e. FlowMatrixRequestInput's OWN useInvestment
+// override -- compiler.py:478,480 passes `force_investment=
+// request.use_investment`, NOT the batch flag; resolve.go's
+// FlowMatrixRequestFromInput already captures this field). THEME and
+// SUBCATEGORY auto-route to investment when unset (both are in
+// resolveUseInvestment's investment_dims set); AUTHOR is not, but
+// dbColumn rejects AUTHOR unconditionally regardless of useInvestment
+// (validate.go's dbColumn doc comment: neither source table has a
+// scalar per-row author identity column) -- so AUTHOR always fails here
+// the same way it fails in CompileSankey, with no special-casing needed
+// in this function.
+func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, timeoutSeconds int, filters *model.FilterInput) (nodes, edges compiledQuery, err error) {
+	useInvestment := resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment)
+
+	dimCol, err := dbColumn(req.Dimension, useInvestment)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+
+	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+
+	var source, alias, dateFilter, extraClauses, measureExpr string
+	if useInvestment {
+		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
+		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+	} else {
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		measureExpr, err = dbExpression(req.Measure, false, false)
+	}
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+	// Force a uniform Float64 result type -- see CompileTimeseries's doc
+	// comment for the full reasoning; identical here.
+	measureExpr = "toFloat64(" + measureExpr + ")"
+
+	dimUpper := strings.ToUpper(string(req.Dimension))
+
+	nodesSQL := fmt.Sprintf(`
+SELECT
+    '%s' AS dimension,
+    toString(%s) AS node_id,
+    %s AS value
+FROM %s
+%s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+GROUP BY node_id
+ORDER BY value DESC, node_id ASC
+LIMIT {limit_per_dim:UInt32}
+SETTINGS max_execution_time = {timeout:UInt64}
+`, dimUpper, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
+	nodesBindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+		{Name: "limit_per_dim", Value: req.MaxNodes},
+		{Name: "timeout", Value: timeoutSeconds},
+	}
+	nodesBindings = append(nodesBindings, fc.bindings...)
+
+	// sankey_edges_template(dimension, dimension, ...): source==target,
+	// a same-dimension self-join -- compiler.py:527-529.
+	edgesSQL := fmt.Sprintf(`
+SELECT
+    '%s' AS source_dimension,
+    '%s' AS target_dimension,
+    toString(%s) AS source,
+    toString(%s) AS target,
+    %s AS value
+FROM %s
+%s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+  AND %s IS NOT NULL
+  AND %s IS NOT NULL
+GROUP BY source, target
+ORDER BY value DESC, source ASC, target ASC
+LIMIT {max_edges:UInt32}
+SETTINGS max_execution_time = {timeout:UInt64}
+`, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol)
+	edgesBindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+		{Name: "max_edges", Value: req.MaxEdges},
+		{Name: "timeout", Value: timeoutSeconds},
+	}
+	edgesBindings = append(edgesBindings, fc.bindings...)
+
+	return compiledQuery{sql: nodesSQL, bindings: nodesBindings}, compiledQuery{sql: edgesSQL, bindings: edgesBindings}, nil
 }
 
 // --- Query templates ---------------------------------------------------

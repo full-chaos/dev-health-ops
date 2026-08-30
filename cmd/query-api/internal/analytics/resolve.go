@@ -219,6 +219,16 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	if err != nil {
 		return nil, err
 	}
+	if useInvestment {
+		// Ports _query_investment_dicts (investment.py:175-181): EVERY
+		// investment query fires the stale-membership-scope telemetry
+		// check immediately before its own real query, not at compile
+		// time (a compile-only caller, e.g. a future dry-run/EXPLAIN
+		// path, should not pay for or emit this signal). Swallowed
+		// internally on its own fetch error -- see
+		// RecordStaleInvestmentMembershipScope's doc comment.
+		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+	}
 	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
 
@@ -230,6 +240,10 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	q, err := CompileBreakdown(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return model.BreakdownResult{}, err
+	}
+	if useInvestment {
+		// See resolveOneTimeseries's identical call for the reasoning.
+		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
 	}
 	return ExecuteBreakdown(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
@@ -300,7 +314,21 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	if err != nil {
 		return nil, err
 	}
-
+	// DELIBERATELY NO RecordStaleInvestmentMembershipScope call here.
+	// Verified by reading analytics.py directly (not assumed from the
+	// "timeseries/coverage/sankey" wording in _execute_breakdown_query's
+	// own comment at :457-459, which overstates sankey's coverage --
+	// _execute_sankey_inner (analytics.py:275-331), the function BOTH
+	// sankey and flowMatrix execution route through, contains NO call
+	// to record_stale_investment_membership_scope at all; only
+	// _execute_timeseries_query (:359-360) and _execute_breakdown_query
+	// (:462-463) do. The ONE sankey-adjacent call site that exists
+	// (analytics.py:867, inside the coverage computation) is inside
+	// SankeyResult.Coverage, which this port does not compute at all
+	// (see this file's package doc comment -- Coverage is always nil),
+	// so porting that call site would fire telemetry for a computation
+	// this port never runs. If/when coverage is ported, its telemetry
+	// call must be added THERE, not here.
 	nodes, edges, execErr := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
 	if execErr != nil {
 		// Swallow: analytics.py:654-656 logs and degrades to empty.

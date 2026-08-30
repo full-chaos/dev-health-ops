@@ -345,6 +345,98 @@ const registeredFlowMatrixDocument = `query FlowMatrix($orgId: String!, $batch: 
   }
 }`
 
+// registeredInvestmentBreakdownDocument is CHAOS-4538's registered
+// document for the investment-path `analytics` breakdown query -- same
+// "registered documents only" contract, same "sourced from the real
+// client file, not reconstructed" discipline as every document above.
+// Copied byte-for-byte from web/src/lib/graphql/queries.ts:10-28's
+// INVESTMENT_BREAKDOWN_QUERY, operation name "InvestmentBreakdown".
+//
+// REGISTRATION IS NOT ENABLEMENT (chris's standing ruling, carried
+// verbatim from CHAOS-4538's brief): PostgresSwitch.Enabled() is
+// fail-closed (routeswitch/postgres_switch.go) -- a missing registry
+// row, a lookup error, or an unresolvable digest all return false and
+// Python keeps serving every real request. Registering this document
+// only makes it POSSIBLE for a future, separately-decided enablement to
+// route traffic here; it does not itself route anything. Whether/when
+// to enable is the orchestrator's/chris's call, not this port's --
+// "register the two documents" is CHAOS-4538's literal scope item 5,
+// "enable" is explicitly NOT.
+//
+// This document's name implies "investment-only" but the schema does
+// not enforce that: `useInvestment` is a batch-level VARIABLE the web
+// client sets inside `$batch` at call time (schema.graphql's
+// AnalyticsRequestInput.useInvestment), never pinned in this document's
+// text -- see this package's investment.go doc comments for the
+// investment-path SQL this operation can now reach.
+const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+      }
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+    }
+  }
+}`
+
+// registeredInvestmentFullDocument is CHAOS-4538's registered document
+// for the combined investment breakdowns+sankey `analytics` query --
+// same contract as registeredInvestmentBreakdownDocument above. Copied
+// byte-for-byte from web/src/lib/graphql/queries.ts:223-252's
+// INVESTMENT_FULL_QUERY, operation name "InvestmentFull".
+//
+// Deliberately NOT registered here: INVESTMENT_SANKEY_QUERY
+// (queries.ts:32) -- it is dead and is being deleted in parallel under
+// CHAOS-4496; a dead document must not be registered as if it carried
+// traffic. This document's own `sankey { ... coverage { ... } }`
+// selection includes SankeyResult.Coverage, which this port's
+// analytics.Resolve does NOT compute (always nil -- resolve.go's
+// package doc comment); registering the document is still correct
+// (registration gates reachability, not response completeness, and
+// nothing is enabled regardless), but a caller enabling this operation
+// later must know `coverage` resolves to null on the Go plane until
+// that follow-up lands.
+const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+      }
+    }
+    sankey {
+      nodes {
+        id
+        label
+        dimension
+        value
+      }
+      edges {
+        source
+        target
+        value
+      }
+      coverage {
+        teamCoverage
+        repoCoverage
+      }
+      unit
+    }
+  }
+}`
+
 // digestHex is this wave's own document/schema digest convention: no
 // canonical algorithm has landed in this repo yet (go_api_registry.py's
 // schema_digest/document_digest are opaque caller-supplied strings; no
@@ -475,6 +567,16 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// map keyed by operation name, so a later wave adding a further
 	// operation extends this map rather than threading another positional
 	// parameter through newQueryHandler/operationForDocument.
+	// NOTE (CHAOS-4538): "investmentBreakdown"/"investmentFull" below are
+	// this route's OWN internal Mux/PostgresSwitch operation keys, chosen
+	// to disambiguate the TWO distinct registered documents that both
+	// invoke the SAME GraphQL root field (`analytics`) -- unlike every
+	// other row in this map, where the key already matches the GraphQL
+	// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
+	// never by GraphQL operation/field name, so this key only has to be
+	// internally consistent across this map, digestByOperation's reverse
+	// index, and each go_api_routing_state row PostgresSwitch looks up by
+	// this same string -- it is never compared against request text.
 	digestByOperation := map[string]string{
 		"featureFlags":         digestHex(registeredFeatureFlagsDocument),
 		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
@@ -486,6 +588,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphFlow":        digestHex(registeredWorkGraphFlowDocument),
 		"workGraphArtifacts":   digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":           digestHex(registeredFlowMatrixDocument),
+		"investmentBreakdown":  digestHex(registeredInvestmentBreakdownDocument),
+		"investmentFull":       digestHex(registeredInvestmentFullDocument),
 	}
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)

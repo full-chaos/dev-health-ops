@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -164,37 +165,64 @@ func TimeseriesRequestFromInput(input model.TimeseriesRequestInput) (TimeseriesR
 	}, nil
 }
 
-// CompileTimeseries ports compile_timeseries (compiler.py:291-342) for
-// the non-investment path only. useInvestment is the resolved batch-level
-// flag (analytics.py:554's `bool(batch.use_investment)`) -- BreakdownRequestInput/
+// firstDateFilterToken ports templates.py's `date_col =
+// date_filter.split(" ")[0]` (templates.py:41) exactly -- including
+// investment path's slightly odd consequence: its date_filter
+// (compiler.py:227) is "work_unit_investments.from_ts < ... AND
+// work_unit_investments.to_ts >= ...", so the timeseries bucket column
+// becomes `work_unit_investments.from_ts` (the work unit's START
+// timestamp), not a generic "day" column -- a real Python behavior this
+// port reproduces faithfully rather than "fixing" into something that
+// reads more sensibly.
+func firstDateFilterToken(dateFilter string) string {
+	fields := strings.Fields(dateFilter)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// CompileTimeseries ports compile_timeseries (compiler.py:291-342,
+// e9ea257ff) for BOTH the non-investment and investment (CHAOS-4538)
+// paths. useInvestment is the resolved batch-level flag (analytics.py:554's
+// `bool(batch.use_investment)`) -- BreakdownRequestInput/
 // TimeseriesRequestInput carry no per-item override (schema.graphql;
 // confirmed against model.TimeseriesRequestInput/BreakdownRequestInput,
 // neither has a UseInvestment field), so this is threaded down from the
 // batch by the caller, not read off req itself.
-//
-// A true useInvestment is rejected WHOLESALE here (every dimension, not
-// gated per-dimension the way flow-matrix's TEAM/REPO/WORK_TYPE happens
-// to be) -- unlike compile_flow_matrix's fixed templates, EVERY
-// investment-path timeseries/breakdown query needs
-// _get_context_params's investment branch (team/repo/author joins,
-// latest_work_unit_investments CTE), which this port does not yet have.
-// This is a deliberate, more conservative simplification than Python's
-// own edge-case behavior (which would let a testops measure's source_table
-// override silently coexist with investment-path joins that reference a
-// table alias the override just replaced) -- reported to the
-// orchestrator, not silently decided.
 func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
-	if useInvestment {
-		return compiledQuery{}, fmt.Errorf("analytics: CompileTimeseries: investment path not yet ported (CHAOS-4506 follow-up)")
+	dimCol, err := dbColumn(req.Dimension, useInvestment)
+	if err != nil {
+		return compiledQuery{}, err
 	}
 
-	dimCol, err := dbColumn(req.Dimension, false)
+	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}
-	measureExpr, err := dbExpression(req.Measure, false, false)
-	if err != nil {
-		return compiledQuery{}, err
+
+	var source, alias, dateFilter, extraClauses, measureExpr string
+	if useInvestment {
+		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
+		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		if err != nil {
+			return compiledQuery{}, err
+		}
+		// investment-path queries execute against org 70d529e0's live
+		// membership state on every call -- RecordStaleInvestmentMembershipScope
+		// is invoked by CompileTimeseries's caller (resolve.go's
+		// resolveOneTimeseries) once the compiled query is about to
+		// execute; see that call site's doc comment for why compile-time
+		// is the wrong place (Python fires the telemetry query from
+		// _query_investment_dicts, which wraps EXECUTION, not
+		// compilation -- investment.py:175-181).
+	} else {
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		measureExpr, err = dbExpression(req.Measure, false, false)
+		if err != nil {
+			return compiledQuery{}, err
+		}
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
@@ -204,18 +232,8 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	// scan type for every measure. Python does the same coercion one
 	// layer later with `float(row["value"])`, so values are unchanged.
 	measureExpr = "toFloat64(" + measureExpr + ")"
-	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
 
-	fc, err := translateFilters(filters, false, filterColumns{Team: "team_id", Repo: "repo_id", Author: "author_email"})
-	if err != nil {
-		return compiledQuery{}, err
-	}
-
-	// date_col: Python derives this from date_filter.split(" ")[0]
-	// (templates.py:41); every non-investment date_filter this package
-	// ever builds is "day >= ..." (compiler.py:236,328), so date_col is
-	// always "day" in this scope -- documented rather than re-derived.
-	const dateCol = "day"
+	dateCol := firstDateFilterToken(dateFilter)
 
 	sql := fmt.Sprintf(`
 SELECT
@@ -223,13 +241,14 @@ SELECT
     %s AS dimension_value,
     %s AS value
 FROM %s
+%s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC, dimension_value ASC
 SETTINGS max_execution_time = {timeout:UInt64}
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, dateFilter, alias, fc.sql)
+`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

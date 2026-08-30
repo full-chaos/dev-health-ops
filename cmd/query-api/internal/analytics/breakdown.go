@@ -62,21 +62,35 @@ func validateTopN(topN int) error {
 	return nil
 }
 
-// CompileBreakdown ports compile_breakdown (compiler.py:345-385) for the
-// non-investment path -- same wholesale useInvestment=true rejection as
-// CompileTimeseries, same reasoning (see that function's doc comment).
+// CompileBreakdown ports compile_breakdown (compiler.py:345-385,
+// e9ea257ff) for BOTH the non-investment and investment (CHAOS-4538)
+// paths -- same investmentContextFor wiring as CompileTimeseries, see
+// that function's doc comment.
 func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
-	if useInvestment {
-		return compiledQuery{}, fmt.Errorf("analytics: CompileBreakdown: investment path not yet ported (CHAOS-4506 follow-up)")
+	dimCol, err := dbColumn(req.Dimension, useInvestment)
+	if err != nil {
+		return compiledQuery{}, err
 	}
 
-	dimCol, err := dbColumn(req.Dimension, false)
+	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}
-	measureExpr, err := dbExpression(req.Measure, false, false)
-	if err != nil {
-		return compiledQuery{}, err
+
+	var source, alias, dateFilter, extraClauses, measureExpr string
+	if useInvestment {
+		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
+		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		if err != nil {
+			return compiledQuery{}, err
+		}
+	} else {
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		measureExpr, err = dbExpression(req.Measure, false, false)
+		if err != nil {
+			return compiledQuery{}, err
+		}
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
@@ -86,18 +100,13 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 	// scan type for every measure. Python does the same coercion one
 	// layer later with `float(row["value"])`, so values are unchanged.
 	measureExpr = "toFloat64(" + measureExpr + ")"
-	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
-
-	fc, err := translateFilters(filters, false, filterColumns{Team: "team_id", Repo: "repo_id", Author: "author_email"})
-	if err != nil {
-		return compiledQuery{}, err
-	}
 
 	sql := fmt.Sprintf(`
 SELECT
     %s AS dimension_value,
     %s AS value
 FROM %s
+%s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
@@ -105,7 +114,7 @@ GROUP BY dimension_value
 ORDER BY value DESC, dimension_value ASC
 LIMIT {top_n:UInt32}
 SETTINGS max_execution_time = {timeout:UInt64}
-`, dimCol, measureExpr, source, dateFilter, alias, fc.sql)
+`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

@@ -1248,6 +1248,28 @@ GUARDED_DELTA_PATH_PREFIXES = tuple(
 # ai_governance downstream-consequence note below.
 REQUIRED_GUARDED_SUFFIX = "priorValue"
 
+# A SECOND downstream consequence, one level further removed than
+# `.percent`/`.status`: this fixture's seeded values make all four
+# guarded metrics land on status "worsened" on BOTH sides (a real,
+# executed finding, not an assumption -- confirmed by running this test:
+# `.status` itself does NOT appear in the mismatch findings). But
+# `_recommendations_from_sections`/``buildSection``'s `worsened` list
+# render `.absolute` into a TEXT string (`"...worsened by %+.1f ..."`,
+# metrics/operating_review.py:738-745 / operatingreview.go:1451-1460), so
+# Python's `+nan` and Go's real `+0.4`-shaped number produce different
+# STRINGS even though the upstream `.status` enum matches. Like
+# `.percent`/`.status` above, this is a consequence of this fixture's
+# concrete numbers, not a guaranteed occurrence -- permitted when it
+# fires, never required.
+DOWNSTREAM_TEXT_PATH_PREFIXES = (
+    "$.data.operatingReview.recommendations",
+    f"$.data.operatingReview.sections[{RISK_SECTION_INDEX}].worsened",
+    f"$.data.operatingReview.sections[{RELIABILITY_SECTION_INDEX}].worsened",
+)
+ALLOWED_MISMATCH_PATH_PREFIXES = (
+    GUARDED_DELTA_PATH_PREFIXES + DOWNSTREAM_TEXT_PATH_PREFIXES
+)
+
 
 @pytest.mark.asyncio
 async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
@@ -1429,12 +1451,13 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     stray = [
         f
         for f in mismatch_findings
-        if not f.path.startswith(GUARDED_DELTA_PATH_PREFIXES)
+        if not f.path.startswith(ALLOWED_MISMATCH_PATH_PREFIXES)
     ]
     assert not stray, (
         f"mismatch findings outside the four guarded metrics' delta "
-        f"sub-objects -- the guard (or this fixture) leaked into fields "
-        f"it should not have touched: {stray}"
+        f"sub-objects (and their permitted recommendations/worsened-list "
+        f"text-rendering consequence) -- the guard (or this fixture) "
+        f"leaked into fields it should not have touched: {stray}"
     )
 
     covered = {

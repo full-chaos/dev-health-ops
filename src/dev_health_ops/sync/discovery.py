@@ -72,7 +72,14 @@ def _resolve_credentials(integration: Integration) -> dict[str, Any]:
             .one_or_none()
         )
     if credential is None:
-        return _env_credentials_mapping(integration.provider)
+        # codex review (CHAOS-4584 round 6, P1): a NON-null credential_id
+        # that fails to resolve (row deleted, or belongs to a different
+        # org) is a dangling-reference error, not "no credential
+        # configured" -- falling back to process-wide env credentials here
+        # would risk importing a DIFFERENT account's Jira projects into
+        # this integration. Fail closed: only the credential_id is None
+        # branch above may use the env fallback.
+        return {}
     return _credential_mapping(credential)
 
 
@@ -657,6 +664,15 @@ def _active_repo_usage_count_for_limit(session: Session, org_id: str) -> int:
     return legacy_count + int(source_count or 0)
 
 
+class RepoLimitExceededError(RuntimeError):
+    """Enabling this source would push the org over its ``max_repos``
+    entitlement (codex review, CHAOS-4584 round 6 P2). Mirrors
+    ``api/services/integrations.py``'s own class of the same name -- the
+    async and sync enable/disable entry points intentionally don't share an
+    import to avoid a load-time cycle (``api.admin.routers.sync``, which
+    the async path lazily imports from, itself imports this module)."""
+
+
 _CAP_MARKER_KEY = "capped_by_repo_limit"
 _SUPERSEDED_MARKER_KEY = "superseded_by_scope_change"
 # Every system-driven auto-recovery marker: an explicit operator
@@ -878,6 +894,25 @@ def set_source_enabled(
     source = session.get(IntegrationSource, source_id)
     if source is None:
         raise ValueError(f"IntegrationSource not found: {source_id}")
+    if enabled and not source.is_enabled and source.provider == "jira":
+        # codex review (CHAOS-4584 round 6, P2): enforce the org's
+        # max_repos limit AT enable time -- otherwise a manual re-enable of
+        # a cap-marked row (whose marker gets cleared just below) gets
+        # silently undone by the very next over-limit discovery run, since
+        # a marker-less row looks like any other ordinary pre-existing
+        # source to the rebalancer.
+        from dev_health_ops.api.services.licensing import TierLimitService
+
+        max_repos = TierLimitService(session).get_limit(
+            uuid.UUID(source.org_id), "max_repos"
+        )
+        if max_repos is not None:
+            current_count = _active_repo_usage_count_for_limit(session, source.org_id)
+            if current_count + 1 > int(max_repos):
+                raise RepoLimitExceededError(
+                    f"Enabling this source would exceed the org's repo "
+                    f"limit ({max_repos})"
+                )
     source.is_enabled = enabled
     metadata = source.metadata_ or {}
     if any(metadata.get(key) for key in _SYSTEM_MARKER_KEYS):

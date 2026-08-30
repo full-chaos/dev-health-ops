@@ -30,6 +30,7 @@ from dev_health_ops.api.services.integrations import (
     IntegrationDatasetService,
     IntegrationService,
     IntegrationSourceService,
+    RepoLimitExceededError,
     SyncRunService,
 )
 from dev_health_ops.sync.canonical_incident_gate import (
@@ -363,7 +364,10 @@ async def update_integration_source(
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    updated = await svc.set_enabled(source, payload.is_enabled)
+    try:
+        updated = await svc.set_enabled(source, payload.is_enabled)
+    except RepoLimitExceededError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
     return _source_to_response(updated)
 
 

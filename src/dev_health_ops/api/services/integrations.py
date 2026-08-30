@@ -23,6 +23,11 @@ from dev_health_ops.models.settings import IntegrationCredential, SyncWatermark
 from dev_health_ops.sync.datasets import get_dataset_spec
 
 
+class RepoLimitExceededError(RuntimeError):
+    """Enabling this source would push the org over its ``max_repos``
+    entitlement (codex review, CHAOS-4584 round 6 P2)."""
+
+
 class IntegrationService:
     """CRUD operations for Integration rows, scoped to an org."""
 
@@ -177,6 +182,35 @@ class IntegrationSourceService:
     async def set_enabled(
         self, source: IntegrationSource, enabled: bool
     ) -> IntegrationSource:
+        if enabled and not source.is_enabled and source.provider == "jira":
+            # codex review (CHAOS-4584 round 6, P2): enforce the org's
+            # max_repos limit AT enable time -- otherwise a manual re-enable
+            # of a cap-marked row (which clears the marker below) gets
+            # silently undone by the very next over-limit discovery run,
+            # since a marker-less row looks like any other ordinary
+            # pre-existing source to the rebalancer. Lazy import: this
+            # service is imported BY api/admin/routers/sync.py, so importing
+            # it back at module load time would be circular.
+            from dev_health_ops.api.admin.routers.sync import (
+                _active_repo_usage_count_for_limit,
+            )
+            from dev_health_ops.api.services.licensing import TierLimitService
+
+            def _get_max_repos(sync_session) -> int | float | None:
+                return TierLimitService(sync_session).get_limit(
+                    uuid.UUID(self._org_id), "max_repos"
+                )
+
+            max_repos = await self._session.run_sync(_get_max_repos)
+            if max_repos is not None:
+                current_count = await _active_repo_usage_count_for_limit(
+                    self._session, self._org_id
+                )
+                if current_count + 1 > int(max_repos):
+                    raise RepoLimitExceededError(
+                        f"Enabling this source would exceed the org's repo "
+                        f"limit ({max_repos})"
+                    )
         source.is_enabled = enabled
         metadata = source.metadata_ or {}
         _system_marker_keys = ("capped_by_repo_limit", "superseded_by_scope_change")

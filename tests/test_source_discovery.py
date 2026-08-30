@@ -725,6 +725,52 @@ def test_jira_discovery_no_credential_no_env_returns_empty_credentials(
     assert mock_discover.call_args.args[1] == {}
 
 
+def test_jira_discovery_dangling_credential_id_fails_closed(
+    session: Session,
+    jira_integration: Integration,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Codex review (CHAOS-4584 round 6, P1): a NON-null credential_id that
+    fails to resolve (deleted row, or belongs to a different org) must fail
+    closed -- never fall back to process-wide env credentials, which could
+    import a DIFFERENT account's Jira projects into this integration. Only
+    a genuinely UNSET credential_id (None) may use the env fallback."""
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme.atlassian.net")
+    monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok")
+
+    jira_integration.credential_id = uuid.uuid4()  # dangling: no matching row
+    session.commit()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_pg_session():
+        class _Query:
+            def filter(self, *_args, **_kwargs):
+                return self
+
+            def one_or_none(self):
+                return None
+
+        class _FakeSession:
+            def query(self, *_args, **_kwargs):
+                return _Query()
+
+        yield _FakeSession()
+
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch("dev_health_ops.db.get_postgres_session_sync", _fake_pg_session):
+        with patch(DISCOVERY_PATH) as mock_discover:
+            mock_discover.return_value = []
+            discover_sources_for_integration(session, jira_integration.id)
+
+    assert mock_discover.call_args.args[1] == {}, (
+        "dangling credential_id must never fall back to env credentials"
+    )
+
+
 def test_jira_discovery_project_id_wins_identity_over_project_key(
     session: Session,
     jira_integration: Integration,
@@ -1284,6 +1330,62 @@ def test_set_source_enabled_clears_superseded_marker_on_manual_disable(
 
     session.refresh(source)
     assert source.is_enabled is False, "operator's explicit disable must survive"
+
+
+def test_set_source_enabled_rejects_enable_over_repo_limit(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 6, P2): re-enabling a source while
+    the org is still at/over its max_repos limit must be rejected up front
+    -- otherwise the very next discovery run's rebalance would silently
+    undo the operator's own explicit enable, since a marker-less row looks
+    like any other ordinary pre-existing source once the cap marker is
+    cleared."""
+    from dev_health_ops.sync.discovery import (
+        RepoLimitExceededError,
+        set_source_enabled,
+    )
+
+    license_row = OrgLicense(org_id=uuid.UUID(_JIRA_ORG_ID), tier="community")
+    session.add(license_row)
+    license_row.limits_override = {"max_repos": 1}
+    already_enabled = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="AAA",
+        name="Project A",
+        full_name="AAA",
+        metadata_={},
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    capped = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="BBB",
+        name="Project B",
+        full_name="BBB",
+        metadata_={"capped_by_repo_limit": True},
+        is_enabled=False,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([already_enabled, capped])
+    session.commit()
+
+    with pytest.raises(RepoLimitExceededError):
+        set_source_enabled(session, capped.id, enabled=True)
+
+    session.refresh(capped)
+    assert capped.is_enabled is False, "rejected enable must not mutate the row"
+    assert capped.metadata_.get("capped_by_repo_limit") is True
 
 
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):

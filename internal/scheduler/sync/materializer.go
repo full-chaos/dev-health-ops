@@ -1420,12 +1420,26 @@ func loadPlanSources(ctx context.Context, tx pgx.Tx, orgID, integrationID, confi
 		// selector will never become valid on retry, so quarantining
 		// immediately closes most of the latency gap against Python's
 		// synchronous _coerce_uuid rejection.
-		for _, id := range explicitSourceIDs {
-			if _, err := uuid.Parse(id); err != nil {
+		//
+		// Codex review (gate round 7, P2): validating with uuid.Parse but
+		// then filtering on the CALLER's original spelling isn't enough --
+		// Postgres renders uuid columns in canonical dashed-lowercase form,
+		// so a valid but non-canonical encoding (e.g. compact/no-dash, or
+		// upper-case) parses successfully yet never equals src.id::text,
+		// silently matching zero sources exactly like the unvalidated case
+		// this fix was meant to close. Python's _coerce_uuid canonicalizes
+		// via uuid.UUID(str(value)) before SQLAlchemy filters on the parsed
+		// object, never the caller's raw spelling -- filter on parsed.String()
+		// here for the same reason.
+		canonicalSourceIDs := make([]string, len(explicitSourceIDs))
+		for i, id := range explicitSourceIDs {
+			parsed, err := uuid.Parse(id)
+			if err != nil {
 				return nil, fmt.Errorf("%w: invalid source_id: %s", ErrInvalidPlan, id)
 			}
+			canonicalSourceIDs[i] = parsed.String()
 		}
-		idFilter = explicitSourceIDs
+		idFilter = canonicalSourceIDs
 	}
 	// metadata/sync_options are read here (not on the pure planner's own
 	// path -- it has no DB access at all) purely to resolve

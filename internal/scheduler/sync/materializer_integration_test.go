@@ -1732,6 +1732,78 @@ func TestNativeMaterializerRejectsInvalidSourceIDInBackfillSelector(t *testing.T
 	}
 }
 
+// TestNativeMaterializerAcceptsANonCanonicalButValidSourceID is the codex
+// gate-round-7 fix: validating a source_id with uuid.Parse but then
+// filtering on the CALLER's original spelling isn't enough -- Postgres
+// renders uuid columns in canonical dashed-lowercase form, so a valid but
+// non-canonical encoding (here, the fixture's own jiraSourceID with its
+// dashes stripped) parses successfully yet never equals src.id::text,
+// silently matching zero sources exactly like the unvalidated case the
+// round-5 fix was meant to close. Python's _coerce_uuid canonicalizes
+// before filtering; loadPlanSources must too.
+func TestNativeMaterializerAcceptsANonCanonicalButValidSourceID(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	// The fixture's own jiraSourceID ("00000000-0000-4000-8000-000000002003")
+	// with its dashes stripped -- a valid, but non-canonical, UUID encoding.
+	const compactSourceID = "00000000000040008000000000002003"
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[$1] WHERE occurrence_id = $2`,
+		compactSourceID, occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatalf("plan.PlannedUnits = 0, want > 0 -- a non-canonical but valid source_id must still match its canonical stored row: %+v", plan)
+	}
+}
+
+// TestNativeMaterializerAnExplicitlyEmptySourceIDsListPlansZeroUnits is the
+// input-shape enumeration team-lead requested (.codex-review-context.md's
+// table): an explicit, non-nil but EMPTY source_ids selector (source_ids=[])
+// must plan zero units, mirroring Python's `_load_enabled_sources`
+// (`if not source_uuids: return []`) -- distinct from source_ids=None/absent,
+// which means "no filter, select everything planner-managed". The base
+// fixture (no override) already plans > 0 units for this same occurrence, so
+// this isolates the empty-list selector as the reason for the drop to zero.
+func TestNativeMaterializerAnExplicitlyEmptySourceIDsListPlansZeroUnits(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[]::text[] WHERE occurrence_id = $1`,
+		occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- an explicit empty source_ids selector must plan nothing, matching Python's `if not source_uuids: return []`", plan.PlannedUnits)
+	}
+}
+
 // TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized is the
 // codex gate-round-5 P2 fix's sibling: Python's _load_enabled_datasets does
 // a plain SQL `dataset_key IN (...)` with the selector's raw strings, with
@@ -1756,6 +1828,43 @@ func TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized(t *testing.
 	}
 	if plan.PlannedUnits != 0 {
 		t.Fatalf("plan.PlannedUnits = %d, want 0 -- \"WORK-ITEMS \" must not case/whitespace-match the real \"work-items\" dataset, matching Python's exact-string selector semantics", plan.PlannedUnits)
+	}
+}
+
+// TestNativeMaterializerAnExplicitlyEmptyDatasetKeysListPlansZeroUnits is
+// the input-shape enumeration team-lead requested (.codex-review-context.md's
+// table): an explicit, non-nil but EMPTY dataset_keys selector
+// (dataset_keys=[]) must plan zero units, mirroring Python's
+// `_load_enabled_datasets` (`if not dataset_keys: return []`) -- distinct
+// from dataset_keys=None/absent (startBackfillTriggerFixture's own default,
+// with no variadic dataset key args, which datasetKeysOrNil turns into NULL),
+// which falls back to the legacy-target-derived scope instead of an empty
+// allowlist. The base fixture (no override) already plans > 0 units for
+// this same occurrence, so this isolates the empty-list selector as the
+// reason for the drop to zero.
+func TestNativeMaterializerAnExplicitlyEmptyDatasetKeysListPlansZeroUnits(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET dataset_keys = ARRAY[]::text[] WHERE occurrence_id = $1`,
+		occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- an explicit empty dataset_keys selector must plan nothing, matching Python's `if not dataset_keys: return []`", plan.PlannedUnits)
 	}
 }
 

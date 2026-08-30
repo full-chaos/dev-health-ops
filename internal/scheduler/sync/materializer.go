@@ -78,6 +78,23 @@ type NativeMaterializer struct {
 	plannedUnitsLast            atomic.Int64
 	zeroPlannedOccurrencesTotal atomic.Uint64
 	materializedOccurrences     atomic.Uint64
+	// sourceDiscovery is the CHAOS-4602 native per-occurrence source
+	// (repo/project) discovery step, run before loadPlanSources reads
+	// integration_sources for a provider with source-type scope
+	// (github/gitlab/jira). Nil (the default from NewNativeMaterializer)
+	// disables the step entirely -- every pre-CHAOS-4602 caller and test
+	// keeps its exact prior behavior until WithSourceDiscovery is called.
+	sourceDiscovery SourceDiscoveryExecutor
+}
+
+// WithSourceDiscovery installs the source-discovery step and returns the
+// same materializer, so production wiring can chain it onto
+// NewNativeMaterializer's result.
+func (materializer *NativeMaterializer) WithSourceDiscovery(discovery SourceDiscoveryExecutor) *NativeMaterializer {
+	if materializer != nil {
+		materializer.sourceDiscovery = discovery
+	}
+	return materializer
 }
 
 // NewNativeMaterializer constructs the scheduled-sync materializer. The pool
@@ -336,8 +353,19 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 			"devhealth_scheduler_materialized_occurrences_total %d\n",
 		materialized,
 	)
-	_, err := io.WriteString(output, text.String())
-	return err
+	if _, err := io.WriteString(output, text.String()); err != nil {
+		return err
+	}
+	// CHAOS-4602: fold in provider_source_discovery_total when a discovery
+	// step is attached, so the caller's single "does this reconciler expose
+	// metrics" check (occurrences.(interface{ WritePrometheus(io.Writer)
+	// error })) picks it up for free -- no separate registration site
+	// needed. A materializer with no discovery service (sourceDiscovery ==
+	// nil, the pre-CHAOS-4602 default) writes nothing extra here.
+	if source, ok := materializer.sourceDiscovery.(interface{ WritePrometheus(io.Writer) error }); ok {
+		return source.WritePrometheus(output)
+	}
+	return nil
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer
@@ -399,7 +427,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	loaded, err := loadMaterializationPlan(ctx, coordinatorTx, occurrence, materializer.watermarkOverlap, materializer.defaultUnitCap)
+	loaded, err := loadMaterializationPlan(ctx, coordinatorTx, occurrence, materializer.watermarkOverlap, materializer.defaultUnitCap, materializer.sourceDiscovery)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -483,7 +511,7 @@ type integrationOptions struct {
 	InitialSyncDepth int `json:"initial_sync_depth"`
 }
 
-func loadMaterializationPlan(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence, watermarkOverlap time.Duration, defaultUnitCap int) (loadedMaterializationPlan, error) {
+func loadMaterializationPlan(ctx context.Context, tx pgx.Tx, occurrence PendingOccurrence, watermarkOverlap time.Duration, defaultUnitCap int, discovery SourceDiscoveryExecutor) (loadedMaterializationPlan, error) {
 	var integrationID, orgID, provider string
 	var credentialID *string
 	var sourceID *string
@@ -543,6 +571,31 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		}
 		if !allowed {
 			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+		}
+	}
+	// CHAOS-4602: native per-occurrence source (repo/project) discovery,
+	// before unit planning reads integration_sources below. Skipped for an
+	// explicit-scope config (sourceID set -- see loadPlanSources' own
+	// sourceID branch) and for any provider outside sourceDiscoveryProviders
+	// (Discover itself also gates this, but checking here avoids the
+	// credential-resolve round trip for a provider that will always skip).
+	// A discovery failure is loud (logged) but never fails the occurrence --
+	// it only means this pass did not widen coverage; already-existing
+	// sources (from Python's config-creation-time discovery, or an earlier
+	// materialize pass) are still enough to plan against below.
+	if discovery != nil && sourceID == nil && sourceDiscoveryProviders[provider] {
+		var syncOptionsMap map[string]any
+		if err := json.Unmarshal(syncOptionsJSON, &syncOptionsMap); err != nil {
+			syncOptionsMap = map[string]any{}
+		}
+		if _, discoverErr := discovery.Discover(ctx, SourceDiscoveryArgs{
+			OrgID: orgID, IntegrationID: integrationID, CredentialID: credentialID,
+			Provider: provider, SyncOptions: syncOptionsMap, ExplicitScope: false,
+		}); discoverErr != nil {
+			slog.Default().Warn("sync.materializer.source_discovery_failed",
+				slog.String("provider", provider),
+				slog.String("integration_id", integrationID),
+				slog.String("error", discoverErr.Error()))
 		}
 	}
 	var pagerDutyRepair *pagerDutyDomainRepair

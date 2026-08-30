@@ -779,6 +779,277 @@ def test_jira_discovery_cap_never_touches_operator_disabled_rows(
     assert sup.is_enabled is False, "operator-disabled rows are never auto-recovered"
 
 
+def test_jira_discovery_supersedes_old_source_on_explicit_scope_change(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 3, P1): PATCH-ing an explicitly-scoped
+    jira config from project_key=OLD to NEW must disable OLD's source, not
+    leave both tagged+enabled -- otherwise the planner
+    (_planner_scoped_source_ids tags by config id, not by "latest scope")
+    keeps syncing the project the operator moved away from."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    jira_planner_config.sync_options = {"project_key": "OLD"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("OLD", "Old Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    jira_planner_config.sync_options = {"project_key": "NEW"}
+    session.commit()
+    with patch(DISCOVERY_PATH, return_value=[("NEW", "New Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    by_external = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    }
+    assert by_external["OLD"].is_enabled is False
+    assert by_external["OLD"].metadata_.get("superseded_by_scope_change") is True
+    assert by_external["NEW"].is_enabled is True
+
+
+def test_jira_discovery_never_supersedes_across_full_discovery(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """The stale-handling policy (module docstring) must still hold for a
+    config with NO explicit scope: a project temporarily absent from one
+    discovery run is never auto-disabled -- only an explicit single-project
+    scope change makes "not in this run" a durable fact."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    with patch(DISCOVERY_PATH, return_value=_JIRA_TUPLES):  # SUP, OPS
+        discover_sources_for_integration(session, jira_integration.id)
+
+    # Next run only returns SUP (OPS temporarily missing from the API).
+    with patch(DISCOVERY_PATH, return_value=[("SUP", "Support Desk", "service_desk")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    ops = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.integration_id == jira_integration.id,
+            IntegrationSource.external_id == "OPS",
+        )
+        .one()
+    )
+    assert ops.is_enabled is True, "no explicit scope -> never auto-disable"
+    assert "superseded_by_scope_change" not in (ops.metadata_ or {})
+
+
+def test_jira_discovery_repairs_preexisting_case_variant_duplicate(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 3, P1): if two case-variant rows for
+    the same project already exist (e.g. from data predating the
+    case-insensitive match), discovery must self-repair -- fold the
+    duplicate into the surviving row -- instead of the case-insensitive
+    filter matching both and one_or_none() raising MultipleResultsFound
+    (which would 503 every future discovery run for this integration)."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    older = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="eng",
+        name="eng",
+        full_name="eng",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    newer = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="ENG",
+        name="ENG",
+        full_name="ENG",
+        metadata_={"planner_managed_sync_config_id": str(jira_planner_config.id)},
+        is_enabled=True,
+        discovered_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2021, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add_all([older, newer])
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("ENG", "Engineering", "software")]):
+        sources = discover_sources_for_integration(session, jira_integration.id)
+
+    assert len(sources) == 1
+    survivors = [
+        s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+        if s.is_enabled
+    ]
+    assert len(survivors) == 1
+    disabled = [
+        s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+        if not s.is_enabled
+    ]
+    assert len(disabled) == 1
+    assert "duplicate_of_external_id" in disabled[0].metadata_
+
+
+def test_jira_discovery_caps_new_sources_before_preexisting_ones(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 3, P1): capping must prefer sources
+    discovered in THIS run over ones that already existed and were already
+    relied upon -- an org already at its limit must not have a working,
+    pre-existing source silently disabled just because this run also
+    discovered new ones."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    license_row = OrgLicense(org_id=uuid.UUID(_JIRA_ORG_ID), tier="community")
+    session.add(license_row)
+    session.commit()
+
+    with patch(DISCOVERY_PATH, return_value=[("ZZZ", "Existing Project", "software")]):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    zzz = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.integration_id == jira_integration.id,
+            IntegrationSource.external_id == "ZZZ",
+        )
+        .one()
+    )
+    assert zzz.is_enabled is True
+
+    # Community's default max_repos is 3; ZZZ already consumes one slot.
+    # Discovering 3 MORE projects overflows by 2 -- both must come from the
+    # new batch, never from ZZZ, even though ZZZ sorts after some of them
+    # alphabetically (external_id desc would otherwise pick it).
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+        ],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    session.refresh(zzz)
+    assert zzz.is_enabled is True, "pre-existing source must never be capped first"
+
+    by_external = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    }
+    enabled_new = [k for k in ("AAA", "BBB", "CCC") if by_external[k].is_enabled]
+    assert len(enabled_new) == 2, (
+        "exactly 2 of the 3 new projects fit the remaining slot"
+    )
+
+
+def test_jira_discovery_recovers_only_sources_seen_in_current_run(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 3, P2): a capped project Jira no
+    longer returns (deleted, credential lost access) must never be
+    re-enabled just because headroom opened up on some OTHER project --
+    recovery only considers rows this run's discovery actually reconfirmed."""
+    from dev_health_ops.sync.discovery import discover_sources_for_integration
+
+    license_row = OrgLicense(org_id=uuid.UUID(_JIRA_ORG_ID), tier="community")
+    session.add(license_row)
+    session.commit()
+
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+            ("DDD", "Project D", "software"),
+        ],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    by_external = {
+        s.external_id: s
+        for s in session.query(IntegrationSource)
+        .filter(IntegrationSource.integration_id == jira_integration.id)
+        .all()
+    }
+    assert by_external["DDD"].is_enabled is False  # capped: community max_repos=3
+
+    # Raise the allowance, but DDD has disappeared from Jira in this run.
+    license_row.limits_override = {"max_repos": 4}
+    session.commit()
+    with patch(
+        DISCOVERY_PATH,
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+        ],
+    ):
+        discover_sources_for_integration(session, jira_integration.id)
+
+    session.refresh(by_external["DDD"])
+    assert by_external["DDD"].is_enabled is False, (
+        "must not recover a project this run's discovery didn't return"
+    )
+
+
+def test_set_source_enabled_clears_cap_marker_on_manual_enable(
+    session: Session,
+    jira_integration: Integration,
+    jira_planner_config: SyncConfiguration,
+):
+    """Codex review (CHAOS-4584 round 3, P2): an operator explicitly
+    enabling a cap-disabled row supersedes the automatic bookkeeping -- the
+    marker must not linger and confuse a later discovery run's own
+    (now-redundant) recovery pass."""
+    from dev_health_ops.sync.discovery import set_source_enabled
+
+    source = IntegrationSource(
+        org_id=_JIRA_ORG_ID,
+        integration_id=jira_integration.id,
+        provider="jira",
+        source_type="project",
+        external_id="AAA",
+        name="Project A",
+        full_name="AAA",
+        metadata_={"capped_by_repo_limit": True},
+        is_enabled=False,
+        discovered_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_seen_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(source)
+    session.commit()
+
+    updated = set_source_enabled(session, source.id, enabled=True)
+    assert updated.is_enabled is True
+    assert "capped_by_repo_limit" not in updated.metadata_
+
+
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):
     from dev_health_ops.sync.discovery import (
         discover_sources_for_integration,

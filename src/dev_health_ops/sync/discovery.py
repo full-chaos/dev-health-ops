@@ -314,6 +314,10 @@ def discover_sources_for_integration(
     now = _now_utc()
     upserted: list[IntegrationSource] = []
     created_count = 0
+    created_external_ids_lower: set[str] = set()
+    discovered_external_ids_lower = {
+        str(fields["external_id"]).lower() for fields in source_dicts
+    }
 
     # codex review (CHAOS-4584 round 1, P2): isolate the upsert loop in a
     # SAVEPOINT so a DB failure partway through (e.g. a concurrent
@@ -326,7 +330,7 @@ def discover_sources_for_integration(
         for fields in source_dicts:
             external_id = fields["external_id"]
 
-            existing_query = session.query(IntegrationSource).filter(
+            base_query = session.query(IntegrationSource).filter(
                 IntegrationSource.org_id == integration.org_id,
                 IntegrationSource.integration_id == integration_id,
                 IntegrationSource.provider == fields["provider"],
@@ -343,14 +347,39 @@ def discover_sources_for_integration(
                 # duplicate that then double-schedules the project.
                 from sqlalchemy import func
 
-                existing_query = existing_query.filter(
-                    func.lower(IntegrationSource.external_id) == external_id.lower()
+                candidates = (
+                    base_query.filter(
+                        func.lower(IntegrationSource.external_id) == external_id.lower()
+                    )
+                    .order_by(
+                        IntegrationSource.discovered_at.asc(),
+                        IntegrationSource.id.asc(),
+                    )
+                    .all()
                 )
+                existing = None
+                if candidates:
+                    exact = [c for c in candidates if c.external_id == external_id]
+                    existing = exact[0] if exact else candidates[0]
+                    # codex review (CHAOS-4584 round 3, P1): a pre-existing
+                    # case-variant pair (e.g. "eng" and "ENG") would make
+                    # this filter match more than one row -- self-repair by
+                    # folding every OTHER match into the surviving row
+                    # instead of ever calling one_or_none() (which would
+                    # raise MultipleResultsFound and 503 every future
+                    # discovery run for this integration).
+                    for dup in candidates:
+                        if dup is existing:
+                            continue
+                        dup.is_enabled = False
+                        dup.metadata_ = {
+                            **(dup.metadata_ or {}),
+                            "duplicate_of_external_id": existing.external_id,
+                        }
             else:
-                existing_query = existing_query.filter(
+                existing = base_query.filter(
                     IntegrationSource.external_id == external_id
-                )
-            existing = existing_query.one_or_none()
+                ).one_or_none()
 
             if existing is not None:
                 # Update mutable fields; preserve is_enabled and discovered_at.
@@ -379,6 +408,16 @@ def discover_sources_for_integration(
                 session.add(source)
                 upserted.append(source)
                 created_count += 1
+                created_external_ids_lower.add(external_id.lower())
+
+        if provider == "jira" and planner_managed_sync_config_id:
+            _supersede_stale_scoped_jira_sources(
+                session,
+                integration,
+                config_shim,
+                planner_managed_sync_config_id,
+                discovered_external_ids_lower,
+            )
 
         session.flush()
 
@@ -397,9 +436,85 @@ def discover_sources_for_integration(
         # time -- enforcing it here means create_sync_config's inline
         # discovery call and the standalone
         # POST /integrations/{id}/discover endpoint both get it automatically.
-        _rebalance_jira_sources_against_repo_limit(session, integration)
+        _rebalance_jira_sources_against_repo_limit(
+            session,
+            integration,
+            created_external_ids_lower=created_external_ids_lower,
+            discovered_external_ids_lower=discovered_external_ids_lower,
+        )
 
     return upserted
+
+
+def _supersede_stale_scoped_jira_sources(
+    session: Session,
+    integration: Integration,
+    config_shim: Any,
+    planner_managed_sync_config_id: str,
+    discovered_external_ids_lower: set[str],
+) -> None:
+    """When an integration is explicitly scoped to one project
+    (``sync_options.project_key``/``project_id``), disable any OTHER
+    enabled source this same planner-managed config tagged that discovery
+    did NOT just return (codex review, CHAOS-4584 round 3 P1).
+
+    Without this, changing an explicitly-scoped config's project via
+    ``PATCH /sync-configs/{id}`` (``project_key=OLD`` -> ``NEW``) leaves
+    ``OLD`` enabled forever -- ``trigger_routing.py::_planner_scoped_source_ids``
+    tags both rows to the same config, so the planner keeps syncing the
+    project the operator just moved away from.
+
+    Deliberately NOT applied to the "discover everything, no explicit
+    scope" case: this module's documented stale-handling policy (top of
+    file) is that a project temporarily absent from one discovery run is
+    never auto-disabled there, and that must stay true. Only an explicit,
+    single-project scope makes "not the current scope" a durable,
+    operator-driven fact rather than a possibly-transient API omission.
+    """
+    sync_options = getattr(config_shim, "sync_options", None) or {}
+    if not (sync_options.get("project_key") or sync_options.get("project_id")):
+        return
+
+    enabled_sources = (
+        session.query(IntegrationSource)
+        .filter(
+            IntegrationSource.org_id == integration.org_id,
+            IntegrationSource.integration_id == integration.id,
+            IntegrationSource.provider == "jira",
+            IntegrationSource.is_enabled.is_(True),
+        )
+        .all()
+    )
+    superseded = []
+    for source in enabled_sources:
+        if (source.metadata_ or {}).get(
+            "planner_managed_sync_config_id"
+        ) != planner_managed_sync_config_id:
+            continue
+        if source.external_id.lower() in discovered_external_ids_lower:
+            continue
+        source.is_enabled = False
+        source.metadata_ = {
+            **(source.metadata_ or {}),
+            "superseded_by_scope_change": True,
+        }
+        superseded.append(source)
+
+    if superseded:
+        from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+
+        JIRA_PROJECT_DISCOVERY_TOTAL.labels(outcome="superseded_by_scope_change").inc(
+            len(superseded)
+        )
+        logger.info(
+            "jira_project_discovery_superseded_by_scope_change",
+            extra={
+                "org_id": integration.org_id,
+                "integration_id": str(integration.id),
+                "superseded_count": len(superseded),
+                "superseded_external_ids": [s.external_id for s in superseded],
+            },
+        )
 
 
 def _active_repo_usage_count_for_limit(session: Session, org_id: str) -> int:
@@ -451,20 +566,37 @@ _CAP_MARKER_KEY = "capped_by_repo_limit"
 
 
 def _rebalance_jira_sources_against_repo_limit(
-    session: Session, integration: Integration
+    session: Session,
+    integration: Integration,
+    *,
+    created_external_ids_lower: set[str],
+    discovered_external_ids_lower: set[str],
 ) -> None:
     """Keep this jira integration's enabled source count within the org's
     ``max_repos`` allowance after a discovery run (codex review, CHAOS-4584
-    round 1 P1 + round 2 P1/P2).
+    round 1 P1, round 2 P1/P2, round 3 P1/P2).
 
     Only ever touches sources on *integration* -- never another provider's
-    or another integration's rows. Disabling is marked with
-    ``metadata_.capped_by_repo_limit`` so a later run -- once the org's
-    allowance grows (a tier change, a higher ``limits_override``, or other
-    sources on the org being disabled) -- can tell a cap-disabled row apart
-    from one an operator deliberately disabled, and re-enable it (round 2
-    P2: capped rows must be able to recover automatically, not require a
-    manual enable operation).
+    or another integration's rows.
+
+    Capping prefers sources CREATED in this very discovery run
+    (*created_external_ids_lower*) over ones that already existed and were
+    already enabled: an org already at its limit must not have real,
+    already-relied-upon sources silently disabled just because THIS run
+    also discovered new ones (round 3 P1) -- that would violate this
+    module's own "is_enabled is never changed for an existing row" contract
+    in spirit even though the row being touched here is a different one.
+
+    Disabling is marked with ``metadata_.capped_by_repo_limit`` so a later
+    run -- once the org's allowance grows (a tier change, a higher
+    ``limits_override``, or other sources on the org being disabled) -- can
+    tell a cap-disabled row apart from one an operator deliberately
+    disabled, and re-enable it (round 2 P2). Recovery only ever considers a
+    row whose external_id was actually RETURNED by this discovery run
+    (*discovered_external_ids_lower*, round 3 P2) -- a project Jira no
+    longer reports (deleted, credential lost access) or the org's tier
+    later downgraded past must never be silently re-enabled just because
+    some OTHER project's headroom opened up.
     """
     from dev_health_ops.api.services.licensing import TierLimitService
     from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
@@ -475,7 +607,7 @@ def _rebalance_jira_sources_against_repo_limit(
     if max_repos is not None:
         overflow = _active_repo_usage_count_for_limit(session, org_id) - int(max_repos)
         if overflow > 0:
-            capped = (
+            enabled_sources = (
                 session.query(IntegrationSource)
                 .filter(
                     IntegrationSource.org_id == org_id,
@@ -483,9 +615,19 @@ def _rebalance_jira_sources_against_repo_limit(
                     IntegrationSource.is_enabled.is_(True),
                 )
                 .order_by(IntegrationSource.external_id.desc())
-                .limit(overflow)
                 .all()
             )
+            newly_created = [
+                s
+                for s in enabled_sources
+                if s.external_id.lower() in created_external_ids_lower
+            ]
+            pre_existing = [
+                s
+                for s in enabled_sources
+                if s.external_id.lower() not in created_external_ids_lower
+            ]
+            capped = (newly_created + pre_existing)[:overflow]
             for source in capped:
                 source.is_enabled = False
                 source.metadata_ = {
@@ -503,13 +645,17 @@ def _rebalance_jira_sources_against_repo_limit(
                         "org_id": org_id,
                         "integration_id": str(integration.id),
                         "capped_count": len(capped),
+                        "capped_pre_existing_count": sum(
+                            1 for s in capped if s in pre_existing
+                        ),
                         "max_repos": max_repos,
                     },
                 )
             return
 
     # Either unlimited (max_repos is None) or there's headroom: recover any
-    # previously cap-disabled rows on THIS integration, up to that headroom.
+    # previously cap-disabled rows on THIS integration THAT DISCOVERY JUST
+    # RECONFIRMED, up to that headroom.
     capped_rows = (
         session.query(IntegrationSource)
         .filter(
@@ -520,7 +666,12 @@ def _rebalance_jira_sources_against_repo_limit(
         .order_by(IntegrationSource.external_id.asc())
         .all()
     )
-    recoverable = [r for r in capped_rows if (r.metadata_ or {}).get(_CAP_MARKER_KEY)]
+    recoverable = [
+        r
+        for r in capped_rows
+        if (r.metadata_ or {}).get(_CAP_MARKER_KEY)
+        and r.external_id.lower() in discovered_external_ids_lower
+    ]
     if not recoverable:
         return
 
@@ -616,6 +767,14 @@ def set_source_enabled(
     if source is None:
         raise ValueError(f"IntegrationSource not found: {source_id}")
     source.is_enabled = enabled
+    if enabled and (source.metadata_ or {}).get(_CAP_MARKER_KEY):
+        # An operator explicitly enabling a cap-disabled row (codex review,
+        # CHAOS-4584 round 3 P2) supersedes the automatic-recovery
+        # bookkeeping -- this is now an operator decision, not something
+        # discovery's own repo-limit rebalancing should ever touch again.
+        source.metadata_ = {
+            k: v for k, v in (source.metadata_ or {}).items() if k != _CAP_MARKER_KEY
+        }
     session.flush()
     return source
 

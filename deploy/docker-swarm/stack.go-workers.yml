@@ -63,7 +63,7 @@ x-go-worker: &go-worker
     # ordering-contract guard and refuses to start against a contract-2
     # (post-067) table without this set. Omitted defaults to contract 1
     # (rollout-safe); see deploy/go-workers/README.md's rollout note.
-    OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+    OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
   networks: [dev-health-internal]
   deploy: &go-worker-deploy
     mode: replicated

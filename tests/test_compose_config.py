@@ -1788,7 +1788,12 @@ def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:
         if d.get("kind") == "ConfigMap"
         and d["metadata"]["name"] == "dev-health-go-worker-config"
     )
-    assert config["data"].get("OPERATIONAL_ORDERING_CONTRACT") == "2"
+    # Default stays "1" (rollout-safe, matches the binary's own omitted
+    # default) -- a codex-caught regression during this PR's own review
+    # defaulted this to "2" unconditionally, which crash-loops any
+    # environment that has not yet applied migration 067. Never flip this
+    # back without also reading deploy/go-workers/README.md's rollout note.
+    assert config["data"].get("OPERATIONAL_ORDERING_CONTRACT") == "1"
 
     deployments = {
         d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
@@ -1825,4 +1830,6 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
     assert ".Values.goWorkers.operationalOrderingContract" in template
 
     values = _load_yaml(_HELM_DIR / "values.yaml")
-    assert values["goWorkers"]["operationalOrderingContract"] == "2"
+    # Same rollout-safe-default regression guard as the Kubernetes ConfigMap
+    # assertion above.
+    assert values["goWorkers"]["operationalOrderingContract"] == "1"

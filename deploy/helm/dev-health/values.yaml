@@ -188,7 +188,7 @@ goWorkers:
   # the Python api's own ordering-contract awareness is a separate,
   # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
   # deploy/go-workers/README.md's rollout note before changing this value.
-  operationalOrderingContract: "2"
+  operationalOrderingContract: "1"
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot

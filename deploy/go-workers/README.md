@@ -141,43 +141,48 @@ queue when River claim sharing and the combined capacity budget are reviewed.
 Both queues and all provider routes remain Celery-owned unless a reviewed route
 release says otherwise.
 
-### `OPERATIONAL_ORDERING_CONTRACT` rollout: apply 067 and restart with contract 2 together, never separately (CHAOS-4587)
+### `OPERATIONAL_ORDERING_CONTRACT` rollout: export it for the migrate job AND every worker, in the same deploy pass (CHAOS-4587)
 
 **Incident this closes:** `go-worker-heavy` crash-looped locally (RestartCount
 6, observed 2026-08-30 08:31Z) after ClickHouse migration 067 flipped
 `operational_incidents` to ordering-contract 2 while no deploy artifact in
-this tree set `OPERATIONAL_ORDERING_CONTRACT` for any Go runtime process. Two
-Go call sites refuse to start rather than read a table shape they were not
-told about (`internal/jobs/metrics/remaining/dora_native_clickhouse.go`,
+this tree set `OPERATIONAL_ORDERING_CONTRACT` for any Go runtime process. The
+migrate step ran with `OPERATIONAL_ORDERING_CONTRACT=2` exported by hand
+(applying 067), but no worker service *referenced* that variable at all —
+Compose only forwards a shell/`.env` variable into a container when a service
+explicitly names it, so every worker fell back to the binary's own omitted
+default (contract 1) and refused to start against the now-contract-2 table.
+Two Go call sites enforce this refusal
+(`internal/jobs/metrics/remaining/dora_native_clickhouse.go`,
 `internal/providersync/pagerduty_services_effects_clickhouse.go`); there is no
 ClickHouse-side downgrade path once the shadow-exchange in 067 has run.
 
-Every deploy artifact in this directory tree now sets
-`OPERATIONAL_ORDERING_CONTRACT=2` by default for every long-running Go
-process that can read a canonical operational table (`heavy`, `ops`, `sync`,
-`sync-provider`, `reconciler`, `scheduler`, and all three stream-runner
-profiles — the full `processes` list in `deployment.json`). That default is a
-**deploy-time choice, not this binary's own default** — the binary itself
-defaults an omitted or explicit `1` to the rollout-safe legacy bridge (see
+Every deploy artifact in this directory tree now *references*
+`OPERATIONAL_ORDERING_CONTRACT` for every long-running Go process that can
+read a canonical operational table (`heavy`, `ops`, `sync`, `sync-provider`,
+`reconciler`, `scheduler`, and all three stream-runner profiles — the full
+`processes` list in `deployment.json`), so an explicit export now actually
+reaches them. **The default stays `1`** (rollout-safe, matching the binary's
+own omitted default per
 `.github/docs-legacy/architecture/canonical-operational-model.md`,
-"Ordering-contract rollout and recovery"). Concretely:
+"Ordering-contract rollout and recovery") — this PR does not, and must not,
+make any environment assume contract 2 on its own. Concretely:
 
 1. **Never restart a contract-1 binary against a contract-2 (post-067)
    table**, and never restart a contract-2 binary against a contract-1
    table — either direction fails a canonical-table read/write with
    `operational_old_writer_rejected` or an ordering-contract stale-state
    error, and there is no automatic recovery.
-2. Applying migration 067 (which requires quiescing ingress and draining
-   queued work first — see the doc above) and rolling every Go process in
-   this fleet to a build that carries this default **are one deploy pass,
-   not two**. Landing this default ahead of 067 is safe (it matches the
-   table's actual contract-1 shape until 067 runs); landing 067 ahead of a
-   rollout that includes this default is the crash-loop above.
+2. At cutover, export `OPERATIONAL_ORDERING_CONTRACT=2` for the migrate job
+   **and** every worker process **in the same deploy pass** — not one
+   without the other, and not a config-file default forcing it ahead of
+   time. Migration 067 itself requires quiescing ingress and draining
+   queued work first (see the doc above).
 3. The Python `api`/`metrics-api` services are **not** wired here on
    purpose. `src/dev_health_ops/storage/operational_current.py` reads the
    same env var for its own reader-shape selection, so once 067 is applied
    in an environment where those services must see the v2 shape, that is a
-   separate, tracked follow-up — do not fold it into this Go-only default
+   separate, tracked follow-up — do not fold it into this Go-only wiring
    without its own review.
 
 ### Health is a work-receipt, not process liveness (CHAOS-4029)

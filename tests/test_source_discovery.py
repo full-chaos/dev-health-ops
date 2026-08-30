@@ -1469,10 +1469,15 @@ def test_set_source_enabled_rejects_enable_over_repo_limit(
     undo the operator's own explicit enable, since a marker-less row looks
     like any other ordinary pre-existing source once the cap marker is
     cleared."""
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
     from dev_health_ops.sync.discovery import (
         RepoLimitExceededError,
         set_source_enabled,
     )
+
+    before = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
 
     license_row = OrgLicense(org_id=uuid.UUID(_JIRA_ORG_ID), tier="community")
     session.add(license_row)
@@ -1512,6 +1517,14 @@ def test_set_source_enabled_rejects_enable_over_repo_limit(
     session.refresh(capped)
     assert capped.is_enabled is False, "rejected enable must not mutate the row"
     assert capped.metadata_.get("capped_by_repo_limit") is True
+
+    after = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
+    assert after == before + 1, (
+        "codex review (gate round 3, P3): the rejection must be observable "
+        "via telemetry, not just the raised exception"
+    )
 
 
 def test_list_sources_enabled_only(session: Session, github_integration: Integration):

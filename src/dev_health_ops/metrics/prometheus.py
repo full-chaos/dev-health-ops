@@ -133,7 +133,11 @@ if _PROMETHEUS_AVAILABLE:
         "(CHAOS-4584): discovered/created/existing/capped_by_repo_limit/"
         "recovered_from_repo_limit_cap/superseded_by_scope_change rows per "
         "run, or a run finding zero projects or no owning planner-managed "
-        "config to tag",
+        "config to tag. rejected_at_enable_repo_limit (gate round 3): an "
+        "operator's own manual re-enable of a Jira source was rejected "
+        "because it would exceed max_repos, from either enable-time entry "
+        "point (sync/discovery.py::set_source_enabled or "
+        "api/services/integrations.py::IntegrationSourceService.set_enabled)",
         ["outcome"],
     )
 

@@ -1032,6 +1032,25 @@ def set_source_enabled(
         if max_repos is not None:
             current_count = _active_repo_usage_count_for_limit(session, source.org_id)
             if current_count + 1 > int(max_repos):
+                # codex review (CHAOS-4584 gate round 3, P3): mirror the
+                # async admin-API path's telemetry (api/services/integrations.py)
+                # so this rejection is operationally visible on this entry
+                # point too.
+                from dev_health_ops.metrics.prometheus import (
+                    JIRA_PROJECT_DISCOVERY_TOTAL,
+                )
+
+                JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+                    outcome="rejected_at_enable_repo_limit"
+                ).inc()
+                logger.warning(
+                    "jira_source_enable_rejected_repo_limit",
+                    extra={
+                        "org_id": source.org_id,
+                        "source_id": str(source.id),
+                        "max_repos": max_repos,
+                    },
+                )
                 raise RepoLimitExceededError(
                     f"Enabling this source would exceed the org's repo "
                     f"limit ({max_repos})"

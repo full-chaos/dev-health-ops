@@ -606,6 +606,12 @@ async def test_patch_source_rejects_jira_enable_over_repo_limit(
         )
         await session.commit()
 
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+
+    before = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
+
     resp = await ac.patch(
         f"/api/v1/admin/integrations/{integration_id}/sources/{capped_id}",
         json={"is_enabled": True},
@@ -616,6 +622,14 @@ async def test_patch_source_rejects_jira_enable_over_repo_limit(
         source = await session.get(IntegrationSource, capped_id)
         assert source.is_enabled is False
         assert source.metadata_.get("capped_by_repo_limit") is True
+
+    after = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
+    assert after == before + 1, (
+        "codex review (gate round 3, P3): the rejection must be observable "
+        "via telemetry, not just the 403"
+    )
 
 
 @pytest.mark.asyncio

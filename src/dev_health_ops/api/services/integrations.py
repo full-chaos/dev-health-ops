@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -21,6 +22,8 @@ from dev_health_ops.models.integrations import (
 )
 from dev_health_ops.models.settings import IntegrationCredential, SyncWatermark
 from dev_health_ops.sync.datasets import get_dataset_spec
+
+logger = logging.getLogger(__name__)
 
 
 class RepoLimitExceededError(RuntimeError):
@@ -218,6 +221,28 @@ class IntegrationSourceService:
                     self._session, self._org_id
                 )
                 if current_count + 1 > int(max_repos):
+                    # codex review (CHAOS-4584 gate round 3, P3): this
+                    # enforcement path had no telemetry -- an org repeatedly
+                    # hitting the cap at enable time was operationally
+                    # invisible (only the 403 the operator saw, no signal
+                    # anywhere else). Reuse the same discovery counter
+                    # family so this shows up next to the other
+                    # CHAOS-4584 repo-limit outcomes.
+                    from dev_health_ops.metrics.prometheus import (
+                        JIRA_PROJECT_DISCOVERY_TOTAL,
+                    )
+
+                    JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+                        outcome="rejected_at_enable_repo_limit"
+                    ).inc()
+                    logger.warning(
+                        "jira_source_enable_rejected_repo_limit",
+                        extra={
+                            "org_id": self._org_id,
+                            "source_id": str(source.id),
+                            "max_repos": max_repos,
+                        },
+                    )
                     raise RepoLimitExceededError(
                         f"Enabling this source would exceed the org's repo "
                         f"limit ({max_repos})"

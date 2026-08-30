@@ -430,7 +430,24 @@ func githubTestsLogArtifactSkipSummary(
 	skippedArtifacts []GitHubTestsSkippedArtifact,
 	excludedSuffix, excludedPrefix int, excludedSample []string,
 ) {
-	if len(incomplete) == 0 && excludedSuffix == 0 && excludedPrefix == 0 {
+	// Gate on an actual artifact/member disposition, not on incomplete being
+	// non-empty (CHAOS-4592 codex review, on merged CHAOS-4588 code): incomplete
+	// ALSO carries run-level page-budget/per-run-cap truncations
+	// (run_inventory, artifact_inventory, run_jobs, run_artifacts, run_reports)
+	// that never skipped a single artifact or report member -- those already
+	// get their own dedicated line at the truncation site
+	// (recordGitHubTestsInventoryTruncation, recordGitHubTestsPerRunTruncation).
+	// Firing THIS "provider artifacts skipped this unit" line for a unit whose
+	// only incompleteness was run-level claimed a skip that never happened,
+	// with a misleading artifact_skip_total=0 right next to the message.
+	hasArtifactDisposition := excludedSuffix > 0 || excludedPrefix > 0
+	for _, observation := range incomplete {
+		if observation.Component == githubTestsReportMemberComponent && observation.Count > 0 {
+			hasArtifactDisposition = true
+			break
+		}
+	}
+	if !hasArtifactDisposition {
 		return
 	}
 	// incomplete mixes several different kinds of observation under one
@@ -1220,13 +1237,25 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 										},
 									)
 								}
-								slog.Warn(
-									"provider artifact skipped: oversized",
-									"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-									"repository", cursor.Repo, "run", pipeline.RunID,
-									"artifact", artifact.ID, "cap", githubTestsMaxDownloadSize,
-									"error", downloadErr,
-								)
+								// No per-artifact log line here (CHAOS-4592
+								// codex review, folding CHAOS-4588's already-
+								// established contract onto this one branch it
+								// missed): unavailable/unreadable_archive
+								// skips a few lines above and below stopped
+								// logging per event once githubTestsLogArtifactSkipSummary
+								// existed to report the same evidence once per
+								// unit -- this oversized branch kept its own
+								// direct slog.Warn, so a unit with even one
+								// oversized artifact got BOTH a per-artifact
+								// line here AND the summary line at
+								// finalization, violating the at-most-one-
+								// line-per-unit contract and duplicating the
+								// summary's skipped_sample. The size/cap this
+								// line used to carry are already durable on
+								// the GitHubTestsSkippedArtifact marker just
+								// above (SizeBytes/CapBytes) and rendered into
+								// the summary's skipped_sample
+								// (githubTestsSkippedArtifactLogSample).
 								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue

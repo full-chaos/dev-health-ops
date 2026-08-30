@@ -153,3 +153,91 @@ func TestGitHubTestsMemberLevelSkipDoesNotCountAsAnArtifactSkip(t *testing.T) {
 		t.Fatalf("report_member_malformed=%v, want 1", attrs["report_member_malformed"])
 	}
 }
+
+// RED before this fix (CHAOS-4592 codex review, on merged CHAOS-4588 code):
+// githubTestsLogArtifactSkipSummary's gate was `len(incomplete) == 0`, but
+// incomplete ALSO carries run-level page-budget truncations that never
+// skipped a single artifact or report member. A unit whose run-listing hits
+// its cumulative page budget -- with the artifacts endpoint returning
+// nothing to skip at all -- must not log "provider artifacts skipped this
+// unit": that line already fired, correctly, at the truncation site
+// (recordGitHubTestsInventoryTruncation's "provider inventory page budget
+// exhausted"), and the summary line repeating it with a misleading
+// artifact_skip_total=0 right next to the claim is not a second useful
+// signal, it is noise that teaches operators to distrust the message.
+func TestGitHubTestsRunLevelTruncationDoesNotLogArtifactSkipSummary(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	claim := nativeTestClaim("github", "tests")
+
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, githubTestsClient(t, doer), 2)
+	if !githubTestsBlocksWatermark(
+		walk.cursor.Incomplete, walk.cursor.SkippedArtifacts,
+		walk.cursor.SkippedArtifactsOverflow, walk.cursor.SkippedArtifactCauseOverflow,
+	) {
+		t.Fatalf("premise failed: want an inventory truncation, incomplete=%+v", walk.cursor.Incomplete)
+	}
+	observation := githubTestsSkipObservation(t, walk.cursor.Incomplete, githubTestsRunInventoryComponent)
+	if observation.Cause != githubTestsPageBudgetCause {
+		t.Fatalf("premise failed: cause=%s, want %s", observation.Cause, githubTestsPageBudgetCause)
+	}
+
+	for _, record := range *records {
+		if record.Message == "provider artifacts skipped this unit; inventory continued" {
+			t.Fatalf(
+				"a unit with zero artifact/member skips logged the artifact-skip summary: %+v",
+				record,
+			)
+		}
+	}
+}
+
+// RED before this fix (CHAOS-4592 codex review, on merged CHAOS-4588 code):
+// the oversized-artifact branch in CollectChunks kept its own direct
+// slog.Warn("provider artifact skipped: oversized", ...) from before
+// CHAOS-4588 collapsed every OTHER report_member skip cause onto one
+// per-unit summary line. A unit with an oversized artifact therefore logged
+// TWO records -- the per-artifact line here and the summary line at
+// finalization -- violating the at-most-one-line-per-unit contract
+// TestGitHubTestsArtifactSkipsLogOncePerUnitWithCountsByCause already pins
+// for every other cause, and duplicating the summary's skipped_sample.
+func TestGitHubTestsOversizedArtifactLogsExactlyOneLine(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 2, oversized: map[int]bool{1: true}}
+
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 4)
+	if err != nil {
+		t.Fatalf("walk returned err=%v, want the unit to finalize with the oversized artifact skipped", err)
+	}
+	if walk.cursor.Suites != 1 {
+		t.Fatalf("premise failed: committed %d suites, want 1 (the one healthy artifact)", walk.cursor.Suites)
+	}
+
+	for _, record := range *records {
+		if record.Message == "provider artifact skipped: oversized" {
+			t.Fatalf(
+				"the per-artifact oversized line still fires; want it folded into the unit summary only: %+v",
+				record,
+			)
+		}
+	}
+	var summaries []slog.Record
+	for _, record := range *records {
+		if record.Message == "provider artifacts skipped this unit; inventory continued" {
+			summaries = append(summaries, record)
+		}
+	}
+	if len(summaries) != 1 {
+		t.Fatalf(
+			"got %d skip-summary log records, want exactly 1 for the whole unit (all records: %+v)",
+			len(summaries), *records,
+		)
+	}
+	attrs := membershipLogAttrs(summaries[0])
+	if attrs["artifact_skip_total"] != int64(1) {
+		t.Fatalf("artifact_skip_total=%v, want 1", attrs["artifact_skip_total"])
+	}
+	if attrs["report_member_artifact_oversized"] != int64(1) {
+		t.Fatalf("report_member_artifact_oversized=%v, want 1", attrs["report_member_artifact_oversized"])
+	}
+}

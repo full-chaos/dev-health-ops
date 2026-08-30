@@ -1196,7 +1196,24 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume.
     # None are integration-tagged.
     # 1280 -> 1281 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1281
+    #
+    # CHAOS-4592 (child of CHAOS-4588: codex reviews on lanes 4586/4587 found
+    # two log-contract defects in CHAOS-4588's merged code, folded in here
+    # since this lane owns github_tests_chunked_route.go today). (1)
+    # githubTestsLogArtifactSkipSummary's gate was `len(incomplete) == 0`,
+    # firing "provider artifacts skipped this unit" for a unit whose only
+    # incompleteness was a run-level page-budget truncation -- zero artifacts
+    # ever skipped, misleading artifact_skip_total=0 right next to the claim.
+    # (2) the oversized-artifact branch kept its own pre-CHAOS-4588 direct
+    # slog.Warn, so a unit with an oversized artifact logged that line PLUS
+    # the summary line -- two records, violating the at-most-one-per-unit
+    # contract CHAOS-4588 established for every other cause. Added 2 new
+    # ordinary top-level tests in github_tests_artifact_skip_log_test.go:
+    # TestGitHubTestsRunLevelTruncationDoesNotLogArtifactSkipSummary and
+    # TestGitHubTestsOversizedArtifactLogsExactlyOneLine. Neither is
+    # integration-tagged.
+    # 1281 -> 1283 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1283
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1213,7 +1230,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1281
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1283
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1274,7 +1291,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1281
+    assert len(selected_tests) == len(set(selected_tests)) == 1283
     assert set(selected_tests) == expected_tests
 
 

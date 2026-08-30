@@ -80,6 +80,7 @@ def _create_source(
     external_id: str,
     provider: str | None = None,
     is_enabled: bool = True,
+    metadata: dict | None = None,
 ) -> IntegrationSource:
     source_provider = provider or integration.provider
     source = IntegrationSource(
@@ -90,7 +91,7 @@ def _create_source(
         external_id=external_id,
         name=external_id.rsplit("/", 1)[-1],
         full_name=external_id,
-        metadata_={},
+        metadata_=dict(metadata or {}),
         is_enabled=is_enabled,
         discovered_at=datetime.now(timezone.utc),
         last_seen_at=datetime.now(timezone.utc),
@@ -2154,6 +2155,72 @@ def test_jira_non_project_source_plans_zero_work_item_units(db_session):
     was "JIRA"."""
     integration = _create_integration(db_session, provider="jira")
     _create_source(db_session, integration, external_id="JIRA", provider="jira")
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert work_item_units == []
+
+
+def test_jira_source_named_jira_with_explicit_scope_marker_still_plans(db_session):
+    """Codex review (CHAOS-4582, P2): a caller CAN legitimately name a real
+    Jira project "JIRA" -- the writer stamps
+    metadata_.explicit_project_scope=True for exactly that case
+    (api/admin/routers/sync.py's explicit_external_id branch), and that
+    marker must always win over the external_id=="jira" heuristic, or a
+    genuinely-scoped project gets silently suppressed the same way the
+    known-bad placeholder is."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(
+        db_session,
+        integration,
+        external_id="JIRA",
+        provider="jira",
+        metadata={"explicit_project_scope": True},
+    )
+    for dataset_key in _FAMILY_DATASETS:
+        _create_dataset(db_session, integration, dataset_key)
+
+    plan = plan_sync_run(
+        db_session,
+        SyncPlanRequest(
+            integration_id=str(integration.id),
+            org_id=ORG_ID,
+            mode=SyncRunMode.INCREMENTAL.value,
+            triggered_by="manual",
+        ),
+    )
+
+    work_item_units = [
+        u
+        for u in _planned_units(db_session, plan.sync_run_id)
+        if u.dataset_key in _FAMILY_DATASETS
+    ]
+    assert len(work_item_units) == 1
+
+
+def test_jira_non_project_source_guard_is_case_insensitive_on_provider(db_session):
+    """Codex review (CHAOS-4582, P3): the writer persists provider casing as
+    supplied (``IntegrationSource(provider=provider)``, no normalization), so
+    a legacy row created with provider="JIRA" (or any other casing) must
+    still trip the planner guard -- comparing the raw, unnormalized casing
+    would let the exact known-bad shape back in for those rows."""
+    integration = _create_integration(db_session, provider="jira")
+    _create_source(db_session, integration, external_id="JIRA", provider="JIRA")
     for dataset_key in _FAMILY_DATASETS:
         _create_dataset(db_session, integration, dataset_key)
 

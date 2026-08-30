@@ -1432,6 +1432,31 @@ async def _assert_single_planner_parent_for_integration(
         )
 
 
+def _non_git_explicit_source_id(sync_options: dict[str, Any]) -> Any:
+    """The run-time source identifier a non-git config's ``sync_options``
+    explicitly names (Jira project, Linear team, a repo), or ``None`` when
+    the config carries no such scope. Shared between ``_non_git_source_rows``
+    (which decides whether to materialize a source at all) and
+    ``create_sync_config``'s repo-limit preflight (CHAOS-4582 codex review:
+    the two must agree on how many sources a config will actually consume,
+    or the preflight over- or under-charges the org's limit)."""
+    return (
+        sync_options.get("project_id")
+        or sync_options.get("project_key")
+        or sync_options.get("team_id")
+        or sync_options.get("repo")
+    )
+
+
+def _jira_config_materializes_zero_sources(
+    provider: str, sync_options: dict[str, Any]
+) -> bool:
+    """Whether this config will hit ``_non_git_source_rows``'s zero-source
+    Jira branch below -- pulled out so the repo-limit preflight can charge 0
+    instead of 1 for it (codex P2)."""
+    return provider.lower() == "jira" and not _non_git_explicit_source_id(sync_options)
+
+
 def _non_git_source_rows(
     provider: str,
     sync_options: dict[str, Any],
@@ -1450,14 +1475,9 @@ def _non_git_source_rows(
     Jira project key) so every non-git config materializes exactly one
     planner-tagged source.
     """
-    explicit_external_id = (
-        sync_options.get("project_id")
-        or sync_options.get("project_key")
-        or sync_options.get("team_id")
-        or sync_options.get("repo")
-    )
+    explicit_external_id = _non_git_explicit_source_id(sync_options)
     is_linear_org_wide = provider.lower() == "linear" and not explicit_external_id
-    if provider.lower() == "jira" and not explicit_external_id:
+    if _jira_config_materializes_zero_sources(provider, sync_options):
         # CHAOS-4582: unlike Linear, Jira's work-items route has no org-wide
         # search mode for a planner-created unit -- it requires a real
         # per-project source (see metrics/job_work_items.py's
@@ -1480,6 +1500,13 @@ def _non_git_source_rows(
     metadata: dict[str, Any] = {"planner_managed_sync_config_id": str(config_id)}
     if is_linear_org_wide:
         metadata["org_wide_placeholder"] = True
+    if provider.lower() == "jira" and explicit_external_id:
+        # Codex review (CHAOS-4582, P2): distinguishes a REAL project a
+        # caller explicitly named (kept even if, coincidentally, that name
+        # is "JIRA") from the old fallback shape the planner-time guard
+        # below refuses to plan for. Without this marker the guard cannot
+        # tell the two apart by external_id alone.
+        metadata["explicit_project_scope"] = True
     return [
         IntegrationSource(
             org_id=org_id,
@@ -2069,10 +2096,24 @@ async def create_sync_config(
     # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
     await _acquire_repo_limit_create_lock(session, org_id)
     current_count = await _active_repo_usage_count_for_limit(session, org_id)
+    # CHAOS-4582 (codex P2): a Jira config with no explicit project scope
+    # materializes ZERO integration_sources rows (see
+    # _jira_config_materializes_zero_sources / _non_git_source_rows below) --
+    # charging it 1 here would wrongly 403 an org sitting exactly at its
+    # repo limit for a config that consumes no slot at all.
+    source_increment = (
+        0
+        if _jira_config_materializes_zero_sources(
+            payload.provider, payload.sync_options or {}
+        )
+        else 1
+    )
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
-        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count + 1)
+        return tier_svc.check_repo_limit(
+            uuid.UUID(org_id), current_count + source_increment
+        )
 
     allowed, reason = await session.run_sync(_check_repo_limit)
     if not allowed:

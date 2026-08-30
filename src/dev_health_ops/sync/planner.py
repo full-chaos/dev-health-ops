@@ -1330,9 +1330,17 @@ def _is_non_project_jira_source(source: IntegrationSource) -> bool:
     - ``external_id`` equal to the provider name itself (case-insensitive)
       -- the exact literal ("JIRA") the pre-fix writer fell back to when a
       config had no explicit project scope (live evidence, org 70d529e0,
-      CHAOS-4582). A real Jira project key is never just "jira".
+      CHAOS-4582).
+
+    Codex review (CHAOS-4582, P2): a caller CAN legitimately name a real
+    Jira project "JIRA" -- unlikely, but the writer's explicit-scope branch
+    stamps ``metadata_.explicit_project_scope`` for exactly that case, and
+    that marker always wins over the external_id heuristic below, so a
+    deliberately-scoped project is never suppressed.
     """
     metadata = source.metadata_ or {}
+    if metadata.get("explicit_project_scope"):
+        return False
     if metadata.get("org_wide_placeholder"):
         return True
     return str(source.external_id or "").strip().lower() == "jira"
@@ -1355,7 +1363,7 @@ def _build_work_item_family_units(
     if not family_specs:
         return []
 
-    if provider == "jira" and _is_non_project_jira_source(source):
+    if provider.strip().lower() == "jira" and _is_non_project_jira_source(source):
         # CHAOS-4582 (defense-in-depth): the writer (_non_git_source_rows,
         # api/admin/routers/sync.py) no longer materializes this shape for a
         # NEW jira config, but a pre-existing row (or a future writer bug of

@@ -418,10 +418,17 @@ func (materializer *NativeMaterializer) Materialize(
 	if materializer == nil || materializer.domainPool == nil || ctx == nil || coordinatorTx == nil {
 		return PlanResult{}, ErrInvalidMaterializer
 	}
-	if !occurrence.ConfigActive || !occurrence.ConfigPlannerManaged ||
-		occurrence.JobStatus != 0 || occurrence.JobType != "sync" {
+	if !occurrence.ConfigActive || !occurrence.ConfigPlannerManaged || occurrence.JobType != "sync" {
 		return PlanResult{}, ErrOccurrenceIneligible
 	}
+	// occurrence.JobStatus (scheduled_jobs.status) is checked further down, in
+	// loadMaterializationPlan, conditionally: an ordinary cron tick still
+	// requires an ACTIVE marker job (unchanged), but a manual/backfill
+	// occurrence (a sync_manual_triggers row exists) bypasses it entirely --
+	// see that check for why (codex review finding: a manual trigger on an
+	// intentionally UNSCHEDULED config -- the org 70d529e0 acceptance shape
+	// -- mints a deliberately PAUSED marker job, and this gate would have
+	// quarantined every such occurrence, never materializing it).
 	materializer.maybeRefreshExecutedProof(ctx)
 	ids, err := deterministicMaterializationIDs(occurrence.ID)
 	if err != nil {
@@ -483,7 +490,7 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
-	if err := persistCoordinatorGraph(ctx, coordinatorTx, ids, occurrence, len(units), loaded.terminalReason); err != nil {
+	if err := persistCoordinatorGraph(ctx, coordinatorTx, ids, occurrence, len(units), loaded.terminalReason, loaded.triggeredBy); err != nil {
 		return PlanResult{}, err
 	}
 	// CHAOS-4603: telemetry is NOT recorded here. coordinatorTx is the
@@ -600,6 +607,17 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
+	// codex review finding: Materialize's own eligibility gate no longer
+	// checks occurrence.JobStatus (moved here) so it can be conditional.
+	// _ensure_scheduled_job_for_config (execution_trigger.py) deliberately
+	// mints a PAUSED marker job for a config with no schedule_cron -- that
+	// PAUSED status means "never auto-fire a cron tick for this", which is
+	// completely orthogonal to "may THIS manually-created occurrence
+	// materialize". An ordinary cron-minted occurrence still requires an
+	// ACTIVE marker job, unchanged.
+	if manualTrigger == nil && occurrence.JobStatus != 0 {
+		return loadedMaterializationPlan{}, ErrOccurrenceIneligible
+	}
 	mode := SyncModeIncremental
 	triggeredBy := "schedule"
 	var sinceOverride, beforeOverride *time.Time
@@ -650,23 +668,29 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		}
 	}
 	// CHAOS-4602: native per-occurrence source (repo/project) discovery,
-	// before unit planning reads integration_sources below. Skipped for an
-	// explicit-scope config (sourceID set -- see loadPlanSources' own
-	// sourceID branch) and for any provider outside sourceDiscoveryProviders
-	// (Discover itself also gates this, but checking here avoids the
-	// credential-resolve round trip for a provider that will always skip).
-	// A discovery failure is loud (logged) but never fails the occurrence --
-	// it only means this pass did not widen coverage; already-existing
-	// sources (from Python's config-creation-time discovery, or an earlier
-	// materialize pass) are still enough to plan against below.
-	if discovery != nil && sourceID == nil && sourceDiscoveryProviders[provider] {
+	// before unit planning reads integration_sources below. Checking
+	// sourceDiscoveryProviders here (not just inside Discover) avoids the
+	// credential-resolve round trip for a provider that will always skip.
+	// An explicit-scope config (sourceID set) is NOT bypassed here the same
+	// way: Discover is still called, with ExplicitScope true, so its own
+	// early-return (before any credential resolution -- equally cheap)
+	// records the skipped-outcome telemetry too (codex review finding: the
+	// old sourceID==nil bypass here made this specific, common skip case
+	// invisible to provider_source_discovery_total -- no series at all, not
+	// even a zero, for a config that is legitimately never expected to
+	// discover). A discovery failure is loud (logged) but never fails the
+	// occurrence -- it only means this pass did not widen coverage;
+	// already-existing sources (from Python's config-creation-time
+	// discovery, or an earlier materialize pass) are still enough to plan
+	// against below.
+	if discovery != nil && sourceDiscoveryProviders[provider] {
 		var syncOptionsMap map[string]any
 		if err := json.Unmarshal(syncOptionsJSON, &syncOptionsMap); err != nil {
 			syncOptionsMap = map[string]any{}
 		}
 		if _, discoverErr := discovery.Discover(ctx, SourceDiscoveryArgs{
 			OrgID: orgID, IntegrationID: integrationID, CredentialID: credentialID,
-			Provider: provider, SyncOptions: syncOptionsMap, ExplicitScope: false,
+			Provider: provider, SyncOptions: syncOptionsMap, ExplicitScope: sourceID != nil,
 			ConfigID: occurrence.ConfigID, PlannerManaged: plannerManaged,
 		}); discoverErr != nil {
 			slog.Default().Warn("sync.materializer.source_discovery_failed",
@@ -1573,6 +1597,32 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 			// `if not dataset_keys: return []` in _load_enabled_datasets.
 			return nil, false, nil
 		}
+		// codex review finding: Python's _reconcile_explicit_requested_datasets
+		// (planner.py:858-904) enables any explicitly requested dataset that
+		// has no integration_datasets row yet -- "every dataset ... is
+		// opt-in and reconciled uniformly here: a caller (operator,
+		// backfill, or scheduled trigger) must name a dataset in
+		// request.dataset_keys for it to be created/enabled." Without this,
+		// a manual/backfill selector naming a dataset the config has never
+		// enabled before silently plans ZERO units for it instead of
+		// creating the requested work. ON CONFLICT DO NOTHING is safe here
+		// (no savepoint needed, unlike applyDomainPlanMutations' security-
+		// dataset case): this row's id is a fresh random UUID per attempt,
+		// never deterministic, so a concurrent replay can only ever
+		// conflict on the (org_id,integration_id,dataset_key) unique
+		// constraint the ON CONFLICT clause already arbitrates.
+		for key := range requested {
+			if _, ok := datasetSpecification(provider, key); !ok {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO public.integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options)
+VALUES ($1::uuid,$2,$3::uuid,$4,TRUE,'{}'::jsonb)
+ON CONFLICT (org_id,integration_id,dataset_key) DO NOTHING`,
+				uuid.New().String(), orgID, integrationID, key); err != nil {
+				return nil, false, fmt.Errorf("reconcile explicitly requested dataset %s: %w", key, err)
+			}
+		}
 	} else {
 		requested = requestedDatasetKeys(provider, targets, sourceID)
 		if provider == "github" || provider == "gitlab" {
@@ -1943,7 +1993,12 @@ func equalOptionalJSON(left, right []byte) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func persistCoordinatorGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, occurrence PendingOccurrence, totalUnits int, terminalReason string) error {
+func persistCoordinatorGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, occurrence PendingOccurrence, totalUnits int, terminalReason, triggeredBy string) error {
+	if triggeredBy == "" {
+		// Defensive default only: every loadMaterializationPlan return path
+		// sets this explicitly (see persistDomainGraph's identical guard).
+		triggeredBy = "schedule"
+	}
 	jobStatus := 0
 	resultValue := map[string]any{"sync_run_id": ids.SyncRunID}
 	if terminalReason != "" {
@@ -1961,8 +2016,8 @@ func persistCoordinatorGraph(ctx context.Context, tx pgx.Tx, ids materialization
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO public.job_runs (id,job_id,status,result,triggered_by,completed_at,error,created_at)
-VALUES ($1::uuid,$2::uuid,$3,$4::jsonb,'schedule',$5,$6,$7)
-ON CONFLICT (id) DO NOTHING`, ids.JobRunID, occurrence.JobID, jobStatus, result, completedAt, jobError, occurrence.ScheduledFor); err != nil {
+VALUES ($1::uuid,$2::uuid,$3,$4::jsonb,$5,$6,$7,$8)
+ON CONFLICT (id) DO NOTHING`, ids.JobRunID, occurrence.JobID, jobStatus, result, triggeredBy, completedAt, jobError, occurrence.ScheduledFor); err != nil {
 		return fmt.Errorf("persist scheduled job run: %w", err)
 	}
 	var persistedJobID, persistedTriggeredBy string
@@ -1975,7 +2030,7 @@ ON CONFLICT (id) DO NOTHING`, ids.JobRunID, occurrence.JobID, jobStatus, result,
 	if err := tx.QueryRow(ctx, `SELECT job_id::text,status,started_at,completed_at,duration_seconds,result::jsonb,error,error_traceback,triggered_by,created_at FROM public.job_runs WHERE id=$1::uuid`, ids.JobRunID).Scan(&persistedJobID, &persistedJobStatus, &persistedJobStarted, &persistedJobCompleted, &persistedJobDuration, &persistedJobResult, &persistedJobError, &persistedJobTraceback, &persistedTriggeredBy, &persistedJobCreatedAt); err != nil {
 		return fmt.Errorf("verify scheduled job run: %w", err)
 	}
-	if persistedJobID != occurrence.JobID || persistedJobStatus != jobStatus || persistedJobStarted != nil || !equalOptionalTime(persistedJobCompleted, completedAt) || persistedJobDuration != nil || !equalOptionalJSON(persistedJobResult, result) || !equalOptionalString(persistedJobError, jobError) || persistedJobTraceback != nil || persistedTriggeredBy != "schedule" || !persistedJobCreatedAt.Equal(occurrence.ScheduledFor) {
+	if persistedJobID != occurrence.JobID || persistedJobStatus != jobStatus || persistedJobStarted != nil || !equalOptionalTime(persistedJobCompleted, completedAt) || persistedJobDuration != nil || !equalOptionalJSON(persistedJobResult, result) || !equalOptionalString(persistedJobError, jobError) || persistedJobTraceback != nil || persistedTriggeredBy != triggeredBy || !persistedJobCreatedAt.Equal(occurrence.ScheduledFor) {
 		return fmt.Errorf("%w: deterministic job run identity maps to different state", ErrInvalidPlan)
 	}
 	if terminalReason != "" {

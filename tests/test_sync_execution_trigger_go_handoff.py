@@ -368,3 +368,61 @@ async def test_await_materialized_never_blocks_the_event_loop(
         f"elapsed={elapsed:.3f}s is close to the serialized sum (~0.45s), "
         "not the concurrent max (~0.25-0.3s) -- the event loop was blocked"
     )
+
+
+@pytest.mark.asyncio
+async def test_await_materialized_records_outcome_and_latency_telemetry(
+    sqlite_session, monkeypatch
+):
+    """CHAOS-4602 fork 2: 'telemetry: counter + histogram on await
+    outcome/latency' -- a codex review finding caught that all three
+    terminal branches returned without ever recording either."""
+    from dev_health_ops.metrics.prometheus import (
+        SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS,
+        SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL,
+    )
+    from dev_health_ops.sync.execution_trigger import (
+        _create_go_manual_sync_execution_trigger,
+    )
+    from dev_health_ops.sync.planner import SyncPlanRequest
+
+    monkeypatch.setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "0.05")
+    config = _seed_planner_managed_config(sqlite_session)
+    request = SyncPlanRequest(
+        integration_id=str(config.integration_id),
+        org_id="org-a",
+        mode="incremental",
+        triggered_by="manual",
+    )
+    minted = _create_go_manual_sync_execution_trigger(
+        sqlite_session, config, "org-a", request
+    )
+    assert minted.occurrence_id is not None
+    sqlite_session.commit()
+
+    before_count = SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL.labels(
+        outcome="pending"
+    )._value.get()
+    before_observations = SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS.labels(
+        outcome="pending"
+    )._sum.get()
+
+    outcome = await await_sync_execution_trigger_materialized(
+        cast(Any, _FakeAsyncSession(sqlite_session)),
+        minted.occurrence_id,
+        poll_interval=0.01,
+    )
+    assert outcome.awaiting_materialization is True
+
+    after_count = SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL.labels(
+        outcome="pending"
+    )._value.get()
+    after_observations = SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS.labels(
+        outcome="pending"
+    )._sum.get()
+    assert after_count == before_count + 1, (
+        f"pending outcome counter did not increment: before={before_count} after={after_count}"
+    )
+    assert after_observations > before_observations, (
+        "pending latency histogram recorded no observation"
+    )

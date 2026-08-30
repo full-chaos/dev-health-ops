@@ -576,7 +576,23 @@ async def await_sync_execution_trigger_materialized(
         neither of the above. Never an error: the caller presents this as
         "pending" and the occurrence keeps reconciling in the background.
     """
-    deadline = time.monotonic() + _manual_trigger_await_seconds()
+    started = time.monotonic()
+
+    def _record(outcome: str) -> None:
+        # CHAOS-4602 fork 2: "telemetry: counter + histogram on await
+        # outcome/latency" -- both labeled by the SAME outcome so they can
+        # be joined (e.g. p99 latency for quarantined vs materialized).
+        from dev_health_ops.metrics.prometheus import (
+            SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS,
+            SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL,
+        )
+
+        SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL.labels(outcome=outcome).inc()
+        SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS.labels(outcome=outcome).observe(
+            time.monotonic() - started
+        )
+
+    deadline = started + _manual_trigger_await_seconds()
     while True:
         state = await session.run_sync(
             lambda sync_session: _read_occurrence_reconcile_state(
@@ -592,9 +608,11 @@ async def await_sync_execution_trigger_materialized(
                     )
                 )
                 await session.commit()
+                _record("materialized")
                 return result
             if status == SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED:
                 await session.commit()
+                _record("quarantined")
                 return SyncExecutionTriggerResult(
                     sync_run_id="",
                     job_run_id="",
@@ -608,6 +626,7 @@ async def await_sync_execution_trigger_materialized(
                 )
         await session.commit()
         if time.monotonic() >= deadline:
+            _record("pending")
             return SyncExecutionTriggerResult(
                 sync_run_id="",
                 job_run_id="",

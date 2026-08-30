@@ -57,7 +57,7 @@ func startSourceDiscoveryPostgres(t *testing.T) (materializerFixture, string) {
 		// here would have silently bypassed that filter and hidden the bug.
 		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["work-items"]'::jsonb,'{"schedule_cron":"0 * * * *"}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{configID, orgID, integrationID}},
 		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{datasetID, orgID, integrationID}},
-		{`INSERT INTO scheduled_jobs VALUES ($1::uuid)`, []any{jobID}},
+		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',0,FALSE)`, []any{jobID, orgID, configID}},
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -100,6 +100,16 @@ func (fake *fakeSourceDiscoveryExecutor) Discover(ctx context.Context, args Sour
 	fake.sourcesAtCall = append(fake.sourcesAtCall, existingCount)
 	if fake.failWith != nil {
 		return SourceDiscoveryReport{}, fake.failWith
+	}
+	if args.ExplicitScope {
+		// Mirrors the REAL NativeSourceDiscoveryService.Discover's own
+		// early return (source_discovery.go): an explicit-scope config
+		// never seeds anything, it just reports skipped. The materializer
+		// now calls Discover unconditionally (codex review finding: the
+		// old caller-side sourceID==nil bypass made this skip invisible to
+		// telemetry) and relies on THIS early return, not on never being
+		// called at all.
+		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
 	}
 	created := 0
 	for i := 0; i < fake.sourcesToSeed; i++ {
@@ -207,8 +217,14 @@ VALUES ($1::uuid,$2,$3::uuid,'jira','project','PINNED','PINNED','PINNED',TRUE,'{
 		t.Fatal(err)
 	}
 
-	if len(fake.calls) != 0 {
-		t.Fatalf("Discover called %d times for an explicit-scope config, want 0", len(fake.calls))
+	// codex review finding: Discover IS now called (so its own skip path
+	// records the telemetry an operator needs), just with ExplicitScope
+	// true -- it must still never touch the source rows, asserted below.
+	if len(fake.calls) != 1 {
+		t.Fatalf("Discover called %d times for an explicit-scope config, want exactly 1", len(fake.calls))
+	}
+	if !fake.calls[0].ExplicitScope {
+		t.Fatalf("Discover call args = %#v, want ExplicitScope=true", fake.calls[0])
 	}
 	var sourceCount int
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT count(*) FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, fixture.occurrence.OrgID, integrationID).Scan(&sourceCount); err != nil {

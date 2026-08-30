@@ -647,7 +647,13 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		}
 		legacyItems, legacyErr := discoverJiraLegacyProjects(ctx, client)
 		if legacyErr != nil {
-			return nil, err
+			// codex review finding: this used to return the ORIGINAL err
+			// (the 404/405/410 that triggered the fallback in the first
+			// place), masking whatever the legacy endpoint itself actually
+			// failed with (a 401/500/decode error) behind an already-
+			// explained "endpoint unsupported" message. Wrap both so
+			// neither failure is silently dropped.
+			return nil, fmt.Errorf("jira legacy project fallback also failed (search endpoint error: %v): %w", err, legacyErr)
 		}
 		page = providerfoundation.PageCollection{Items: legacyItems}
 	}

@@ -778,6 +778,29 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    # CHAOS-4602 fork 2: the bounded await
+    # (execution_trigger.await_sync_execution_trigger_materialized) for a
+    # manual Sync Now / Backfill Go hand-off. Without this, a stalled or
+    # quarantined Go materialization is client-visible in the HTTP response
+    # but leaves no alertable signal behind it.
+    SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _prometheus_client_module.Counter(
+        "sync_manual_trigger_await_outcome_total",
+        "Terminal outcomes of the bounded await on a Go-owned "
+        "scheduled_sync_occurrences row materializing a manual Sync Now or "
+        "Backfill trigger (CHAOS-4602 fork 2): materialized, pending "
+        "(deadline elapsed, never an error), or quarantined (a client-"
+        "visible failure).",
+        ["outcome"],
+    )
+    SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _prometheus_client_module.Histogram(
+        "sync_manual_trigger_await_latency_seconds",
+        "Wall-clock time await_sync_execution_trigger_materialized spent "
+        "polling before reaching a terminal outcome (CHAOS-4602 fork 2), "
+        "labeled by that outcome.",
+        ["outcome"],
+        buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0),
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -827,6 +850,8 @@ else:
     TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
+    SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _noop_counter()
+    SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()

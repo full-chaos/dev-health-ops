@@ -202,6 +202,35 @@ func TestBuildBackfillPlanUsesWiderChunkForLinearWorkItemFamily(t *testing.T) {
 	}
 }
 
+// TestBuildBackfillPlanAcceptsAWideLinearBackfillMaxWindowDaysOverride proves
+// a codex review finding: Python's _linear_backfill_max_window_days has NO
+// upper bound (only value > 0), so an operator override like 3651 is
+// perfectly valid on the Python side. Go's own maxChunkDays safety rail
+// (backfill_chunker.go) used to sit at an arbitrary 3650 -- far below the
+// REAL time.Duration overflow boundary (~106,752) -- which rejected this
+// exact, otherwise-legitimate override on the Go path only. Deliberately
+// NOT marked t.Parallel(): it sets a process-global env var via t.Setenv,
+// which panics if used alongside a parallel test.
+func TestBuildBackfillPlanAcceptsAWideLinearBackfillMaxWindowDaysOverride(t *testing.T) {
+	t.Setenv("LINEAR_BACKFILL_MAX_WINDOW_DAYS", "3651")
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	units, err := BuildBackfillPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeBackfill, Now: now,
+		Since: &since, Before: &before,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "team", Provider: "linear", FullName: "team"}},
+		Datasets: []PlanDataset{{Key: "work-items"}},
+	})
+	if err != nil {
+		t.Fatalf("BuildBackfillPlan() with LINEAR_BACKFILL_MAX_WINDOW_DAYS=3651 = %v, want nil (Python accepts this value unconditionally)", err)
+	}
+	// A 3651-day chunk width covers this entire 20-day range in ONE chunk.
+	if len(units) != 1 {
+		t.Fatalf("len(units) = %d, want 1 (one wide chunk covers the whole 20-day range): %+v", len(units), units)
+	}
+}
+
 func TestBuildBackfillPlanSingleDayRangePlansOneUnit(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)

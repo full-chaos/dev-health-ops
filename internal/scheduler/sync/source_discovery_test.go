@@ -563,6 +563,42 @@ func TestDiscoverJiraDoesNotFallBackOnAuthenticationOrRateLimitErrors(t *testing
 	}
 }
 
+// TestDiscoverJiraLegacyFallbackFailureSurfacesItsOwnError proves a codex
+// review finding: when the enhanced-search endpoint is unsupported (404)
+// AND the legacy fallback ALSO fails, the caller must see the legacy
+// endpoint's own failure reason, not the original 404 re-surfaced as if the
+// fallback had never been attempted -- the original error is a fully
+// explained, already-handled "endpoint unsupported" signal that would
+// otherwise mask a genuinely different, actionable failure (here, a 500
+// from the legacy endpoint).
+func TestDiscoverJiraLegacyFallbackFailureSurfacesItsOwnError(t *testing.T) {
+	doer := &sequencedSourceDiscoveryDoer{
+		t:        t,
+		statuses: []int{http.StatusNotFound, http.StatusInternalServerError},
+		bodies:   []string{`{"errorMessages":["not found"]}`, `{"errorMessages":["boom"]}`},
+	}
+	credential, err := providerfoundation.Credential{Provider: "jira"}.WithEphemeralSecret("email", secrets.NewValue("bot@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("api_token", secrets.NewValue("jira-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = credential.WithEphemeralSecret("base_url", secrets.NewValue("https://acme.atlassian.net"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	_, err = service.discoverJira(context.Background(), credential)
+	if err == nil {
+		t.Fatal("discoverJira() with both endpoints failing = nil error, want the legacy endpoint's own failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("discoverJira() error = %q, want it to mention the legacy endpoint's real 500 failure, not just the original 404", err.Error())
+	}
+}
+
 // TestDiscoverSkipsExplicitScopeAndUnknownProviders proves the two
 // no-network, no-DB early-outs: an explicit-scope config, and any provider
 // outside sourceDiscoveryProviders. Neither reaches the credential resolver
@@ -578,6 +614,18 @@ func TestDiscoverSkipsExplicitScopeAndUnknownProviders(t *testing.T) {
 	}
 	if report.Outcome != SourceDiscoveryOutcomeSkipped {
 		t.Fatalf("explicit-scope Discover() outcome = %q, want skipped", report.Outcome)
+	}
+	// codex review finding: the materializer used to bypass Discover
+	// entirely for an explicit-scope config, leaving this outcome
+	// unobservable (not even a zero series). Discover's OWN telemetry has
+	// always recorded it on this path; asserting it directly here, not just
+	// via the materializer-level wiring test.
+	var buffer bytes.Buffer
+	if err := service.telemetry.WritePrometheus(&buffer); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buffer.String(), `provider_source_discovery_total{provider="jira",outcome="skipped"} 1`) {
+		t.Fatalf("explicit-scope skip was not recorded as telemetry:\n%s", buffer.String())
 	}
 
 	report, err = service.Discover(context.Background(), SourceDiscoveryArgs{Provider: "pagerduty"})

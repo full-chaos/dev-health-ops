@@ -26,14 +26,25 @@ type DateWindow struct {
 	Before time.Time
 }
 
-// maxChunkDays bounds chunkDays to a value that can never overflow
-// time.Duration's int64-nanosecond range when multiplied by 24h (codex
-// review round 2, P2: an unbounded chunkDays above ~106,752 overflows into
-// a NEGATIVE span, which turns the loop below into one that emits invalid
-// windows and walks its cursor backward instead of forward). Far beyond
-// any real backfill window -- Python's own default is 7 -- so this is a
-// safety rail, not a real limit.
-const maxChunkDays = 3650
+// maxChunkDays bounds chunkDays to the largest value that can never
+// overflow time.Duration's int64-nanosecond range when multiplied by 24h
+// (codex review round 2, P2: an unbounded chunkDays above ~106,752
+// overflows into a NEGATIVE span, which turns the loop below into one that
+// emits invalid windows and walks its cursor backward instead of forward).
+//
+// Deliberately the REAL overflow boundary (106751 = floor(math.MaxInt64 /
+// (24h in nanoseconds)) - 1, not an arbitrary smaller "far beyond any real
+// backfill window" round number: a codex review finding (round 3) caught
+// that an earlier value here (3650) rejected a configured
+// LINEAR_BACKFILL_MAX_WINDOW_DAYS override Python accepts without
+// complaint (Python's own _linear_backfill_max_window_days has no upper
+// bound at all, only `value > 0`) -- a valid, if unusually wide, operator
+// override failed ONLY on the Go side. This constant exists solely to
+// prevent genuine overflow, not to second-guess an operator's configured
+// window width, so it must sit as close to that boundary as safely
+// possible instead of picking a smaller number that merely "seems" far
+// enough.
+const maxChunkDays = 106751
 
 // ChunkDateRange ports chunk_date_range verbatim: an inclusive [since,
 // before] date range split into chunkDays-day windows (Python's default is

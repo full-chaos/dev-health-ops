@@ -170,6 +170,15 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
 		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		// CHAOS-4582: message was already being read off the response body
+		// (above) to let ClassifyHTTPWithMessage sniff GitHub/GitLab
+		// rate-limit bodies -- it was then discarded rather than attached to
+		// the classification returned to the caller, so every consumer saw
+		// only the generic Class and never the provider's own rejection
+		// reason. Path excludes the query string deliberately (see Path's
+		// doc comment); Body is bounded/redacted in Error() itself.
+		classification.Path = target.Path
+		classification.Body = string(message)
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
 			// The gate is shared cross-runtime (Celery workers read the same

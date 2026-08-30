@@ -178,20 +178,33 @@ type GitHubTestsSkippedArtifact struct {
 }
 
 // githubTestsMaxSkippedArtifactRecords bounds how many GitHubTestsSkippedArtifact
-// records one unit's cursor carries. Chosen conservatively against
-// maxChunkCursorBytes (4KiB, chunked_persistence.go): a record serializes to
-// roughly 90-120 bytes depending on id lengths, and the cursor already
-// carries NextURL, Repo, and the rest of githubTestsChunkCursor's fields
-// before this list even starts, so a cap sized for those bytes alone (e.g.
-// 50) could push an otherwise-healthy cursor over budget and fail
-// ErrChunkCheckpointConflict on encode -- turning a documented, harmless
-// truncation (records beyond the cap collapse into
-// SkippedArtifactsOverflow) into an undocumented, harmful one (the WHOLE
-// cursor becomes unencodable, and unrelated committed progress is lost).
+// records one unit's cursor carries. Chosen against maxChunkCursorBytes
+// (4KiB, chunked_persistence.go): a cap sized for the SkippedArtifacts bytes
+// alone, ignoring the rest of githubTestsChunkCursor's fields, could push an
+// otherwise-healthy cursor over budget and fail ErrChunkCheckpointConflict
+// on encode -- turning a documented, harmless truncation (records beyond
+// the cap collapse into SkippedArtifactsOverflow) into an undocumented,
+// harmful one (the WHOLE cursor becomes unencodable, and unrelated
+// committed progress is lost).
+//
+// CHAOS-4592 codex review (P1, on merged CHAOS-4588/CHAOS-4591 code): the
+// value this replaced (20) was set BEFORE GitHubTestsSkippedArtifact.Name
+// existed and never revisited when CHAOS-4588/4591 added it -- computed with
+// Name at its old 48-byte cap, one record actually serializes to ~206 bytes,
+// so 20 records alone encoded to ~4.1KB, already exceeding the ENTIRE
+// cursor's 4KiB budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
+// everything else is added: a heavy-skip-volume unit's checkpoint write
+// could fail outright. 8 here, alongside githubTestsMaxArtifactNameBytes's
+// 24, keeps a full worst-case cursor (every field at a realistic maximum) at
+// ~3.3KB -- verified, not assumed, by
+// TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget, which encodes
+// exactly that shape and fails if a future field addition erodes the
+// margin again.
+//
 // Occurrences beyond this cap are still fully reflected in the closed
 // GitHubTestsIncomplete Count and the RecordArtifactSkipped metric; only the
 // per-artifact SAMPLE used to locate a specific artifact is bounded.
-const githubTestsMaxSkippedArtifactRecords = 20
+const githubTestsMaxSkippedArtifactRecords = 8
 
 // githubTestsMaxExcludedArtifactSampleRecords bounds
 // githubTestsChunkCursor.ExcludedArtifactSample, kept well under
@@ -298,7 +311,21 @@ const (
 // covered by the legacy aggregate count incorrectly withholds the
 // watermark -- not a permanent stall (the very next attempt's OWN full walk
 // would cover it), but an avoidable re-run this sentinel exists to skip.
-const githubTestsLegacyReportOverflowSentinel = "\x00legacy"
+//
+// The value is plain ASCII, not a NUL byte (codex review round 4, P1): this
+// map round-trips through githubTestsFinalMetadataBatch's Result and is
+// persisted via repository_postgres.go's completeUnitSQL, which casts the
+// encoded JSON to ::jsonb. encoding/json renders a NUL byte as a "u0000"
+// Unicode escape, which PostgreSQL's jsonb input function rejects outright
+// ("unsupported Unicode escape sequence") -- exactly the legacy/rolling-
+// upgrade unit this sentinel exists to rescue would then fail to finalize
+// at all, a strictly worse outcome than the withhold-and-retry it was
+// meant to avoid. The double-underscore wrapping keeps it visually and
+// lexically distinct from
+// any real snake_case report_member cause (malformed, unreadable,
+// artifact_oversized, artifact_unavailable, unreadable_archive) without
+// relying on a byte no valid cause could ever contain.
+const githubTestsLegacyReportOverflowSentinel = "__legacy__"
 
 // githubTestsWatermarkAdvancingPairs is the CLOSED set of (component, cause)
 // pairs that may advance the watermark. It is an allowlist rather than a

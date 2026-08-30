@@ -156,12 +156,29 @@ func appendGitHubTestsSkippedArtifact(
 
 // githubTestsMaxArtifactNameBytes bounds any provider-supplied artifact name
 // stored on the cursor (GitHubTestsSkippedArtifact.Name and
-// ExcludedArtifactSample entries), sized so
-// githubTestsMaxSkippedArtifactRecords records at the cap stay a small
-// fraction of maxChunkCursorBytes -- enough to recognize a pattern (e.g. the
-// ".dockerbuild" or "digests-" run this ticket is about), not to reproduce
-// the full name.
-const githubTestsMaxArtifactNameBytes = 48
+// ExcludedArtifactSample entries).
+//
+// CHAOS-4592 codex review (P1, on merged CHAOS-4588/CHAOS-4591 code): the
+// value this replaced (48) was sized against githubTestsMaxSkippedArtifactRecords's
+// OWN stale "~90-120 bytes/record" estimate, written before this Name field
+// existed at all -- with Name added, one record actually serializes to
+// ~206 bytes at the old 48-byte name, so
+// githubTestsMaxSkippedArtifactRecords's OLD cap of 20 records alone
+// encoded to ~4.1KB, already exceeding the WHOLE cursor's maxChunkCursorBytes
+// (4KiB) budget before Repo/NextURL/Incomplete/ExcludedArtifactSample/
+// everything else on githubTestsChunkCursor is added -- turning a
+// documented, harmless truncation (records beyond the cap collapse into
+// SkippedArtifactsOverflow) into an undocumented, harmful one
+// (encodeGitHubTestsChunkCursor fails ErrChunkCheckpointConflict, losing a
+// unit's progress instead of merely trimming its operator-triage sample).
+// 24 bytes here alongside githubTestsMaxSkippedArtifactRecords's 8 keeps a
+// full worst-case cursor (every field at a realistic maximum, computed and
+// pinned by TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget) at ~3.3KB
+// -- comfortable headroom under the 4KiB budget rather than a value that
+// merely happens to fit today. Still enough to recognize a pattern (e.g.
+// the ".dockerbuild" or "digests-" run CHAOS-4588 is about), not to
+// reproduce the full name.
+const githubTestsMaxArtifactNameBytes = 24
 
 // githubTestsTruncateArtifactName bounds a provider-supplied name to
 // githubTestsMaxArtifactNameBytes, byte-safe (never splits a UTF-8

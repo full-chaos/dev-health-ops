@@ -178,7 +178,12 @@ func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 	if walk.cursor.ExcludedNonReportPrefix != 0 {
 		t.Fatalf("ExcludedNonReportPrefix=%d, want 0: the default prefix list is empty (codex round 1, P1)", walk.cursor.ExcludedNonReportPrefix)
 	}
-	want := []string{"full-chaos~dev-health-ops~BV20PU.dockerbuild (non_report_artifact_suffix)"}
+	// CHAOS-4592 codex review (P1, on merged CHAOS-4588/CHAOS-4591 code):
+	// githubTestsMaxArtifactNameBytes shrank from 48 to 24 to fit
+	// githubTestsMaxSkippedArtifactRecords's shared cursor-byte budget --
+	// see TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget -- so this
+	// 45-byte name now truncates where it did not before.
+	want := []string{"full-chaos~dev-health-op… (non_report_artifact_suffix)"}
 	if len(walk.cursor.ExcludedArtifactSample) != 1 || walk.cursor.ExcludedArtifactSample[0] != want[0] {
 		t.Fatalf("ExcludedArtifactSample=%v, want %v", walk.cursor.ExcludedArtifactSample, want)
 	}

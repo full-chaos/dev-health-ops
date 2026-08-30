@@ -1213,7 +1213,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsOversizedArtifactLogsExactlyOneLine. Neither is
     # integration-tagged.
     # 1281 -> 1283 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1283
+    #
+    # CHAOS-4592 third CHAOS-4588 fold-in (codex P1 via lane-4587): a
+    # GitHubTestsSkippedArtifact record serializes far larger once its Name
+    # field (CHAOS-4588/4591) exists than githubTestsMaxSkippedArtifactRecords
+    # was originally sized against -- 20 records at the old 48-byte name cap
+    # alone encoded to ~4.1KB, already exceeding the WHOLE cursor's 4KiB
+    # maxChunkCursorBytes budget before every other field is added, so a
+    # heavy-skip-volume unit's checkpoint write could fail
+    # ErrChunkCheckpointConflict outright instead of degrading into
+    # SkippedArtifactsOverflow. Shrank githubTestsMaxSkippedArtifactRecords
+    # (20 -> 8) and githubTestsMaxArtifactNameBytes (48 -> 24) to a
+    # combined budget verified, not assumed. Added 1 new ordinary top-level
+    # test in github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget. Not
+    # integration-tagged.
+    # 1283 -> 1284 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1284
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1230,7 +1246,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1283
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1284
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1291,7 +1307,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1283
+    assert len(selected_tests) == len(set(selected_tests)) == 1284
     assert set(selected_tests) == expected_tests
 
 

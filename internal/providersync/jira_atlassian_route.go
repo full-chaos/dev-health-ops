@@ -435,58 +435,21 @@ func cloneJiraSprintRows(rows []jiraSprintRow) []jiraSprintRow {
 	return result
 }
 
+// collectJiraAtlassianIssues used to page GET /rest/api/3/search by
+// startAt/total. Atlassian retired that endpoint outright (410 Gone --
+// CHAOS-4585); the replacement, /rest/api/3/search/jql, pages by cursor
+// (nextPageToken/isLast) instead, so the request builder and the response
+// parser had to change together, not incrementally (a startAt-shaped request
+// against the new path 404s, and a total-based stop condition against a
+// response that no longer carries `total` never terminates). Rather than
+// keep two Jira issue-search implementations that could drift again the same
+// way this one drifted from Python's, this now delegates to
+// collectJiraWorkItemIssues (jira_work_items_route.go), which already
+// targets /search/jql with cursor paging and is the one this repo's live
+// proof confirmed against real Jira (org 70d529e0, project SUP) -- see
+// CHAOS-4585.
 func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string, maxPages, maxRows, perPage int) ([]map[string]any, int, error) {
-	issues := make([]map[string]any, 0)
-	start := 0
-	seen := make(map[int]struct{})
-	for pages := 0; ; pages++ {
-		if pages >= maxPages {
-			return nil, pages, ErrPaginationCapExceeded
-		}
-		if _, ok := seen[start]; ok {
-			return nil, pages, ErrPaginationCapExceeded
-		}
-		seen[start] = struct{}{}
-		query := url.Values{"jql": {jql}, "startAt": {strconv.Itoa(start)}, "maxResults": {strconv.Itoa(perPage)}, "fields": {"*all"}}
-		var page struct {
-			Issues  []json.RawMessage `json:"issues"`
-			StartAt *int              `json:"startAt"`
-			Total   *int              `json:"total"`
-		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/search?"+query.Encode(), nil, &page); err != nil {
-			return nil, pages + 1, err
-		}
-		if page.Issues == nil {
-			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
-		}
-		if len(issues)+len(page.Issues) > maxRows {
-			return nil, pages + 1, ErrPaginationCapExceeded
-		}
-		for _, raw := range page.Issues {
-			var issue map[string]any
-			if err := decodeJiraJSON(raw, &issue); err != nil || issue == nil {
-				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
-			}
-			issues = append(issues, issue)
-		}
-		if page.Total != nil && start+len(page.Issues) >= *page.Total {
-			return issues, pages + 1, nil
-		}
-		if page.Total == nil && len(page.Issues) < perPage {
-			return issues, pages + 1, nil
-		}
-		if len(page.Issues) == 0 {
-			return nil, pages + 1, ErrPaginationCapExceeded
-		}
-		next := start + len(page.Issues)
-		if page.StartAt != nil && *page.StartAt != start {
-			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
-		}
-		if next <= start {
-			return nil, pages + 1, ErrPaginationCapExceeded
-		}
-		start = next
-	}
+	return collectJiraWorkItemIssues(ctx, client, jql, maxPages, maxRows, perPage)
 }
 
 func collectJiraAtlassianChangelog(ctx context.Context, client *providerfoundation.HTTPClient, issueKey string, maxPages int) ([]any, int, error) {

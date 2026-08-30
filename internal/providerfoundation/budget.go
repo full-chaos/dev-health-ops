@@ -280,6 +280,7 @@ type Metrics struct {
 	duplicateTestSuite             map[string]uint64
 	duplicateNaturalKey            map[string]uint64
 	syncRunRollupBumped            map[string]uint64
+	jiraSearchPages                map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -305,6 +306,7 @@ func NewMetrics() *Metrics {
 		duplicateTestSuite:             map[string]uint64{},
 		duplicateNaturalKey:            map[string]uint64{},
 		syncRunRollupBumped:            map[string]uint64{},
+		jiraSearchPages:                map[string]uint64{},
 	}
 }
 
@@ -878,6 +880,41 @@ func (m *Metrics) RecordSyncRunRollupBumped(outcome string) {
 	m.syncRunRollupBumped[lowered]++
 }
 
+// metricJiraSearchPageOutcomeVocabulary is the closed set of outcomes for one
+// Jira /rest/api/3/search/jql cursor-paging walk (CHAOS-4585). Atlassian
+// retired GET /rest/api/3/search (410 Gone) with no runtime signal beyond a
+// generic "provider request failed" until CHAOS-4582 added Path/Body to
+// ProviderError -- this counter is the CHAOS-4585 twin for the new endpoint's
+// own failure modes, so a future regression (a cap hit, a malformed page) is
+// visible on a dashboard rather than only in a log line an operator has to
+// already be looking for.
+var metricJiraSearchPageOutcomeVocabulary = map[string]struct{}{
+	"succeeded": {}, "pagination_cap_exceeded": {}, "invalid_response": {}, "request_failed": {},
+}
+
+// MetricJiraSearchPageOutcomeLabel bounds the outcome label by allowlist, the
+// same shape as MetricPerRunCauseLabel above.
+func MetricJiraSearchPageOutcomeLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricJiraSearchPageOutcomeVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordJiraSearchPage counts one completed /rest/api/3/search/jql
+// cursor-paging walk (one Collect-level search, which may itself have spanned
+// several HTTP pages), by how it ended.
+func (m *Metrics) RecordJiraSearchPage(outcome string) {
+	if m == nil {
+		return
+	}
+	label := MetricJiraSearchPageOutcomeLabel(outcome)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.jiraSearchPages[label]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1260,6 +1297,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_sync_run_rollup_bumped_total",
 		"sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it (CHAOS-4559).",
 		"outcome", m.syncRunRollupBumped,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_jira_search_pages_total",
+		"Jira /rest/api/3/search/jql cursor-paging walks, by outcome (CHAOS-4585).",
+		"outcome", m.jiraSearchPages,
 	); err != nil {
 		return err
 	}

@@ -300,6 +300,7 @@ func collectJiraWorkItemIssues(
 	seenTokens := make(map[string]struct{})
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
 			return nil, pages, ErrPaginationCapExceeded
 		}
 		query := url.Values{
@@ -317,28 +318,35 @@ func collectJiraWorkItemIssues(
 			NextPageToken string            `json:"nextPageToken"`
 		}
 		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
 		if page.IsLast == nil || page.Issues == nil {
+			client.Metrics.RecordJiraSearchPage("invalid_response")
 			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 		}
 		if len(issues)+len(page.Issues) > maxRows {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
 			return nil, pages + 1, ErrPaginationCapExceeded
 		}
 		for _, raw := range page.Issues {
 			var issue map[string]any
 			if err := decodeJiraJSON(raw, &issue); err != nil || issue == nil {
+				client.Metrics.RecordJiraSearchPage("invalid_response")
 				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 			}
 			issues = append(issues, issue)
 		}
 		if *page.IsLast {
+			client.Metrics.RecordJiraSearchPage("succeeded")
 			return issues, pages + 1, nil
 		}
 		if page.NextPageToken == "" {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
 			return nil, pages + 1, ErrPaginationCapExceeded
 		}
 		if _, duplicate := seenTokens[page.NextPageToken]; duplicate {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
 			return nil, pages + 1, ErrPaginationCapExceeded
 		}
 		seenTokens[page.NextPageToken] = struct{}{}

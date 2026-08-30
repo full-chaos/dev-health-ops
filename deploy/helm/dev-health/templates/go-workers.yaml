@@ -149,7 +149,7 @@ spec:
             # a separate, out-of-scope concern. Omitted defaults to contract
             # 1 (rollout-safe); see deploy/go-workers/README.md.
             - name: OPERATIONAL_ORDERING_CONTRACT
-              value: {{ .Values.goWorkers.operationalOrderingContract | default "2" | quote }}
+              value: {{ $.Values.goWorkers.operationalOrderingContract | default "2" | quote }}
             {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
             # Explicit env beats the shared Secret mounted via envFrom below,
             # so Go pods get the native port while Python keeps HTTP.

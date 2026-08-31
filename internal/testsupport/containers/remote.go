@@ -139,12 +139,48 @@ func scratchName() (string, error) {
 // would then delete an empty database while the real one carried the writes.
 var databaseQueryKeys = []string{"database", "dbname"}
 
-// withDatabasePath returns dsn addressed at database instead of whatever
-// database it currently names, by both path AND query parameter.
-func withDatabasePath(dsn string, database string) (string, error) {
+// postgresURLSchemes are the two prefixes libpq -- and therefore pgx -- treats
+// as URL form. Anything else is keyword/value form, which url.Parse cannot read.
+var postgresURLSchemes = []string{"postgres://", "postgresql://"}
+
+// withPostgresDatabase points a PostgreSQL DSN at database, in whichever of the
+// two forms pgx accepts.
+//
+// url.Parse alone is not enough, and it fails in two different ways. Given
+// `host=... dbname=acr application_name=x%zz` it errors on the invalid escape;
+// given a plain `host=... dbname=acr` it SUCCEEDS and hands the whole string
+// back as an opaque path, so rewriting the path yields `/scratch_x` -- a DSN
+// that has silently lost the host, the user and the password. Both were
+// observed directly against the parsers.
+func withPostgresDatabase(dsn string, database string) (string, error) {
+	for _, scheme := range postgresURLSchemes {
+		if strings.HasPrefix(dsn, scheme) {
+			return withDatabaseURL(dsn, database)
+		}
+	}
+	// Keyword/value form. libpq resolves duplicate keys last-wins and pgx
+	// follows it, so appending is a complete override -- verified with
+	// pgx.ParseConfig, which reports Database="scratch_x" for a DSN naming
+	// dbname twice. The name has already passed assertSafeIdentifier, so it
+	// cannot contain a space or quote that would break the encoding.
+	if _, err := pgx.ParseConfig(dsn); err != nil {
+		return "", fmt.Errorf("parse %s as a PostgreSQL DSN: %w", PostgresDSNEnv, err)
+	}
+	return dsn + " dbname=" + database, nil
+}
+
+// withDatabaseURL returns a URL-form dsn addressed at database instead of
+// whatever database it currently names, by both path AND query parameter.
+func withDatabaseURL(dsn string, database string) (string, error) {
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		return "", fmt.Errorf("parse DSN: %w", err)
+	}
+	if parsed.Scheme == "" {
+		// Without this, url.Parse quietly accepts a non-URL DSN and returns it
+		// as an opaque path; the rewrite below would then discard everything
+		// in it except the database name.
+		return "", fmt.Errorf("DSN is not in URL form (no scheme): %q", dsn)
 	}
 	parsed.Path = "/" + database
 	query := parsed.Query()
@@ -191,6 +227,15 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	// query passed to the driver is a single prepared value.
 	createStatement, dropStatement := postgresScratchDDL(database)
 
+	// Rewrite the DSN BEFORE creating anything. Done afterwards, a DSN this
+	// rewrite cannot handle leaves the database created with no Instance to
+	// hold its cleanup closure -- an orphan whose only trace is a "created"
+	// log line with no matching "dropped".
+	uri, err := withPostgresDatabase(dsn, database)
+	if err != nil {
+		return nil, err
+	}
+
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connect to remote PostgreSQL (%s): %w", PostgresDSNEnv, err)
@@ -202,10 +247,6 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	}
 	logScratch("created", "postgres", database)
 
-	uri, err := withDatabasePath(dsn, database)
-	if err != nil {
-		return nil, err
-	}
 	return &Instance{
 		URI: uri,
 		cleanup: func(ctx context.Context) error {
@@ -255,13 +296,13 @@ func startClickHouseRemote(ctx context.Context, dsn string, httpDSN string) (*In
 	// the CREATE would leak the database on a malformed value: the error
 	// returns without an Instance, so nothing holds the cleanup closure and
 	// nothing drops what was just created.
-	uri, err := withDatabasePath(dsn, database)
+	uri, err := withDatabaseURL(dsn, database)
 	if err != nil {
 		return nil, err
 	}
 	var httpURI string
 	if httpDSN != "" {
-		httpURI, err = withDatabasePath(httpDSN, database)
+		httpURI, err = withDatabaseURL(httpDSN, database)
 		if err != nil {
 			return nil, fmt.Errorf("rewrite %s: %w", ClickHouseHTTPDSNEnv, err)
 		}

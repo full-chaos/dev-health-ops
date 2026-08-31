@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -125,7 +126,7 @@ func TestStartClickHouseWithRemoteDSNNeverReachesDocker(t *testing.T) {
 func TestWithDatabasePathOverridesTheDatabaseQueryParameter(t *testing.T) {
 	for _, key := range []string{"database", "dbname"} {
 		t.Run(key, func(t *testing.T) {
-			got, err := withDatabasePath(
+			got, err := withDatabaseURL(
 				"clickhouse://u:p@example:9000/default?"+key+"=dh_0830", "scratch_x",
 			)
 			if err != nil {
@@ -303,13 +304,93 @@ func TestGeneratedScratchNamesAlwaysPassTheIdentifierGuard(t *testing.T) {
 }
 
 func TestWithDatabasePathReplacesDatabase(t *testing.T) {
-	got, err := withDatabasePath("postgres://u:p@example:5432/original?sslmode=disable", "scratch_x")
+	got, err := withDatabaseURL("postgres://u:p@example:5432/original?sslmode=disable", "scratch_x")
 	if err != nil {
 		t.Fatalf("withDatabasePath: %v", err)
 	}
 	const want = "postgres://u:p@example:5432/scratch_x?sslmode=disable"
 	if got != want {
 		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+// TestWithPostgresDatabaseHandlesKeywordValueDSNs covers the DSN form pgx
+// accepts that url.Parse cannot read.
+//
+// This is the review finding that url.Parse alone was the wrong tool. On the
+// first input below url.Parse errors on the invalid escape; on the second it
+// SUCCEEDS and returns the whole string as an opaque path, so a path rewrite
+// would have produced "/scratch_x" -- a DSN that silently lost the host, the
+// user and the password.
+func TestWithPostgresDatabaseHandlesKeywordValueDSNs(t *testing.T) {
+	for name, dsn := range map[string]string{
+		// The reviewer's exact repro input.
+		"invalid URL escape": "host=127.0.0.1 port=5432 user=u password=p dbname=acr application_name=literal%zz",
+		"plain":              "host=127.0.0.1 port=5432 user=u password=p dbname=acr",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := withPostgresDatabase(dsn, "scratch_x")
+			if err != nil {
+				t.Fatalf("withPostgresDatabase: %v", err)
+			}
+			// Ask the driver, not a regex: the only claim that matters is
+			// which database pgx actually resolves.
+			config, err := pgx.ParseConfig(got)
+			if err != nil {
+				t.Fatalf("pgx could not parse the rewritten DSN %q: %v", got, err)
+			}
+			if config.Database != "scratch_x" {
+				t.Errorf("pgx resolved database %q, want scratch_x (rewritten DSN: %q)", config.Database, got)
+			}
+			if config.Host != "127.0.0.1" || config.User != "u" {
+				t.Errorf("rewrite lost connection details: host=%q user=%q", config.Host, config.User)
+			}
+		})
+	}
+}
+
+func TestWithPostgresDatabaseStillRewritesURLForm(t *testing.T) {
+	got, err := withPostgresDatabase("postgres://u:p@127.0.0.1:5432/acr?sslmode=disable", "scratch_x")
+	if err != nil {
+		t.Fatalf("withPostgresDatabase: %v", err)
+	}
+	config, err := pgx.ParseConfig(got)
+	if err != nil {
+		t.Fatalf("pgx could not parse %q: %v", got, err)
+	}
+	if config.Database != "scratch_x" {
+		t.Errorf("pgx resolved database %q, want scratch_x", config.Database)
+	}
+}
+
+// TestWithDatabaseURLRejectsANonURLDSN stops url.Parse's opaque-path behaviour
+// from silently discarding a DSN's connection details.
+func TestWithDatabaseURLRejectsANonURLDSN(t *testing.T) {
+	_, err := withDatabaseURL("host=127.0.0.1 port=5432 dbname=acr", "scratch_x")
+	if err == nil || !strings.Contains(err.Error(), "not in URL form") {
+		t.Errorf("want a rejection naming the URL-form requirement, got: %v", err)
+	}
+}
+
+// TestStartPostgresRejectsAnUnrewritableDSNBeforeCreating pins the ordering
+// that prevents an orphan: a DSN the rewrite cannot handle must fail BEFORE the
+// database is created, or nothing holds the cleanup that would drop it.
+func TestStartPostgresRejectsAnUnrewritableDSNBeforeCreating(t *testing.T) {
+	recordDockerCalls(t)
+	t.Setenv(PostgresDSNEnv, "postgres://u:p@127.0.0.1:1/ac%zz")
+	t.Setenv(ScratchPrefixEnv, "")
+
+	_, err := StartPostgres(shortCtx(t))
+
+	if err == nil {
+		t.Fatal("want the unrewritable DSN rejected, got nil")
+	}
+	// Had the rewrite run after the CREATE, we would have reached the
+	// connect/create path against an unreachable host instead.
+	for _, forbidden := range []string{"connect to remote PostgreSQL", "create scratch"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("DSN was rewritten after connecting/creating: %v", err)
+		}
 	}
 }
 

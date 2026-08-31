@@ -89,257 +89,54 @@ on:
     - cron: '17 8 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # PR runs cancel their predecessor so fast-follow pushes don't queue behind
-  # a stale diff, which bounds this workflow to ONE live fan-out per PR --
-  # ~13 jobs, several at a 25-minute cap.
+  # CHAOS-4676 (redesigned round 6, replacing the imperative `guard` job
+  # after 5 rounds of a lookup/cancel/poll approach that each surfaced a
+  # new race or silent-pass mode — a distributed-consistency problem does
+  # not belong solved with best-effort REST calls inside a CI job). `push`
+  # and `pull_request` runs for the SAME branch now share ONE concurrency
+  # group, so GitHub itself is the single source of truth for "only one
+  # authoritative run per branch tip" — no lookups, no polls, no
+  # eventual-consistency windows. See the design note in
+  # .codex-review-context.md for the full ordering analysis (push-then-PR-
+  # open, PR-open-then-push, ordinary re-push) and how each of the prior
+  # 10 findings is now structurally impossible or obsolete.
+  #
+  # `github.head_ref` is the PR's source branch name (set only for
+  # pull_request/pull_request_target) and empty for push, so it falls
+  # through to `github.ref_name` (the pushed branch name) there — the same
+  # branch produces the same group key from either trigger.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # PR/branch runs cancel their predecessor, in EITHER direction now, so a
+  # fast-follow push (or a PR opening moments after a no-PR push) never
+  # leaves two authoritative runs live on one SHA — whichever run GitHub
+  # starts second in the shared group cancels whichever was there first,
+  # regardless of which trigger fired which one. This bounds the workflow
+  # to ONE live fan-out per branch -- ~13 jobs, several at a 25-minute cap.
   #
   # merge_group runs must not be cancelled: a burst of merges lands several
-  # within the same `github.ref` group in quick succession, and with an
-  # unconditional cancel-in-progress every one but the last gets cancelled
-  # before go-storage-integration finishes — so most merges never get a real
+  # within the same group in quick succession, and with an unconditional
+  # cancel-in-progress every one but the last gets cancelled before
+  # go-storage-integration finishes — so most merges never get a real
   # pass/fail, only "cancelled". integration.yml (push-to-main integration
   # suite) already sets cancel-in-progress: false for the same reason;
-  # docs-cloudflare.yml uses this same event-conditional pattern. The same
-  # applies to `on.push`: it is the one trigger here that cannot be
-  # cancelled AND fires per-commit -- CHAOS-3948 turned it off because that
-  # combination exhausted the org's Actions concurrency. It is enabled again
-  # (owner-ratified), scoped by the same path filter `pull_request` uses, so
-  # this risk is worth watching rather than a solved problem.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # docs-cloudflare.yml uses this same event-conditional pattern.
+  #
+  # Direct pushes to `main` must also not be cancelled, for the identical
+  # reason (CHAOS-3948): main is never a PR's head branch in this repo's
+  # normal flow, so a main push never actually races a pull_request run --
+  # but a burst of fast-follow merges to main WOULD cancel each other's Go
+  # coverage if this were left unconditionally true, the same failure mode
+  # merge_group already guards against.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' && github.ref_name != 'main' }}
 
 permissions:
   contents: read
 
 jobs:
-  # CHAOS-4676: `push` (scoped to all branches, for coverage when a branch
-  # has no open PR — see the `schedule` comment above) and `pull_request`
-  # both trigger on every push to a PR branch, same SHA, racing each other
-  # for capacity and producing two same-name check runs a rollup reader
-  # can't tell apart (one FAILURE while the other is still running or
-  # already `success`; this made two same-commit contentions read as
-  # ambiguous "is CI green" answers on 2026-08-31, and manufactured at least
-  # one integration timing flake by doubling the suite's concurrent load).
-  #
-  # This job makes the choice explicit instead: a `push` run on a branch
-  # that already has an open PR is redundant, because the `pull_request` run
-  # on the identical commit is authoritative, so every substantive job below
-  # is stopped for that case. Post-merge pushes to main (which never have an
-  # open PR with that head) are unaffected and keep running for real.
-  #
-  # `go-quality` (the one required check in this family — confirmed against
-  # the live `main` ruleset) is handled differently from every other job
-  # here: it has NO `if:` skip. A job skipped via `if:` still records a
-  # "skipped" check run under its own name, and GitHub treats "skipped" as
-  # PASSING for a required status check (same mechanism `go-quality-noop.yml`
-  # relies on deliberately for non-Go PRs) — for a REDUNDANT run that would
-  # let the superseded push run's skip satisfy `go-quality` before the real
-  # pull_request run's `go-quality` has finished. A codex review of this PR
-  # observed exactly that window live: the push run's `go-quality` reported
-  # `skipped` at 17:18:34 while the authoritative pull_request run's
-  # `go-quality` did not complete until 17:24:54. So instead of `if:`,
-  # `go-quality` is stopped by the run-level cancellation below, whose
-  # conclusion is `cancelled` — a status required-check evaluation does
-  # NOT treat as passing.
-  #
-  # Replacement for the flake-control this removes (ticket comment,
-  # 2026-08-31): the duplicate run had started serving as an unintended
-  # same-commit control — twice in one day, "the other run passed on
-  # identical code" made an infra flake provable rather than merely
-  # suspected. That diagnostic goes away with the duplicate. The deliberate
-  # replacement: a suspected infra flake on a required check gets an
-  # EXPLICIT rerun of just that job (`gh run rerun <run-id> --job <job-id>`,
-  # runs enumerated by full 40-char SHA per the ticket's CI-verdict rules),
-  # not a second full fan-out. Slower, and it costs the "simultaneous pass
-  # on identical code" evidence, but it does not reintroduce the capacity
-  # waste or the ambiguous rollup this ticket exists to remove.
-  #
-  # Proved live on PR #2050's own tip: a push while no PR was open ran for
-  # real (33418461163); once the PR existed, this second push's `push` run
-  # is superseded (guard skip=true) while its `pull_request` run is the sole
-  # authoritative one — see the PR body / merge note for the cited run ids.
-  #
-  # TOCTOU (codex round 3, CHAOS-4676): the above only covers a push that
-  # arrives AFTER a PR is already open. The reverse order is also live and
-  # was proved on this PR's own FIRST commit: push commit C while the
-  # branch has no open PR → guard correctly runs for real (skip=false, its
-  # only coverage) → `gh pr create` opens the PR at that same C with NO new
-  # push → the `pull_request` guard's non-push fast path unconditionally
-  # returned skip=false, so a second real run started on the identical SHA
-  # (push run 33418461163 + pull_request run 33418491525, both real, both
-  # on 397cc5ab1325b323c9a0b44da5f47abf9defc955). The fix mirrors the
-  # push-side cancellation from the other direction: a `pull_request` run
-  # always proceeds (it is the authoritative event per this design), but
-  # first cancels any still-active `push`-triggered run it finds at the
-  # identical head SHA, closing the window instead of racing it.
-  # `merge_group`/`workflow_dispatch`/`schedule` are unaffected — none of
-  # them are reachable from the proved scenario (a same-SHA `push` racing a
-  # same-SHA `pull_request` open/reopen).
-  #
-  # Confirm-or-fail-loudly (codex round 4, CHAOS-4676): the cross-run cancel
-  # above was originally best-effort (`|| true`), with nothing checking
-  # whether it actually landed — the same silent-failure shape as the
-  # already-fixed finding on the push-side cancel, except round 2's fix for
-  # THAT (go-quality's self-abort backstop) does not cover this path: it
-  # only fires when a run's OWN guard.skip output is 'true', and the stale
-  # push run's own skip output was legitimately 'false' when it started
-  # (correct at push time, before the PR existed) — it can never self-abort
-  # via that mechanism. Silently proceeding on an unconfirmed cancel would
-  # reintroduce the exact double-real-run problem this ticket exists to
-  # remove, just gated behind "cancel failed" instead of "always" — and
-  # this ticket's own standing bar is no fail-open without telemetry. So
-  # this path now polls the cancelled run to a terminal state (bounded
-  # wait) and, if the lookup or cancel or that confirmation fails, sets
-  # `stale_push_unconfirmed=true` naming the run id in the log. `go-quality`
-  # (below) fails deliberately, not skips, when that output is true — same
-  # pattern as the skip=true backstop, so this can never read as a pass.
-  guard:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      pull-requests: read
-      actions: write # to cancel this run (or a stale peer) when superseded
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-      stale_push_unconfirmed: ${{ steps.check.outputs.stale_push_unconfirmed }}
-    steps:
-      - name: Decide whether this push run is superseded by an open PR
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-          RUN_ID: ${{ github.run_id }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -uo pipefail
-          if [ "${EVENT_NAME}" = "pull_request" ]; then
-            # TOCTOU close (codex round 3, CHAOS-4676 — see the job-family
-            # comment above): this run is always authoritative and always
-            # proceeds, but first cancels any still-active `push`-triggered
-            # run at the IDENTICAL head SHA, so a push-then-PR-open/reopen
-            # at one commit can never leave two real runs live on it.
-            #
-            # Confirm-or-fail-loudly (round 4 finding, see job-family
-            # comment above): every failure branch below sets
-            # stale_push_unconfirmed=true and names the run id, instead of
-            # silently proceeding. go-quality turns that into a real
-            # failure, never a skip.
-            stale_unconfirmed=false
-            if ids=$(gh api --method GET -f event=push -f "head_sha=${PR_HEAD_SHA}" "repos/${REPO}/actions/workflows/go.yml/runs" --jq '[.workflow_runs[] | select(.status != "completed") | .id] | .[]' 2>/tmp/guard-supersede.err); then
-              for id in ${ids}; do
-                echo "cancelling superseded same-SHA push run ${id} (this pull_request run is authoritative)" >&2
-                if ! gh api --method POST "repos/${REPO}/actions/runs/${id}/cancel" >/tmp/guard-cancel-"${id}".err 2>&1; then
-                  echo "cancel POST for stale push run ${id} FAILED: $(cat /tmp/guard-cancel-"${id}".err)" >&2
-                  stale_unconfirmed=true
-                  continue
-                fi
-                # Bounded poll (~30s) for the cancel to actually land —
-                # "completed" is the only terminal `status` value; do not
-                # trust the cancel POST's 202 Accepted on its own.
-                confirmed=false
-                for _ in 1 2 3 4 5 6; do
-                  run_status=$(gh api "repos/${REPO}/actions/runs/${id}" --jq '.status' 2>/dev/null || echo "")
-                  if [ "${run_status}" = "completed" ]; then
-                    confirmed=true
-                    break
-                  fi
-                  sleep 5
-                done
-                if [ "${confirmed}" != "true" ]; then
-                  echo "stale push run ${id} did NOT reach a terminal state within the bounded wait after cancel; cannot confirm it stopped" >&2
-                  stale_unconfirmed=true
-                fi
-              done
-            else
-              echo "same-SHA push-run lookup FAILED, cannot confirm no stale run is live: $(cat /tmp/guard-supersede.err)" >&2
-              stale_unconfirmed=true
-            fi
-            echo "stale_push_unconfirmed=${stale_unconfirmed}" >> "${GITHUB_OUTPUT}"
-            echo "skip=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if [ "${EVENT_NAME}" != "push" ]; then
-            echo "skip=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          owner="${REPO%%/*}"
-          # `-f` query params are URL-encoded by `gh api` itself. Hand-built
-          # URL interpolation (an earlier form) silently mis-sends a branch
-          # name containing `#`/`&`/space, which would miss a real open PR
-          # and let the duplicate run through — found by codex review.
-          # `--method GET` is NOT optional: `gh api` defaults to POST the
-          # instant any `-f`/`-F` field is present, which 404/422s against
-          # a list endpoint — codex EXECUTED this exact break in round 2,
-          # and the resulting error silently fell through the fail-open
-          # path below, defeating the guard on every push to an open PR.
-          if ! count=$(gh api --method GET -f state=open -f "head=${owner}:${BRANCH}" "repos/${REPO}/pulls" --jq 'length' 2>/tmp/guard-gh-api.err); then
-            # Fail OPEN, not closed (codex review, CHAOS-4676): an API
-            # hiccup must never silently cost this branch its only real Go
-            # coverage, and must never leave `go-quality` unrun on the one
-            # push run that would have supplied it.
-            echo "gh api lookup failed, defaulting to skip=false (run for real): $(cat /tmp/guard-gh-api.err)" >&2
-            echo "skip=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if [ "${count:-0}" -gt 0 ]; then
-            echo "skipping: branch '${BRANCH}' has ${count} open PR(s); the pull_request run on this SHA is authoritative" >&2
-            echo "skip=true" >> "${GITHUB_OUTPUT}"
-            # Cancel the run itself rather than leaving `go-quality` to an
-            # `if:` skip (see the job-family comment above for why: a
-            # skipped `go-quality` reports as a passing required check).
-            # Best-effort: this step has already written its output, so a
-            # failure here does not change the skip/run decision.
-            gh api --method POST "repos/${REPO}/actions/runs/${RUN_ID}/cancel" >/dev/null 2>&1 || true
-          else
-            echo "running: branch '${BRANCH}' has no open PR; this push run provides its only gate coverage" >&2
-            echo "skip=false" >> "${GITHUB_OUTPUT}"
-          fi
-
   go-quality:
-    # No `if:` skip here — see the job-family comment on `guard` above.
-    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Defense in depth (codex round 2, CHAOS-4676): guard's run-level
-      # cancellation is best-effort (`|| true` — a failed cancel API call
-      # must not fail guard itself, since guard has already written its
-      # output). If that cancel is slow or fails, this job would otherwise
-      # start for real on a superseded push run with nothing to stop it.
-      # This step is a second, non-race-dependent backstop: it runs FIRST,
-      # before any expensive setup, and deliberately FAILS (not skips) when
-      # guard already decided this run is redundant — a failure conclusion
-      # does not satisfy a required check, so it can never be mistaken for
-      # a pass, unlike a skip.
-      - name: Abort if this run was superseded by an open PR
-        if: needs.guard.outputs.skip == 'true'
-        run: |
-          echo "guard determined this push run is superseded by an open PR;" >&2
-          echo "the pull_request run on this SHA is authoritative. Failing" >&2
-          echo "deliberately (not skipping) so this can never read as a pass." >&2
-          exit 1
-
-      # Same pattern, other direction (codex round 4, CHAOS-4676): this is
-      # the `pull_request` run itself. guard could not CONFIRM that a stale
-      # same-SHA `push` run it found was actually cancelled (lookup failed,
-      # cancel POST failed, or the run never reached a terminal state within
-      # the bounded wait — see guard's job-family comment). Proceeding
-      # silently risks two authoritative go-quality reports on one SHA —
-      # exactly this ticket's defect. Failing loudly here, rather than the
-      # stale run's own (already-known-uncertain) fate, is the one outcome
-      # this run can actually guarantee: a visible, correctly-attributed red
-      # that names the cause, instead of a quiet ambiguous rollup.
-      - name: Abort if a superseded push run could not be confirmed cancelled
-        if: needs.guard.outputs.stale_push_unconfirmed == 'true'
-        run: |
-          echo "guard could not confirm that a stale same-SHA push run was" >&2
-          echo "actually cancelled (CHAOS-4676 finding #7). Failing" >&2
-          echo "deliberately rather than risk two authoritative go-quality" >&2
-          echo "runs on one SHA; see this run's guard job log for the run id." >&2
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
@@ -385,8 +182,6 @@ jobs:
         run: bash ci/check_river_compat_static.sh
 
   go-storage-integration-plan:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -406,8 +201,7 @@ jobs:
 
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
-    needs: [guard, go-storage-integration-plan]
-    if: needs.guard.outputs.skip != 'true'
+    needs: go-storage-integration-plan
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -448,9 +242,8 @@ jobs:
   # aggregate result only after every shard has reached a terminal state.
   go-storage-integration:
     name: go-storage-integration
-    if: ${{ needs.guard.outputs.skip != 'true' && always() }}
+    if: always()
     needs:
-      - guard
       - go-storage-integration-plan
       - go-storage-integration-shard
     runs-on: ubuntu-latest
@@ -470,8 +263,6 @@ jobs:
           echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -481,8 +272,6 @@ jobs:
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -531,8 +320,6 @@ jobs:
           version: v0.70.0
 
   go-container-reproducibility:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -542,8 +329,6 @@ jobs:
         run: bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

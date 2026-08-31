@@ -360,7 +360,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	}
 	unbounded := isUnboundedDiscovery(provider, args.SyncOptions)
 
-	var created, existing, superseded int
+	var created, existing, superseded, capped, recovered int
 	if provider == "jira" {
 		// CHAOS-4629: Jira gets the case-insensitive matching / repo-limit
 		// capping / rescope-supersede path that parities #2036/CHAOS-4584's
@@ -391,7 +391,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 				ctx, tx, args.OrgID, args.IntegrationID, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded,
 			)
 			if err == nil {
-				err = service.rebalanceJiraSourceRepoLimit(ctx, tx, args.OrgID, args.IntegrationID, createdLower, discoveredLower)
+				capped, recovered, err = service.rebalanceJiraSourceRepoLimit(ctx, tx, args.OrgID, args.IntegrationID, createdLower, discoveredLower)
 			}
 			if err == nil {
 				if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -407,6 +407,22 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("upsert %s sources: %w", provider, err)
+	}
+	// codex review round-3 P3: capped/recovered telemetry and logging are
+	// recorded ONLY here, after the shared transaction has actually
+	// committed (mirrors materializer.go's RecordMaterialized, which
+	// defers plan telemetry past its caller's own commit for the identical
+	// reason) -- rebalanceJiraSourceRepoLimit itself never logs or observes,
+	// so a rolled-back transaction can never be reported as a successful cap.
+	if capped > 0 {
+		service.telemetry.observeN("jira", SourceDiscoveryOutcomeCapped, capped)
+		service.log().Warn("jira_project_discovery_capped_by_repo_limit",
+			"org_id", args.OrgID, "integration_id", args.IntegrationID, "capped_count", capped)
+	}
+	if recovered > 0 {
+		service.telemetry.observeN("jira", SourceDiscoveryOutcomeRecovered, recovered)
+		service.log().Info("jira_project_discovery_recovered_from_repo_limit_cap",
+			"org_id", args.OrgID, "integration_id", args.IntegrationID, "recovered_count", recovered)
 	}
 	service.telemetry.observeN(provider, SourceDiscoveryOutcomeSuperseded, superseded)
 	recordSourceDiscoveryOutcome(service.telemetry, provider, created, existing)
@@ -1321,7 +1337,7 @@ func supersedeStaleScopedJiraSources(
 	}
 	rows, err := tx.Query(ctx, `
 SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND is_enabled`, orgID, integrationID)
+WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND is_enabled`, orgID, integrationID)
 	if err != nil {
 		return 0, fmt.Errorf("load enabled jira sources for supersede: %w", err)
 	}
@@ -1499,47 +1515,67 @@ type repoLimitCandidateRow struct {
 // Takes an already-open tx, shared with upsertJiraSources -- see that
 // function's doc comment for why capping/recovery must commit atomically
 // with the upsert (codex review P1) rather than in its own transaction.
+//
+// Returns the capped/recovered counts rather than recording telemetry or
+// logging itself (codex review round-3 P3): this function runs BEFORE the
+// caller's commit, so a log line or counter emitted here would report a
+// successful outcome even if the shared transaction is later rolled back
+// or fails to commit. Mirrors materializer.go's RecordMaterialized, which
+// documents the identical rule for plan-telemetry: "anything incremented
+// at this point would fire before the caller's own commit makes this ...
+// durable." The caller (Discover) records both only after its own commit
+// succeeds.
 func (service *NativeSourceDiscoveryService) rebalanceJiraSourceRepoLimit(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
-) error {
+) (capped, recovered int, err error) {
 	var plannerConfigActive *bool
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 SELECT is_active FROM public.sync_configurations
 WHERE integration_id=$1::uuid AND org_id=$2 AND planner_managed AND parent_id IS NULL
 LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("load planner config active state: %w", err)
+		return 0, 0, fmt.Errorf("load planner config active state: %w", err)
 	}
 	if plannerConfigActive != nil && !*plannerConfigActive {
 		// A paused integration's own usage would read as zero (active-only
 		// count), and recovery could wrongly re-enable every capped source
 		// for it -- skip cap/recovery entirely while paused (CHAOS-4584
 		// round 2 P1). The PATCH reactivation handler re-runs discovery.
-		return nil
+		return 0, 0, nil
 	}
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, repoLimitAdvisoryLockKey(orgID)); err != nil {
-		return fmt.Errorf("acquire repo-limit lock: %w", err)
+		return 0, 0, fmt.Errorf("acquire repo-limit lock: %w", err)
 	}
 
 	maxRepos, err := resolveMaxReposLimit(ctx, tx, orgID)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	if maxRepos != nil {
 		usage, err := activeRepoUsageCountForLimit(ctx, tx, orgID)
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 		overflow := usage - *maxRepos
 		if overflow > 0 {
+			// lower(provider)='jira' (codex review round-3 P1): provider
+			// casing is not write-time validated anywhere in this codebase
+			// (Integration.provider accepts "JIRA" as freely as "jira" --
+			// the same latent shape CHAOS-4584's own case-normalization
+			// work already had to account for). activeRepoUsageCountForLimit
+			// below counts EVERY enabled source on this integration with no
+			// provider filter at all, so a mixed-case row already counts
+			// toward usage; this SELECT must find it too, or it becomes
+			// permanently invisible to capping -- over max_repos with no
+			// candidate left to cap.
 			rows, err := tx.Query(ctx, `
 SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND is_enabled
+WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND is_enabled
 ORDER BY external_id DESC`, orgID, integrationID)
 			if err != nil {
-				return fmt.Errorf("load enabled jira sources for capping: %w", err)
+				return 0, 0, fmt.Errorf("load enabled jira sources for capping: %w", err)
 			}
 			var createdRows, preExistingRows []repoLimitCandidateRow
 			for rows.Next() {
@@ -1547,7 +1583,7 @@ ORDER BY external_id DESC`, orgID, integrationID)
 				var metadataJSON []byte
 				if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
 					rows.Close()
-					return err
+					return 0, 0, err
 				}
 				_ = json.Unmarshal(metadataJSON, &row.metadata)
 				if _, ok := createdLower[normalizeSourceKey(row.externalID)]; ok {
@@ -1558,35 +1594,30 @@ ORDER BY external_id DESC`, orgID, integrationID)
 			}
 			if err := rows.Err(); err != nil {
 				rows.Close()
-				return err
+				return 0, 0, err
 			}
 			rows.Close()
-			capped := append(createdRows, preExistingRows...)
-			if len(capped) > overflow {
-				capped = capped[:overflow]
+			cappedRows := append(createdRows, preExistingRows...)
+			if len(cappedRows) > overflow {
+				cappedRows = cappedRows[:overflow]
 			}
-			for _, row := range capped {
+			for _, row := range cappedRows {
 				metadata := cloneMetadata(row.metadata)
 				metadata[sourceCapMarkerKey] = true
 				if err := disableSourceRow(ctx, tx, row.id, metadata); err != nil {
-					return err
+					return 0, 0, err
 				}
 			}
-			if len(capped) > 0 {
-				service.telemetry.observeN("jira", SourceDiscoveryOutcomeCapped, len(capped))
-				service.log().Warn("jira_project_discovery_capped_by_repo_limit",
-					"org_id", orgID, "integration_id", integrationID, "capped_count", len(capped), "max_repos", *maxRepos)
-			}
-			return nil
+			return len(cappedRows), 0, nil
 		}
 	}
 
 	rows, err := tx.Query(ctx, `
 SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND NOT is_enabled
+WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND NOT is_enabled
 ORDER BY external_id ASC`, orgID, integrationID)
 	if err != nil {
-		return fmt.Errorf("load disabled jira sources for recovery: %w", err)
+		return 0, 0, fmt.Errorf("load disabled jira sources for recovery: %w", err)
 	}
 	var recoverable []repoLimitCandidateRow
 	for rows.Next() {
@@ -1594,7 +1625,7 @@ ORDER BY external_id ASC`, orgID, integrationID)
 		var metadataJSON []byte
 		if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
 			rows.Close()
-			return err
+			return 0, 0, err
 		}
 		_ = json.Unmarshal(metadataJSON, &row.metadata)
 		capped, _ := row.metadata[sourceCapMarkerKey].(bool)
@@ -1605,16 +1636,16 @@ ORDER BY external_id ASC`, orgID, integrationID)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return 0, 0, err
 	}
 	rows.Close()
 	if len(recoverable) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 	if maxRepos != nil {
 		usage, err := activeRepoUsageCountForLimit(ctx, tx, orgID)
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 		headroom := *maxRepos - usage
 		if headroom < 0 {
@@ -1628,15 +1659,10 @@ ORDER BY external_id ASC`, orgID, integrationID)
 		metadata := cloneMetadata(row.metadata)
 		delete(metadata, sourceCapMarkerKey)
 		if err := enableSourceRow(ctx, tx, row.id, metadata); err != nil {
-			return err
+			return 0, 0, err
 		}
 	}
-	if len(recoverable) > 0 {
-		service.telemetry.observeN("jira", SourceDiscoveryOutcomeRecovered, len(recoverable))
-		service.log().Info("jira_project_discovery_recovered_from_repo_limit_cap",
-			"org_id", orgID, "integration_id", integrationID, "recovered_count", len(recoverable))
-	}
-	return nil
+	return 0, len(recoverable), nil
 }
 
 func stringOption(options map[string]any, key string) string {

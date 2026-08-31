@@ -468,19 +468,21 @@ func mustUpsertJiraSourcesInOwnTx(
 func mustRebalanceJiraSourceRepoLimitInOwnTx(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeSourceDiscoveryService,
 	orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
-) {
+) (capped, recovered int) {
 	t.Helper()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.rebalanceJiraSourceRepoLimit(ctx, tx, orgID, integrationID, createdLower, discoveredLower); err != nil {
+	capped, recovered, err = service.rebalanceJiraSourceRepoLimit(ctx, tx, orgID, integrationID, createdLower, discoveredLower)
+	if err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	return capped, recovered
 }
 
 // TestUpsertJiraSourcesCaseInsensitiveMatchUpdatesExistingRowInsteadOfDuplicating
@@ -727,6 +729,48 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','BBB','BBB','BBB',TRUE,'{
 	}
 }
 
+// TestUpsertJiraSourcesSupersedesAMixedCaseProviderRowOnRescope is the codex
+// round-3 P1 regression case: provider casing is not write-time validated
+// anywhere in this codebase (Integration.provider accepts "JIRA" as freely
+// as "jira", the same latent shape CHAOS-4584 itself had to account for on
+// external_id/project_key). A tagged legacy row with provider="JIRA" must
+// still be found and superseded on a bounded rescope -- an exact-match
+// `provider='jira'` SQL predicate would silently skip it, leaving OLD
+// enabled (and permanently uncountable for repo-limit capping, since
+// activeRepoUsageCountForLimit counts it toward usage with no provider
+// filter at all).
+func TestUpsertJiraSourcesSupersedesAMixedCaseProviderRowOnRescope(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx := context.Background()
+	orgID := fixture.occurrence.OrgID
+	const configID = "00000000-0000-4000-8000-000000003102"
+
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO public.integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES (gen_random_uuid(),$1,$2::uuid,'JIRA','project','OLD','Old Project','OLD',TRUE,$3::jsonb,now(),now())`,
+		orgID, integrationID, fmt.Sprintf(`{"planner_managed_sync_config_id":"%s"}`, configID)); err != nil {
+		t.Fatal(err)
+	}
+
+	discovered := []discoveredSource{
+		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "2"}},
+	}
+	_, _, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
+	if superseded != 1 {
+		t.Fatalf("superseded = %d, want 1 -- a mixed-case provider='JIRA' row must still be found and disabled on rescope", superseded)
+	}
+
+	var oldEnabled bool
+	if err := fixture.pool.QueryRow(ctx, `SELECT is_enabled FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND external_id='OLD'`, orgID, integrationID).Scan(&oldEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if oldEnabled {
+		t.Fatal("OLD (provider='JIRA') is still enabled -- the exact-match provider='jira' SQL predicate silently skipped it")
+	}
+}
+
 // TestUpsertJiraSourcesSupersedesStaleScopedSourceOnRescope ports
 // discovery.py::_supersede_stale_scoped_jira_sources: an explicitly-scoped
 // planner-managed config (sync_options.project_key/project_id set, i.e.
@@ -877,7 +921,7 @@ func TestJiraDiscoveryRebalanceFailureRollsBackTheWholeUpsertAtomically(t *testi
 	// separately-committed transactions.
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	rebalanceErr := service.rebalanceJiraSourceRepoLimit(canceledCtx, tx, orgID, integrationID, createdLower, discoveredLower)
+	_, _, rebalanceErr := service.rebalanceJiraSourceRepoLimit(canceledCtx, tx, orgID, integrationID, createdLower, discoveredLower)
 	if rebalanceErr == nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal("test setup bug: expected rebalanceJiraSourceRepoLimit to fail with a canceled context")

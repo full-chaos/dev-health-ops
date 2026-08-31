@@ -62,6 +62,10 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+
+# Plain module import, not `from . import ...` -- this directory has no
+# __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
+from _tie_boundary_seeding import tied_row_count_for_limit
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -662,6 +666,182 @@ async def test_dual_run_happy_path_matches_directed_edges(
     # PROOF_RUN row all exist for this exact
     # (schema_digest, document_digest, selected_operation) triple.
     assert await _proof_run_count(registry_postgres["async"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_dual_run_tied_reviews_count_at_limit_boundary_matches(
+    tmp_path_factory, query_api_binary, jwks_path, registry_postgres
+):
+    """CHAOS-4513: the happy-path test above seeds exactly 2 edges with
+    distinct (repo_id, reviewer, author) identities -- never enough rows to
+    reach ``limit``, so the LIMIT boundary is never exercised and this
+    operation's ORDER BY (fixed by CHAOS-4421: ``reviews_count DESC,
+    repo_id, reviewer, author, day``) is never actually proven total by the
+    dual-run. This test is the harness's affordance for that: more tied
+    rows than ``limit`` sharing the SAME ``reviews_count``, seeded via
+    SEPARATE ``write_review_edges`` calls (CHAOS-4513's shared
+    ``_tie_boundary_seeding`` standard -- one INSERT per row, never a
+    single batched INSERT, so the read is a genuine multi-part scan and
+    not trivially stable regardless of the tie-break).
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4513-tie-boundary-{uuid.uuid4()}"
+    repo_id = uuid.uuid4()
+    day = date(2026, 8, 15)
+    created = datetime(2026, 8, 15, 9, 0, 0, tzinfo=timezone.utc)
+    computed_at = datetime(2026, 8, 16, 0, 0, 0, tzinfo=timezone.utc)
+    limit = 10
+    tied_count = tied_row_count_for_limit(limit)
+
+    # `tied_count` distinct (reviewer, author) pairs, one PR + one review
+    # each, on the SAME repo/day -- every resulting edge shares
+    # reviews_count=1, a genuine tie on the resolver's PRIMARY sort key.
+    pr_rows: list[PullRequestRow] = []
+    review_rows: list[PullRequestReviewRow] = []
+    for i in range(tied_count):
+        author = f"author-{i:03d}-{uuid.uuid4().hex[:6]}@example.com"
+        reviewer = f"reviewer-{i:03d}-{uuid.uuid4().hex[:6]}@example.com"
+        pr_rows.append(
+            {
+                "repo_id": repo_id,
+                "number": i + 1,
+                "author_email": author,
+                "author_name": f"Author {i:03d}",
+                "created_at": created,
+                "merged_at": created,
+            }
+        )
+        review_rows.append(
+            {
+                "repo_id": repo_id,
+                "number": i + 1,
+                "reviewer": reviewer,
+                "submitted_at": created,
+                "state": "APPROVED",
+            }
+        )
+
+    records = compute_review_edges_daily(
+        day=day,
+        pull_request_rows=pr_rows,
+        pull_request_review_rows=review_rows,
+        computed_at=computed_at,
+    )
+    assert len(records) == tied_count, (
+        f"expected exactly {tied_count} tied edges, computed {len(records)}"
+    )
+    assert {r.reviews_count for r in records} == {1}, (
+        "expected every seeded edge to share reviews_count=1 -- a broken "
+        "seed here would silently defeat the tie-boundary proof"
+    )
+    records = [replace(record, org_id=org_id) for record in records]
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-tie-boundary.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    document_digest = _document_digest(REVIEW_EDGES_DOCUMENT)
+    await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        # One write_review_edges call PER record -- `tied_count` separate
+        # INSERTs, never one batched call (CHAOS-4513: a single INSERT
+        # typically collapses to one part, which reads back stably with or
+        # without a tie-break and proves nothing).
+        for record in records:
+            sink.write_review_edges([record])
+
+        python_result = await resolve_review_edges(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            ReviewEdgesInput(
+                org_id=org_id,
+                since_date=day,
+                until_date=day,
+                repo_ids=None,
+                limit=limit,
+            ),
+        )
+        go_payload = _post_graphql(
+            server.base_url,
+            token,
+            {
+                "input": {
+                    "orgId": org_id,
+                    "sinceDate": day.isoformat(),
+                    "untilDate": day.isoformat(),
+                    "repoIds": None,
+                    "limit": limit,
+                }
+            },
+        )
+    finally:
+        server.stop()
+        sink.client.command(
+            "ALTER TABLE review_edges_daily DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
+        sink.close()
+
+    assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+    assert python_result.total_count == limit, (
+        f"expected exactly {limit} of {tied_count} tied rows to survive the "
+        f"LIMIT boundary, got total_count={python_result.total_count}"
+    )
+
+    # The deterministic tie-break (repo_id, reviewer, author, day) makes
+    # the surviving `limit` rows -- among `tied_count` rows tied on
+    # reviews_count -- the lexicographically-smallest (reviewer, author)
+    # tuples, IN ASCENDING ORDER (repo_id/day are constant across every
+    # seeded row, so the tie-break reduces to (reviewer, author) ASC).
+    # Comparing sorted(actual) to sorted(expected) would only prove the
+    # SET is right, not that Python's own ORDER BY produced ascending
+    # order -- a regression returning the right rows in the WRONG order
+    # would pass a sorted-vs-sorted check, and would pass the cross-plane
+    # comparator too if Go regressed identically (codex round 2 class,
+    # applied here proactively). Compare the RAW resolver order directly,
+    # unsorted, against the known-correct ascending sequence.
+    # review_rows[i]["reviewer"] pairs with pr_rows[i]["author_email"] by
+    # construction above (both built from the same loop index i).
+    expected_pairs = sorted(
+        (review_rows[i]["reviewer"], pr_rows[i]["author_email"])
+        for i in range(tied_count)
+    )[:limit]
+    actual_pairs = [(e.reviewer, e.author) for e in python_result.edges]
+    assert actual_pairs == expected_pairs, (
+        f"Python's surviving tied-row order was not the deterministic "
+        f"ascending lexicographically-smallest {limit} of {tied_count} -- "
+        f"CHAOS-4421 regression: got {actual_pairs}, expected {expected_pairs}"
+    )
+
+    baseline = _review_edges_python_response_snapshot(python_result)
+    candidate = _review_edges_go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
+
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=document_digest,
+        terminal_state=comparison.terminal_state,
+        org_id=org_id,
+    )
+
+    assert comparison.is_match, (
+        f"reviewEdges tie-boundary dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={baseline}\ngo={candidate}"
+    )
 
 
 @pytest.mark.asyncio

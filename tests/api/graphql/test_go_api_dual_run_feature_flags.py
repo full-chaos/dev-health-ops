@@ -48,6 +48,13 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+
+# Plain module import, not `from . import ...` -- this directory has no
+# __init__.py, so pytest's rootdir-relative sys.path insertion is how
+# sibling test-support modules resolve here (see
+# test_resolver_sql_explain.py's identical `from _sql_explain_helpers
+# import ...`).
+from _tie_boundary_seeding import version_conflict_pair
 from sqlalchemy.engine import Engine, make_url
 
 from dev_health_ops.api.graphql import go_api_comparator, principal_envelope
@@ -155,6 +162,20 @@ def _sync_engine(uri: str) -> Engine:
 
 
 def _create_scratch_postgres_db(admin_uri: str) -> tuple[str, str]:
+    """Creates a scratch DB, returns (db_name, dsn) where dsn keeps
+    admin_uri's own drivername (no dialect override) -- matching the
+    other eight dual-run fixtures' _create_scratch_postgres_db (e.g.
+    test_go_api_dual_run_review_edges.py's). CHAOS-4649: the prior
+    ``admin_uri.rsplit("/", 1)[0] + f"/{db_name}"`` concatenation passed
+    whatever SQLAlchemy dialect prefix admin_uri carried (the project's
+    own mandated opt-in test DSN form, postgresql+asyncpg://) straight
+    through to registry_postgres's Go-facing yield, which the Go binary
+    cannot parse ("cannot parse ...: failed to parse as keyword/value").
+    make_url(...).set(database=...) normalizes the path segment without
+    touching the driver prefix, so callers still choose their own
+    driver via .set(drivername=...) downstream (registry_postgres does,
+    for the Go side).
+    """
     db_name = f"chaos_4367_dual_run_{uuid.uuid4().hex}"
     engine = _sync_engine(admin_uri)
     try:
@@ -162,7 +183,9 @@ def _create_scratch_postgres_db(admin_uri: str) -> tuple[str, str]:
             connection.exec_driver_sql(f'CREATE DATABASE "{db_name}"')
     finally:
         engine.dispose()
-    return db_name, admin_uri.rsplit("/", 1)[0] + f"/{db_name}"
+    base_url = make_url(admin_uri)
+    dsn = base_url.set(database=db_name).render_as_string(hide_password=False)
+    return db_name, dsn
 
 
 def _drop_scratch_postgres_db(admin_uri: str, db_name: str) -> None:
@@ -185,12 +208,24 @@ def registry_postgres() -> Iterator[str]:
     minimal shape PostgresSwitch reads, matching
     cmd/query-api/internal/routeswitch/postgres_switch_integration_test.go's
     own minimal-shape convention rather than running full alembic here.
+
+    Yields a plain ``postgresql://`` DSN, driver-normalized via
+    make_url(...).set(drivername=...) like the other eight dual-run
+    fixtures' "go" variant (CHAOS-4649). This single string is handed
+    BOTH to the Go binary's GO_API_REGISTRY_POSTGRES_URI (which cannot
+    parse a SQLAlchemy dialect suffix such as +asyncpg) and to this
+    file's own _sync_engine calls below, which already force
+    drivername="postgresql+psycopg2" regardless of what they are
+    passed -- so normalizing here is safe for both consumers.
     """
     assert POSTGRES_TEST_URI is not None
     db_name, dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    _create_routing_state_table(dsn)
+    go_dsn = (
+        make_url(dsn).set(drivername="postgresql").render_as_string(hide_password=False)
+    )
+    _create_routing_state_table(go_dsn)
     try:
-        yield dsn
+        yield go_dsn
     finally:
         _drop_scratch_postgres_db(POSTGRES_TEST_URI, db_name)
 
@@ -534,6 +569,155 @@ async def test_dual_run_happy_path_matches(
 
 
 @pytest.mark.asyncio
+async def test_dual_run_replacing_merge_tree_version_conflict_matches(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """CHAOS-4513: ``feature_flag`` is ``ReplacingMergeTree(last_synced)``
+    keyed, post-migration-075, on ``(org_id, provider, project_key,
+    flag_key, environment)`` -- the resolver reads it via ``FROM
+    feature_flag FINAL``. Two *unmerged* rows sharing that full key but
+    differing in ``last_synced`` (the version column) and payload are a
+    true tie no ORDER BY tie-break on the row's own key columns can
+    resolve. ``test_dual_run_happy_path_matches`` above seeds exactly ONE
+    row, so it cannot exercise this class at all -- it is a control case,
+    not ordering/dedup evidence, despite exercising the same operation.
+    This is the harness's affordance for the version-conflict class the
+    CHAOS-4513 standard requires, built on the shared
+    ``_tie_boundary_seeding.version_conflict_pair`` helper.
+    """
+    assert CLICKHOUSE_URI is not None
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4513-version-conflict-{uuid.uuid4()}"
+    project_key = f"project-{uuid.uuid4()}"
+    flag_key = "checkout-v2"
+    identity = {
+        "org_id": org_id,
+        "provider": "launchdarkly",
+        "flag_key": flag_key,
+        "project_key": project_key,
+        "repo_id": "repo-1",
+        "environment": "production",
+    }
+    older_synced = datetime(2026, 8, 10, 12, 0, 30, 500000, tzinfo=timezone.utc)
+    newer_synced = datetime(2026, 8, 11, 9, 15, 0, 0, tzinfo=timezone.utc)
+    older, newer = version_conflict_pair(
+        identity,
+        version_column="last_synced",
+        older_version=older_synced,
+        newer_version=newer_synced,
+        older_payload={
+            "flag_type": "boolean",
+            "created_at": older_synced,
+            "archived_at": None,
+        },
+        # Both fields below must come from the SAME (newer) row if
+        # FINAL/argMax correctly picks one whole surviving row rather than
+        # mixing columns across versions.
+        newer_payload={
+            "flag_type": "multivariate",
+            "created_at": older_synced,
+            "archived_at": newer_synced,
+        },
+    )
+    columns = [
+        "org_id",
+        "provider",
+        "flag_key",
+        "project_key",
+        "repo_id",
+        "environment",
+        "flag_type",
+        "created_at",
+        "archived_at",
+        "last_synced",
+    ]
+
+    def _row(payload: dict) -> list:
+        return [payload[c] for c in columns]
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-version-conflict.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    _set_routing_mode(registry_postgres, "canary")
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres,
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        # TWO SEPARATE inserts (CHAOS-4513: never a single INSERT for a
+        # version-conflict proof) -- these must land as distinct, unmerged
+        # ClickHouse parts so `FINAL` genuinely has two versions to resolve
+        # between at query time. Deliberately NO "OPTIMIZE TABLE ... FINAL"
+        # here: the resolver's own query supplies FINAL, and proving THAT
+        # merge-time resolution is the point, matching real production
+        # write timing (rows land as separate parts, never pre-merged
+        # before the query runs).
+        sink.client.insert("feature_flag", [_row(older)], column_names=columns)
+        sink.client.insert("feature_flag", [_row(newer)], column_names=columns)
+
+        python_result = await resolve_feature_flags(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            provider="launchdarkly",
+            project=project_key,
+            include_archived=True,
+        )
+        go_payload = _post_graphql(
+            server.base_url,
+            token,
+            {
+                "orgId": org_id,
+                "provider": "launchdarkly",
+                "project": project_key,
+                "includeArchived": True,
+                "limit": 1000,
+            },
+        )
+    finally:
+        server.stop()
+        sink.client.command(
+            "ALTER TABLE feature_flag DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
+        sink.close()
+
+    assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+    assert python_result.total_count == 1, (
+        "expected the version-conflict pair to collapse to ONE logical "
+        f"flag, got total_count={python_result.total_count}"
+    )
+    assert len(python_result.flags) == 1, python_result.flags
+    surviving = python_result.flags[0]
+    assert surviving.flag_type == "multivariate", (
+        f"Python resolver surfaced the OLDER version's payload "
+        f"(flag_type={surviving.flag_type!r}) -- FINAL/argMax picked the "
+        f"wrong row out of the version-conflict pair"
+    )
+    assert surviving.archived_at is not None, (
+        "Python resolver surfaced the older version's archived_at (None) "
+        "instead of the newer version's"
+    )
+
+    baseline = _feature_flags_python_response_snapshot(python_result)
+    candidate = _feature_flags_go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
+
+    assert comparison.is_match, (
+        f"featureFlags version-conflict dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={baseline}\ngo={candidate}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dual_run_missing_table_degrades_on_both_sides(
     tmp_path_factory, query_api_binary, jwks_path
 ):
@@ -564,15 +748,33 @@ async def test_dual_run_missing_table_degrades_on_both_sides(
     admin_client.command(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
 
     registry_db_name, registry_dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    _create_routing_state_table(registry_dsn)
-    _set_routing_mode(registry_dsn, "canary")
+    # CHAOS-4649 (executed regression, caught running this test 2026-08-31:
+    # "cannot parse ...: failed to parse as keyword/value"): this call site
+    # builds its OWN scratch registry DB inline rather than going through
+    # the `registry_postgres` fixture, so it must repeat that fixture's
+    # Go-facing normalization itself -- `registry_dsn` keeps
+    # `_create_scratch_postgres_db`'s admin_uri drivername (e.g.
+    # postgresql+asyncpg://, the project's mandated opt-in test DSN form),
+    # which the Go binary cannot parse.
+    registry_go_dsn = (
+        make_url(registry_dsn)
+        .set(drivername="postgresql")
+        .render_as_string(hide_password=False)
+    )
+    _create_routing_state_table(registry_go_dsn)
+    _set_routing_mode(registry_go_dsn, "canary")
 
     token, jwks, issuer, audience = _mint_envelope(org_id)
     jwks_file = jwks_path / "jwks-degraded.json"
     jwks_file.write_text(json.dumps(jwks))
 
     server = _start_go_server(
-        query_api_binary, unmigrated_uri, registry_dsn, str(jwks_file), issuer, audience
+        query_api_binary,
+        unmigrated_uri,
+        registry_go_dsn,
+        str(jwks_file),
+        issuer,
+        audience,
     )
     try:
         python_client = clickhouse_connect.get_client(dsn=unmigrated_uri)

@@ -106,6 +106,10 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+
+# Plain module import, not `from . import ...` -- this directory has no
+# __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
+from _tie_boundary_seeding import tied_row_count_for_limit
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -889,6 +893,144 @@ async def test_dual_run_team_dimension_matches(
         f"findings={comparison.findings}\npython={baseline}\ngo={candidate}"
     )
     assert await _proof_run_count(registry_postgres["async"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_dual_run_team_dimension_tied_nodes_at_limit_boundary_matches(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """CHAOS-4513: ``flow_matrix_team_nodes_template``'s
+    ``ORDER BY value DESC, node_id ASC LIMIT %(limit_per_dim)s`` has a
+    total-order tie-break (``node_id`` is the GROUP BY key), but the test
+    above seeds only 2 teams -- never enough to reach ``max_nodes`` and
+    exercise the truncation boundary. This test is that proof:
+    ``tied_count`` distinct teams, each with exactly ONE work item (so
+    every team's ``uniqExact(work_item_id)`` node value is identically 1
+    -- a genuine tie on the primary sort key), seeded via SEPARATE inserts
+    per team (CHAOS-4513's shared ``_tie_boundary_seeding`` standard --
+    each ``_insert_work_item_team_attribution``/``_insert_work_item_cycle_times``
+    call is already its own single-row INSERT, so this reuses the
+    existing helpers as-is rather than needing new ones), with
+    ``maxNodes`` set below ``tied_count`` to force the boundary.
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4513-flowmatrix-team-tie-{uuid.uuid4()}"
+    repo_id = uuid.uuid4()
+    day = date(2026, 8, 10)
+    now = datetime(2026, 8, 11, 0, 0, 0, tzinfo=timezone.utc)
+    max_nodes = 10
+    tied_count = tied_row_count_for_limit(max_nodes)
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-flowmatrix-team-tie.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    document_digest = _document_digest(FLOW_MATRIX_DOCUMENT)
+    await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    team_ids = [f"team-{i:03d}" for i in range(tied_count)]
+    try:
+        for i, team_id in enumerate(team_ids):
+            wi_id = f"wi-tie-{i:03d}"
+            _insert_work_item_team_attribution(
+                sink,
+                org_id=org_id,
+                repo_id=repo_id,
+                work_item_id=wi_id,
+                team_id=team_id,
+                team_name=f"Team {i:03d}",
+                computed_at=now,
+            )
+            _insert_work_item_cycle_times(
+                sink,
+                org_id=org_id,
+                work_item_id=wi_id,
+                day=day,
+                work_scope_id="scope-1",
+                team_id=team_id,
+                created_at=now,
+                computed_at=now,
+            )
+
+        start, end = "2026-08-01", "2026-08-31"
+        batch = _flow_matrix_batch(
+            DimensionInput.TEAM, date(2026, 8, 1), date(2026, 8, 31)
+        )
+        assert batch.flow_matrix is not None
+        batch.flow_matrix.max_nodes = max_nodes
+        python_result = await resolve_analytics(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink),
+            batch,
+        )
+        variables = _flow_matrix_variables(org_id, "TEAM", start, end)
+        variables["batch"]["flowMatrix"]["maxNodes"] = max_nodes
+        go_payload = _post_graphql(server.base_url, token, variables)
+    finally:
+        server.stop()
+        for table in (
+            "work_item_cycle_times",
+            "work_items",
+            "work_item_team_attributions",
+        ):
+            sink.client.command(
+                f"ALTER TABLE {table} DELETE WHERE org_id = {{org_id:String}} SETTINGS mutations_sync=2",
+                parameters={"org_id": org_id},
+            )
+        sink.close()
+
+    assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+    assert python_result.flow_matrix is not None
+    assert len(python_result.flow_matrix.nodes) == max_nodes, (
+        f"expected exactly {max_nodes} of {tied_count} tied team nodes to "
+        f"survive the LIMIT boundary, got {len(python_result.flow_matrix.nodes)}"
+    )
+
+    # Every team ties on value=1, so the deterministic tie-break (node_id
+    # ASC) alone decides survivors AND their order: the lexicographically
+    # smallest `max_nodes` team_ids, in ascending order. codex round 2
+    # P3: comparing SORTED actual against sorted expected only proves the
+    # survivor SET is right, not that Python's own ORDER BY produced
+    # ascending order -- a regression that returned the right nodes in
+    # the WRONG order would still pass a sorted-vs-sorted check, and
+    # would pass the cross-plane comparator too if Go regressed
+    # identically. Compare the RAW resolver order directly, unsorted,
+    # against the known-correct ascending sequence.
+    expected_ids = sorted(f"TEAM:{t}" for t in team_ids)[:max_nodes]
+    actual_ids = [n.id for n in python_result.flow_matrix.nodes]
+    assert actual_ids == expected_ids, (
+        f"Python's surviving tied-node order was not the deterministic "
+        f"ascending lexicographically-smallest {max_nodes} of {tied_count} -- "
+        f"got {actual_ids}, expected {expected_ids}"
+    )
+
+    baseline = _python_response_snapshot(python_result)
+    candidate = _go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
+
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=document_digest,
+        terminal_state=comparison.terminal_state,
+        org_id=org_id,
+    )
+
+    assert comparison.is_match, (
+        f"flowMatrix(TEAM) tie-boundary dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={baseline}\ngo={candidate}"
+    )
 
 
 # --- Test 2: REPO dimension, EXPECTED divergence on unmerged duplicate ----

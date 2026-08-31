@@ -894,9 +894,22 @@ async def test_dual_run_investment_full_sankey_control_case_matches(
 
     baseline = _sankey_python_snapshot(python_result)
     candidate = _go_snapshot(go_payload)
-    comparison = go_api_comparator.compare_responses(
-        baseline, candidate, allowlisted_envelope_keys=frozenset({"coverage"})
-    )
+    # CHAOS-4648: no allowlisted_envelope_keys here. coverage lives at
+    # data.analytics.sankey.coverage -- two levels below the envelope top
+    # level allowlisted_envelope_keys actually reaches (it is dropped
+    # before _compare_dict/_compare_json/_compare_list recurse into any
+    # nested value, by design: a field named e.g. "extensions" nested in
+    # `data` is ordinary business data, not a transport-envelope key, so
+    # the allowlist must never widen to recurse). A prior
+    # allowlisted_envelope_keys=frozenset({"coverage"}) here was a no-op
+    # that happened to be harmless only because both planes currently
+    # return null (Go's SankeyResult.Coverage is never computed; Python's
+    # own snapshot hardcodes "coverage": None below) -- deleting it is the
+    # honest fix: both sides null still compares equal without it, and the
+    # day Go starts computing Coverage (CHAOS-4538) while Python still
+    # hardcodes None, THIS test SHOULD fail -- that is a real parity gap,
+    # not a false alarm to suppress.
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
 
     await _record_dual_run_proof(
         registry_postgres["async"],

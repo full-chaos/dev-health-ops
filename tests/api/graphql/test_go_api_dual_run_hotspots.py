@@ -50,6 +50,10 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+
+# Plain module import, not `from . import ...` -- this directory has no
+# __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
+from _tie_boundary_seeding import tied_row_count_for_limit
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -592,6 +596,160 @@ async def test_dual_run_happy_path_matches(
     )
 
     assert await _proof_run_count(registry_postgres["async"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_dual_run_tied_risk_score_at_limit_boundary_matches(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """CHAOS-4513: the happy-path test above seeds exactly one hotspot --
+    never enough rows to reach ``limit``, so the LIMIT boundary is never
+    exercised and this operation's ORDER BY (fixed by CHAOS-4472:
+    ``risk_score DESC NULLS LAST, repo_id, file_path``) is never actually
+    proven total by the dual-run. This test is the harness's affordance for
+    that: more tied rows than ``limit`` sharing the SAME ``risk_score``,
+    seeded via SEPARATE ``write_file_hotspot_daily`` calls (CHAOS-4513's
+    shared ``_tie_boundary_seeding`` standard).
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4513-hotspots-tie-boundary-{uuid.uuid4()}"
+    repo_id = uuid.uuid4()
+    day = date(2026, 8, 10)
+    computed_at = datetime(2026, 8, 11, 0, 0, 0, tzinfo=timezone.utc)
+    limit = 10
+    tied_count = tied_row_count_for_limit(limit)
+
+    # `tied_count` distinct file_paths, same repo_id/day, ALL sharing
+    # risk_score=92.3 -- a genuine tie on the resolver's primary sort key.
+    hotspots = [
+        FileHotspotDaily(
+            repo_id=repo_id,
+            day=day,
+            file_path=f"src/file_{i:03d}.go",
+            churn_loc_30d=500,
+            churn_commits_30d=20,
+            cyclomatic_total=30,
+            cyclomatic_avg=4.5,
+            blame_concentration=0.75,
+            risk_score=92.3,
+            computed_at=computed_at,
+            org_id=org_id,
+        )
+        for i in range(tied_count)
+    ]
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-hotspots-tie-boundary.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    document_digest = _document_digest(HOTSPOTS_DOCUMENT)
+    await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        # One write_file_hotspot_daily call PER row -- `tied_count`
+        # separate INSERTs, never one batched call (CHAOS-4513: a single
+        # INSERT typically collapses to one part, which reads back stably
+        # with or without a tie-break and proves nothing).
+        for hotspot in hotspots:
+            sink.write_file_hotspot_daily([hotspot])
+        _insert_repo_catalog_row(
+            sink, repo_id=repo_id, org_id=org_id, full_name="acme/backend"
+        )
+
+        since_utc = datetime(2026, 8, 10, 0, 0, 0, tzinfo=timezone.utc)
+        until_utc = datetime(2026, 8, 10, 23, 59, 59, tzinfo=timezone.utc)
+
+        python_result = await resolve_hotspots(
+            GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client),
+            HotspotsInput(
+                org_id=org_id,
+                since_utc=since_utc,
+                until_utc=until_utc,
+                repo_ids=None,
+                team_ids=None,
+                limit=limit,
+            ),
+        )
+        go_payload = _post_graphql(
+            server.base_url,
+            token,
+            {
+                "input": {
+                    "orgId": org_id,
+                    "sinceUtc": since_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "untilUtc": until_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "repoIds": None,
+                    "teamIds": None,
+                    "limit": limit,
+                }
+            },
+        )
+    finally:
+        server.stop()
+        sink.client.command(
+            "ALTER TABLE file_hotspot_daily DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
+        sink.client.command(
+            "ALTER TABLE repos DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
+        sink.close()
+
+    assert "errors" not in go_payload, f"Go response carried errors: {go_payload}"
+    assert len(python_result.rows) == limit, (
+        f"expected exactly {limit} of {tied_count} tied rows to survive the "
+        f"LIMIT boundary, got {len(python_result.rows)}"
+    )
+
+    # repo_id is constant across every seeded row, so the deterministic
+    # tie-break (repo_id, file_path) reduces to file_path ascending among
+    # rows tied on risk_score -- deciding BOTH the survivor set AND their
+    # order. Comparing sorted(actual) to sorted(expected) would only
+    # prove the SET is right, not that Python's own ORDER BY produced
+    # ascending order -- a regression returning the right rows in the
+    # WRONG order would pass a sorted-vs-sorted check, and would pass the
+    # cross-plane comparator too if Go regressed identically (codex round
+    # 2 class, applied here proactively). Compare the RAW resolver order
+    # directly, unsorted, against the known-correct ascending sequence.
+    expected_paths = sorted(h.file_path for h in hotspots)[:limit]
+    actual_paths = [r.file_path for r in python_result.rows]
+    assert actual_paths == expected_paths, (
+        f"Python's surviving tied-row order was not the deterministic "
+        f"ascending lexicographically-smallest {limit} of {tied_count} -- "
+        f"CHAOS-4472 regression: got {actual_paths}, expected {expected_paths}"
+    )
+
+    baseline = _hotspots_python_response_snapshot(python_result)
+    candidate = _hotspots_go_response_snapshot(go_payload)
+    comparison = go_api_comparator.compare_responses(baseline, candidate)
+
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=document_digest,
+        terminal_state=comparison.terminal_state,
+        org_id=org_id,
+    )
+
+    assert comparison.is_match, (
+        f"hotspots tie-boundary dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={baseline}\ngo={candidate}"
+    )
 
 
 @pytest.mark.asyncio

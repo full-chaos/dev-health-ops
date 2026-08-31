@@ -190,7 +190,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	// it). Same fatal-compile/swallow-execute split.
 	var flowMatrixResult *model.FlowMatrixResult
 	if batch.FlowMatrix != nil {
-		result, err := resolveFlowMatrix(ctx, client, orgID, *batch.FlowMatrix, resolvedFilters)
+		result, err := resolveFlowMatrix(ctx, client, orgID, *batch.FlowMatrix, batch.UseInvestment, resolvedFilters)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: flowMatrix: %w", err)
 		}
@@ -219,6 +219,16 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	if err != nil {
 		return nil, err
 	}
+	if useInvestment {
+		// Ports _query_investment_dicts (investment.py:175-181): EVERY
+		// investment query fires the stale-membership-scope telemetry
+		// check immediately before its own real query, not at compile
+		// time (a compile-only caller, e.g. a future dry-run/EXPLAIN
+		// path, should not pay for or emit this signal). Swallowed
+		// internally on its own fetch error -- see
+		// RecordStaleInvestmentMembershipScope's doc comment.
+		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+	}
 	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
 
@@ -230,6 +240,10 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	q, err := CompileBreakdown(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return model.BreakdownResult{}, err
+	}
+	if useInvestment {
+		// See resolveOneTimeseries's identical call for the reasoning.
+		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
 	}
 	return ExecuteBreakdown(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
@@ -300,7 +314,21 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	if err != nil {
 		return nil, err
 	}
-
+	// DELIBERATELY NO RecordStaleInvestmentMembershipScope call here.
+	// Verified by reading analytics.py directly (not assumed from the
+	// "timeseries/coverage/sankey" wording in _execute_breakdown_query's
+	// own comment at :457-459, which overstates sankey's coverage --
+	// _execute_sankey_inner (analytics.py:275-331), the function BOTH
+	// sankey and flowMatrix execution route through, contains NO call
+	// to record_stale_investment_membership_scope at all; only
+	// _execute_timeseries_query (:359-360) and _execute_breakdown_query
+	// (:462-463) do. The ONE sankey-adjacent call site that exists
+	// (analytics.py:867, inside the coverage computation) is inside
+	// SankeyResult.Coverage, which this port does not compute at all
+	// (see this file's package doc comment -- Coverage is always nil),
+	// so porting that call site would fire telemetry for a computation
+	// this port never runs. If/when coverage is ported, its telemetry
+	// call must be added THERE, not here.
 	nodes, edges, execErr := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
 	if execErr != nil {
 		// Swallow: analytics.py:654-656 logs and degrades to empty.
@@ -324,10 +352,29 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 // resolveFlowMatrix ports the batch.flow_matrix branch of
 // resolve_analytics (analytics.py:935-963). Same fatal-compile/
 // swallow-execute split as resolveSankey.
-func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, input model.FlowMatrixRequestInput, filters *model.FilterInput) (*model.FlowMatrixResult, error) {
+func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, input model.FlowMatrixRequestInput, batchUseInvestment *bool, filters *model.FilterInput) (*model.FlowMatrixResult, error) {
 	req, err := FlowMatrixRequestFromInput(input)
 	if err != nil {
 		return nil, err
+	}
+	// CHAOS-4538 codex round-1 P2 fix (2026-08-30): same three-state
+	// resolution bug resolveSankey above already carries the scar tissue
+	// for -- see that function's doc comment for the full incident. Before
+	// this fix, req.UseInvestment was left as FlowMatrixRequestFromInput
+	// set it: input.UseInvestment ONLY (the nested flowMatrix.useInvestment
+	// field), so an explicit batch-level `useInvestment: false` with the
+	// nested field unset could never reach compileFlowMatrixInvestmentDimension's
+	// resolveUseInvestment call, and THEME/SUBCATEGORY silently kept
+	// auto-routing to the investment source regardless of the batch flag.
+	// Reproduced red on tip fccae28d5:
+	// TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT.
+	// analytics.py:944-946 resolves this the same way sankey does:
+	// `fm_req.use_investment if fm_req.use_investment is not None else
+	// batch.use_investment`, UNWRAPPED (not bool()'d) so a genuine "both
+	// unset" state still reaches resolveUseInvestment's own dimension
+	// auto-route rather than being collapsed to false here.
+	if req.UseInvestment == nil {
+		req.UseInvestment = batchUseInvestment
 	}
 
 	nodesQuery, edgesQuery, err := CompileFlowMatrix(req, orgID, queryTimeoutSecs, filters)

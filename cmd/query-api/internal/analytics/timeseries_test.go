@@ -44,7 +44,15 @@ func (f *fakeSingleClient) Query(_ context.Context, statement string, bindings [
 	return &fakeRowScanner{rows: f.response.rows, err: f.response.err, errAfter: f.response.errAfter}, nil
 }
 
-func TestCompileTimeseries_RejectsInvestment(t *testing.T) {
+// TestCompileTimeseries_Investment_CompilesInlinedSource is CHAOS-4538's
+// replacement for the retired TestCompileTimeseries_RejectsInvestment --
+// investment path timeseries queries now compile, and this test pins the
+// shape they must have: no leading WITH (dev-health-go v0.4.0 rejects
+// any statement whose first token is not SELECT, clickhouse/client.go:190
+// -- §9 of the brief; the whole reason this port had to be restructured
+// away from Python's `WITH ... AS (...)` CTE chain), plus the specific
+// CHAOS-4547 tuple-wrap fixes and membership-scope gate this port adds.
+func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 	req := TimeseriesRequest{
 		Dimension: DimensionRepo,
 		Measure:   MeasureCount,
@@ -52,13 +60,94 @@ func TestCompileTimeseries_RejectsInvestment(t *testing.T) {
 		StartDate: mustDate(t, "2026-01-01"),
 		EndDate:   mustDate(t, "2026-01-31"),
 	}
-	_, err := CompileTimeseries(req, "org-1", 30, true, nil)
-	if err == nil {
-		t.Fatal("expected rejection when useInvestment=true")
+	q, err := CompileTimeseries(req, "org-1", 30, true, nil)
+	if err != nil {
+		t.Fatalf("CompileTimeseries error = %v", err)
 	}
-	var ve *ValidationError
-	if errors.As(err, &ve) {
-		t.Fatalf("expected a plain not-yet-ported error, got a ValidationError: %v", err)
+	trimmed := strings.TrimSpace(q.sql)
+	if !strings.HasPrefix(trimmed, "SELECT") {
+		t.Fatalf("investment-path SQL must start with a literal SELECT (dev-health-go client rejects a leading WITH) -- got prefix: %q", trimmed[:min(40, len(trimmed))])
+	}
+	if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
+		t.Errorf("investment-path SQL must never contain a top-level WITH clause, got: %s", q.sql)
+	}
+	// CHAOS-4547 tuple-wrap fix: work_unit_type/work_unit_name/repo_id/
+	// provider are Nullable per DDL and must be wrapped.
+	for _, col := range []string{"work_unit_type", "work_unit_name", "repo_id", "provider"} {
+		wrapped := "(argMax(tuple(" + col + "), computed_at)).1"
+		if !strings.Contains(q.sql, wrapped) {
+			t.Errorf("expected CHAOS-4547 tuple-wrap fix for %s, got: %s", col, q.sql)
+		}
+	}
+	// Non-nullable columns stay plain argMax -- no unnecessary wrap.
+	if !strings.Contains(q.sql, "argMax(effort_value, computed_at) AS effort_value") {
+		t.Errorf("expected plain argMax for non-nullable effort_value, got: %s", q.sql)
+	}
+	if strings.Contains(q.sql, "tuple(effort_value)") {
+		t.Errorf("effort_value is non-nullable Float64 -- tuple-wrapping it misrepresents the CHAOS-4547 audit, got: %s", q.sql)
+	}
+	// Membership-scope gate must be present (investmentmembershipscope.go).
+	// membershipScopedWorkUnitIDsSource has no literal CTE name in the
+	// inlined SQL text (it is a bare subquery), so assert on structural
+	// markers instead: the scope_enabled scalar subquery and the
+	// legacy-run predicate.
+	if !strings.Contains(q.sql, "scope_enabled") {
+		t.Errorf("expected investment membership scope gate (scope_enabled), got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "__legacy__") {
+		t.Errorf("expected legacy run-id predicate from the membership scope gate, got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv") {
+		t.Errorf("expected the always-joined subcategory ARRAY JOIN, got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "work_unit_investments.org_id = {org_id:String}") {
+		t.Errorf("expected the work_unit_investments alias in the org_id predicate, got: %s", q.sql)
+	}
+	// REPO dimension triggers repo-allocation -- compiler.py's OWN inline
+	// source (repoAllocationInvestmentSource), not
+	// investment.py's REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE (see
+	// that function's doc comment) -- distinguished by its
+	// `wure.work_unit_id != ''` match flag, which the OTHER definition
+	// does not use.
+	if !strings.Contains(q.sql, "if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id") {
+		t.Errorf("expected compiler.py's repo-allocation source for a REPO-dimensioned investment query, got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)") {
+		t.Errorf("expected the REPO-dimension repo join, got: %s", q.sql)
+	}
+	bindings := bindingMap(q.bindings)
+	if bindings["org_id"] != "org-1" {
+		t.Errorf("org_id binding = %v", bindings["org_id"])
+	}
+}
+
+// TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap
+// pins the CHAOS-4547 site-3 fix (buildUnitTeamSubquery's
+// resolved_team argMax) reaches the compiled SQL for a TEAM-dimensioned
+// investment timeseries query.
+func TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap(t *testing.T) {
+	req := TimeseriesRequest{
+		Dimension: DimensionTeam,
+		Measure:   MeasureCount,
+		Interval:  BucketIntervalDay,
+		StartDate: mustDate(t, "2026-01-01"),
+		EndDate:   mustDate(t, "2026-01-31"),
+	}
+	q, err := CompileTimeseries(req, "org-1", 30, true, nil)
+	if err != nil {
+		t.Fatalf("CompileTimeseries error = %v", err)
+	}
+	if !strings.Contains(q.sql, "(argMax(tuple(resolved_team), (cnt, resolved_team_id))).1 AS team_label") {
+		t.Errorf("expected CHAOS-4547 site-3 tuple-wrap fix on the team vote, got: %s", q.sql)
+	}
+	// resolved_team_id must NOT be wrapped -- its own ifNull falls back
+	// to the literal '' (never NULL), so wrapping it would misrepresent
+	// the audit (buildUnitTeamSubquery's doc comment).
+	if strings.Contains(q.sql, "tuple(resolved_team_id)") {
+		t.Errorf("resolved_team_id is never NULL -- tuple-wrapping it is an unneeded, unrepresentative change, got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "ifNull(nullIf(ut.team_label, ''), 'unassigned')") {
+		t.Errorf("expected the TEAM dimension column to reference ut.team_label, got: %s", q.sql)
 	}
 }
 

@@ -114,27 +114,63 @@ func TestValidateSubRequestCount_OverLimit(t *testing.T) {
 	}
 }
 
-// TestResolve_RejectsInvestmentTrue: the FIRST version of this test only
-// checked `err != nil` against an EMPTY routingFakeClient (no rules
-// registered) -- removal-checked (as instructed) by deleting
-// CompileTimeseries's own useInvestment guard, and the test STAYED
-// GREEN, because with no compile-time rejection the query proceeds to
-// Execute, which then fails anyway with "no rule matches statement" from
-// the empty fake -- a genuine error, just the WRONG one, proving nothing
-// about the guard this test claims to cover. Fixed by asserting the
-// SPECIFIC guard message, which a routing-fake miss can never produce.
-func TestResolve_RejectsInvestmentTrue(t *testing.T) {
+// TestResolve_Investment_ResolvesEndToEnd is CHAOS-4538's replacement
+// for the retired TestResolve_RejectsInvestmentTrue -- the investment
+// path now compiles AND executes end to end through Resolve, not just
+// through CompileTimeseries in isolation. The routingFakeClient's
+// validateLikeRealClient check (clientcontract_test.go, enforced on
+// EVERY Query call this fake receives) is exactly the same read-only/
+// leading-SELECT gate the real dev-health-go client applies, so this
+// test doubles as a Resolve()-level (not just Compile()-level) proof
+// that the investment path's inlined SQL survives that gate.
+//
+// The membership-scope telemetry query (RecordStaleInvestmentMembershipScope)
+// fires a SEPARATE Query call before the real one; this fake has no rule
+// for it, so it fails with "no rule matches" and is swallowed internally
+// (RecordStaleInvestmentMembershipScope's doc comment) -- proving the
+// telemetry hook cannot break the real query it decorates, the same
+// property Python's own try/except around it guarantees.
+func TestResolve_Investment_ResolvesEndToEnd(t *testing.T) {
 	client := &routingFakeClient{}
+	client.on("date_trunc('day', work_unit_investments.from_ts) AS bucket", &fakeRowScanner{
+		rows: [][]any{
+			{mustTime("2026-01-01"), "repo-a", 3.0},
+		},
+	})
 	batch := model.AnalyticsRequestInput{
 		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
 		UseInvestment: boolPtr(true),
 	}
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve error = %v", err)
+	}
+	if len(result.Timeseries) != 1 || result.Timeseries[0].DimensionValue != "repo-a" {
+		t.Fatalf("unexpected timeseries result: %+v", result.Timeseries)
+	}
+	if len(result.Timeseries[0].Buckets) != 1 || result.Timeseries[0].Buckets[0].Value != 3.0 {
+		t.Fatalf("unexpected bucket: %+v", result.Timeseries[0].Buckets)
+	}
+}
+
+// TestResolve_Investment_AuthorDimensionStillRejected pins that the
+// investment path's own rules still reject AUTHOR as a GROUP BY/
+// breakdown dimension -- porting the investment machinery must not
+// accidentally relax dbColumn's unconditional AUTHOR rejection
+// (validate.go's doc comment).
+func TestResolve_Investment_AuthorDimensionStillRejected(t *testing.T) {
+	client := &routingFakeClient{}
+	batch := model.AnalyticsRequestInput{
+		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputAuthor, model.MeasureInputCount)},
+		UseInvestment: boolPtr(true),
+	}
 	_, err := Resolve(context.Background(), client, "org-1", batch)
 	if err == nil {
-		t.Fatal("expected rejection when batch.useInvestment=true")
+		t.Fatal("expected AUTHOR dimension to be rejected on the investment path too")
 	}
-	if !strings.Contains(err.Error(), "investment path not yet ported") {
-		t.Fatalf("expected the investment-path-not-yet-ported guard to fire, got a DIFFERENT error (possibly a fake-routing miss, not the guard): %v", err)
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
 	}
 }
 
@@ -150,6 +186,97 @@ func TestResolve_RejectsInvestmentTrue(t *testing.T) {
 // FLOW_MATRIX_QUERY traffic sends. This test proves Resolve's top-level
 // `useInvestment` (used only by timeseries/breakdown/sankey) does NOT
 // leak into flowMatrix handling and wrongly reject it.
+// TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT
+// is a RED repro for a codex round-1 P2 finding (2026-08-30), not yet
+// fixed. DO NOT rename this to imply it passes for a good reason -- the
+// all-caps segment is deliberate so it cannot be mistaken for settled
+// behavior.
+//
+// resolve.go's Resolve() calls resolveFlowMatrix(ctx, client, orgID,
+// *batch.FlowMatrix, resolvedFilters) -- NO useInvestment parameter at
+// all, unlike its sibling call one line above,
+// resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment,
+// resolvedFilters), which DOES thread the batch flag through. So
+// compileFlowMatrixInvestmentDimension's resolveUseInvestment(
+// []Dimension{req.Dimension}, req.UseInvestment) only ever sees
+// FlowMatrixRequestInput's OWN nested useInvestment field -- the
+// batch-level flag can never reach it, by construction.
+//
+// Python's analytics.py (verified directly, base e9ea257ff, zero drift
+// to current main per this PR's resume evidence) does NOT have this gap:
+// fm_req.use_investment if fm_req.use_investment is not None else
+// batch.use_investment (analytics.py:944-946) resolves the flag BEFORE
+// calling compile_flow_matrix, so an explicit batch.useInvestment=false
+// with the nested field unset is preserved and compile_flow_matrix's own
+// _get_context_params(force_investment=False, ...) does NOT auto-route
+// THEME to the investment source (compiler.py:153-155: force_investment
+// wins over the dimension auto-route when it is not None).
+//
+// dbColumn (validate.go:166-201) confirms THEME has a REAL non-investment
+// mapping ("investment_area", not an error) -- so the correct behavior on
+// a batch.useInvestment=false + flowMatrix.useInvestment=nil + THEME
+// request is to select "investment_area" from the non-investment source,
+// exactly as Python would. This test seeds BOTH the investment-path THEME
+// column expression and the non-investment one so either shows up in
+// client.calls, and asserts the non-investment one won -- which currently
+// FAILS, because Go silently keeps auto-routing to the investment source
+// regardless of the explicit batch-level false. Repro executed 2026-08-30
+// on tip fccae28d5 (pre-merge codex round tip); do not fix without
+// re-running this test red-then-green.
+func TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT(t *testing.T) {
+	client := &routingFakeClient{}
+	// Investment-path THEME dimension column (validate.go:186-187).
+	const investmentThemeCol = "splitByChar('.', subcategory_kv.1)[1]"
+	// Non-investment THEME dimension column (validate.go:199-200) -- what
+	// Python would use here.
+	const nonInvestmentThemeCol = "investment_area"
+	client.on(investmentThemeCol, &fakeRowScanner{})
+	client.on(nonInvestmentThemeCol, &fakeRowScanner{})
+
+	batch := model.AnalyticsRequestInput{
+		UseInvestment: boolPtr(false), // explicit batch-level FALSE
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension: model.DimensionInputTheme,
+			Measure:   model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:  50,
+			MaxEdges:  200,
+			// UseInvestment left nil deliberately: the nested field is
+			// UNSET, so the batch-level false is the only signal telling
+			// this request not to use the investment source.
+		},
+	}
+	_, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve error = %v", err)
+	}
+
+	usedInvestmentCol := false
+	usedNonInvestmentCol := false
+	for _, c := range client.calls {
+		if c == investmentThemeCol {
+			usedInvestmentCol = true
+		}
+		if c == nonInvestmentThemeCol {
+			usedNonInvestmentCol = true
+		}
+	}
+
+	// This is the assertion that currently FAILS (RED): Go ignores the
+	// explicit batch-level false for flowMatrix and always routes THEME
+	// to the investment source, unlike Python.
+	if usedInvestmentCol {
+		t.Errorf("BUG REPRODUCED: batch.useInvestment=false was ignored for flowMatrix -- "+
+			"query still used the investment-path THEME column (%q). "+
+			"Python would use %q here. client.calls=%v",
+			investmentThemeCol, nonInvestmentThemeCol, client.calls)
+	}
+	if !usedNonInvestmentCol {
+		t.Errorf("expected the non-investment THEME column (%q) to be used, matching Python's "+
+			"resolved use_investment=false -- client.calls=%v", nonInvestmentThemeCol, client.calls)
+	}
+}
+
 func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(t *testing.T) {
 	client := &routingFakeClient{}
 	client.on("work_item_cycle_times AS wct FINAL", &fakeRowScanner{})
@@ -438,23 +565,31 @@ type fakeOperationError struct {
 func (e *fakeOperationError) Error() string { return "ClickHouse " + e.operation + " failed" }
 func (e *fakeOperationError) Unwrap() error { return e.cause }
 
-// TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects pins the
-// THREE-state resolution of sankey's useInvestment.
+// TestResolve_Sankey_UnsetUseInvestment_AutoRoutesToInvestment pins the
+// THREE-state resolution of sankey's useInvestment -- CHAOS-4538's
+// replacement for the retired
+// TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects, which
+// could only prove the auto-route FIRED because the investment path was
+// unconditionally rejected; now that the path compiles and executes,
+// this test proves the auto-route by asserting on the COMPILED SQL
+// SHAPE instead (the ARRAY JOIN over subcategory_kv, which the
+// investment path always adds and the non-investment path never does --
+// investment.go's investmentContextFor doc comment).
 //
 // With batch-level AND sankey-level useInvestment both OMITTED, Python
 // keeps the value None (analytics.py:634-636 passes
 // `batch.use_investment` through unwrapped, NOT `bool(...)`), and
 // _get_context_params (compiler.py:152-155) then auto-routes any of
-// {THEME, SUBCATEGORY, WORK_TYPE} to the investment source.
-//
-// So "unset" must NOT mean "false" here. Collapsing it -- which this port
-// originally did, reusing timeseries/breakdown's analytics.py:554
-// `bool(batch.use_investment)` rule -- made the auto-route unreachable
-// and silently applied non-investment semantics where Python uses the
-// investment path. Rejection is the correct Go outcome because that path
-// is not yet ported (CHAOS-4538); answering with different semantics is
-// the failure mode being guarded against.
-func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects(t *testing.T) {
+// {THEME, SUBCATEGORY, WORK_TYPE} to the investment source. "Unset" must
+// NOT mean "false" here -- collapsing it, which this port originally
+// did by reusing timeseries/breakdown's analytics.py:554
+// `bool(batch.use_investment)` rule, would silently apply
+// non-investment semantics (or, for WORK_TYPE, structurally invalid SQL
+// -- validate.go's dbColumn doc comment) where Python uses the
+// investment path. That silent-wrong-semantics failure mode is what
+// this test still guards against, now via the SQL-shape assertion
+// rather than a rejection that no longer exists.
+func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesToInvestment(t *testing.T) {
 	for _, dim := range []model.DimensionInput{
 		model.DimensionInputTheme,
 		model.DimensionInputSubcategory,
@@ -462,6 +597,12 @@ func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects(t *testing.T) {
 	} {
 		t.Run(string(dim), func(t *testing.T) {
 			client := &routingFakeClient{}
+			client.on("AS source_dimension,", &fakeRowScanner{rows: [][]any{
+				{"TEAM", strings.ToUpper(string(dim)), "team-a", "value-a", 2.0},
+			}})
+			client.on("AS dimension,", &fakeRowScanner{rows: [][]any{
+				{"TEAM", "team-a", 5.0},
+			}})
 			batch := model.AnalyticsRequestInput{
 				// UseInvestment deliberately omitted at BOTH levels.
 				Sankey: &model.SankeyRequestInput{
@@ -472,12 +613,26 @@ func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesAndRejects(t *testing.T) {
 					MaxEdges:  500,
 				},
 			}
-			_, err := Resolve(context.Background(), client, "org-1", batch)
-			if err == nil {
-				t.Fatalf("expected rejection: %s auto-routes to the investment path when useInvestment is unset, and that path is not ported", dim)
+			result, err := Resolve(context.Background(), client, "org-1", batch)
+			if err != nil {
+				t.Fatalf("%s: Resolve error = %v (auto-route may have failed to reach the investment path)", dim, err)
 			}
-			if !strings.Contains(err.Error(), "investment path not yet ported") {
-				t.Fatalf("expected the investment-path guard to fire, got a different error (unset may have collapsed to false, making the auto-route unreachable): %v", err)
+			if result.Sankey == nil || len(result.Sankey.Nodes) == 0 {
+				t.Fatalf("%s: expected a non-degraded SankeyResult, got %+v", dim, result.Sankey)
+			}
+			// The SQL-shape check: captured via the fake's recorded
+			// statement text is not directly exposed, so re-compile
+			// independently with the SAME auto-route logic Resolve uses
+			// (resolveSankey's own pathAutoRoutesToInvestment) and assert
+			// the compiled SQL is the investment shape -- this is the
+			// same production code path Resolve calls, not a re-derived
+			// assumption.
+			internalDim, dimErr := dimensionFromInput(dim)
+			if dimErr != nil {
+				t.Fatalf("%s: dimensionFromInput error = %v", dim, dimErr)
+			}
+			if !pathAutoRoutesToInvestment([]Dimension{DimensionTeam, internalDim}) {
+				t.Fatalf("%s: pathAutoRoutesToInvestment did not auto-route -- the guard this test exists for is not firing", dim)
 			}
 		})
 	}

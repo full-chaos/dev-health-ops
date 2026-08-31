@@ -48,7 +48,14 @@ func TestValidateSankeyPath_Valid(t *testing.T) {
 	}
 }
 
-func TestCompileSankey_RejectsInvestment(t *testing.T) {
+// TestCompileSankey_Investment_CompilesInlinedSource is CHAOS-4538's
+// replacement for the retired TestCompileSankey_RejectsInvestment -- see
+// TestCompileTimeseries_Investment_CompilesInlinedSource's doc comment
+// for the "no leading WITH" reasoning this pins identically. A TEAM+REPO
+// path exercises BOTH investmentContextFor joins (team vote AND repo
+// join) in one compile, matching how a real chord/Sankey request would
+// combine them.
+func TestCompileSankey_Investment_CompilesInlinedSource(t *testing.T) {
 	req := SankeyRequest{
 		Path:      []Dimension{DimensionTeam, DimensionRepo},
 		Measure:   MeasureCount,
@@ -57,9 +64,30 @@ func TestCompileSankey_RejectsInvestment(t *testing.T) {
 		MaxNodes:  100,
 		MaxEdges:  500,
 	}
-	_, _, err := CompileSankey(req, "org-1", 30, true, nil)
-	if err == nil {
-		t.Fatal("expected rejection when useInvestment=true")
+	nodes, edges, err := CompileSankey(req, "org-1", 30, true, nil)
+	if err != nil {
+		t.Fatalf("CompileSankey error = %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edges query for a 2-dimension path, got %d", len(edges))
+	}
+	for name, q := range map[string]compiledQuery{"nodes": nodes, "edges": edges[0]} {
+		trimmed := strings.TrimSpace(q.sql)
+		if !strings.HasPrefix(trimmed, "SELECT") {
+			t.Errorf("%s: investment-path SQL must start with a literal SELECT, got prefix: %q", name, trimmed[:min(40, len(trimmed))])
+		}
+		if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
+			t.Errorf("%s: investment-path SQL must never contain a top-level WITH clause, got: %s", name, q.sql)
+		}
+		if !strings.Contains(q.sql, "(argMax(tuple(repo_id), computed_at)).1") {
+			t.Errorf("%s: expected CHAOS-4547 tuple-wrap fix for repo_id, got: %s", name, q.sql)
+		}
+		if !strings.Contains(q.sql, "LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)") {
+			t.Errorf("%s: expected the REPO-dimension repo join, got: %s", name, q.sql)
+		}
+		if !strings.Contains(q.sql, "(argMax(tuple(resolved_team), (cnt, resolved_team_id))).1 AS team_label") {
+			t.Errorf("%s: expected CHAOS-4547 site-3 tuple-wrap fix on the team vote, got: %s", name, q.sql)
+		}
 	}
 }
 

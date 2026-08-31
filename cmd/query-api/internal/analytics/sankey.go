@@ -73,11 +73,12 @@ func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, erro
 	}, nil
 }
 
-// CompileSankey ports compile_sankey (compiler.py:388-447) for the
-// non-investment path -- same wholesale useInvestment rejection as
-// CompileTimeseries/CompileBreakdown, and for the same reason (every
-// investment-path sankey dimension needs _get_context_params's
-// investment branch, not yet ported).
+// CompileSankey ports compile_sankey (compiler.py:388-447, e9ea257ff)
+// for BOTH the non-investment and investment (CHAOS-4538) paths -- same
+// investmentContextFor wiring as CompileTimeseries, see that function's
+// doc comment. _get_context_params is called with the FULL path (not
+// per-dimension), matching Python: one team/repo/author join set serves
+// every UNION branch in the nodes query and every edges query.
 //
 // Returns exactly 1 nodes query (a single UNION ALL across every
 // dimension in the path -- sankey_nodes_template folds all dimensions
@@ -87,9 +88,6 @@ func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, erro
 // (compiler.py:447) exactly, including that nodes is always a
 // single-element list while edges can be longer.
 func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (nodes compiledQuery, edges []compiledQuery, err error) {
-	if useInvestment {
-		return compiledQuery{}, nil, fmt.Errorf("analytics: CompileSankey: investment path not yet ported (CHAOS-4506 follow-up)")
-	}
 	for _, dim := range req.Path {
 		if dim == DimensionAuthor {
 			// dbColumn below would reject this per-dimension anyway, but
@@ -103,14 +101,25 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 		}
 	}
 
-	fc, err := translateFilters(filters, false, filterColumns{Team: "team_id", Repo: "repo_id", Author: "author_email"})
+	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, nil, err
 	}
 
-	measureExpr, err := dbExpression(req.Measure, false, false)
-	if err != nil {
-		return compiledQuery{}, nil, err
+	var source, alias, dateFilter, extraClauses, measureExpr string
+	if useInvestment {
+		ictx := investmentContextFor(req.Path, needsTeamJoin(filters), needsAuthorJoin(filters))
+		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
+		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		if err != nil {
+			return compiledQuery{}, nil, err
+		}
+	} else {
+		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
+		measureExpr, err = dbExpression(req.Measure, false, false)
+		if err != nil {
+			return compiledQuery{}, nil, err
+		}
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
@@ -120,7 +129,6 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 	// scan type for every measure. Python does the same coercion one
 	// layer later with `float(row["value"])`, so values are unchanged.
 	measureExpr = "toFloat64(" + measureExpr + ")"
-	source, alias, dateFilter := nonInvestmentSourceAndDateFilter(req.Measure)
 
 	// limit_per_dim = max(1, max_nodes // len(dimensions)), compiler.py:413.
 	limitPerDim := req.MaxNodes / len(req.Path)
@@ -130,7 +138,7 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 
 	var unionParts []string
 	for _, dim := range req.Path {
-		dimCol, dimErr := dbColumn(dim, false)
+		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
 			return compiledQuery{}, nil, dimErr
 		}
@@ -140,13 +148,14 @@ SELECT
     toString(%s) AS node_id,
     %s AS value
 FROM %s
+%s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-`, strings.ToUpper(string(dim)), dimCol, measureExpr, source, dateFilter, alias, fc.sql))
+`, strings.ToUpper(string(dim)), dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql))
 	}
 	nodesSQL := fmt.Sprintf("\n%s\nSETTINGS max_execution_time = {timeout:UInt64}\n", strings.Join(unionParts, " UNION ALL "))
 	nodesBindings := []clickhouse.Binding{
@@ -165,11 +174,11 @@ LIMIT {limit_per_dim:UInt32}
 	maxEdgesPerPair := req.MaxEdges / (len(req.Path) - 1)
 	for i := 0; i < len(req.Path)-1; i++ {
 		sourceDim, targetDim := req.Path[i], req.Path[i+1]
-		sourceCol, colErr := dbColumn(sourceDim, false)
+		sourceCol, colErr := dbColumn(sourceDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
-		targetCol, colErr := dbColumn(targetDim, false)
+		targetCol, colErr := dbColumn(targetDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
@@ -181,6 +190,7 @@ SELECT
     toString(%s) AS target,
     %s AS value
 FROM %s
+%s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
@@ -190,7 +200,7 @@ GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 SETTINGS max_execution_time = {timeout:UInt64}
-`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, dateFilter, alias, fc.sql, sourceCol, targetCol)
+`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol)
 
 		edgeBindings := []clickhouse.Binding{
 			{Name: "org_id", Value: orgID},

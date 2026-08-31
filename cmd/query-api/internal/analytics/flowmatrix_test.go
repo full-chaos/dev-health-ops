@@ -63,6 +63,24 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 				return fmt.Errorf("scan col %d: destination *uint64 but fixture holds %T -- ClickHouse returns UInt64 for count()/uniqExact()/SUM(UInt*); the native driver will NOT scan it into another type", i, row[i])
 			}
 			*ptr = v
+		case *int64:
+			// Added for investmentmembershiptelemetry.go's lag_seconds
+			// (a toInt64(...) SQL expression, not the UInt64-producing
+			// count()/uniqExact()/SUM(UInt*) shape every other scan in
+			// this package uses -- it is the only *int64 destination in
+			// the whole port). Verified against the real driver before
+			// adding this case, not assumed: clickhouse-go/v2's
+			// lib/column/column_gen.go has a dedicated generated Int64
+			// column type with `case *int64:` scan destinations
+			// (v2.47.0, this module's pinned version) -- Int64 -> *int64
+			// is a standard supported pairing, unlike UInt64 (which
+			// specifically requires *uint64 because a real UInt64 can
+			// exceed int64's range).
+			v, ok := row[i].(int64)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination *int64 but fixture holds %T -- ClickHouse returns Int64 for toInt64(...); the native driver will NOT scan it into another type", i, row[i])
+			}
+			*ptr = v
 		case *float64:
 			v, ok := row[i].(float64)
 			if !ok {
@@ -88,7 +106,7 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			// notably *graphqldate.Date, which has no Scan method and is
 			// therefore not an sql.Scanner. Scan the driver's type
 			// (time.Time) and convert after, as reviewedges.go:152 does.
-			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *float64, *time.Time, sql.Scanner)", i, d)
+			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *int64, *float64, *time.Time, sql.Scanner)", i, d)
 		}
 	}
 	return nil
@@ -360,24 +378,72 @@ func TestCompileFlowMatrix_OrgScopeIsNotActive(t *testing.T) {
 	}
 }
 
-func TestCompileFlowMatrix_AuthorThemeSubcategoryNotYetPorted(t *testing.T) {
-	for _, dim := range []Dimension{DimensionAuthor, DimensionTheme, DimensionSubcategory} {
-		req := FlowMatrixRequest{
-			Dimension: dim,
-			Measure:   MeasureCount,
-			StartDate: mustDate(t, "2026-01-01"),
-			EndDate:   mustDate(t, "2026-01-31"),
-			MaxNodes:  50,
-			MaxEdges:  200,
-		}
-		_, _, err := CompileFlowMatrix(req, "org-1", 30, nil)
-		if err == nil {
-			t.Fatalf("dimension %v: expected 'not yet ported' error, got nil", dim)
-		}
-		var ve *ValidationError
-		if errors.As(err, &ve) {
-			t.Fatalf("dimension %v: expected a plain not-yet-implemented error, got a ValidationError (%v) -- do not let this read as a real input rejection", dim, err)
-		}
+// TestCompileFlowMatrix_AuthorDimensionRejectedWithValidationError is
+// CHAOS-4538's replacement for the retired
+// TestCompileFlowMatrix_AuthorThemeSubcategoryNotYetPorted's AUTHOR case.
+// AUTHOR is no longer a "not yet ported" stub -- it now runs through the
+// real compileFlowMatrixInvestmentDimension path and is rejected by
+// dbColumn's unconditional AUTHOR rejection (validate.go doc comment:
+// neither source table has a scalar per-row author identity column),
+// which returns a real *ValidationError, matching Python. Pin that shape
+// specifically so a future change that relaxes it back to a plain
+// "not yet implemented" error is caught.
+func TestCompileFlowMatrix_AuthorDimensionRejectedWithValidationError(t *testing.T) {
+	req := FlowMatrixRequest{
+		Dimension: DimensionAuthor,
+		Measure:   MeasureCount,
+		StartDate: mustDate(t, "2026-01-01"),
+		EndDate:   mustDate(t, "2026-01-31"),
+		MaxNodes:  50,
+		MaxEdges:  200,
+	}
+	_, _, err := CompileFlowMatrix(req, "org-1", 30, nil)
+	if err == nil {
+		t.Fatal("expected AUTHOR dimension to be rejected")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected a real *ValidationError (matching Python's dbColumn rejection), got %T: %v", err, err)
+	}
+}
+
+// TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource is
+// CHAOS-4538's replacement for the retired
+// TestCompileFlowMatrix_AuthorThemeSubcategoryNotYetPorted's THEME/
+// SUBCATEGORY cases. THEME and SUBCATEGORY both auto-route to the
+// investment path (resolveUseInvestment's investment_dims set,
+// compileFlowMatrixInvestmentDimension's doc comment) and now compile
+// successfully instead of returning the retired stub error. Pin the same
+// structural shape TestCompileTimeseries_Investment_CompilesInlinedSource
+// pins: no leading WITH (clickhouse/client.go:190).
+func TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource(t *testing.T) {
+	for _, dim := range []Dimension{DimensionTheme, DimensionSubcategory} {
+		t.Run(string(dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension: dim,
+				Measure:   MeasureCount,
+				StartDate: mustDate(t, "2026-01-01"),
+				EndDate:   mustDate(t, "2026-01-31"),
+				MaxNodes:  50,
+				MaxEdges:  200,
+			}
+			nodes, edges, err := CompileFlowMatrix(req, "org-1", 30, nil)
+			if err != nil {
+				t.Fatalf("dimension %v: CompileFlowMatrix error = %v", dim, err)
+			}
+			for _, q := range []struct {
+				name string
+				sql  string
+			}{{"nodes", nodes.sql}, {"edges", edges.sql}} {
+				trimmed := strings.TrimSpace(q.sql)
+				if !strings.HasPrefix(trimmed, "SELECT") {
+					t.Fatalf("dimension %v %s SQL must start with a literal SELECT, got prefix: %q", dim, q.name, trimmed[:min(40, len(trimmed))])
+				}
+				if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
+					t.Errorf("dimension %v %s SQL must never contain a top-level WITH clause, got: %s", dim, q.name, q.sql)
+				}
+			}
+		})
 	}
 }
 

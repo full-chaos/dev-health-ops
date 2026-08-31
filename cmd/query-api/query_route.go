@@ -17,17 +17,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
@@ -484,13 +488,66 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 	return cfg, true
 }
 
+// queryRouteMaxResultRows and queryRouteMaxBytesToRead override
+// dev-health-go/clickhouse's per-request safety-net defaults
+// (Options.MaxResultRows=1,000, Options.MaxBytesToRead=64 MiB --
+// CHAOS-3848, sized for a 200-row pull_requests batch) for THIS route.
+//
+// CHAOS-4647, EXECUTED against real org 70d529e0 data (live-local
+// runner, unwrap-chain instrumentation in newQueryHandler below):
+//   - hotspots' unscoped scan of file_hotspot_daily (repoIds omitted --
+//     a spec-valid HotspotsInput shape, contracts/graphql/v1/
+//     schema.graphql's `repoIds: [String!] = null`) across a 180-day
+//     window first failed at 64.49 MiB (the 64 MiB default). This is
+//     NOT a narrow miss to round up past: org 70d529e0 alone has
+//     6,942,432 file_hotspot_daily rows in that window (EXECUTED via
+//     clickhouse-client with max_bytes_to_read=0: read_rows=6942432,
+//     read_bytes=1,050,548,512 -- ~1002 MiB -- query_duration_ms=67,
+//     system.query_log row confirmed 2026-08-31 05:43:18Z). A first
+//     attempt at 512 MiB (8x the default) ALSO failed for exactly this
+//     reason -- it undershot the real unbounded read by roughly 2x, the
+//     same class of mistake this comment now exists to prevent someone
+//     repeating. file_hotspot_daily's engine is
+//     `ORDER BY (repo_id, day, file_path)` with no org_id in the sort
+//     key (org_id was ALTER-added in migration 024, after 007 created
+//     the table), so an org-scoped, repo-unscoped query cannot prune by
+//     org via the primary index; measured here it happened not to
+//     matter (this org owns effectively the whole table in-window --
+//     6,940,028 rows exist for ALL orgs in the same window) but the
+//     value below is sized off the ACTUAL org-70d529e0 read, not that
+//     coincidence. 2 GiB is ~2x that measured ~1002 MiB, real headroom
+//     for organic growth, not a bare floor -- but it IS still a static
+//     ceiling against a value (one org's total hotspot history) that
+//     grows with sync depth and time, so re-derive it if this trips
+//     again rather than doubling blindly a second time.
+//   - workGraphEdges' batch membership query (membership.go) returned
+//     2.33 thousand distinct (node_type, node_id) rows against the
+//     1,000-row default -- ClickHouse code 396 ("Limit for result
+//     exceeded").
+//
+// Neither is malformed SQL (both PASS on producer-seeded scratch, whose
+// working set sits far below either ceiling) and neither is caller
+// error (an org-wide hotspots read and a real membership graph are both
+// spec-valid). Python's equivalent queries set no such ceiling at all --
+// these are Go-plane-only defaults this route inherited and never
+// overrode. max_execution_time (10s, unaffected by this change) remains
+// the time-based safety net; the 67ms measured above is nowhere near it.
+const (
+	queryRouteMaxResultRows  = 100_000
+	queryRouteMaxBytesToRead = 2 << 30 // 2 GiB
+)
+
 // buildQueryRoute wires the real featureFlags path from env-sourced
 // config: the shared dev-health-go ClickHouse client, a real Postgres
 // pool, and the effective-principal verifier, then hands them to
 // newQueryHandler. The returned cleanup func closes the Postgres pool;
 // call it on shutdown.
 func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
-	chClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: cfg.ClickHouseURI})
+	chClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
+		DSN:            cfg.ClickHouseURI,
+		MaxResultRows:  queryRouteMaxResultRows,
+		MaxBytesToRead: queryRouteMaxBytesToRead,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -604,6 +661,21 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient}})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
+	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
+	// and gqlgen's default presenter surfaces only err.Error() -- which for
+	// a dev-health-go *operationError (clickhouse/client.go) is the fixed
+	// string "ClickHouse <operation> failed" with the real driver cause
+	// reachable only via Unwrap(). Log the full Unwrap() chain server-side
+	// on every resolver error so a live-data failure's actual cause is
+	// visible without changing the response the client sees.
+	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+		chain := []string{err.Error()}
+		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
+			chain = append(chain, unwrapped.Error())
+		}
+		log.Printf("query-api: resolver error unwrap chain: %s", strings.Join(chain, " <- "))
+		return graphql.DefaultErrorPresenter(ctx, err)
+	})
 	for operation := range digestByOperation {
 		routeMux.Register(operation, gqlHandler)
 	}

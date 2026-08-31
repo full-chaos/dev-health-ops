@@ -7,10 +7,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1107,4 +1109,117 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 			t.Fatalf("featureFlags should stay unreachable when only flowMatrix is canaried: got %d", rec.Code)
 		}
 	})
+}
+
+// TestQueryRouteClickHouseClient_ToleratesRealResultVolume is the
+// regression proof for CHAOS-4647: two of this route's registered
+// documents (hotspots, workGraphEdges) returned HTTP 200 with a GraphQL
+// error against REAL local org 70d529e0 data -- never against
+// producer-seeded scratch -- because dev-health-go/clickhouse's
+// Options.MaxResultRows/MaxBytesToRead default to 1,000 rows / 64 MiB
+// (CHAOS-3848, sized for an unrelated 200-row pull_requests batch) and
+// buildQueryRoute's ClickHouse client left both unset. EXECUTED against
+// real org 70d529e0 data (live-local runner, 2026-08-31): hotspots'
+// unscoped file_hotspot_daily scan needed ~1002 MiB / 6,942,432 rows
+// (clickhouse-client, max_bytes_to_read=0, system.query_log-confirmed);
+// workGraphEdges' batch membership query returned 2,330 rows against the
+// 1,000-row default. Neither is malformed SQL -- both PASS on
+// producer-seeded scratch, whose working set sits far below either
+// ceiling; this is a real-data-VOLUME gap invisible to any string-level
+// check (unit test, gofmt/vet/build, or a code review reading compiled
+// SQL) because it depends on how much data actually exists, not on the
+// query's shape.
+//
+// This test does not re-seed millions of rows (the live-local runner
+// above already proved the real case against real data); it pins the
+// MECHANISM instead, against a real ClickHouse test container:
+// `system.numbers` cheaply produces exactly `queryRouteMaxResultRows+1`
+// rows, deterministically on the row-count side of the SAME two knobs
+// buildQueryRoute configures. The subtest using the OLD (unset) defaults
+// is the FAILS-ON-PARENT half -- it fails today, on this same commit,
+// proving the guard is real, not just that a bigger number was typed in.
+func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Container.Terminate(context.Background()) }()
+
+	// One row more than the OLD 1,000-row default -- small enough to
+	// seed instantly via system.numbers, large enough to trip the old
+	// ceiling deterministically every run.
+	const rowCount = 1001
+	statement := "SELECT number FROM system.numbers LIMIT " + itoa(rowCount)
+
+	countRows := func(t *testing.T, opts clickhouse.Options) (int, error) {
+		t.Helper()
+		opts.DSN = ch.URI
+		client, err := clickhouse.NewClickHouseQueryClientWithOptions(opts)
+		if err != nil {
+			t.Fatalf("construct ClickHouse client: %v", err)
+		}
+		defer func() { _ = client.Close() }()
+
+		rows, err := client.Query(ctx, statement, nil)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = rows.Close() }()
+		n := 0
+		for rows.Next() {
+			var v uint64
+			if scanErr := rows.Scan(&v); scanErr != nil {
+				return n, scanErr
+			}
+			n++
+		}
+		return n, rows.Err()
+	}
+
+	t.Run("parent_defaults_fail_on_real_volume", func(t *testing.T) {
+		// buildQueryRoute's config BEFORE CHAOS-4647: dhclickhouse.Options{DSN: ...}
+		// with MaxResultRows/MaxBytesToRead left at their zero value, which
+		// dev-health-go/clickhouse's applyOptions defaults to 1,000 rows.
+		n, err := countRows(t, clickhouse.Options{})
+		if err == nil {
+			t.Fatalf("expected the old 1,000-row default to reject %d rows, got %d rows with no error", rowCount, n)
+		}
+		if !strings.Contains(err.Error(), "row iteration") && !strings.Contains(err.Error(), "query") {
+			t.Fatalf("expected a ClickHouse row-iteration/query error, got: %v", err)
+		}
+		var chErr interface{ Unwrap() error }
+		if !errorsAsUnwrapper(err, &chErr) {
+			t.Fatalf("expected the operationError chain to be reachable via Unwrap(), got: %v", err)
+		}
+	})
+
+	t.Run("tip_config_tolerates_real_volume", func(t *testing.T) {
+		n, err := countRows(t, clickhouse.Options{
+			MaxResultRows:  queryRouteMaxResultRows,
+			MaxBytesToRead: queryRouteMaxBytesToRead,
+		})
+		if err != nil {
+			t.Fatalf("buildQueryRoute's configured client rejected a real-shaped %d-row result: %v", rowCount, err)
+		}
+		if n != rowCount {
+			t.Fatalf("got %d rows, want %d", n, rowCount)
+		}
+	})
+}
+
+// itoa avoids importing strconv solely for one call site's row-count
+// literal in the statement built above.
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
+
+// errorsAsUnwrapper is a tiny errors.As wrapper so the parent-defaults
+// subtest above can assert the SAME Unwrap() chain CHAOS-4647's
+// production fix (query_route.go's SetErrorPresenter) walks is actually
+// present on this error, not just that Query returned "an error".
+func errorsAsUnwrapper(err error, target *interface{ Unwrap() error }) bool {
+	return errors.As(err, target)
 }

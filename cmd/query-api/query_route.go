@@ -491,82 +491,89 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 
 // queryRouteMaxResultRows and queryRouteMaxBytesToRead override
 // dev-health-go/clickhouse's per-request safety-net defaults
-// (Options.MaxResultRows=1,000, Options.MaxBytesToRead=64 MiB --
-// CHAOS-3848, sized for a 200-row pull_requests batch) for THIS route.
+// (Options.MaxResultRows=1,000, Options.MaxBytesToRead=64 MiB) for THIS
+// route.
 //
-// CHAOS-4647, EXECUTED against real org 70d529e0 data (live-local
-// runner, unwrap-chain instrumentation in newQueryHandler below):
-//   - hotspots' unscoped scan of file_hotspot_daily (repoIds omitted --
-//     a spec-valid HotspotsInput shape, contracts/graphql/v1/
-//     schema.graphql's `repoIds: [String!] = null`) across a 180-day
-//     window first failed at 64.49 MiB (the 64 MiB default). This is
-//     NOT a narrow miss to round up past: org 70d529e0 alone has
-//     6,942,432 file_hotspot_daily rows in that window (EXECUTED via
-//     clickhouse-client with max_bytes_to_read=0: read_rows=6942432,
-//     read_bytes=1,050,548,512 -- ~1002 MiB -- query_duration_ms=67,
-//     system.query_log row confirmed 2026-08-31 05:43:18Z). A first
-//     attempt at 512 MiB (8x the default) ALSO failed for exactly this
-//     reason -- it undershot the real unbounded read by roughly 2x, the
-//     same class of mistake this comment now exists to prevent someone
-//     repeating. file_hotspot_daily's engine is
-//     `ORDER BY (repo_id, day, file_path)` with no org_id in the sort
-//     key (org_id was ALTER-added in migration 024, after 007 created
-//     the table), so an org-scoped, repo-unscoped query cannot prune by
-//     org via the primary index; measured here it happened not to
-//     matter (this org owns effectively the whole table in-window --
-//     6,940,028 rows exist for ALL orgs in the same window) but the
-//     value below is sized off the ACTUAL org-70d529e0 read, not that
-//     coincidence. 2 GiB is ~2x that measured ~1002 MiB, real headroom
-//     for organic growth, not a bare floor -- but it IS still a static
-//     ceiling against a value (one org's total hotspot history) that
-//     grows with sync depth and time, so re-derive it if this trips
-//     again rather than doubling blindly a second time.
-//   - workGraphEdges' batch membership query (membership.go) returned
-//     2.33 thousand distinct (node_type, node_id) rows against the
-//     1,000-row default -- ClickHouse code 396 ("Limit for result
-//     exceeded").
+// ROOT DEFECT (CHAOS-4647): those two defaults were calibrated by
+// CHAOS-3848 for a completely different endpoint -- a 200-row
+// pull_requests batch -- and borrowed here, unexamined, for an endpoint
+// that legitimately reads whole-org history. That mismatch, not either
+// specific number, is what actually broke hotspots and workGraphEdges
+// against real org 70d529e0 data (EXECUTED, live-local runner) while
+// every unit test, gofmt/vet/build, and prior codex review stayed green
+// -- none of those send SQL to a real engine. Both PASS on
+// producer-seeded scratch, whose working set sits far below either
+// ceiling, and neither failure is malformed SQL or caller error: an
+// org-wide hotspots read and a real membership graph are both
+// spec-valid per contracts/graphql/v1/schema.graphql.
 //
-// Neither is malformed SQL (both PASS on producer-seeded scratch, whose
-// working set sits far below either ceiling) and neither is caller
-// error (an org-wide hotspots read and a real membership graph are both
-// spec-valid). Python's equivalent queries set no such ceiling at all --
-// these are Go-plane-only defaults this route inherited and never
-// overrode. max_execution_time (10s, unaffected by this change) remains
-// the time-based safety net; the 67ms measured above is nowhere near it.
+// BOTH VALUES BELOW ARE PROVISIONAL, each with a named successor that
+// removes it as a lane's independent decision, not a number this PR is
+// asserting is correct:
 //
-// queryRouteMaxResultRows is NOT a flat number: codex review round 1
-// (P2, EXECUTED, re-run and CONFIRMED by this lane) found a bare 100,000
-// only pushed the SAME failure class one step out. Round 2 (P2, EXECUTED
-// by codex, re-run and CONFIRMED by this lane) found the round-1 fix
-// STILL undercounted: work_unit_membership (046_work_unit_membership.sql)
-// emits ONE is_dominant=1 row per (node, category_kind), and
-// category_kind has exactly two values -- 'theme' and 'subcategory' (that
-// migration's own doc comment: "category_kind distinguishes 'theme' rows
-// from 'subcategory' rows... argmax category within each kind is ALWAYS
-// emitted... with is_dominant=1"). batchResolveMembership's query filters
-// is_dominant=1 but does NOT collapse theme+subcategory into one row --
-// that collapse happens in Go, in the Next()/Scan() loop, AFTER every row
-// has already counted against ClickHouse's max_result_rows. So each
-// endpoint can contribute up to 2 ClickHouse-side rows, not 1. Codex's
-// EXECUTED evidence: real data shows max 2 rows/endpoint; a synthetic
-// 400,000-row case against a 300,000 cap failed at code 396 (current
-// rows: 327.05 thousand).
+//   - queryRouteMaxBytesToRead: PROVISIONAL, successor CHAOS-4651 /
+//     dev-health-go v0.6.1. This is NOT a capacity-boundable value --
+//     it protects ClickHouse's OWN read volume, which is the engine's
+//     resource, governed by its server profile (CHAOS-4653: prod and
+//     local both currently run with every such setting at 0 already;
+//     removing this client-side cap restores that status quo rather
+//     than opening a new hole). The correct value is "no client-side
+//     cap" -- Python's equivalent queries impose none. dev-health-go
+//     @v0.4.0 cannot express that: applyOptions' defaultPositiveUint64
+//     substitutes its positive fallback whenever Options.MaxBytesToRead
+//     is <= 0, so deleting this field does NOT remove the cap, it
+//     silently reverts to the ORIGINAL 64 MiB bug (found reading
+//     options.go, not assumed). v0.6.1 adds the ability to request
+//     literal 0/unlimited; the ops pin bump to it is a one-line
+//     follow-up that deletes this field for real. Until then: 2 GiB,
+//     EXECUTED against real org 70d529e0 data (live-local runner,
+//     unwrap-chain instrumentation in newQueryHandler below) -- proven
+//     live 12/12 three separate times on this branch, real headroom
+//     (~2x) over the measured ~1002 MiB / 6,942,432-row hotspots scan
+//     (clickhouse-client, max_bytes_to_read=0, system.query_log
+//     confirmed). INVALIDATED BY: v0.6.1 shipping (delete this field
+//     entirely then, don't re-derive a bigger number) OR a legitimate
+//     query needing to read more than 2 GiB before v0.6.1 lands (widen
+//     the value with a fresh EXECUTED measurement, same as this one).
 //
-// workgraph.MaxEdgesLimit (edges.go) is the real, already
-// codebase-enforced ceiling on a single workGraphEdges request's
-// `filters.limit` -- clampEdgesLimit forces every caller-supplied limit
-// into [1, MaxEdgesLimit]. Each edge contributes up to 2 distinct
-// (node_type, node_id) endpoints (source + target), and each endpoint
-// contributes up to 2 membership rows (theme + subcategory), so the real
-// worst case is 4*MaxEdgesLimit ClickHouse-side rows for a single
-// request -- a code-enforced upper bound, not an organically-growing one
-// like hotspots' byte need above. Deriving the row budget FROM that
-// constant (plus real headroom) keeps the two in lockstep if
-// MaxEdgesLimit ever changes, instead of silently re-opening this gap a
-// third time.
+//   - queryRouteMaxResultRows: PROVISIONAL, successor CHAOS-4654. This
+//     IS capacity-boundable in principle -- it protects THIS PROCESS
+//     (query-api's own pooled connections, MaxOpenConns=8 by default,
+//     and the in-memory row slice every resolver buffers before the
+//     HTTP response is written) -- but a capacity derivation needs a
+//     declared container memory budget, and query-api has none: no
+//     mem_limit/deploy.resources in deploy/go-api/compose-query-api.yml
+//     (its only deploy artifact), no k8s/helm manifest at all (checked
+//     2026-08-31 -- this service hasn't reached that deploy layer yet).
+//     A capacity number derived from an unknown capacity is a workload
+//     guess wearing better clothes, so this is NOT that: it is still a
+//     WORKLOAD derivation -- 4*workgraph.MaxEdgesLimit (edges.go's
+//     already-enforced ceiling on a single workGraphEdges request's
+//     filters.limit; 2 endpoints/edge x 2 membership rows/endpoint --
+//     see the long comment trail this constant's git blame carries)
+//     plus 100,000 rows of headroom -- proven EXECUTED and CONFIRMED
+//     against real org 70d529e0 data (live-local runner, 12/12, three
+//     times) but NOT proof against a fan-out dimension nobody has yet
+//     found, which is exactly how rounds 1 and 2 of this same review
+//     each undercounted the round before. CHAOS-4654 makes "give
+//     query-api a declared container memory budget" a precondition of
+//     actually DEPLOYING this service, not of merging this PR; once
+//     that budget exists, re-derive this value from it (rows this
+//     process can safely buffer per request, generously above any
+//     legitimate result -- real results here are thousands of rows, a
+//     capacity bound should land orders of magnitude above that) and
+//     delete the workgraph.MaxEdgesLimit dependency below entirely,
+//     since a capacity-derived bound needs no fan-out arithmetic at
+//     all. INVALIDATED BY: CHAOS-4654 landing a declared memory budget
+//     (re-derive from capacity then) OR a THIRD undiscovered fan-out
+//     multiplier tripping this value first (see
+//     TestCategoryKindCardinalityHasNoNewValue in membership_test.go --
+//     it fails loudly the moment a new category_kind value appears,
+//     which is the earliest possible signal that this workload
+//     derivation's assumptions changed).
 const (
-	queryRouteMaxResultRows  = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000: 2 endpoints/edge x 2 membership rows/endpoint (theme + subcategory) x the 100,000-edge clamp ceiling, plus 100,000 rows of headroom
-	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB
+	queryRouteMaxResultRows  = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654
+	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB -- PROVISIONAL, successor CHAOS-4651 / dev-health-go v0.6.1
 )
 
 // newQueryRouteClickHouseClient is the ONE place this route constructs its

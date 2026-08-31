@@ -90,8 +90,17 @@ type PendingOccurrence struct {
 	// for a fixture/legacy config must not be allowed to materialize into a
 	// real sync run even if it is already sitting in the table.
 	ConfigPlannerManaged bool
-	JobStatus            int
-	JobType              string
+	// ConfigSourceID mirrors sync_configurations.source_id, locked at
+	// materialization time exactly like ConfigPlannerManaged (CHAOS-4604):
+	// a non-nil value identifies a non-planner-managed CHILD config pinned
+	// to one explicit IntegrationSource -- the ONLY other shape Materialize's
+	// eligibility gate admits besides a planner-managed parent. A
+	// non-planner-managed config with this nil (a legacy, unscoped standalone
+	// config) is still refused -- this field WIDENS eligibility, it never
+	// makes the gate permissive by default.
+	ConfigSourceID *string
+	JobStatus      int
+	JobType        string
 }
 
 // PlanResult is the authoritative graph one materialization produced.
@@ -609,6 +618,7 @@ func lockPendingOccurrence(
 		&occurrence.AttemptCount,
 		&occurrence.ConfigActive,
 		&occurrence.ConfigPlannerManaged,
+		&occurrence.ConfigSourceID,
 		&occurrence.JobStatus,
 		&occurrence.JobType,
 	)
@@ -687,6 +697,7 @@ SELECT
     occurrence.reconcile_attempt_count,
     config.is_active,
     config.planner_managed,
+    config.source_id::text,
     job.status,
     job.job_type
 FROM public.scheduled_sync_occurrences AS occurrence

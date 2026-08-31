@@ -18,6 +18,11 @@ type PostureGap struct {
 	ColumnName   string // empty for a table-wide requirement
 	TableMissing bool
 	Missing      []string // e.g. ["INSERT", "UPDATE"]; ["SELECT"] for a column-scoped gap
+	// Excess names table-wide privileges the role holds on a table this
+	// posture declares column-scoped only (CHAOS-4675). Mutually exclusive
+	// with Missing/TableMissing on any one gap: a table cannot both not
+	// exist and carry an excess privilege on it.
+	Excess []string
 }
 
 // String renders one gap as a single redacted line, safe to place in a log
@@ -28,6 +33,9 @@ func (gap PostureGap) String() string {
 			return fmt.Sprintf("%s.%s: table does not exist", gap.TableName, gap.ColumnName)
 		}
 		return fmt.Sprintf("%s: table does not exist", gap.TableName)
+	}
+	if len(gap.Excess) > 0 {
+		return fmt.Sprintf("%s: excess table-wide privileges %v (declared column-scoped only)", gap.TableName, gap.Excess)
 	}
 	if gap.ColumnName != "" {
 		return fmt.Sprintf("%s.%s: missing %v", gap.TableName, gap.ColumnName, gap.Missing)
@@ -116,26 +124,85 @@ FROM resolved
 ORDER BY sequence_name
 `
 
+// diagnoseColumnScopedExcessQuery is the admin-callable, role-NAME-parameterized
+// counterpart of rolePostureQuery's "no table-wide privilege leakage on a
+// column-scoped table" predicate (domain_authorization.go's
+// column_scoped_relations clause). It exists for CHAOS-4675: go-river-migrate's
+// executed-proof gate (checkExecutedGrantPosture, cmd/dev-health-worker-migrate)
+// calls DiagnoseRolePosture from an admin connection that cannot open a session
+// AS the runtime role, so it cannot call CheckRolePosture/rolePostureQuery
+// itself (that query is deliberately current_user-bound). Before this query
+// existed, DiagnoseRolePosture only ever asked "is anything declared missing",
+// so a coordinator role that also held a stray TABLE-WIDE grant on a table
+// this posture declares column-scoped (e.g. a leftover from before the table
+// was split to column-scoped, or a hand-run admin GRANT) read as zero gaps --
+// "posture confirmed" -- from this gate, while CheckCoordinatorAuthorization
+// still correctly rejected the same role at every runtime binary's own
+// startup. That silent disagreement, with both sides individually reporting
+// success, is CHAOS-4675: the granter/checker pair can drift on privilege
+// GRANULARITY (table-wide vs column-scoped) for the same table without the
+// migrate-time telemetry ever naming it.
+//
+// has_table_privilege accepts an explicit role name (it is not restricted to
+// current_user the way the ownership/ambient-privilege checks in
+// rolePostureQuery are), so this reuses the identical seven-privilege sweep
+// (MAINTAIN gated the same way, by server_version_num) against an admin
+// connection bound to the role BY NAME rather than by session identity.
+const diagnoseColumnScopedExcessQuery = `
+WITH required(table_name) AS (
+	SELECT DISTINCT * FROM unnest($2::text[])
+), resolved AS (
+	SELECT
+		required.table_name,
+		to_regclass('public.' || required.table_name) AS relation
+	FROM required
+)
+SELECT
+	table_name,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'SELECT') AS excess_select,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'INSERT') AS excess_insert,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'UPDATE') AS excess_update,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'REFERENCES') AS excess_references,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRIGGER') AS excess_trigger,
+	relation IS NOT NULL
+		AND current_setting('server_version_num')::integer >= 170000
+		AND has_table_privilege($1, relation, 'MAINTAIN') AS excess_maintain
+FROM resolved
+ORDER BY table_name
+`
+
 // DiagnoseRolePosture re-checks a RolePosture's requirements individually
 // (tables, column-scoped privileges, AND required sequences) and returns
-// the subset the connected login does not currently satisfy. It is
-// deliberately NOT part of CheckRolePosture's hot readiness path: it
-// issues additional queries re-deriving what CheckRolePosture's single
-// hardened boolean already computed, at higher cost and with a smaller
-// trusted surface, so callers should use it only after CheckRolePosture has
-// already reported failure -- purely to explain why, in a form safe to log.
+// the subset the connected login does not currently satisfy, PLUS
+// (CHAOS-4675) any table-wide privilege excess on a table this posture
+// declares column-scoped only. It is deliberately NOT part of
+// CheckRolePosture's hot readiness path: it issues additional queries
+// re-deriving what CheckRolePosture's single hardened boolean already
+// computed, at higher cost and with a smaller trusted surface, so callers
+// should use it only after CheckRolePosture has already reported failure --
+// purely to explain why, in a form safe to log.
 //
-// It does NOT prove the inverse of CheckRolePosture (that the role holds
-// nothing beyond its posture): an empty result here means every declared
-// requirement is individually satisfied, which usually but not always means
-// CheckRolePosture would now pass. If CheckRolePosture still fails against
-// an empty diagnostic here, the role holds something it must not (an excess
-// grant), which this function does not attempt to detect -- identifying
-// that would mean walking effective privileges on every relation in the
-// schema against the manifest, the same work rolePostureQuery's catch-all
-// predicates already do inside its single trustworthy boolean, and
-// duplicating that here would be exactly the drift risk CheckRolePosture's
-// own package doc warns against.
+// It still does NOT prove the FULL inverse of CheckRolePosture (that the
+// role holds nothing beyond its posture, in every sense rolePostureQuery's
+// catch-all predicates check: ownership, database/schema-level ambient
+// privileges, River-schema leakage, or table-wide excess on a table this
+// posture does not mention at all). Column-scoped-table excess is the one
+// slice of that property this function now covers, because it is exactly
+// the slice CHAOS-4675 proved can drift silently: a granter/checker pair
+// that agrees a table is column-scoped can still disagree, over time, about
+// whether the role also holds a table-wide grant on it, and unlike a
+// missing grant (which every runtime binary's own startup check catches
+// loudly) an excess grant here only fails LATER, in a way this diagnostic
+// used to read as "posture confirmed". Every other excess-privilege route
+// remains something only CheckRolePosture itself proves, from a real
+// session as that role -- identifying those here would mean walking
+// effective privileges on every relation in the schema against the
+// manifest, the same work rolePostureQuery's catch-all predicates already
+// do inside its single trustworthy boolean, and duplicating that here would
+// be exactly the drift risk CheckRolePosture's own package doc warns
+// against.
 func DiagnoseRolePosture(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -161,6 +228,12 @@ func DiagnoseRolePosture(
 			return nil, err
 		}
 		gaps = append(gaps, columnGaps...)
+
+		excessGaps, err := diagnoseColumnScopedExcess(ctx, pool, expectedRole, posture.ColumnScoped)
+		if err != nil {
+			return nil, err
+		}
+		gaps = append(gaps, excessGaps...)
 	}
 
 	if len(posture.RequiredSequences) > 0 {
@@ -316,6 +389,85 @@ func diagnoseColumnPosture(
 		}
 		if missing {
 			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, Missing: []string{privilege}})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return gaps, nil
+}
+
+// diagnoseColumnScopedExcess is diagnoseColumnScopedExcessQuery's Go side: for
+// every distinct table named in a posture's ColumnScoped entries, it reports
+// any table-wide privilege the role holds on that table as an excess gap
+// (CHAOS-4675). A table declared column-scoped is never also supposed to
+// carry a table-wide grant -- coordinatorGrantStatements enforces that by
+// construction going forward (a table cannot appear in both
+// CoordinatorGrants and CoordinatorColumnGrants, see ValidateMigrationOptions),
+// but this diagnostic is what notices the database has drifted from that
+// invariant regardless of how -- a leftover grant from before a table was
+// split to column-scoped, or one applied by hand outside the migration.
+func diagnoseColumnScopedExcess(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	expectedRole string,
+	columns []ColumnPrivilege,
+) ([]PostureGap, error) {
+	seen := make(map[string]struct{}, len(columns))
+	tableNames := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.TableName]; ok {
+			continue
+		}
+		seen[column.TableName] = struct{}{}
+		tableNames = append(tableNames, column.TableName)
+	}
+	rows, err := pool.Query(ctx, diagnoseColumnScopedExcessQuery, expectedRole, tableNames)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+
+	var gaps []PostureGap
+	for rows.Next() {
+		var (
+			tableName                                                       string
+			excessSelect, excessInsert, excessUpdate, excessDelete          bool
+			excessTruncate, excessReferences, excessTrigger, excessMaintain bool
+		)
+		if err := rows.Scan(
+			&tableName, &excessSelect, &excessInsert, &excessUpdate, &excessDelete,
+			&excessTruncate, &excessReferences, &excessTrigger, &excessMaintain,
+		); err != nil {
+			return nil, ErrUnavailable
+		}
+		var excess []string
+		if excessSelect {
+			excess = append(excess, "SELECT")
+		}
+		if excessInsert {
+			excess = append(excess, "INSERT")
+		}
+		if excessUpdate {
+			excess = append(excess, "UPDATE")
+		}
+		if excessDelete {
+			excess = append(excess, "DELETE")
+		}
+		if excessTruncate {
+			excess = append(excess, "TRUNCATE")
+		}
+		if excessReferences {
+			excess = append(excess, "REFERENCES")
+		}
+		if excessTrigger {
+			excess = append(excess, "TRIGGER")
+		}
+		if excessMaintain {
+			excess = append(excess, "MAINTAIN")
+		}
+		if len(excess) > 0 {
+			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
 		}
 	}
 	if err := rows.Err(); err != nil {

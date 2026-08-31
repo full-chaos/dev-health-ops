@@ -16,3 +16,4 @@ lifecycle: active
 - [Debug and observe development environments](debugging.md)
 - [Verification traps in the Go worker runtime](go-worker-verification-traps.md)
 - [Lane isolation on a kiac cluster](lane-isolation-kiac.md) — run the whole stack per namespace instead of sharing the Compose stack
+- [Integration suite targets](integration-suite-targets.md) — which integration suite runs on host Testcontainers, on kiac, or in CI, and the ClickHouse versions that decide it

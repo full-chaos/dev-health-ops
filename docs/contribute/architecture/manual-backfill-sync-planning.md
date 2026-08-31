@@ -28,7 +28,8 @@ A non-planner-managed config (a child config pinned to one explicit
 The routing decision lives in one place --
 `create_sync_execution_trigger` (`execution_trigger.py`) checks
 `config.planner_managed AND SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED` (env
-flag, default OFF) before choosing the Go hand-off branch over the
+flag, default OFF at launch, flipped PERMANENTLY ON by CHAOS-4629 landing --
+chris ruling, 2026-08-31) before choosing the Go hand-off branch over the
 pre-existing in-process call. It is also enforced structurally, not just by
 that routing check: `NativeMaterializer.Materialize`'s own eligibility gate
 rejects any occurrence whose `ConfigPlannerManaged` is false

@@ -265,6 +265,7 @@ nav:
           - Debugging: contribute/development/debugging.md
           - Go worker verification traps: contribute/development/go-worker-verification-traps.md
           - Lane isolation on kiac: contribute/development/lane-isolation-kiac.md
+          - Integration suite targets: contribute/development/integration-suite-targets.md
       - Review and release:
           - contribute/review-and-release/index.md
           - Pull requests: contribute/review-and-release/pull-requests.md

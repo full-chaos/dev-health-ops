@@ -24,12 +24,47 @@ import (
 // the caller used to reach its own terminal state (Dispatch()'s main
 // claim/route/enqueue session has already closed by every call site that
 // reaches this).
+// redispatchCountdown is _schedule_redispatch's own default wakeup delay,
+// named so a caller that must compare against it (CHAOS-4605's
+// deferred-outside-snapshot arm in dispatch_sync_run) reads the SAME env var
+// with the SAME default rather than keeping a second copy of the number.
+func redispatchCountdown() time.Duration {
+	return time.Duration(budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", 60)) * time.Second
+}
+
+// dueNowRearmAt is the wakeup rule for a pass that has work eligible NOW which
+// it nonetheless could not queue -- concurrency-capped units, and (CHAOS-4605)
+// units left unclaimed because they became claimable after the guard snapshot.
+// That work wants the default countdown: it is not deferred, it is waiting for
+// capacity or for the next pass's decision.
+//
+// The trap is that a pass can hold BOTH kinds at once, and scheduleRedispatch
+// writes exactly ONE wakeup whose second statement overwrites a still-pending
+// row for this kind UNCONDITIONALLY. So arming the bare countdown while a
+// budget/cooldown deferral is already pending EARLIER pushes that earlier
+// wakeup back by up to the whole countdown. Codex found this twice, in the two
+// arms independently: round 1 P2 in the riverQueued > 0 snapshot-deferral arm
+// (a wakeup at now+5s moved to now+60s), and round 2 P2 in the riverQueued == 0
+// tail, where `counts.dispatchable > 0` armed the bare countdown and dropped
+// `counts.nextDeferredAt` entirely -- the latter reachable on origin/main too,
+// via concurrency-capped units, and made far more reachable by CHAOS-4605's own
+// allow-list, which is what leaves a unit dispatchable instead of claiming it.
+//
+// Taking the earlier of the two is therefore not a preference, it is the only
+// choice that cannot delay either claimant. Waking early costs one cheap pass;
+// waking late strands work that was already due. Named, shared by both arms and
+// tested on its own because the RULE is what regressed, and a regression back to
+// "always the countdown" is invisible at a call site.
+func dueNowRearmAt(nextDeferredAt *time.Time, now time.Time) *time.Time {
+	return earlierOf(nextDeferredAt, now.Add(redispatchCountdown()))
+}
+
 func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, syncRunID string, availableAt *time.Time, now time.Time) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	countdown := budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", 60)
-	redispatchAt := now.Add(time.Duration(countdown) * time.Second)
+	countdown := redispatchCountdown()
+	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
 		redispatchAt = *availableAt
 	}
@@ -70,5 +105,5 @@ WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_toke
 		return
 	}
 	logger.InfoContext(ctx, "dispatch_sync_run.redispatch_rearmed",
-		slog.String("sync_run_id", syncRunID), slog.Int("countdown", countdown), slog.Time("available_at", redispatchAt))
+		slog.String("sync_run_id", syncRunID), slog.Int("countdown", int(countdown.Seconds())), slog.Time("available_at", redispatchAt))
 }

@@ -79,6 +79,39 @@ def _seed_planner_managed_config(
     return config
 
 
+def _seed_child_config(
+    session: Session, org_id: str = "org-a", *, with_explicit_source: bool
+) -> SyncConfiguration:
+    """CHAOS-4604: a non-planner-managed CHILD config, optionally pinned to
+    one explicit IntegrationSource -- the shape the routing gate's widening
+    targets. Deliberately does not create an actual IntegrationSource row:
+    the routing decision reads only config.source_id's presence, and sqlite
+    (this fixture's engine) does not enforce the FK by default."""
+    integration = Integration(
+        org_id=org_id,
+        provider="github",
+        name=f"integration-{uuid.uuid4()}",
+        config={},
+        is_active=True,
+    )
+    session.add(integration)
+    session.flush()
+    config = SyncConfiguration(
+        org_id=org_id,
+        name="child-config",
+        provider="github",
+        sync_targets=["git"],
+        sync_options={},
+        is_active=True,
+        integration_id=integration.id,
+        planner_managed=False,
+        source_id=uuid.uuid4() if with_explicit_source else None,
+    )
+    session.add(config)
+    session.flush()
+    return config
+
+
 @pytest.fixture
 def sqlite_session():
     engine = create_engine("sqlite:///:memory:")
@@ -127,13 +160,36 @@ def test_go_handoff_mints_occurrence_and_trigger_row_when_flag_on(
     assert trigger_row.triggered_by == "manual"
 
 
-def test_go_handoff_disabled_by_default_even_for_planner_managed_config(
+def test_go_handoff_enabled_by_default_for_planner_managed_config(
     sqlite_session, monkeypatch
 ):
-    """Fork 1/rollout-flag default-off: a planner_managed config still goes
-    through the pre-existing in-process path unless the flag is explicitly
-    on -- this is what makes the rollout safe to ship dark."""
+    """CHAOS-4629 (chris ruling, 2026-08-31 06:20 PT): the rollout flag's
+    default flipped PERMANENTLY ON now that this parity ticket has landed --
+    a planner_managed config routes to the Go hand-off with NO env var set
+    at all, pinning the new default so a future edit that silently reverts
+    it fails this test instead of shipping unnoticed."""
     monkeypatch.delenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", raising=False)
+    config = _seed_planner_managed_config(sqlite_session)
+
+    result = create_sync_execution_trigger(
+        sqlite_session, config, "org-a", triggered_by="manual", mode="incremental"
+    )
+    sqlite_session.flush()
+
+    assert result is not None
+    assert result.occurrence_id is not None
+    assert result.awaiting_materialization is True
+    assert sqlite_session.query(SyncManualTrigger).count() == 1, (
+        "default-true means the Go hand-off path mints a sync_manual_triggers "
+        "row with no env var set at all"
+    )
+
+
+def test_go_handoff_can_still_be_explicitly_disabled(sqlite_session, monkeypatch):
+    """The escape hatch survives the default flip: an operator/ops override
+    explicitly setting the flag to a falsy value still routes to the legacy
+    in-process path, exactly like the old default-off behavior did."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false")
     config = _seed_planner_managed_config(sqlite_session)
 
     result = create_sync_execution_trigger(
@@ -180,6 +236,62 @@ def test_go_handoff_never_intercepts_an_ordinary_scheduled_cron_tick(
     )
     assert sqlite_session.query(ScheduledSyncOccurrence).count() == 0, (
         "the Go hand-off's own occurrence row must not be minted either"
+    )
+
+
+def test_go_handoff_routes_non_planner_managed_child_config_with_explicit_source(
+    sqlite_session, monkeypatch
+):
+    """CHAOS-4604: a non-planner-managed CHILD config pinned to one explicit
+    source_id routes to the Go hand-off exactly like a planner-managed
+    parent does -- the ticket's own target shape, and the Go-side
+    Materialize gate's mirror-image widening (materializer.go)."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true")
+    config = _seed_child_config(sqlite_session, with_explicit_source=True)
+
+    result = create_sync_execution_trigger(
+        sqlite_session, config, "org-a", triggered_by="manual", mode="incremental"
+    )
+    sqlite_session.flush()
+
+    assert result is not None
+    assert result.occurrence_id is not None
+    assert result.awaiting_materialization is True
+
+    trigger_row = (
+        sqlite_session.query(SyncManualTrigger)
+        .filter(SyncManualTrigger.occurrence_id == result.occurrence_id)
+        .one()
+    )
+    assert trigger_row.triggered_by == "manual"
+
+
+def test_go_handoff_never_routes_non_planner_managed_config_without_source_id(
+    sqlite_session, monkeypatch
+):
+    """Regression guard for the structural property CHAOS-4604 calls out: a
+    legacy, fully-unscoped non-planner-managed config (source_id NULL) is
+    NOT one of the two shapes the routing gate admits, even with the flag
+    on and triggered_by='manual' -- it must keep falling through to the
+    pre-existing in-process plan_sync_run path, exactly as before this
+    ticket. A bug that widened this gate by accident would otherwise send an
+    unscoped config's occurrence into the Go materializer, which itself
+    still refuses it (ErrOccurrenceIneligible) -- but this test pins the
+    ROUTING decision, not just the Go-side backstop."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true")
+    config = _seed_child_config(sqlite_session, with_explicit_source=False)
+
+    result = create_sync_execution_trigger(
+        sqlite_session, config, "org-a", triggered_by="manual", mode="incremental"
+    )
+
+    assert result is not None
+    assert result.occurrence_id is None
+    assert result.awaiting_materialization is False
+    assert sqlite_session.query(SyncManualTrigger).count() == 0, (
+        "an unscoped, non-planner-managed config (source_id NULL) is not one "
+        "of the two shapes the routing gate admits, even with the flag on -- "
+        "it must fall through to the legacy in-process plan_sync_run path"
     )
 
 

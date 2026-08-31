@@ -47,14 +47,26 @@ _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS = 10.0
 def _go_manual_backfill_planner_enabled() -> bool:
     """CHAOS-4602 rollout flag, read at call time (ops/tests can flip it
     live) -- matches the established PROVIDER_SYNC_QUEUES_ENABLED shape
-    (workers/queues.py). Default OFF: every planner-managed config keeps
-    calling plan_sync_run in-process, byte-for-byte unchanged, until this
-    is explicitly turned on. Non-planner-managed and child configs are
-    UNCHANGED regardless of this flag (fork 1) -- the gate below also
-    checks config.planner_managed.
+    (workers/queues.py).
+
+    CHAOS-4629 (chris ruling, 2026-08-31 06:20 PT): default flips PERMANENTLY
+    ON now that this parity ticket (Go discovery parity with #2036's
+    hardened Python behaviors -- max_repos capping, case-insensitive
+    matching, rescope-supersede) has landed, which was this flag's own
+    documented rollout gate (CHAOS-4629's own ticket text: "enabling
+    SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED for an org is gated on either
+    (a) this parity ticket landing, or (b) explicitly accepting the narrow
+    exposure"). An explicit env var value (either direction) still wins --
+    this only changes what happens when nothing is set.
+
+    Only a planner-managed parent, or (CHAOS-4604) a non-planner-managed
+    child config pinned to one explicit source_id, are ever routed to Go by
+    this flag -- every other config (a legacy, unscoped standalone config in
+    particular) is UNCHANGED regardless of this flag; see
+    create_sync_execution_trigger's own gate.
     """
     return os.getenv(
-        "SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false"
+        "SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true"
     ).strip().lower() in {
         "1",
         "true",
@@ -369,10 +381,14 @@ def create_sync_execution_trigger(
     elif since is not None or before is not None:
         request = replace(request, since=since, before=before)
 
-    # CHAOS-4602 fork 1: Go pickup only for planner-managed configs, only
-    # when the rollout flag is on, AND only for a genuine manual/backfill
-    # trigger (codex review, gate round 9, P1): this function is also the
-    # ordinary scheduled-cron path's call target
+    # CHAOS-4602 fork 1 (widened by CHAOS-4604): Go pickup for a
+    # planner-managed parent OR a non-planner-managed CHILD config pinned to
+    # one explicit source_id -- the Go-side Materialize gate
+    # (materializer.go, CHAOS-4604) admits exactly this same pair of shapes
+    # and refuses everything else, so this condition and that gate must stay
+    # in lockstep. Only when the rollout flag is on, AND only for a genuine
+    # manual/backfill trigger (codex review, gate round 9, P1): this
+    # function is also the ordinary scheduled-cron path's call target
     # (create_scheduled_sync_execution_trigger passes triggered_by="schedule"
     # straight through from sync_scheduler.py). Without this check, an
     # eligible cron occurrence on a flag-enabled planner-managed config
@@ -381,12 +397,15 @@ def create_sync_execution_trigger(
     # ck_sync_manual_triggers_triggered_by CHECK constraint (settings.py,
     # 'manual'/'backfill' only) rejects outright, failing every regular
     # scheduled sync for that config the moment the flag is turned on.
-    # Every non-planner-managed/child config, every planner-managed config
-    # while the flag is off, and every ordinary scheduled tick (regardless
-    # of the flag) falls through UNCHANGED to the pre-existing in-process
-    # plan_sync_run call below.
+    # A non-planner-managed config with source_id NULL (a legacy, unscoped
+    # standalone config -- the shape CHAOS-4604 does NOT widen routing for),
+    # every planner-managed config while the flag is off, and every
+    # ordinary scheduled tick (regardless of the flag) fall through
+    # UNCHANGED to the pre-existing in-process plan_sync_run call below.
+    config_planner_managed = bool(getattr(config, "planner_managed", False))
+    config_has_explicit_source = getattr(config, "source_id", None) is not None
     if (
-        bool(getattr(config, "planner_managed", False))
+        (config_planner_managed or config_has_explicit_source)
         and _go_manual_backfill_planner_enabled()
         and triggered_by in ("manual", "backfill")
     ):

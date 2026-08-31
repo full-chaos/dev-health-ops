@@ -121,3 +121,109 @@ func TestDiagnoseRolePostureReturnsNoGapsOnceGrantsAreCorrect(t *testing.T) {
 		t.Fatalf("CheckCoordinatorAuthorization disagrees with DiagnoseRolePosture's empty result: %v", err)
 	}
 }
+
+// TestDiagnoseRolePostureCatchesTableWideExcessOnAColumnScopedTable is the
+// CHAOS-4675 regression test: executed, live evidence for the exact prod
+// state that ticket reported, and proof it is now caught at migrate time
+// instead of surfacing later as workerctl's runtime_role_unauthorized.
+//
+// CHAOS-4675 confirmed on the shared local stack (2026-08-31,
+// has_table_privilege('devhealth_coordinator','public.integration_credentials',
+// 'SELECT') = false while all five declared column grants were present) that
+// go-river-migrate's own posture telemetry (dev_health_runtime_posture_missing)
+// read 0 for every role -- "posture confirmed" -- in a state where a
+// coordinator process would still fail at startup, IF the role had also held
+// a table-wide grant left over on that same column-scoped table: nothing
+// this test's baseline (pre-fix) DiagnoseRolePosture call checks would have
+// noticed a table-wide grant coexisting with the correct column grants,
+// because that function only ever asked "is anything declared missing."
+//
+// This test builds the real coordinator role from the real migration-emitted
+// grants (startGrantHarness / CoordinatorPosture(), the SAME production
+// manifest CheckCoordinatorAuthorization asserts against), then adds ONE
+// excess table-wide GRANT on integration_credentials -- a table
+// CoordinatorPosture() declares column-scoped only -- reproducing "the
+// column-level grants are all present AND a table-wide grant also exists"
+// without touching anything DiagnoseRolePosture already treats as missing.
+//
+// Before the CHAOS-4675 fix (diagnoseColumnScopedExcess wired into
+// DiagnoseRolePosture): this excess grant produced ZERO gaps here --
+// exactly the metric's "posture confirmed" blindness the ticket named as the
+// actual root defect -- while CheckCoordinatorAuthorization still correctly
+// rejected the role. After the fix: DiagnoseRolePosture reports the excess
+// as a gap naming the table and the leaked privilege, agreeing with
+// CheckCoordinatorAuthorization's rejection instead of contradicting it.
+func TestDiagnoseRolePostureCatchesTableWideExcessOnAColumnScopedTable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+
+	// Sanity: the harness's real migration-emitted grants start clean on both
+	// sides, exactly like TestDiagnoseRolePostureReturnsNoGapsOnceGrantsAreCorrect.
+	if gaps, err := DiagnoseRolePosture(ctx, coordinator, grantCoordinatorRole, CoordinatorPosture()); err != nil {
+		t.Fatalf("DiagnoseRolePosture (baseline): %v", err)
+	} else if len(gaps) != 0 {
+		t.Fatalf("expected a clean baseline before injecting excess, got %+v", gaps)
+	}
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
+		t.Fatalf("CheckCoordinatorAuthorization (baseline): %v", err)
+	}
+
+	// Inject the excess: a table-wide SELECT grant on integration_credentials,
+	// left alongside the five column grants CoordinatorPosture() already
+	// declares and the migration already applied for that table.
+	if _, err := admin.Exec(ctx,
+		"GRANT SELECT ON TABLE public.integration_credentials TO "+grantCoordinatorRole,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.Exec(cleanupCtx,
+			"REVOKE SELECT ON TABLE public.integration_credentials FROM "+grantCoordinatorRole,
+		); err != nil {
+			t.Errorf("revoke injected excess grant: %v", err)
+		}
+	})
+
+	// The real startup gate every coordinator-role binary depends on must
+	// reject this state -- it did before this test existed, and still must.
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+		t.Fatal("CheckCoordinatorAuthorization accepted a table-wide grant on a column-scoped table -- test setup is not exercising the excess this test is about")
+	}
+
+	// The migrate-time diagnostic must now agree with that rejection instead
+	// of reading "posture confirmed" (CHAOS-4675's actual defect).
+	gaps, err := DiagnoseRolePosture(ctx, coordinator, grantCoordinatorRole, CoordinatorPosture())
+	if err != nil {
+		t.Fatalf("DiagnoseRolePosture (excess): %v", err)
+	}
+	var found *PostureGap
+	for i := range gaps {
+		if gaps[i].TableName == "integration_credentials" && len(gaps[i].Excess) > 0 {
+			found = &gaps[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("DiagnoseRolePosture did not report the excess table-wide grant on integration_credentials -- "+
+			"CheckCoordinatorAuthorization rejects this role but the migrate-time diagnostic reads it as clean, "+
+			"exactly the CHAOS-4675 blindness; got gaps: %+v", gaps)
+	}
+	if !containsString(found.Excess, "SELECT") {
+		t.Errorf("expected the excess gap to name SELECT specifically, got %+v", found.Excess)
+	}
+	if line := found.String(); !strings.Contains(line, "integration_credentials") || !strings.Contains(line, "SELECT") {
+		t.Errorf("PostureGap.String() should name the table and the leaked privilege, got %q", line)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

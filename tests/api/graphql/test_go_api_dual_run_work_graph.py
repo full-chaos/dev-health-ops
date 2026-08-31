@@ -1114,15 +1114,21 @@ async def test_dual_run_edges_tied_confidence_at_limit_boundary_matches(
     )
 
     # Every edge shares confidence=0.5, so the deterministic tie-break
-    # (edge_id ASC) alone decides the survivors: the lexicographically
-    # smallest `limit` edge_ids. Assert Python matches THAT expected set,
-    # independent of Go, before ever comparing the two planes to each
-    # other -- two planes agreeing on the WRONG set is not evidence.
+    # (edge_id ASC) alone decides the survivors AND their order: the
+    # lexicographically smallest `limit` edge_ids, in ascending order.
+    # codex round 2 P3: comparing SORTED actual against sorted expected
+    # only proves the survivor SET is right, not that Python's own
+    # ORDER BY produced ascending order -- a regression that returned
+    # the right 10 edges in the WRONG (e.g. descending) order would still
+    # pass a sorted-vs-sorted check, and would pass the cross-plane
+    # comparator too if Go regressed identically. Compare the RAW
+    # resolver order directly, unsorted, against the known-correct
+    # ascending sequence.
     expected_edge_ids = sorted(r.edge_id for r in records)[:limit]
-    actual_edge_ids = sorted(e.edge_id for e in python_edges.edges)
+    actual_edge_ids = [e.edge_id for e in python_edges.edges]
     assert actual_edge_ids == expected_edge_ids, (
-        f"Python's surviving tied-row set was not the deterministic "
-        f"lexicographically-smallest {limit} of {tied_count} -- "
+        f"Python's surviving tied-row order was not the deterministic "
+        f"ascending lexicographically-smallest {limit} of {tied_count} -- "
         f"CHAOS-2442/4493 regression: got {actual_edge_ids}, "
         f"expected {expected_edge_ids}"
     )

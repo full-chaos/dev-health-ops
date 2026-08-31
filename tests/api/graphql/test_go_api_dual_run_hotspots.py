@@ -718,14 +718,19 @@ async def test_dual_run_tied_risk_score_at_limit_boundary_matches(
 
     # repo_id is constant across every seeded row, so the deterministic
     # tie-break (repo_id, file_path) reduces to file_path ascending among
-    # rows tied on risk_score. Assert Python matches THAT expected set,
-    # independent of Go, before ever comparing the two planes to each
-    # other -- two planes agreeing on the WRONG set is not evidence.
+    # rows tied on risk_score -- deciding BOTH the survivor set AND their
+    # order. Comparing sorted(actual) to sorted(expected) would only
+    # prove the SET is right, not that Python's own ORDER BY produced
+    # ascending order -- a regression returning the right rows in the
+    # WRONG order would pass a sorted-vs-sorted check, and would pass the
+    # cross-plane comparator too if Go regressed identically (codex round
+    # 2 class, applied here proactively). Compare the RAW resolver order
+    # directly, unsorted, against the known-correct ascending sequence.
     expected_paths = sorted(h.file_path for h in hotspots)[:limit]
-    actual_paths = sorted(r.file_path for r in python_result.rows)
+    actual_paths = [r.file_path for r in python_result.rows]
     assert actual_paths == expected_paths, (
-        f"Python's surviving tied-row set was not the deterministic "
-        f"lexicographically-smallest {limit} of {tied_count} -- "
+        f"Python's surviving tied-row order was not the deterministic "
+        f"ascending lexicographically-smallest {limit} of {tied_count} -- "
         f"CHAOS-4472 regression: got {actual_paths}, expected {expected_paths}"
     )
 

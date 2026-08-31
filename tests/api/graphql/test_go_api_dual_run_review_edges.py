@@ -804,19 +804,25 @@ async def test_dual_run_tied_reviews_count_at_limit_boundary_matches(
     # The deterministic tie-break (repo_id, reviewer, author, day) makes
     # the surviving `limit` rows -- among `tied_count` rows tied on
     # reviews_count -- the lexicographically-smallest (reviewer, author)
-    # tuples. Assert Python matches THAT expected set, independent of Go,
-    # before ever comparing the two planes to each other -- two planes
-    # agreeing on the WRONG set is not evidence of anything.
+    # tuples, IN ASCENDING ORDER (repo_id/day are constant across every
+    # seeded row, so the tie-break reduces to (reviewer, author) ASC).
+    # Comparing sorted(actual) to sorted(expected) would only prove the
+    # SET is right, not that Python's own ORDER BY produced ascending
+    # order -- a regression returning the right rows in the WRONG order
+    # would pass a sorted-vs-sorted check, and would pass the cross-plane
+    # comparator too if Go regressed identically (codex round 2 class,
+    # applied here proactively). Compare the RAW resolver order directly,
+    # unsorted, against the known-correct ascending sequence.
     # review_rows[i]["reviewer"] pairs with pr_rows[i]["author_email"] by
     # construction above (both built from the same loop index i).
     expected_pairs = sorted(
         (review_rows[i]["reviewer"], pr_rows[i]["author_email"])
         for i in range(tied_count)
     )[:limit]
-    actual_pairs = sorted((e.reviewer, e.author) for e in python_result.edges)
+    actual_pairs = [(e.reviewer, e.author) for e in python_result.edges]
     assert actual_pairs == expected_pairs, (
-        f"Python's surviving tied-row set was not the deterministic "
-        f"lexicographically-smallest {limit} of {tied_count} -- "
+        f"Python's surviving tied-row order was not the deterministic "
+        f"ascending lexicographically-smallest {limit} of {tied_count} -- "
         f"CHAOS-4421 regression: got {actual_pairs}, expected {expected_pairs}"
     )
 

@@ -998,15 +998,20 @@ async def test_dual_run_team_dimension_tied_nodes_at_limit_boundary_matches(
     )
 
     # Every team ties on value=1, so the deterministic tie-break (node_id
-    # ASC) alone decides survivors: the lexicographically smallest
-    # `max_nodes` team_ids. Assert Python matches THAT expected set,
-    # independent of Go, before ever comparing the two planes to each
-    # other -- two planes agreeing on the WRONG set is not evidence.
+    # ASC) alone decides survivors AND their order: the lexicographically
+    # smallest `max_nodes` team_ids, in ascending order. codex round 2
+    # P3: comparing SORTED actual against sorted expected only proves the
+    # survivor SET is right, not that Python's own ORDER BY produced
+    # ascending order -- a regression that returned the right nodes in
+    # the WRONG order would still pass a sorted-vs-sorted check, and
+    # would pass the cross-plane comparator too if Go regressed
+    # identically. Compare the RAW resolver order directly, unsorted,
+    # against the known-correct ascending sequence.
     expected_ids = sorted(f"TEAM:{t}" for t in team_ids)[:max_nodes]
-    actual_ids = sorted(n.id for n in python_result.flow_matrix.nodes)
+    actual_ids = [n.id for n in python_result.flow_matrix.nodes]
     assert actual_ids == expected_ids, (
-        f"Python's surviving tied-node set was not the deterministic "
-        f"lexicographically-smallest {max_nodes} of {tied_count} -- "
+        f"Python's surviving tied-node order was not the deterministic "
+        f"ascending lexicographically-smallest {max_nodes} of {tied_count} -- "
         f"got {actual_ids}, expected {expected_ids}"
     )
 

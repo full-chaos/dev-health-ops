@@ -27,7 +27,7 @@ cluster is built; this page covers only **where a given suite should run**.
 | Target | What it is | What it costs |
 | --- | --- | --- |
 | **Host Testcontainers** | `StartPostgres`/`StartClickHouse`/`StartValkey` start a container per caller through Docker. The default. | Docker CPU on the developer's Mac — the allocation CHAOS-4428 exists to reduce. |
-| **kiac in-cluster** | The same helpers, pointed at a cluster's existing datastores by env DSN, each caller getting its own scratch database. | Near zero extra CPU: the datastores are already running. |
+| **kiac in-cluster** | The same helpers, pointed at a cluster's existing datastores by env DSN. Every caller **that goes through the harness** gets its own scratch database; a resource created out-of-band is outside that ownership model — see below. | Near zero extra CPU: the datastores are already running. |
 | **GitHub Actions CI** | The suite is not run locally at all; the `go-storage-integration-*` jobs are the signal. | No local cost, but see the version table — CI does not run what production runs. |
 
 ## The rule
@@ -77,7 +77,9 @@ stays local.
 flowchart TD
     A[Integration suite] --> P{Is every Start* result<br/>eventually Closed?}
     P -- no --> PF[Fix that FIRST<br/>a discarded Instance leaks a<br/>database on every run,<br/>including passing ones]
-    P -- yes --> B{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
+    P -- yes --> O{Does anything create a datastore<br/>the harness does not own?}
+    O -- yes --> OF[Host Testcontainers<br/>nothing namespaces or drops it,<br/>so lanes collide - until the<br/>names are namespaced]
+    O -- no --> B{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
     B -- yes --> C[Host Testcontainers<br/>a scratch database does not<br/>isolate roles - until the names<br/>are parameterised]
     B -- no --> D{Needs Valkey?}
     D -- yes --> E[Valkey from a local container;<br/>PostgreSQL and ClickHouse<br/>still from kiac]
@@ -124,7 +126,7 @@ semantics that a version change can move.
 | `internal/scheduler/fixed` | 143s | PG | kiac | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | CH | **kiac** | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
 | `internal/storage/postgres` | 91s | PG | **host** (roles) | yes | Creates roles without dropping them first, so a shared cluster fails on re-run. Otherwise pure PostgreSQL. |
-| `internal/testsupport/computeparity` | 50s | CH | **kiac** | **no** | Mixed: `dora_table_parity` is neutral, `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Package-level routing makes the whole package sensitive. |
+| `internal/testsupport/computeparity` | 50s | CH | **host** (out-of-band) | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. |
 | `internal/jobs/report` | 33s | CH+PG | **kiac** | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | PG | kiac | yes | Pure PostgreSQL. |
 | `cmd/dev-health-worker` | 24s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
@@ -133,7 +135,7 @@ semantics that a version change can move.
 | `internal/joboperator` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/synccoverage` | 13s | PG | kiac | yes | Pure PostgreSQL. |
 | `cmd/dev-health-workerctl` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
-| `internal/testsupport/containers` | 13s | CH+PG+VK | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
+| `internal/testsupport/containers` | 13s | CH+PG+VK | **host** (self-test) | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
 | `internal/joboutbox` | 12s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/jobs/system` | 12s | PG | kiac | yes | Pure PostgreSQL. |
 | `internal/providerfoundation` | 12s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
@@ -149,8 +151,8 @@ semantics that a version change can move.
 | `internal/jobruntime` | 5s | PG | kiac | yes | Pure PostgreSQL. |
 | `cmd/query-api/internal/routeswitch` | 5s | PG | kiac | yes | Pure PostgreSQL. |
 | `internal/syncroute` | 3s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/cacheinvalidation` | 2s | VK | **host** | yes | Valkey only. |
-| `internal/streamrunner` | 2s | VK | **host** | yes | Valkey only. |
+| `internal/cacheinvalidation` | 2s | VK | **host** (Valkey) | yes | Valkey only. |
+| `internal/streamrunner` | 2s | VK | **host** (Valkey) | yes | Valkey only. |
 
 **Nine packages carry engine-sensitive ClickHouse SQL and cannot be proven by
 CI at all** — 1416s, 76.5% of the total integration weight. Three of them
@@ -200,15 +202,17 @@ shared server would be far more dangerous than the problem it solves.
 
 | Class | Weight | Share |
 | --- | --- | --- |
-| Movable to kiac today | 1627s | **87.9%** |
+| Movable to kiac today | 1577s | **85.2%** |
 | Blocked by unparameterised roles | 151s | 8.2% |
 | Blocked by Valkey | 61s | 3.3% |
+| Blocked by out-of-band fixed-name databases | 50s | 2.7% |
 | The harness's own self-test | 13s | 0.7% |
 
-Exactly, 1627/1852 = **87.85%**, rounded to 87.9% above.
+Exactly, 1577/1852 = **85.15%**, rounded to 85.2% above.
 
-The role blocker is the removable one: parameterising those role names would
-take the movable share to **96.0%**.
+Two of these are removable. Parameterising the role names recovers 151s;
+namespacing `computeparity`'s fixed database names recovers its 50s. Together
+they would take the movable share to **96.0%**.
 
 The other two are not blockers and will not shrink. The Valkey packages keep
 only a *Valkey* container — they still take PostgreSQL and ClickHouse from kiac,
@@ -235,6 +239,31 @@ while other tests still read through the cached conn.
 So before routing a suite here, confirm every `StartPostgres` / `StartClickHouse`
 result is eventually `Close`d. A suite that caches across tests needs a
 `TestMain`, not a `t.Cleanup`.
+
+### And check nothing creates a datastore behind the harness's back
+
+The check above is necessary but not sufficient, because it only sees resources
+the harness created. `internal/testsupport/computeparity` passes it — both its
+callers close their instance correctly — and is still unsafe on a shared
+cluster, because it creates **fixed-name** databases (`parity_left`,
+`parity_right`, `parity_capacity_*`) through a separate fixture tool and
+provisions them with `--reset`. Two lanes then collide on the same names and one
+drops the other's live database. The tool's ownership marker does not help: it
+is the same table name in every lane, so it distinguishes a fixture database
+from a real one but not one lane's from another's.
+
+**So the second question is: does anything here create a datastore the harness
+does not own?** Any creator that is not the harness is a potential collision and
+a potential orphan, because nothing will namespace it and nothing will drop it.
+Swept at the time of writing: no Go test issues `CREATE DATABASE` directly, and
+`scripts/worker/compute_parity_fixtures.py` is the only out-of-band creator in
+the repository, used by four call sites in that one package.
+
+That package is therefore **host-only until its names are namespaced** — which
+leaves it in an uncomfortable spot worth stating plainly: it is
+engine-sensitive *and* host-only, so today it can be proven neither by CI (25.1)
+nor by kiac (destructive), and its host containers run 26.6.1 rather than
+production's 26.7 line.
 
 ### Orphans
 

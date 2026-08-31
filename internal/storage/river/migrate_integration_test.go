@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -794,7 +795,6 @@ func assertBackupRestore(
 	dbName string,
 ) {
 	t.Helper()
-	assertPostgresClientToolsAvailable(t)
 	queuePool := openPool(t, ctx, queueURI)
 	client, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{Schema: "river"})
 	if err != nil {
@@ -830,24 +830,14 @@ func assertBackupRestore(
 		t.Fatal(err)
 	}
 	adminUser := adminConfig.User
-	dumpFile := filepath.Join(t.TempDir(), "river.dump")
 
-	// pg_dump/createdb/pg_restore run as host processes against instance's
-	// network address, exactly like every other client in this test file
-	// (pgx does the same) -- NOT via `docker exec` into a container. That
-	// only ever worked on the container path (Instance.Container is nil on
-	// the kiac remote path, CHAOS-4661) and this host already carries a
-	// matching-major-version client (verified: PostgreSQL 18 client tools
-	// against both a postgres:18-alpine container and kiac's PostgreSQL
-	// 18.6).
-	runPostgresClientCommand(t, ctx, adminConfig, "pg_dump",
-		"--username="+adminUser, "--dbname="+dbName, "--schema=river", "--format=custom", "--file="+dumpFile)
-	runPostgresClientCommand(t, ctx, adminConfig, "createdb", "--username="+adminUser, restoredDatabase)
 	// A plain defer, not t.Cleanup: t.Cleanup funcs run after the OUTER
 	// test's own defers (including closeInstance, which drops the scratch
 	// database this admin connection lives on), so a t.Cleanup here would
 	// try to drop through an already-dropped connection. This defer runs
 	// when assertBackupRestore itself returns, while instance is still open.
+	// Registered before either dispatch path runs its createdb, so it still
+	// fires (and safely no-ops via IF EXISTS) if that path fails partway.
 	defer func() {
 		dropCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -857,8 +847,34 @@ func assertBackupRestore(
 			t.Errorf("drop restored database %s: %v", restoredDatabase, err)
 		}
 	}()
-	runPostgresClientCommand(t, ctx, adminConfig, "pg_restore",
-		"--username="+adminUser, "--dbname="+restoredDatabase, "--exit-on-error", "--no-owner", "--no-privileges", dumpFile)
+
+	// Dual-path dispatch (CHAOS-4661 follow-up): a first version of this
+	// suite ran pg_dump/createdb/pg_restore as HOST processes on every path,
+	// unconditionally. That is required on the remote/kiac path (no
+	// container to exec into) but was a regression on the container/host
+	// Testcontainers path -- CI runs there, and CI's runner ships an older
+	// pg_dump than this suite's PostgreSQL 18 floor demands, so the suite
+	// went from CI-green (via `docker exec`, using the postgres:18-alpine
+	// image's OWN bundled v18 client tools) to CI-red. Restoring the
+	// container-exec path for instance.Container != nil keeps CI exactly as
+	// it was before CHAOS-4661 touched this file; the host-client path stays
+	// for the remote path, where Instance.Container is nil and there is no
+	// container to exec into.
+	if instance.Container != nil {
+		runContainerCommand(t, ctx, instance, "pg_dump",
+			"--username="+adminUser, "--dbname="+dbName, "--schema=river", "--format=custom", "--file=/tmp/river.dump")
+		runContainerCommand(t, ctx, instance, "createdb", "--username="+adminUser, restoredDatabase)
+		runContainerCommand(t, ctx, instance, "pg_restore",
+			"--username="+adminUser, "--dbname="+restoredDatabase, "--exit-on-error", "--no-owner", "--no-privileges", "/tmp/river.dump")
+	} else {
+		assertPostgresClientToolsAvailable(t)
+		dumpFile := filepath.Join(t.TempDir(), "river.dump")
+		runPostgresClientCommand(t, ctx, adminConfig, "pg_dump",
+			"--username="+adminUser, "--dbname="+dbName, "--schema=river", "--format=custom", "--file="+dumpFile)
+		runPostgresClientCommand(t, ctx, adminConfig, "createdb", "--username="+adminUser, restoredDatabase)
+		runPostgresClientCommand(t, ctx, adminConfig, "pg_restore",
+			"--username="+adminUser, "--dbname="+restoredDatabase, "--exit-on-error", "--no-owner", "--no-privileges", dumpFile)
+	}
 
 	restoredURI := roleURI(t, instance.URI, adminUser, adminConfig.Password, restoredDatabase)
 	restoredPool := openPool(t, ctx, restoredURI)
@@ -874,6 +890,28 @@ func assertBackupRestore(
 	}
 	if current, err := riverstore.CheckSchema(ctx, restoredPool, "river", nil); err != nil || current != riverstore.PinnedSchemaVersion {
 		t.Fatalf("restored River schema check = %d, %v", current, err)
+	}
+}
+
+// runContainerCommand runs a PostgreSQL client binary (pg_dump, createdb,
+// pg_restore, ...) INSIDE instance's own container via `docker exec`,
+// reusing the postgres:18-alpine image's own bundled PostgreSQL 18 client
+// tools -- no host dependency, and the exact mechanism this suite used
+// before CHAOS-4661 introduced the remote/kiac path (which has no
+// container to exec into; that path uses runPostgresClientCommand below
+// instead). Only ever called when instance.Container != nil.
+func runContainerCommand(t *testing.T, ctx context.Context, instance *containers.Instance, command ...string) {
+	t.Helper()
+	exitCode, output, err := instance.Container.Exec(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(output, 16*1024))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if exitCode != 0 {
+		t.Fatalf("container command %s failed with %d: %s", command[0], exitCode, strings.TrimSpace(string(data)))
 	}
 }
 

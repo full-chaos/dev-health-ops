@@ -170,7 +170,7 @@ semantics that a version change can move.
 | `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `cmd/dev-health-reconciler` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **New host dependency**: its backup/restore test called `instance.Container.Exec` for `pg_dump`/`createdb`/`pg_restore`, which is nil on the kiac remote path (no container); rewritten to run those as host client processes against the instance's real address instead (the restored database name is suffixed the same way the roles are). This makes `pg_dump`/`createdb`/`pg_restore` PostgreSQL 18+ client tools a requirement on the machine running this suite -- `assertPostgresClientToolsAvailable` checks PATH and each tool's major version before the first one runs and fails with an install instruction (not an opaque exec error) if either is missing. |
+| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **Dual-path backup/restore**: its round-trip test dispatches on `instance.Container` -- non-nil (host Testcontainers, including CI) runs `pg_dump`/`createdb`/`pg_restore` via `instance.Container.Exec`, reusing the `postgres:18-alpine` image's own bundled PostgreSQL 18 client tools with zero host dependency (this is the original, pre-CHAOS-4661 mechanism, restored); nil (the kiac remote path, no container to exec into) runs the same three binaries as host processes instead. **Host-tools requirement is remote-path only**: `assertPostgresClientToolsAvailable` (PATH + PostgreSQL 18+ major-version check, failing with an install instruction rather than an opaque exec error) gates only the host-process branch -- CI, which runs the container path, carries no such dependency and is unaffected by what PostgreSQL client tools its runner happens to have. |
 | `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
 | `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised by CHAOS-4661 -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
@@ -585,6 +585,28 @@ zero growth. **Mutation-spot-check (non-vacuity)**: removing one `defer
 containers.DropRole(...)` line and re-running once moved the domain-role count
 4→5 (a real leak, caught); the line was restored (verified byte-identical via
 `git diff`) and the single leaked role dropped.
+
+**River backup/restore: CI regression found and fixed.** The first version of
+`assertBackupRestore` ran `pg_dump`/`createdb`/`pg_restore` as host processes
+unconditionally, which is required on the remote/kiac path but broke CI: CI
+runs the host-Testcontainers path, where the test previously reused the
+`postgres:18-alpine` container's own bundled v18 client tools via
+`instance.Container.Exec`, and the CI runner's own `pg_dump` is major version
+16 (below this suite's PostgreSQL 18 floor) -- red on every push once the
+unconditional rewrite landed, confirmed identical failure on this branch's
+CI going back to before this session, `main` unaffected (doesn't have the
+test yet). Fixed with a dual-path dispatch on `instance.Container` (see the
+matrix row above). **Proof**: both paths run green locally -- container path
+(no `DEV_HEALTH_TEST_POSTGRES_DSN` set) PASS in 3.04s reusing the container's
+tools; kiac remote path PASS/PASS twice-in-succession (2.02s, 3.19s, full
+package, 21 tests). **Mutation-spot-check (non-vacuity)**: inverting the
+dispatch condition and running on the remote path (where `instance.Container`
+is nil) forced the container-exec branch, which panicked immediately with a
+nil-pointer dereference at the mutated line -- loud, not silent -- confirming
+the dispatch is load-bearing; the panic's `defer`s still ran (Go's unwind
+semantics), leaving zero leaked roles/databases even from the crashed run.
+The condition was restored and re-verified (`git diff` byte-identical,
+build/vet/gofmt clean, both paths re-run green).
 
 Isolation verified after every run: no leaked scratch databases (`LIKE
 'lane_4661%'` sweep returns 0 throughout). Roles are a separate story from

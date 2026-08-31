@@ -1,0 +1,279 @@
+---
+page_id: con-integration-suite-targets
+summary: Which Go and Python integration suite runs where — host Testcontainers, kiac in-cluster datastores by env DSN, or GitHub Actions — and the ClickHouse engine versions that decide it.
+content_type: reference
+owner: engineering
+source_of_truth:
+  - internal/testsupport/containers/harness.go (the single helper every Go integration suite obtains PostgreSQL/ClickHouse/Valkey from)
+  - internal/testsupport/containers/remote.go (the env-DSN path and scratch-database lifecycle)
+  - ci/go_integration_shards.tsv (the authoritative package list and CI weights)
+  - .github/workflows/test.yml (the ClickHouse and PostgreSQL service versions CI runs)
+applicability: current
+lifecycle: active
+---
+
+# Integration suite targets: Testcontainers, kiac, or CI
+
+Every Go integration suite in this repository needs a real datastore. There are
+three places it can come from, and picking the wrong one produces a green run
+that proves nothing.
+
+Tracked by CHAOS-4428. The companion runbook,
+[Lane isolation on a kiac cluster](lane-isolation-kiac.md), covers how a lane
+cluster is built; this page covers only **where a given suite should run**.
+
+## The three targets
+
+| Target | What it is | What it costs |
+| --- | --- | --- |
+| **Host Testcontainers** | `StartPostgres`/`StartClickHouse`/`StartValkey` start a container per caller through Docker. The default. | Docker CPU on the developer's Mac — the allocation CHAOS-4428 exists to reduce. |
+| **kiac in-cluster** | The same helpers, pointed at a cluster's existing datastores by env DSN, each caller getting its own scratch database. | Near zero extra CPU: the datastores are already running. |
+| **GitHub Actions CI** | The suite is not run locally at all; the `go-storage-integration-*` jobs are the signal. | No local cost, but see the version table — CI does not run what production runs. |
+
+## The rule
+
+**Start from the engine versions, not from convenience.** They are not the same
+across the three targets, and that is what decides the routing:
+
+| Where | ClickHouse | PostgreSQL | How this was established |
+| --- | --- | --- | --- |
+| Host Testcontainers (this repo) | **26.6.1.1193** | 18-alpine | The image is digest-pinned with no version in the source; resolved from the registry config blob label `com.clickhouse.build.version` (built 2026-06-26). Independently corroborated in-repo: `internal/providersync/linear_stale_project_ownership_cleanup.go:75-82` records the same resolution, reached by running against the digest directly. |
+| GitHub Actions CI services | **25.1** | 18-alpine | `.github/workflows/test.yml:165,335`; `.github/workflows/live-e2e.yml:82,176`. |
+| kiac in-cluster (`acr-local`) | **26.7.3.19** | **18.6** | Live readback, `SELECT version()` / `SHOW server_version`, 2026-08-31. |
+| acr's own Testcontainers | 26.7.5.10 | 18-alpine | Pinned deliberately by CHAOS-4549; floor `26.7` in `acr/internal/chfixture`. |
+| Production | 26.7.x (floating) | — | CHAOS-4519: prod's exact patch drifts, so the floor is `major.minor`. |
+
+Three consequences follow, and they are the whole decision procedure:
+
+1. **CI cannot prove ClickHouse engine behaviour.** It runs 25.1 against a
+   production line of 26.7. CHAOS-4549 is the precedent for why the gap
+   matters rather than being cosmetic: a multi-arm `JOIN ... ON (... OR ...)`
+   is accepted on 26.7 and rejected on 24.8 with
+   `Code: 403 Unsupported JOIN ON conditions`, under every analyzer setting.
+   A version gap changes *what SQL is accepted at all*.
+2. **This repository's host Testcontainers cannot prove it either.** They run
+   26.6.1, one minor **below** the 26.7 floor acr ruled for exactly this
+   reason — so an ops host container would fail acr's own
+   `AtLeastVersionFloor` check. This is the caveat that is easiest to miss:
+   "I ran it against a real ClickHouse locally" is not the same claim as "I
+   ran it against production's engine".
+3. **kiac is the only target in this repository that matches production's
+   ClickHouse line.** So moving ClickHouse-touching suites there is a
+   correctness upgrade, not only a Docker saving.
+
+> **Open:** the ops ClickHouse pin is an opaque digest set under CHAOS-3033 and
+> never revisited, and it disagrees with acr's ruled 26.7 floor. Reconciling
+> the two is tracked separately — it changes what every ops ClickHouse suite
+> runs against and needs its own red-first change, so it is deliberately not
+> folded in here.
+
+## Decision flow
+
+```mermaid
+flowchart TD
+    A[Integration suite] --> B{Needs Valkey?}
+    B -- yes --> C[Host Testcontainers<br/>Valkey has no CREATE DATABASE<br/>to isolate parallel callers]
+    B -- no --> D{Touches ClickHouse?}
+    D -- no --> E{Needs real org data?}
+    D -- yes --> F[kiac in-cluster<br/>only target on prod's 26.7 line]
+    E -- yes --> G[kiac in-cluster<br/>live data plane required]
+    E -- no --> H{Asserts a pristine DB<br/>or exact migration sequence?}
+    H -- yes --> I[Host Testcontainers<br/>or kiac scratch DB<br/>never a shared database]
+    H -- no --> J[kiac in-cluster<br/>CI is an acceptable backstop]
+```
+
+## Per-package matrix — Go, this repository
+
+Weights are the declared CI shard weights from `ci/go_integration_shards.tsv`;
+they are the best available proxy for what each package costs. "Stores" is
+derived from which harness entry points the package's files call — including
+files that reach the harness through a package-local helper without importing
+`testcontainers` themselves, which is the majority.
+
+Two questions are answered separately, because they are separate:
+
+- **Local target** — where the suite runs on a developer's machine.
+- **Is CI sufficient proof?** — whether the `go-storage-integration-*` jobs can
+  stand in for a local run at all. This is where the version table bites.
+
+PostgreSQL-only packages get **yes**: CI's PostgreSQL is the same 18 line as
+kiac (18.6) and production, so nothing about the engine differs. ClickHouse-
+touching packages get **no** unless every construct they exercise is engine-
+neutral — CI is 25.1 against a 26.7 production line.
+
+Engine-sensitivity below is per-package and evidenced. The recurring sensitive
+constructs in this codebase are `FINAL` on `ReplacingMergeTree`, `argMax`
+tie-breaks, window functions, and insert-block dedup `SETTINGS` — all of them
+semantics that a version change can move.
+
+| Package | Weight | Stores | Local target | CI proof? | Engine notes |
+| --- | --- | --- | --- | --- | --- |
+| `internal/providersync` | 1166s | CH+PG | **kiac** | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. |
+| `internal/scheduler/fixed` | 143s | PG | kiac | yes | Self-seeding PostgreSQL. |
+| `internal/streamhandlers` | 113s | CH | **kiac** | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
+| `internal/storage/postgres` | 91s | PG | kiac | yes | Asserts grant posture; a scratch DB gives a clean role surface. |
+| `internal/testsupport/computeparity` | 50s | CH | **kiac** | **no** | Mixed: `dora_table_parity` is neutral, `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Package-level routing makes the whole package sensitive. |
+| `internal/jobs/report` | 33s | CH+PG | **kiac** | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
+| `internal/scheduler/sync` | 32s | PG | kiac | yes | Pure PostgreSQL. |
+| `cmd/dev-health-worker` | 24s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
+| `internal/syncreconciler` | 16s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/externalrecompute` | 15s | PG+VK | **host** (Valkey) | yes | PostgreSQL from kiac; only Valkey is local. |
+| `internal/joboperator` | 13s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/synccoverage` | 13s | PG | kiac | yes | Pure PostgreSQL. |
+| `cmd/dev-health-workerctl` | 13s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/testsupport/containers` | 13s | CH+PG+VK | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
+| `internal/joboutbox` | 12s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/jobs/system` | 12s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/providerfoundation` | 12s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
+| `cmd/dev-health-reconciler` | 10s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/storage/river` | 9s | PG | kiac | yes | Applies the River schema to a scratch DB. |
+| `internal/jobs/pagerduty` | 9s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/jobs/workgraph` | 7s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/jobroute` | 6s | PG | kiac | yes | **Demonstrated** — see below. |
+| `internal/jobs/metrics/daily` | 6s | CH+PG | **kiac** | **no** | Sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
+| `internal/jobs/metrics/remaining` | 6s | CH+PG | **kiac** | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
+| `internal/syncdispatchruntime` | 6s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. |
+| `internal/jobrescue` | 5s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/jobruntime` | 5s | PG | kiac | yes | Pure PostgreSQL. |
+| `cmd/query-api/internal/routeswitch` | 5s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/syncroute` | 3s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/cacheinvalidation` | 2s | VK | **host** | yes | Valkey only. |
+| `internal/streamrunner` | 2s | VK | **host** | yes | Valkey only. |
+
+**Nine packages carry engine-sensitive ClickHouse SQL and cannot be proven by
+CI at all** — 1402s, 76% of the total integration weight. Three of them
+(`computeparity`, `jobs/report`, `jobs/metrics/remaining`) are sensitive only
+in *some* files; splitting those files into their own packages would let the
+neutral remainder defer to CI, which is a worthwhile follow-up but is not done
+here.
+
+Two classifications were left explicitly uncertain rather than guessed:
+`jobs/metrics/daily/repo_user_commit_org_scope` (queries `FROM work_items FINAL`
+but never inserts into that table, so `FINAL`'s effect is not outcome-asserted)
+and `cmd/dev-health-worker/multi_family_boot` (may transitively hit the
+ordering guard but asserts nothing about it). Both sit inside packages already
+routed to kiac, so the uncertainty changes no routing decision today.
+
+### What that adds up to
+
+31 packages, **1852s (30.9 min)** of declared integration weight.
+
+| Class | Weight | Share |
+| --- | --- | --- |
+| Movable to kiac (no Valkey) | 1778s | **96.0%** |
+| Must keep a Docker container (Valkey-touching) | 74s | 4.0% |
+
+Even the 4% only keeps a *Valkey* container: those packages take their
+PostgreSQL and ClickHouse from kiac like everything else. Valkey's container is
+the cheapest of the three, so the residual Docker load is far below 4% of the
+current cost.
+
+## Why Valkey stays on Testcontainers
+
+It is the one deliberate exception and it is not an oversight — a test pins it.
+
+PostgreSQL and ClickHouse both have `CREATE DATABASE`, so a shared server can
+hand each caller a private database. Valkey has no equivalent: only 16 fixed
+numeric slots, which cannot cover packages running in parallel, and a suite
+that issues `FLUSHDB` would silently destroy a neighbour's state. Eleven of the
+164 files touch Valkey and its container is by far the lightest of the three,
+so accepting that isolation risk would buy back almost no CPU.
+
+## Suites that must never point at a shared database
+
+Independent of the target, some suites assert a **pristine** database and break
+against anything holding prior state:
+
+- Migration suites that assert an exact applied-version sequence.
+- Suites asserting exact row counts starting from zero.
+
+The scratch-database-per-caller design satisfies these — a scratch database is
+empty by construction — but pointing such a suite at a *seeded* lane database
+does not. CHAOS-4457 recorded this concretely: two `tests/test_dispatch_outbox.py`
+tests failed with `IndexError` against a seeded lane whose `worker_job_outbox`
+already held 32 pending rows, because they claim with `limit=1` and expect
+their own seeded row back. Against a scratch database both pass unchanged (see
+the executed evidence below). **The distinction that matters is scratch vs.
+seeded, not container vs. cluster.**
+
+## How to run a suite against kiac
+
+```bash
+export KUBECONFIG=<repo>/acr/.tmp/kiac/acr-local/kubeconfig
+eval "$(bash acr/deploy/local/trial-data.sh dsn --env | sed -E 's/^/export /')"
+
+export DEV_HEALTH_TEST_POSTGRES_DSN="postgres://${ACR_TEST_TRIAL_PG_USER}:${ACR_TEST_TRIAL_PG_PASSWORD}@${ACR_TEST_TRIAL_PG_HOST}:${ACR_TEST_TRIAL_PG_PORT}/${ACR_TEST_TRIAL_PG_DB}?sslmode=disable"
+export DEV_HEALTH_TEST_CLICKHOUSE_DSN="clickhouse://${ACR_TEST_TRIAL_CH_USER}:${ACR_TEST_TRIAL_CH_PASSWORD}@${ACR_TEST_TRIAL_CH_HOST}:${ACR_TEST_TRIAL_CH_PORT}/${ACR_TEST_TRIAL_CH_DB}"
+export DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN="clickhouse://${ACR_TEST_TRIAL_CH_USER}:${ACR_TEST_TRIAL_CH_PASSWORD}@${ACR_TEST_TRIAL_CH_HOST}:${ACR_TEST_TRIAL_CH_HTTP_PORT}/${ACR_TEST_TRIAL_CH_DB}"
+
+# Namespaces this lane's scratch databases so an orphan from a killed run can
+# be swept without matching a concurrent lane's live ones.
+export DEV_HEALTH_TEST_SCRATCH_PREFIX=lane_<ticket>
+
+go test -tags=integration ./internal/jobroute/ -count=1
+```
+
+Set neither DSN and the harness starts containers exactly as before — the
+default is unchanged, so nothing that works today stops working.
+
+`DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN` is needed alongside the native DSN
+whenever a suite reaches ClickHouse over HTTP (the Python migration runner
+does). A remote instance has no container to ask for a mapped port, so the HTTP
+address cannot be derived; omitting it produces an error that names the
+variable rather than a connection failure.
+
+### Sweeping orphans
+
+Each scratch database is logged as it is created and dropped:
+
+```
+containers: created scratch postgres database "lane_4428_8a2c4feb5e391ab5"
+containers: dropped scratch postgres database "lane_4428_8a2c4feb5e391ab5"
+```
+
+A run killed between the two leaves the database behind. Find them by prefix:
+
+```sql
+SELECT datname FROM pg_database WHERE datname LIKE 'lane_<ticket>%';
+```
+
+## Executed evidence (2026-08-31)
+
+Against `acr-local`'s in-cluster data plane — ClickHouse 26.7.3.19,
+PostgreSQL 18.6 — with the Docker daemon left untouched. Running-container
+count was **22 before and 22 after every run**.
+
+| Suite | Language | Stores | Result |
+| --- | --- | --- | --- |
+| `internal/jobroute` | Go | PostgreSQL | **PASS**, 0.979s |
+| `internal/jobs/metrics/daily` | Go | PostgreSQL + ClickHouse | **PASS**, 5.002s |
+| `tests/test_dispatch_outbox.py` (the two `test_real_postgres_*` cases) | Python | PostgreSQL | **PASS**, 6.68s |
+
+The Python pair is the CHAOS-4457 sub-item (b) result: both are recorded there
+as failing against a seeded lane database, and both pass against a scratch one
+with no change to the tests. The DSN used the `postgresql+asyncpg://` dialect,
+which is sub-item (a)'s correction.
+
+Isolation was verified by comparing the full `pg_database` and
+`system.databases` listings before and after: both are byte-identical to their
+baselines, and a `LIKE 'lane_4428%'` sweep returns 0. The shared trial
+ClickHouse `default` database and the real-data `dh_0830` database were never
+written to.
+
+## acr's Go suites
+
+acr is **not** covered by the plumbing above and needs its own change, tracked
+separately.
+
+It has no single chokepoint. `acr/internal/chfixture` looks like one but starts
+no containers — it holds the image pin, the version floor, and the static
+JOIN-portability linter that replaced the old-engine fixture gate. The
+container starts instead live in roughly twenty per-package helpers
+(`newXTestDatabase`, `newXIntegrationClient`, `newLiveAdapter`), so remote-DSN
+support is about twenty small edits rather than one.
+
+acr already has the convention to adopt — `ACR_TEST_TRIAL_{PG,CH,FALKOR}_*`,
+`ACR_CLICKHOUSE_INTEGRATION_DSN`, `ACR_CHAOS4645_KIAC_DSN` — and several suites
+already skip unless a live DSN is set. Its highest-risk suites to move are
+under `migrations/postgres`, which take a fresh container per test and assert
+exact migration sequences; those need a scratch database, never a shared one.

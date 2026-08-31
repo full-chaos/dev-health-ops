@@ -23,6 +23,7 @@ con-migrations	con-dev	/contribute/development/migrations/	Create and validate d
 con-debug	con-dev	/contribute/development/debugging/	Debug and observe development environments	task-guide	true	public	planned	false	
 con-go-worker-traps	con-dev	/contribute/development/go-worker-verification-traps/	Verification traps in the Go worker runtime	reference	true	public	planned	false	Checks in the Go worker codebase that report success while the thing they check is broken.
 con-lane-isolation-kiac	con-dev	/contribute/development/lane-isolation-kiac/	Lane isolation on a kiac cluster	runbook	true	public	planned	false	Run the whole stack per namespace on a local kiac cluster so parallel agents stop sharing one Compose stack.
+con-integration-suite-targets	con-dev	/contribute/development/integration-suite-targets/	Integration suite targets	reference	true	public	planned	false	Which integration suite runs on host Testcontainers, on kiac in-cluster datastores, or in GitHub Actions, and the ClickHouse engine versions that decide it.
 con-review	contribute	/contribute/review-and-release/	Review and release	landing	true	public	planned	false	
 con-pr	con-review	/contribute/review-and-release/pull-requests/	Prepare and review a pull request	task-guide	true	public	planned	false	
 con-release	con-review	/contribute/review-and-release/releases/	Release and rollback expectations	task-guide	true	public	planned	false	

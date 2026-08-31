@@ -47,16 +47,26 @@ _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS = 10.0
 def _go_manual_backfill_planner_enabled() -> bool:
     """CHAOS-4602 rollout flag, read at call time (ops/tests can flip it
     live) -- matches the established PROVIDER_SYNC_QUEUES_ENABLED shape
-    (workers/queues.py). Default OFF: every eligible config keeps calling
-    plan_sync_run in-process, byte-for-byte unchanged, until this is
-    explicitly turned on. Only a planner-managed parent, or (CHAOS-4604) a
-    non-planner-managed child config pinned to one explicit source_id, are
-    ever routed to Go by this flag -- every other config (a legacy, unscoped
-    standalone config in particular) is UNCHANGED regardless of this flag;
-    see create_sync_execution_trigger's own gate.
+    (workers/queues.py).
+
+    CHAOS-4629 (chris ruling, 2026-08-31 06:20 PT): default flips PERMANENTLY
+    ON now that this parity ticket (Go discovery parity with #2036's
+    hardened Python behaviors -- max_repos capping, case-insensitive
+    matching, rescope-supersede) has landed, which was this flag's own
+    documented rollout gate (CHAOS-4629's own ticket text: "enabling
+    SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED for an org is gated on either
+    (a) this parity ticket landing, or (b) explicitly accepting the narrow
+    exposure"). An explicit env var value (either direction) still wins --
+    this only changes what happens when nothing is set.
+
+    Only a planner-managed parent, or (CHAOS-4604) a non-planner-managed
+    child config pinned to one explicit source_id, are ever routed to Go by
+    this flag -- every other config (a legacy, unscoped standalone config in
+    particular) is UNCHANGED regardless of this flag; see
+    create_sync_execution_trigger's own gate.
     """
     return os.getenv(
-        "SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false"
+        "SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true"
     ).strip().lower() in {
         "1",
         "true",

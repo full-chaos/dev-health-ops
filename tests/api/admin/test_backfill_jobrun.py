@@ -97,6 +97,20 @@ _TABLES = tables_of(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _force_legacy_fanout_path(monkeypatch):
+    """This whole file tests the legacy fan-out (plan_sync_run) backfill path
+    (see module docstring) -- session_maker's sqlite fixture below only
+    creates a fixed table subset (_TABLES) that does NOT include
+    scheduled_sync_occurrences/sync_manual_triggers. CHAOS-4629 flipped
+    SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED's default to true, which would
+    otherwise route a planner_managed config's backfill into the Go hand-off
+    here and fail with "no such table: scheduled_sync_occurrences" -- force
+    it off for every test in this module, matching what these tests were
+    always exercising."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false")
+
+
 @pytest_asyncio.fixture
 async def session_maker(tmp_path: Path):
     db_path = tmp_path / "backfill-jobrun.db"

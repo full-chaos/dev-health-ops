@@ -159,6 +159,23 @@ func withDatabasePath(dsn string, database string) (string, error) {
 	return parsed.String(), nil
 }
 
+// postgresScratchDDL returns the CREATE and DROP statements for a scratch
+// database. Identifiers cannot be parameterised in DDL, so the name is quoted
+// with the driver's own pgx.Identifier and has already passed
+// assertSafeIdentifier at the call site.
+func postgresScratchDDL(database string) (createStatement string, dropStatement string) {
+	quoted := pgx.Identifier{database}.Sanitize()
+	return "CREATE DATABASE " + quoted, "DROP DATABASE IF EXISTS " + quoted + " WITH (FORCE)"
+}
+
+// clickHouseScratchDDL is the ClickHouse counterpart. ClickHouse quotes
+// identifiers with backticks and, like PostgreSQL, cannot parameterise one in
+// DDL. assertSafeIdentifier at the call site is what makes this safe -- its
+// pattern excludes the backtick entirely.
+func clickHouseScratchDDL(database string) (createStatement string, dropStatement string) {
+	return "CREATE DATABASE `" + database + "`", "DROP DATABASE IF EXISTS `" + database + "`"
+}
+
 // startPostgresRemote creates a scratch database on the server named by dsn
 // and returns an Instance addressed at it. Close drops it again.
 func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
@@ -172,9 +189,7 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	// pgx.Identifier.Sanitize is the driver's own identifier quoting; the
 	// statement is built here rather than concatenated at the Exec call so the
 	// query passed to the driver is a single prepared value.
-	quoted := pgx.Identifier{database}.Sanitize()
-	createStatement := fmt.Sprintf("CREATE DATABASE %s", quoted)
-	dropStatement := fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", quoted)
+	createStatement, dropStatement := postgresScratchDDL(database)
 
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -229,8 +244,7 @@ func startClickHouseRemote(ctx context.Context, dsn string, httpDSN string) (*In
 	// ClickHouse quotes identifiers with backticks and, like PostgreSQL,
 	// cannot parameterise one in DDL. assertSafeIdentifier above is what makes
 	// this interpolation safe; the pattern excludes the backtick entirely.
-	createStatement := fmt.Sprintf("CREATE DATABASE `%s`", database)
-	dropStatement := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", database)
+	createStatement, dropStatement := clickHouseScratchDDL(database)
 
 	options, err := clickhousego.ParseDSN(dsn)
 	if err != nil {

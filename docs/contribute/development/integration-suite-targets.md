@@ -69,9 +69,18 @@ Three consequences follow, and they are the whole decision procedure:
 
 ## Decision flow
 
-Routing is **per store**, not per suite: a suite that needs Valkey still takes
-its PostgreSQL and ClickHouse from kiac. Only the store that cannot be isolated
-stays local.
+Routing is **per store**, not per suite: each store is decided on its own, and
+one package can get a different answer for each of its three.
+
+> **The table below is the only place this page asserts where anything runs.**
+> Everything else — this flow, and every paragraph — explains *why* a store is
+> blocked, never *what* routes where, and makes no universal statement about a
+> class of suite. That rule exists because the prose kept drifting from the
+> table: four separate corrections traced to sentences generalising about
+> "Valkey suites" or "role suites", every one of them wrong about
+> `cmd/dev-health-worker` and `internal/syncdispatchruntime`, which are blocked
+> by two stores at once. A second source of truth for routing is a second thing
+> that can be wrong; read the row.
 
 ```mermaid
 flowchart TD
@@ -203,10 +212,11 @@ Two packages (`internal/providersync`, `internal/storage/river`) already
 safe to run **concurrently**: two lanes race on the same fixed role name, and
 the one that drops it does so out from under the other.
 
-**Under the concurrent bar that is the deciding test, so all ten role-creating
-packages take their PostgreSQL from a local container — including the two that
-drop first.** This is the single largest constraint on this page:
-`internal/providersync` alone is 1166s, and it is in this set.
+**Under the concurrent bar that is the deciding test, so a fixed role name
+blocks its package's PostgreSQL — including where the package drops the role
+first.** This is the single largest constraint on this page:
+`internal/providersync` alone is 1166s, and it is in this set. Which packages
+that covers, and what it means for each of their stores, is the table's to say.
 
 The fix is a per-test change, not a harness change — the harness cannot rename a
 role a test hard-codes, and having it drop unknown roles on a shared server
@@ -260,12 +270,13 @@ packages behind another reason, and both measured re-runnability rather than
 concurrency. The figures above are derived from the table by script rather than
 by hand, and every bucket can be recomputed from it.
 
-The other two are not blockers and will not shrink. The Valkey packages keep
-only a *Valkey* container — they still take PostgreSQL and ClickHouse from kiac,
-and Valkey's container is the cheapest of the three. `internal/testsupport/containers`
-is separated out deliberately rather than folded in with them: it is the
-harness's own self-test and must keep exercising the container path, because
-that path is the thing under test.
+The Valkey and self-test rows will not shrink. Valkey has no `CREATE DATABASE`
+to carve a private namespace out of a shared server, and its container is the
+cheapest of the three anyway; `internal/testsupport/containers` is separated out
+deliberately rather than folded in with it, because it is the harness's own
+self-test and must keep exercising the container path — that path is the thing
+under test. For what each of those packages actually does with its other
+stores, read its row: two of them are blocked by a second store as well.
 
 ### Before moving a suite: check it actually closes its Instance
 

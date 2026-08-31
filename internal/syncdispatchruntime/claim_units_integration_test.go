@@ -29,6 +29,19 @@ func claimedUnitRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id st
 	return result
 }
 
+// authorized builds claimUnits' CHAOS-4605 allow-list. Every test below
+// authorizes EVERY unit it seeds, so what each case still exercises is
+// claimUnits' own status/timing predicates and the capped exclusion --
+// unchanged by the allow-list. The allow-list's own behavior is pinned
+// separately in dispatch_guard_claim_snapshot_integration_test.go.
+func authorized(ids ...string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
 // TestClaimUnitsClaimsFreshPlannedUnits pins the PLANNED claim path: status
 // moves to DISPATCHING and first_blocked_at is cleared (CHAOS-3412: a
 // successful claim is the moment a unit stops being blocked).
@@ -44,7 +57,7 @@ func TestClaimUnitsClaimsFreshPlannedUnits(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(unitID), nil, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -82,7 +95,7 @@ func TestClaimUnitsClaimsDueRetryingUnitsAndClearsAvailableAt(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(unitID), nil, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -121,7 +134,7 @@ func TestClaimUnitsSkipsNotYetDueRetryingUnits(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(unitID), nil, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -152,7 +165,7 @@ func TestClaimUnitsReclaimsStaleDispatchingButNeverRunning(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(staleDispatching, veryOldRunning), nil, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -206,7 +219,7 @@ func TestClaimUnitsExcludesCappedUnitIDsFromEveryClaimPath(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, capped, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(cappedPlanned, cappedRetrying, cappedStale, uncappedPlanned), capped, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -251,7 +264,7 @@ func TestClaimUnitsRoundTripsProcessorFlagsForValidateClaim(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, now)
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, authorized(complete, incomplete), nil, now)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -281,7 +294,7 @@ func TestClaimUnitsReturnsEmptyWhenNothingClaimable(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		units, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, pgNow())
+		units, _, err := claimUnits(ctx, tx, budgetCandidatesRunID, nil, nil, pgNow())
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}

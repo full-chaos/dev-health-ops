@@ -1169,3 +1169,90 @@ VALUES ('00000000-0000-4000-8000-0000000000c5',$1,$2,$3,1,now(),'Reference disco
 		}
 	})
 }
+
+// TestDispatchTailPreservesAnEarlierDeferralWhenWorkIsStillDispatchable pins
+// the riverQueued == 0 tail's branch (a) at the CALL SITE, which is where the
+// defect lives -- a unit test on dueNowRearmAt cannot catch a caller that
+// passes nil, and passing nil is exactly what this branch used to do.
+//
+// Found by codex round 2 (P2) reviewing CHAOS-4605's own change. It is NOT a
+// regression this ticket introduced: the shape below needs no allow-list at
+// all -- a bucket at cap leaves a PLANNED unit unclaimed and dispatchable on
+// origin/main too, so this test fails on the parent commit. CHAOS-4605's
+// allow-list widens the reach considerably, since leaving a unit dispatchable
+// instead of claiming it is precisely what it does.
+//
+// The shape:
+//   - a live RUNNING unit saturates the (org, github, standard) bucket at
+//     SYNC_UNIT_CONCURRENCY_PER_BUCKET=1, so allowedSlots is 0;
+//   - a PLANNED unit in that bucket is therefore capped -- unclaimed, still
+//     dispatchable, and nothing is queued to River, which is what routes the
+//     pass into the tail rather than the riverQueued > 0 arms;
+//   - a RETRYING unit deferred to a time WELL INSIDE the 60 s countdown
+//     supplies counts.nextDeferredAt.
+//
+// scheduleRedispatch writes ONE wakeup and its second statement overwrites a
+// pending row unconditionally, so arming the bare countdown here does not
+// merge with the deferral -- it destroys it.
+func TestDispatchTailPreservesAnEarlierDeferralWhenWorkIsStillDispatchable(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+
+		// Comfortably inside the 60s countdown, and comfortably in the future
+		// so it cannot come due while the containerized pass runs.
+		deferredUntil := now.Add(20 * time.Second)
+		leaseUntil := now.Add(time.Hour)
+
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,lease_owner,lease_expires_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','running',$4,'live-worker',$5)`,
+			"00000000-0000-4000-8000-0000000000fa", discoveryTestOrg, discoveryTestRun, now, leaseUntil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			"00000000-0000-4000-8000-0000000000fb", discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,available_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','retrying',$4,$5)`,
+			"00000000-0000-4000-8000-0000000000fc", discoveryTestOrg, discoveryTestRun, now, deferredUntil); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
+
+		service := newTestDispatchService(t, pool)
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+
+		// Precondition: the pass really did take the tail, not a
+		// riverQueued > 0 arm. Without this the assertion below could pass
+		// for the wrong reason.
+		var queued int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`, jobcontract.KindSyncProviderUnit).
+			Scan(&queued); err != nil {
+			t.Fatal(err)
+		}
+		if queued != 0 {
+			t.Fatalf("got %d queued provider-unit jobs, want 0 -- the bucket is at cap, so this pass must reach the riverQueued == 0 tail", queued)
+		}
+		var plannedStatus string
+		if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`,
+			"00000000-0000-4000-8000-0000000000fb").Scan(&plannedStatus); err != nil {
+			t.Fatal(err)
+		}
+		if plannedStatus != syncRunUnitStatusPlanned {
+			t.Fatalf("capped unit status=%q want=planned -- it must stay dispatchable, which is what selects tail branch (a)", plannedStatus)
+		}
+
+		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
+		if !got.Equal(deferredUntil) {
+			t.Fatalf("redispatch available_at=%s want=%s -- branch (a) armed the bare countdown and destroyed the earlier deferral; scheduleRedispatch overwrites a pending row unconditionally, so it does not merge", got, deferredUntil)
+		}
+	})
+}

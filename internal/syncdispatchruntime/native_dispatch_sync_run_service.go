@@ -380,11 +380,38 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 
 	// --- Atomic claim: fresh PLANNED, due RETRYING, reclaimed stale
-	// DISPATCHING, excluding every id capped/deferred/excluded above ---
-	claimedUnits, err := claimUnits(ctx, tx, run.id, cappedIDs, service.nowUTC())
+	// DISPATCHING, excluding every id capped/deferred/excluded above, and
+	// RESTRICTED to the units this pass actually authorized ---
+	//
+	// CHAOS-4605: authorizeRun above ran on `now`, captured at the top of
+	// this function; claimUnits runs on a FRESH service.nowUTC() after the
+	// feature gate, the reference-discovery gate, the pre-capacity claim
+	// validation, observeRun, enforceRun and reconfirmCooldowns. Under READ
+	// COMMITTED its statements see a fresh row image, so without this
+	// allow-list a unit that became claimable inside that window -- a
+	// RETRYING unit whose available_at simply arrived, or a RUNNING unit a
+	// concurrent LeaseRepair.Step converted to a due RETRYING one -- was
+	// claimed with no slot reserved for it, in a bucket whose cap this pass
+	// may never have evaluated and whose advisory lock it may never have
+	// held.
+	//
+	// surplusAdmittedUnitIDs joins the authorized set because BudgetGuard's
+	// surplus phase admits those against decision.slotHeadroom -- i.e.
+	// against a bucket authorizeRun DID lock and DID cap-check -- so they
+	// are covered by this pass's capacity decision even though they were
+	// deferrals, not candidates, at snapshot time.
+	authorizedIDs := make(map[string]bool, len(decision.authorizedUnitIDs)+len(budgetResult.surplusAdmittedUnitIDs))
+	for id := range decision.authorizedUnitIDs {
+		authorizedIDs[id] = true
+	}
+	for id := range budgetResult.surplusAdmittedUnitIDs {
+		authorizedIDs[id] = true
+	}
+	claimedUnits, deferredOutsideSnapshot, err := claimUnits(ctx, tx, run.id, authorizedIDs, cappedIDs, service.nowUTC())
 	if err != nil {
 		return err
 	}
+	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
 
 	riverQueued := 0
 	var unroutableUnits []budgetUnit
@@ -494,9 +521,25 @@ WHERE id = $1::uuid`,
 	flushRollupBumpTally(ctx, service.metrics)
 
 	if riverQueued > 0 {
-		if nextDeferredAt != nil {
+		switch {
+		// CHAOS-4605: a unit left unclaimed because it became claimable
+		// after the guard's snapshot is due NOW -- it is not a deferral, it
+		// just missed this pass's capacity decision. Without an arm here the
+		// riverQueued > 0 path can commit with nothing scheduled (no
+		// nextDeferredAt, no capped ids) and strand it: the tail's
+		// computePendingUnitCounts re-arm only runs when riverQueued == 0.
+		//
+		// Arm the EARLIER of the default countdown and any budget deferral,
+		// so neither delays the other: scheduleRedispatch writes ONE wakeup
+		// and its second statement overwrites a pending row unconditionally,
+		// so picking the wrong one of the two would push the other back.
+		case len(deferredOutsideSnapshot) > 0:
+			armAt := service.nowUTC()
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
+				dueNowRearmAt(nextDeferredAt, armAt), armAt)
+		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		} else if len(cappedIDs) > 0 {
+		case len(cappedIDs) > 0:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
 		}
 		service.logger.InfoContext(ctx, "dispatch_sync_run.dispatched",
@@ -529,7 +572,17 @@ WHERE id = $1::uuid`,
 	// elsewhere in this function) -- nothing to replicate beyond the call
 	// itself.
 	if counts.dispatchable > 0 {
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		// CHAOS-4605 (codex round 2, P2): this armed the bare countdown and
+		// dropped counts.nextDeferredAt on the floor. Because
+		// scheduleRedispatch's second statement overwrites a pending row
+		// UNCONDITIONALLY, a run holding both dispatchable-but-capped work and
+		// an earlier budget deferral had that deferral pushed out by up to the
+		// countdown. Reachable on origin/main already (concurrency-capped units
+		// alone put a pass here), and made far more reachable by this ticket's
+		// allow-list, which is precisely what leaves a unit dispatchable rather
+		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
+		armAt := service.nowUTC()
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAt(counts.nextDeferredAt, armAt), armAt)
 		service.logger.InfoContext(ctx, "dispatch_sync_run.noop",
 			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("pending_units", counts.dispatchable))
 		return nil

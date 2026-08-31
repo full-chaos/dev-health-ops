@@ -72,6 +72,25 @@ const (
 // engines share, so the prefix can be interpolated without quoting games.
 var scratchPrefixPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,23}$`)
 
+// scratchNamePattern re-validates the FULL generated database name immediately
+// before it reaches a DDL statement.
+//
+// The name is already built from a validated prefix plus crypto/rand hex, so
+// this cannot fail today. It is here because neither engine can parameterise an
+// identifier in DDL -- `CREATE DATABASE $1` is not a thing -- so interpolation
+// is unavoidable and the guarantee has to be enforced at the point of use
+// rather than inferred from how the value was constructed several calls back.
+// Same shape as riverSchemaPattern in internal/joboutbox.
+var scratchNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+
+// assertSafeIdentifier fails closed on anything that is not a plain identifier.
+func assertSafeIdentifier(database string) error {
+	if !scratchNamePattern.MatchString(database) {
+		return fmt.Errorf("refusing to build DDL for unsafe database name %q", database)
+	}
+	return nil
+}
+
 func remoteDSN(env string) string {
 	return strings.TrimSpace(os.Getenv(env))
 }
@@ -108,14 +127,35 @@ func scratchName() (string, error) {
 	return prefix + "_" + hex.EncodeToString(suffix), nil
 }
 
+// databaseQueryKeys are the query parameters that select a database by another
+// name than the URL path. Both drivers give these PRECEDENCE over the path, so
+// rewriting only the path is not enough to redirect a DSN.
+//
+// This is the sharpest edge in this file. A DSN like
+// `clickhouse://host:9000/default?database=dh_0830` rewritten to
+// `.../scratch_x?database=dh_0830` still resolves to dh_0830 -- verified
+// against the driver's own parser -- so a suite would run against the shared
+// server's REAL data instead of its scratch database, and the scratch drop
+// would then delete an empty database while the real one carried the writes.
+var databaseQueryKeys = []string{"database", "dbname"}
+
 // withDatabasePath returns dsn addressed at database instead of whatever
-// database it currently names.
+// database it currently names, by both path AND query parameter.
 func withDatabasePath(dsn string, database string) (string, error) {
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		return "", fmt.Errorf("parse DSN: %w", err)
 	}
 	parsed.Path = "/" + database
+	query := parsed.Query()
+	for _, key := range databaseQueryKeys {
+		if query.Has(key) {
+			// Overwrite rather than delete: an explicit value keeps the
+			// resulting DSN unambiguous whichever precedence a driver applies.
+			query.Set(key, database)
+		}
+	}
+	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
 
@@ -126,13 +166,23 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := assertSafeIdentifier(database); err != nil {
+		return nil, err
+	}
+	// pgx.Identifier.Sanitize is the driver's own identifier quoting; the
+	// statement is built here rather than concatenated at the Exec call so the
+	// query passed to the driver is a single prepared value.
+	quoted := pgx.Identifier{database}.Sanitize()
+	createStatement := fmt.Sprintf("CREATE DATABASE %s", quoted)
+	dropStatement := fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", quoted)
+
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("connect to remote PostgreSQL (%s): %w", PostgresDSNEnv, err)
 	}
 	defer func() { _ = admin.Close(ctx) }()
 
-	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+database+`"`); err != nil {
+	if _, err := admin.Exec(ctx, createStatement); err != nil {
 		return nil, fmt.Errorf("create scratch database %q: %w", database, err)
 	}
 	logScratch("created", "postgres", database)
@@ -146,13 +196,17 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 		cleanup: func(ctx context.Context) error {
 			conn, err := pgx.Connect(ctx, dsn)
 			if err != nil {
+				// Most callers discard Instance.Close's error, so returning it
+				// is not enough to make an orphan discoverable. Name it here.
+				logScratch("ORPHANED, connect failed", "postgres", database)
 				return fmt.Errorf("connect to drop scratch database %q: %w", database, err)
 			}
 			defer func() { _ = conn.Close(ctx) }()
 			// FORCE terminates any connection the suite left behind; without
 			// it a leaked pool makes DROP block and the scratch database
 			// survives the run it belonged to.
-			if _, err := conn.Exec(ctx, `DROP DATABASE IF EXISTS "`+database+`" WITH (FORCE)`); err != nil {
+			if _, err := conn.Exec(ctx, dropStatement); err != nil {
+				logScratch("ORPHANED, drop failed", "postgres", database)
 				return fmt.Errorf("drop scratch database %q: %w", database, err)
 			}
 			logScratch("dropped", "postgres", database)
@@ -169,46 +223,64 @@ func startClickHouseRemote(ctx context.Context, dsn string, httpDSN string) (*In
 	if err != nil {
 		return nil, err
 	}
+	if err := assertSafeIdentifier(database); err != nil {
+		return nil, err
+	}
+	// ClickHouse quotes identifiers with backticks and, like PostgreSQL,
+	// cannot parameterise one in DDL. assertSafeIdentifier above is what makes
+	// this interpolation safe; the pattern excludes the backtick entirely.
+	createStatement := fmt.Sprintf("CREATE DATABASE `%s`", database)
+	dropStatement := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", database)
+
 	options, err := clickhousego.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", ClickHouseDSNEnv, err)
 	}
+
+	// Rewrite the optional HTTP DSN BEFORE creating anything. Doing it after
+	// the CREATE would leak the database on a malformed value: the error
+	// returns without an Instance, so nothing holds the cleanup closure and
+	// nothing drops what was just created.
+	uri, err := withDatabasePath(dsn, database)
+	if err != nil {
+		return nil, err
+	}
+	var httpURI string
+	if httpDSN != "" {
+		httpURI, err = withDatabasePath(httpDSN, database)
+		if err != nil {
+			return nil, fmt.Errorf("rewrite %s: %w", ClickHouseHTTPDSNEnv, err)
+		}
+	}
+
 	admin, err := clickhousego.Open(options)
 	if err != nil {
 		return nil, fmt.Errorf("connect to remote ClickHouse (%s): %w", ClickHouseDSNEnv, err)
 	}
 	defer func() { _ = admin.Close() }()
 
-	if err := admin.Exec(ctx, "CREATE DATABASE `"+database+"`"); err != nil {
+	if err := admin.Exec(ctx, createStatement); err != nil {
 		return nil, fmt.Errorf("create scratch ClickHouse database %q: %w", database, err)
 	}
 	logScratch("created", "clickhouse", database)
 
-	uri, err := withDatabasePath(dsn, database)
-	if err != nil {
-		return nil, err
-	}
 	instance := &Instance{
 		URI: uri,
 		cleanup: func(ctx context.Context) error {
 			conn, err := clickhousego.Open(options)
 			if err != nil {
+				logScratch("ORPHANED, connect failed", "clickhouse", database)
 				return fmt.Errorf("connect to drop scratch ClickHouse database %q: %w", database, err)
 			}
 			defer func() { _ = conn.Close() }()
-			if err := conn.Exec(ctx, "DROP DATABASE IF EXISTS `"+database+"`"); err != nil {
+			if err := conn.Exec(ctx, dropStatement); err != nil {
+				logScratch("ORPHANED, drop failed", "clickhouse", database)
 				return fmt.Errorf("drop scratch ClickHouse database %q: %w", database, err)
 			}
 			logScratch("dropped", "clickhouse", database)
 			return nil
 		},
 	}
-	if httpDSN != "" {
-		httpURI, err := withDatabasePath(httpDSN, database)
-		if err != nil {
-			return nil, fmt.Errorf("rewrite %s: %w", ClickHouseHTTPDSNEnv, err)
-		}
-		instance.httpURI = httpURI
-	}
+	instance.httpURI = httpURI
 	return instance, nil
 }

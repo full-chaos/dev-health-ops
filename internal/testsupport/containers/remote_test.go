@@ -89,6 +89,12 @@ func TestStartPostgresWithoutRemoteDSNUsesDocker(t *testing.T) {
 func TestStartClickHouseWithRemoteDSNNeverReachesDocker(t *testing.T) {
 	calls := recordDockerCalls(t)
 	t.Setenv(ClickHouseDSNEnv, unreachableClickHouseDSN)
+	// Do NOT inherit a scratch prefix from the ambient environment. Prefix
+	// validation runs before the remote datastore is touched, so an invalid
+	// inherited prefix would make this test pass without ever reaching the
+	// path it exists to prove -- the assertion below is what catches that,
+	// and this line is what stops it happening in the first place.
+	t.Setenv(ScratchPrefixEnv, "")
 
 	_, err := StartClickHouse(shortCtx(t))
 
@@ -96,7 +102,64 @@ func TestStartClickHouseWithRemoteDSNNeverReachesDocker(t *testing.T) {
 		t.Errorf("Docker was asked for a container %d times with %s set; want 0", got, ClickHouseDSNEnv)
 	}
 	if err == nil {
-		t.Error("want a failure from the unreachable remote ClickHouse, got nil")
+		t.Fatal("want a failure from the unreachable remote ClickHouse, got nil")
+	}
+	// Prove the remote ClickHouse path was actually entered rather than the
+	// call failing earlier for an unrelated reason.
+	if strings.Contains(err.Error(), ScratchPrefixEnv) {
+		t.Fatalf("failed during prefix validation, never reached ClickHouse: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ClickHouse") {
+		t.Errorf("want an error from the remote ClickHouse path, got: %v", err)
+	}
+}
+
+// TestWithDatabasePathOverridesTheDatabaseQueryParameter is the regression test
+// for the sharpest failure this design has.
+//
+// Both drivers give a `?database=` / `?dbname=` query parameter PRECEDENCE over
+// the URL path. Rewriting only the path therefore leaves a DSN pointing at
+// whatever the caller's query parameter named -- on the shared server that is
+// real data -- while the scratch database sits empty and gets dropped, so the
+// writes land somewhere real and nothing looks wrong.
+func TestWithDatabasePathOverridesTheDatabaseQueryParameter(t *testing.T) {
+	for _, key := range []string{"database", "dbname"} {
+		t.Run(key, func(t *testing.T) {
+			got, err := withDatabasePath(
+				"clickhouse://u:p@example:9000/default?"+key+"=dh_0830", "scratch_x",
+			)
+			if err != nil {
+				t.Fatalf("withDatabasePath: %v", err)
+			}
+			if strings.Contains(got, "dh_0830") {
+				t.Errorf("rewritten DSN still names the original database: %s", got)
+			}
+			if !strings.Contains(got, key+"=scratch_x") {
+				t.Errorf("want %s pointed at the scratch database, got: %s", key, got)
+			}
+		})
+	}
+}
+
+// TestStartClickHouseRejectsAMalformedHTTPDSNBeforeCreating pins the ordering
+// that prevents a leak: the HTTP DSN is rewritten BEFORE the database is
+// created, because an error after the CREATE returns without an Instance and
+// so nothing holds the cleanup that would drop it.
+func TestStartClickHouseRejectsAMalformedHTTPDSNBeforeCreating(t *testing.T) {
+	recordDockerCalls(t)
+	t.Setenv(ClickHouseDSNEnv, unreachableClickHouseDSN)
+	t.Setenv(ClickHouseHTTPDSNEnv, "clickhouse://example/%zz")
+	t.Setenv(ScratchPrefixEnv, "")
+
+	_, err := StartClickHouse(shortCtx(t))
+
+	if err == nil || !strings.Contains(err.Error(), ClickHouseHTTPDSNEnv) {
+		t.Fatalf("want the malformed HTTP DSN rejected by name, got: %v", err)
+	}
+	// The native DSN is unreachable, so had the rewrite been attempted after
+	// the CREATE we would have seen a connect/create error instead.
+	if strings.Contains(err.Error(), "create scratch") {
+		t.Error("HTTP DSN was validated after the database was created")
 	}
 }
 
@@ -197,6 +260,45 @@ func TestScratchPrefixRejectsUnsafeValues(t *testing.T) {
 				t.Errorf("scratchName accepted unsafe prefix %q", prefix)
 			}
 		})
+	}
+}
+
+// TestAssertSafeIdentifierRejectsAnythingButAPlainIdentifier guards the last
+// step before a name reaches a DDL statement. Neither engine can parameterise
+// an identifier in DDL, so interpolation is unavoidable and this is where the
+// safety is actually enforced -- not inferred from how the name was built.
+func TestAssertSafeIdentifierRejectsAnythingButAPlainIdentifier(t *testing.T) {
+	for _, name := range []string{
+		"",
+		`a"; DROP DATABASE postgres; --`,
+		"has`backtick",
+		"has space",
+		"UPPER",
+		"1leading_digit",
+		"has-a-dash",
+	} {
+		if err := assertSafeIdentifier(name); err == nil {
+			t.Errorf("assertSafeIdentifier accepted unsafe name %q", name)
+		}
+	}
+	if err := assertSafeIdentifier("lane_4428_8a2c4feb5e391ab5"); err != nil {
+		t.Errorf("assertSafeIdentifier rejected a well-formed name: %v", err)
+	}
+}
+
+// TestGeneratedScratchNamesAlwaysPassTheIdentifierGuard ties the two halves
+// together: whatever scratchName produces must survive the DDL guard, so the
+// guard can never reject a name the harness itself generated.
+func TestGeneratedScratchNamesAlwaysPassTheIdentifierGuard(t *testing.T) {
+	t.Setenv(ScratchPrefixEnv, "lane_4428")
+	for range 64 {
+		name, err := scratchName()
+		if err != nil {
+			t.Fatalf("scratchName: %v", err)
+		}
+		if err := assertSafeIdentifier(name); err != nil {
+			t.Fatalf("generated name %q failed the identifier guard: %v", name, err)
+		}
 	}
 }
 

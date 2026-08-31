@@ -94,22 +94,45 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		}
 		for _, spec := range genDecl.Specs {
 			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok || len(valueSpec.Names) != 1 || len(valueSpec.Values) != 1 {
+			if !ok {
 				continue
 			}
-			name := valueSpec.Names[0].Name
-			if !documentConstPattern.MatchString(name) {
-				continue
+			// A single `const NAME = "..."` line is the overwhelmingly
+			// common case in this file today (len(Names) == len(Values)
+			// == 1), but Go also allows a GROUPED declaration on one
+			// line, `const A, B = "x", "y"` -- codex review (2026-08-30)
+			// caught that an earlier version of this loop required
+			// exactly one name/value pair and silently `continue`d past
+			// anything else, so a registered*Document const written in
+			// grouped form vanished from documentByConstName with NO
+			// error, only becoming visible if digestByOperation also
+			// referenced it (the cross-check below would then report it
+			// as "not found among registered*Document consts" -- correct
+			// but confusing) or, if digestByOperation did NOT reference
+			// it either, not becoming visible AT ALL: exactly the class
+			// of silent under-enumeration this whole tool exists to
+			// prevent, one syntax form lower than the document list
+			// itself. Iterating Names/Values pairwise (Go requires equal
+			// lengths whenever both are present) closes that gap outright
+			// rather than converting it into a different loud failure.
+			if len(valueSpec.Names) != len(valueSpec.Values) {
+				return nil, fmt.Errorf("const declaration has %d name(s) but %d value(s) -- this tool only understands `const NAME = \"...\"` or `const A, B = \"...\", \"...\"` with matching counts", len(valueSpec.Names), len(valueSpec.Values))
 			}
-			lit, ok := valueSpec.Values[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return nil, fmt.Errorf("const %s is not a string literal (got %T) -- registered document consts must stay literal text so this tool can read the exact bytes a real request digests", name, valueSpec.Values[0])
+			for i, nameIdent := range valueSpec.Names {
+				name := nameIdent.Name
+				if !documentConstPattern.MatchString(name) {
+					continue
+				}
+				lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return nil, fmt.Errorf("const %s is not a string literal (got %T) -- registered document consts must stay literal text so this tool can read the exact bytes a real request digests", name, valueSpec.Values[i])
+				}
+				text, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					return nil, fmt.Errorf("const %s: unquote: %w", name, err)
+				}
+				documentByConstName[name] = text
 			}
-			text, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return nil, fmt.Errorf("const %s: unquote: %w", name, err)
-			}
-			documentByConstName[name] = text
 		}
 	}
 

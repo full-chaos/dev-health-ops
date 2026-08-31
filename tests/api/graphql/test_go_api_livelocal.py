@@ -191,6 +191,29 @@ def _enumerate_registered_documents() -> tuple[dict[str, str], ...]:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "registered_doc" not in metafunc.fixturenames:
         return
+    # Gate the (go-toolchain-requiring) enumeration behind this module's
+    # OWN precondition -- codex review (2026-08-30) caught that an earlier
+    # version called _enumerate_registered_documents() unconditionally
+    # here, before the module-level `pytestmark` skipif on CLICKHOUSE_URI/
+    # POSTGRES_TEST_URI could take effect (skip marks apply at test SETUP,
+    # long after pytest_generate_tests has already run at COLLECTION). On
+    # a plain "not clickhouse" CI tier with no `go` binary -- an entirely
+    # reasonable combination for a runner that only needs Python -- this
+    # file would raise a collection ERROR instead of cleanly skipping like
+    # its own skipif already promises, potentially failing an unrelated
+    # tier for a proof that tier never intended to run. Reproduced by hand
+    # (env -i PATH=/usr/bin:/bin, CLICKHOUSE_URI/POSTGRES_TEST_URI unset):
+    # `pytest --collect-only` errored the whole file before this fix.
+    #
+    # When this module's own precondition is already false, the go
+    # toolchain is not needed at all -- parametrize with an EMPTY list,
+    # which pytest reports as a clean skip, not an error. When the
+    # precondition IS true (an operator genuinely wants this proof to
+    # run), missing `go` still fails loudly via
+    # _enumerate_registered_documents's RuntimeError, exactly as before.
+    if not CLICKHOUSE_URI or not POSTGRES_TEST_URI:
+        metafunc.parametrize("registered_doc", [], ids=[])
+        return
     docs = _enumerate_registered_documents()
     metafunc.parametrize(
         "registered_doc",
@@ -306,7 +329,26 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
             return
         for selection in selection_set.selections:
             if not isinstance(selection, gql_ast.FieldNode):
-                continue  # fragment spread / inline fragment: none of the 12 use these
+                # Fragment spread / inline fragment: none of the current 12
+                # documents use one (confirmed by reading every
+                # registered*Document const), but codex review (2026-08-30)
+                # correctly flagged that silently `continue`ing past one
+                # means a FUTURE document using a fragment would have every
+                # field inside it go completely unchecked -- a null on a
+                # non-nullable field behind a fragment would pass with zero
+                # violations, exactly the "check that cannot fail" root
+                # AGENTS.md's four verification rules warn against. Fail
+                # loudly instead of silently doing less than the module doc
+                # comment claims; whoever adds the first fragment-using
+                # document extends this walker to resolve it properly.
+                result.violations.append(
+                    f"{path}: document uses a fragment "
+                    f"({type(selection).__name__}) at this selection set -- "
+                    "_shape_check does not resolve fragments yet, so this "
+                    "document's shape cannot be confirmed here. Extend "
+                    "_shape_check before claiming this document shape-sane."
+                )
+                continue
             key = _response_key(selection)
             if key not in node:
                 result.violations.append(
@@ -570,26 +612,40 @@ def registry_postgres() -> Iterator[dict[str, str]]:
     `DEV_HEALTH_POSTGRES_TEST_URI` admin-connects to and dropped at
     teardown -- holds only the go_api_* routing-registry tables (plumbing
     that gates Go-plane reachability), never the org's real data. Same
-    pattern every test_go_api_dual_run_*.py file already uses.
+    pattern every test_go_api_dual_run_*.py file already uses (that
+    pattern has the same leak this fixture fixes below -- forwarded, not
+    fixed there; out of this PR's scope).
+
+    The DB-drop `finally` wraps EVERYTHING from creation onward, not just
+    the `yield` -- codex review (2026-08-30) caught that an earlier
+    version left `GitBase.metadata.create_all(...)` outside that
+    `finally`'s reach: a raise from `create_all` (a locked-down Postgres
+    role, a DDL timeout, anything) would propagate straight out of this
+    fixture, past the drop-DB `finally` below it, leaking the scratch
+    database on the shared server forever. Confirmed by reading the
+    control flow (no fault injection needed: the exception path is
+    unambiguous once the drop is outside its scope).
     """
     assert POSTGRES_TEST_URI is not None
     db_name, dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    sync_engine = _sync_engine(dsn)
     try:
-        registry_tables = cast(
-            list[sa.Table],
-            [CandidateBuild.__table__, RoutingState.__table__, ProofRun.__table__],
-        )
-        GitBase.metadata.create_all(sync_engine, tables=registry_tables)
-    finally:
-        sync_engine.dispose()
+        sync_engine = _sync_engine(dsn)
+        try:
+            registry_tables = cast(
+                list[sa.Table],
+                [CandidateBuild.__table__, RoutingState.__table__, ProofRun.__table__],
+            )
+            GitBase.metadata.create_all(sync_engine, tables=registry_tables)
+        finally:
+            sync_engine.dispose()
 
-    base_url = make_url(dsn)
-    go_dsn = base_url.set(drivername="postgresql").render_as_string(hide_password=False)
-    async_dsn = base_url.set(drivername="postgresql+asyncpg").render_as_string(
-        hide_password=False
-    )
-    try:
+        base_url = make_url(dsn)
+        go_dsn = base_url.set(drivername="postgresql").render_as_string(
+            hide_password=False
+        )
+        async_dsn = base_url.set(drivername="postgresql+asyncpg").render_as_string(
+            hide_password=False
+        )
         yield {"go": go_dsn, "async": async_dsn}
     finally:
         _drop_scratch_postgres_db(POSTGRES_TEST_URI, db_name)

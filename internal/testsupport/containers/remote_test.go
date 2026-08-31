@@ -505,6 +505,76 @@ func TestSingleHostDSNsAreStillAccepted(t *testing.T) {
 	}
 }
 
+// TestHostlessDSNsAreRefusedWhateverTheEnvironmentSays closes the general form
+// of the same-server guarantee.
+//
+// pgx resolves a hostless DSN from $PGHOST at EVERY parse, and this package
+// re-parses to reconnect for cleanup -- so without this guard the DROP can
+// reach a server the CREATE never saw. The two subtests below are the two
+// resolutions that matter: a set PGHOST (redirects to a named server) and an
+// unset one (resolves to a local Unix socket). The guard must refuse both,
+// which is what makes it independent of the environment rather than merely
+// ahead of it.
+func TestHostlessDSNsAreRefusedWhateverTheEnvironmentSays(t *testing.T) {
+	for name, pghost := range map[string]string{
+		"PGHOST set, would redirect to a named server": "server-b",
+		"PGHOST unset, would resolve to a socket":      "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			recordDockerCalls(t)
+			t.Setenv("PGHOST", pghost)
+			t.Setenv(PostgresDSNEnv, "postgres://u:p@/acr?sslmode=disable")
+
+			_, err := StartPostgres(shortCtx(t))
+
+			if err == nil {
+				t.Fatal("want a hostless DSN refused, got nil")
+			}
+			if !strings.Contains(err.Error(), "does not name its host") {
+				t.Errorf("refusal does not explain the constraint: %v", err)
+			}
+			for _, tooLate := range []string{"connect to remote", "create scratch"} {
+				if strings.Contains(err.Error(), tooLate) {
+					t.Errorf("refused only after connecting or creating: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestKeywordValueDSNWithoutAHostIsRefused covers the other PostgreSQL DSN
+// form, where the host is a key rather than a URL component.
+func TestKeywordValueDSNWithoutAHostIsRefused(t *testing.T) {
+	recordDockerCalls(t)
+	t.Setenv("PGHOST", "server-b")
+	t.Setenv(PostgresDSNEnv, "user=u password=p dbname=acr")
+
+	_, err := StartPostgres(shortCtx(t))
+
+	if err == nil || !strings.Contains(err.Error(), "does not name its host") {
+		t.Fatalf("want the hostless keyword/value DSN refused, got: %v", err)
+	}
+}
+
+// TestLiteralHostGuardAcceptsEveryDocumentedShape is the control. The guard
+// must not reject anything the recipe actually tells an operator to use.
+func TestLiteralHostGuardAcceptsEveryDocumentedShape(t *testing.T) {
+	t.Setenv("PGHOST", "irrelevant-because-the-dsn-names-its-own")
+	for name, dsn := range map[string]string{
+		"postgres URL":           "postgres://u:p@192.168.65.4:30500/acr?sslmode=disable",
+		"postgresql URL":         "postgresql://u:p@192.168.65.4:30500/acr",
+		"postgres keyword/value": "host=192.168.65.4 port=30500 user=u dbname=acr",
+		"clickhouse native":      "clickhouse://u:p@192.168.65.4:30502/default",
+		"clickhouse http":        "clickhouse://u:p@192.168.65.4:30501/default",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := assertLiteralHost(dsn, PostgresDSNEnv); err != nil {
+				t.Errorf("documented DSN shape wrongly refused: %v", err)
+			}
+		})
+	}
+}
+
 // TestCloseRunsCleanupInsteadOfTerminating pins that a remote instance drops
 // its scratch database. A remote Instance has a nil Container, and the old
 // Close returned nil for exactly that case -- so without this the scratch

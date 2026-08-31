@@ -227,8 +227,59 @@ func clickHouseScratchDDL(database string) (createStatement string, dropStatemen
 // no use in a test harness, and refusing is a smaller guarantee to verify than
 // pinning.
 
+// keywordValueHostPattern finds an explicit `host=` key in a keyword/value DSN.
+// `hostaddr=` is deliberately not accepted: it is a different key with
+// different resolution rules, and the point here is that ONE spelling of the
+// target is required so there is nothing to reconcile.
+var keywordValueHostPattern = regexp.MustCompile(`(^|\s)host\s*=\s*\S`)
+
+// assertLiteralHost rejects a DSN that does not name its host in the string
+// itself.
+//
+// This is the general form of the multi-host rule, and it is what actually
+// guarantees the property: a scratch database must be dropped on the server
+// that created it. Counting hosts is not enough, because a DSN can name none
+// and let something outside the string decide. pgx resolves a hostless DSN
+// from $PGHOST at EVERY parse -- observed directly, same string returning
+// server-A then server-B as the variable changed, and a Unix socket path when
+// it is unset -- and this package re-parses the DSN to reconnect for cleanup.
+// In a test harness, where t.Setenv is routine, that is a live way for the
+// DROP to reach a different server than the CREATE.
+//
+// Requiring the host to be literally present closes multi-host, hostless,
+// socket-derived and environment-derived redirection in one condition, rather
+// than case by case -- which is the mistake the previous version of this guard
+// made.
+func assertLiteralHost(dsn string, env string) error {
+	fail := func() error {
+		return fmt.Errorf(
+			"%s does not name its host in the DSN itself: this harness requires a literal "+
+				"host, because a hostless DSN is resolved from the environment at every "+
+				"parse and the scratch database must be dropped on the server that created it",
+			env,
+		)
+	}
+	if strings.Contains(dsn, "://") {
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", env, err)
+		}
+		if parsed.Hostname() == "" {
+			return fail()
+		}
+		return nil
+	}
+	if !keywordValueHostPattern.MatchString(dsn) {
+		return fail()
+	}
+	return nil
+}
+
 // assertSingleHostClickHouse rejects a ClickHouse DSN naming more than one host.
 func assertSingleHostClickHouse(dsn string, env string) error {
+	if err := assertLiteralHost(dsn, env); err != nil {
+		return err
+	}
 	options, err := clickhousego.ParseDSN(dsn)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", env, err)
@@ -248,6 +299,9 @@ func assertSingleHostClickHouse(dsn string, env string) error {
 // pgx spreads additional hosts across Fallbacks, and accepts them in both the
 // URL and the keyword/value form.
 func assertSingleHostPostgres(dsn string, env string) error {
+	if err := assertLiteralHost(dsn, env); err != nil {
+		return err
+	}
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", env, err)

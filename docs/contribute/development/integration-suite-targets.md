@@ -391,13 +391,25 @@ go test -tags=integration ./internal/jobroute/ -count=1
 Set neither DSN and the harness starts containers exactly as before — the
 default is unchanged, so nothing that works today stops working.
 
-**Each DSN must name exactly one host.** A multi-host DSN is refused with a
-loud error rather than accepted, because a scratch database is created on one
-connection and dropped on a later, separate one: both drivers may pick a
-different host each time, the drop would then reach a server that never saw the
-create, `DROP ... IF EXISTS` would succeed as a no-op, and the harness would log
-`dropped` for a database that still exists. That is the one failure mode that
-makes the orphan log lie, and the sweep below depends on it not lying.
+**Each DSN must name exactly one host, literally, in the DSN itself.** Anything
+else is refused with a loud error before a connection is opened.
+
+The reason is that a scratch database is created on one connection and dropped
+on a later, separate one, and the drop must reach the server that created it.
+Otherwise `DROP ... IF EXISTS` succeeds as a no-op, the harness logs `dropped`,
+and the database survives with nothing naming it — the one failure mode that
+makes the orphan log lie, which the sweep below depends on it not doing.
+
+Two ways a DSN can break that, both refused:
+
+- **More than one host.** Either driver may pick a different one per connection.
+- **No host at all.** `postgres://u:p@/acr` has its host resolved from `$PGHOST`
+  at *every* parse — the same string yields a different server as the variable
+  changes, and a local Unix socket when it is unset. In a test harness, where
+  `t.Setenv` is routine, that is a live way for the drop to go elsewhere.
+
+So the requirement is on the DSN *string*, not on what it happens to resolve to:
+if the host is written down, nothing outside the DSN can move it.
 
 `DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN` is needed alongside the native DSN
 whenever a suite reaches ClickHouse over HTTP (the Python migration runner

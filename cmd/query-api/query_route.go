@@ -17,23 +17,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 )
 
 // registeredFeatureFlagsDocument is the ONE query document query-api
@@ -484,13 +489,113 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 	return cfg, true
 }
 
+// queryRouteMaxResultRows and queryRouteMaxBytesToRead override
+// dev-health-go/clickhouse's per-request safety-net defaults
+// (Options.MaxResultRows=1,000, Options.MaxBytesToRead=64 MiB) for THIS
+// route.
+//
+// ROOT DEFECT (CHAOS-4647): those two defaults were calibrated by
+// CHAOS-3848 for a completely different endpoint -- a 200-row
+// pull_requests batch -- and borrowed here, unexamined, for an endpoint
+// that legitimately reads whole-org history. That mismatch, not either
+// specific number, is what actually broke hotspots and workGraphEdges
+// against real org 70d529e0 data (EXECUTED, live-local runner) while
+// every unit test, gofmt/vet/build, and prior codex review stayed green
+// -- none of those send SQL to a real engine. Both PASS on
+// producer-seeded scratch, whose working set sits far below either
+// ceiling, and neither failure is malformed SQL or caller error: an
+// org-wide hotspots read and a real membership graph are both
+// spec-valid per contracts/graphql/v1/schema.graphql.
+//
+// BOTH VALUES BELOW ARE PROVISIONAL, each with a named successor that
+// removes it as a lane's independent decision, not a number this PR is
+// asserting is correct:
+//
+//   - queryRouteMaxBytesToRead: PROVISIONAL, successor CHAOS-4651 /
+//     dev-health-go v0.6.1. This is NOT a capacity-boundable value --
+//     it protects ClickHouse's OWN read volume, which is the engine's
+//     resource, governed by its server profile (CHAOS-4653: prod and
+//     local both currently run with every such setting at 0 already;
+//     removing this client-side cap restores that status quo rather
+//     than opening a new hole). The correct value is "no client-side
+//     cap" -- Python's equivalent queries impose none. dev-health-go
+//     @v0.4.0 cannot express that: applyOptions' defaultPositiveUint64
+//     substitutes its positive fallback whenever Options.MaxBytesToRead
+//     is <= 0, so deleting this field does NOT remove the cap, it
+//     silently reverts to the ORIGINAL 64 MiB bug (found reading
+//     options.go, not assumed). v0.6.1 adds the ability to request
+//     literal 0/unlimited; the ops pin bump to it is a one-line
+//     follow-up that deletes this field for real. Until then: 2 GiB,
+//     EXECUTED against real org 70d529e0 data (live-local runner,
+//     unwrap-chain instrumentation in newQueryHandler below) -- proven
+//     live 12/12 three separate times on this branch, real headroom
+//     (~2x) over the measured ~1002 MiB / 6,942,432-row hotspots scan
+//     (clickhouse-client, max_bytes_to_read=0, system.query_log
+//     confirmed). INVALIDATED BY: v0.6.1 shipping (delete this field
+//     entirely then, don't re-derive a bigger number) OR a legitimate
+//     query needing to read more than 2 GiB before v0.6.1 lands (widen
+//     the value with a fresh EXECUTED measurement, same as this one).
+//
+//   - queryRouteMaxResultRows: PROVISIONAL, successor CHAOS-4654. This
+//     IS capacity-boundable in principle -- it protects THIS PROCESS
+//     (query-api's own pooled connections, MaxOpenConns=8 by default,
+//     and the in-memory row slice every resolver buffers before the
+//     HTTP response is written) -- but a capacity derivation needs a
+//     declared container memory budget, and query-api has none: no
+//     mem_limit/deploy.resources in deploy/go-api/compose-query-api.yml
+//     (its only deploy artifact), no k8s/helm manifest at all (checked
+//     2026-08-31 -- this service hasn't reached that deploy layer yet).
+//     A capacity number derived from an unknown capacity is a workload
+//     guess wearing better clothes, so this is NOT that: it is still a
+//     WORKLOAD derivation -- 4*workgraph.MaxEdgesLimit (edges.go's
+//     already-enforced ceiling on a single workGraphEdges request's
+//     filters.limit; 2 endpoints/edge x 2 membership rows/endpoint --
+//     see the long comment trail this constant's git blame carries)
+//     plus 100,000 rows of headroom -- proven EXECUTED and CONFIRMED
+//     against real org 70d529e0 data (live-local runner, 12/12, three
+//     times) but NOT proof against a fan-out dimension nobody has yet
+//     found, which is exactly how rounds 1 and 2 of this same review
+//     each undercounted the round before. CHAOS-4654 makes "give
+//     query-api a declared container memory budget" a precondition of
+//     actually DEPLOYING this service, not of merging this PR; once
+//     that budget exists, re-derive this value from it (rows this
+//     process can safely buffer per request, generously above any
+//     legitimate result -- real results here are thousands of rows, a
+//     capacity bound should land orders of magnitude above that) and
+//     delete the workgraph.MaxEdgesLimit dependency below entirely,
+//     since a capacity-derived bound needs no fan-out arithmetic at
+//     all. INVALIDATED BY: CHAOS-4654 landing a declared memory budget
+//     (re-derive from capacity then) OR a THIRD undiscovered fan-out
+//     multiplier tripping this value first (see
+//     TestCategoryKindCardinalityHasNoNewValue in membership_test.go --
+//     it fails loudly the moment a new category_kind value appears,
+//     which is the earliest possible signal that this workload
+//     derivation's assumptions changed).
+const (
+	queryRouteMaxResultRows  = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654
+	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB -- PROVISIONAL, successor CHAOS-4651 / dev-health-go v0.6.1
+)
+
+// newQueryRouteClickHouseClient is the ONE place this route constructs its
+// ClickHouse client -- pulled out of buildQueryRoute so a test can exercise
+// the REAL production wiring (these exact options reaching the real
+// driver) instead of a hand-copied literal that could silently drift from
+// what buildQueryRoute actually does (codex review round 1, P3).
+func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
+	return dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
+		DSN:            dsn,
+		MaxResultRows:  queryRouteMaxResultRows,
+		MaxBytesToRead: queryRouteMaxBytesToRead,
+	})
+}
+
 // buildQueryRoute wires the real featureFlags path from env-sourced
 // config: the shared dev-health-go ClickHouse client, a real Postgres
 // pool, and the effective-principal verifier, then hands them to
 // newQueryHandler. The returned cleanup func closes the Postgres pool;
 // call it on shutdown.
 func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
-	chClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: cfg.ClickHouseURI})
+	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -559,6 +664,30 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // waves are local dual-run proof only (plan §5 stage 2); org-scoped
 // canary enforcement is a stage-5 concern this PR does not claim to
 // satisfy.
+// maxUnwrapChainLogBytes bounds the CHAOS-4647 unwrap-chain log line
+// (codex review, merge-gate round, P3 ARGUED): the deepest cause is
+// frequently a ClickHouse *proto.Exception, whose Message field is
+// server-authored text this process does not control -- some ClickHouse
+// error classes echo back query/data fragments, so an unbounded join
+// could put an arbitrarily large or awkward line into the process log.
+// Truncating caps that exposure; it is a size bound, not a redaction
+// guarantee -- this log line already carried backend-authored
+// diagnostic text before this change and still does, just with a hard
+// ceiling on how much.
+const maxUnwrapChainLogBytes = 4096
+
+// truncateForLog bounds s to at most max bytes, appending how much was
+// cut so a truncated line is visibly truncated rather than looking
+// complete. A pure function so the CHAOS-4647 P3 fix has a direct,
+// fast unit test instead of only being provable by capturing real log
+// output.
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
+}
+
 func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
@@ -604,6 +733,31 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient}})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
+	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
+	// and gqlgen's default presenter surfaces only err.Error() -- which for
+	// a dev-health-go *operationError (clickhouse/client.go) is the fixed
+	// string "ClickHouse <operation> failed" with the real driver cause
+	// reachable only via Unwrap(). Log the full Unwrap() chain server-side
+	// on every resolver error so a live-data failure's actual cause is
+	// visible without changing the response the client sees.
+	//
+	// Bounded (codex review, merge-gate round, P3 ARGUED): the deepest
+	// cause here is frequently a ClickHouse *proto.Exception, whose
+	// Message field is server-authored text this process does not
+	// control -- some ClickHouse error classes echo back query/data
+	// fragments, so an unbounded join could put an arbitrarily large or
+	// awkward line into the process log. Truncating caps that exposure;
+	// it is a size bound, not a redaction guarantee -- this log line was
+	// already carrying backend-authored diagnostic text before this
+	// change and still does, just with a hard ceiling on how much.
+	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+		chain := []string{err.Error()}
+		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
+			chain = append(chain, unwrapped.Error())
+		}
+		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
+		return graphql.DefaultErrorPresenter(ctx, err)
+	})
 	for operation := range digestByOperation {
 		routeMux.Register(operation, gqlHandler)
 	}

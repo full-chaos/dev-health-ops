@@ -374,11 +374,17 @@ type AnalyticsResult struct {
 // byte-for-byte checked against the live Strawberry export
 // (tests/api/graphql/test_schema_sdl_pinned.py) and stays `value:
 // Float!` on the Python side (root AGENTS.md GO-ONLY rule -- no
-// further work in the Python GraphQL layer). This field is not yet
-// reachable through query_route.go (blocked on CHAOS-4538, see
-// breakdown.go's ExecuteBreakdown doc comment), so nothing observes
-// the internal/schema nullability mismatch today. Whoever wires
-// BreakdownItem into a registered document MUST widen
+// further work in the Python GraphQL layer). Reachability, checked by
+// mechanism not by ticket state (CHAOS-4538 itself merged 08-30/31,
+// bba15566d -- citing it as the blocker is stale): `investmentBreakdown`
+// IS pre-registered in query_route.go, but dispatch requires its OWN
+// row in routeswitch's dynamic switch (switch.go), and no
+// go_api_routing_state row currently enables `investmentBreakdown` or
+// `investmentFull` -- verified locally; PRODUCTION ROUTING STATE IS
+// UNVERIFIED, this is a local fact only. So nothing observes the
+// internal/schema nullability mismatch TODAY, but that could change
+// the moment a routing-state row is added, with no further code
+// change. Whoever enables that row MUST widen
 // contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
 // Float` (and its Python Strawberry counterpart,
 // src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)

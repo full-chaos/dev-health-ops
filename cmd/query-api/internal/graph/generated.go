@@ -27195,8 +27195,9 @@ func (ec *executionContext) _BreakdownItem_value(ctx context.Context, field grap
 	// gqlgen last ran against contracts/graphql/v1/schema.graphql's
 	// still-unwidened `value: Float!` -- see models_gen.go's
 	// BreakdownItem comment for why the SDL pin is not touched by this
-	// change and what must happen when this field is finally wired
-	// live (CHAOS-4538).
+	// change and what must happen when a go_api_routing_state row
+	// enables this field's dispatch (routeswitch; no such row exists
+	// today, verified locally -- production is unverified).
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil

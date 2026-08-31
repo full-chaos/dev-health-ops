@@ -91,7 +91,6 @@ import sqlalchemy as sa
 from graphql import (
     GraphQLList,
     GraphQLNonNull,
-    GraphQLOutputType,
     GraphQLSchema,
     build_schema,
 )
@@ -373,12 +372,6 @@ def _find_fragment_usage(
     return found
 
 
-def _unwrap_to_named_type(type_: GraphQLOutputType) -> GraphQLOutputType:
-    while isinstance(type_, (GraphQLNonNull, GraphQLList)):
-        type_ = type_.of_type
-    return type_
-
-
 @dataclass
 class _ShapeCheck:
     violations: list[str]
@@ -434,43 +427,68 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
         selection_set: gql_ast.SelectionSetNode | None,
         node: Any,
         path: str,
-        parent_type: Any,
-        element_nullable: bool = True,
+        type_: Any,
     ) -> None:
+        """Walks one position in the response tree against the ACTUAL
+        schema type at that exact position, peeling exactly one
+        NonNull/List wrapper per recursive call rather than flattening
+        `field_def.type` down to its named type once and reusing a
+        single derived boolean for every nesting depth below it.
+
+        codex review round 3 (2026-08-30, EXECUTED, synthetic schema)
+        caught that the earlier, flattening version got this wrong two
+        ways for a NESTED list (`[[Thing]]` and similar): (1) it computed
+        `element_nullable` once from the OUTERMOST list layer and reused
+        that same value at every deeper layer, so a null at the second
+        list layer was checked against the wrong layer's nullability; (2)
+        the earlier version collapsed every wrapper down to the bare named
+        type in one step (via a now-removed `_unwrap_to_named_type` helper), so an inner list was walked against the
+        eventual OBJECT type's `.fields` instead of being recognized as
+        still-a-list at that position -- "runtime list/object shape
+        accepted against the wrong schema container". None of the
+        current 12 documents nest lists (confirmed by reading every
+        registered*Document const), so this was latent, not a live
+        false-pass -- fixed here so the SAME logic is correct for every
+        depth uniformly, not just depth 1.
+        """
         if selection_set is None:
             return
-        if isinstance(node, list):
-            # `element_nullable` describes the LIST'S ELEMENT type (e.g.
-            # `[Thing]` has nullable elements, `[Thing!]` does not) --
-            # threaded down from the field-processing call below, not
-            # from this list value's own (outer) nullability, which was
-            # already checked before we ever got here. codex review
-            # round 2 (2026-08-30, EXECUTED, synthetic schema) caught
-            # that this branch previously recursed into every item
-            # unconditionally, so a spec-valid `null` element inside a
-            # nullable-element list fell through to the "expected an
-            # object or list" violation below instead of being recognized
-            # as a legitimate null -- the same class of over-strictness
-            # chris's ruling already fixed one level up for FIELD nulls.
+        nullable = not isinstance(type_, GraphQLNonNull)
+        inner = type_.of_type if isinstance(type_, GraphQLNonNull) else type_
+        if node is None:
+            if not nullable:
+                result.violations.append(
+                    f"{path}: NULL at a NON-nullable schema position "
+                    f"({inner}) -- contract violation"
+                )
+            # A spec-valid null at a NESTED (non-field-level) position --
+            # e.g. one element of a nullable-element list -- has no field
+            # name to build the richer field-level "note" message chris's
+            # ruling covers; that ruling and its note-vs-violation
+            # distinction are about FIELD nulls (handled below, in the
+            # per-selection loop, which still owns that richer message).
+            # A bare nested null needs no note: there's nothing under it
+            # this checker could have confirmed either way.
+            return
+        if isinstance(inner, GraphQLList):
+            if not isinstance(node, list):
+                result.violations.append(
+                    f"{path}: expected a list ({inner}), got "
+                    f"{type(node).__name__}={node!r}"
+                )
+                return
             for i, item in enumerate(node):
-                if item is None:
-                    if not element_nullable:
-                        result.violations.append(
-                            f"{path}[{i}]: NULL list element on a "
-                            "NON-nullable element type -- contract violation"
-                        )
-                    continue
-                walk(selection_set, item, f"{path}[{i}]", parent_type)
+                walk(selection_set, item, f"{path}[{i}]", inner.of_type)
             return
         if not isinstance(node, dict):
             result.violations.append(
-                f"{path}: expected an object or list, got {type(node).__name__}={node!r}"
+                f"{path}: expected an object, got {type(node).__name__}={node!r}"
             )
             return
-        fields = getattr(parent_type, "fields", None)
+        fields = getattr(inner, "fields", None)
         if fields is None:
             result.violations.append(
-                f"{path}: schema type {parent_type!r} has no fields but the "
+                f"{path}: schema type {inner!r} has no fields but the "
                 "document selects sub-fields there"
             )
             return
@@ -501,17 +519,17 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
             if field_def is None:
                 result.violations.append(
                     f"{path}.{key}: field not found on schema type "
-                    f"{getattr(parent_type, 'name', parent_type)!r} -- "
+                    f"{getattr(inner, 'name', inner)!r} -- "
                     "schema/document drift"
                 )
                 continue
-            nullable = not isinstance(field_def.type, GraphQLNonNull)
+            field_nullable = not isinstance(field_def.type, GraphQLNonNull)
             value = node[key]
             if value is None:
-                if not nullable:
+                if not field_nullable:
                     result.violations.append(
                         f"{path}.{key}: NULL on a NON-nullable schema field "
-                        f"({getattr(parent_type, 'name', parent_type)}."
+                        f"({getattr(inner, 'name', inner)}."
                         f"{selection.name.value}) -- contract violation"
                     )
                 elif selection.selection_set is not None:
@@ -522,7 +540,7 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
                     ]
                     result.notes.append(
                         f"{path}.{key}: null (schema-nullable field "
-                        f"{getattr(parent_type, 'name', parent_type)}."
+                        f"{getattr(inner, 'name', inner)}."
                         f"{selection.name.value}) -- sub-fields {subfield_names} "
                         "not confirmable. Spec-valid per claim 2's ruling: "
                         "whether the Go plane SHOULD return non-null here is "
@@ -531,28 +549,7 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
                     )
                 continue
             if selection.selection_set is not None:
-                # Determine THIS field's list-element nullability (if it
-                # is a list at all) to thread down to walk()'s list
-                # branch -- `[Thing]` has nullable elements, `[Thing!]`
-                # does not; a non-list field passes the default (True,
-                # meaningless since it's never consulted for a non-list).
-                unwrapped_once = (
-                    field_def.type.of_type
-                    if isinstance(field_def.type, GraphQLNonNull)
-                    else field_def.type
-                )
-                element_nullable = True
-                if isinstance(unwrapped_once, GraphQLList):
-                    element_nullable = not isinstance(
-                        unwrapped_once.of_type, GraphQLNonNull
-                    )
-                walk(
-                    selection.selection_set,
-                    value,
-                    f"{path}.{key}",
-                    _unwrap_to_named_type(field_def.type),
-                    element_nullable,
-                )
+                walk(selection.selection_set, value, f"{path}.{key}", field_def.type)
 
     walk(operation.selection_set, data, "$", query_type)
     return result
@@ -883,21 +880,36 @@ def _mint_envelope(org_id: str) -> tuple[str, dict, str, str]:
         format=PrivateFormat.PKCS8,
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
+    # codex review round 3 (2026-08-30, EXECUTED): this left
+    # GO_API_ENVELOPE_PRIVATE_KEY set in the process environment forever
+    # (observed before_present=False after_present=True) -- each of the
+    # 12 tests overwrote it with a fresh random key and never cleaned up,
+    # so anything running later in the SAME pytest process (another test
+    # file, a later test in this one) would see a leaked, unrelated
+    # Ed25519 key. Save/restore around the two calls that actually need
+    # it read from the environment, in a finally so a raise still
+    # restores it.
+    previous_key = os.environ.get("GO_API_ENVELOPE_PRIVATE_KEY")
     os.environ["GO_API_ENVELOPE_PRIVATE_KEY"] = key_pem
-
-    user = AuthenticatedUser(
-        user_id="55555555-5555-4555-8555-555555555555",
-        email="dev@example.com",
-        org_id=org_id,
-        role="admin",
-        is_superuser=False,
-        is_superuser_verified=False,
-        token_version=3,
-    )
-    token = principal_envelope.issue_effective_principal_envelope(
-        user, tier=LicenseTier.TEAM, licensed_features=["ai_review"]
-    )
-    jwks = principal_envelope.build_envelope_jwks()
+    try:
+        user = AuthenticatedUser(
+            user_id="55555555-5555-4555-8555-555555555555",
+            email="dev@example.com",
+            org_id=org_id,
+            role="admin",
+            is_superuser=False,
+            is_superuser_verified=False,
+            token_version=3,
+        )
+        token = principal_envelope.issue_effective_principal_envelope(
+            user, tier=LicenseTier.TEAM, licensed_features=["ai_review"]
+        )
+        jwks = principal_envelope.build_envelope_jwks()
+    finally:
+        if previous_key is None:
+            os.environ.pop("GO_API_ENVELOPE_PRIVATE_KEY", None)
+        else:
+            os.environ["GO_API_ENVELOPE_PRIVATE_KEY"] = previous_key
     return (
         token,
         jwks,

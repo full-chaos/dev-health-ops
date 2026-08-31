@@ -47,12 +47,14 @@ func TestRiverWorkerClientRunsReindexerWithoutPermissionErrors(t *testing.T) {
 	// database does not isolate it (CHAOS-4661). Deriving both role names
 	// from this call's own database identity is what makes two successive
 	// runs, and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(postgres)
+	reindexDomainRole, err := containers.RoleName("reindex_domain_runtime", postgres)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reindexDomainRole := "reindex_domain_runtime_" + roleSuffix
-	reindexQueueRole := "reindex_queue_runtime_" + roleSuffix
+	reindexQueueRole, err := containers.RoleName("reindex_queue_runtime", postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	admin, err := pgxpool.New(ctx, postgres.URI)
 	if err != nil {

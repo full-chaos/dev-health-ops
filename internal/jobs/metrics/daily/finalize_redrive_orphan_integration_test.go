@@ -533,12 +533,14 @@ func newFinalizeRedriveTestStackWithRiverSchema(t *testing.T) (*pgxpool.Pool, *P
 	// database does not isolate it (CHAOS-4661). Deriving the role name from
 	// this call's own database identity is what makes two successive runs,
 	// and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(instance)
+	riverSchemaTestDomainRole, err := containers.RoleName("finalize_redrive_test_domain", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	riverSchemaTestDomainRole := "finalize_redrive_test_domain_" + roleSuffix
-	riverSchemaTestQueueRole := "finalize_redrive_test_queue_" + roleSuffix
+	riverSchemaTestQueueRole, err := containers.RoleName("finalize_redrive_test_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, statement := range []string{
 		"CREATE ROLE " + riverSchemaTestDomainRole +

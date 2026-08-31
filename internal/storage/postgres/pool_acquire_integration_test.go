@@ -44,16 +44,18 @@ func TestRuntimePoolsObserveRealAcquireLatency(t *testing.T) {
 	// successive runs, and two concurrent lanes, collision-free. Likewise
 	// "worker_test" as a literal DATABASE target only resolves on the
 	// container path; dbName is the database this call actually created.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	poolAcquireDomainRole := "pool_acquire_domain_" + roleSuffix
-	poolAcquireQueueRole := "pool_acquire_queue_" + roleSuffix
+	poolAcquireDomainRole, err := containers.RoleName("pool_acquire_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolAcquireQueueRole, err := containers.RoleName("pool_acquire_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()

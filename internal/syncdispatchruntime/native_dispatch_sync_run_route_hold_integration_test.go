@@ -164,12 +164,14 @@ CREATE TABLE public.worker_job_runs (
 	// database does not isolate it (CHAOS-4661). Deriving both role names
 	// from this call's own database identity is what makes two successive
 	// runs, and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(instance)
+	routeHoldDomainRole, err := containers.RoleName("routehold_domain_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	routeHoldDomainRole := "routehold_domain_runtime_" + roleSuffix
-	routeHoldQueueRole := "routehold_queue_runtime_" + roleSuffix
+	routeHoldQueueRole, err := containers.RoleName("routehold_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	roleSetup := []string{
 		"CREATE ROLE " + routeHoldDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
 		"CREATE ROLE " + routeHoldQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",

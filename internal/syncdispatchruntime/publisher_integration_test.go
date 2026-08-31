@@ -43,16 +43,18 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 	// database does not isolate it (CHAOS-4661). Deriving both role names
 	// from this call's own database identity is what makes two successive
 	// runs, and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	integrationDomainRole := "sync_dispatch_runtime_domain_" + roleSuffix
-	integrationQueueRole := "sync_dispatch_runtime_queue_" + roleSuffix
+	integrationDomainRole, err := containers.RoleName("sync_dispatch_runtime_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationQueueRole, err := containers.RoleName("sync_dispatch_runtime_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

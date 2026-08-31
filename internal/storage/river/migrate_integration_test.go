@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,20 +60,22 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 	// creates, in this function and its helpers, is suffixed from this
 	// call's own database identity so two successive runs, and two
 	// concurrent lanes, never collide on a CREATE ROLE.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	domainRole := "worker_domain_runtime_" + roleSuffix
-	queueRole := "worker_queue_runtime_" + roleSuffix
+	domainRole, err := containers.RoleName("worker_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("worker_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
-	assertRuntimeRolePreflightHasNoSideEffects(t, ctx, adminPool, roleSuffix)
+	assertRuntimeRolePreflightHasNoSideEffects(t, ctx, adminPool, instance)
 	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	assertRuntimeRolePosture(t, ctx, adminPool, domainRole)
 	assertRuntimeRolePosture(t, ctx, adminPool, queueRole)
@@ -184,26 +187,34 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 	assertRuntimePrivileges(t, ctx, domainURI, queueURI)
 	assertRetention(t, ctx, adminPool, queueURI)
 	assertGrowthAndVacuum(t, ctx, adminPool, queueURI)
-	assertBackupRestore(t, ctx, instance, adminPool, queueURI, dbName, roleSuffix)
+	assertBackupRestore(t, ctx, instance, adminPool, queueURI, dbName)
 	assertSuffixMismatchFailsClosed(t, ctx, adminPool)
 }
 
-func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Context, pool *pgxpool.Pool, roleSuffix string) {
+func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Context, pool *pgxpool.Pool, instance *containers.Instance) {
 	t.Helper()
 	// CREATE ROLE is cluster-scoped (CHAOS-4661); every name below, including
 	// the two never-created "missing" roles asserted absent, is suffixed so
 	// this preflight sweep cannot collide with a concurrent lane's or this
 	// package's own runtime roles either.
-	validDomainRole := "preflight_domain_valid_" + roleSuffix
-	validQueueRole := "preflight_queue_valid_" + roleSuffix
-	queueMissingRole := "preflight_queue_missing_" + roleSuffix
-	domainMissingRole := "preflight_domain_missing_" + roleSuffix
-	noLoginRole := "preflight_no_login_" + roleSuffix
-	superuserRole := "preflight_superuser_" + roleSuffix
-	createDBRole := "preflight_createdb_" + roleSuffix
-	createRoleRole := "preflight_createrole_" + roleSuffix
-	replicationRole := "preflight_replication_" + roleSuffix
-	bypassRLSRole := "preflight_bypassrls_" + roleSuffix
+	roleName := func(prefix string) string {
+		t.Helper()
+		name, err := containers.RoleName(prefix, instance)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	validDomainRole := roleName("preflight_domain_valid")
+	validQueueRole := roleName("preflight_queue_valid")
+	queueMissingRole := roleName("preflight_queue_missing")
+	domainMissingRole := roleName("preflight_domain_missing")
+	noLoginRole := roleName("preflight_no_login")
+	superuserRole := roleName("preflight_superuser")
+	createDBRole := roleName("preflight_createdb")
+	createRoleRole := roleName("preflight_createrole")
+	replicationRole := roleName("preflight_replication")
+	bypassRLSRole := roleName("preflight_bypassrls")
 	roles := []struct {
 		name       string
 		attributes string
@@ -779,9 +790,9 @@ func assertBackupRestore(
 	adminPool *pgxpool.Pool,
 	queueURI string,
 	dbName string,
-	roleSuffix string,
 ) {
 	t.Helper()
+	assertPostgresClientToolsAvailable(t)
 	queuePool := openPool(t, ctx, queueURI)
 	client, err := river.NewClient(riverpgxv5.New(queuePool), &river.Config{Schema: "river"})
 	if err != nil {
@@ -807,6 +818,10 @@ func assertBackupRestore(
 	// two concurrent lanes on the same shared kiac cluster, so it is
 	// suffixed the same way and dropped explicitly, since Instance.Close
 	// only ever drops the database it created itself.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	restoredDatabase := "restored_river_" + roleSuffix
 	adminConfig, err := pgx.ParseConfig(instance.URI)
 	if err != nil {
@@ -875,6 +890,70 @@ func runPostgresClientCommand(t *testing.T, ctx context.Context, config *pgx.Con
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(fullArgs, " "), err, strings.TrimSpace(string(output)))
+	}
+}
+
+// minPostgresClientMajorVersion is the lowest pg_dump/pg_restore major
+// version this suite trusts to read a PostgreSQL 18 server's dump format.
+// Both targets this suite runs against (the postgres:18-alpine container and
+// kiac's PostgreSQL 18.6) are major version 18; the check is on the CLIENT
+// tools specifically, since a client older than the server it talks to is
+// the classic silent-corruption failure mode for pg_dump/pg_restore
+// (documented in the PostgreSQL manual: a NEWER server's dump is not
+// guaranteed readable by an OLDER client's pg_restore).
+const minPostgresClientMajorVersion = 18
+
+// pgClientVersionPattern extracts the major version number from `pg_dump
+// (PostgreSQL) 18.6` / `pg_restore (PostgreSQL) 18.6 (Homebrew)` /
+// `createdb (PostgreSQL) 18.6` -- the three binaries' `--version` output all
+// share this shape.
+var pgClientVersionPattern = regexp.MustCompile(`\(PostgreSQL\)\s+(\d+)`)
+
+// assertPostgresClientToolsAvailable fails loudly, naming exactly what is
+// missing and how to fix it, rather than letting a missing or too-old
+// pg_dump/createdb/pg_restore surface as an opaque "executable file not
+// found in $PATH" or a silent restore-format mismatch from
+// runPostgresClientCommand many lines later. This is the condition attached
+// to keeping this fix in CHAOS-4661 rather than a follow-up ticket: the
+// host-client-tools dependency this rewrite introduces (replacing `docker
+// exec`, which has no equivalent on the kiac remote path) must fail
+// instructively when the host does not meet it.
+func assertPostgresClientToolsAvailable(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"pg_dump", "createdb", "pg_restore"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf(
+				"%s is not on PATH: this suite's backup/restore proof (CHAOS-4661) runs "+
+					"pg_dump/createdb/pg_restore as host processes against the PostgreSQL "+
+					"server directly (never `docker exec`, which has no equivalent on the "+
+					"kiac remote path) -- install the PostgreSQL %d client tools "+
+					"(e.g. `brew install postgresql@%d`) and ensure they are on PATH",
+				name, minPostgresClientMajorVersion, minPostgresClientMajorVersion,
+			)
+		}
+		output, err := exec.Command(path, "--version").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s --version failed: %v\n%s", name, err, strings.TrimSpace(string(output)))
+		}
+		match := pgClientVersionPattern.FindSubmatch(output)
+		if match == nil {
+			t.Fatalf("%s --version output %q does not match the expected `(PostgreSQL) <major>` shape -- "+
+				"cannot confirm it meets the PostgreSQL %d floor", name, strings.TrimSpace(string(output)), minPostgresClientMajorVersion)
+		}
+		major, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			t.Fatalf("%s --version reported an unparseable major version %q: %v", name, match[1], err)
+		}
+		if major < minPostgresClientMajorVersion {
+			t.Fatalf(
+				"%s is client major version %d, below this suite's PostgreSQL %d floor: "+
+					"a client OLDER than the server it dumps from/restores to is not guaranteed "+
+					"to read the server's dump format correctly (PostgreSQL manual, pg_dump "+
+					"compatibility). Upgrade the host's PostgreSQL client tools to %d or newer",
+				name, major, minPostgresClientMajorVersion, minPostgresClientMajorVersion,
+			)
+		}
 	}
 }
 

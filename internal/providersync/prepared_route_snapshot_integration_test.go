@@ -545,11 +545,10 @@ INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
 	// on the same shared kiac cluster still race on the fixed name and one
 	// can drop the role out from under the other mid-test. Deriving it from
 	// this call's own database identity removes the collision outright.
-	roleSuffix, err := containers.RoleSuffix(instance)
+	role, err := containers.RoleName("providersync_domain_probe", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	role := "providersync_domain_probe_" + roleSuffix
 	for _, statement := range []string{
 		`DROP ROLE IF EXISTS ` + role,
 		`CREATE ROLE ` + role + ` LOGIN PASSWORD 'probe'`,

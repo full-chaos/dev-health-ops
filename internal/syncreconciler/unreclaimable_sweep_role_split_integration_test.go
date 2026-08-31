@@ -288,18 +288,26 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 	}
 	t.Cleanup(admin.Close)
 
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
+	domainRole, err := containers.RoleName("sweep_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err := containers.RoleName("sweep_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("sweep_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	roles = splitRoleNames{
-		domain:      "sweep_domain_runtime_" + roleSuffix,
-		coordinator: "sweep_coordinator_runtime_" + roleSuffix,
-		queue:       "sweep_queue_runtime_" + roleSuffix,
+		domain:      domainRole,
+		coordinator: coordinatorRole,
+		queue:       queueRole,
 	}
 
 	statements := []string{

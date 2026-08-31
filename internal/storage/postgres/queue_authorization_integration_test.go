@@ -25,15 +25,14 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 	}
 	defer closePostgresInstance(t, instance)
 
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	queueAuthorizationFenceRole := "queue_authorization_fence_" + roleSuffix
+	queueAuthorizationFenceRole, err := containers.RoleName("queue_authorization_fence", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()

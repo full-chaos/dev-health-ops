@@ -70,16 +70,18 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 	// database does not isolate it (CHAOS-4661). Deriving both role names
 	// from this call's own database identity is what makes two successive
 	// runs, and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	kernelDomainRole := "kernel_domain_runtime_" + roleSuffix
-	kernelQueueRole := "kernel_queue_runtime_" + roleSuffix
+	kernelDomainRole, err := containers.RoleName("kernel_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelQueueRole, err := containers.RoleName("kernel_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

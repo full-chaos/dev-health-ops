@@ -93,3 +93,44 @@ func RoleSuffix(instance *Instance) (string, error) {
 	}
 	return name, nil
 }
+
+// maxIdentifierLength is PostgreSQL's NAMEDATALEN limit (64) minus 1 for the
+// C string terminator: a name at exactly this length round-trips through
+// pg_roles.rolname unmodified; one byte longer is silently truncated by the
+// server, not rejected.
+const maxIdentifierLength = 63
+
+// RoleName composes a cluster-scoped test role name from a static prefix and
+// this call's own database identity (RoleSuffix), and FAILS rather than
+// silently truncating if the result would exceed PostgreSQL's NAMEDATALEN
+// limit. Truncation is the dangerous failure mode here, not merely an
+// awkward one: two different prefixes -- or the same prefix from two
+// different calls whose suffixes happen to share their last bytes after a
+// server-side cut -- could truncate to the identical stored name, which is
+// exactly the collision this whole package exists to prevent. Silently
+// cutting the name would trade a loud, obvious test failure for exactly that
+// silent, intermittent one.
+//
+// Every current caller of RoleSuffix composes a role name from it this same
+// way (`prefix + "_" + suffix`); RoleName is the single place that pattern
+// and its safety check live, so a future long prefix fails at the point it
+// is added rather than passing review on today's evidence (the longest
+// existing literal, "workerctl_coordinator_runtime", is 29 bytes -- 29+1+12
+// = 42, comfortably under 63 -- which is a fact about today's names, not a
+// guarantee about tomorrow's).
+func RoleName(prefix string, instance *Instance) (string, error) {
+	suffix, err := RoleSuffix(instance)
+	if err != nil {
+		return "", err
+	}
+	name := prefix + "_" + suffix
+	if len(name) > maxIdentifierLength {
+		return "", fmt.Errorf(
+			"role name %q is %d bytes, exceeds PostgreSQL's %d-byte NAMEDATALEN limit -- "+
+				"refusing rather than letting the server silently truncate it, which could "+
+				"collide two calls that produced different suffixes",
+			name, len(name), maxIdentifierLength,
+		)
+	}
+	return name, nil
+}

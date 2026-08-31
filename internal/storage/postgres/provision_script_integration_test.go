@@ -117,14 +117,22 @@ func TestProvisionScriptGrantsNoTablePrivileges(t *testing.T) {
 	// database does not isolate it (CHAOS-4661). This test creates its own
 	// instance rather than sharing startGrantHarness's, so it derives its
 	// own role names from it the same way that helper does.
-	roleSuffix, err := containers.RoleSuffix(instance)
+	domainRole, err := containers.RoleName("grant_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("grant_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err := containers.RoleName("grant_coordinator_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
 	roles := grantRoleNames{
-		domain:      "grant_domain_runtime_" + roleSuffix,
-		queue:       "grant_queue_runtime_" + roleSuffix,
-		coordinator: "grant_coordinator_runtime_" + roleSuffix,
+		domain:      domainRole,
+		queue:       queueRole,
+		coordinator: coordinatorRole,
 	}
 
 	runProvisionScript(t, ctx, instance.URI, roles)

@@ -492,17 +492,22 @@ func createOperatorIntegrationSchema(
 	t *testing.T, ctx context.Context, instance *containers.Instance, pool *pgxpool.Pool,
 ) (domainRole, queueRole, coordinatorRole string) {
 	t.Helper()
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	domainRole = "operator_domain_runtime_" + roleSuffix
-	queueRole = "operator_queue_runtime_" + roleSuffix
-	coordinatorRole = "operator_coordinator_runtime_" + roleSuffix
+	domainRole, err = containers.RoleName("operator_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err = containers.RoleName("operator_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err = containers.RoleName("operator_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := sha256.Sum256([]byte(operatorIntegrationToken))
 	tx, err := pool.Begin(ctx)
 	if err != nil {

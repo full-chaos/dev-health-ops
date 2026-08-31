@@ -195,16 +195,18 @@ func startDomainRoleHarness(
 	// concurrent PACKAGES: internal/storage/postgres's grant-reconciliation
 	// suite creates roles with these exact same literal names, and ordinary
 	// `go test ./...` already runs different packages' tests in parallel.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privilegeDomainRole := "grant_domain_runtime_" + roleSuffix
-	privilegeQueueRole := "grant_queue_runtime_" + roleSuffix
+	privilegeDomainRole, err := containers.RoleName("grant_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privilegeQueueRole, err := containers.RoleName("grant_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, statement := range []string{
 		"CREATE ROLE " + privilegeDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +

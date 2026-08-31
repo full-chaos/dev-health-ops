@@ -60,10 +60,6 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
 	// database does not isolate it (CHAOS-4661), so the role name is derived
 	// from this call's own database identity rather than hard-coded.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +68,10 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 		password = "synthetic_posture_password"
 		schema   = "synthetic_river"
 	)
-	role := "synthetic_posture_role_" + roleSuffix
+	role, err := containers.RoleName("synthetic_posture_role", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -145,10 +144,6 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
 	// database does not isolate it (CHAOS-4661), so both role names are
 	// derived from this call's own database identity rather than hard-coded.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -158,8 +153,14 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 		passwordB = "attribution_role_b_password"
 		schema    = "attribution_river"
 	)
-	roleA := "attribution_role_a_" + roleSuffix
-	roleB := "attribution_role_b_" + roleSuffix
+	roleA, err := containers.RoleName("attribution_role_a", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleB, err := containers.RoleName("attribution_role_b", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -278,10 +279,6 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
 	// database does not isolate it (CHAOS-4661), so both role names are
 	// derived from this call's own database identity rather than hard-coded.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -291,8 +288,14 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 		passwordB = "shared_table_role_b_password"
 		schema    = "shared_table_river"
 	)
-	roleA := "shared_table_role_a_" + roleSuffix
-	roleB := "shared_table_role_b_" + roleSuffix
+	roleA, err := containers.RoleName("shared_table_role_a", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleB, err := containers.RoleName("shared_table_role_b", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -426,10 +429,6 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
 	// database does not isolate it (CHAOS-4661), so both role names are
 	// derived from this call's own database identity rather than hard-coded.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -439,8 +438,14 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 		coordinatorPass = "manifest_coordinator_role_password"
 		schema          = "manifest_attribution_river"
 	)
-	domainRole := "manifest_domain_role_" + roleSuffix
-	coordinatorRole := "manifest_coordinator_role_" + roleSuffix
+	domainRole, err := containers.RoleName("manifest_domain_role", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err := containers.RoleName("manifest_coordinator_role", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	domain := domainPosture()
 	coordinator := coordinatorPosture()
 	domainExclusive := firstExclusivePostureTable(t, domain, coordinator)

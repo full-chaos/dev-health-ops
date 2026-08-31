@@ -1,6 +1,9 @@
 package containers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDatabaseNameReadsTheRealConnectedDatabase(t *testing.T) {
 	t.Parallel()
@@ -92,5 +95,47 @@ func TestRoleSuffixRejectsANilInstance(t *testing.T) {
 
 	if _, err := RoleSuffix(nil); err == nil {
 		t.Fatal("want an error for a nil instance, got nil")
+	}
+}
+
+func TestRoleNameComposesAndValidates(t *testing.T) {
+	t.Parallel()
+
+	instance := &Instance{URI: "postgres://u:p@h:5432/lane_4661_scratch_20d2d1267138ddb3?sslmode=disable"}
+	name, err := RoleName("workerctl_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix, err := RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "workerctl_coordinator_runtime_" + suffix; name != want {
+		t.Errorf("RoleName = %q, want %q", name, want)
+	}
+	if len(name) != 42 {
+		t.Errorf("RoleName length = %d, want 42 (this repo's longest role literal, 29, plus '_' plus the 12-byte suffix)", len(name))
+	}
+}
+
+// TestRoleNameRejectsAPrefixThatWouldOverflowNamedatalen is the mutation
+// target this test pins: RoleName must FAIL a name that would exceed
+// PostgreSQL's 63-byte NAMEDATALEN, never silently truncate it. Truncating
+// instead would let two different long prefixes -- or two different calls
+// whose composed names happen to share a 63-byte cut point -- collide on the
+// identical stored role name, which is exactly the bug this package exists
+// to prevent.
+func TestRoleNameRejectsAPrefixThatWouldOverflowNamedatalen(t *testing.T) {
+	t.Parallel()
+
+	instance := &Instance{URI: "postgres://u:p@h:5432/lane_4661_scratch_20d2d1267138ddb3?sslmode=disable"}
+	// prefix + "_" + 12-byte suffix must land at 64 bytes, one over the
+	// 63-byte limit -- built by repeat rather than by hand-counting a
+	// literal, so the test can't itself be off by one.
+	overlong := strings.Repeat("x", maxIdentifierLength-1-roleSuffixLen+1)
+	name, err := RoleName(overlong, instance)
+	if err == nil {
+		t.Fatalf("RoleName(%d-byte prefix) = %q (%d bytes): want an error, not a name at or over 63 bytes",
+			len(overlong), name, len(name))
 	}
 }

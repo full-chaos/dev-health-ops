@@ -343,18 +343,26 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	}
 	t.Cleanup(admin.Close)
 
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
+	domainRole, err := containers.RoleName("grant_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("grant_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err := containers.RoleName("grant_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	roles := grantRoleNames{
-		domain:      "grant_domain_runtime_" + roleSuffix,
-		queue:       "grant_queue_runtime_" + roleSuffix,
-		coordinator: "grant_coordinator_runtime_" + roleSuffix,
+		domain:      domainRole,
+		queue:       queueRole,
+		coordinator: coordinatorRole,
 	}
 
 	// The coordinator role is created here, before ApplyPinnedMigrations, for

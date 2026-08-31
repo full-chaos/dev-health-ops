@@ -34,19 +34,30 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	// roles further down -- is suffixed from this call's own database
 	// identity so two successive runs, and two concurrent lanes, never
 	// collide on a CREATE ROLE.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeAuthorizationDomainRole := "runtime_authorization_domain_" + roleSuffix
-	runtimeAuthorizationQueueRole := "runtime_authorization_queue_" + roleSuffix
-	semanticCapabilityRole := "runtime_authorization_semantic_capability_" + roleSuffix
-	elevatedRole := "runtime_authorization_elevated_" + roleSuffix
-	riverCapabilityRole := "runtime_authorization_river_capability_" + roleSuffix
+	runtimeAuthorizationDomainRole, err := containers.RoleName("runtime_authorization_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeAuthorizationQueueRole, err := containers.RoleName("runtime_authorization_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticCapabilityRole, err := containers.RoleName("runtime_authorization_semantic_capability", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elevatedRole, err := containers.RoleName("runtime_authorization_elevated", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	riverCapabilityRole, err := containers.RoleName("runtime_authorization_river_capability", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()

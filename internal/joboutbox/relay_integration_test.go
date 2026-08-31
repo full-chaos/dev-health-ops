@@ -69,12 +69,14 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	// database does not isolate it (CHAOS-4661). Deriving both role names
 	// from this call's own database identity is what makes two successive
 	// runs, and two concurrent lanes, collision-free.
-	roleSuffix, err := containers.RoleSuffix(instance)
+	outboxDomainRole, err := containers.RoleName("outbox_domain_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outboxDomainRole := "outbox_domain_runtime_" + roleSuffix
-	outboxQueueRole := "outbox_queue_runtime_" + roleSuffix
+	outboxQueueRole, err := containers.RoleName("outbox_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	createOutboxRoles(t, ctx, adminPool, outboxDomainRole, outboxQueueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:     "river",

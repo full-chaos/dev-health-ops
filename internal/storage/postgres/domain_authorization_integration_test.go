@@ -32,15 +32,14 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 	// and two concurrent lanes, collision-free. Likewise "worker_test" as a
 	// literal DATABASE target only resolves on the container path; dbName is
 	// the database this call actually created.
-	roleSuffix, err := containers.RoleSuffix(instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbName, err := containers.DatabaseName(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorizedDomainRole := "domain_authorized_" + roleSuffix
+	authorizedDomainRole, err := containers.RoleName("domain_authorized", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()

@@ -183,10 +183,15 @@ jobs:
           fi
           owner="${REPO%%/*}"
           # `-f` query params are URL-encoded by `gh api` itself. Hand-built
-          # URL interpolation (the prior form) silently mis-sends a branch
+          # URL interpolation (an earlier form) silently mis-sends a branch
           # name containing `#`/`&`/space, which would miss a real open PR
           # and let the duplicate run through — found by codex review.
-          if ! count=$(gh api -f state=open -f "head=${owner}:${BRANCH}" "repos/${REPO}/pulls" --jq 'length' 2>/tmp/guard-gh-api.err); then
+          # `--method GET` is NOT optional: `gh api` defaults to POST the
+          # instant any `-f`/`-F` field is present, which 404/422s against
+          # a list endpoint — codex EXECUTED this exact break in round 2,
+          # and the resulting error silently fell through the fail-open
+          # path below, defeating the guard on every push to an open PR.
+          if ! count=$(gh api --method GET -f state=open -f "head=${owner}:${BRANCH}" "repos/${REPO}/pulls" --jq 'length' 2>/tmp/guard-gh-api.err); then
             # Fail OPEN, not closed (codex review, CHAOS-4676): an API
             # hiccup must never silently cost this branch its only real Go
             # coverage, and must never leave `go-quality` unrun on the one
@@ -211,13 +216,28 @@ jobs:
 
   go-quality:
     # No `if:` skip here — see the job-family comment on `guard` above.
-    # This job's only defense against a redundant run is the guard job's
-    # run-level cancellation, deliberately, so a superseded run can never
-    # record a passing "skipped" `go-quality` (the required check).
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Defense in depth (codex round 2, CHAOS-4676): guard's run-level
+      # cancellation is best-effort (`|| true` — a failed cancel API call
+      # must not fail guard itself, since guard has already written its
+      # output). If that cancel is slow or fails, this job would otherwise
+      # start for real on a superseded push run with nothing to stop it.
+      # This step is a second, non-race-dependent backstop: it runs FIRST,
+      # before any expensive setup, and deliberately FAILS (not skips) when
+      # guard already decided this run is redundant — a failure conclusion
+      # does not satisfy a required check, so it can never be mistaken for
+      # a pass, unlike a skip.
+      - name: Abort if this run was superseded by an open PR
+        if: needs.guard.outputs.skip == 'true'
+        run: |
+          echo "guard determined this push run is superseded by an open PR;" >&2
+          echo "the pull_request run on this SHA is authoritative. Failing" >&2
+          echo "deliberately (not skipping) so this can never read as a pass." >&2
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go

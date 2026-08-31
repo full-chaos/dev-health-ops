@@ -243,8 +243,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # regression guard runs against a REAL ClickHouse container (a fake
     # QueryClient cannot exercise how ClickHouse itself resolves an argMax
     # tie), so the package picked up its first -tags=integration file.
-    # Weight 10s, measured from a local single-container run of both
-    # subtests; LPT re-balanced shards 2/3 to 356s/355s (still within 1s).
+    # Weight 26s, measured locally across both top-level test functions
+    # (the tie-break proof plus a second, codex-round-1-found regression
+    # guard for a NULL-blame_concentration mixed-day row, each starting
+    # its own container); LPT re-balanced shards 2/3 to 364s/363s (still
+    # within 1s).
     assert "34 package(s) discovered, 1 denylisted, 33 will run" in result.stdout
     assert "integration shard plan: 3 shard(s), 33 package(s)" in result.stdout
 

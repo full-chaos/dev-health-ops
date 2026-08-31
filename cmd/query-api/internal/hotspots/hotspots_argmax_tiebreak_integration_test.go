@@ -254,3 +254,98 @@ func TestFetchHotspotRows_TieOnComputedAt_ReturnsLatestDay_RealClickHouse(t *tes
 		assertReturnsRowB(t, orgID)
 	})
 }
+
+// TestFetchHotspotRows_LatestDayNullBlameConcentration_DoesNotBorrowFromEarlierDay
+// is the red-first proof for codex review round 1's CHAOS-4684 finding
+// (P2, EXECUTED): six INDEPENDENT argMax(<col>, (day, computed_at)) calls
+// -- this package's FIRST attempt at the fix -- still mix days when the
+// winning (latest-day) row's blame_concentration is NULL. ClickHouse's
+// argMax skips a NULL-valued Nullable argument when choosing which row's
+// value to return FOR THAT COLUMN ALONE, so an independent
+// argMax(blame_concentration, (day, computed_at)) silently falls back to
+// a strictly EARLIER day's non-null blame value, even though every other
+// column (churn, cyclomatic, risk_score) correctly resolves to the true
+// latest day. The row returned to the caller then has five fields from
+// day B and one field (blame_concentration) from day A -- exactly the
+// "mix values from different days into a single row" hazard this
+// package's own doc comment warned a PARTIAL EDIT would cause, except
+// here it happens with a COMPLETE, correctly-written six-column edit,
+// via ClickHouse's own NULL-skipping semantics rather than a missed
+// column.
+//
+// EXECUTED independently against real ClickHouse before trusting codex's
+// finding (`docker exec ... clickhouse-client`, the six-independent-
+// argMax form): blame_concentration came back 0.9 (day A's non-null
+// value) while risk_score came back 1 (day B's correct value) from the
+// SAME query, SAME group -- an inconsistent-day row proven at the SQL
+// level, not argued.
+//
+// Fixed by aggregating ONE argMax over a tuple of all six columns (see
+// fetchHotspotRows's doc comment) so the row selection is atomic: NULL
+// blame_concentration on the winning day is returned AS NULL, not
+// silently replaced by an earlier day's value.
+func TestFetchHotspotRows_LatestDayNullBlameConcentration_DoesNotBorrowFromEarlierDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	conn := openRawClickHouse(t, inst.URI)
+	if err := conn.Exec(ctx, fileHotspotDailyDDL); err != nil {
+		t.Fatalf("create file_hotspot_daily: %v", err)
+	}
+
+	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const orgID = "chaos-4684-null-blame-latest-day"
+	const repoID = "22222222-2222-2222-2222-222222222222"
+	const filePath = "src/nullblame.go"
+
+	// Row A (earlier day) has a NON-NULL blame_concentration. Row B (the
+	// later, WINNING day) has a NULL blame_concentration. Distinct
+	// computed_at values (no tie needed -- this defect is about NULL
+	// handling within a single argMax, not the tie-break from the other
+	// test in this file), same partition (both January) so both land in
+	// one part, matching this file's other tests' discipline of proving
+	// the property independent of merge-order non-determinism.
+	rowA := tiebreakSeedRow{
+		day:         "2026-01-01",
+		churnLoc30d: 500, churnCommits30d: 40, cyclomaticTotal: 80, cyclomaticAvg: 8.5,
+		blameConcentration: f64ptr(0.9), riskScore: 99.0,
+	}
+	rowB := tiebreakSeedRow{
+		day:         "2026-01-20",
+		churnLoc30d: 7, churnCommits30d: 2, cyclomaticTotal: 3, cyclomaticAvg: 1.0,
+		blameConcentration: nil, riskScore: 1.0,
+	}
+	seedTiedRows(t, ctx, conn, orgID, repoID, filePath,
+		time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC), []tiebreakSeedRow{rowA})
+	seedTiedRows(t, ctx, conn, orgID, repoID, filePath,
+		time.Date(2026, 3, 20, 9, 0, 0, 0, time.UTC), []tiebreakSeedRow{rowB})
+
+	rows, err := fetchHotspotRows(ctx, client, orgID, "2025-01-01", "2026-12-31", nil, 10)
+	if err != nil {
+		t.Fatalf("fetchHotspotRows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1 (one (repo_id, file_path) group)", len(rows))
+	}
+	got := rows[0]
+	if got.churnLoc30d != rowB.churnLoc30d {
+		t.Errorf("churnLoc30d = %d, want %d (row B / latest day)", got.churnLoc30d, rowB.churnLoc30d)
+	}
+	if got.riskScore != rowB.riskScore {
+		t.Errorf("riskScore = %g, want %g (row B / latest day)", got.riskScore, rowB.riskScore)
+	}
+	if got.blameConcentration != nil {
+		t.Errorf("blameConcentration = %v, want nil -- THIS is codex round 1's P2 defect: the latest day's NULL blame_concentration must not be silently replaced by an earlier day's non-null value", *got.blameConcentration)
+	}
+}

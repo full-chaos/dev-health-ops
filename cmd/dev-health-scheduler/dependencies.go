@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -255,7 +257,7 @@ type schedulerRuntimeSources struct {
 	// work rather than a delayed one. BuildScheduledPlan reads the execution
 	// registry directly for plannable identities (CHAOS-4054), so no route
 	// configuration is threaded here.
-	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error)
+	newOccurrences func(*pgxpool.Pool, *pgxpool.Pool, config.Config) (schedulersync.OccurrenceStepper, error)
 }
 
 var productionSchedulerRuntimeSources = schedulerRuntimeSources{
@@ -279,10 +281,55 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 	newCoordinator: schedulersync.NewOccurrenceCoordinator,
 	newLoop:        schedulersync.NewLoop,
 	newFixedLoop:   buildFixedScheduleLoop,
-	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+	newOccurrences: func(coordinatorPool, domainPool *pgxpool.Pool, cfg config.Config) (schedulersync.OccurrenceStepper, error) {
 		materializer, err := schedulersync.NewNativeMaterializer(domainPool)
 		if err != nil {
 			return nil, err
+		}
+		// CHAOS-4602: wire native per-occurrence source discovery
+		// (github/gitlab/jira) so the scheduled-sync route stops depending
+		// on Python's one-shot, config-creation-time discovery as the only
+		// way integration_sources ever gets a row (jira had NO branch there
+		// at all). A decryptor construction failure disables the step
+		// rather than failing scheduler startup -- discovery only WIDENS
+		// coverage; a scheduler that cannot read the encryption key can
+		// still plan and run every already-discovered source exactly as
+		// before CHAOS-4602.
+		if decryptor, cipherErr := providerfoundation.NewFernetDecryptor(
+			cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal(),
+		); cipherErr != nil {
+			slog.Default().Error(
+				"scheduler_source_discovery_cipher_unavailable: native source "+
+					"discovery is disabled for this process; already-discovered "+
+					"sources still plan normally (CHAOS-4602)",
+				"error", cipherErr,
+			)
+		} else if discovery, discoveryErr := schedulersync.NewNativeSourceDiscoveryService(
+			domainPool,
+			providerfoundation.CredentialResolver{
+				Repository: providerfoundation.PostgresCredentialRepository{Pool: domainPool},
+				Decryptor:  decryptor,
+			},
+			&http.Client{
+				Timeout: 45 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			},
+			nil,
+		); discoveryErr != nil {
+			slog.Default().Error(
+				"scheduler_source_discovery_unavailable: native source discovery "+
+					"is disabled for this process (CHAOS-4602)",
+				"error", discoveryErr,
+			)
+		} else {
+			// NativeMaterializer.WritePrometheus (registered by the caller as
+			// scheduler_executed_proof_gate, keyed off *OccurrenceReconciler
+			// forwarding to it) already folds in provider_source_discovery_total
+			// once a discovery service is attached -- no separate registration
+			// needed here.
+			materializer.WithSourceDiscovery(discovery)
 		}
 		// CHAOS-4060/CHAOS-4114/CHAOS-4124: load the executed-proof snapshot
 		// at process startup. A failed load is not fatal to the PROCESS --
@@ -543,7 +590,7 @@ func buildSchedulerLoopWithSources(
 	if coordinator == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_coordinator_unavailable")
 	}
-	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool)
+	occurrences, err := sources.newOccurrences(coordinatorPool, domainPool, cfg)
 	if err != nil || occurrences == nil {
 		return nil, dependencyUnavailable("scheduler_occurrence_reconciler_construction_failed")
 	}

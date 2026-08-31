@@ -124,6 +124,19 @@ func coordinatorExclusiveDDL() []string {
 		)`,
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
+		// CHAOS-4602: sync_manual_triggers joined coordinatorPosture()'s
+		// manifest (SELECT-only, domain_authorization.go). Production column
+		// shape, matching materializer.go's loadManualSyncTrigger SELECT
+		// exactly, for the same 42703-avoidance reason as the tables above.
+		`CREATE TABLE public.sync_manual_triggers (
+			occurrence_id text PRIMARY KEY,
+			mode text NOT NULL,
+			since timestamptz,
+			before timestamptz,
+			source_ids text[],
+			dataset_keys text[],
+			triggered_by text NOT NULL
+		)`,
 		// Production column shape (internal/scheduler/fixed/ledger.go), because
 		// fixed_engine_statement_privileges_integration_test.go executes the
 		// real ledger statements against it and a stub would raise 42703 during

@@ -66,13 +66,16 @@ type plannerOracleRoute struct {
 }
 
 type plannerOracleCase struct {
-	ID                      string                   `json:"id"`
-	OrgID                   string                   `json:"org_id"`
-	IntegrationID           string                   `json:"integration_id"`
-	Provider                string                   `json:"provider"`
-	Mode                    string                   `json:"mode"`
-	Now                     string                   `json:"now"`
-	Before                  *string                  `json:"before,omitempty"`
+	ID            string  `json:"id"`
+	OrgID         string  `json:"org_id"`
+	IntegrationID string  `json:"integration_id"`
+	Provider      string  `json:"provider"`
+	Mode          string  `json:"mode"`
+	Now           string  `json:"now"`
+	Before        *string `json:"before,omitempty"`
+	// Since is CHAOS-4602 backfill-mode-only; nil for every scheduled case,
+	// matching PlannerInput.Since being nil on that path too.
+	Since                   *string                  `json:"since,omitempty"`
 	IntegrationDepth        *int                     `json:"integration_depth,omitempty"`
 	TierCap                 *int                     `json:"tier_cap,omitempty"`
 	WatermarkOverlapSeconds int                      `json:"watermark_overlap_seconds"`
@@ -369,7 +372,10 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 			if test.Route != nil && test.Route.SourceID != nil && source.ID != *test.Route.SourceID {
 				continue
 			}
-			input.Sources = append(input.Sources, PlanSource(source))
+			input.Sources = append(input.Sources, PlanSource{
+				ID: source.ID, ExternalID: source.ExternalID,
+				Provider: source.Provider, FullName: source.FullName,
+			})
 		}
 		for _, dataset := range test.Datasets {
 			if requested != nil && !requested[dataset.DatasetKey] {
@@ -403,6 +409,142 @@ func TestBuildScheduledPlanMatchesLivePythonPlanner(t *testing.T) {
 		}
 		if strings.HasPrefix(test.ID, "provider_matrix_") && len(normalized) == 0 {
 			t.Fatalf("%s produced no units; provider matrix parity did not execute", test.ID)
+		}
+	}
+}
+
+// TestBuildBackfillPlanMatchesLivePythonPlanner is CHAOS-4602's backfill/
+// manual-mode sibling to TestBuildScheduledPlanMatchesLivePythonPlanner:
+// the SAME live-Python differential oracle (planner._build_planned_units,
+// mode-agnostic on the Python side), driven with mode="backfill" and both
+// since/before set, compared against Go's BuildBackfillPlan. Covers the
+// shapes backfill introduces that scheduled mode never exercises: chunked
+// multi-window fan-out, the work-item family collapsing PER chunk (not
+// once total), the Linear family's wider 14-day chunk, and the exact
+// requested-instant chunk-boundary mapping (chunkToWindow/_chunk_to_window).
+func TestBuildBackfillPlanMatchesLivePythonPlanner(t *testing.T) {
+	cap30 := 30
+	since := "2026-08-01T00:00:00Z"
+	before20d := "2026-08-20T00:00:00Z"
+	cases := []plannerOracleCase{
+		// The org 70d529e0 acceptance shape: a Jira config with no explicit
+		// scope, backfilling a 20-day range (3 chunks of 7 days) against the
+		// work-item family -- one composite "work-items" unit PER chunk,
+		// every family flag stamped unconditionally on each.
+		{
+			ID: "jira_backfill_work_item_family_chunks", OrgID: "org-backfill-jira",
+			IntegrationID: "integration-backfill-jira", Provider: "jira",
+			Mode: SyncModeBackfill, Now: "2026-08-30T12:00:00Z", Since: &since, Before: &before20d,
+			TierCap: &cap30,
+			Sources: []plannerOracleSource{
+				{ID: "source-proj", ExternalID: "PROJ", Provider: "jira", FullName: "PROJ"},
+			},
+			Datasets: []plannerOracleDataset{
+				{DatasetKey: "work-items"}, {DatasetKey: "work-item-labels"},
+				{DatasetKey: "work-item-projects"}, {DatasetKey: "work-item-history"},
+				{DatasetKey: "work-item-comments"},
+			},
+		},
+		// GitHub: the work-item family (all 5) collapses AND the non-atomic
+		// PR-social fold (prs only, no siblings enabled) contributes its own
+		// per-chunk units, AND a standalone non-family dataset (security)
+		// fans out per chunk independently -- three different collapse
+		// shapes in the same backfill pass.
+		{
+			ID: "github_backfill_family_fold_and_standalone", OrgID: "org-backfill-github",
+			IntegrationID: "integration-backfill-github", Provider: "github",
+			Mode: SyncModeBackfill, Now: "2026-08-30T12:00:00Z", Since: &since, Before: &before20d,
+			TierCap: &cap30,
+			Sources: []plannerOracleSource{
+				{ID: "source-gh", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"},
+			},
+			Datasets: []plannerOracleDataset{
+				{DatasetKey: "work-items"}, {DatasetKey: "work-item-labels"},
+				{DatasetKey: "work-item-projects"}, {DatasetKey: "work-item-history"},
+				{DatasetKey: "work-item-comments"}, {DatasetKey: "prs"}, {DatasetKey: "security"},
+			},
+		},
+		// Linear's work-item family backfills at a 14-day chunk width, not
+		// the 7-day default every other provider (including github/jira
+		// above) uses -- a 20-day range is 2 chunks here, not 3.
+		{
+			ID: "linear_backfill_work_item_family_wider_chunk", OrgID: "org-backfill-linear",
+			IntegrationID: "integration-backfill-linear", Provider: "linear",
+			Mode: SyncModeBackfill, Now: "2026-08-30T12:00:00Z", Since: &since, Before: &before20d,
+			TierCap: &cap30,
+			Sources: []plannerOracleSource{
+				{ID: "source-linear", ExternalID: "team-a", Provider: "linear", FullName: "team-a"},
+			},
+			Datasets: []plannerOracleDataset{
+				{DatasetKey: "work-items"}, {DatasetKey: "work-item-labels"},
+				{DatasetKey: "work-item-projects"}, {DatasetKey: "work-item-history"},
+				{DatasetKey: "work-item-comments"},
+			},
+		},
+		// A range with NO interior chunk boundary at all (single day):
+		// _chunk_to_window/chunkToWindow's "boundary lands on the requested
+		// instant itself" branch on BOTH ends in the same chunk, the
+		// simplest possible case and the one most likely to silently regress.
+		{
+			ID: "backfill_single_day_range_one_chunk", OrgID: "org-backfill-single",
+			IntegrationID: "integration-backfill-single", Provider: "pagerduty",
+			Mode: SyncModeBackfill, Now: "2026-08-30T12:00:00Z",
+			Since: ptr("2026-08-10T09:15:00Z"), Before: ptr("2026-08-10T18:45:00Z"),
+			TierCap: &cap30,
+			Sources: []plannerOracleSource{
+				{ID: "source-pd", ExternalID: "account", Provider: "pagerduty", FullName: "account"},
+			},
+			Datasets: []plannerOracleDataset{{DatasetKey: "incidents"}, {DatasetKey: "services"}},
+		},
+	}
+
+	want := runPythonPlannerOracle(t, cases)
+	for _, test := range cases {
+		now, err := time.Parse(time.RFC3339, test.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		since, err := time.Parse(time.RFC3339, *test.Since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := time.Parse(time.RFC3339, *test.Before)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := PlannerInput{
+			OrgID: test.OrgID, IntegrationID: test.IntegrationID, Mode: test.Mode, Now: now,
+			Since: &since, Before: &before, TierBackfillDaysCap: test.TierCap,
+			Watermarks: make(map[WatermarkKey]time.Time),
+		}
+		for _, source := range test.Sources {
+			input.Sources = append(input.Sources, PlanSource{
+				ID: source.ID, ExternalID: source.ExternalID,
+				Provider: source.Provider, FullName: source.FullName,
+			})
+		}
+		for _, dataset := range test.Datasets {
+			input.Datasets = append(input.Datasets, PlanDataset{Key: dataset.DatasetKey, InitialDepthDays: dataset.InitialDepth})
+		}
+		got, err := BuildBackfillPlan(input)
+		if err != nil {
+			t.Fatalf("%s: BuildBackfillPlan: %v", test.ID, err)
+		}
+		gotJSON, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var normalized []map[string]any
+		if err := json.Unmarshal(gotJSON, &normalized); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(normalized, want[test.ID]) {
+			prettyGot, _ := json.MarshalIndent(normalized, "", "  ")
+			prettyWant, _ := json.MarshalIndent(want[test.ID], "", "  ")
+			t.Errorf("%s Go plan:\n%s\nPython plan:\n%s", test.ID, prettyGot, prettyWant)
+		}
+		if len(normalized) == 0 {
+			t.Fatalf("%s produced no units; backfill parity did not execute", test.ID)
 		}
 	}
 }

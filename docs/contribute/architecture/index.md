@@ -15,5 +15,6 @@ lifecycle: active
 - [Work-item team attribution](team-attribution.md)
 - [Go worker runtime architecture](go-worker-runtime.md)
 - [Go worker migration and drain lifecycle](go-worker-helm-lifecycle.md)
+- [Manual Sync Now + Backfill planning architecture](manual-backfill-sync-planning.md)
 
 Publish the current durable boundary, not the chronological history of a project or pull request.

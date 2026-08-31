@@ -87,6 +87,7 @@ from dev_health_ops.sync.datasets import (
 from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
+    await_sync_execution_trigger_materialized,
     create_sync_execution_trigger,
     ensure_pending_sync_job_run,
     mark_job_run_failed,
@@ -2874,6 +2875,30 @@ async def trigger_sync_config(
         org_id,
         sync_config_id=getattr(config, "id"),
     )
+    if trigger.occurrence_id is not None and trigger.awaiting_materialization:
+        # CHAOS-4602: commit now so the Go scheduler's reconciler (a
+        # separate connection) can see the occurrence/trigger rows just
+        # inserted, then bound the wait on its materialization.
+        await session.commit()
+        trigger = await await_sync_execution_trigger_materialized(
+            session, trigger.occurrence_id
+        )
+        if trigger.quarantined:
+            return {
+                "status": "failed",
+                "config_id": str(config.id),
+                "occurrence_id": trigger.occurrence_id,
+                "reason": trigger.terminal_reason,
+            }
+        if trigger.awaiting_materialization:
+            return {
+                "status": "pending",
+                "config_id": str(config.id),
+                "occurrence_id": trigger.occurrence_id,
+            }
+        # Materialized: trigger now carries a real sync_run_id/job_run_id/
+        # total_units and falls through to the SAME triggered/disabled
+        # response shape the in-process path already returns below.
     if not trigger.dispatch_required:
         await session.commit()
         return {
@@ -3004,6 +3029,32 @@ async def trigger_sync_config_backfill(
             org_id,
             sync_config_id=getattr(config, "id"),
         )
+        if trigger.occurrence_id is not None and trigger.awaiting_materialization:
+            # CHAOS-4602: commit now so the Go scheduler's reconciler (a
+            # separate connection) can see the occurrence/trigger rows just
+            # inserted, then bound the wait on its materialization. A
+            # BackfillJobModel row needs a REAL sync_run_id (embedded in its
+            # celery_task_id), so it cannot be created until this resolves.
+            await session.commit()
+            trigger = await await_sync_execution_trigger_materialized(
+                session, trigger.occurrence_id
+            )
+            if trigger.quarantined:
+                return {
+                    "status": "failed",
+                    "config_id": str(config.id),
+                    "occurrence_id": trigger.occurrence_id,
+                    "reason": trigger.terminal_reason,
+                }
+            if trigger.awaiting_materialization:
+                return {
+                    "status": "pending",
+                    "config_id": str(config.id),
+                    "occurrence_id": trigger.occurrence_id,
+                }
+            # Materialized: trigger now carries a real sync_run_id, and
+            # falls through to the SAME disabled/accepted response shape
+            # the in-process path already returns below.
         if not trigger.dispatch_required:
             await session.commit()
             return {

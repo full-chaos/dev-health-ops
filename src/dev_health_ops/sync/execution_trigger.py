@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import math
+import os
+import time
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from dev_health_ops.models.settings import (
     SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED,
+    SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED,
     JobRun,
     JobRunStatus,
     JobStatus,
     ScheduledJob,
     ScheduledSyncOccurrence,
     SyncConfiguration,
+    SyncManualTrigger,
 )
 from dev_health_ops.sync.canonical_incident_gate import (
     require_canonical_incident_feature_for_update_sync,
@@ -23,10 +30,60 @@ from dev_health_ops.sync.canonical_incident_gate import (
     sync_targets_require_canonical_incident_feature,
 )
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
-from dev_health_ops.sync.planner import BackfillSelector, plan_sync_run
+from dev_health_ops.sync.planner import BackfillSelector, SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.trigger_routing import planner_request_for_config_if_routed
 
 SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION = "sync_scheduler_occurrence_v1"
+
+# Default bound for await_sync_execution_trigger_materialized (CHAOS-4602
+# fork 2): generous relative to the Go scheduler's default ~1s reconciler
+# tick (internal/scheduler/sync/loop.go's PollInterval), short enough that a
+# Sync Now / Backfill click cannot hang the request indefinitely. Env
+# override lets ops widen it if the coordinator is ever meaningfully
+# backlogged without a code change.
+_DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS = 10.0
+
+
+def _go_manual_backfill_planner_enabled() -> bool:
+    """CHAOS-4602 rollout flag, read at call time (ops/tests can flip it
+    live) -- matches the established PROVIDER_SYNC_QUEUES_ENABLED shape
+    (workers/queues.py). Default OFF: every planner-managed config keeps
+    calling plan_sync_run in-process, byte-for-byte unchanged, until this
+    is explicitly turned on. Non-planner-managed and child configs are
+    UNCHANGED regardless of this flag (fork 1) -- the gate below also
+    checks config.planner_managed.
+    """
+    return os.getenv(
+        "SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false"
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _manual_trigger_await_seconds() -> float:
+    raw = os.getenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS")
+    if raw is not None:
+        try:
+            value = float(raw)
+            # Codex review (gate round 9, P2): float("inf")/"nan" both parse
+            # successfully and "inf" > 0 is True, so the old check alone
+            # accepted them -- an infinite deadline breaks the "bounded
+            # await" contract fork 2 requires (a deadline that never
+            # elapses means await_sync_execution_trigger_materialized's
+            # poll loop never returns "pending", hanging the admin
+            # request's coroutine/connection indefinitely on an occurrence
+            # that never completes).
+            if value > 0 and math.isfinite(value):
+                return value
+        except ValueError:
+            # A non-numeric SYNC_MANUAL_TRIGGER_AWAIT_SECONDS (unset, blank,
+            # or a typo'd operator override) falls through to the default
+            # below -- same fallback the non-finite/non-positive case above
+            # takes, deliberately not a hard failure of the admin request.
+            pass
+    return _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -36,6 +93,15 @@ class SyncExecutionTriggerResult:
     total_units: int
     dispatch_required: bool = True
     terminal_reason: str = ""
+    # CHAOS-4602: set (non-None) only on the Go hand-off path. occurrence_id
+    # is the scheduled_sync_occurrences row a caller can poll directly.
+    # awaiting_materialization=True means Go has not yet reached a terminal
+    # reconcile_status (a caller MUST present this as "pending", never as an
+    # error). quarantined=True means Go rejected or exhausted the occurrence
+    # (client-visible failure, never silently reported as pending).
+    occurrence_id: str | None = None
+    awaiting_materialization: bool = False
+    quarantined: bool = False
 
 
 class ScheduledSyncOccurrenceConflictError(RuntimeError):
@@ -153,13 +219,21 @@ def create_scheduled_sync_execution_trigger(
     return trigger
 
 
-def ensure_pending_sync_job_run(
+def _ensure_scheduled_job_for_config(
     session: Session,
     config: SyncConfiguration,
     org_id: str,
-    triggered_by: str,
-    result: dict[str, Any] | None = None,
-) -> str:
+) -> ScheduledJob:
+    """Find or create the ``ScheduledJob`` marker row for ``config``.
+
+    Extracted from ``ensure_pending_sync_job_run`` (CHAOS-4602) so the new
+    Go hand-off path -- which needs a ``scheduled_job_id`` for
+    ``ScheduledSyncOccurrence``'s FK but must NOT create a ``JobRun`` row
+    itself (Go derives job_run_id/sync_run_id deterministically from the
+    occurrence_id; see ``scheduled_sync_occurrence_identity`` and Go's own
+    ``deterministicMaterializationIDs``) -- can reuse this lookup-or-create
+    logic verbatim instead of duplicating it.
+    """
     config_uuid = uuid.UUID(str(config.id))
     job = (
         session.query(ScheduledJob)
@@ -194,7 +268,17 @@ def ensure_pending_sync_job_run(
         )
         session.add(job)
         session.flush()
+    return job
 
+
+def ensure_pending_sync_job_run(
+    session: Session,
+    config: SyncConfiguration,
+    org_id: str,
+    triggered_by: str,
+    result: dict[str, Any] | None = None,
+) -> str:
+    job = _ensure_scheduled_job_for_config(session, config, org_id)
     run = JobRun(
         job_id=uuid.UUID(str(job.id)),
         triggered_by=triggered_by,
@@ -285,6 +369,31 @@ def create_sync_execution_trigger(
     elif since is not None or before is not None:
         request = replace(request, since=since, before=before)
 
+    # CHAOS-4602 fork 1: Go pickup only for planner-managed configs, only
+    # when the rollout flag is on, AND only for a genuine manual/backfill
+    # trigger (codex review, gate round 9, P1): this function is also the
+    # ordinary scheduled-cron path's call target
+    # (create_scheduled_sync_execution_trigger passes triggered_by="schedule"
+    # straight through from sync_scheduler.py). Without this check, an
+    # eligible cron occurrence on a flag-enabled planner-managed config
+    # would ALSO route into _create_go_manual_sync_execution_trigger, which
+    # writes triggered_by verbatim into SyncManualTrigger -- a value the
+    # ck_sync_manual_triggers_triggered_by CHECK constraint (settings.py,
+    # 'manual'/'backfill' only) rejects outright, failing every regular
+    # scheduled sync for that config the moment the flag is turned on.
+    # Every non-planner-managed/child config, every planner-managed config
+    # while the flag is off, and every ordinary scheduled tick (regardless
+    # of the flag) falls through UNCHANGED to the pre-existing in-process
+    # plan_sync_run call below.
+    if (
+        bool(getattr(config, "planner_managed", False))
+        and _go_manual_backfill_planner_enabled()
+        and triggered_by in ("manual", "backfill")
+    ):
+        return _create_go_manual_sync_execution_trigger(
+            session, config, org_id, request
+        )
+
     job_run_id = ensure_pending_sync_job_run(
         session,
         config,
@@ -314,6 +423,251 @@ def create_sync_execution_trigger(
         dispatch_required=plan.dispatch_required,
         terminal_reason=plan.terminal_reason,
     )
+
+
+def _resolve_manual_trigger_selector(
+    request: SyncPlanRequest,
+) -> tuple[
+    datetime | None, datetime | None, tuple[str, ...] | None, tuple[str, ...] | None
+]:
+    """Return the FINAL (since, before, source_ids, dataset_keys) this
+    request resolved to -- the structured backfill_selector when present
+    (the only source of truth _validate_backfill_selector_compatibility
+    allows to coexist with it is nothing at all), otherwise the flat
+    fields plan_sync_run itself would read.
+    """
+    selector = request.backfill_selector
+    if selector is not None:
+        return (
+            selector.since,
+            selector.before,
+            selector.source_ids,
+            selector.dataset_keys,
+        )
+    return request.since, request.before, request.source_ids, request.dataset_keys
+
+
+def _create_go_manual_sync_execution_trigger(
+    session: Session,
+    config: SyncConfiguration,
+    org_id: str,
+    request: SyncPlanRequest,
+) -> SyncExecutionTriggerResult:
+    """CHAOS-4602 Go hand-off: mint a scheduled_sync_occurrences row (the
+    SAME identity space and pickup path a cron tick uses -- Go's
+    dueOccurrenceKeysSQL/lockPendingOccurrenceSQL is producer-agnostic) plus
+    its sync_manual_triggers payload, instead of calling plan_sync_run
+    in-process. Deliberately does NOT create a JobRun row: Go derives
+    job_run_id/sync_run_id deterministically from occurrence_id (see this
+    module's scheduled_sync_occurrence_identity and Go's own
+    deterministicMaterializationIDs, the SAME namespace UUID on both sides),
+    so there is nothing here for a pre-created JobRun id to match.
+
+    Returns immediately with awaiting_materialization=True; the caller (the
+    admin router, after committing this insert) is responsible for the
+    bounded await via await_sync_execution_trigger_materialized.
+    """
+    since, before, source_ids, dataset_keys = _resolve_manual_trigger_selector(request)
+    scheduled_for = datetime.now(timezone.utc)
+    occurrence_id = scheduled_sync_occurrence_identity(config.id, scheduled_for)
+    job = _ensure_scheduled_job_for_config(session, config, org_id)
+    occurrence = ScheduledSyncOccurrence(
+        occurrence_id=occurrence_id,
+        identity_version=SCHEDULED_SYNC_OCCURRENCE_IDENTITY_VERSION,
+        org_id=org_id,
+        sync_config_id=uuid.UUID(str(config.id)),
+        scheduled_job_id=uuid.UUID(str(job.id)),
+        scheduled_for=scheduled_for,
+    )
+    session.add(occurrence)
+    session.add(
+        SyncManualTrigger(
+            occurrence_id=occurrence_id,
+            mode=request.mode,
+            since=since,
+            before=before,
+            source_ids=list(source_ids) if source_ids is not None else None,
+            dataset_keys=list(dataset_keys) if dataset_keys is not None else None,
+            triggered_by=request.triggered_by,
+        )
+    )
+    session.flush()
+    return SyncExecutionTriggerResult(
+        sync_run_id="",
+        job_run_id="",
+        total_units=0,
+        occurrence_id=occurrence_id,
+        awaiting_materialization=True,
+    )
+
+
+def _read_occurrence_reconcile_state(
+    session: Session, occurrence_id: str
+) -> tuple[str, str | None, str | None, str | None] | None:
+    occurrence = (
+        session.query(ScheduledSyncOccurrence)
+        .filter(ScheduledSyncOccurrence.occurrence_id == occurrence_id)
+        .one_or_none()
+    )
+    if occurrence is None:
+        return None
+    return (
+        str(occurrence.reconcile_status),
+        str(occurrence.job_run_id) if occurrence.job_run_id is not None else None,
+        str(occurrence.sync_run_id) if occurrence.sync_run_id is not None else None,
+        occurrence.reconcile_error_code,
+    )
+
+
+def _materialized_trigger_result(
+    session: Session,
+    occurrence_id: str,
+    job_run_id: str | None,
+    sync_run_id: str | None,
+) -> SyncExecutionTriggerResult:
+    from dev_health_ops.models import SyncRun, SyncRunStatus
+
+    if sync_run_id is None:
+        # Shouldn't happen: Go's persistCoordinatorGraph links job_run_id/
+        # sync_run_id and flips reconcile_status='completed' in the SAME
+        # transaction it commits (occurrence_reconciler.go's reconcileOne).
+        # Treat as still-pending rather than raising into the request.
+        return SyncExecutionTriggerResult(
+            sync_run_id="",
+            job_run_id="",
+            total_units=0,
+            occurrence_id=occurrence_id,
+            awaiting_materialization=True,
+        )
+    sync_run = (
+        session.query(SyncRun)
+        .filter(SyncRun.id == uuid.UUID(sync_run_id))
+        .one_or_none()
+    )
+    if sync_run is None:
+        return SyncExecutionTriggerResult(
+            sync_run_id="",
+            job_run_id="",
+            total_units=0,
+            occurrence_id=occurrence_id,
+            awaiting_materialization=True,
+        )
+    result = sync_run.result if isinstance(sync_run.result, dict) else {}
+    terminal = (
+        sync_run.status == SyncRunStatus.FAILED.value
+        and result.get("error_category") == "pagerduty_sync_disabled"
+    )
+    return SyncExecutionTriggerResult(
+        sync_run_id=str(sync_run.id),
+        job_run_id=job_run_id or "",
+        total_units=int(sync_run.total_units or 0),
+        dispatch_required=not terminal,
+        terminal_reason=str(sync_run.error or "") if terminal else "",
+        occurrence_id=occurrence_id,
+    )
+
+
+async def await_sync_execution_trigger_materialized(
+    session: AsyncSession,
+    occurrence_id: str,
+    *,
+    poll_interval: float = 0.25,
+) -> SyncExecutionTriggerResult:
+    """Bounded, async-native poll for a Go-owned scheduled_sync_occurrences
+    row to reach a terminal reconcile_status -- the same typed-outcome shape
+    ``await_reference_discovery_terminal`` (CHAOS-4498) established, adapted
+    for this call site's constraint: THIS function is called from inside
+    the admin router's async request handler, where a blocking
+    ``time.sleep`` (that function's own mechanism) would stall the whole
+    event loop for every concurrent request, not just this one --
+    SQLAlchemy's async/greenlet bridge only yields to the loop on real I/O,
+    never on a plain sleep. ``asyncio.sleep`` here actually yields.
+
+    Each poll runs its read in its own committed transaction (the ``commit``
+    after every ``run_sync`` below), both to release the held connection
+    between sleeps and so the NEXT read starts a fresh READ COMMITTED
+    transaction that can see Go's own, separately-connected commit.
+
+    Outcomes:
+      * materialized -- reconcile_status='completed'; returns the exact
+        SyncExecutionTriggerResult shape the in-process path already
+        returns (occurrence_id set, awaiting_materialization=False).
+      * quarantined=True -- reconcile_status='quarantined': Go rejected the
+        occurrence's identity or exhausted its retry budget. Client-visible
+        failure, per CHAOS-4602 fork 2 -- the caller must never fold this
+        into a silent "pending".
+      * awaiting_materialization=True (unchanged) -- the deadline
+        (``SYNC_MANUAL_TRIGGER_AWAIT_SECONDS``, default 10s) elapsed with
+        neither of the above. Never an error: the caller presents this as
+        "pending" and the occurrence keeps reconciling in the background.
+    """
+    started = time.monotonic()
+
+    def _record(outcome: str) -> None:
+        # CHAOS-4602 fork 2: "telemetry: counter + histogram on await
+        # outcome/latency" -- both labeled by the SAME outcome so they can
+        # be joined (e.g. p99 latency for quarantined vs materialized).
+        from dev_health_ops.metrics.prometheus import (
+            SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS,
+            SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL,
+        )
+
+        SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL.labels(outcome=outcome).inc()
+        SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS.labels(outcome=outcome).observe(
+            time.monotonic() - started
+        )
+
+    deadline = started + _manual_trigger_await_seconds()
+    while True:
+        state = await session.run_sync(
+            lambda sync_session: _read_occurrence_reconcile_state(
+                sync_session, occurrence_id
+            )
+        )
+        if state is not None:
+            status, job_run_id, sync_run_id, error_code = state
+            if status == SCHEDULED_OCCURRENCE_RECONCILE_COMPLETED:
+                result = await session.run_sync(
+                    lambda sync_session: _materialized_trigger_result(
+                        sync_session, occurrence_id, job_run_id, sync_run_id
+                    )
+                )
+                await session.commit()
+                _record("materialized")
+                return result
+            if status == SCHEDULED_OCCURRENCE_RECONCILE_QUARANTINED:
+                await session.commit()
+                _record("quarantined")
+                return SyncExecutionTriggerResult(
+                    sync_run_id="",
+                    job_run_id="",
+                    total_units=0,
+                    dispatch_required=False,
+                    terminal_reason=(
+                        f"scheduled sync occurrence quarantined: {error_code or 'unknown'}"
+                    ),
+                    occurrence_id=occurrence_id,
+                    quarantined=True,
+                )
+        await session.commit()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _record("pending")
+            return SyncExecutionTriggerResult(
+                sync_run_id="",
+                job_run_id="",
+                total_units=0,
+                occurrence_id=occurrence_id,
+                awaiting_materialization=True,
+            )
+        # Codex review (gate round 9, P2): sleeping the full poll_interval
+        # unconditionally overshoots a configured deadline shorter than it
+        # (e.g. SYNC_MANUAL_TRIGGER_AWAIT_SECONDS=0.05 with the default
+        # 0.25s poll_interval measured returning ~5x late) -- cap the sleep
+        # at whatever time actually remains, so the next deadline check
+        # fires close to the promised bound instead of after one more full
+        # poll cycle.
+        await asyncio.sleep(min(poll_interval, remaining))
 
 
 def _require_locked_scheduled_eligibility(

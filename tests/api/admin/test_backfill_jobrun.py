@@ -314,11 +314,19 @@ async def test_sync_config_backfill_accepts_nested_selector_and_resolves_integra
     def _fake_trigger(session, config, org_id, **kwargs):
         captured["integration_id"] = getattr(config, "integration_id")
         captured["backfill_selector"] = kwargs.get("backfill_selector")
+        # occurrence_id/awaiting_materialization must be explicit: a bare
+        # MagicMock auto-vivifies any unset attribute access as a truthy
+        # mock, which would make the router's `trigger.occurrence_id is not
+        # None and trigger.awaiting_materialization` Go-hand-off check fire
+        # for this legacy in-process path and try to await materialization
+        # on a MagicMock occurrence_id (CHAOS-4602).
         return MagicMock(
             sync_run_id=str(uuid.uuid4()),
             job_run_id=str(uuid.uuid4()),
             total_units=1,
             dispatch_required=True,
+            occurrence_id=None,
+            awaiting_materialization=False,
         )
 
     with (

@@ -45,6 +45,11 @@ BLOCK_MARKERS = (
         "<!-- END GENERATED WORKER FILE LEDGER -->",
         "render_worker_block",
     ),
+    (
+        "<!-- BEGIN GENERATED SOURCE DISCOVERY LEDGER -->",
+        "<!-- END GENERATED SOURCE DISCOVERY LEDGER -->",
+        "render_source_discovery_block",
+    ),
 )
 
 
@@ -147,6 +152,24 @@ def test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row(
     except SystemExit:
         raised = True
     assert raised, "consistency guard did not fail on an untracked new worker file"
+
+    # CHAOS-4602: the fourth mechanism -- source discovery is neither a kind,
+    # a route, nor a worker file, which is exactly why the three guards above
+    # could never have caught it existing at all before this ticket.
+    mutated_providers = gen.load_source_discovery_providers() | {"brand_new_provider"}
+    try:
+        gen._consistency_guard(
+            "source-discovery provider(s)",
+            mutated_providers,
+            set(gen.SOURCE_DISCOVERY_LEDGER),
+            "",
+        )
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised, (
+        "consistency guard did not fail on an untracked new source-discovery provider"
+    )
 
 
 def test_team_item_kinds_native_for_linear_github_gitlab_chaos_4492() -> None:

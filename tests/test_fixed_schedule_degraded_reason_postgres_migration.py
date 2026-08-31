@@ -188,4 +188,4 @@ def test_0100_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert _COLUMN in _columns(migrated_to_0099.engine)
-    assert _revisions(migrated_to_0099.engine) == {"0118"}
+    assert _revisions(migrated_to_0099.engine) == {"0121"}

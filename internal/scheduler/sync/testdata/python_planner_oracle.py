@@ -56,9 +56,14 @@ _package("dev_health_ops.providers")
 _package("dev_health_ops.providers.github")
 _package("dev_health_ops.sync")
 _package("dev_health_ops.workers")
-_module(
+# CHAOS-4602: loaded for REAL (not stubbed) -- this oracle now also drives
+# BACKFILL-mode cases, and _backfill_windows (planner.py) calls the real
+# chunk_date_range to resolve them. chunker.py has no further dependencies
+# of its own (pure stdlib datetime/date), so there is nothing else to stub
+# for it.
+_load(
     "dev_health_ops.backfill.chunker",
-    chunk_date_range=lambda **_kwargs: (),
+    SOURCE / "backfill/chunker.py",
 )
 _module(
     "dev_health_ops.credentials.fingerprint",
@@ -307,6 +312,10 @@ def _planned(case: dict[str, object]) -> list[dict[str, object]]:
         mode=str(case["mode"]),
         triggered_by="schedule",
         before=_instant(_optional_str(case.get("before"), "before")),
+        # CHAOS-4602: since is BACKFILL-mode-only (_backfill_windows requires
+        # both since and before); every scheduled-mode case leaves it None,
+        # matching the Go side's PlannerInput.Since being nil there too.
+        since=_instant(_optional_str(case.get("since"), "since")),
     )
     route = _optional_mapping(case.get("route"), "route")
     if route is not None:

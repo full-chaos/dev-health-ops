@@ -75,7 +75,7 @@ CREATE TABLE public.scheduled_sync_occurrences (
         CHECK (reconcile_status IN ('pending', 'retry', 'completed', 'quarantined')),
     CONSTRAINT ck_scheduled_sync_occurrence_reconcile_error_code CHECK (
         reconcile_error_code IN
-            ('identity_conflict', 'ineligible', 'planner_error', 'retry_exhausted')
+            ('identity_conflict', 'ineligible', 'planner_error', 'retry_exhausted', 'invalid_plan')
         OR reconcile_error_code IS NULL
     ),
     CONSTRAINT ck_scheduled_sync_occurrence_reconcile_error_state CHECK (
@@ -410,6 +410,54 @@ func TestOccurrenceReconcilerRecordsIneligibilityDistinctly(t *testing.T) {
 	state := fixture.state(t, fixture.occurrence.ID)
 	if state.ErrorCode == nil || *state.ErrorCode != OccurrenceErrorIneligible {
 		t.Fatalf("ineligible plan recorded %v", state.ErrorCode)
+	}
+}
+
+// TestOccurrenceReconcilerQuarantinesInvalidPlanWithoutRetrying is the codex
+// gate-round-6 fix: ErrInvalidPlan (an unsupported mode, a unit-cap
+// overflow, a malformed manual selector) reproduces identically on every
+// future attempt, so it must quarantine on the FIRST Reconcile pass exactly
+// like an identity conflict -- never through deferOccurrence's
+// retry-with-backoff ladder (60s/120s/240s/480s, ~15 minutes before
+// quarantine), which only delays reaching the same terminal state fork 2
+// already requires for a deterministic client-input error Python rejects
+// synchronously.
+func TestOccurrenceReconcilerQuarantinesInvalidPlanWithoutRetrying(t *testing.T) {
+	ctx := context.Background()
+	fixture := startOccurrencePostgres(t)
+	materializer := &countingMaterializer{
+		err: fmt.Errorf("invalid source_id: not-a-uuid: %w", ErrInvalidPlan),
+	}
+	reconciler, err := NewOccurrenceReconciler(fixture.pool, materializer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reconciler.Reconcile(ctx, at("2026-07-24T01:05:00Z"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Quarantined != 1 {
+		t.Fatalf("Reconcile() = %+v, want quarantined on the first pass, not deferred", result)
+	}
+	state := fixture.state(t, fixture.occurrence.ID)
+	if state.Status != OccurrenceReconcileQuarantined ||
+		state.ErrorCode == nil || *state.ErrorCode != OccurrenceErrorInvalidPlan ||
+		state.NextAttempt != nil {
+		t.Fatalf("state = %+v", state)
+	}
+	// Not a failed attempt at doable work, same reasoning as the identity
+	// conflict case: the occurrence's own data can never produce a valid
+	// plan, so nothing was actually attempted and retried.
+	if state.AttemptCount != 0 {
+		t.Fatalf("invalid plan consumed an attempt: %+v", state)
+	}
+	// Quarantined is terminal: never picked up again.
+	after, err := reconciler.Reconcile(ctx, at("2026-07-24T01:05:00Z").Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Scanned != 0 {
+		t.Fatalf("quarantined occurrence was re-claimed: %+v", after)
 	}
 }
 

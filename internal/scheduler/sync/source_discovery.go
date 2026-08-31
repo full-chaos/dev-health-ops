@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -71,6 +73,12 @@ const (
 	SourceDiscoveryOutcomeExisting = "existing"
 	SourceDiscoveryOutcomeSkipped  = "skipped"
 	SourceDiscoveryOutcomeError    = "error"
+	// The three below are Jira-only parity outcomes with Python's
+	// discover_sources_for_integration (#2036/CHAOS-4584), ported under
+	// CHAOS-4629: github/gitlab cannot structurally emit them.
+	SourceDiscoveryOutcomeCapped     = "capped_by_repo_limit"
+	SourceDiscoveryOutcomeRecovered  = "recovered_from_repo_limit_cap"
+	SourceDiscoveryOutcomeSuperseded = "superseded_by_scope_change"
 )
 
 // sourceDiscoveryProviders is the CLOSED set of providers whose sources are
@@ -174,6 +182,11 @@ func newSourceDiscoveryTelemetry() *sourceDiscoveryTelemetry {
 			telemetry.counts[[2]string{provider, outcome}] = 0
 		}
 	}
+	// Jira-only parity outcomes (CHAOS-4629): pre-seeded only for jira,
+	// since github/gitlab cannot emit them.
+	for _, outcome := range []string{SourceDiscoveryOutcomeCapped, SourceDiscoveryOutcomeRecovered, SourceDiscoveryOutcomeSuperseded} {
+		telemetry.counts[[2]string{"jira", outcome}] = 0
+	}
 	return telemetry
 }
 
@@ -181,6 +194,15 @@ func (telemetry *sourceDiscoveryTelemetry) observe(provider, outcome string) {
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.counts[[2]string{provider, outcome}]++
+}
+
+func (telemetry *sourceDiscoveryTelemetry) observeN(provider, outcome string, n int) {
+	if n <= 0 {
+		return
+	}
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.counts[[2]string{provider, outcome}] += uint64(n)
 }
 
 // WritePrometheus satisfies the same health.MetricsSource shape
@@ -330,18 +352,42 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	case "gitlab":
 		discovered, err = service.discoverGitLab(ctx, credential, args.SyncOptions)
 	case "jira":
-		discovered, err = service.discoverJira(ctx, credential)
+		discovered, err = service.discoverJira(ctx, credential, args.SyncOptions)
 	}
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("discover %s sources: %w", provider, err)
 	}
 	unbounded := isUnboundedDiscovery(provider, args.SyncOptions)
-	created, existing, err := service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded)
+
+	var created, existing, superseded int
+	if provider == "jira" {
+		// CHAOS-4629: Jira gets the case-insensitive matching / repo-limit
+		// capping / rescope-supersede path that parities #2036/CHAOS-4584's
+		// hardened Python behaviors. github/gitlab keep the plain exact-match
+		// upsertSources path below (Python's own out-of-scope decision).
+		var createdLower, discoveredLower map[string]struct{}
+		created, existing, createdLower, discoveredLower, superseded, err = service.upsertJiraSources(
+			ctx, args.OrgID, args.IntegrationID, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded,
+		)
+		if err == nil {
+			if rebalanceErr := service.rebalanceJiraSourceRepoLimit(ctx, args.OrgID, args.IntegrationID, createdLower, discoveredLower); rebalanceErr != nil {
+				// Best-effort, matching this whole step's contract (loud log,
+				// never fails the occurrence): the upsert above already
+				// committed and is not rolled back by a capping failure.
+				service.log().Error("jira source repo-limit rebalance failed",
+					"org_id", args.OrgID, "integration_id", args.IntegrationID, "error", rebalanceErr)
+				service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
+			}
+		}
+	} else {
+		created, existing, err = service.upsertSources(ctx, args.OrgID, args.IntegrationID, provider, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded)
+	}
 	if err != nil {
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("upsert %s sources: %w", provider, err)
 	}
+	service.telemetry.observeN(provider, SourceDiscoveryOutcomeSuperseded, superseded)
 	recordSourceDiscoveryOutcome(service.telemetry, provider, created, existing)
 	outcome := SourceDiscoveryOutcomeExisting
 	if created > 0 {
@@ -379,6 +425,18 @@ func (service *NativeSourceDiscoveryService) nowUTC() time.Time {
 		return time.Now().UTC()
 	}
 	return service.now().UTC()
+}
+
+// log falls back to slog.Default() for a service built via a bare struct
+// literal (several existing tests construct NativeSourceDiscoveryService
+// this way, skipping NewNativeSourceDiscoveryService's own nil check) --
+// without this, a nil service.logger would panic the first time CHAOS-4629's
+// rebalance logging runs.
+func (service *NativeSourceDiscoveryService) log() *slog.Logger {
+	if service.logger == nil {
+		return slog.Default()
+	}
+	return service.logger
 }
 
 // githubDiscoveryOptions mirrors discover_github_repos' owner/search/all_repos
@@ -663,14 +721,25 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 // (round 1, P2), mirroring the existing Python client's own fallback
 // (src/dev_health_ops/providers/jira/client.py:552-579).
 //
-// There is no Python precedent to match byte-for-byte for the primary path
-// (discover_repos_for_config's jira branch does not exist on main as of this
-// PR -- CHAOS-4584 is still in flight): external_id is the project KEY,
-// matching the "project_key" scope vocabulary this ticket and
-// team_autoimport_jira.py's own ownership resolution already use, not the
-// numeric project id (which fetchJiraProject/resolveJiraProjectCatalog in
-// jira_work_items_route.go resolve FROM the key, the reverse direction).
-func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, credential providerfoundation.Credential) ([]discoveredSource, error) {
+// external_id is the project KEY, matching the "project_key" scope
+// vocabulary this ticket and team_autoimport_jira.py's own ownership
+// resolution already use, not the numeric project id (which
+// fetchJiraProject/resolveJiraProjectCatalog in jira_work_items_route.go
+// resolve FROM the key, the reverse direction) -- UNLESS syncOptions carries
+// an explicit project_id, in which case the result is filtered to that one
+// project and identified BY that id (see the filtering block below,
+// CHAOS-4629 parity with discovery/repos.py::discover_jira_projects, whose
+// docstring names the exact precedence: project_id, once present, is the
+// ENTIRE scope; project_key is ignored, not additionally enforced).
+//
+// This filtering is a CHAOS-4629 prerequisite, not cosmetic: without it, a
+// bounded config's discovery pass would still list every visible project
+// (Jira has no server-side "list one project" filter this client used
+// before), which would put the OLD (soon-to-be-superseded) project back into
+// discoveredLower on every single pass -- silently defeating
+// supersedeStaleScopedJiraSources, which trusts discoveredLower to mean "the
+// scope's CURRENT membership", not "everything the credential can see".
+func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, credential providerfoundation.Credential, syncOptions map[string]any) ([]discoveredSource, error) {
 	client, err := providerfoundation.NewJiraClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
 	if err != nil {
 		return nil, err
@@ -707,6 +776,9 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 	if page.PageBudgetExhausted {
 		return nil, fmt.Errorf("jira: %w", ErrSourceDiscoveryTruncated)
 	}
+	explicitID := strings.TrimSpace(stringOption(syncOptions, "project_id"))
+	explicitKey := normalizeSourceKey(stringOption(syncOptions, "project_key"))
+	identityIsProjectID := explicitID != ""
 	result := make([]discoveredSource, 0, len(page.Items))
 	for _, raw := range page.Items {
 		var project struct {
@@ -720,12 +792,27 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		if project.Key == "" {
 			continue
 		}
+		// Filter precedence mirrors discover_jira_projects exactly:
+		// project_id, once present, is the ENTIRE scope (project_key is
+		// ignored, not additionally enforced -- a stale key alongside a
+		// freshly-PATCHed id must not filter every project out).
+		if identityIsProjectID {
+			if project.ID != explicitID {
+				continue
+			}
+		} else if explicitKey != "" && normalizeSourceKey(project.Key) != explicitKey {
+			continue
+		}
+		identity := project.Key
+		if identityIsProjectID && project.ID != "" {
+			identity = project.ID
+		}
 		fullName := project.Name
 		if fullName == "" {
 			fullName = project.Key
 		}
 		result = append(result, discoveredSource{
-			ExternalID: project.Key, SourceType: "project", Name: fullName, FullName: fullName,
+			ExternalID: identity, SourceType: "project", Name: fullName, FullName: fullName,
 			// Codex review (gate round 10, P2): "discovered_project" mirrors
 			// Python's own real-discovery marker (_map_jira_tuple,
 			// CHAOS-4584 round 5) -- set on EVERY row this discovers,
@@ -738,6 +825,14 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 			// check and wrongly classifies a real, validly-discovered
 			// project as the known-bad shape, silently planning zero units
 			// for it.
+			//
+			// project_id is ALWAYS carried, even when the KEY is the
+			// identity: it is how a project-key RENAME is detected as the
+			// same project rather than a new one (discovery/repos.py's own
+			// rationale, ported verbatim; Go has no rename-migration path of
+			// its own yet, out of CHAOS-4629's scope, but keeping the field
+			// present costs nothing and keeps this row's shape aligned with
+			// Python's for whenever that lands).
 			Metadata: map[string]any{"project_id": project.ID, "discovered_project": true},
 		})
 	}
@@ -889,6 +984,647 @@ RETURNING (xmax = 0)`,
 	}
 	committed = true
 	return created, existing, nil
+}
+
+// --- CHAOS-4629: Jira parity with #2036/CHAOS-4584's hardened Python
+// discover_sources_for_integration behaviors ---------------------------
+//
+// Three behaviors below (case-insensitive matching, repo-limit capping,
+// rescope-supersede) are Jira-only, exactly matching Python's own scope:
+// github/gitlab provider casing has never been shown to drift, and neither
+// has an equivalent entitlement/rescope concern for them.
+
+const (
+	sourceCapMarkerKey        = "capped_by_repo_limit"
+	sourceSupersededMarkerKey = "superseded_by_scope_change"
+	sourceDuplicateOfKey      = "duplicate_of_external_id"
+)
+
+// errSourceInsertConflict marks a concurrent exact-external_id insert
+// winning the race between our existing-rows fetch and our INSERT. The
+// caller treats the loss the same as "existing" -- the row is there.
+var errSourceInsertConflict = errors.New("integration source insert lost a concurrent race")
+
+// normalizeSourceKey mirrors discovery/repos.py::jira_key_norm exactly:
+// .strip().lower(), the ONE normalization implementation for every
+// provider/external_id comparison here. Comparison happens only in Go, never
+// mirrored in SQL -- chris's ruling (CHAOS-4584 gate round 7, reaffirmed for
+// CHAOS-4629) after two independent SQL-side normalization mirrors drifted
+// from Python's Unicode-aware jira_key_norm on real inputs.
+func normalizeSourceKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+type existingSourceRow struct {
+	ID           string
+	Provider     string
+	ExternalID   string
+	IsEnabled    bool
+	DiscoveredAt time.Time
+	Metadata     map[string]any
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	clone := make(map[string]any, len(metadata)+1)
+	for key, value := range metadata {
+		clone[key] = value
+	}
+	return clone
+}
+
+func fetchExistingSourceRows(ctx context.Context, tx pgx.Tx, orgID, integrationID string) ([]*existingSourceRow, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id::text, provider, external_id, is_enabled, discovered_at, metadata::jsonb
+FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, orgID, integrationID)
+	if err != nil {
+		return nil, fmt.Errorf("load existing integration sources: %w", err)
+	}
+	defer rows.Close()
+	var result []*existingSourceRow
+	for rows.Next() {
+		row := &existingSourceRow{}
+		var metadataJSON []byte
+		if err := rows.Scan(&row.ID, &row.Provider, &row.ExternalID, &row.IsEnabled, &row.DiscoveredAt, &metadataJSON); err != nil {
+			return nil, fmt.Errorf("scan existing integration source: %w", err)
+		}
+		_ = json.Unmarshal(metadataJSON, &row.Metadata)
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func disableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[string]any) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode source metadata: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET is_enabled=FALSE, metadata=$2::json WHERE id=$1::uuid`, id, metadataJSON); err != nil {
+		return fmt.Errorf("disable integration source %s: %w", id, err)
+	}
+	return nil
+}
+
+func enableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[string]any) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode source metadata: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET is_enabled=TRUE, metadata=$2::json WHERE id=$1::uuid`, id, metadataJSON); err != nil {
+		return fmt.Errorf("enable integration source %s: %w", id, err)
+	}
+	return nil
+}
+
+func updateExistingSourceRow(ctx context.Context, tx pgx.Tx, id, name, fullName string, metadata map[string]any, now time.Time, reenable bool) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode source metadata: %w", err)
+	}
+	sql := `UPDATE public.integration_sources SET name=$2, full_name=$3, metadata=$4::json, last_seen_at=$5`
+	if reenable {
+		sql += `, is_enabled=TRUE`
+	}
+	sql += ` WHERE id=$1::uuid`
+	if _, err := tx.Exec(ctx, sql, id, name, fullName, metadataJSON, now); err != nil {
+		return fmt.Errorf("update integration source %s: %w", id, err)
+	}
+	return nil
+}
+
+func insertNewSourceRow(
+	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider, sourceType, externalID, name, fullName string,
+	metadata map[string]any, now time.Time,
+) (id string, discoveredAt time.Time, err error) {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("encode source metadata: %w", err)
+	}
+	var returnedID string
+	err = tx.QueryRow(ctx, `
+INSERT INTO public.integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,$8,$9::json,TRUE,$10,$10)
+ON CONFLICT (org_id,integration_id,provider,external_id) DO NOTHING
+RETURNING id::text`,
+		uuid.New().String(), orgID, integrationID, provider, sourceType, externalID, name, fullName, metadataJSON, now,
+	).Scan(&returnedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", time.Time{}, errSourceInsertConflict
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("insert integration source: %w", err)
+	}
+	return returnedID, now, nil
+}
+
+// upsertJiraSources ports discover_sources_for_integration's jira branch
+// (CHAOS-4584 rounds 2-4). Jira project keys are case-insensitive
+// server-side but an operator-typed scope, or a pre-existing row, can carry
+// any casing -- matching must fold case BEFORE deciding insert-vs-update, or
+// the plain exact-match upsertSources path inserts a case-variant duplicate
+// that double-schedules the same project. A pre-existing case-variant PAIR
+// self-repairs: every extra candidate folds into one surviving row (an
+// already-enabled candidate wins ties, so an existing sync in progress is
+// never silently stopped).
+//
+// Returns the created/discovered external_id sets (normalized) the caller
+// needs for repo-limit capping/recovery, and the count of sources this run
+// superseded for a rescoped explicit config.
+func (service *NativeSourceDiscoveryService) upsertJiraSources(
+	ctx context.Context, orgID, integrationID string, sources []discoveredSource, now time.Time,
+	configID string, plannerManaged, unbounded bool,
+) (created, existingCount int, createdLower, discoveredLower map[string]struct{}, superseded int, err error) {
+	discoveredLower = make(map[string]struct{}, len(sources))
+	createdLower = make(map[string]struct{})
+	for _, source := range sources {
+		discoveredLower[normalizeSourceKey(source.ExternalID)] = struct{}{}
+	}
+	if len(sources) == 0 {
+		return 0, 0, createdLower, discoveredLower, 0, nil
+	}
+
+	tx, err := service.domainPool.Begin(ctx)
+	if err != nil {
+		return 0, 0, nil, nil, 0, fmt.Errorf("begin jira source discovery domain transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+
+	existingRows, err := fetchExistingSourceRows(ctx, tx, orgID, integrationID)
+	if err != nil {
+		return 0, 0, nil, nil, 0, err
+	}
+
+	// stampNewRows mirrors upsertSources' own isUnboundedDiscovery-gated
+	// tagging exactly (see that function's doc comment): only a genuinely
+	// unbounded planner-managed config gets every discovered row tagged.
+	stampNewRows := plannerManaged && configID != "" && unbounded
+
+	for _, source := range sources {
+		normalizedKey := normalizeSourceKey(source.ExternalID)
+		var candidates []*existingSourceRow
+		for _, row := range existingRows {
+			if normalizeSourceKey(row.Provider) == "jira" && normalizeSourceKey(row.ExternalID) == normalizedKey {
+				candidates = append(candidates, row)
+			}
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			if !candidates[i].DiscoveredAt.Equal(candidates[j].DiscoveredAt) {
+				return candidates[i].DiscoveredAt.Before(candidates[j].DiscoveredAt)
+			}
+			return candidates[i].ID < candidates[j].ID
+		})
+
+		var survivor *existingSourceRow
+		if len(candidates) > 0 {
+			pool := make([]*existingSourceRow, 0, len(candidates))
+			for _, candidate := range candidates {
+				if candidate.IsEnabled {
+					pool = append(pool, candidate)
+				}
+			}
+			if len(pool) == 0 {
+				pool = candidates
+			}
+			survivor = pool[0]
+			for _, candidate := range pool {
+				if candidate.ExternalID == source.ExternalID {
+					survivor = candidate
+					break
+				}
+			}
+			for _, dup := range candidates {
+				if dup == survivor {
+					continue
+				}
+				metadata := cloneMetadata(dup.Metadata)
+				metadata[sourceDuplicateOfKey] = survivor.ExternalID
+				if err := disableSourceRow(ctx, tx, dup.ID, metadata); err != nil {
+					return 0, 0, nil, nil, 0, err
+				}
+				dup.IsEnabled = false
+				dup.Metadata = metadata
+			}
+		}
+
+		metadata := source.Metadata
+		if stampNewRows {
+			metadata = cloneMetadata(metadata)
+			metadata["planner_managed_sync_config_id"] = configID
+		}
+
+		if survivor != nil {
+			merged := cloneMetadata(survivor.Metadata)
+			for key, value := range metadata {
+				merged[key] = value
+			}
+			reenable := false
+			if _, ok := merged[sourceSupersededMarkerKey]; ok {
+				// The project this row was superseded for is reconfirmed by
+				// this discovery run -- undo a system-driven (never an
+				// operator's own) rescope disable.
+				delete(merged, sourceSupersededMarkerKey)
+				reenable = true
+			}
+			if err := updateExistingSourceRow(ctx, tx, survivor.ID, source.Name, source.FullName, merged, now, reenable); err != nil {
+				return 0, 0, nil, nil, 0, err
+			}
+			survivor.Metadata = merged
+			if reenable {
+				survivor.IsEnabled = true
+			}
+			existingCount++
+			continue
+		}
+
+		newID, discoveredAt, insertErr := insertNewSourceRow(ctx, tx, orgID, integrationID, "jira", "project", source.ExternalID, source.Name, source.FullName, metadata, now)
+		if errors.Is(insertErr, errSourceInsertConflict) {
+			existingCount++
+			continue
+		}
+		if insertErr != nil {
+			return 0, 0, nil, nil, 0, insertErr
+		}
+		created++
+		createdLower[normalizedKey] = struct{}{}
+		existingRows = append(existingRows, &existingSourceRow{
+			ID: newID, Provider: "jira", ExternalID: source.ExternalID,
+			IsEnabled: true, DiscoveredAt: discoveredAt, Metadata: metadata,
+		})
+	}
+
+	if plannerManaged && configID != "" && !unbounded {
+		count, err := supersedeStaleScopedJiraSources(ctx, tx, orgID, integrationID, configID, discoveredLower)
+		if err != nil {
+			return 0, 0, nil, nil, 0, err
+		}
+		superseded = count
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, nil, nil, 0, fmt.Errorf("commit jira source discovery domain transaction: %w", err)
+	}
+	committed = true
+	return created, existingCount, createdLower, discoveredLower, superseded, nil
+}
+
+// supersedeStaleScopedJiraSources ports
+// discovery.py::_supersede_stale_scoped_jira_sources (CHAOS-4584 round 3):
+// when a planner-managed config is explicitly scoped to one project
+// (unbounded==false), disable any OTHER enabled source THIS config tagged
+// that discovery did not just return -- otherwise moving an explicitly
+// scoped config's project_key/project_id leaves the OLD project enabled
+// forever. Never applied to an unbounded config (a project transiently
+// missing from one run is never auto-disabled -- this file's documented
+// stale-handling policy), and never on an empty discoveredLower
+// (indistinguishable from a transient credential/API failure -- the caller
+// already guarantees this by only calling with unbounded==false, len(sources)>0).
+func supersedeStaleScopedJiraSources(
+	ctx context.Context, tx pgx.Tx, orgID, integrationID, configID string, discoveredLower map[string]struct{},
+) (int, error) {
+	if len(discoveredLower) == 0 {
+		return 0, nil
+	}
+	rows, err := tx.Query(ctx, `
+SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND is_enabled`, orgID, integrationID)
+	if err != nil {
+		return 0, fmt.Errorf("load enabled jira sources for supersede: %w", err)
+	}
+	type candidateRow struct {
+		id         string
+		externalID string
+		metadata   map[string]any
+	}
+	var superseded []candidateRow
+	for rows.Next() {
+		var row candidateRow
+		var metadataJSON []byte
+		if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		_ = json.Unmarshal(metadataJSON, &row.metadata)
+		tag, _ := row.metadata["planner_managed_sync_config_id"].(string)
+		if tag != configID {
+			continue
+		}
+		if _, ok := discoveredLower[normalizeSourceKey(row.externalID)]; ok {
+			continue
+		}
+		superseded = append(superseded, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	for _, row := range superseded {
+		metadata := cloneMetadata(row.metadata)
+		metadata[sourceSupersededMarkerKey] = true
+		if err := disableSourceRow(ctx, tx, row.id, metadata); err != nil {
+			return 0, err
+		}
+	}
+	return len(superseded), nil
+}
+
+// jiraMaxReposTierDefaults mirrors models/licensing.py::TIER_LIMITS_DEFAULTS'
+// max_repos entries exactly: community=3, team=10, enterprise=unlimited.
+var jiraMaxReposTierDefaults = map[string]*int{
+	"community":  intPtr(3),
+	"team":       intPtr(10),
+	"enterprise": nil,
+}
+
+func intPtr(value int) *int { return &value }
+
+// resolveMaxReposLimit mirrors
+// api/services/licensing.py::TierLimitService.get_limit(org_id,"max_repos")'s
+// exact precedence: org_licenses.limits_override (highest) -> tier_limits DB
+// table -> hardcoded jiraMaxReposTierDefaults. Reuses the same
+// organizations/org_licenses join loadPlanLimits already uses for
+// backfill_days/max_sync_units, so a tier resolution divergence between the
+// two would need a change in only one of these two spots to fix.
+func resolveMaxReposLimit(ctx context.Context, tx pgx.Tx, orgID string) (*int, error) {
+	var orgTier, licenseTier *string
+	var overridesJSON []byte
+	err := tx.QueryRow(ctx, `
+SELECT coalesce(organization.tier,'community'),license.tier,license.limits_override::jsonb
+FROM public.organizations AS organization
+LEFT JOIN public.org_licenses AS license ON license.org_id=organization.id
+WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return intPtr(3), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load org tier for max_repos limit: %w", err)
+	}
+	resolvedTier := "community"
+	if orgTier != nil {
+		resolvedTier = *orgTier
+	}
+	if licenseTier != nil {
+		resolvedTier = *licenseTier
+	}
+	if resolvedTier != "community" && resolvedTier != "team" && resolvedTier != "enterprise" {
+		resolvedTier = "community"
+	}
+	var overrides map[string]json.RawMessage
+	_ = json.Unmarshal(overridesJSON, &overrides)
+	if raw, ok := overrides["max_repos"]; ok {
+		if string(raw) == "null" {
+			return nil, nil
+		}
+		var value int
+		if json.Unmarshal(raw, &value) == nil {
+			return &value, nil
+		}
+	}
+	var limitValueText *string
+	err = tx.QueryRow(ctx, `SELECT limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key='max_repos'`, resolvedTier).Scan(&limitValueText)
+	if err == nil {
+		if limitValueText == nil {
+			return nil, nil
+		}
+		var value int
+		if _, scanErr := fmt.Sscanf(*limitValueText, "%d", &value); scanErr == nil {
+			return &value, nil
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("load max_repos tier limit: %w", err)
+	}
+	return jiraMaxReposTierDefaults[resolvedTier], nil
+}
+
+// activeRepoUsageCountForLimit mirrors
+// discovery.py::_active_repo_usage_count_for_limit: org-wide "legacy active
+// configs (not a planner-managed parent) + enabled sources on every
+// planner-managed integration" count.
+func activeRepoUsageCountForLimit(ctx context.Context, tx pgx.Tx, orgID string) (int, error) {
+	var legacyCount int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM public.sync_configurations
+WHERE org_id=$1 AND is_active
+  AND NOT (parent_id IS NULL AND planner_managed AND integration_id IS NOT NULL)`, orgID).Scan(&legacyCount); err != nil {
+		return 0, fmt.Errorf("count legacy active sync configs: %w", err)
+	}
+	var sourceCount int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM public.integration_sources AS source
+WHERE source.org_id=$1 AND source.is_enabled
+  AND source.integration_id IN (
+    SELECT integration_id FROM public.sync_configurations
+    WHERE org_id=$1 AND is_active AND parent_id IS NULL AND planner_managed AND integration_id IS NOT NULL
+  )`, orgID).Scan(&sourceCount); err != nil {
+		return 0, fmt.Errorf("count enabled planner-managed sources: %w", err)
+	}
+	return legacyCount + sourceCount, nil
+}
+
+// repoLimitAdvisoryLockKey mirrors
+// discovery.py::_acquire_repo_limit_lock's key formula EXACTLY --
+// uuid.UUID(org_id).int & ((1<<63)-1), falling back to
+// uuid5(NAMESPACE_URL, org_id) for a non-UUID org_id -- because Python's own
+// create_sync_config repo-limit preflight and THIS Go rebalance step must
+// serialize against each other on the SAME advisory-lock key during the
+// coexistence window (an org can get a new Jira config created via Python
+// at the same moment an occurrence's Go discovery rebalances it). A
+// same-process-only key (e.g. Postgres's own hashtextextended) would not
+// coordinate across languages at all.
+func repoLimitAdvisoryLockKey(orgID string) int64 {
+	parsed, err := uuid.Parse(orgID)
+	if err != nil {
+		// RFC 4122 NAMESPACE_URL, matching Python's uuid.NAMESPACE_URL.
+		namespace := uuid.MustParse("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
+		parsed = uuid.NewSHA1(namespace, []byte(orgID))
+	}
+	// Python's uuid.UUID.int is the big-endian 128-bit unsigned integer of
+	// the 16 raw bytes; the low 64 bits of that integer are exactly the
+	// last 8 bytes of the (big-endian) byte array. Mask off the sign bit to
+	// match Python's `& ((1 << 63) - 1)`.
+	low64 := binary.BigEndian.Uint64(parsed[8:16])
+	return int64(low64 & 0x7FFFFFFFFFFFFFFF)
+}
+
+type repoLimitCandidateRow struct {
+	id         string
+	externalID string
+	metadata   map[string]any
+}
+
+// rebalanceJiraSourceRepoLimit ports
+// discovery.py::_rebalance_jira_sources_against_repo_limit (CHAOS-4584):
+// keeps this integration's enabled Jira source count within the org's
+// max_repos entitlement after a discovery run. Prefers capping sources
+// CREATED by THIS run over already-enabled pre-existing ones (an org already
+// at its limit must not lose real, relied-upon sources just because this run
+// also discovered new ones); recovers previously cap-disabled rows once
+// headroom returns, but only ones discovery just reconfirmed exist.
+func (service *NativeSourceDiscoveryService) rebalanceJiraSourceRepoLimit(
+	ctx context.Context, orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
+) error {
+	tx, err := service.domainPool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin jira repo-limit rebalance transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+
+	var plannerConfigActive *bool
+	err = tx.QueryRow(ctx, `
+SELECT is_active FROM public.sync_configurations
+WHERE integration_id=$1::uuid AND org_id=$2 AND planner_managed AND parent_id IS NULL
+LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("load planner config active state: %w", err)
+	}
+	if plannerConfigActive != nil && !*plannerConfigActive {
+		// A paused integration's own usage would read as zero (active-only
+		// count), and recovery could wrongly re-enable every capped source
+		// for it -- skip cap/recovery entirely while paused (CHAOS-4584
+		// round 2 P1). The PATCH reactivation handler re-runs discovery.
+		return tx.Commit(ctx)
+	}
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, repoLimitAdvisoryLockKey(orgID)); err != nil {
+		return fmt.Errorf("acquire repo-limit lock: %w", err)
+	}
+
+	maxRepos, err := resolveMaxReposLimit(ctx, tx, orgID)
+	if err != nil {
+		return err
+	}
+
+	if maxRepos != nil {
+		usage, err := activeRepoUsageCountForLimit(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		overflow := usage - *maxRepos
+		if overflow > 0 {
+			rows, err := tx.Query(ctx, `
+SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND is_enabled
+ORDER BY external_id DESC`, orgID, integrationID)
+			if err != nil {
+				return fmt.Errorf("load enabled jira sources for capping: %w", err)
+			}
+			var createdRows, preExistingRows []repoLimitCandidateRow
+			for rows.Next() {
+				var row repoLimitCandidateRow
+				var metadataJSON []byte
+				if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+					rows.Close()
+					return err
+				}
+				_ = json.Unmarshal(metadataJSON, &row.metadata)
+				if _, ok := createdLower[normalizeSourceKey(row.externalID)]; ok {
+					createdRows = append(createdRows, row)
+				} else {
+					preExistingRows = append(preExistingRows, row)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			rows.Close()
+			capped := append(createdRows, preExistingRows...)
+			if len(capped) > overflow {
+				capped = capped[:overflow]
+			}
+			for _, row := range capped {
+				metadata := cloneMetadata(row.metadata)
+				metadata[sourceCapMarkerKey] = true
+				if err := disableSourceRow(ctx, tx, row.id, metadata); err != nil {
+					return err
+				}
+			}
+			if len(capped) > 0 {
+				service.telemetry.observeN("jira", SourceDiscoveryOutcomeCapped, len(capped))
+				service.log().Warn("jira_project_discovery_capped_by_repo_limit",
+					"org_id", orgID, "integration_id", integrationID, "capped_count", len(capped), "max_repos", *maxRepos)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit jira repo-limit cap: %w", err)
+			}
+			committed = true
+			return nil
+		}
+	}
+
+	rows, err := tx.Query(ctx, `
+SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider='jira' AND NOT is_enabled
+ORDER BY external_id ASC`, orgID, integrationID)
+	if err != nil {
+		return fmt.Errorf("load disabled jira sources for recovery: %w", err)
+	}
+	var recoverable []repoLimitCandidateRow
+	for rows.Next() {
+		var row repoLimitCandidateRow
+		var metadataJSON []byte
+		if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		_ = json.Unmarshal(metadataJSON, &row.metadata)
+		capped, _ := row.metadata[sourceCapMarkerKey].(bool)
+		_, discoveredNow := discoveredLower[normalizeSourceKey(row.externalID)]
+		if capped && discoveredNow {
+			recoverable = append(recoverable, row)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(recoverable) == 0 {
+		return tx.Commit(ctx)
+	}
+	if maxRepos != nil {
+		usage, err := activeRepoUsageCountForLimit(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		headroom := *maxRepos - usage
+		if headroom < 0 {
+			headroom = 0
+		}
+		if len(recoverable) > headroom {
+			recoverable = recoverable[:headroom]
+		}
+	}
+	for _, row := range recoverable {
+		metadata := cloneMetadata(row.metadata)
+		delete(metadata, sourceCapMarkerKey)
+		if err := enableSourceRow(ctx, tx, row.id, metadata); err != nil {
+			return err
+		}
+	}
+	if len(recoverable) > 0 {
+		service.telemetry.observeN("jira", SourceDiscoveryOutcomeRecovered, len(recoverable))
+		service.log().Info("jira_project_discovery_recovered_from_repo_limit_cap",
+			"org_id", orgID, "integration_id", integrationID, "recovered_count", len(recoverable))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit jira repo-limit recovery: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func stringOption(options map[string]any, key string) string {

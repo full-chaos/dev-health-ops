@@ -247,7 +247,7 @@ func TestClaimUnitsClaimsARetryingUnitThatBecameDueAfterTheGuardSnapshot(t *test
 			t.Fatalf("cappedUnitIDs=%v want empty (the late unit was never a candidate)", decision.cappedUnitIDs)
 		}
 
-		claimed, err := claimUnits(ctx, tx, claimSnapshotRun, nil, claimNow)
+		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -257,6 +257,11 @@ func TestClaimUnitsClaimsARetryingUnitThatBecameDueAfterTheGuardSnapshot(t *test
 
 		if got := idsOf(claimed); len(got) != 0 {
 			t.Fatalf("claimUnits claimed %v; want nothing -- the guard authorized no unit in a bucket it reported at zero headroom", got)
+		}
+		// The skip is REPORTED, not silent: the caller re-arms a dispatch
+		// for exactly these ids rather than stranding them.
+		if len(deferred) != 1 || deferred[0] != lateUnit {
+			t.Fatalf("deferredOutsideSnapshot=%v want exactly [%s]", deferred, lateUnit)
 		}
 		if status := unitStatus(t, ctx, pool, lateUnit); status != syncRunUnitStatusRetrying {
 			t.Fatalf("late unit status=%q want=retrying (unclaimed, left for the next pass)", status)
@@ -350,7 +355,7 @@ func TestClaimUnitsClaimsAUnitLeaseRepairMadeClaimableInAnUnlockedBucket(t *test
 		// Uncontested: authorizeRun asked for no lock on this bucket.
 		leaseRepairFlipToRetrying(t, ctx, pool, lostUnit, guardNow.Add(200*time.Millisecond), guardNow)
 
-		claimed, err := claimUnits(ctx, tx, claimSnapshotRun, nil, claimNow)
+		claimed, deferred, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
 		if err != nil {
 			t.Fatalf("claimUnits: %v", err)
 		}
@@ -360,6 +365,9 @@ func TestClaimUnitsClaimsAUnitLeaseRepairMadeClaimableInAnUnlockedBucket(t *test
 
 		if got := idsOf(claimed); len(got) != 0 {
 			t.Fatalf("claimUnits claimed %v; want nothing -- the guard neither locked nor cap-checked this bucket", got)
+		}
+		if len(deferred) != 1 || deferred[0] != lostUnit {
+			t.Fatalf("deferredOutsideSnapshot=%v want exactly [%s]", deferred, lostUnit)
 		}
 		if active := activeBucketUnitsNow(t, ctx, pool, claimNow); active > bucketCap {
 			t.Fatalf("bucket occupancy=%d exceeds SYNC_UNIT_CONCURRENCY_PER_BUCKET=%d", active, bucketCap)
@@ -409,6 +417,7 @@ func TestGuardBucketLockDoesNotProtectTheClaimBecauseTheSnapshotPrecedesIt(t *te
 			wg       sync.WaitGroup
 			decision guardDecision
 			claimed  []budgetUnit
+			deferred []string
 			guardErr error
 			claimErr error
 		)
@@ -430,7 +439,7 @@ func TestGuardBucketLockDoesNotProtectTheClaimBecauseTheSnapshotPrecedesIt(t *te
 			for _, id := range decision.cappedUnitIDs {
 				capped[id] = true
 			}
-			claimed, claimErr = claimUnits(ctx, tx, claimSnapshotRun, capped, claimNow)
+			claimed, deferred, claimErr = claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, capped, claimNow)
 			if claimErr != nil {
 				return
 			}
@@ -471,6 +480,9 @@ WHERE id = $1::uuid AND status = 'running'`,
 		got := idsOf(claimed)
 		if len(got) != 1 || !got[plannedUnit] {
 			t.Fatalf("claimUnits claimed %v; want exactly [%s] -- the lease-repaired unit was never authorized by this pass", got, plannedUnit)
+		}
+		if len(deferred) != 1 || deferred[0] != lostUnit {
+			t.Fatalf("deferredOutsideSnapshot=%v want exactly [%s]", deferred, lostUnit)
 		}
 		if active := activeBucketUnitsNow(t, ctx, pool, claimNow); active > bucketCap {
 			t.Fatalf("bucket occupancy=%d exceeds SYNC_UNIT_CONCURRENCY_PER_BUCKET=%d despite the guard holding this bucket's advisory lock", active, bucketCap)

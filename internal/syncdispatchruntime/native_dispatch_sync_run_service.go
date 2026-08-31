@@ -380,11 +380,38 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	}
 
 	// --- Atomic claim: fresh PLANNED, due RETRYING, reclaimed stale
-	// DISPATCHING, excluding every id capped/deferred/excluded above ---
-	claimedUnits, err := claimUnits(ctx, tx, run.id, cappedIDs, service.nowUTC())
+	// DISPATCHING, excluding every id capped/deferred/excluded above, and
+	// RESTRICTED to the units this pass actually authorized ---
+	//
+	// CHAOS-4605: authorizeRun above ran on `now`, captured at the top of
+	// this function; claimUnits runs on a FRESH service.nowUTC() after the
+	// feature gate, the reference-discovery gate, the pre-capacity claim
+	// validation, observeRun, enforceRun and reconfirmCooldowns. Under READ
+	// COMMITTED its statements see a fresh row image, so without this
+	// allow-list a unit that became claimable inside that window -- a
+	// RETRYING unit whose available_at simply arrived, or a RUNNING unit a
+	// concurrent LeaseRepair.Step converted to a due RETRYING one -- was
+	// claimed with no slot reserved for it, in a bucket whose cap this pass
+	// may never have evaluated and whose advisory lock it may never have
+	// held.
+	//
+	// surplusAdmittedUnitIDs joins the authorized set because BudgetGuard's
+	// surplus phase admits those against decision.slotHeadroom -- i.e.
+	// against a bucket authorizeRun DID lock and DID cap-check -- so they
+	// are covered by this pass's capacity decision even though they were
+	// deferrals, not candidates, at snapshot time.
+	authorizedIDs := make(map[string]bool, len(decision.authorizedUnitIDs)+len(budgetResult.surplusAdmittedUnitIDs))
+	for id := range decision.authorizedUnitIDs {
+		authorizedIDs[id] = true
+	}
+	for id := range budgetResult.surplusAdmittedUnitIDs {
+		authorizedIDs[id] = true
+	}
+	claimedUnits, deferredOutsideSnapshot, err := claimUnits(ctx, tx, run.id, authorizedIDs, cappedIDs, service.nowUTC())
 	if err != nil {
 		return err
 	}
+	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
 
 	riverQueued := 0
 	var unroutableUnits []budgetUnit
@@ -494,9 +521,20 @@ WHERE id = $1::uuid`,
 	flushRollupBumpTally(ctx, service.metrics)
 
 	if riverQueued > 0 {
-		if nextDeferredAt != nil {
+		switch {
+		// CHAOS-4605: a unit left unclaimed because it became claimable
+		// after the guard's snapshot is due NOW, not at nextDeferredAt --
+		// it is not a deferral, it just missed this pass's decision. Arm
+		// the default countdown so the next pass picks it up, ahead of any
+		// longer budget backoff. Without this arm, the riverQueued > 0 path
+		// can commit with nothing scheduled (no nextDeferredAt, no capped
+		// ids) and strand it: the tail's computePendingUnitCounts re-arm
+		// only runs when riverQueued == 0.
+		case len(deferredOutsideSnapshot) > 0:
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		} else if len(cappedIDs) > 0 {
+		case len(cappedIDs) > 0:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
 		}
 		service.logger.InfoContext(ctx, "dispatch_sync_run.dispatched",

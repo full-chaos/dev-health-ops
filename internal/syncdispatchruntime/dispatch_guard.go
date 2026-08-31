@@ -70,6 +70,32 @@ type guardDecision struct {
 	cappedUnitIDs     []string
 	concurrencyCapped bool
 	slotHeadroom      map[dispatchBucket]int
+	// authorizedUnitIDs is the EXACT set of units this pass's capacity
+	// decision was computed over: every unit the snapshot classified as a
+	// candidate, in a bucket this transaction locked and cap-checked.
+	//
+	// CHAOS-4605: it exists because the decision set and the claim set were
+	// two DIFFERENT reads. authorizeRun classifies units once, at the top of
+	// dispatch_sync_run's transaction; claimUnits re-derives its own claim
+	// set from a FRESH read of the same table many statements later, under
+	// READ COMMITTED and against a LATER `now`. Anything that becomes
+	// claimable in between -- a RETRYING unit whose available_at falls
+	// inside that window, or a RUNNING unit a concurrent LeaseRepair.Step
+	// converted to a due RETRYING one -- was claimed with no cap check and,
+	// in the RUNNING case, in a bucket this transaction never even locked.
+	//
+	// Widening the lock set does not close it: loadDispatchGuardUnits runs
+	// BEFORE acquireBucketAdvisoryLocks, so a writer that already holds a
+	// bucket lock commits into the gap and the lock this function finally
+	// acquires certifies an already-stale snapshot. Pinning the claim to
+	// this set does close it, in the only direction that is safe: a unit
+	// that became claimable mid-pass is left for the NEXT pass, which
+	// snapshots, locks and cap-checks it properly.
+	//
+	// Populated on every ALLOW decision and never on the hard-deny return,
+	// matching slotHeadroom's own convention (the hard-deny branch returns
+	// before any bucket is visited and its caller never reaches claimUnits).
+	authorizedUnitIDs map[string]bool
 }
 
 // defaultSyncRunMaxUnits mirrors guard.py's _resolve_total_unit_cap default
@@ -231,6 +257,21 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 		}, nil
 	}
 
+	// CHAOS-4605: the authorized set is derived from candidatesByBucket and
+	// nothing else -- exactly the units the per-bucket cap loop below
+	// accounts for, in exactly the buckets acquireBucketAdvisoryLocks
+	// already locked above (allBuckets is a subset of lockBucketsByUnit by
+	// construction: every candidate status and every deferred RETRYING row
+	// is added to the lock set in the same iteration). A unit outside this
+	// set has had no slot reserved for it by this pass and must not be
+	// claimed by it.
+	authorizedUnitIDs := make(map[string]bool)
+	for _, bucketUnits := range candidatesByBucket {
+		for _, unit := range bucketUnits {
+			authorizedUnitIDs[unit.id] = true
+		}
+	}
+
 	concurrencyCap := syncUnitConcurrencyPerBucket()
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
@@ -295,9 +336,10 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID, ru
 			cappedUnitIDs:     cappedUnitIDs,
 			concurrencyCapped: true,
 			slotHeadroom:      slotHeadroom,
+			authorizedUnitIDs: authorizedUnitIDs,
 		}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom}, nil
+	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
 }
 
 // loadDispatchGuardUnits loads this run's units ordered by id (stable

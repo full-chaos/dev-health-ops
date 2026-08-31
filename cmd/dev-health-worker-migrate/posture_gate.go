@@ -26,19 +26,30 @@ var postureGateRoles = []string{"domain", "queue", "coordinator"}
 //
 // Scope, stated precisely because it is easy to over-claim: OK==true means
 // no declared table/column/sequence requirement in DomainPosture/
-// QueuePosture/CoordinatorPosture was found missing. It does NOT mean a
-// role holds nothing beyond that posture (an excess table privilege, a
-// wrong River-schema grant, bad role membership, or a role attribute
-// problem can all coexist with OK==true here -- see DiagnoseRolePosture's
-// own doc comment, which states this limitation explicitly). Proving THAT
-// half of the property is what each runtime binary's own strict,
-// current_user-bound startup check (CheckDomainAuthorization/
-// CheckQueueAuthorization/CheckCoordinatorAuthorization) is for, and
-// nothing here substitutes for it.
+// QueuePosture/CoordinatorPosture was found missing, AND (CHAOS-4675) no
+// table-wide privilege excess was found on a table any of those postures
+// declares column-scoped only. It does NOT mean a role holds nothing beyond
+// that posture in every sense: a wrong River-schema grant, bad role
+// membership, a role attribute problem, or a table-wide excess on a table
+// the posture does not mention at all can all coexist with OK==true here --
+// see DiagnoseRolePosture's own doc comment, which states this narrower
+// remaining limitation explicitly. Proving the full property is what each
+// runtime binary's own strict, current_user-bound startup check
+// (CheckDomainAuthorization/CheckQueueAuthorization/
+// CheckCoordinatorAuthorization) is for, and nothing here substitutes for
+// it -- but the column-scoped-granularity drift that let CHAOS-4675 read as
+// "posture confirmed" while workerctl still failed with
+// runtime_role_unauthorized is now caught here too, at migrate time, rather
+// than only at the next CLI invocation.
 type postureGateResult struct {
 	OK             bool
 	GrantsApplied  map[string]int
 	PostureMissing map[string]int
+	// PostureExcess counts, per role, the table-wide-privilege-on-a-
+	// column-scoped-table gaps DiagnoseRolePosture reported (CHAOS-4675).
+	// Disjoint from PostureMissing: a gap is either something declared and
+	// absent, or something present and undeclared, never both.
+	PostureExcess map[string]int
 }
 
 // checkExecutedGrantPosture re-derives, against the live database, whether
@@ -55,10 +66,14 @@ type postureGateResult struct {
 // from this admin connection; every runtime binary that DOES connect as
 // one of these roles (reconciler, scheduler, worker, workerctl) still
 // gates its own readiness on the strict current_user-bound check at
-// startup, so the "no excess privilege" half of the property
+// startup, so the full "no excess privilege of any kind" property
 // (CheckRolePosture's doc comment) is still proven somewhere for every
-// role -- this gate only adds the "nothing is missing, and name what is"
-// half, immediately after the grants that are supposed to satisfy it.
+// role. This gate adds the "nothing declared is missing" half immediately
+// after the grants that are supposed to satisfy it, PLUS (CHAOS-4675) the
+// one slice of the excess half that was proven to drift silently: a
+// table-wide grant surviving on a table declared column-scoped. It does not
+// generalize to excess detection everywhere CheckRolePosture looks -- see
+// DiagnoseRolePosture's doc comment for exactly which slice this covers.
 //
 // The queue role's own readiness check (queueAuthorizationQuery) has no
 // admin-callable per-table diagnostic of its own -- postgresstore.QueuePosture
@@ -84,6 +99,7 @@ func checkExecutedGrantPosture(
 		OK:             true,
 		GrantsApplied:  make(map[string]int, len(postureGateRoles)),
 		PostureMissing: make(map[string]int, len(postureGateRoles)),
+		PostureExcess:  make(map[string]int, len(postureGateRoles)),
 	}
 
 	checkTablePosture := func(roleLabel, roleName string, posture postgresstore.RolePosture) {
@@ -100,18 +116,44 @@ func checkExecutedGrantPosture(
 			logger.Error("runtime grant posture check failed", "role", roleLabel, "reason", "diagnostic_unavailable")
 			return
 		}
-		result.PostureMissing[roleLabel] = len(gaps)
-		result.GrantsApplied[roleLabel] = declared - len(gaps)
-		if len(gaps) == 0 {
+		// A gap is either something declared and absent (Missing/TableMissing)
+		// or something present and undeclared (Excess, CHAOS-4675) -- never
+		// both, so this partition is exhaustive and disjoint over gaps.
+		var missing, excess []postgresstore.PostureGap
+		for _, gap := range gaps {
+			if len(gap.Excess) > 0 {
+				excess = append(excess, gap)
+				continue
+			}
+			missing = append(missing, gap)
+		}
+		result.PostureMissing[roleLabel] = len(missing)
+		result.PostureExcess[roleLabel] = len(excess)
+		result.GrantsApplied[roleLabel] = declared - len(missing)
+		if len(missing) == 0 {
 			logger.Info("runtime grant posture confirmed", "role", roleLabel, "grants_applied", declared)
-			return
+		} else {
+			result.OK = false
+			details := make([]string, len(missing))
+			for i, gap := range missing {
+				details[i] = gap.String()
+			}
+			logger.Error("runtime grant posture gap", "role", roleLabel, "gaps", details)
 		}
-		result.OK = false
-		details := make([]string, len(gaps))
-		for i, gap := range gaps {
-			details[i] = gap.String()
+		if len(excess) > 0 {
+			// This is the CHAOS-4675 case: nothing above is missing (the gate
+			// would otherwise print "confirmed" and go-worker-migrate's own
+			// telemetry would read clean), but the role also holds a
+			// table-wide grant on a table declared column-scoped -- exactly
+			// the granularity drift that let workerctl fail
+			// runtime_role_unauthorized right after a "posture confirmed" run.
+			result.OK = false
+			details := make([]string, len(excess))
+			for i, gap := range excess {
+				details[i] = gap.String()
+			}
+			logger.Error("runtime grant posture excess", "role", roleLabel, "gaps", details)
 		}
-		logger.Error("runtime grant posture gap", "role", roleLabel, "gaps", details)
 	}
 
 	checkTablePosture("domain", domainRole, postgresstore.DomainPosture())
@@ -138,5 +180,10 @@ func writePostureTelemetry(w io.Writer, result postureGateResult) {
 	fmt.Fprintln(w, "# TYPE dev_health_runtime_posture_missing gauge")
 	for _, role := range postureGateRoles {
 		fmt.Fprintf(w, "dev_health_runtime_posture_missing{role=%q} %d\n", role, result.PostureMissing[role])
+	}
+	fmt.Fprintln(w, "# HELP dev_health_runtime_posture_excess_grants Table-wide privileges held on a column-scoped table immediately after go-river-migrate (CHAOS-4675).")
+	fmt.Fprintln(w, "# TYPE dev_health_runtime_posture_excess_grants gauge")
+	for _, role := range postureGateRoles {
+		fmt.Fprintf(w, "dev_health_runtime_posture_excess_grants{role=%q} %d\n", role, result.PostureExcess[role])
 	}
 }

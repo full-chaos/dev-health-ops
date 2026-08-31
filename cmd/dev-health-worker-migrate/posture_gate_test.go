@@ -18,6 +18,7 @@ func TestWritePostureTelemetryEmitsBothMetricsForEveryRole(t *testing.T) {
 	result := postureGateResult{
 		GrantsApplied:  map[string]int{"domain": 42, "queue": 1, "coordinator": 12},
 		PostureMissing: map[string]int{"domain": 0, "queue": 0, "coordinator": 3},
+		PostureExcess:  map[string]int{"domain": 0, "queue": 0, "coordinator": 1},
 	}
 	var buf bytes.Buffer
 	writePostureTelemetry(&buf, result)
@@ -26,12 +27,16 @@ func TestWritePostureTelemetryEmitsBothMetricsForEveryRole(t *testing.T) {
 	for _, want := range []string{
 		"# TYPE dev_health_runtime_grants_applied_total counter",
 		"# TYPE dev_health_runtime_posture_missing gauge",
+		"# TYPE dev_health_runtime_posture_excess_grants gauge",
 		`dev_health_runtime_grants_applied_total{role="domain"} 42`,
 		`dev_health_runtime_grants_applied_total{role="queue"} 1`,
 		`dev_health_runtime_grants_applied_total{role="coordinator"} 12`,
 		`dev_health_runtime_posture_missing{role="domain"} 0`,
 		`dev_health_runtime_posture_missing{role="queue"} 0`,
 		`dev_health_runtime_posture_missing{role="coordinator"} 3`,
+		`dev_health_runtime_posture_excess_grants{role="domain"} 0`,
+		`dev_health_runtime_posture_excess_grants{role="queue"} 0`,
+		`dev_health_runtime_posture_excess_grants{role="coordinator"} 1`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("telemetry output missing %q; got:\n%s", want, output)
@@ -51,6 +56,7 @@ func TestWritePostureTelemetryDefaultsUnrecordedRolesToZero(t *testing.T) {
 	result := postureGateResult{
 		GrantsApplied:  map[string]int{},
 		PostureMissing: map[string]int{},
+		PostureExcess:  map[string]int{},
 	}
 	var buf bytes.Buffer
 	writePostureTelemetry(&buf, result)
@@ -60,6 +66,7 @@ func TestWritePostureTelemetryDefaultsUnrecordedRolesToZero(t *testing.T) {
 		for _, metric := range []string{
 			"dev_health_runtime_grants_applied_total",
 			"dev_health_runtime_posture_missing",
+			"dev_health_runtime_posture_excess_grants",
 		} {
 			want := metric + `{role="` + role + `"} 0`
 			if !strings.Contains(output, want) {

@@ -536,7 +536,7 @@ WHERE id = $1::uuid`,
 		case len(deferredOutsideSnapshot) > 0:
 			armAt := service.nowUTC()
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
-				earlierOf(nextDeferredAt, armAt.Add(redispatchCountdown())), armAt)
+				dueNowRearmAt(nextDeferredAt, armAt), armAt)
 		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
 		case len(cappedIDs) > 0:
@@ -572,7 +572,17 @@ WHERE id = $1::uuid`,
 	// elsewhere in this function) -- nothing to replicate beyond the call
 	// itself.
 	if counts.dispatchable > 0 {
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		// CHAOS-4605 (codex round 2, P2): this armed the bare countdown and
+		// dropped counts.nextDeferredAt on the floor. Because
+		// scheduleRedispatch's second statement overwrites a pending row
+		// UNCONDITIONALLY, a run holding both dispatchable-but-capped work and
+		// an earlier budget deferral had that deferral pushed out by up to the
+		// countdown. Reachable on origin/main already (concurrency-capped units
+		// alone put a pass here), and made far more reachable by this ticket's
+		// allow-list, which is precisely what leaves a unit dispatchable rather
+		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
+		armAt := service.nowUTC()
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAt(counts.nextDeferredAt, armAt), armAt)
 		service.logger.InfoContext(ctx, "dispatch_sync_run.noop",
 			slog.String("sync_run_id", run.id), slog.Int("queued_units", 0), slog.Int("pending_units", counts.dispatchable))
 		return nil

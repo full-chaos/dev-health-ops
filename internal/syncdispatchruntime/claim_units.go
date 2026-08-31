@@ -85,10 +85,23 @@ func execReturningIDs(ctx context.Context, tx pgx.Tx, sql string, args ...any) (
 //     deadlock-free against each other (dispatch_guard.go's
 //     sortedDispatchBuckets doc comment) -- and it still leaves that
 //     bucket's concurrency cap unevaluated for this pass.
-//   - REPEATABLE READ/SERIALIZABLE turns the interleaving into a 40001
-//     serialization failure. Dispatch() has no retry harness for one, and
-//     CHAOS-4550 is on record for why aborting the whole pass over a single
-//     unit is the wrong failure mode here.
+//   - Raising the isolation level does not address the no-concurrency shape
+//     at ALL: the guard and the claim take two different application
+//     timestamps (native_dispatch_sync_run_service.go:244 vs the fresh
+//     nowUTC() at the claim), and no isolation level reconciles two
+//     timestamps. For the concurrent shape it would convert interleavings
+//     into serialization failures, and Dispatch() has no retry harness
+//     around its transaction, with CHAOS-4550 on record for why aborting the
+//     whole pass over a single unit is the wrong failure mode. Whether EVERY
+//     such interleaving raises 40001 is unverified and is not relied on.
+//
+// SCOPE: this establishes the invariant for the native dispatch pass, not for
+// every write of status='dispatching' in the repository. Worker-side lease
+// handbacks (internal/providersync/repository_postgres.go's ReleaseForRetry
+// and the budget/rate-limit/continuation deferrals) move RUNNING -> DISPATCHING
+// through a lease-owner CAS; they hand a unit already in flight back to the
+// queue rather than admitting fresh work, and they are outside this
+// transaction. Do not read this allow-list as a global admission gate.
 //
 // Pinning the claim to the authorized set fails in the only safe direction:
 // a unit that became claimable after the snapshot is left RETRYING/PLANNED
@@ -105,16 +118,6 @@ func claimUnits(
 ) ([]budgetUnit, []string, error) {
 	cappedSlice := mapKeysToSlice(cappedUnitIDs)
 	authorizedSlice := mapKeysToSlice(authorizedUnitIDs)
-
-	// Every row the three statements below WOULD have claimed on their own
-	// fresh read, minus the ones this pass authorized. Non-empty means the
-	// snapshot-to-claim window was actually observed, which is the signal
-	// CHAOS-4605 exists to make visible -- and the caller must re-arm a
-	// dispatch for them.
-	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, authorizedSlice, cappedSlice, now)
-	if err != nil {
-		return nil, nil, err
-	}
 
 	plannedClaimed, err := execReturningIDs(ctx, tx, `
 UPDATE public.sync_run_units
@@ -163,6 +166,31 @@ RETURNING id::text`,
 	}
 	for _, id := range staleReclaimed {
 		claimedIDs[id] = true
+	}
+
+	// Probed AFTER the three statements, not before (codex sol architecture
+	// round, reservation 3). A writer that commits between the probe and the
+	// claims -- LeaseRepair.Step is the live example -- makes a row claimable
+	// that the allow-list correctly refuses; probing first meant that row was
+	// refused SILENTLY and the caller's redispatch arm never fired for it.
+	// Reading last makes the probe observe the latest state this transaction
+	// can see, so anything the claim statements just declined to touch is
+	// reported.
+	//
+	// Reading last cannot double-count what was just claimed: every claimed
+	// row is now DISPATCHING with updated_at = now, which matches none of the
+	// three predicates below (a fresh DISPATCHING row is not past the stale
+	// cutoff), and every claimed row is in authorizedSlice anyway.
+	//
+	// This is a narrower window, not a closed one: a writer can still commit
+	// after this read. That residue is not a liveness hole -- the reconciler's
+	// dispatch materializer independently finds PLANNED, stale-DISPATCHING and
+	// due-RETRYING units and re-arms dispatch (internal/syncreconciler/
+	// materializer.go), so a row this probe misses is still picked up. The arm
+	// here exists to make the common case prompt, not to be the only backstop.
+	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, authorizedSlice, cappedSlice, now)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if len(claimedIDs) == 0 {

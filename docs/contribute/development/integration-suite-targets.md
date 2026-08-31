@@ -69,18 +69,30 @@ Three consequences follow, and they are the whole decision procedure:
 
 ## Decision flow
 
+Routing is **per store**, not per suite: a suite that needs Valkey still takes
+its PostgreSQL and ClickHouse from kiac. Only the store that cannot be isolated
+stays local.
+
 ```mermaid
 flowchart TD
-    A[Integration suite] --> B{Needs Valkey?}
-    B -- yes --> C[Host Testcontainers<br/>Valkey has no CREATE DATABASE<br/>to isolate parallel callers]
-    B -- no --> D{Touches ClickHouse?}
-    D -- no --> E{Needs real org data?}
-    D -- yes --> F[kiac in-cluster<br/>only target on prod's 26.7 line]
-    E -- yes --> G[kiac in-cluster<br/>live data plane required]
-    E -- no --> H{Asserts a pristine DB<br/>or exact migration sequence?}
-    H -- yes --> I[Host Testcontainers<br/>or kiac scratch DB<br/>never a shared database]
-    H -- no --> J[kiac in-cluster<br/>CI is an acceptable backstop]
+    A[Integration suite] --> P{Is every Start* result<br/>eventually Closed?}
+    P -- no --> PF[Fix that FIRST<br/>a discarded Instance leaks a<br/>database on every run,<br/>including passing ones]
+    P -- yes --> B{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
+    B -- yes --> C[Host Testcontainers<br/>a scratch database does not<br/>isolate roles - until the names<br/>are parameterised]
+    B -- no --> D{Needs Valkey?}
+    D -- yes --> E[Valkey from a local container;<br/>PostgreSQL and ClickHouse<br/>still from kiac]
+    D -- no --> F{Touches ClickHouse?}
+    F -- yes --> G[kiac only<br/>the sole target on prod's 26.7 line;<br/>CI cannot prove engine behaviour]
+    F -- no --> H{Needs real org data?}
+    H -- yes --> I[kiac<br/>live data plane required]
+    H -- no --> J[kiac<br/>and CI is a sufficient backstop:<br/>the PostgreSQL versions match]
 ```
+
+Note what is **not** a fork here. "Does it assert a pristine database?" used to
+be one, and should not be: every caller gets a freshly created scratch database,
+so that requirement is satisfied on either target. The distinction that matters
+for those suites is scratch vs. *seeded*, which is a different question and is
+covered below.
 
 ## Per-package matrix — Go, dev-health-ops
 

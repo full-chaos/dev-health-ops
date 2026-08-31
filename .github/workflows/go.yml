@@ -124,11 +124,23 @@ jobs:
   # This job makes the choice explicit instead: a `push` run on a branch
   # that already has an open PR is redundant, because the `pull_request` run
   # on the identical commit is authoritative, so every substantive job below
-  # is skipped (not removed) for that case. A GitHub Actions "skipped"
-  # conclusion counts as passing for a required check, so `go-quality`
-  # (required on main via the ruleset) still satisfies branch protection on
-  # a no-PR branch push, and post-merge pushes to main (which never have an
+  # is stopped for that case. Post-merge pushes to main (which never have an
   # open PR with that head) are unaffected and keep running for real.
+  #
+  # `go-quality` (the one required check in this family — confirmed against
+  # the live `main` ruleset) is handled differently from every other job
+  # here: it has NO `if:` skip. A job skipped via `if:` still records a
+  # "skipped" check run under its own name, and GitHub treats "skipped" as
+  # PASSING for a required status check (same mechanism `go-quality-noop.yml`
+  # relies on deliberately for non-Go PRs) — for a REDUNDANT run that would
+  # let the superseded push run's skip satisfy `go-quality` before the real
+  # pull_request run's `go-quality` has finished. A codex review of this PR
+  # observed exactly that window live: the push run's `go-quality` reported
+  # `skipped` at 17:18:34 while the authoritative pull_request run's
+  # `go-quality` did not complete until 17:24:54. So instead of `if:`,
+  # `go-quality` is stopped by the run-level cancellation below, whose
+  # conclusion is `cancelled` — a status required-check evaluation does
+  # NOT treat as passing.
   #
   # Replacement for the flake-control this removes (ticket comment,
   # 2026-08-31): the duplicate run had started serving as an unintended
@@ -151,6 +163,7 @@ jobs:
     timeout-minutes: 2
     permissions:
       pull-requests: read
+      actions: write # to cancel this run when it is superseded — see below
     outputs:
       skip: ${{ steps.check.outputs.skip }}
     steps:
@@ -161,25 +174,47 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ "${EVENT_NAME}" != "push" ]; then
             echo "skip=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           owner="${REPO%%/*}"
-          count=$(gh api "repos/${REPO}/pulls?head=${owner}:${BRANCH}&state=open" --jq 'length')
-          if [ "${count}" -gt 0 ]; then
+          # `-f` query params are URL-encoded by `gh api` itself. Hand-built
+          # URL interpolation (the prior form) silently mis-sends a branch
+          # name containing `#`/`&`/space, which would miss a real open PR
+          # and let the duplicate run through — found by codex review.
+          if ! count=$(gh api -f state=open -f "head=${owner}:${BRANCH}" "repos/${REPO}/pulls" --jq 'length' 2>/tmp/guard-gh-api.err); then
+            # Fail OPEN, not closed (codex review, CHAOS-4676): an API
+            # hiccup must never silently cost this branch its only real Go
+            # coverage, and must never leave `go-quality` unrun on the one
+            # push run that would have supplied it.
+            echo "gh api lookup failed, defaulting to skip=false (run for real): $(cat /tmp/guard-gh-api.err)" >&2
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ "${count:-0}" -gt 0 ]; then
             echo "skipping: branch '${BRANCH}' has ${count} open PR(s); the pull_request run on this SHA is authoritative" >&2
             echo "skip=true" >> "${GITHUB_OUTPUT}"
+            # Cancel the run itself rather than leaving `go-quality` to an
+            # `if:` skip (see the job-family comment above for why: a
+            # skipped `go-quality` reports as a passing required check).
+            # Best-effort: this step has already written its output, so a
+            # failure here does not change the skip/run decision.
+            gh api --method POST "repos/${REPO}/actions/runs/${RUN_ID}/cancel" >/dev/null 2>&1 || true
           else
             echo "running: branch '${BRANCH}' has no open PR; this push run provides its only gate coverage" >&2
             echo "skip=false" >> "${GITHUB_OUTPUT}"
           fi
 
   go-quality:
+    # No `if:` skip here — see the job-family comment on `guard` above.
+    # This job's only defense against a redundant run is the guard job's
+    # run-level cancellation, deliberately, so a superseded run can never
+    # record a passing "skipped" `go-quality` (the required check).
     needs: guard
-    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

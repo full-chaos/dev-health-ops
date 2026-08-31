@@ -8,7 +8,18 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/99designs/gqlgen/graphql"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // CreateSavedReport is the resolver for the createSavedReport field.
@@ -81,9 +92,65 @@ func (r *queryResolver) Catalog(ctx context.Context, orgID string, dimension *mo
 	panic(fmt.Errorf("not implemented: Catalog - catalog"))
 }
 
-// Analytics is the resolver for the analytics field.
+// Analytics is the resolver for the analytics field (CHAOS-4506,
+// non-investment path only -- see internal/analytics's package doc
+// comment for the full scope split).
+//
+// The two-branch org-id check below is COPIED IN SHAPE from
+// FeatureFlags above (schema.resolvers.go:146-164), not invented here --
+// `analytics` is not the first ported resolver to take a client-supplied
+// `orgId` argument (nine others already do: FeatureFlags plus the
+// Catalog/DevMetric/DevScopeSearch/etc. stubs), and FeatureFlags already
+// implements the reject-on-mismatch check Python's OrgIdAuthExtension
+// (extensions.py:109-169) performs for its non-superuser branch. Message
+// text is NOT copied -- FeatureFlags's mismatch string ("org_id is
+// required for all analytics queries") is itself a copy-paste artifact
+// that predates this field and is not fixed here (out of this PR's
+// scope; not propagated forward either).
+//
+// KNOWN GAP, pre-existing and epic-wide, not introduced here: Python's
+// OrgIdAuthExtension lets a verified superuser cross-org query by
+// rebinding context.org_id when the requested org differs
+// (extensions.py:159-168); Go's authctx.Claims carries no superuser or
+// impersonation state at all, and none of the nine other orgId-taking
+// resolvers have it either. This makes Go strictly MORE restrictive than
+// Python (a superuser cannot cross-org query analytics via this path
+// yet) -- a capability gap, not a vulnerability: nothing leaks, the
+// restrictive direction is the safe one to diverge in on an authz
+// boundary, and adding superuser support later is additive, never a
+// revert.
 func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error) {
-	panic(fmt.Errorf("not implemented: Analytics - analytics"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		return nil, &gqlerror.Error{
+			Message: "cannot query analytics for a different organization",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
+	spanCtx, finish := startAnalyticsSpan(ctx)
+	result, err := analytics.Resolve(spanCtx, r.ClickHouse, orgID, batch)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("analytics: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // ProductTelemetryDashboard is the resolver for the productTelemetryDashboard field.
@@ -101,9 +168,44 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 	panic(fmt.Errorf("not implemented: Home - home"))
 }
 
-// WorkGraphEdges is the resolver for the workGraphEdges field.
+// WorkGraphEdges is the resolver for the workGraphEdges field (CHAOS-4352
+// Wave 4 Lane A / CHAOS-4504). Ports
+// dev_health_ops.api.graphql.resolvers.work_graph.resolve_work_graph_edges
+// via workgraph.ResolveEdges -- see that package's doc comment for the full
+// parity contract, the CHAOS-4515 Go-side dedup fix (a DELIBERATE
+// divergence from Python), and the resolve_work_graph_edges splice trap.
+//
+// Authorization mirrors resolve_work_graph_edges's ACTUAL behavior exactly,
+// same "authorized org always wins" convention as ReviewEdges/CognitiveLoad
+// above: Python's require_org_id(context) raises when the envelope has no
+// org, then silently uses the authorized org for every query regardless of
+// what the client sent as the orgId argument. This resolver reproduces that
+// by construction: it passes claims.OrgID, never the orgID argument, to
+// workgraph.ResolveEdges.
 func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphEdgesResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphEdges - workGraphEdges"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphEdgesSpan(ctx)
+	result, err := workgraph.ResolveEdges(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphEdges: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // Pr is the resolver for the pr field.
@@ -111,19 +213,122 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 	panic(fmt.Errorf("not implemented: Pr - pr"))
 }
 
-// WorkGraphFlow is the resolver for the workGraphFlow field.
+// WorkGraphFlow is the resolver for the workGraphFlow field (CHAOS-4352
+// Wave 4 Lane A / CHAOS-4504). Ports resolve_work_graph_flow via
+// workgraph.ResolveFlow -- see workgraph package doc comment. Same
+// "authorized org always wins" authorization convention as WorkGraphEdges
+// above.
 func (r *queryResolver) WorkGraphFlow(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphFlowResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphFlow - workGraphFlow"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphFlowSpan(ctx)
+	result, err := workgraph.ResolveFlow(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphFlow: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
-// WorkGraphArtifacts is the resolver for the workGraphArtifacts field.
+// WorkGraphArtifacts is the resolver for the workGraphArtifacts field
+// (CHAOS-4352 Wave 4 Lane A / CHAOS-4504). Ports
+// resolve_work_graph_artifacts via workgraph.ResolveArtifacts -- see
+// workgraph package doc comment. Same "authorized org always wins"
+// authorization convention as WorkGraphEdges above.
 func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphArtifactsResult, error) {
-	panic(fmt.Errorf("not implemented: WorkGraphArtifacts - workGraphArtifacts"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	spanCtx, finish := startWorkGraphArtifactsSpan(ctx)
+	result, err := workgraph.ResolveArtifacts(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("workGraphArtifacts: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
-// FeatureFlags is the resolver for the featureFlags field.
+// FeatureFlags is the resolver for the featureFlags field (CHAOS-4367
+// Wave 1 canary). Ports
+// dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flags
+// via featureflags.Resolve -- see that package's doc comment for the
+// exact parity contract (WHERE clauses, argMax latest-row selection,
+// ORDER BY, LIMIT clamp, missing-table degraded path).
+//
+// Authorization mirrors require_org_id's contract at the boundary this
+// Go plane actually owns: query-api trusts the effective-principal
+// envelope (plan §3), not an independent Postgres/Valkey lookup, so the
+// check here is "does the envelope's org match the orgId argument the
+// client is asking about" -- a caller cannot read another org's flags by
+// passing a different orgId than their own envelope carries.
 func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider *string, project *string, includeArchived *bool, limit int) (*model.FeatureFlagRegistryResult, error) {
-	panic(fmt.Errorf("not implemented: FeatureFlags - featureFlags"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	includeArchivedValue := false
+	if includeArchived != nil {
+		includeArchivedValue = *includeArchived
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
+	spanCtx, finish := startFeatureFlagsSpan(ctx)
+	result, err := featureflags.Resolve(spanCtx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("featureFlags: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // FeatureFlagEvents is the resolver for the featureFlagEvents field.
@@ -181,9 +386,47 @@ func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, in
 	panic(fmt.Errorf("not implemented: ThroughputForecast - throughputForecast"))
 }
 
-// OperatingReview is the resolver for the operatingReview field.
+// OperatingReview is the resolver for the operatingReview field (CHAOS-4352
+// Wave 4 Lane B, CHAOS-4505). Ports
+// dev_health_ops.api.graphql.resolvers.operating_review.resolve_operating_review
+// via operatingreview.Resolve -- see that package's doc comment for the
+// full parity contract (ten-table dual-period fetch, per-table error
+// isolation, and the one declared Go-side fix + expected dual-run
+// divergence on ai_governance).
+//
+// The orgID parameter (from the schema's `operatingReview(orgId: String!,
+// input: ...)`) is deliberately UNUSED for scoping, matching Python's
+// ACTUAL behavior exactly: api/graphql/schema.py's operating_review field
+// accepts the same org_id argument and never passes it to
+// resolve_operating_review, which authorizes via require_org_id(context)
+// alone -- the same "authorized org always wins, a client-supplied orgId
+// is parsed but never trusted for scoping" behavior cognitiveload/
+// reviewedges/hotspots already document. This resolver reproduces that by
+// construction: it passes claims.OrgID, never orgID, to
+// operatingreview.Resolve.
 func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input model.OperatingReviewInput) (*model.OperatingReview, error) {
-	panic(fmt.Errorf("not implemented: OperatingReview - operatingReview"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startOperatingReviewSpan(ctx)
+	result, err := operatingreview.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.WeekStart)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("operatingReview: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // DataHealth is the resolver for the dataHealth field.
@@ -208,22 +451,142 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.
 func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error) {
-	panic(fmt.Errorf("not implemented: ComplexityTimeseries - complexityTimeseries"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startComplexityTimeseriesSpan(ctx)
+	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("complexityTimeseries: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // Hotspots is the resolver for the hotspots field.
 func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput) (*model.HotspotsResult, error) {
-	panic(fmt.Errorf("not implemented: Hotspots - hotspots"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startHotspotsSpan(ctx)
+	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("hotspots: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
-// CognitiveLoad is the resolver for the cognitiveLoad field.
+// CognitiveLoad is the resolver for the cognitiveLoad field (CHAOS-4369
+// Wave 3; extended to the ownership-gated team+repo path by CHAOS-4462
+// after the CHAOS-4352 rebase lane took origin/main's CHAOS-4406 fix).
+// Ports
+// dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load
+// via cognitiveload.Resolve -- see that package's doc comment for the
+// exact parity contract (the THREE read paths: single-team direct read,
+// ownership-gated team+repo-combined, and org-wide merge).
+//
+// Authorization mirrors resolve_cognitive_load's/ReviewEdges's ACTUAL
+// behavior exactly, not FeatureFlags's stricter Go-side equality check:
+// Python's resolver calls require_org_id(context) (raises when the
+// envelope has no org) and then, if input.org_id differs from the
+// authorized org, does NOT error -- it logs a debug line and silently
+// uses the authorized org for every query regardless of what the client
+// sent. This resolver reproduces that "authorized org always wins,
+// client-supplied orgId in the input is never trusted for scoping"
+// behavior by construction: it passes claims.OrgID, never input.OrgID, to
+// cognitiveload.Resolve.
 func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.CognitiveLoadInput) (*model.CognitiveLoadResult, error) {
-	panic(fmt.Errorf("not implemented: CognitiveLoad - cognitiveLoad"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startCognitiveLoadSpan(ctx)
+	result, err := cognitiveload.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.TeamID, input.RepoID)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("cognitiveLoad: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
-// ReviewEdges is the resolver for the reviewEdges field.
+// ReviewEdges is the resolver for the reviewEdges field (CHAOS-4368 Wave
+// 2). Ports
+// dev_health_ops.api.graphql.resolvers.review_edges.resolve_review_edges
+// via reviewedges.Resolve -- see that package's doc comment for the exact
+// parity contract (dedup, deterministic ORDER BY tie-break, repo_ids
+// filter, limit clamp, and the deliberate absence of a degraded-result
+// path unlike FeatureFlags).
+//
+// Authorization mirrors resolve_review_edges's ACTUAL behavior exactly,
+// not FeatureFlags's stricter Go-side equality check above: Python's
+// resolver calls require_org_id(context) (raises when the envelope has no
+// org) and then, if input.org_id differs from the authorized org, does
+// NOT error -- it logs a debug line and silently uses the authorized org
+// for the query regardless of what the client sent
+// (review_edges.py's resolve_review_edges, "Ignoring GraphQL orgId ... in
+// favor of authorized org"). This resolver reproduces that
+// "authorized org always wins, client-supplied orgId in the input is
+// never trusted for scoping" behavior by construction: it passes
+// claims.OrgID, never input.OrgID, to reviewedges.Resolve.
 func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdgesInput) (*model.ReviewEdgesResult, error) {
-	panic(fmt.Errorf("not implemented: ReviewEdges - reviewEdges"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	// The returned ctx carries the span; finish must run after Resolve
+	// actually completes so the span measures the resolver's real work
+	// (same discipline startFeatureFlagsSpan's doc comment documents).
+	spanCtx, finish := startReviewEdgesSpan(ctx)
+	result, err := reviewedges.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.RepoIds, input.Limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("reviewEdges: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // Recommendations is the resolver for the recommendations field.

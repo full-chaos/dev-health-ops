@@ -247,7 +247,25 @@ async def _fetch_hotspot_rows(
     repo_ids: list[str] | None,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Latest-compute read from ``file_hotspot_daily``, ranked by risk_score DESC."""
+    """Latest-compute read from ``file_hotspot_daily``, ranked by risk_score DESC.
+
+    CHAOS-4472 / CHAOS-4369: ``ORDER BY risk_score DESC NULLS LAST`` alone
+    has no tie-breaker. ClickHouse does NOT guarantee a stable row order
+    among rows with equal ``risk_score`` -- an ``ORDER BY`` with ties,
+    combined with a ``LIMIT`` sitting at a tie boundary, can return a
+    different row set/order across otherwise-identical runs (parallel block
+    processing has no ordering guarantee beyond the declared sort key; see
+    ClickHouse docs on ORDER BY: "If ... rows have the same value ... the
+    resulting order of such rows is undefined and may be non-deterministic").
+    That makes this resolver's output genuinely non-deterministic at a tie
+    boundary, which the Go/Python parity comparator (CHAOS-4381 stage 2)
+    cannot tolerate -- comparing two non-deterministic outputs is not a
+    valid proof of parity. Fix: extend ``ORDER BY`` with a deterministic
+    tie-break drawn from the row's own key columns -- ``repo_id, file_path``
+    is exactly the ``GROUP BY`` key below, so it is already a total order
+    over the deduplicated row set; no synthetic tiebreaker column is
+    introduced. Same class of fix as CHAOS-4421 (reviewEdges).
+    """
     query = """
         SELECT
             toString(repo_id) AS repo_id,
@@ -280,7 +298,7 @@ async def _fetch_hotspot_rows(
         params["repo_ids"] = bounded
     query += (
         f"\nGROUP BY repo_id, file_path"
-        f"\nORDER BY risk_score DESC NULLS LAST\nLIMIT {limit}"
+        f"\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT {limit}"
     )
     return await query_dicts(client, query, params)
 

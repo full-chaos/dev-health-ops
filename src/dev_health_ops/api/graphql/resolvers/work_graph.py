@@ -1139,34 +1139,28 @@ async def resolve_work_graph_edges(
     )
     params["limit"] = int(limit)
 
-    # ORDER BY confidence DESC, edge_id ASC (CHAOS-2442) — GATED on a narrowing
-    # filter being active. The table is sorted by (source_type, source_id,
-    # edge_type, target_type, target_id), NOT confidence, so a GLOBAL relevance
-    # sort would force ClickHouse to read the org's ENTIRE edge set and top-sort
-    # before returning the first page — defeating early-LIMIT termination (a
-    # timeout path for large tenants). We therefore only sort when the candidate
-    # set is ALREADY bounded by a narrowing filter (edge_type(s)/source/target/
-    # node_id/theme/subcategory/repo_ids). For the fully-unfiltered default
-    # overview we emit NO ORDER BY, keeping the cap-bounded hot path — that's
-    # acceptable because the Dependencies tab fetches its own edge_types and the
-    # aggregates (work_graph_flow / work_graph_artifacts) are exact at any scale,
-    # so the broad overview does not need the global sort to be useful.
-    has_narrowing_filter = bool(
-        filters
-        and (
-            filters.repo_ids
-            or filters.source_type
-            or filters.target_type
-            or filters.edge_type
-            or filters.edge_types
-            or filters.node_id
-            or filters.theme
-            or filters.subcategory
-        )
-    )
-    order_by_sql = (
-        "ORDER BY confidence DESC, edge_id ASC" if has_narrowing_filter else ""
-    )
+    # ORDER BY confidence DESC, edge_id ASC (CHAOS-2442), UNCONDITIONAL on both
+    # the filtered and unfiltered paths (CHAOS-4493). This used to be GATED on
+    # a narrowing filter being active, on the argument that the cap-bounded
+    # unfiltered hot path did not need a global sort. That argument was about
+    # UI usefulness only — it does not survive a cross-plane comparator: the
+    # CHAOS-4381 stage-2 dual-run comparator diffs this resolver's Python rows
+    # against the Go port's rows for the SAME input, and a query with no total
+    # order under LIMIT legitimately returns a different row set/order on the
+    # two planes (or even two consecutive calls to the same plane), so the
+    # comparator could never reach a stable match verdict on the unfiltered
+    # path. `edge_id` is the table's own ReplacingMergeTree dedup key — unique
+    # per (source_type, source_id, edge_type, target_type, target_id) — so it
+    # is already a total order over the deduplicated row set, not a synthetic
+    # tiebreaker column. Same class of fix as CHAOS-4421 (reviewEdges, #1980)
+    # and CHAOS-4472 (hotspots, #1996): fixed in Python first, ahead of the
+    # Go port (CHAOS-4504), so the port can carry the identical ORDER BY.
+    #
+    # Cost: the table's own sort key is (source_type, source_id, edge_type,
+    # target_type, target_id), not confidence, so this sort is NOT free on the
+    # unfiltered path — see CHAOS-4493's PR body for the measured cost at a
+    # realistic row count.
+    order_by_sql = "ORDER BY confidence DESC, edge_id ASC"
     query = f"""
         SELECT
             edge_id,

@@ -29,6 +29,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
+    "cmd/query-api",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -212,8 +213,31 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
     # go_api_registry-backed PostgresSwitch is proved against a real
     # Postgres testcontainer.
-    assert "31 package(s) discovered, 0 denylisted, 31 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 31 package(s)" in result.stdout
+    # CHAOS-4367 added cmd/query-api (31 -> 32): the featureFlags Wave-1
+    # canary's HTTP-level reachability test
+    # (query_route_integration_test.go) is proved against a real Postgres
+    # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
+    # CHAOS-4352 (batch analytics port, commit 634414b0a) added
+    # cmd/query-api/internal/analytics (32 -> 33): nan_class_live_test.go
+    # is integration-tagged because it proves the ClickHouse NaN-class
+    # breakdown live against a real container. This literal drifted stale
+    # across the Wave 5 epic rebase/main-merge chain before anyone landed
+    # the re-pin -- reproduced red on the base tip (e9ea257ff, pre-rebase)
+    # and on this branch's own merge tip (da9aadadb) before re-pinning,
+    # per root AGENTS.md's "never label a red check unrelated without
+    # running it on the base SHA".
+    # CHAOS-4643 denylisted cmd/query-api/internal/analytics out of the
+    # shard manifest (still discovered, no longer runnable/shardable: 33
+    # discovered, 32 will run) -- CI's integration-shard job never sets
+    # CLICKHOUSE_URI, which nan_class_live_test.go requires directly (unlike
+    # every sibling package, which gets its own ClickHouse via
+    # testcontainers), so the enrolled test skipped on every CI run and the
+    # skip reported as a pass. It remains a discretionary, slot-only proof
+    # per orchestrator ruling 2026-08-29 (see the file's own STATUS header),
+    # now run explicitly with CLICKHOUSE_URI + DEV_HEALTH_REQUIRE_LIVE=1, not
+    # via this gate.
+    assert "33 package(s) discovered, 1 denylisted, 32 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 32 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -239,7 +263,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 31
+    assert len(flattened) == len(set(flattened)) == 32
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1454,7 +1478,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 30
+    assert len(selected_packages) == len(set(selected_packages)) == 31
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

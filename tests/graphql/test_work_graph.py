@@ -305,6 +305,73 @@ class TestResolveWorkGraphEdges:
         with pytest.raises(RuntimeError, match="Database client not available"):
             await resolve_work_graph_edges(context)
 
+    # -----------------------------------------------------------------------
+    # Deterministic tie-break on the UNFILTERED path (CHAOS-4493)
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_edges_order_by_has_deterministic_tie_break(
+        self, mock_context
+    ):
+        """The unfiltered ``workGraphEdges`` path previously emitted NO
+        ``ORDER BY`` at all (gated behind ``has_narrowing_filter``), so under
+        ``LIMIT`` ClickHouse's row set/order was undefined — the table's own
+        sort key is ``(source_type, source_id, edge_type, target_type,
+        target_id)``, not confidence, so nothing pinned which rows survive a
+        tie. That makes the CHAOS-4381 stage-2 Go/Python dual-run comparator
+        meaningless on this path (comparing two non-deterministic outputs is
+        not a valid parity proof). Fix: apply the SAME
+        ``ORDER BY confidence DESC, edge_id ASC`` the filtered path already
+        used, unconditionally — one order for both paths, and ``edge_id`` is
+        the table's own dedup key, already a total order over the
+        deduplicated row set, so no synthetic tiebreaker column is
+        introduced. Same class of fix as CHAOS-4421 (reviewEdges, #1980) and
+        CHAOS-4472 (hotspots, #1996).
+
+        Red-first: before the fix, no filters means ``has_narrowing_filter``
+        is False and ``order_by_sql`` is the empty string, so this assertion
+        fails (the ORDER BY clause is entirely absent from the unfiltered
+        query).
+        """
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = []
+
+            await resolve_work_graph_edges(mock_context)
+
+            call_args = mock_query.call_args
+            sql = call_args[0][1]
+
+            assert "ORDER BY confidence DESC, edge_id ASC" in sql, (
+                "the unfiltered workGraphEdges path must carry a "
+                "deterministic ORDER BY, not rely on an absent sort key "
+                "(CHAOS-4493) — a LIMIT with no total order returns an "
+                "undefined row set/order at a tie boundary"
+            )
+            idx_where = sql.index("WHERE org_id = %(org_id)s")
+            idx_order = sql.index("ORDER BY confidence DESC, edge_id ASC")
+            idx_limit = sql.index("LIMIT")
+            assert idx_where < idx_order < idx_limit
+
+    @pytest.mark.asyncio
+    async def test_filtered_edges_order_by_still_present(self, mock_context):
+        """Narrowing-filter path already had the deterministic ORDER BY —
+        this pins it stays unchanged now that the gate is removed (both
+        paths must emit the identical clause, not diverge)."""
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = []
+
+            filters = WorkGraphEdgeFilterInput(source_type=WorkGraphNodeTypeInput.ISSUE)
+            await resolve_work_graph_edges(mock_context, filters)
+
+            sql = mock_query.call_args[0][1]
+            assert "ORDER BY confidence DESC, edge_id ASC" in sql
+
 
 class TestWorkGraphEdgeDisplayNames:
     """CHAOS-2089: WorkGraphEdgeResult carries server-resolved display names.

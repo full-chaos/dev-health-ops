@@ -114,6 +114,7 @@ package analytics
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -147,6 +148,38 @@ const requireLiveEnv = "DEV_HEALTH_REQUIRE_LIVE"
 // regression). Doing the same translation here lets this test run off
 // the SAME env var value the slot already exports, rather than requiring
 // a second, easily-forgotten one.
+// dsnParseErrorForLog converts a DSN-parsing error into a string safe to
+// hand to t.Fatalf/log output: it never includes the raw input URL that
+// produced the error, even though the error VALUE itself does. CHAOS-4643
+// round 4 (EXECUTED by codex, immediately after redactDSNForLog was deleted
+// and every direct dsn-logging call site was removed): Go's own
+// net/url.Error type -- returned by both url.Parse and, via lib/churl,
+// clickhouse.ParseDSN -- embeds the ENTIRE input URL in its own Error()
+// string ("parse \"<url>\": <cause>"). Neither this file's redaction
+// removal nor its stop-logging-the-dsn discipline touched that: the
+// credential was never handed to a log call, it rode inside the %v
+// formatting of the error VALUE at the two t.Fatalf sites below. Unwrapping
+// to the inner cause (errors.As to *url.Error, then .Err) closes that path
+// by construction -- .Err carries a fixed description ("missing ']' in
+// host", "invalid port \":abc\" after host") or, for a malformed escape,
+// a short fragment of the OFFENDING BYTES ("invalid URL escape \"%ZZ\""),
+// never the surrounding userinfo/query. Errors clickhouse.ParseDSN returns
+// that do NOT come from churl (e.g. its own "parse dsn address failed" for
+// an empty host) are already static strings with no interpolated input --
+// verified empirically, not assumed, and pinned by
+// TestDSNParseErrorForLog_NeverLeaksCredentials below across both call
+// sites and multiple malformed-input shapes. Every DSN-parse-error site in
+// this file MUST route through this one helper, so there is a single place
+// this can be gotten wrong rather than one t.Fatalf per site that each has
+// to stay correct independently.
+func dsnParseErrorForLog(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
+}
+
 // nanClassClickHouseURI returns (dsn, hostPort): dsn is the full rebuilt
 // connection string for the driver; hostPort is host:port only (no
 // credentials, no path, no query) for callers that need to name the target
@@ -173,7 +206,7 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 	// never calls either of those.
 	pathQuery, err := url.Parse(raw)
 	if err != nil {
-		t.Fatalf("parse CLICKHOUSE_URI: %v", err)
+		t.Fatalf("parse CLICKHOUSE_URI: %s", dsnParseErrorForLog(err))
 	}
 
 	// Host list and credentials come ONLY from the driver's OWN DSN
@@ -189,7 +222,7 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 	// half-implementations of the same job.
 	opts, err := chdriver.ParseDSN(raw)
 	if err != nil {
-		t.Fatalf("clickhouse.ParseDSN(CLICKHOUSE_URI): %v", err)
+		t.Fatalf("clickhouse.ParseDSN(CLICKHOUSE_URI): %s", dsnParseErrorForLog(err))
 	}
 	if len(opts.Addr) == 0 {
 		t.Fatalf("CLICKHOUSE_URI has no host: %q", raw)
@@ -707,4 +740,93 @@ func TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping(t *t
 				requireLiveEnv, fake.failed, fake.skipped, fake.msg)
 		}
 	})
+}
+
+// TestDSNParseErrorForLog_NeverLeaksCredentials is CHAOS-4643 round 4's
+// EXECUTED finding, and the property test the ruling required: rounds 1-4
+// on this file are ALL one class -- credentials reaching an output stream
+// -- and this is the brick that was still missing after round 4's
+// structural fix (deleting redactDSNForLog, no longer logging the DSN
+// directly) closed every site THIS FILE'S OWN CODE writes to a log/error
+// string. What remained was the error VALUE itself: Go's net/url.Error
+// embeds the entire input URL in its own Error() string, so
+// t.Fatalf("...: %v", err) on either DSN-parse failure in
+// nanClassClickHouseURI printed the credentialed DSN through the error's
+// formatting, never through anything this file explicitly logged. A
+// table-driven PROPERTY test, not a single example, because the point is
+// that this must hold for every malformed-input SHAPE that can reach
+// either parse call, not just the one codex happened to try -- a future
+// edit that reintroduces a leak at a different malformed-input shape must
+// fail this test too, not just the shape codex tried once.
+func TestDSNParseErrorForLog_NeverLeaksCredentials(t *testing.T) {
+	const password = "ci-secret"
+	const userinfo = "ci-user:ci-secret"
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			// Unbalanced IPv6 bracket -- fails inside url.Parse (the
+			// FIRST call in nanClassClickHouseURI).
+			name: "unbalanced_bracket",
+			raw:  "clickhouse://ci-user:ci-secret@[::1:8123/db",
+		},
+		{
+			// Non-numeric port -- fails inside url.Parse.
+			name: "bad_port",
+			raw:  "clickhouse://ci-user:ci-secret@example.internal:notaport/db",
+		},
+		{
+			// Empty host (userinfo present, host component empty) --
+			// url.Parse itself accepts this syntactically; the failure
+			// comes from the SECOND call, clickhouse.ParseDSN, whose own
+			// "parse dsn address failed" is a static string with no
+			// interpolated input. Exercises the other call site.
+			name: "empty_host",
+			raw:  "clickhouse://ci-user:ci-secret@/db",
+		},
+		{
+			// Malformed percent-escape INSIDE the userinfo itself --
+			// the case most likely to echo a credential fragment back,
+			// since the escape error's diagnostic can include the
+			// offending bytes. Fails inside url.Parse.
+			name: "bad_percent_escape_in_userinfo",
+			raw:  "clickhouse://ci-user:ci-sec%ZZret@example.internal:8123/db",
+		},
+		{
+			// Multi-host with a malformed piece in the SECOND host, and
+			// credentials carried as ?username=/?password= query params
+			// instead of userinfo -- covers the multi-host class finding
+			// A fixed, the query-param-credential class finding B fixed,
+			// AND the raw-query-string leak surface in one input. Fails
+			// inside url.Parse ("invalid IP-literal").
+			name: "multi_host_malformed_with_query_param_credentials",
+			raw:  "clickhouse://host1:8123,[::1:8443/db?username=ci-user&password=ci-secret",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLICKHOUSE_URI", tc.raw)
+			t.Setenv(requireLiveEnv, "")
+			fake := &fakeSkipFailTB{TB: t}
+			runNanClassClickHouseURI(fake)
+			if !fake.failed || fake.skipped {
+				t.Fatalf("expected this malformed DSN to FAIL (not skip or succeed): failed=%v skipped=%v msg=%q",
+					fake.failed, fake.skipped, fake.msg)
+			}
+			if strings.Contains(fake.msg, password) {
+				t.Fatalf("failure message leaked the PASSWORD: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, userinfo) {
+				t.Fatalf("failure message leaked the USERINFO: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, "username=ci-user") || strings.Contains(fake.msg, "password=ci-secret") {
+				t.Fatalf("failure message leaked the RAW QUERY STRING credentials: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, tc.raw) {
+				t.Fatalf("failure message embedded the entire raw DSN verbatim: %q", fake.msg)
+			}
+		})
+	}
 }

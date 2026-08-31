@@ -175,14 +175,33 @@ jobs:
   # `merge_group`/`workflow_dispatch`/`schedule` are unaffected — none of
   # them are reachable from the proved scenario (a same-SHA `push` racing a
   # same-SHA `pull_request` open/reopen).
+  #
+  # Confirm-or-fail-loudly (codex round 4, CHAOS-4676): the cross-run cancel
+  # above was originally best-effort (`|| true`), with nothing checking
+  # whether it actually landed — the same silent-failure shape as the
+  # already-fixed finding on the push-side cancel, except round 2's fix for
+  # THAT (go-quality's self-abort backstop) does not cover this path: it
+  # only fires when a run's OWN guard.skip output is 'true', and the stale
+  # push run's own skip output was legitimately 'false' when it started
+  # (correct at push time, before the PR existed) — it can never self-abort
+  # via that mechanism. Silently proceeding on an unconfirmed cancel would
+  # reintroduce the exact double-real-run problem this ticket exists to
+  # remove, just gated behind "cancel failed" instead of "always" — and
+  # this ticket's own standing bar is no fail-open without telemetry. So
+  # this path now polls the cancelled run to a terminal state (bounded
+  # wait) and, if the lookup or cancel or that confirmation fails, sets
+  # `stale_push_unconfirmed=true` naming the run id in the log. `go-quality`
+  # (below) fails deliberately, not skips, when that output is true — same
+  # pattern as the skip=true backstop, so this can never read as a pass.
   guard:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     permissions:
       pull-requests: read
-      actions: write # to cancel this run when it is superseded — see below
+      actions: write # to cancel this run (or a stale peer) when superseded
     outputs:
       skip: ${{ steps.check.outputs.skip }}
+      stale_push_unconfirmed: ${{ steps.check.outputs.stale_push_unconfirmed }}
     steps:
       - name: Decide whether this push run is superseded by an open PR
         id: check
@@ -198,17 +217,46 @@ jobs:
           if [ "${EVENT_NAME}" = "pull_request" ]; then
             # TOCTOU close (codex round 3, CHAOS-4676 — see the job-family
             # comment above): this run is always authoritative and always
-            # proceeds, but first cancel any still-active `push`-triggered
+            # proceeds, but first cancels any still-active `push`-triggered
             # run at the IDENTICAL head SHA, so a push-then-PR-open/reopen
             # at one commit can never leave two real runs live on it.
+            #
+            # Confirm-or-fail-loudly (round 4 finding, see job-family
+            # comment above): every failure branch below sets
+            # stale_push_unconfirmed=true and names the run id, instead of
+            # silently proceeding. go-quality turns that into a real
+            # failure, never a skip.
+            stale_unconfirmed=false
             if ids=$(gh api --method GET -f event=push -f "head_sha=${PR_HEAD_SHA}" "repos/${REPO}/actions/workflows/go.yml/runs" --jq '[.workflow_runs[] | select(.status != "completed") | .id] | .[]' 2>/tmp/guard-supersede.err); then
               for id in ${ids}; do
                 echo "cancelling superseded same-SHA push run ${id} (this pull_request run is authoritative)" >&2
-                gh api --method POST "repos/${REPO}/actions/runs/${id}/cancel" >/dev/null 2>&1 || true
+                if ! gh api --method POST "repos/${REPO}/actions/runs/${id}/cancel" >/tmp/guard-cancel-"${id}".err 2>&1; then
+                  echo "cancel POST for stale push run ${id} FAILED: $(cat /tmp/guard-cancel-"${id}".err)" >&2
+                  stale_unconfirmed=true
+                  continue
+                fi
+                # Bounded poll (~30s) for the cancel to actually land —
+                # "completed" is the only terminal `status` value; do not
+                # trust the cancel POST's 202 Accepted on its own.
+                confirmed=false
+                for _ in 1 2 3 4 5 6; do
+                  run_status=$(gh api "repos/${REPO}/actions/runs/${id}" --jq '.status' 2>/dev/null || echo "")
+                  if [ "${run_status}" = "completed" ]; then
+                    confirmed=true
+                    break
+                  fi
+                  sleep 5
+                done
+                if [ "${confirmed}" != "true" ]; then
+                  echo "stale push run ${id} did NOT reach a terminal state within the bounded wait after cancel; cannot confirm it stopped" >&2
+                  stale_unconfirmed=true
+                fi
               done
             else
-              echo "same-SHA push-run lookup failed, proceeding anyway (pull_request always runs for real): $(cat /tmp/guard-supersede.err)" >&2
+              echo "same-SHA push-run lookup FAILED, cannot confirm no stale run is live: $(cat /tmp/guard-supersede.err)" >&2
+              stale_unconfirmed=true
             fi
+            echo "stale_push_unconfirmed=${stale_unconfirmed}" >> "${GITHUB_OUTPUT}"
             echo "skip=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -271,6 +319,25 @@ jobs:
           echo "guard determined this push run is superseded by an open PR;" >&2
           echo "the pull_request run on this SHA is authoritative. Failing" >&2
           echo "deliberately (not skipping) so this can never read as a pass." >&2
+          exit 1
+
+      # Same pattern, other direction (codex round 4, CHAOS-4676): this is
+      # the `pull_request` run itself. guard could not CONFIRM that a stale
+      # same-SHA `push` run it found was actually cancelled (lookup failed,
+      # cancel POST failed, or the run never reached a terminal state within
+      # the bounded wait — see guard's job-family comment). Proceeding
+      # silently risks two authoritative go-quality reports on one SHA —
+      # exactly this ticket's defect. Failing loudly here, rather than the
+      # stale run's own (already-known-uncertain) fate, is the one outcome
+      # this run can actually guarantee: a visible, correctly-attributed red
+      # that names the cause, instead of a quiet ambiguous rollup.
+      - name: Abort if a superseded push run could not be confirmed cancelled
+        if: needs.guard.outputs.stale_push_unconfirmed == 'true'
+        run: |
+          echo "guard could not confirm that a stale same-SHA push run was" >&2
+          echo "actually cancelled (CHAOS-4676 finding #7). Failing" >&2
+          echo "deliberately rather than risk two authoritative go-quality" >&2
+          echo "runs on one SHA; see this run's guard job log for the run id." >&2
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

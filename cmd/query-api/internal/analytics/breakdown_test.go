@@ -173,11 +173,58 @@ func TestExecuteBreakdown_MapsRows(t *testing.T) {
 	if len(result.Items) != 2 {
 		t.Fatalf("got %d items, want 2", len(result.Items))
 	}
-	if result.Items[0].Key != "repo-a" || result.Items[0].Value != 10.0 {
-		t.Fatalf("unexpected items[0]: %+v", result.Items[0])
+	if result.Items[0].Value == nil {
+		t.Fatalf("unexpected items[0]: Value is nil, want a populated 10.0")
+	}
+	if result.Items[0].Key != "repo-a" || *result.Items[0].Value != 10.0 {
+		t.Fatalf("unexpected items[0]: %+v (value=%v)", result.Items[0], *result.Items[0].Value)
 	}
 	if result.Items[0].Label != nil {
 		t.Fatalf("label resolution not yet ported -- expected nil label, got %v", *result.Items[0].Label)
+	}
+}
+
+// TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero is the
+// CHAOS-4650 (chris 2026-08-31 04:18, Option B) regression guard for
+// executeBreakdownRaw's nullable scan. Proven in BOTH directions per the
+// epic's evidence standard: a test asserting only the null case cannot
+// catch a change that nils out EVERY value, which would be a worse
+// defect than the 0.0 collapse this fixes (a populated group silently
+// losing its real value). A group whose measure column is SQL NULL
+// (repo-null) must come back as model.BreakdownItem.Value == nil (JSON
+// null on the wire, not the literal 0); a populated group in the SAME
+// result set (repo-real) must still carry its real float64.
+//
+// RED-on-baseline: against executeBreakdownRaw's pre-fix `var value
+// float64` (bare, non-pointer) destination, the fake's *float64 case
+// mirrors the real clickhouse-go v2 driver's documented behaviour for a
+// NULL Nullable(Float64) row (nullable.go's ScanRow: no case matches a
+// bare *float64, so it returns nil WITHOUT writing to the destination) --
+// the zero-initialised 0.0 survives untouched, and this test's
+// repo-null assertion (Value == nil) fails because Value is a non-nil
+// *float64 pointing at 0.0 (post-fix struct) or the raw field is 10.0
+// pre-fix; either way the null case is not observed. This is the exact
+// silent collapse CHAOS-4650 exists to remove.
+func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
+	client := &fakeSingleClient{
+		response: &fakeRowScanner{rows: [][]any{
+			{"repo-null", nil},  // SQL NULL -- the all-NULL-group shape
+			{"repo-real", 42.5}, // populated -- the other direction
+		}},
+	}
+	q := compiledQuery{sql: "SELECT ..."}
+	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COVERAGE_LINE_PCT")
+	if err != nil {
+		t.Fatalf("ExecuteBreakdown error = %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("got %d items, want 2", len(result.Items))
+	}
+	if result.Items[0].Key != "repo-null" || result.Items[0].Value != nil {
+		t.Fatalf("expected repo-null's Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", result.Items[0])
+	}
+	if result.Items[1].Key != "repo-real" || result.Items[1].Value == nil || *result.Items[1].Value != 42.5 {
+		t.Fatalf("expected repo-real's Value to be the real populated 42.5 -- a fix that nils out EVERY value would also pass a null-only test, got %+v", result.Items[1])
 	}
 }
 

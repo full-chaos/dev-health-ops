@@ -27188,6 +27188,15 @@ func (ec *executionContext) _BreakdownItem_value(ctx context.Context, field grap
 			ret = graphql.Null
 		}
 	}()
+	// CHAOS-4650 (chris 2026-08-31 04:18, Option B): hand-edited to a
+	// nullable marshal, matching model.BreakdownItem.Value's *float64
+	// type (see that field's doc comment). Was generated as
+	// marshalNFloat2float64 with a "must not be null" guard when
+	// gqlgen last ran against contracts/graphql/v1/schema.graphql's
+	// still-unwidened `value: Float!` -- see models_gen.go's
+	// BreakdownItem comment for why the SDL pin is not touched by this
+	// change and what must happen when this field is finally wired
+	// live (CHAOS-4538).
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil
@@ -27197,14 +27206,11 @@ func (ec *executionContext) _BreakdownItem_value(ctx context.Context, field grap
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_BreakdownItem_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {

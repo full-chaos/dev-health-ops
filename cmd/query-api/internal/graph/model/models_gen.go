@@ -368,10 +368,27 @@ type AnalyticsResult struct {
 	EvidenceQualityStats        *EvidenceQualityStats `json:"evidenceQualityStats,omitempty"`
 }
 
+// BreakdownItem.Value is *float64, not float64 -- CHAOS-4650 (chris
+// 2026-08-31 04:18, Option B). Hand-edited, NOT regenerated from
+// contracts/graphql/v1/schema.graphql: the canonical SDL pin is
+// byte-for-byte checked against the live Strawberry export
+// (tests/api/graphql/test_schema_sdl_pinned.py) and stays `value:
+// Float!` on the Python side (root AGENTS.md GO-ONLY rule -- no
+// further work in the Python GraphQL layer). This field is not yet
+// reachable through query_route.go (blocked on CHAOS-4538, see
+// breakdown.go's ExecuteBreakdown doc comment), so nothing observes
+// the internal/schema nullability mismatch today. Whoever wires
+// BreakdownItem into a registered document MUST widen
+// contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
+// Float` (and its Python Strawberry counterpart,
+// src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)
+// in that same change, or a live all-NULL group will make gqlgen's
+// exec engine reject the whole response ("must not be null") instead
+// of rendering the empty state this ticket exists to enable.
 type BreakdownItem struct {
-	Key   string  `json:"key"`
-	Value float64 `json:"value"`
-	Label *string `json:"label,omitempty"`
+	Key   string   `json:"key"`
+	Value *float64 `json:"value"`
+	Label *string  `json:"label,omitempty"`
 }
 
 type BreakdownRequestInput struct {

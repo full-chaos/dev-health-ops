@@ -664,6 +664,30 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 // waves are local dual-run proof only (plan §5 stage 2); org-scoped
 // canary enforcement is a stage-5 concern this PR does not claim to
 // satisfy.
+// maxUnwrapChainLogBytes bounds the CHAOS-4647 unwrap-chain log line
+// (codex review, merge-gate round, P3 ARGUED): the deepest cause is
+// frequently a ClickHouse *proto.Exception, whose Message field is
+// server-authored text this process does not control -- some ClickHouse
+// error classes echo back query/data fragments, so an unbounded join
+// could put an arbitrarily large or awkward line into the process log.
+// Truncating caps that exposure; it is a size bound, not a redaction
+// guarantee -- this log line already carried backend-authored
+// diagnostic text before this change and still does, just with a hard
+// ceiling on how much.
+const maxUnwrapChainLogBytes = 4096
+
+// truncateForLog bounds s to at most max bytes, appending how much was
+// cut so a truncated line is visibly truncated rather than looking
+// complete. A pure function so the CHAOS-4647 P3 fix has a direct,
+// fast unit test instead of only being provable by capturing real log
+// output.
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
+}
+
 func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
@@ -716,12 +740,22 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// reachable only via Unwrap(). Log the full Unwrap() chain server-side
 	// on every resolver error so a live-data failure's actual cause is
 	// visible without changing the response the client sees.
+	//
+	// Bounded (codex review, merge-gate round, P3 ARGUED): the deepest
+	// cause here is frequently a ClickHouse *proto.Exception, whose
+	// Message field is server-authored text this process does not
+	// control -- some ClickHouse error classes echo back query/data
+	// fragments, so an unbounded join could put an arbitrarily large or
+	// awkward line into the process log. Truncating caps that exposure;
+	// it is a size bound, not a redaction guarantee -- this log line was
+	// already carrying backend-authored diagnostic text before this
+	// change and still does, just with a hard ceiling on how much.
 	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
 		chain := []string{err.Error()}
 		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
 			chain = append(chain, unwrapped.Error())
 		}
-		log.Printf("query-api: resolver error unwrap chain: %s", strings.Join(chain, " <- "))
+		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 		return graphql.DefaultErrorPresenter(ctx, err)
 	})
 	for operation := range digestByOperation {

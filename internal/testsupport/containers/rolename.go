@@ -48,6 +48,16 @@ func DatabaseName(uri string) (string, error) {
 	if config.Database == "" {
 		return "", fmt.Errorf("instance URI names no database")
 	}
+	// Every caller of this function concatenates its return value directly
+	// into a DDL/DCL statement (CREATE ROLE, GRANT ... ON DATABASE, ...),
+	// where an identifier cannot be parameterised. Re-validating here, rather
+	// than trusting that the value came from scratchName()'s own
+	// assertSafeIdentifier check, means this function is safe to call with
+	// ANY syntactically valid PostgreSQL URI -- not only ones this package
+	// itself produced -- without becoming a second, unguarded path into DDL.
+	if !scratchNamePattern.MatchString(config.Database) {
+		return "", fmt.Errorf("refusing to return unsafe database name %q for use in DDL/DCL", config.Database)
+	}
 	return config.Database, nil
 }
 

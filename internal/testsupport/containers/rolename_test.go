@@ -32,6 +32,26 @@ func TestDatabaseNameRejectsAnUnparseableURI(t *testing.T) {
 	}
 }
 
+// TestDatabaseNameRejectsAnUnsafeDatabaseName is the injection-defense case:
+// every caller concatenates DatabaseName's return value directly into DDL,
+// so this function must refuse a database name outside the safe identifier
+// class itself, rather than trusting that only this package's own
+// scratchName() ever produces the URIs it is given.
+func TestDatabaseNameRejectsAnUnsafeDatabaseName(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"postgres://u:p@h:5432/robert'; DROP TABLE users;--?sslmode=disable",
+		"postgres://u:p@h:5432/Has-A-Dash?sslmode=disable",
+		"postgres://u:p@h:5432/UPPERCASE?sslmode=disable",
+	}
+	for _, uri := range cases {
+		if _, err := DatabaseName(uri); err == nil {
+			t.Errorf("DatabaseName(%q): want an error for an unsafe database name, got nil", uri)
+		}
+	}
+}
+
 func TestRoleSuffixIsBoundedAndDiffersAcrossCalls(t *testing.T) {
 	t.Parallel()
 

@@ -82,6 +82,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"runtime"
@@ -146,10 +147,18 @@ func nanClassClickHouseURI(t testing.TB) string {
 	// the same percent-encoded "user[:pass]" form url.URL itself accepts
 	// back in, matching how the Python harness's string-replace on netloc
 	// (which never touches the userinfo segment) already preserves it.
+	//
+	// net.JoinHostPort, not a bare "%s:%s" -- codex review round 1 caught
+	// that Hostname() strips IPv6 brackets ("::1", not "[::1]"), so a raw
+	// Sprintf produced an unparseable "host:port" for any IPv6 CLICKHOUSE_URI
+	// (clickhouse://u:p@[::1]:8123/db rebuilt as ...@::1:9000, ambiguous
+	// with the port). JoinHostPort re-adds the brackets exactly when the
+	// host needs them and is a no-op for ordinary hostnames/IPv4.
+	hostPort := net.JoinHostPort(host, port)
 	if parsed.User != nil {
-		return fmt.Sprintf("%s://%s@%s:%s", scheme, parsed.User.String(), host, port)
+		return fmt.Sprintf("%s://%s@%s", scheme, parsed.User.String(), hostPort)
 	}
-	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	return fmt.Sprintf("%s://%s", scheme, hostPort)
 }
 
 // nanClassAllNullGroupSQL and nanClassPopulatedGroupSQL wrap the REAL
@@ -344,6 +353,16 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 			raw:  "http://chuser:chpass@example.internal:9000/default",
 			want: "clickhouse://chuser:chpass@example.internal:9000",
 		},
+		{
+			// codex review round 1 (EXECUTED): Hostname() strips the brackets
+			// off an IPv6 literal ("::1", not "[::1]"), and a bare "%s:%s"
+			// Sprintf never put them back, so the rebuilt DSN was ambiguous
+			// (host and port both after the last ":"). net.JoinHostPort fixes
+			// this by re-adding brackets exactly when the host needs them.
+			name: "ipv6_host_gets_bracketed",
+			raw:  "clickhouse://chuser:chpass@[::1]:8123/default",
+			want: "clickhouse://chuser:chpass@[::1]:9000",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -356,6 +375,24 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 			}
 		})
 	}
+
+	// codex review round 1 (EXECUTED mutation survivor): every case above
+	// runs with DEV_HEALTH_REQUIRE_LIVE unset, so a mutant that made
+	// nanClassClickHouseURI fail whenever DEV_HEALTH_REQUIRE_LIVE=1 --
+	// regardless of whether CLICKHOUSE_URI was even set -- passed the whole
+	// suite. DEV_HEALTH_REQUIRE_LIVE=1 must be a no-op once CLICKHOUSE_URI is
+	// present; it only changes behavior on the MISSING-URI path (see
+	// TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping).
+	t.Run("require_live_with_uri_present_is_a_no_op", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "clickhouse://chuser:chpass@example.internal:8123/default")
+		t.Setenv(requireLiveEnv, "1")
+		got := nanClassClickHouseURI(t)
+		want := "clickhouse://chuser:chpass@example.internal:9000"
+		if got != want {
+			t.Fatalf("nanClassClickHouseURI with CLICKHOUSE_URI set and %s=1 = %q, want %q -- "+
+				"the require-live flag must only affect the missing-URI path", requireLiveEnv, got, want)
+		}
+	})
 }
 
 // fakeSkipFailTB is a minimal testing.TB that records whether the code under

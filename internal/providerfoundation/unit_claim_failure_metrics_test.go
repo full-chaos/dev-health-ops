@@ -40,6 +40,40 @@ func TestUnitClaimedCounterRendersPerProviderAndDataset(t *testing.T) {
 	}
 }
 
+// CHAOS-4592: a chunked route that never completes within one attempt (the
+// dev-health-ops cicd/tests walk observed reaching 178+ continuations before
+// being cancelled) previously left no durable signal of HOW MANY
+// continuations were needed -- only river_job.metadata->>'snoozes' on
+// whichever job row happened to still exist, which resets to zero on
+// re-dispatch. This counter is process-durable across re-dispatches instead.
+func TestChunkContinuationCounterRendersPerProviderAndDataset(t *testing.T) {
+	t.Parallel()
+	metrics := NewMetrics()
+	metrics.RecordChunkContinuation("GitHub", "cicd")
+	metrics.RecordChunkContinuation("github", "cicd")
+	metrics.RecordChunkContinuation("gitlab", "cicd")
+	var nilMetrics *Metrics
+	nilMetrics.RecordChunkContinuation("github", "cicd")
+
+	var output bytes.Buffer
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	for _, want := range []string{
+		"# TYPE dev_health_provider_chunk_continuation_total counter",
+		`dev_health_provider_chunk_continuation_total{provider="github",dataset="cicd"} 2`,
+		`dev_health_provider_chunk_continuation_total{provider="gitlab",dataset="cicd"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	if got := strings.Count(rendered, "dev_health_provider_chunk_continuation_total{"); got != 2 {
+		t.Fatalf("series=%d want 2 in:\n%s", got, rendered)
+	}
+}
+
 func TestUnitFailedCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 	t.Parallel()
 	metrics := NewMetrics()

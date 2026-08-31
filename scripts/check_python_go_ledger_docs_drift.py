@@ -2,13 +2,15 @@
 """Fail when the published Python<->Go live-path ledger drifts from its producers.
 
 Same shape as ``scripts/check_queue_mapping_docs_drift.py`` (CHAOS-4044): this
-script recomputes the three generated blocks from the current producers
+script recomputes the four generated blocks from the current producers
 (``contracts/jobs/v1/registry.json``, ``contracts/jobs/v1/migration-state.json``,
-``internal/syncdispatchruntime/bridge.go``, ``src/dev_health_ops/workers/*.py``)
+``internal/syncdispatchruntime/bridge.go``, ``src/dev_health_ops/workers/*.py``,
+``internal/scheduler/sync/source_discovery.go``)
 via ``scripts/gen_python_go_ledger_docs.py`` and fails if the published blocks in
 ``docs/reference/runtime/python-go-live-path-ledger.md`` disagree -- or if the
-generator itself refuses to render because a kind/route/file has no curated
-ledger row. See CHAOS-4433.
+generator itself refuses to render because a kind/route/file/source-discovery
+provider has no curated ledger row. See CHAOS-4433 (and CHAOS-4602 for the
+fourth block).
 """
 
 from __future__ import annotations
@@ -39,6 +41,12 @@ BLOCKS = (
         "render_worker_block",
         "<!-- BEGIN GENERATED WORKER FILE LEDGER -->",
         "<!-- END GENERATED WORKER FILE LEDGER -->",
+    ),
+    (
+        "source-discovery provider",
+        "render_source_discovery_block",
+        "<!-- BEGIN GENERATED SOURCE DISCOVERY LEDGER -->",
+        "<!-- END GENERATED SOURCE DISCOVERY LEDGER -->",
     ),
 )
 

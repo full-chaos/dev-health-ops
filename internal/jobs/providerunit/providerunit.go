@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -419,6 +420,25 @@ func (handler *Handler) observeCicdPartialSuccess(
 	reason := providersync.GitHubTestsCicdPartialSuccessReason(incomplete)
 	repo, _ := payload["repo"].(string)
 	handler.ProviderMetrics.RecordCicdPartialSuccess(reason)
+	// Per-cause overflow metric (codex review gate round 5, P3):
+	// RecordCicdPartialSuccess above names only ONE dominant reason for the
+	// whole unit, indistinguishable from a single skip of that cause -- a
+	// unit whose bounded sample overflowed for a cause gets its own signal
+	// here, per overflowed cause, sorted for deterministic ordering.
+	if causeOverflow, ok := providersync.DecodeGitHubTestsSkippedArtifactCauseOverflow(
+		payload["skipped_artifact_cause_overflow"],
+	); ok {
+		overflowedCauses := make([]string, 0, len(causeOverflow))
+		for cause, overflowed := range causeOverflow {
+			if overflowed {
+				overflowedCauses = append(overflowedCauses, cause)
+			}
+		}
+		sort.Strings(overflowedCauses)
+		for _, cause := range overflowedCauses {
+			handler.ProviderMetrics.RecordSkippedArtifactCauseOverflow(claim.Provider, claim.Dataset, cause)
+		}
+	}
 	slog.Info(
 		"cicd/tests unit advanced its watermark with a durable, recorded gap",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
@@ -682,6 +702,7 @@ func (handler *Handler) Work(
 		); deferErr != nil {
 			return jobruntime.Retryable(deferErr)
 		}
+		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "continued", err)
 		return jobruntime.RetryableAfter(err, delay)

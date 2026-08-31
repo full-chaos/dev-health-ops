@@ -102,7 +102,19 @@ CREATE TABLE public.sync_executed_proof_ledger (
  CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
   CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
 );
-CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY);
+-- Mirrors occurrence_reconciler_integration_test.go's real shape: a bare
+-- (id uuid PRIMARY KEY) table let every existing test in this file
+-- hand-construct PendingOccurrence{JobStatus: 0} directly and never actually
+-- exercise lockPendingOccurrenceSQL's real job.status/org_id/sync_config_id
+-- read at all -- which is exactly why a codex review finding (a manual
+-- trigger's deliberately PAUSED marker job quarantining the occurrence)
+-- went uncaught by this file's own tests.
+CREATE TABLE public.scheduled_jobs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
+ job_type text NOT NULL, schedule_cron text NOT NULL, timezone text NOT NULL,
+ status integer NOT NULL, is_running boolean NOT NULL,
+ last_run_at timestamptz, updated_at timestamptz, next_run_at timestamptz
+);
 CREATE TABLE public.job_runs (
  id uuid PRIMARY KEY, job_id uuid NOT NULL, status integer NOT NULL,
  started_at timestamptz, completed_at timestamptz, duration_seconds integer,
@@ -139,6 +151,21 @@ CREATE TABLE public.scheduled_sync_occurrences (
  FOREIGN KEY(scheduled_job_id) REFERENCES scheduled_jobs(id),
  FOREIGN KEY(job_run_id) REFERENCES job_runs(id),
  FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id)
+);
+-- CHAOS-4602 migration 0119, mirrored verbatim (including its CHECK
+-- constraints) so a fixture row that would be rejected in production is
+-- rejected here too.
+CREATE TABLE public.sync_manual_triggers (
+ occurrence_id text PRIMARY KEY, mode text NOT NULL,
+ since timestamptz, before timestamptz,
+ source_ids text[], dataset_keys text[],
+ triggered_by text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(occurrence_id) REFERENCES scheduled_sync_occurrences(occurrence_id) ON DELETE CASCADE,
+ CONSTRAINT ck_sync_manual_triggers_mode CHECK (mode IN ('incremental','full_resync','backfill')),
+ CONSTRAINT ck_sync_manual_triggers_triggered_by CHECK (triggered_by IN ('manual','backfill')),
+ CONSTRAINT ck_sync_manual_triggers_backfill_selector
+  CHECK ((mode = 'backfill') = (since IS NOT NULL AND before IS NOT NULL))
 );`
 
 type materializerFixture struct {
@@ -182,7 +209,7 @@ func startMaterializerPostgres(t *testing.T) materializerFixture {
 		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'github','repository','full-chaos/dev-health','dev-health','full-chaos/dev-health',TRUE,'{}'::jsonb,now(),now())`, []any{sourceID, orgID, integrationID}},
 		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'commits',TRUE,'{}'::jsonb)`, []any{datasetID, orgID, integrationID}},
 		{`INSERT INTO sync_watermarks VALUES ($1,'full-chaos/dev-health','commits','full-chaos/dev-health','commits',$2)`, []any{orgID, time.Date(2026, 8, 1, 6, 0, 0, 0, time.UTC)}},
-		{`INSERT INTO scheduled_jobs VALUES ($1::uuid)`, []any{jobID}},
+		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',0,FALSE)`, []any{jobID, orgID, configID}},
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -211,6 +238,10 @@ func materializeAndCommit(t *testing.T, fixture materializerFixture, materialize
 	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-4603: mirrors occurrence_reconciler.go's reconcileOne -- record
+	// plan-stamped telemetry only now that the transaction Materialize wrote
+	// into has itself committed.
+	materializer.RecordMaterialized(plan.PlannedUnits)
 	return plan, nil
 }
 
@@ -1396,5 +1427,587 @@ func TestNativeMaterializerMaybeRefreshExecutedProofUnblocksWithoutRestart(t *te
 				"picked up the new evidence on its own",
 			got,
 		)
+	}
+}
+
+// startBackfillTriggerFixture installs an UNSCHEDULED (no schedule_cron),
+// planner-managed Jira config -- the exact org 70d529e0 acceptance shape --
+// with a sync_manual_triggers row requesting a backfill, on top of the
+// shared materializer fixture's pool/org. Only a manual trigger row makes
+// such a config eligible at all (loadMaterializationPlan's schedule_cron
+// check is skipped only when one exists).
+// datasetKeysOrNil returns nil (encoded as SQL NULL by pgx) for an empty
+// variadic slice, or the slice itself otherwise -- startBackfillTriggerFixture's
+// two pre-existing callers pass none, and must keep getting a NULL
+// dataset_keys column (the "no explicit selector" default), not an empty
+// array (a real, if unusual, "explicit empty selector" that plans zero
+// datasets).
+func datasetKeysOrNil(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
+}
+
+func startBackfillTriggerFixture(t *testing.T, fixture materializerFixture, since, before time.Time, datasetKeys ...string) PendingOccurrence {
+	t.Helper()
+	ctx := context.Background()
+	const (
+		jiraIntegrationID = "00000000-0000-4000-8000-000000002002"
+		jiraConfigID      = "00000000-0000-4000-8000-000000002001"
+		jiraSourceID      = "00000000-0000-4000-8000-000000002003"
+		jiraDatasetID     = "00000000-0000-4000-8000-000000002004"
+		jiraJobID         = "00000000-0000-4000-8000-000000002005"
+	)
+	orgID := fixture.occurrence.OrgID
+	occurrenceID := "occurrence:v1:backfill"
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO integrations VALUES ($1::uuid,$2,'jira',NULL,TRUE,'{}'::jsonb)`, []any{jiraIntegrationID, orgID}},
+		// Deliberately NO schedule_cron: this config is intentionally
+		// unscheduled, exactly like the live org 70d529e0 Jira config this
+		// ticket's acceptance proof targets.
+		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'[]'::jsonb,'{}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{jiraConfigID, orgID, jiraIntegrationID}},
+		// metadata carries the planner_managed_sync_config_id tag: without
+		// it loadPlanSources' own planner_managed filter (CHAOS-4602 round-1
+		// P1) would never select this row for a planner_managed=TRUE config.
+		{fmt.Sprintf(`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'jira','project','PROJ','PROJ','PROJ',TRUE,'{"planner_managed_sync_config_id":"%s"}'::jsonb,now(),now())`, jiraConfigID), []any{jiraSourceID, orgID, jiraIntegrationID}},
+		// "work-items" (not "incidents"): avoids the canonical-incident
+		// feature-gate entirely, keeping this fixture about the backfill
+		// mode routing itself.
+		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{jiraDatasetID, orgID, jiraIntegrationID}},
+		// status=1 (PAUSED): matches EXACTLY what _ensure_scheduled_job_for_config
+		// (execution_trigger.py) creates for a config with no schedule_cron --
+		// this config is intentionally unscheduled, the org 70d529e0 acceptance
+		// shape. A codex review finding caught that Materialize's own
+		// eligibility gate used to reject this outright (occurrence.JobStatus
+		// != 0), quarantining every such manual/backfill occurrence before it
+		// could ever materialize; fixed in loadMaterializationPlan.
+		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',1,FALSE)`, []any{jiraJobID, orgID, jiraConfigID}},
+		{`INSERT INTO scheduled_sync_occurrences (occurrence_id,identity_version,org_id,sync_config_id,scheduled_job_id,scheduled_for,reconcile_status) VALUES ($1,$2,$3,$4::uuid,$5::uuid,$6,'pending')`,
+			[]any{occurrenceID, OccurrenceIdentityVersion, orgID, jiraConfigID, jiraJobID, before}},
+		{`INSERT INTO sync_manual_triggers (occurrence_id,mode,since,before,dataset_keys,triggered_by) VALUES ($1,'backfill',$2,$3,$4,'backfill')`,
+			[]any{occurrenceID, since, before, datasetKeysOrNil(datasetKeys)}},
+	}
+	for _, statement := range statements {
+		if _, err := fixture.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return PendingOccurrence{
+		ID: occurrenceID, IdentityVersion: OccurrenceIdentityVersion,
+		OrgID: orgID, ConfigID: jiraConfigID, JobID: jiraJobID,
+		ScheduledFor: before,
+		ConfigActive: true, ConfigPlannerManaged: true,
+		// JobStatus: 1 (PAUSED) -- matches the scheduled_jobs row's own
+		// status above, and is itself the regression proof for the codex
+		// finding: without loadMaterializationPlan's manualTrigger-bypass
+		// fix, Materialize would reject this with ErrOccurrenceIneligible
+		// before ever reaching the backfill planner.
+		JobStatus: 1, JobType: "sync",
+	}
+}
+
+// TestNativeMaterializerRoutesBackfillTriggerToBuildBackfillPlan is the
+// CHAOS-4602 acceptance shape at the Go materializer level: an unscheduled,
+// planner-managed Jira config with no explicit source/dataset scope, driven
+// by a sync_manual_triggers row, must (a) be eligible at all despite having
+// no schedule_cron, (b) route through BuildBackfillPlan rather than
+// BuildScheduledPlan (which would reject it outright), (c) plan MULTIPLE
+// units from the chunked backfill range (2026-08-01..2026-08-20 at the
+// default 7-day chunk = 3), and (d) stamp sync_runs.triggered_by='backfill'
+// -- not the 'schedule' every occurrence got before this ticket.
+func TestNativeMaterializerRoutesBackfillTriggerToBuildBackfillPlan(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 3 {
+		t.Fatalf("plan.PlannedUnits = %d, want 3 (7-day chunks of a 20-day range): %+v", plan.PlannedUnits, plan)
+	}
+
+	var triggeredBy, mode string
+	var totalUnits int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT triggered_by, mode, total_units FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID,
+	).Scan(&triggeredBy, &mode, &totalUnits); err != nil {
+		t.Fatal(err)
+	}
+	if triggeredBy != "backfill" {
+		t.Errorf("sync_runs.triggered_by = %q, want %q", triggeredBy, "backfill")
+	}
+	if mode != "backfill" {
+		t.Errorf("sync_runs.mode = %q, want %q", mode, "backfill")
+	}
+	if totalUnits != 3 {
+		t.Errorf("sync_runs.total_units = %d, want 3", totalUnits)
+	}
+
+	var unitCount int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`, plan.SyncRunID,
+	).Scan(&unitCount); err != nil {
+		t.Fatal(err)
+	}
+	if unitCount != 3 {
+		t.Errorf("sync_run_units count = %d, want 3 composite work-items units", unitCount)
+	}
+
+	// codex review finding: persistCoordinatorGraph hardcoded
+	// job_runs.triggered_by to 'schedule' unconditionally, the same class of
+	// bug already fixed for sync_runs.triggered_by above -- this asserts the
+	// job_runs side too.
+	var jobTriggeredBy string
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT triggered_by FROM job_runs WHERE id=$1::uuid`, plan.JobRunID,
+	).Scan(&jobTriggeredBy); err != nil {
+		t.Fatal(err)
+	}
+	if jobTriggeredBy != "backfill" {
+		t.Errorf("job_runs.triggered_by = %q, want %q", jobTriggeredBy, "backfill")
+	}
+}
+
+// TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit is CHAOS-4603's
+// required proof: a plan that Materialize computed but whose transaction
+// the CALLER then rolls back (any reason, at any later point in its own
+// commit sequence) must leave devhealth_scheduler_materialized_occurrences_total
+// and devhealth_scheduler_planned_units untouched -- exactly as if
+// Materialize had never run. Mirrors the SAVEPOINT-vs-outer-transaction bug
+// codex found in Python's plan_sync_run (planner.py:689-692): telemetry may
+// only fire once the transaction Materialize wrote into is itself durable.
+func TestNativeMaterializerRecordsPlanTelemetryOnlyAfterCommit(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsContain := func(want string) bool {
+		var metrics bytes.Buffer
+		if err := materializer.WritePrometheus(&metrics); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(metrics.String(), want+"\n")
+	}
+
+	// Rollback path: Materialize succeeds and computes a real plan, but the
+	// transaction it wrote into is rolled back instead of committed (the
+	// deliberate absence of RecordMaterialized here mirrors what
+	// occurrence_reconciler.go's reconcileOne does on every non-success
+	// return between Materialize and its own tx.Commit).
+	rollbackOccurrence := fixture.occurrence
+	rollbackOccurrence.ID = "occurrence:v1:telemetry-rollback"
+	tx, err := fixture.pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializer.Materialize(context.Background(), tx, rollbackOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatalf("plan=%+v want a real (non-zero) plan to roll back", plan)
+	}
+	if err := tx.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if metricsContain("devhealth_scheduler_materialized_occurrences_total 1") {
+		t.Fatal("materialized_occurrences_total incremented for a plan whose transaction was rolled back")
+	}
+	if metricsContain("devhealth_scheduler_planned_units " + fmt.Sprint(plan.PlannedUnits)) {
+		t.Fatal("planned_units published for a plan whose transaction was rolled back")
+	}
+
+	// Commit path: the SAME shape, but the transaction actually commits, so
+	// RecordMaterialized fires -- exactly once.
+	commitOccurrence := fixture.occurrence
+	commitOccurrence.ID = "occurrence:v1:telemetry-commit"
+	committedPlan, err := materializeAndCommit(t, fixture, materializer, commitOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metricsContain("devhealth_scheduler_materialized_occurrences_total 1") {
+		t.Fatal("materialized_occurrences_total did not reach exactly 1 after the first durable commit")
+	}
+	if !metricsContain(fmt.Sprintf("devhealth_scheduler_planned_units %d", committedPlan.PlannedUnits)) {
+		t.Fatalf("planned_units did not publish %d after commit", committedPlan.PlannedUnits)
+	}
+}
+
+// TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist
+// proves a codex review finding: Python's _reconcile_explicit_requested_datasets
+// (planner.py:858-904) enables any explicitly requested dataset that has no
+// integration_datasets row yet -- "every dataset ... is opt-in and
+// reconciled uniformly here: a caller (operator, backfill, or scheduled
+// trigger) must name a dataset in request.dataset_keys for it to be
+// created/enabled." Go's loadPlanDatasets used to only FILTER existing
+// rows; a manual/backfill selector naming a dataset the config had never
+// enabled before silently planned a ZERO-unit run instead of creating the
+// requested work.
+func TestNativeMaterializerCreatesExplicitlyRequestedDatasetThatDoesNotYetExist(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk
+	// "work-item-labels" is explicitly requested but NO integration_datasets
+	// row for it exists yet -- only "work-items" does (startBackfillTriggerFixture's
+	// own fixture row). The fix must create+enable one before planning.
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before, "work-item-labels")
+
+	var existingCount int
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM integration_datasets WHERE dataset_key='work-item-labels'`,
+	).Scan(&existingCount); err != nil {
+		t.Fatal(err)
+	}
+	if existingCount != 0 {
+		t.Fatalf("test setup bug: work-item-labels already has %d rows, want 0 before Materialize", existingCount)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatalf("plan.PlannedUnits = 0, want > 0 -- the explicitly requested dataset was never created/enabled: %+v", plan)
+	}
+
+	var isEnabled bool
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT is_enabled FROM integration_datasets WHERE dataset_key='work-item-labels'`,
+	).Scan(&isEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if !isEnabled {
+		t.Fatal("integration_datasets row for work-item-labels exists but is not enabled")
+	}
+}
+
+// TestNativeMaterializerRejectsInvalidSourceIDInBackfillSelector is the
+// codex gate-round-5 P2 fix: Python's _load_enabled_sources rejects a
+// non-UUID source_id via _coerce_uuid, surfacing a client-visible error
+// before anything materializes (planner.py). Before this fix, Go's
+// loadPlanSources only compared the raw string against src.id::text --
+// "not-a-uuid" matches zero rows, so the occurrence would silently plan
+// ZERO units and the route would still report success, instead of
+// surfacing the operator's typo the way Python does.
+func TestNativeMaterializerRejectsInvalidSourceIDInBackfillSelector(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const badSourceID = "not-a-uuid"
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[$1] WHERE occurrence_id = $2`,
+		badSourceID, occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materializeAndCommit(t, fixture, materializer, occurrence)
+	if err == nil {
+		t.Fatal("Materialize() with an invalid source_id = nil error, want a rejection matching Python's _coerce_uuid, not a silent zero-unit plan")
+	}
+	if !strings.Contains(err.Error(), badSourceID) {
+		t.Fatalf("Materialize() error = %q, want it to name the invalid source_id %q", err.Error(), badSourceID)
+	}
+}
+
+// TestNativeMaterializerAcceptsANonCanonicalButValidSourceID is the codex
+// gate-round-7 fix: validating a source_id with uuid.Parse but then
+// filtering on the CALLER's original spelling isn't enough -- Postgres
+// renders uuid columns in canonical dashed-lowercase form, so a valid but
+// non-canonical encoding (here, the fixture's own jiraSourceID with its
+// dashes stripped) parses successfully yet never equals src.id::text,
+// silently matching zero sources exactly like the unvalidated case the
+// round-5 fix was meant to close. Python's _coerce_uuid canonicalizes
+// before filtering; loadPlanSources must too.
+func TestNativeMaterializerAcceptsANonCanonicalButValidSourceID(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	// The fixture's own jiraSourceID ("00000000-0000-4000-8000-000000002003")
+	// with its dashes stripped -- a valid, but non-canonical, UUID encoding.
+	const compactSourceID = "00000000000040008000000000002003"
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[$1] WHERE occurrence_id = $2`,
+		compactSourceID, occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatalf("plan.PlannedUnits = 0, want > 0 -- a non-canonical but valid source_id must still match its canonical stored row: %+v", plan)
+	}
+}
+
+// TestNativeMaterializerAnExplicitlyEmptySourceIDsListPlansZeroUnits is the
+// input-shape enumeration team-lead requested (.codex-review-context.md's
+// table): an explicit, non-nil but EMPTY source_ids selector (source_ids=[])
+// must plan zero units, mirroring Python's `_load_enabled_sources`
+// (`if not source_uuids: return []`) -- distinct from source_ids=None/absent,
+// which means "no filter, select everything planner-managed". The base
+// fixture (no override) already plans > 0 units for this same occurrence, so
+// this isolates the empty-list selector as the reason for the drop to zero.
+func TestNativeMaterializerAnExplicitlyEmptySourceIDsListPlansZeroUnits(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET source_ids = ARRAY[]::text[] WHERE occurrence_id = $1`,
+		occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- an explicit empty source_ids selector must plan nothing, matching Python's `if not source_uuids: return []`", plan.PlannedUnits)
+	}
+}
+
+// TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized is the
+// codex gate-round-5 P2 fix's sibling: Python's _load_enabled_datasets does
+// a plain SQL `dataset_key IN (...)` with the selector's raw strings, with
+// no case-folding or trimming anywhere in the chain from the API schema.
+// Before this fix, Go lowercased and trimmed every explicit dataset key, so
+// "WORK-ITEMS " (mismatched case + trailing space) would match and
+// backfill the real "work-items" dataset -- work Python's own exact-string
+// selector would never have selected for the same request.
+func TestNativeMaterializerDatasetKeysAreExactMatchNotCaseNormalized(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before, "WORK-ITEMS ")
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- \"WORK-ITEMS \" must not case/whitespace-match the real \"work-items\" dataset, matching Python's exact-string selector semantics", plan.PlannedUnits)
+	}
+}
+
+// TestNativeMaterializerAnExplicitlyEmptyDatasetKeysListPlansZeroUnits is
+// the input-shape enumeration team-lead requested (.codex-review-context.md's
+// table): an explicit, non-nil but EMPTY dataset_keys selector
+// (dataset_keys=[]) must plan zero units, mirroring Python's
+// `_load_enabled_datasets` (`if not dataset_keys: return []`) -- distinct
+// from dataset_keys=None/absent (startBackfillTriggerFixture's own default,
+// with no variadic dataset key args, which datasetKeysOrNil turns into NULL),
+// which falls back to the legacy-target-derived scope instead of an empty
+// allowlist. The base fixture (no override) already plans > 0 units for
+// this same occurrence, so this isolates the empty-list selector as the
+// reason for the drop to zero.
+func TestNativeMaterializerAnExplicitlyEmptyDatasetKeysListPlansZeroUnits(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE public.sync_manual_triggers SET dataset_keys = ARRAY[]::text[] WHERE occurrence_id = $1`,
+		occurrence.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlannedUnits != 0 {
+		t.Fatalf("plan.PlannedUnits = %d, want 0 -- an explicit empty dataset_keys selector must plan nothing, matching Python's `if not dataset_keys: return []`", plan.PlannedUnits)
+	}
+}
+
+// TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource proves
+// the CHAOS-4582 defense-in-depth guard (ported per team-lead ruling: "your
+// premise that bad shape can't reach it is false" -- org 70d529e0 alone
+// carries pre-existing disabled SUP/OPS/JIRA rows, and the planner reads
+// integration_sources rows regardless of who wrote them). A source whose
+// external_id is literally "jira" -- the pre-fix writer's own fallback
+// literal, with neither an explicit-project-scope marker nor a config that
+// actually names a project called "JIRA" -- must be refused a work-items
+// unit, while a sibling REAL project source on the same config still plans
+// normally.
+func TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk: <7 days
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const (
+		jiraConfigID = "00000000-0000-4000-8000-000000002001"
+		badSourceID  = "00000000-0000-4000-8000-000000002006"
+	)
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+INSERT INTO integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s'::uuid),
+        'jira','project','jira','jira','jira',TRUE,
+        '{"planner_managed_sync_config_id":"%s"}'::jsonb,now(),now())`,
+		jiraConfigID, jiraConfigID,
+	), badSourceID, occurrence.OrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the good "PROJ" source (from startBackfillTriggerFixture)
+	// contributes a work-items unit; the bad-shape "jira" source is
+	// refused, not silently planned against.
+	if plan.PlannedUnits != 1 {
+		t.Fatalf("plan.PlannedUnits = %d, want 1 (only the real PROJ source): %+v", plan.PlannedUnits, plan)
+	}
+
+	rows, err := fixture.pool.Query(context.Background(),
+		`SELECT source_id::text FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`,
+		plan.SyncRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sourceIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sourceIDs) != 1 || strings.EqualFold(sourceIDs[0], badSourceID) {
+		t.Fatalf("sync_run_units source_ids=%v, want exactly the good PROJ source, never %s", sourceIDs, badSourceID)
+	}
+}
+
+// TestNativeMaterializerPlansWorkItemsForARealDiscoveredJiraProjectNamedJira
+// is TestNativeMaterializerSkipsWorkItemsForLegacyNonProjectJiraSource's
+// sibling for the opposite, previously-unproven direction (codex gate-round-10
+// P2): a REAL Jira project whose key genuinely IS "jira" (a live edge case,
+// per Python's own _is_non_project_jira_source docstring) must still plan
+// work-items units when it was actually discovered (metadata.discovered_project,
+// this session's discoverJira -- CHAOS-4584 round 5's own marker on the
+// Python side) -- external_id alone can never disambiguate this from the
+// legacy pre-fix writer's fallback shape, which is exactly why this marker
+// exists.
+func TestNativeMaterializerPlansWorkItemsForARealDiscoveredJiraProjectNamedJira(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) // single chunk: <7 days
+	occurrence := startBackfillTriggerFixture(t, fixture, since, before)
+
+	const (
+		jiraConfigID = "00000000-0000-4000-8000-000000002001"
+		realSourceID = "00000000-0000-4000-8000-000000002008"
+	)
+	if _, err := fixture.pool.Exec(context.Background(), fmt.Sprintf(`
+INSERT INTO integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s'::uuid),
+        'jira','project','jira','JIRA','JIRA',TRUE,
+        '{"planner_managed_sync_config_id":"%s","discovered_project":true}'::jsonb,now(),now())`,
+		jiraConfigID, jiraConfigID,
+	), realSourceID, occurrence.OrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both the good "PROJ" source (from startBackfillTriggerFixture) and
+	// this genuinely-discovered "jira" project contribute a work-items
+	// unit each.
+	if plan.PlannedUnits != 2 {
+		t.Fatalf("plan.PlannedUnits = %d, want 2 (PROJ + the real discovered jira project): %+v", plan.PlannedUnits, plan)
+	}
+
+	rows, err := fixture.pool.Query(context.Background(),
+		`SELECT source_id::text FROM sync_run_units WHERE sync_run_id=$1::uuid AND dataset_key='work-items'`,
+		plan.SyncRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var sourceIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, id := range sourceIDs {
+		if strings.EqualFold(id, realSourceID) {
+			found = true
+		}
+	}
+	if len(sourceIDs) != 2 || !found {
+		t.Fatalf("sync_run_units source_ids=%v, want both PROJ and %s (the real discovered jira project)", sourceIDs, realSourceID)
 	}
 }

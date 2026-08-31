@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -380,11 +381,18 @@ VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
 	}
 
 	var syncRunError *string
-	if err := pool.QueryRow(ctx, `SELECT error FROM sync_runs WHERE id=$1`, discoveryTestRun).Scan(&syncRunError); err != nil {
+	var syncRunFailedUnits int
+	if err := pool.QueryRow(ctx, `SELECT error, failed_units FROM sync_runs WHERE id=$1`, discoveryTestRun).
+		Scan(&syncRunError, &syncRunFailedUnits); err != nil {
 		t.Fatal(err)
 	}
 	if syncRunError == nil || *syncRunError != referenceDiscoveryErrorMessage {
 		t.Fatalf("sync_runs.error=%v want=%q", syncRunError, referenceDiscoveryErrorMessage)
+	}
+	// CHAOS-4586: handleFailure's terminal path must recompute sync_runs'
+	// rollup after failNonterminalUnits, not leave it stale until finalize.
+	if syncRunFailedUnits != 1 {
+		t.Fatalf("sync_runs.failed_units=%d, want 1", syncRunFailedUnits)
 	}
 
 	var finalizeWakeupRows int
@@ -394,6 +402,162 @@ VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
 	}
 	if finalizeWakeupRows != 1 {
 		t.Fatalf("finalize_sync_run wakeup rows=%d want=1", finalizeWakeupRows)
+	}
+}
+
+// TestFailNonterminalUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite
+// pins the closed-enumeration follow-up to codex round 11's P1
+// (feature_disabled_termination.go's terminalizeFeatureDisabledRun):
+// failNonterminalUnits (handleFailure's own terminal-failure path) has the
+// IDENTICAL unlocked-bulk-writer shape -- a bare `status NOT IN (...)`
+// predicate matching potentially every non-terminal unit of the run, no
+// explicit row-lock order -- and handleFailure opens its own fresh
+// transaction with no earlier bucket-lock gate (reference discovery runs
+// before dispatch and has no DispatchGuard of its own). Same mechanism
+// proof as TestTerminalizeFeatureDisabledRunAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite:
+// a holder takes the unit's bucket advisory lock first; failNonterminalUnits
+// is started concurrently and must block on it, confirmed via
+// pg_stat_activity; releasing the holder lets it proceed and complete.
+func TestFailNonterminalUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+	unitID := "00000000-0000-4000-8000-0000000000e7"
+	sourceID := "00000000-0000-4000-8000-0000000000e8"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
+		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+		t.Fatal(err)
+	}
+	// cost_class defaults to 'standard' (schema default, createReferenceDiscoveryTables).
+	bucketKey := bucketAdvisoryLockKey(dispatchBucket{
+		orgID: discoveryTestOrg, provider: "github", costClass: "standard",
+	})
+
+	holderTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holderTx.Rollback(ctx) }()
+	if _, err := holderTx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bucketKey); err != nil {
+		t.Fatalf("holder acquire bucket lock: %v", err)
+	}
+
+	consumerDone := make(chan error, 1)
+	go func() {
+		consumerTx, err := pool.Begin(ctx)
+		if err != nil {
+			consumerDone <- err
+			return
+		}
+		defer func() { _ = consumerTx.Rollback(ctx) }()
+		err = failNonterminalUnits(ctx, consumerTx, discoveryTestRun, time.Now().UTC(),
+			referenceDiscoveryErrorMessage, errors.New("boom"))
+		if err == nil {
+			err = consumerTx.Commit(ctx)
+		}
+		consumerDone <- err
+	}()
+
+	waitForBlockedAdvisoryLock(t, ctx, pool, "failNonterminalUnits")
+
+	select {
+	case err := <-consumerDone:
+		t.Fatalf("failNonterminalUnits completed (err=%v) before the holder released the bucket advisory "+
+			"lock -- it is not acquiring the lock at all (codex round 11 follow-up, CHAOS-4586)", err)
+	default:
+	}
+
+	if err := holderTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-consumerDone:
+		if err != nil {
+			t.Fatalf("failNonterminalUnits (after the bucket lock released): %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("failNonterminalUnits never unblocked after the bucket advisory lock was released")
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id=$1`, unitID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != syncRunUnitStatusFailed {
+		t.Fatalf("unit status=%q, want failed", status)
+	}
+}
+
+// TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollupBumpMetric
+// is TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetries's fixture,
+// with real metrics wired (codex round 10, P2: no existing test in this
+// package wires WithMetrics on a real end-to-end call -- see
+// TestDispatchDeniesWithActiveUnitsRecordsTheRollupBumpMetric's own doc
+// comment, native_dispatch_sync_run_service_integration_test.go, for the
+// full rationale and the process-wide-singleton delta-assertion
+// technique). This path is also where round 10 found NativeReferenceDiscoveryService.claim
+// never installed withRollupBumpTally at all (a separate bug from the one
+// this specific test targets, fixed in the same round) -- Discover here
+// reaches handleFailure directly, a different call path than claim's own
+// feature-disabled branch, so it does not exercise that fix, only
+// confirms handleFailure's OWN tally/flush wiring (already correct before
+// round 10) still works end to end.
+func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollupBumpMetric(t *testing.T) {
+	t.Setenv("SYNC_REFERENCE_DISCOVERY_MAX_ATTEMPTS", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+	unitID := "00000000-0000-4000-8000-0000000000fa"
+	sourceID := "00000000-0000-4000-8000-0000000000fb"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
+		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &fakeDiscoveryExecutor{err: retryableDiscoveryError{message: "rate limited, please retry"}}
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := providerfoundation.NewMetrics()
+	service.WithMetrics(metrics)
+	before := rollupBumpedCount(t, "reference_discovery_failed")
+
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	if got, want := rollupBumpedCount(t, "reference_discovery_failed"), before+1; got != want {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"reference_discovery_failed\"} = %d "+
+			"after a real Discover() retry-exhaustion termination, want %d (before=%d) -- WithMetrics is wired but "+
+			"flushRollupBumpTally never ran (codex round 10, CHAOS-4586)", got, want, before)
 	}
 }
 
@@ -526,6 +690,69 @@ VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
 	}
 	if ledgerCount != 0 {
 		t.Fatalf("ledger rows=%d want=0 (denied before the ledger is ever created)", ledgerCount)
+	}
+}
+
+// TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabledRecordsTheRollupBumpMetric
+// is TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled's fixture,
+// with real metrics wired (codex round 10, follow-up per team-lead's ruling:
+// "verified correct by reading" is exactly what failed for this exemption --
+// no exemptions-by-reading left in the registry). This is the ONE Dispatch/
+// Discover-family rollup path the earlier round-10 fix commit shipped with
+// only a concurrency proof (TestTerminalizeFeatureDisabledRunWaitsForA...)
+// and code reading, not a dedicated metric-delta assertion: the concurrency
+// test proves the rollup WRITE is lock-protected, but says nothing about
+// whether claim()'s own newly-added withRollupBumpTally/flushRollupBumpTally
+// wiring actually reaches the real counter end to end. This test closes that
+// gap for claim()'s feature-disabled branch specifically (a DIFFERENT call
+// path from handleFailure's, which
+// TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollupBumpMetric
+// already covers).
+func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabledRecordsTheRollupBumpMetric(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createReferenceDiscoveryTables(t, ctx, pool)
+	seedDiscoveryRoute(t, ctx, pool)
+	unitID := "00000000-0000-4000-8000-0000000000e5"
+	sourceID := "00000000-0000-4000-8000-0000000000e6"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
+VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
+		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &fakeDiscoveryExecutor{summary: map[string]any{"ok": true}}
+	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := providerfoundation.NewMetrics()
+	service.WithMetrics(metrics)
+	before := rollupBumpedCount(t, "feature_disabled")
+
+	if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	if executor.calls != 0 {
+		t.Fatalf("executor.calls=%d want=0 (a feature-disabled run must never reach the executor)", executor.calls)
+	}
+	if got, want := rollupBumpedCount(t, "feature_disabled"), before+1; got != want {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"feature_disabled\"} = %d after a "+
+			"real Discover() feature-disabled termination via claim(), want %d (before=%d) -- claim() installs "+
+			"withRollupBumpTally and flushes it after commit (codex round 10, CHAOS-4586), but this is the only "+
+			"test that proves the flush actually reaches the real counter for THIS call path", got, want, before)
 	}
 }
 

@@ -154,7 +154,7 @@ def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
 
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
-    env["GOTOOLCHAIN"] = "go1.25.9"
+    env["GOTOOLCHAIN"] = "go1.27.0"
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
@@ -1173,7 +1173,242 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # scanning every production jira_*.go file for the retired path).
     # Neither is integration-tagged.
     # 1277 -> 1279 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1279
+    #
+    # CHAOS-4592 (github tests/cicd watermark pinned at last_synced_at=
+    # 2026-08-08 for weeks: report_member's report-parse-time causes,
+    # malformed/unreadable, were never added to githubTestsWatermarkAdvancingPairs
+    # when CHAOS-4394 fixed the three whole-artifact causes for the identical
+    # reason -- an immutable historical CI artifact's bytes parse the same
+    # way on every re-attempt). Codex review round 1 (P1) found the aggregate
+    # SkippedArtifactsOverflow shortcut in
+    # githubTestsReportMemberSkippedWithoutDurableMarker could let an
+    # intermediate binary's cursor (post-CHAOS-4394, pre-CHAOS-4592) advance
+    # over an unmarked malformed/unreadable skip during a rolling upgrade;
+    # narrowed the shortcut to the three original causes only. Added 1 new
+    # ordinary top-level test in complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses.
+    # None are integration-tagged.
+    # 1279 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 codex review round 2 (P1): round 1's overflow-shortcut
+    # narrowing still shared ONE aggregate SkippedArtifactsOverflow int
+    # across every report_member cause, so it could not prove which cause
+    # actually overflowed -- one cause's overflow could wrongly excuse an
+    # unrelated unmarked cause, or a heavy run of the three original causes
+    # could permanently starve a later malformed/unreadable skip out of ever
+    # counting as covered. Added SkippedArtifactCauseOverflow (per-cause).
+    # No new top-level tests (extended the existing overflow test in place).
+    # 1280 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 codex review round 3 (P2): round 2's per-cause fix gated its
+    # legacy-cursor fallback on "causeOverflow has zero entries", which a
+    # walk straddling this exact deploy would break the instant its own
+    # post-upgrade marker-writing touched even one unrelated cause. Added
+    # githubTestsLegacyReportOverflowSentinel, stamped once at decode from
+    # the cursor's raw shape, to distinguish legacy-shaped provenance from
+    # "merely non-empty". Added 1 new ordinary top-level test in
+    # complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsChunkedFinalMetadataPreservesLegacyOverflowAcrossResume.
+    # None are integration-tagged.
+    # 1280 -> 1281 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 (child of CHAOS-4588: codex reviews on lanes 4586/4587 found
+    # two log-contract defects in CHAOS-4588's merged code, folded in here
+    # since this lane owns github_tests_chunked_route.go today). (1)
+    # githubTestsLogArtifactSkipSummary's gate was `len(incomplete) == 0`,
+    # firing "provider artifacts skipped this unit" for a unit whose only
+    # incompleteness was a run-level page-budget truncation -- zero artifacts
+    # ever skipped, misleading artifact_skip_total=0 right next to the claim.
+    # (2) the oversized-artifact branch kept its own pre-CHAOS-4588 direct
+    # slog.Warn, so a unit with an oversized artifact logged that line PLUS
+    # the summary line -- two records, violating the at-most-one-per-unit
+    # contract CHAOS-4588 established for every other cause. Added 2 new
+    # ordinary top-level tests in github_tests_artifact_skip_log_test.go:
+    # TestGitHubTestsRunLevelTruncationDoesNotLogArtifactSkipSummary and
+    # TestGitHubTestsOversizedArtifactLogsExactlyOneLine. Neither is
+    # integration-tagged.
+    # 1281 -> 1283 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 third CHAOS-4588 fold-in (codex P1 via lane-4587): a
+    # GitHubTestsSkippedArtifact record serializes far larger once its Name
+    # field (CHAOS-4588/4591) exists than githubTestsMaxSkippedArtifactRecords
+    # was originally sized against -- 20 records at the old 48-byte name cap
+    # alone encoded to ~4.1KB, already exceeding the WHOLE cursor's 4KiB
+    # maxChunkCursorBytes budget before every other field is added, so a
+    # heavy-skip-volume unit's checkpoint write could fail
+    # ErrChunkCheckpointConflict outright instead of degrading into
+    # SkippedArtifactsOverflow. Shrank githubTestsMaxSkippedArtifactRecords
+    # (20 -> 8) and githubTestsMaxArtifactNameBytes (48 -> 24) to a
+    # combined budget verified, not assumed. Added 1 new ordinary top-level
+    # test in github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget. Not
+    # integration-tagged.
+    # 1283 -> 1284 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 fourth CHAOS-4588 fold-in (codex P1, round 5): shrinking the
+    # skipped-artifact caps only bounds a NEWLY appended record -- a cursor a
+    # PRIOR binary version already wrote under the OLDER, larger caps
+    # decodes with its sample exactly as written (up to 20 records with
+    # 48-byte names), and without normalizing it down to the current bounded
+    # shape, an otherwise-ordinary in-flight cursor can already exceed
+    # maxChunkCursorBytes on its own once that legacy sample is added back
+    # in -- the very next re-encode during a rolling deploy fails
+    # ErrChunkCheckpointConflict outright, losing committed progress.
+    # decodeGitHubTestsChunkCursor now normalizes an inherited
+    # SkippedArtifacts sample to the current caps, trimming into
+    # SkippedArtifactsOverflow exactly as appendGitHubTestsSkippedArtifact
+    # already does for a new record. Added 1 new ordinary top-level test in
+    # github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorNormalizesLegacySkippedArtifactsOnDecode.
+    # Not integration-tagged.
+    # 1284 -> 1285 top-level; 152 -> 152 integration-tagged (unchanged).
+    #
+    # CHAOS-4592 sixth CHAOS-4588 fold-in (codex P1 + P2 on lane-4587's round
+    # 5/6): (P1) the legacy-sample migration bumped SkippedArtifactsOverflow
+    # in aggregate, so the generic legacy sentinel could wrongly cover an
+    # UNRELATED unmarked cause the trimmed records never touched -- a pre-
+    # CHAOS-4394 cursor with exactly 20 artifact_oversized markers
+    # (overflow==0) plus an unmarked artifact_unavailable observation would
+    # advance the watermark for artifact_unavailable with zero durable
+    # evidence for it. normalizeLegacyGitHubTestsSkippedArtifacts now
+    # attributes migration-induced overflow to each dropped record's OWN
+    # cause, and the legacy sentinel is decided from the RAW pre-
+    # normalization signal instead of the post-normalization one, so the two
+    # provenances never conflate. (P2) the folded per-unit summary line
+    # dropped the run/artifact ids and cap the old per-artifact oversized
+    # WARN carried, and the totality-gate failure path (which returns before
+    # the summary ever runs) logged none at all -- both durable-marker
+    # fields, already collected, now render into githubTestsSkippedArtifactLogSample
+    # and the totality-gate ERROR line. Added 1 new ordinary top-level test
+    # in github_tests_chunk_cursor_budget_test.go:
+    # TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause.
+    # Not integration-tagged.
+    # 1285 -> 1286 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round (terra/xhigh, full-base):
+    # single-layer tests for the malformed/unreadable causes never proved the
+    # parser's marker actually reaches the cursor the chunked route builds --
+    # a regression dropping that forwarding loop would leave every existing
+    # test green while recreating CHAOS-4592. Added 1 new ordinary top-level
+    # test in complete_route_comparator_decoded_test.go:
+    # TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd.
+    # Not integration-tagged.
+    # 1286 -> 1287 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round 2 (terra/xhigh, full-base +
+    # .codex-review-context.md): 1 P1 + 2 P2 findings, each fixed with a
+    # regression test. P1 -- the durable-marker guard checked cause PRESENCE
+    # not COUNT, so one marker could excuse an unrelated remainder of that
+    # same cause's Incomplete count with zero evidence (a cursor straddling
+    # this deploy could carry N unmarked pre-deploy skips + 1 post-deploy
+    # marked one, advancing over all N+1). Fixed with an exact per-cause
+    # SkippedArtifactCauseCount field, tested by
+    # TestGitHubTestsChunkedFinalMetadataRequiresFullCountNotMarkerPresence
+    # (complete_route_comparator_decoded_test.go). P2 #1 -- per-cause marker
+    # overflow was durable but not observable in the summary log line,
+    # tested by TestGitHubTestsSkipSummaryLogsOverflowedCauses
+    # (github_tests_artifact_skip_log_test.go). P2 #2 -- the prior round's
+    # end-to-end test reimplemented the route's forwarding loop instead of
+    # exercising it, tested by
+    # TestGitHubTestsMemberLevelSkipAdvancesWatermarkThroughRealRoute
+    # (github_tests_artifact_skip_log_test.go), which drives the real
+    # chunked route through an HTTP-mocked walk. 3 new ordinary top-level
+    # tests, none integration-tagged.
+    # 1287 -> 1290 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round 3 (terra/xhigh, full-base +
+    # .codex-review-context.md): 2 P2 correctness bugs, both regressions in
+    # round 2's own P1 fix or its supporting normalize path, plus 2 P3 proof
+    # gaps in unrelated-package/test-double wiring. P2 #1 -- causeCount was
+    # treated as authoritative the moment it was tracked at all, abandoning
+    # the sampleCount/causeOverflow fallback -- a cursor with fully retained
+    # markers from BEFORE causeCount existed, resumed under this binary with
+    # ONE new skip, wrongly withheld a fully-marked cause. Fixed by checking
+    # every signal unconditionally (first success wins) instead of gating on
+    # causeCount's presence; tested by
+    # TestGitHubTestsChunkedFinalMetadataCombinesCauseCountWithRetainedMarkers
+    # (complete_route_comparator_decoded_test.go). P2 #2 -- legacy-marker
+    # trim attributed dropped records' overflow to the RAW (often empty)
+    # Cause field instead of resolving it through
+    # githubTestsSkippedArtifactCause's SizeBytes fallback, mis-keying
+    # migration overflow under "" instead of artifact_oversized; the round-6
+    # test that was supposed to cover this manufactured modern-shaped markers
+    # (Cause already set) and never exercised the bug at all -- fixed both the
+    # code and that test's marker construction (no new test func). The 2 P3s
+    # (chunk-continuation metric wiring in internal/jobs/providerunit; the
+    # causeOverflow-to-log-line forwarding through the real route) each get a
+    # new test that exercises the real call path instead of a direct/synthetic
+    # one: TestGitHubTestsSkipSummaryLogsOverflowThroughRealRoute
+    # (github_tests_artifact_skip_log_test.go, providersync package) and
+    # TestChunkContinuationDeferRecordsTheMetric
+    # (chunk_continuation_test.go, internal/jobs/providerunit package --
+    # does NOT count toward this providersync-only pin). 2 new ordinary
+    # top-level providersync tests, none integration-tagged.
+    # 1290 -> 1292 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round 5 (terra/xhigh, full-base +
+    # ledger, chris's ruling: apply the CLASS fix, not the layer patch).
+    # Round 4 found causeOverflow[cause] was STILL a boolean with no
+    # magnitude check -- the identical defect as round 2's original bug
+    # (marker presence) and round 3's regression (causeCount trusted the
+    # moment it was "tracked"), recurring a 3rd time at a new layer. Deleted
+    # the generic causeOverflow[cause] fallback entirely (now provably
+    # redundant: causeCount is unconditional/exact, so it already covers
+    # every legitimate same-binary overflow via the first check; the
+    # boolean could only ever fire in the unsafe mixed-era gap it was
+    # supposed to guard). Fixed one now-stale sub-case in
+    # TestGitHubTestsChunkedFinalMetadataOverflowShortcutExcludesReportParseCauses
+    # that manufactured a causeOverflow-without-causeCount cursor no real
+    # binary could produce. Also fixed the P2 sibling: the totality-gate
+    # ERROR log had its own separate copy of the skipped-sample attrs that
+    # silently missed skipped_sample_cause_overflow when round 2 added it to
+    # the OTHER copy -- extracted githubTestsSkippedArtifactMarkerAttrs so
+    # both (and any future third caller) share one builder. Added 2 new
+    # ordinary top-level tests, none integration-tagged:
+    # TestGitHubTestsAllArtifactsUnreadableLogsCauseOverflow
+    # (github_tests_all_artifacts_unreadable_test.go) and
+    # TestGitHubTestsReportMemberMagnitudeInvariant
+    # (complete_route_comparator_decoded_test.go) -- the latter pins THE
+    # class invariant ("watermark advances only when some signal proves the
+    # FULL Count; no boolean may excuse a magnitude") with the round
+    # 2/3/5 repros as its three sub-cases, so a 4th recurrence of this
+    # pattern fails loudly here instead of needing a round 6 to find it.
+    # 1292 -> 1294 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round 5's OWN merge-gate re-run
+    # (terra/xhigh, full-base + ledger, THE INVARIANT confirmed closed: "No
+    # additional watermark-advance defect found... the sole boolean legacy
+    # fallback remains limited to artifact_oversized"). Found 1 P2 + 1 P3, a
+    # DIFFERENT class from the invariant (not a watermark-advance defect --
+    # both fixed the same commit). P2: RunID/ArtifactID (json.Number-decoded,
+    # syntactically unbounded) were never length-bounded the way Name was
+    # (round 1's own fix) -- an oversized provider-supplied ID could blow
+    # maxChunkCursorBytes and fail the checkpoint outright, losing progress
+    # instead of degrading into overflow. Fixed with
+    # githubTestsMaxArtifactIDBytes (24) truncation at the same single append
+    # site Name already used; the worst-case budget test's RunID/ArtifactID
+    # values were also fixed to genuinely exercise the new hard bound rather
+    # than realistic-looking-but-short values. P3: per-cause sample overflow
+    # had no metric of its own, only RecordCicdPartialSuccess's single
+    # dominant-reason label (indistinguishable from a single skip) and the
+    # round-2 log line. Added
+    # dev_health_provider_skipped_artifact_cause_overflow_total, wired
+    # through observeCicdPartialSuccess. 1 new ordinary top-level test:
+    # TestGitHubTestsSkippedArtifactAppendTruncatesOversizedID
+    # (github_tests_chunk_cursor_budget_test.go). Not integration-tagged.
+    # TestObserveCicdPartialSuccessRecordsPerCauseOverflow (the P3 fix's
+    # test) is in internal/jobs/providerunit, does not count toward this pin.
+    # 1294 -> 1295 top-level; 152 -> 152 integration-tagged (unchanged).
+    # CHAOS-4592/4601 codex review gate round 6 (terra/xhigh, full-base +
+    # ledger; THE INVARIANT still confirmed closed -- these 2 findings are
+    # in items 24/25's OWN robustness/telemetry class, not the invariant).
+    # P2: item 24's ID truncation bounded only NEWLY appended markers --
+    # normalizeLegacyGitHubTestsSkippedArtifacts re-truncates an inherited
+    # Name for exactly this reason (a prior binary's shape can exceed this
+    # binary's own caps) but left RunID/ArtifactID untouched, so a resumed
+    # cursor with a legacy oversized ID could still fail its next checkpoint
+    # after any new skip. Fixed by re-truncating RunID/ArtifactID in the
+    # same legacy-normalize loop that already re-truncates Name. 1 new
+    # ordinary top-level test:
+    # TestGitHubTestsChunkCursorNormalizeRetruncatesInheritedIDs
+    # (github_tests_chunk_cursor_budget_test.go). Not integration-tagged.
+    # 1295 -> 1296 top-level; 152 -> 152 integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1296
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1190,7 +1425,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1279
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1296
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1251,7 +1486,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1279
+    assert len(selected_tests) == len(set(selected_tests)) == 1296
     assert set(selected_tests) == expected_tests
 
 
@@ -1439,7 +1674,7 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
             "cache-dependency-path": "**/go.sum",
         }
     assert re.search(
-        r"(?m)^go 1\.25\.9$", (ROOT / "go.mod").read_text(encoding="utf-8")
+        r"(?m)^go 1\.27\.0$", (ROOT / "go.mod").read_text(encoding="utf-8")
     )
 
     aggregate = jobs["go-storage-integration"]
@@ -1467,7 +1702,7 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
     assert workflow_source.count("- 'ci/go_providersync_test_shards.tsv'") == 2
 
     check_go_source = CHECK_GO.read_text(encoding="utf-8")
-    assert 'GO_TOOLCHAIN="go1.25.9"' in check_go_source
+    assert 'GO_TOOLCHAIN="go1.27.0"' in check_go_source
     assert 'export GOTOOLCHAIN="${GO_TOOLCHAIN}"' in check_go_source
     assert 'export GOCACHE="${DEV_HEALTH_GO_CACHE}"' in check_go_source
     assert (

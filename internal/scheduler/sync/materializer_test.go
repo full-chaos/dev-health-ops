@@ -32,6 +32,43 @@ func TestRequestedDatasetKeysPreservesLiveConfigRoutingSemantics(t *testing.T) {
 	}
 }
 
+// TestSourceIDCanonicalizationMatchesEveryFormatPythonAccepts is the input-
+// shape enumeration team-lead requested for the source_ids seam (codex gate
+// round 7's canonicalization fix, .codex-review-context.md's table): proves
+// uuid.Parse(id).String() (loadPlanSources' actual canonicalization line)
+// produces the identical canonical form for every UUID encoding Python's
+// stdlib uuid.UUID() constructor also accepts -- canonical, compact
+// (no-dash), upper-case, braced, and URN -- and that a genuinely malformed
+// string still fails to parse, matching _coerce_uuid's rejection.
+func TestSourceIDCanonicalizationMatchesEveryFormatPythonAccepts(t *testing.T) {
+	const canonical = "00000000-0000-4000-8000-000000002003"
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"canonical", canonical},
+		{"compact (no dashes)", "00000000000040008000000000002003"},
+		{"upper-case", strings.ToUpper(canonical)},
+		{"braced", "{" + canonical + "}"},
+		{"urn form", "urn:uuid:" + canonical},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			parsed, err := uuid.Parse(testCase.input)
+			if err != nil {
+				t.Fatalf("uuid.Parse(%q) = %v, want a valid parse (Python's uuid.UUID() accepts this form)", testCase.input, err)
+			}
+			if got := parsed.String(); got != canonical {
+				t.Fatalf("uuid.Parse(%q).String() = %q, want the canonical form %q -- Postgres renders uuid columns canonically, so anything else silently matches zero rows", testCase.input, got, canonical)
+			}
+		})
+	}
+
+	if _, err := uuid.Parse("not-a-uuid"); err == nil {
+		t.Fatal("uuid.Parse(\"not-a-uuid\") = nil error, want a rejection matching Python's _coerce_uuid")
+	}
+}
+
 func TestNewNativeMaterializerPortsPythonEnvironmentBounds(t *testing.T) {
 	t.Setenv("SYNC_WATERMARK_OVERLAP", "-10")
 	t.Setenv("SYNC_RUN_MAX_UNITS", "0")

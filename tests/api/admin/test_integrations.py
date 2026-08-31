@@ -28,6 +28,7 @@ from dev_health_ops.models.integrations import (
     SyncRunReferenceDiscovery,
     SyncRunUnit,
 )
+from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     ScheduledJob,
@@ -66,6 +67,9 @@ _TABLES = tables_of(
     ScheduledJob,
     # The units endpoint reads watermark lag per (source, dataset) (CHAOS-3430).
     SyncWatermark,
+    # CHAOS-4584 round 6: enabling a jira source checks the org's max_repos
+    # entitlement, which resolves via OrgLicense.
+    OrgLicense,
 )
 
 
@@ -498,6 +502,134 @@ async def test_patch_source_enable(client, session_maker, seeded_state):
     )
     assert resp.status_code == 200
     assert resp.json()["is_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_source_clears_repo_limit_cap_marker(
+    client, session_maker, seeded_state
+):
+    """Codex review (CHAOS-4584 round 4, P1): an operator's explicit
+    enable/disable via this endpoint must clear metadata.capped_by_repo_limit
+    -- otherwise a later Jira discovery run with available headroom treats
+    the row as still auto-recoverable and can flip it back, overriding the
+    admin's own decision (IntegrationSourceService.set_enabled is the
+    endpoint's own service, a different code path from
+    sync/discovery.py::set_source_enabled)."""
+    ac, _ = client
+    created = await _create_integration(ac)
+    integration_id = created["id"]
+    source_id = await _seed_source(
+        session_maker, seeded_state["org_id"], integration_id
+    )
+    async with session_maker() as session:
+        source = await session.get(IntegrationSource, uuid.UUID(source_id))
+        source.is_enabled = False
+        source.metadata_ = {**source.metadata_, "capped_by_repo_limit": True}
+        await session.commit()
+
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/sources/{source_id}",
+        json={"is_enabled": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_enabled"] is True
+
+    async with session_maker() as session:
+        source = await session.get(IntegrationSource, uuid.UUID(source_id))
+        assert "capped_by_repo_limit" not in source.metadata_
+
+
+@pytest.mark.asyncio
+async def test_patch_source_rejects_jira_enable_over_repo_limit(
+    client, session_maker, seeded_state
+):
+    """Codex review (CHAOS-4584 round 6, P2): the admin PATCH endpoint must
+    reject re-enabling a jira source when doing so would push the org over
+    its max_repos entitlement -- 403, not a silent 200 immediately undone
+    by the next discovery run's rebalance (which would otherwise treat the
+    marker-less row as an ordinary pre-existing source)."""
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+    created = await _create_integration(ac, provider="jira")
+    integration_id = created["id"]
+    capped_id = uuid.uuid4()
+
+    async with session_maker() as session:
+        session.add(
+            OrgLicense(
+                org_id=uuid.UUID(org_id),
+                tier="community",
+                limits_override={"max_repos": 1},
+            )
+        )
+        # _active_repo_usage_count_for_limit only counts a source if its
+        # integration has a linked planner-managed parent SyncConfiguration
+        # (_create_integration alone creates a bare Integration row).
+        session.add(
+            SyncConfiguration(
+                name="jira-planner",
+                provider="jira",
+                org_id=org_id,
+                sync_targets=["work-items"],
+                sync_options={},
+                is_active=True,
+                integration_id=uuid.UUID(integration_id),
+                planner_managed=True,
+            )
+        )
+        session.add(
+            IntegrationSource(
+                org_id=org_id,
+                integration_id=uuid.UUID(integration_id),
+                provider="jira",
+                source_type="project",
+                external_id="AAA",
+                name="Project A",
+                full_name="AAA",
+                metadata_={},
+                is_enabled=True,
+            )
+        )
+        session.add(
+            IntegrationSource(
+                id=capped_id,
+                org_id=org_id,
+                integration_id=uuid.UUID(integration_id),
+                provider="jira",
+                source_type="project",
+                external_id="BBB",
+                name="Project B",
+                full_name="BBB",
+                metadata_={"capped_by_repo_limit": True},
+                is_enabled=False,
+            )
+        )
+        await session.commit()
+
+    from dev_health_ops.metrics.prometheus import JIRA_PROJECT_DISCOVERY_TOTAL
+
+    before = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
+
+    resp = await ac.patch(
+        f"/api/v1/admin/integrations/{integration_id}/sources/{capped_id}",
+        json={"is_enabled": True},
+    )
+    assert resp.status_code == 403
+
+    async with session_maker() as session:
+        source = await session.get(IntegrationSource, capped_id)
+        assert source.is_enabled is False
+        assert source.metadata_.get("capped_by_repo_limit") is True
+
+    after = JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+        outcome="rejected_at_enable_repo_limit"
+    )._value.get()
+    assert after == before + 1, (
+        "codex review (gate round 3, P3): the rejection must be observable "
+        "via telemetry, not just the 403"
+    )
 
 
 @pytest.mark.asyncio

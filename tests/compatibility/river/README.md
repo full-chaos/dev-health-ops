@@ -17,7 +17,7 @@ touch the repository's development PostgreSQL or ClickHouse data.
 
 - Docker with Compose v2;
 - a Go installation with automatic toolchain selection enabled; the runner
-  builds both CLIs with and asserts the exact candidate runtime Go 1.25.9;
+  builds both CLIs with and asserts the exact candidate runtime Go 1.27.0;
 - `jq`;
 - a standalone Python 3.13.14 environment with `riverqueue`, SQLAlchemy,
   `asyncpg`, and `greenlet` installed at the exact versions below. This is intentionally

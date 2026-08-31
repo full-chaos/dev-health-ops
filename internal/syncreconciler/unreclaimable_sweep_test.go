@@ -412,9 +412,10 @@ func TestSweepStepErrorsCarryNoConnectionMaterial(t *testing.T) {
 // would quietly re-create the exact ambiguity this ticket removed.
 func TestSweepStepIdentitiesAreDistinct(t *testing.T) {
 	steps := sweepStepIdentities()
-	if len(steps) != 17 {
-		t.Fatalf("declared %d steps, want the 17 failure paths this file has "+
-			"(the original 14, plus the three the closing route fence adds)", len(steps))
+	if len(steps) != 20 {
+		t.Fatalf("declared %d steps, want the 20 failure paths this file has "+
+			"(the original 14, plus the three the closing route fence adds, "+
+			"plus sweepStepRollupBump/sweepStepUnitLock/sweepStepBucketLock from CHAOS-4586)", len(steps))
 	}
 	seen := make(map[string]struct{}, len(steps))
 	for _, step := range steps {
@@ -445,6 +446,14 @@ func sweepStepIdentities() []string {
 		sweepStepOutboxQuery, sweepStepOutboxScan, sweepStepOutboxRows,
 		sweepStepTerminalizePayload, sweepStepTerminalizeExec,
 		sweepStepTerminalizeRows, sweepStepCommit,
+		// CHAOS-4586: sweepStepRollupBump (round 2), sweepStepUnitLock
+		// (round 4) and sweepStepBucketLock (round 5, codex round 6 P2
+		// caught this one specifically missing) were each added without
+		// being registered here, so TestSweepStepErrorsCarryNoConnectionMaterial
+		// never exercised their error messages and a future regression in
+		// any of the three would go undetected by this file's own
+		// distinctness/sanitization tests.
+		sweepStepRollupBump, sweepStepUnitLock, sweepStepBucketLock,
 	}
 }
 

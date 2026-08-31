@@ -43,6 +43,13 @@ REGISTRY_PATH = ROOT / "contracts" / "jobs" / "v1" / "registry.json"
 MIGRATION_STATE_PATH = ROOT / "contracts" / "jobs" / "v1" / "migration-state.json"
 BRIDGE_PATH = ROOT / "internal" / "syncdispatchruntime" / "bridge.go"
 WORKERS_DIR = ROOT / "src" / "dev_health_ops" / "workers"
+# CHAOS-4602: the native per-occurrence source (repo/project) discovery step
+# is neither a River job kind, a bridge.go route, nor a workers/*.py file --
+# it is an API-request-time / materializer-time side effect, which is exactly
+# why the by-mechanism audits that built the three tables below missed it
+# entirely (CHAOS-4602's own executed finding). sourceDiscoveryProviders is
+# its own small, closed registry, mechanically enumerable the same way.
+SOURCE_DISCOVERY_PATH = ROOT / "internal" / "scheduler" / "sync" / "source_discovery.go"
 DOC_PATH = ROOT / "docs" / "reference" / "runtime" / "python-go-live-path-ledger.md"
 
 KIND_BEGIN = "<!-- BEGIN GENERATED KIND LEDGER -->"
@@ -51,8 +58,15 @@ ROUTE_BEGIN = "<!-- BEGIN GENERATED BRIDGE ROUTE LEDGER -->"
 ROUTE_END = "<!-- END GENERATED BRIDGE ROUTE LEDGER -->"
 WORKER_BEGIN = "<!-- BEGIN GENERATED WORKER FILE LEDGER -->"
 WORKER_END = "<!-- END GENERATED WORKER FILE LEDGER -->"
+SOURCE_BEGIN = "<!-- BEGIN GENERATED SOURCE DISCOVERY LEDGER -->"
+SOURCE_END = "<!-- END GENERATED SOURCE DISCOVERY LEDGER -->"
 
 BRIDGE_CALL_RE = re.compile(r'bridge\.(?:call|callWithResult)\(ctx, "([^"]+)"')
+SOURCE_DISCOVERY_PROVIDERS_RE = re.compile(
+    r"var sourceDiscoveryProviders = map\[string\]bool\{(?P<body>.*?)\n\}",
+    re.DOTALL,
+)
+SOURCE_DISCOVERY_PROVIDER_KEY_RE = re.compile(r'"(\w+)":\s*true')
 
 
 def _load_json(path: Path) -> dict:
@@ -76,6 +90,17 @@ def load_bridge_routes() -> set[str]:
 
 def load_worker_files() -> set[str]:
     return {p.name for p in WORKERS_DIR.glob("*.py")}
+
+
+def load_source_discovery_providers() -> set[str]:
+    text = SOURCE_DISCOVERY_PATH.read_text(encoding="utf-8")
+    match = SOURCE_DISCOVERY_PROVIDERS_RE.search(text)
+    if match is None:
+        raise SystemExit(
+            "gen_python_go_ledger_docs: sourceDiscoveryProviders map literal not "
+            f"found in {SOURCE_DISCOVERY_PATH}"
+        )
+    return set(SOURCE_DISCOVERY_PROVIDER_KEY_RE.findall(match.group("body")))
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +600,40 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# CURATED: one entry per provider in sourceDiscoveryProviders
+# (internal/scheduler/sync/source_discovery.go), CHAOS-4602. Every provider
+# here has its sources (repos for github/gitlab, projects for jira)
+# discovered from the provider's own API and upserted into
+# integration_sources -- distinct from an admin manually adding one.
+# ---------------------------------------------------------------------------
+SOURCE_DISCOVERY_LEDGER: dict[str, dict[str, str]] = {
+    "github": {
+        "producer": "`internal/scheduler/sync/source_discovery.go` `NativeSourceDiscoveryService.discoverGitHub`, called from `loadMaterializationPlan` before `loadPlanSources` reads sources for planning (CHAOS-4602)",
+        "plane": "native Go, inside the scheduled-sync materializer, once per occurrence",
+        "trigger": "every scheduled occurrence for a config with no explicit scope (`sync_configurations.source_id IS NULL`)",
+        "evidence": "argued — code read this PR; local integration-test evidence in `internal/scheduler/sync/source_discovery_integration_test.go` (idempotent upsert never flips `is_enabled`, discovery runs before `loadPlanSources`, explicit-scope configs skip it, a failure does not fail the occurrence)",
+        "state": "native (this PR) — the Python one-shot at sync-config creation (`src/dev_health_ops/discovery/repos.py::discover_repos_for_config`) stays wired as an INTERIM, now-superseded mechanism (it still runs once at config creation; it is not yet deleted)",
+        "ticket": "CHAOS-4602 (this PR); retiring the Python one-shot is follow-up once a prod readback confirms the Go step as the live writer, the same pattern CHAOS-4435 already uses for the team-catalog populators above",
+    },
+    "gitlab": {
+        "producer": "`internal/scheduler/sync/source_discovery.go` `NativeSourceDiscoveryService.discoverGitLab`, same call site as github",
+        "plane": "native Go, inside the scheduled-sync materializer, once per occurrence",
+        "trigger": "every scheduled occurrence for a config with no explicit scope",
+        "evidence": "argued — code read this PR; same integration-test evidence as github",
+        "state": "native (this PR) — the Python one-shot at sync-config creation stays wired as an interim, now-superseded mechanism, not yet deleted",
+        "ticket": "CHAOS-4602 (this PR); retiring the Python one-shot is follow-up",
+    },
+    "jira": {
+        "producer": "`internal/scheduler/sync/source_discovery.go` `NativeSourceDiscoveryService.discoverJira`, same call site as github/gitlab",
+        "plane": "native Go, inside the scheduled-sync materializer, once per occurrence",
+        "trigger": "every scheduled occurrence for a config with no explicit scope",
+        "evidence": "argued — code read this PR; local integration-test evidence (source_discovery_integration_test.go). CHAOS-4602's own executed finding: jira had NO source-discovery mechanism at all before this PR (`discover_repos_for_config`'s jira branch does not exist on main as of this PR; CHAOS-4584 is a separate, still-in-flight Python interim, not yet merged) -- this Go step is jira's FIRST source-discovery mechanism, not a port of an existing one",
+        "state": "native (this PR, and jira's ONLY mechanism -- there is no Python one-shot to supersede for jira the way there is for github/gitlab)",
+        "ticket": "CHAOS-4602 (this PR) + CHAOS-4584 (interim Python jira branch at config-creation time, separate/in-flight, does not block this PR) + CHAOS-4576 (Jira REFERENCE discovery -- boards/sprints -- to native Go; a different discovery surface, coordinate if the same route can carry both)",
+    },
+}
+
 _CATEGORY_LABEL = {
     "a": "LIVE",
     "b": "CELERY-TASK-ONLY / DEAD",
@@ -680,6 +739,29 @@ def render_worker_block() -> str:
     return "\n".join(lines)
 
 
+def render_source_discovery_block() -> str:
+    live_providers = load_source_discovery_providers()
+    _consistency_guard(
+        "source-discovery provider(s)",
+        live_providers,
+        set(SOURCE_DISCOVERY_LEDGER),
+        "Add a SOURCE_DISCOVERY_LEDGER row (producer/plane/trigger/evidence/state/ticket) for it.",
+    )
+    lines = [
+        SOURCE_BEGIN,
+        "| provider | producer | plane | trigger | evidence | state | ticket |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for provider in sorted(SOURCE_DISCOVERY_LEDGER):
+        row = SOURCE_DISCOVERY_LEDGER[provider]
+        lines.append(
+            f"| `{provider}` | {row['producer']} | {row['plane']} | {row['trigger']} | "
+            f"{row['evidence']} | {row['state']} | {row['ticket']} |"
+        )
+    lines.append(SOURCE_END)
+    return "\n".join(lines)
+
+
 def _replace_block(
     doc: str, begin: str, end: str, rendered: str, doc_path: Path
 ) -> str:
@@ -698,6 +780,9 @@ def update_doc() -> None:
     doc = _replace_block(doc, KIND_BEGIN, KIND_END, render_kind_block(), DOC_PATH)
     doc = _replace_block(doc, ROUTE_BEGIN, ROUTE_END, render_route_block(), DOC_PATH)
     doc = _replace_block(doc, WORKER_BEGIN, WORKER_END, render_worker_block(), DOC_PATH)
+    doc = _replace_block(
+        doc, SOURCE_BEGIN, SOURCE_END, render_source_discovery_block(), DOC_PATH
+    )
     DOC_PATH.write_text(doc, encoding="utf-8")
 
 

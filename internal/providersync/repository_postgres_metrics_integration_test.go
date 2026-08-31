@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,36 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// syncRunRollupBumpedCount reads the current value of one
+// dev_health_sync_run_rollup_bumped_total{outcome,path} series from the
+// process-wide singleton (CHAOS-4586 moved this metric off the per-instance
+// providerfoundation.Metrics -- see budget.go's SyncRunRollupBumpedMetricsSource
+// doc comment for why). It is process-wide, not per-repository, so every
+// integration test in this package that exercises a real Fail/Complete adds
+// to the SAME counters; a before/after delta is the only assertion that is
+// not sensitive to test execution order within the shared test binary.
+// Missing series read as 0, matching Prometheus's own "absent == zero"
+// convention.
+func syncRunRollupBumpedCount(t *testing.T, outcome, path string) uint64 {
+	t.Helper()
+	var output bytes.Buffer
+	if err := providerfoundation.SyncRunRollupBumpedMetricsSource().WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf(`dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} `, outcome, path)
+	for _, line := range strings.Split(output.String(), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		value, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, prefix)), 10, 64)
+		if err != nil {
+			t.Fatalf("parse counter value from %q: %v", line, err)
+		}
+		return value
+	}
+	return 0
+}
 
 // TestPostgresRepositoryRecordsClaimAndFailMetrics pins CHAOS-4078's
 // telemetry requirement end to end: a PostgresRepository constructed WITH a
@@ -61,6 +93,8 @@ func TestPostgresRepositoryRecordsClaimAndFailMetrics(t *testing.T) {
 	if claim.Provider != "github" || claim.Dataset != "commits" {
 		t.Fatalf("fixture claim provider/dataset drifted: %+v", claim)
 	}
+	rollupBefore := syncRunRollupBumpedCount(t, "failed", "provider_unit")
+
 	failedAt := now.Add(time.Second)
 	if err := repository.Fail(ctx, claim, "feature_disabled", now, failedAt); err != nil {
 		t.Fatal(err)
@@ -74,13 +108,27 @@ func TestPostgresRepositoryRecordsClaimAndFailMetrics(t *testing.T) {
 	for _, want := range []string{
 		`dev_health_provider_unit_claimed_total{provider="github",dataset="commits"} 1`,
 		`dev_health_provider_unit_failed_total{provider="github",dataset="commits",reason="feature_disabled"} 1`,
-		// CHAOS-4559: Fail's terminal commit must bump the run's live rollup
-		// counter, not just the pre-existing claim/fail-reason counters above.
-		`dev_health_sync_run_rollup_bumped_total{outcome="failed"} 1`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("missing %q in:\n%s", want, rendered)
 		}
+	}
+	// CHAOS-4586: the rollup-bumped counter moved off the per-instance
+	// Metrics.WritePrometheus onto a process-wide singleton (two Metrics
+	// instances in one worker process must not each declare their own
+	// # HELP/# TYPE for the same metric name -- see budget.go). This
+	// instance's own render must no longer carry it.
+	if strings.Contains(rendered, "dev_health_sync_run_rollup_bumped_total") {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total must not render from the per-instance Metrics any more:\n%s", rendered)
+	}
+
+	// CHAOS-4559: Fail's terminal commit must bump the run's live rollup
+	// counter, not just the pre-existing claim/fail-reason counters above.
+	// Read via the process-wide singleton (CHAOS-4586's path label), and as
+	// a delta since other integration tests in this package's shared test
+	// binary bump the same series.
+	if got, want := syncRunRollupBumpedCount(t, "failed", "provider_unit"), rollupBefore+1; got != want {
+		t.Fatalf("dev_health_sync_run_rollup_bumped_total{outcome=\"failed\",path=\"provider_unit\"} = %d, want %d (before=%d)", got, want, rollupBefore)
 	}
 }
 

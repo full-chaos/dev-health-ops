@@ -22,7 +22,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 TEMP_RESULT="$(mktemp "${OUTPUT}.tmp.XXXXXX")"
-GOTOOLCHAIN=go1.25.9 "${SCRIPT_DIR}/run.sh" >"${TEMP_RESULT}"
+GOTOOLCHAIN=go1.27.0 "${SCRIPT_DIR}/run.sh" >"${TEMP_RESULT}"
 jq -e '
   .schema_version == 1
   and .evidence_scope == "local_ephemeral_compatibility_harness"

@@ -44,6 +44,7 @@ from dev_health_ops.api.services.sync_coverage import (
     ensure_utc,
     invalidate_sync_coverage_projection,
 )
+from dev_health_ops.discovery.repos import jira_key_norm
 from dev_health_ops.metrics.prometheus import (
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL,
 )
@@ -83,8 +84,10 @@ from dev_health_ops.sync.datasets import (
     planner_dataset_keys,
     supported_legacy_targets,
 )
+from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
+    await_sync_execution_trigger_materialized,
     create_sync_execution_trigger,
     ensure_pending_sync_job_run,
     mark_job_run_failed,
@@ -1439,13 +1442,30 @@ def _non_git_explicit_source_id(sync_options: dict[str, Any]) -> Any:
     (which decides whether to materialize a source at all) and
     ``create_sync_config``'s repo-limit preflight (CHAOS-4582 codex review:
     the two must agree on how many sources a config will actually consume,
-    or the preflight over- or under-charges the org's limit)."""
-    return (
-        sync_options.get("project_id")
-        or sync_options.get("project_key")
-        or sync_options.get("team_id")
-        or sync_options.get("repo")
-    )
+    or the preflight over- or under-charges the org's limit).
+
+    A whitespace-only string means "not set" (codex review, CHAOS-4584 gate
+    round 2 P2): without this, a config PATCHed/created with
+    ``{"project_key": "   "}`` was treated as explicitly scoped HERE
+    (materializing a real, enabled, repo-slot-consuming source keyed on
+    literal whitespace) but as UNSCOPED by ``discover_jira_projects``'s own
+    normalization -- the two disagreeing meant that garbage source was
+    created once and then never touched (superseded/capped/recovered)
+    again by anything, permanently occupying a slot for a project that can
+    never sync.
+    """
+    for value in (
+        sync_options.get("project_id"),
+        sync_options.get("project_key"),
+        sync_options.get("team_id"),
+        sync_options.get("repo"),
+    ):
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def _jira_config_materializes_zero_sources(
@@ -2276,6 +2296,34 @@ async def create_sync_config(
     except PagerDutyOperationalTargetError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    if _jira_config_materializes_zero_sources(payload.provider, sync_options):
+        # CHAOS-4584: a Jira config with no explicit project scope used to
+        # be stuck at zero sources forever (CHAOS-4582 made that outcome
+        # safe, not real). Run the same discover_repos_for_config seam
+        # github/gitlab use (via the /integrations/{id}/discover endpoint)
+        # right here at creation time so a jira config with no explicit
+        # project_key/project_id actually gets real per-project sources
+        # materialized immediately. Best-effort: a
+        # discovery failure (bad credential, Jira unreachable) must not fail
+        # config creation -- the config is still valid and can be
+        # re-discovered later via that endpoint once the credential works.
+        # discover_sources_for_integration internally isolates its DB
+        # writes in a SAVEPOINT and applies the org's max_repos cap itself
+        # (codex review, CHAOS-4584 round 1 P1/P2, round 2 P1) -- both
+        # apply uniformly to every discovery entry point, not just this one.
+        try:
+            await session.run_sync(
+                lambda sync_session: discover_sources_for_integration(
+                    sync_session, integration.id
+                )
+            )
+        except Exception:
+            logger.exception(
+                "jira_project_discovery_at_creation_failed",
+                extra={"org_id": org_id, "integration_id": str(integration.id)},
+            )
+
     return _sync_config_to_response(config, credential_id=integration.credential_id)
 
 
@@ -2627,10 +2675,44 @@ async def update_sync_config(
                     "service_repository_mappings"
                 ],
             }
+    was_inactive = not bool(getattr(config, "is_active", True))
     if payload.is_active is not None:
         mutable_config.is_active = payload.is_active
     await session.flush()
     updated = config
+
+    updated_integration_id = getattr(updated, "integration_id", None)
+    if (
+        jira_key_norm(str(getattr(updated, "provider", ""))) == "jira"
+        and updated_integration_id is not None
+        and (sync_options_provided or (was_inactive and bool(updated.is_active)))
+    ):
+        # codex review (gate round 2, P1 x2): PATCH previously persisted a
+        # jira config's sync_options (or reactivated it) without ever
+        # re-running discovery -- every scope-change/cap-recovery mechanism
+        # built across rounds 3-6 only ran when something called
+        # discover_sources_for_integration directly (tests, or the
+        # standalone /integrations/{id}/discover endpoint); a real operator
+        # PATCHing project_key via THIS endpoint got a 200 while the
+        # planner kept routing whatever was enabled before the PATCH.
+        # Reactivation additionally needs this because
+        # _active_repo_usage_count_for_limit only counts sources whose
+        # config is_active=True -- discovery that ran while paused could
+        # under-count and over-recover; re-running now, with the flush
+        # above already active, re-establishes a correct count and caps
+        # again if the org is over its allowance. Best-effort: never fail
+        # the PATCH itself.
+        try:
+            await session.run_sync(
+                lambda sync_session: discover_sources_for_integration(
+                    sync_session, updated_integration_id
+                )
+            )
+        except Exception:
+            logger.exception(
+                "jira_project_discovery_on_update_failed",
+                extra={"org_id": org_id, "config_id": config_id},
+            )
 
     await _upsert_scheduled_job(session, updated, org_id)
 
@@ -2793,6 +2875,30 @@ async def trigger_sync_config(
         org_id,
         sync_config_id=getattr(config, "id"),
     )
+    if trigger.occurrence_id is not None and trigger.awaiting_materialization:
+        # CHAOS-4602: commit now so the Go scheduler's reconciler (a
+        # separate connection) can see the occurrence/trigger rows just
+        # inserted, then bound the wait on its materialization.
+        await session.commit()
+        trigger = await await_sync_execution_trigger_materialized(
+            session, trigger.occurrence_id
+        )
+        if trigger.quarantined:
+            return {
+                "status": "failed",
+                "config_id": str(config.id),
+                "occurrence_id": trigger.occurrence_id,
+                "reason": trigger.terminal_reason,
+            }
+        if trigger.awaiting_materialization:
+            return {
+                "status": "pending",
+                "config_id": str(config.id),
+                "occurrence_id": trigger.occurrence_id,
+            }
+        # Materialized: trigger now carries a real sync_run_id/job_run_id/
+        # total_units and falls through to the SAME triggered/disabled
+        # response shape the in-process path already returns below.
     if not trigger.dispatch_required:
         await session.commit()
         return {
@@ -2923,6 +3029,32 @@ async def trigger_sync_config_backfill(
             org_id,
             sync_config_id=getattr(config, "id"),
         )
+        if trigger.occurrence_id is not None and trigger.awaiting_materialization:
+            # CHAOS-4602: commit now so the Go scheduler's reconciler (a
+            # separate connection) can see the occurrence/trigger rows just
+            # inserted, then bound the wait on its materialization. A
+            # BackfillJobModel row needs a REAL sync_run_id (embedded in its
+            # celery_task_id), so it cannot be created until this resolves.
+            await session.commit()
+            trigger = await await_sync_execution_trigger_materialized(
+                session, trigger.occurrence_id
+            )
+            if trigger.quarantined:
+                return {
+                    "status": "failed",
+                    "config_id": str(config.id),
+                    "occurrence_id": trigger.occurrence_id,
+                    "reason": trigger.terminal_reason,
+                }
+            if trigger.awaiting_materialization:
+                return {
+                    "status": "pending",
+                    "config_id": str(config.id),
+                    "occurrence_id": trigger.occurrence_id,
+                }
+            # Materialized: trigger now carries a real sync_run_id, and
+            # falls through to the SAME disabled/accepted response shape
+            # the in-process path already returns below.
         if not trigger.dispatch_required:
             await session.commit()
             return {

@@ -193,9 +193,196 @@ class TestDiscoverReposForConfig:
     def test_unsupported_provider_returns_empty(self):
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
+        config = _make_config(provider="linear")
+        result = discover_repos_for_config(config, {"token": "test"})
+        assert result == []
+
+    @patch("dev_health_ops.discovery.repos.discover_jira_projects")
+    def test_jira_delegates_to_jira_discovery(self, mock_jira):
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_jira.return_value = [
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ]
+        config = _make_config(provider="jira", org_id="org-test")
+        result = discover_repos_for_config(
+            config,
+            {
+                "email": "bot@example.com",
+                "api_token": "tok",
+                "base_url": "https://acme.atlassian.net",
+            },
+        )
+        assert result == [
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ]
+        mock_jira.assert_called_once()
+        assert mock_jira.call_args.kwargs["org_id"] == "org-test"
+        assert mock_jira.call_args.kwargs["sync_options"] == {}
+
+    @patch("dev_health_ops.discovery.repos.discover_jira_projects")
+    def test_jira_threads_sync_options_for_explicit_scope(self, mock_jira):
+        """CHAOS-4584 round 1 P1: the explicit project_key/project_id an
+        integration was configured with must reach ``discover_jira_projects``
+        so it can stay scoped instead of expanding to every visible project."""
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
+        mock_jira.return_value = [("ENG", "Engineering", "software")]
+        config = _make_config(
+            provider="jira", org_id="org-test", sync_options={"project_key": "ENG"}
+        )
+        discover_repos_for_config(
+            config,
+            {
+                "email": "bot@example.com",
+                "api_token": "tok",
+                "base_url": "https://acme.atlassian.net",
+            },
+        )
+        mock_jira.assert_called_once()
+        assert mock_jira.call_args.kwargs["sync_options"] == {"project_key": "ENG"}
+
+    def test_jira_missing_credentials_returns_empty(self):
+        """CHAOS-4584 (root gap): unlike a real credential returning zero
+        projects, a credential mapping too incomplete to build JiraCredentials
+        (no email/base_url) must not raise -- every other provider's contract
+        here is "unresolvable credential -> []", never an exception."""
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
         config = _make_config(provider="jira")
         result = discover_repos_for_config(config, {"token": "test"})
         assert result == []
+
+
+class TestDiscoverJiraProjects:
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_maps_all_visible_project_types(self, mock_get_all):
+        """Chris's ruling (CHAOS-4584): a generic API key discovers ALL
+        projects visible to it, every project type included -- board/sprint
+        gating by projectTypeKey is a separate, downstream concern
+        (CHAOS-4575)."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"key": "SUP", "name": "Support Desk", "projectTypeKey": "service_desk"},
+            {"key": "OPS", "name": "Platform Ops", "projectTypeKey": "software"},
+            {"key": "BIZ", "name": "Biz Ops", "projectTypeKey": "business"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds, org_id="org-test")
+        assert result == [
+            ("SUP", "Support Desk", "service_desk", ""),
+            ("OPS", "Platform Ops", "software", ""),
+            ("BIZ", "Biz Ops", "business", ""),
+        ]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_explicit_project_key_stays_scoped(self, mock_get_all):
+        """Codex review (CHAOS-4584 round 1, P1): an integration configured
+        for one named project (sync_options.project_key) must never silently
+        expand to every visible project just because a discovery run was
+        triggered -- e.g. a re-run of POST /integrations/{id}/discover on an
+        explicitly-scoped jira integration."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"key": "ENG", "name": "Engineering", "projectTypeKey": "software"},
+            {"key": "SUP", "name": "Support Desk", "projectTypeKey": "service_desk"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds, sync_options={"project_key": "eng"})
+        assert result == [("ENG", "Engineering", "software", "")]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_explicit_project_id_stays_scoped(self, mock_get_all):
+        """CHAOS-4584 round 4 P2: identity is the project_id itself, not the
+        key -- a project_id-scoped config's existing IntegrationSource is
+        keyed by that numeric id (_non_git_source_rows), so rediscovery must
+        match it by id or it abandons that row's sync watermark."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"id": "10001", "key": "ENG", "name": "Engineering"},
+            {"id": "10002", "key": "SUP", "name": "Support Desk"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds, sync_options={"project_id": "10002"})
+        assert result == [("10002", "Support Desk", "", "10002")]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_explicit_project_id_wins_even_with_a_stale_project_key(self, mock_get_all):
+        """Codex review (gate round, P2): project_id must win as the ENTIRE
+        scope, not just for identity naming -- a config that PATCHed only
+        project_id (leaving a STALE project_key from before the change,
+        e.g. {project_id: "10002", project_key: "ENG"} where ENG was the
+        OLD project) must still discover the NEW project_id's project.
+        Requiring the stale key to ALSO match meant discovery returned []
+        for every real project, and the empty-result safeguard then left
+        the OLD project's source enabled forever -- the planner never
+        noticed the config had moved to a different project."""
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"id": "10001", "key": "ENG", "name": "Engineering"},
+            {"id": "10002", "key": "SUP", "name": "Support Desk"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        # project_key is STALE (still says "eng", the OLD project) --
+        # project_id ("10002") is the current, authoritative scope.
+        result = discover_jira_projects(
+            creds, sync_options={"project_id": "10002", "project_key": "eng"}
+        )
+        assert result == [("10002", "Support Desk", "", "10002")]
+
+    @patch("dev_health_ops.providers.jira.client.JiraClient.get_all_projects")
+    def test_skips_projects_without_a_key(self, mock_get_all):
+        from dev_health_ops.credentials.resolver import jira_credentials_from_mapping
+        from dev_health_ops.discovery.repos import discover_jira_projects
+
+        mock_get_all.return_value = [
+            {"key": "", "name": "Malformed"},
+            {"name": "No key at all"},
+            {"key": "OK", "name": "Fine", "projectTypeKey": "software"},
+        ]
+        creds = jira_credentials_from_mapping(
+            {
+                "api_token": "tok",
+                "email": "bot@example.com",
+                "base_url": "https://acme.atlassian.net",
+            }
+        )
+        result = discover_jira_projects(creds)
+        assert result == [("OK", "Fine", "software", "")]
 
 
 class TestDiscoverGithubRepos:

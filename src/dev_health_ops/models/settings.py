@@ -28,6 +28,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
@@ -722,8 +723,19 @@ class ScheduledSyncOccurrence(Base):
             name="ck_scheduled_sync_occurrence_reconcile_status",
         ),
         CheckConstraint(
+            # 'invalid_plan' added by migrations 0120/0121 (CHAOS-4602 gate
+            # round 6): occurrence_reconciler.go quarantines ErrInvalidPlan
+            # occurrences immediately under this code. This ORM-declared
+            # constraint is what Base.metadata.create_all() uses to build a
+            # SQLite test fixture (unlike a real Postgres DB, which goes
+            # through alembic) -- it must stay in sync with the DB-level
+            # constraint those migrations installed, or a SQLite fixture
+            # cannot represent the quarantined-invalid_plan terminal state
+            # (codex review, gate round 13, P3: EXECUTED repro against an
+            # in-memory SQLite table built from this exact __table_args__).
             "reconcile_error_code IN ('identity_conflict', 'ineligible', "
-            "'planner_error', 'retry_exhausted') OR reconcile_error_code IS NULL",
+            "'planner_error', 'retry_exhausted', 'invalid_plan') "
+            "OR reconcile_error_code IS NULL",
             name="ck_scheduled_sync_occurrence_reconcile_error_code",
         ),
         CheckConstraint(
@@ -758,6 +770,64 @@ class ScheduledSyncOccurrence(Base):
             "scheduled_for",
             "org_id",
             postgresql_where=text("reconcile_status IN ('pending', 'retry')"),
+        ),
+    )
+
+
+class SyncManualTrigger(Base):
+    """The backfill-selector payload for a manual "Sync Now" / backfill
+    scheduled_sync_occurrences row (CHAOS-4602, alembic migration 0119).
+
+    1:1 with one ScheduledSyncOccurrence: mode/since/before/source_ids/
+    dataset_keys/triggered_by are this ONE trigger's own ask, never a
+    config's persisted scheduled default -- sync_configurations.sync_options
+    only ever describes the SCHEDULED default.
+    """
+
+    __tablename__ = "sync_manual_triggers"
+
+    occurrence_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("scheduled_sync_occurrences.occurrence_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # postgresql.ARRAY on real Postgres (matches migration 0119 exactly);
+    # sqlite's ORM-level test fixtures (Base.metadata.create_all against an
+    # in-memory sqlite engine, e.g. tests/test_sync_manual_trigger_safety.py)
+    # have no ARRAY type, so JSON is the portable list-round-trip fallback
+    # there -- sqlite is never a real deployment target for this table.
+    source_ids: Mapped[list[str] | None] = mapped_column(
+        postgresql.ARRAY(Text()).with_variant(JSON(), "sqlite"), nullable=True
+    )
+    dataset_keys: Mapped[list[str] | None] = mapped_column(
+        postgresql.ARRAY(Text()).with_variant(JSON(), "sqlite"), nullable=True
+    )
+    triggered_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('incremental', 'full_resync', 'backfill')",
+            name="ck_sync_manual_triggers_mode",
+        ),
+        CheckConstraint(
+            "triggered_by IN ('manual', 'backfill')",
+            name="ck_sync_manual_triggers_triggered_by",
+        ),
+        CheckConstraint(
+            "(mode = 'backfill') = (since IS NOT NULL AND before IS NOT NULL)",
+            name="ck_sync_manual_triggers_backfill_selector",
         ),
     )
 

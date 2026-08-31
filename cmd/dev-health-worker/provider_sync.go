@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/providerunit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -864,7 +865,7 @@ func constructProviderSyncWorkerWithDependencies(
 				return nil
 			},
 		},
-		metricsSource: providerMetrics,
+		metricsSource: map[string]health.MetricsSource{"provider_foundation": providerMetrics},
 	}, nil
 }
 

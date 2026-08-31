@@ -2454,6 +2454,313 @@ async def test_create_jira_sync_config_without_project_scope_materializes_zero_s
 
 
 @pytest.mark.asyncio
+async def test_create_jira_sync_config_auto_discovers_real_projects_at_creation(
+    client, session_maker
+):
+    """CHAOS-4584: the actual capability gap this ticket closes. Unlike the
+    zero-source case above (no resolvable credential, so nothing to
+    discover), a jira config with no explicit project_key/project_id whose
+    credential CAN enumerate real projects gets them materialized as real,
+    planner-tagged ``integration_sources`` rows immediately at creation --
+    run through the SAME discover_repos_for_config seam github/gitlab use,
+    not a sibling path. Best-effort: creation succeeds even though discovery
+    here is mocked, matching the "must not fail config creation" contract."""
+    ac, _ = client
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-auto",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        assert config is not None and config.integration_id is not None
+        enabled_sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert {s.external_id for s in enabled_sources} == {"SUP", "OPS"}
+        assert {s.source_type for s in enabled_sources} == {"project"}
+        for source in enabled_sources:
+            assert source.metadata_.get("planner_managed_sync_config_id") == config_id
+
+
+@pytest.mark.asyncio
+async def test_create_jira_sync_config_caps_discovery_at_repo_limit(
+    client, session_maker
+):
+    """Codex review (CHAOS-4584 round 1, P1): the repo-limit preflight
+    charges 0 for a no-scope jira create (correctly --
+    _jira_config_materializes_zero_sources), so real discovery finding more
+    projects than the org's max_repos allows must not silently exceed the
+    entitlement. 3 discovered projects, max_repos=2 -> exactly 2 stay
+    enabled, 1 gets disabled, deterministically (external_id desc)."""
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(OrgLicense).where(OrgLicense.org_id == uuid.UUID(org_id))
+        )
+        license_row = result.scalar_one_or_none()
+        if license_row is None:
+            license_row = OrgLicense(org_id=uuid.UUID(org_id), tier="pro")
+            session.add(license_row)
+        license_row.limits_override = {"max_repos": 2}
+        await session.commit()
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-capped",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_external = {s.external_id: s for s in sources}
+        assert len(by_external) == 3, "capping disables rows, never deletes them"
+        assert by_external["AAA"].is_enabled is True
+        assert by_external["BBB"].is_enabled is True
+        assert by_external["CCC"].is_enabled is False, (
+            "CCC sorts last (external_id desc) -- it's the one over the cap"
+        )
+
+
+@pytest.mark.asyncio
+async def test_reactivating_a_paused_jira_config_reapplies_the_repo_cap(
+    client, session_maker
+):
+    """Codex review (CHAOS-4584 gate round 2, P1): the repo-limit usage
+    counter excludes sources whose planner-parent config is inactive, so
+    rediscovery while paused can silently recover rows the cap had
+    disabled. PATCHing is_active back to True must re-run discovery (which
+    re-locks, re-counts, and re-caps) rather than leave the org over its
+    max_repos entitlement."""
+    ac, seeded_state = client
+    org_id = seeded_state["org_id"]
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(OrgLicense).where(OrgLicense.org_id == uuid.UUID(org_id))
+        )
+        license_row = result.scalar_one_or_none()
+        if license_row is None:
+            license_row = OrgLicense(org_id=uuid.UUID(org_id), tier="pro")
+            session.add(license_row)
+        license_row.limits_override = {"max_repos": 2}
+        await session.commit()
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-reactivate",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        integration_id = config.integration_id
+
+    # Pause the config.
+    pause_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"is_active": False},
+    )
+    assert pause_resp.status_code == 200
+
+    # While paused, a rediscovery run finds 2 MORE projects. The usage
+    # counter excludes this config's sources (parent inactive), so nothing
+    # caps them -- all 4 end up enabled.
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+            ("DDD", "Project D", "software"),
+        ],
+    ):
+        discover_resp = await ac.post(
+            f"/api/v1/admin/integrations/{integration_id}/discover"
+        )
+    assert discover_resp.status_code == 202, discover_resp.text
+
+    async with session_maker() as session:
+        enabled = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled) == 4, (
+            "sanity check: paused config's sources are uncapped while inactive"
+        )
+
+    # Reactivating must re-run discovery and re-cap back down to max_repos.
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("AAA", "Project A", "software"),
+            ("BBB", "Project B", "software"),
+            ("CCC", "Project C", "software"),
+            ("DDD", "Project D", "software"),
+        ],
+    ):
+        reactivate_resp = await ac.patch(
+            f"/api/v1/admin/sync-configs/{config_id}",
+            json={"is_active": True},
+        )
+    assert reactivate_resp.status_code == 200
+
+    async with session_maker() as session:
+        enabled = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == integration_id,
+                        IntegrationSource.is_enabled.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(enabled) == 2, (
+            "reactivation must re-cap usage back down to max_repos, not "
+            "leave the org over its entitlement"
+        )
+
+
+@pytest.mark.asyncio
+async def test_patch_sync_options_reruns_discovery_and_supersedes_old_scope(
+    client, session_maker
+):
+    """Codex review (CHAOS-4584 gate round 2, P1): PATCHing a jira config's
+    sync_options (narrowing its scope to one project) must actually apply
+    that scope -- rerunning discovery so the OLD, now-out-of-scope sources
+    get superseded (disabled) and the NEW scoped project gets enabled.
+    Before this fix, the route persisted sync_options and returned 200
+    without ever invoking discovery, so the planner kept routing the old,
+    unscoped set of sources."""
+    ac, _ = client
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[
+            ("SUP", "Support Desk", "service_desk"),
+            ("OPS", "Platform Ops", "software"),
+        ],
+    ):
+        create_resp = await ac.post(
+            "/api/v1/admin/sync-configs",
+            json={
+                "name": "JIRA-scope-patch",
+                "provider": "jira",
+                "sync_targets": ["work-items"],
+                "sync_options": {},
+            },
+        )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    with patch(
+        "dev_health_ops.sync.discovery.discover_repos_for_config",
+        return_value=[("ENG", "Engineering", "software")],
+    ):
+        patch_resp = await ac.patch(
+            f"/api/v1/admin/sync-configs/{config_id}",
+            json={"sync_options": {"project_key": "ENG"}},
+        )
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    async with session_maker() as session:
+        config = await session.get(SyncConfiguration, uuid.UUID(config_id))
+        sources = (
+            (
+                await session.execute(
+                    select(IntegrationSource).where(
+                        IntegrationSource.integration_id == config.integration_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_external = {s.external_id: s for s in sources}
+        assert by_external["ENG"].is_enabled is True, "the new scope must be enabled"
+        assert by_external["SUP"].is_enabled is False, (
+            "the old, now-out-of-scope source must be superseded, not left "
+            "routable forever"
+        )
+        assert by_external["OPS"].is_enabled is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider, repo", [("github", "acme/repo"), ("gitlab", "123")])
 async def test_batch_create_git_sync_config_is_triggerable_with_units(
     client, session_maker, provider, repo

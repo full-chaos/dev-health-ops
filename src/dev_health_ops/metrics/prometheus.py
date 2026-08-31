@@ -127,6 +127,20 @@ if _PROMETHEUS_AVAILABLE:
         ["provider"],
     )
 
+    JIRA_PROJECT_DISCOVERY_TOTAL = _prometheus_client_module.Counter(
+        "jira_project_discovery_total",
+        "Jira per-project integration_sources discovery outcomes "
+        "(CHAOS-4584): discovered/created/existing/capped_by_repo_limit/"
+        "recovered_from_repo_limit_cap/superseded_by_scope_change rows per "
+        "run, or a run finding zero projects or no owning planner-managed "
+        "config to tag. rejected_at_enable_repo_limit (gate round 3): an "
+        "operator's own manual re-enable of a Jira source was rejected "
+        "because it would exceed max_repos, from either enable-time entry "
+        "point (sync/discovery.py::set_source_enabled or "
+        "api/services/integrations.py::IntegrationSourceService.set_enabled)",
+        ["outcome"],
+    )
+
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _prometheus_client_module.Counter(
         "credential_mapping_rejected_total",
         "Stored credentials a provider resolver refused to build, by the "
@@ -764,6 +778,29 @@ if _PROMETHEUS_AVAILABLE:
         )
     )
 
+    # CHAOS-4602 fork 2: the bounded await
+    # (execution_trigger.await_sync_execution_trigger_materialized) for a
+    # manual Sync Now / Backfill Go hand-off. Without this, a stalled or
+    # quarantined Go materialization is client-visible in the HTTP response
+    # but leaves no alertable signal behind it.
+    SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _prometheus_client_module.Counter(
+        "sync_manual_trigger_await_outcome_total",
+        "Terminal outcomes of the bounded await on a Go-owned "
+        "scheduled_sync_occurrences row materializing a manual Sync Now or "
+        "Backfill trigger (CHAOS-4602 fork 2): materialized, pending "
+        "(deadline elapsed, never an error), or quarantined (a client-"
+        "visible failure).",
+        ["outcome"],
+    )
+    SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _prometheus_client_module.Histogram(
+        "sync_manual_trigger_await_latency_seconds",
+        "Wall-clock time await_sync_execution_trigger_materialized spent "
+        "polling before reaching a terminal outcome (CHAOS-4602 fork 2), "
+        "labeled by that outcome.",
+        ["outcome"],
+        buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0),
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -773,6 +810,7 @@ else:
     SYNC_COVERAGE_FOLDED_KEY_RESOLUTIONS_TOTAL = _noop_counter()
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL = _noop_counter()
     SYNC_ZERO_UNIT_PLAN_CREDENTIAL_STAMPED_TOTAL = _noop_counter()
+    JIRA_PROJECT_DISCOVERY_TOTAL = _noop_counter()
     CREDENTIAL_MAPPING_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_ROSTER_PRESERVATION_FAILED_TOTAL = _noop_counter()
     DEV_HEALTH_TEAM_AUTOIMPORT_REFERENCE_SUBITEM_SKIPPED_TOTAL = _noop_counter()
@@ -812,6 +850,8 @@ else:
     TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
+    SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _noop_counter()
+    SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()

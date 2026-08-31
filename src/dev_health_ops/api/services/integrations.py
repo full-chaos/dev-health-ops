@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -21,6 +22,13 @@ from dev_health_ops.models.integrations import (
 )
 from dev_health_ops.models.settings import IntegrationCredential, SyncWatermark
 from dev_health_ops.sync.datasets import get_dataset_spec
+
+logger = logging.getLogger(__name__)
+
+
+class RepoLimitExceededError(RuntimeError):
+    """Enabling this source would push the org over its ``max_repos``
+    entitlement (codex review, CHAOS-4584 round 6 P2)."""
 
 
 class IntegrationService:
@@ -177,7 +185,95 @@ class IntegrationSourceService:
     async def set_enabled(
         self, source: IntegrationSource, enabled: bool
     ) -> IntegrationSource:
+        from dev_health_ops.discovery.repos import jira_key_norm
+
+        if (
+            enabled
+            and not source.is_enabled
+            and jira_key_norm(source.provider) == "jira"
+        ):
+            # codex review (CHAOS-4584 round 6, P2): enforce the org's
+            # max_repos limit AT enable time -- otherwise a manual re-enable
+            # of a cap-marked row (which clears the marker below) gets
+            # silently undone by the very next over-limit discovery run,
+            # since a marker-less row looks like any other ordinary
+            #
+            # codex review (CHAOS-4584 gate round 4, P1 class): compare via
+            # jira_key_norm, not ``==`` -- a source whose ``provider`` was
+            # stored as mixed-case (e.g. "JIRA") previously skipped this
+            # entitlement check entirely, mirroring the same bug class
+            # found in sync/discovery.py::set_source_enabled.
+            # pre-existing source to the rebalancer. Lazy import: this
+            # service is imported BY api/admin/routers/sync.py, so importing
+            # it back at module load time would be circular.
+            from dev_health_ops.api.admin.routers.sync import (
+                _acquire_repo_limit_create_lock,
+                _active_repo_usage_count_for_limit,
+            )
+            from dev_health_ops.api.services.licensing import TierLimitService
+
+            # codex review (gate round, P1): the read-check-write below was
+            # not serialized -- two concurrent PATCH requests enabling
+            # DIFFERENT sources could each read the same pre-commit count,
+            # both pass the check, and together exceed max_repos. Reuse the
+            # SAME org advisory lock create_sync_config's preflight and
+            # discover_sources_for_integration's rebalance already hold for
+            # exactly this reason (reentrant per session/backend, so a
+            # caller that already holds it pays no extra cost).
+            await _acquire_repo_limit_create_lock(self._session, self._org_id)
+
+            def _get_max_repos(sync_session) -> int | float | None:
+                return TierLimitService(sync_session).get_limit(
+                    uuid.UUID(self._org_id), "max_repos"
+                )
+
+            max_repos = await self._session.run_sync(_get_max_repos)
+            if max_repos is not None:
+                current_count = await _active_repo_usage_count_for_limit(
+                    self._session, self._org_id
+                )
+                if current_count + 1 > int(max_repos):
+                    # codex review (CHAOS-4584 gate round 3, P3): this
+                    # enforcement path had no telemetry -- an org repeatedly
+                    # hitting the cap at enable time was operationally
+                    # invisible (only the 403 the operator saw, no signal
+                    # anywhere else). Reuse the same discovery counter
+                    # family so this shows up next to the other
+                    # CHAOS-4584 repo-limit outcomes.
+                    from dev_health_ops.metrics.prometheus import (
+                        JIRA_PROJECT_DISCOVERY_TOTAL,
+                    )
+
+                    JIRA_PROJECT_DISCOVERY_TOTAL.labels(
+                        outcome="rejected_at_enable_repo_limit"
+                    ).inc()
+                    logger.warning(
+                        "jira_source_enable_rejected_repo_limit",
+                        extra={
+                            "org_id": self._org_id,
+                            "source_id": str(source.id),
+                            "max_repos": max_repos,
+                        },
+                    )
+                    raise RepoLimitExceededError(
+                        f"Enabling this source would exceed the org's repo "
+                        f"limit ({max_repos})"
+                    )
         source.is_enabled = enabled
+        metadata = source.metadata_ or {}
+        _system_marker_keys = ("capped_by_repo_limit", "superseded_by_scope_change")
+        if any(metadata.get(key) for key in _system_marker_keys):
+            # ANY explicit operator enable/disable (codex review, CHAOS-4584
+            # round 4 P1, round 5 P2) supersedes ALL automatic discovery
+            # bookkeeping (repo-limit cap AND scope-change supersession) --
+            # from this point it's an operator decision, not something
+            # discovery's own recovery/scope-reversion passes should ever
+            # touch again, in either direction. Mirrors
+            # sync/discovery.py::set_source_enabled, the other enable/disable
+            # entry point for the same rows.
+            source.metadata_ = {
+                k: v for k, v in metadata.items() if k not in _system_marker_keys
+            }
         await self._session.flush()
         return source
 

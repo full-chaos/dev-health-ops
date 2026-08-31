@@ -185,7 +185,7 @@ func TestSchedulerReadinessClosesWhileExecutedProofHasNeverLoaded(t *testing.T) 
 			},
 			newCoordinator: schedulersync.NewOccurrenceCoordinator,
 			newLoop:        schedulersync.NewLoop,
-			newOccurrences: func(*pgxpool.Pool, *pgxpool.Pool) (schedulersync.OccurrenceStepper, error) {
+			newOccurrences: func(*pgxpool.Pool, *pgxpool.Pool, config.Config) (schedulersync.OccurrenceStepper, error) {
 				return evidenceReportingStepper{loaded: loaded}, nil
 			},
 			newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {

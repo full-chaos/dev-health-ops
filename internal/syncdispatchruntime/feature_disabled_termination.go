@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -136,11 +138,62 @@ func terminalizeFeatureDisabledRun(
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 	}
 
+	// CHAOS-4586 (codex round 11, P1): take the SAME sorted per-bucket
+	// advisory locks AuthorizeRun/LeaseRepair.Step/UnreclaimableSweep.Step
+	// already take, before this function locks or writes ANY sync_run_units
+	// row below. Without this, this function's own bulk UPDATE (two
+	// statements further down: a bare `status IN (...)` predicate matching
+	// potentially many rows of this run, with no explicit row-lock order --
+	// Postgres locks matching rows in whatever order its plan finds them)
+	// can deadlock against UnreclaimableSweep.Step's now-deterministic
+	// ascending-unit-id lock order (round 4, lockSyncRunUnitsAscending): a
+	// nonterminal run with two stale units A<B by id, if this function's own
+	// unordered scan happens to visit B before A while the sweep (having
+	// locked A first, per its own ascending order) then wants B, is a
+	// classic ABBA cycle -- Postgres detects it and aborts one side,
+	// stranding either this termination or the sweep's repair until a later
+	// retry. This function was never part of the bucket-lock convention the
+	// other four bulk/multi-row writers of sync_run_units already follow;
+	// acquiring it here, before any row touch, closes that gap the same way
+	// for a fifth.
+	rows, err := tx.Query(ctx, `
+SELECT DISTINCT org_id, provider, cost_class FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching', 'running')`, run.id)
+	if err != nil {
+		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+	}
+	var buckets []dispatchBucket
+	for rows.Next() {
+		var bucket dispatchBucket
+		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass); err != nil {
+			rows.Close()
+			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+		}
+		buckets = append(buckets, bucket)
+	}
+	if rows.Err() != nil {
+		rows.Close()
+		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+	}
+	rows.Close()
+	sort.Slice(buckets, func(left, right int) bool {
+		if buckets[left].orgID != buckets[right].orgID {
+			return buckets[left].orgID < buckets[right].orgID
+		}
+		if buckets[left].provider != buckets[right].provider {
+			return buckets[left].provider < buckets[right].provider
+		}
+		return buckets[left].costClass < buckets[right].costClass
+	})
+	if err := acquireBucketAdvisoryLocks(ctx, tx, buckets); err != nil {
+		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
+	}
+
 	type runningLease struct {
 		unitID string
 		owner  *string
 	}
-	rows, err := tx.Query(ctx, `
+	rows, err = tx.Query(ctx, `
 SELECT id::text, lease_owner FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status = 'running'`, run.id)
 	if err != nil {
@@ -181,6 +234,28 @@ WHERE id = $1::uuid AND sync_run_id = $6::uuid AND status = 'running'
 			run.id, lease.owner); err != nil {
 			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 		}
+	}
+
+	// CHAOS-4586 (codex round 10, P1): lock the run's sync_runs row BEFORE
+	// counting unit statuses below. Without this, a concurrent
+	// syncrunrollup.Bump call on this SAME run (providersync's Complete,
+	// or any of this package's own denial/exhaustion paths) that commits
+	// strictly AFTER this counting read but BEFORE this function's own
+	// later `UPDATE sync_runs` can have its fresh, correct
+	// completed_units/failed_units silently overwritten by this
+	// function's now-stale ones: this write is a bare column assignment,
+	// not a compare-and-swap, so whichever transaction commits LAST wins
+	// outright regardless of which one started first. This function was
+	// documented as "already correct" in the cross-package registry
+	// (internal/syncrunrollup/cross_package_registry_test.go) on the
+	// strength of it doing a full COUNT(*) recompute every time, which is
+	// necessary but not sufficient -- Bump's OWN doc comment already
+	// explains why the recompute must also be lock-protected, and this
+	// function's separate-query-then-Go-variable shape had neither the
+	// lock nor Bump's atomic same-statement subqueries. See
+	// syncrunrollup.LockRun's doc comment for the full scenario.
+	if err := syncrunrollup.LockRun(ctx, tx, run.id); err != nil {
+		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 	}
 
 	statusRows, err := tx.Query(ctx, `SELECT status FROM public.sync_run_units WHERE sync_run_id = $1::uuid`, run.id)
@@ -240,6 +315,15 @@ WHERE id = $1::uuid`,
 			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 		}
 	}
+	// CHAOS-4586 (codex round 10): this write just recomputed
+	// sync_runs.failed_units/completed_units the same as every other
+	// terminal-status path in this package -- tally it under the SAME
+	// counter those paths use so a feature-disabled termination is not
+	// the one rollup write in the whole codebase telemetry never sees.
+	// Callers that own the transaction (Dispatch, the reference-discovery
+	// gate) install withRollupBumpTally on ctx and flush it after their
+	// own commit succeeds, same as every other path here.
+	recordRollupBump(ctx, rollupPathFeatureDisabled)
 
 	return FeatureDisabledRunTransition{
 		FailedUnits:  failedUnits,

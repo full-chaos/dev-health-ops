@@ -32,6 +32,11 @@ CREATE TABLE public.sync_configurations (
     -- written for. The dedicated refusal test inserts planner_managed
     -- explicitly.
     planner_managed boolean NOT NULL DEFAULT TRUE,
+    -- CHAOS-4604: lockPendingOccurrenceSQL now selects config.source_id
+    -- unconditionally (Materialize's gate admits a non-planner-managed
+    -- config only when it is set) -- this file's existing fixtures never
+    -- name the column, so it stays NULL for all of them, unchanged.
+    source_id uuid,
     sync_options jsonb NOT NULL,
     last_sync_at timestamptz,
     created_at timestamptz NOT NULL

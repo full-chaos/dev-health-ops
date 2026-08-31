@@ -152,25 +152,49 @@ func nanClassClickHouseURI(t testing.TB) string {
 	if scheme == "" || scheme == "http" || scheme == "https" || scheme == "clickhouse+http" {
 		scheme = "clickhouse"
 	}
-	// Carry the userinfo through the rebuild (CHAOS-4643 defect 1): a
-	// credentialed CLICKHOUSE_URI (clickhouse://user:pass@host:8123/db)
-	// used to lose "user:pass" here, so even a correct slot run with a
-	// real password failed ClickHouse auth. parsed.User.String() returns
-	// the same percent-encoded "user[:pass]" form url.URL itself accepts
-	// back in, matching how the Python harness's string-replace on netloc
-	// (which never touches the userinfo segment) already preserves it.
-	//
-	// net.JoinHostPort, not a bare "%s:%s" -- codex review round 1 caught
-	// that Hostname() strips IPv6 brackets ("::1", not "[::1]"), so a raw
-	// Sprintf produced an unparseable "host:port" for any IPv6 CLICKHOUSE_URI
-	// (clickhouse://u:p@[::1]:8123/db rebuilt as ...@::1:9000, ambiguous
-	// with the port). JoinHostPort re-adds the brackets exactly when the
-	// host needs them and is a no-op for ordinary hostnames/IPv4.
-	hostPort := net.JoinHostPort(host, port)
-	if parsed.User != nil {
-		return fmt.Sprintf("%s://%s@%s", scheme, parsed.User.String(), hostPort)
+	// Rebuild via a copy of the parsed *url.URL, not a hand-written
+	// Sprintf -- codex review rounds 1 and 2 both found real gaps in the
+	// string-concatenation approach:
+	//   - round 1: Hostname() strips IPv6 brackets ("::1", not "[::1]"),
+	//     so a bare "%s:%s" produced an unparseable host:port.
+	//   - round 2: an IPv6 zone ID's "%" needs to be re-escaped as "%25"
+	//     to round-trip through a URI host component (Hostname() returns
+	//     it DECODED, e.g. "fe80::1%en0"), and the rebuild dropped the
+	//     source URI's Path/RawQuery entirely -- losing a non-default
+	//     database name or a "?secure=true" TLS flag, which the Python
+	//     harness's own _go_clickhouse_uri (this function's stated mirror
+	//     target) does NOT drop, since it only rewrites netloc via
+	//     urlsplit/urlunsplit and passes path/query through unchanged.
+	// u.String() gets all three right for free: it re-escapes Host
+	// (including zone IDs) and preserves every field this copy did not
+	// touch (User, Path, RawQuery, Fragment).
+	rebuilt := *parsed
+	rebuilt.Scheme = scheme
+	rebuilt.Host = net.JoinHostPort(host, port)
+	return rebuilt.String()
+}
+
+// redactDSNForLog returns dsn with any password blanked out, for use in
+// log/error output only -- never for the actual connection. CHAOS-4643
+// round 1 fixed nanClassClickHouseURI to carry real credentials through
+// the DSN rebuild (previously it silently dropped them); codex review
+// round 2 caught that this meant every subsequent connect-failure log line
+// below started printing that same credentialed DSN verbatim into
+// CI/test output. If dsn fails to re-parse (should not happen -- it is
+// always this file's own rebuilt output), the raw string is returned
+// rather than risking a second bug in the redaction path masking a real
+// connection error.
+func redactDSNForLog(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
 	}
-	return fmt.Sprintf("%s://%s", scheme, hostPort)
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.UserPassword(u.User.Username(), "REDACTED")
+		}
+	}
+	return u.String()
 }
 
 // nanClassAllNullGroupSQL and nanClassPopulatedGroupSQL wrap the REAL
@@ -243,7 +267,7 @@ func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) 
 	dsn := nanClassClickHouseURI(t)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", dsn, err)
+		t.Fatalf("connect to ClickHouse at %s: %v", redactDSNForLog(dsn), err)
 	}
 	ctx := context.Background()
 
@@ -319,7 +343,7 @@ func TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN(t *testing.T) 
 	dsn := nanClassClickHouseURI(t)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", dsn, err)
+		t.Fatalf("connect to ClickHouse at %s: %v", redactDSNForLog(dsn), err)
 	}
 	ctx := context.Background()
 
@@ -396,22 +420,22 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 		{
 			name: "user_and_password_preserved_and_port_translated",
 			raw:  "clickhouse://chuser:chpass@example.internal:8123/default",
-			want: "clickhouse://chuser:chpass@example.internal:9000",
+			want: "clickhouse://chuser:chpass@example.internal:9000/default",
 		},
 		{
 			name: "user_only_preserved",
 			raw:  "clickhouse://chuser@example.internal:8443/default",
-			want: "clickhouse://chuser@example.internal:9000",
+			want: "clickhouse://chuser@example.internal:9000/default",
 		},
 		{
 			name: "no_userinfo_still_works",
 			raw:  "clickhouse://example.internal:8123/default",
-			want: "clickhouse://example.internal:9000",
+			want: "clickhouse://example.internal:9000/default",
 		},
 		{
 			name: "http_scheme_and_native_port_pass_through",
 			raw:  "http://chuser:chpass@example.internal:9000/default",
-			want: "clickhouse://chuser:chpass@example.internal:9000",
+			want: "clickhouse://chuser:chpass@example.internal:9000/default",
 		},
 		{
 			// codex review round 1 (EXECUTED): Hostname() strips the brackets
@@ -421,7 +445,7 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 			// this by re-adding brackets exactly when the host needs them.
 			name: "ipv6_host_gets_bracketed",
 			raw:  "clickhouse://chuser:chpass@[::1]:8123/default",
-			want: "clickhouse://chuser:chpass@[::1]:9000",
+			want: "clickhouse://chuser:chpass@[::1]:9000/default",
 		},
 	}
 	for _, tc := range cases {
@@ -447,12 +471,72 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 		t.Setenv("CLICKHOUSE_URI", "clickhouse://chuser:chpass@example.internal:8123/default")
 		t.Setenv(requireLiveEnv, "1")
 		got := nanClassClickHouseURI(t)
-		want := "clickhouse://chuser:chpass@example.internal:9000"
+		want := "clickhouse://chuser:chpass@example.internal:9000/default"
 		if got != want {
 			t.Fatalf("nanClassClickHouseURI with CLICKHOUSE_URI set and %s=1 = %q, want %q -- "+
 				"the require-live flag must only affect the missing-URI path", requireLiveEnv, got, want)
 		}
 	})
+
+	// codex review round 2 (EXECUTED): the manual "%s://%s:%s" rebuild
+	// dropped Path/RawQuery entirely and mis-escaped an IPv6 zone ID's
+	// "%" -- both fixed by rebuilding from a copy of the parsed *url.URL
+	// instead of Sprintf. Regression-tested together since both trace to
+	// the same fix.
+	t.Run("ipv6_zone_id_and_path_query_preserved", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "clickhouse://ci-user:ci-secret@[fe80::1%25en0]:8123/ci_scratch?secure=true")
+		t.Setenv(requireLiveEnv, "")
+		got := nanClassClickHouseURI(t)
+		want := "clickhouse://ci-user:ci-secret@[fe80::1%25en0]:9000/ci_scratch?secure=true"
+		if got != want {
+			t.Fatalf("nanClassClickHouseURI with an IPv6-zone-ID + non-default-db + query CLICKHOUSE_URI "+
+				"= %q, want %q -- the zone ID's \"%%\" must round-trip as \"%%25\" through the URI host "+
+				"component, and Path/RawQuery must survive the rebuild unchanged", got, want)
+		}
+	})
+}
+
+// TestRedactDSNForLog_BlanksPasswordButKeepsRestOfDSN is CHAOS-4643 codex
+// review round 2's third EXECUTED finding: after nanClassClickHouseURI
+// started carrying real credentials through the DSN rebuild (round 1 fix),
+// the two connect-failure t.Fatalf call sites started printing that same
+// credentialed DSN verbatim into CI/test logs. redactDSNForLog must blank
+// the password while leaving the rest of the DSN (username, host, port,
+// path) intact, so a connect-failure log line is still useful for
+// debugging without leaking the secret.
+func TestRedactDSNForLog_BlanksPasswordButKeepsRestOfDSN(t *testing.T) {
+	cases := []struct {
+		name string
+		dsn  string
+		want string
+	}{
+		{
+			name: "password_redacted",
+			dsn:  "clickhouse://ci-user:ci-secret@127.0.0.1:1/default",
+			want: "clickhouse://ci-user:REDACTED@127.0.0.1:1/default",
+		},
+		{
+			name: "user_only_unchanged",
+			dsn:  "clickhouse://ci-user@127.0.0.1:1/default",
+			want: "clickhouse://ci-user@127.0.0.1:1/default",
+		},
+		{
+			name: "no_userinfo_unchanged",
+			dsn:  "clickhouse://127.0.0.1:1/default",
+			want: "clickhouse://127.0.0.1:1/default",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactDSNForLog(tc.dsn)
+			if got != tc.want {
+				t.Fatalf("redactDSNForLog(%q) = %q, want %q", tc.dsn, got, tc.want)
+			}
+			if tc.name == "password_redacted" && strings.Contains(got, "ci-secret") {
+				t.Fatalf("redacted DSN %q still contains the raw password", got)
+			}
+		})
+	}
 }
 
 // fakeSkipFailTB is a minimal testing.TB that records whether the code under

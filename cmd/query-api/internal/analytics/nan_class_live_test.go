@@ -17,6 +17,43 @@
 // divergence) the standing NaN-class ruling requires -- neither file
 // alone is the proof.
 //
+// CHAOS-4643: this file used to be enrolled in ci/go_integration_shards.tsv
+// even though .github/workflows/go.yml never sets CLICKHOUSE_URI for the
+// integration-shard job -- CI ran the package, the guard below fired on
+// every run, and the resulting skip reported as a pass, silently, forever.
+// It is now denylisted out of that shard (see INTEGRATION_DENYLIST in
+// ci/check_go.sh) instead of enrolled-but-perpetually-skipping: the STATUS
+// note above already says this proof is discretionary and slot-only, so an
+// enrolment CI could never satisfy was actively misleading, not merely
+// unused. A missing CLICKHOUSE_URI now only skips when nanClassClickHouseURI
+// is called without DEV_HEALTH_REQUIRE_LIVE=1; set that alongside
+// CLICKHOUSE_URI when running this as an actual slot proof and a still-missing
+// URI fails loudly instead. The rebuilt DSN also used to drop the URI's
+// userinfo, so even a correct slot run with real credentials failed
+// ClickHouse auth -- nanClassClickHouseURI now carries parsed.User through.
+//
+// CHAOS-4643 round 3 (EXECUTED, both P2): the hand-rolled url.Parse +
+// Hostname()/Port() + net.JoinHostPort rewrite -- three rounds of
+// string-surgery patches by this point -- had a FOURTH gap: a comma-joined
+// multi-host DSN ("host1:8123,host2:8123") corrupted into one bogus bracketed
+// host, because Hostname()/Port() only ever see the first host. That composed
+// with a second gap in the redactor this rewrite required in the first place:
+// redactDSNForLog never looked at ?username=/?password= query-param
+// credentials, and returned the raw DSN verbatim on its own parse failure --
+// which multi-host corruption could trigger. Ruling: three same-class bugs in
+// one hand-rolled rewriter means the approach was the defect, not each gap.
+// Two structural changes replace it: (1) nanClassClickHouseURI now sources
+// the host list and credentials from clickhouse.ParseDSN (the driver's own
+// parser, backed by lib/churl, which correctly splits multi-host and folds
+// query-param credentials the same way it folds userinfo) instead of
+// hand-rewriting; Path/RawQuery still come from a plain net/url parse, which
+// is safe because Go 1.27's stdlib leaves those fields correct even on a
+// multi-host authority -- only Hostname()/Port() are corrupted by the comma,
+// and this file no longer calls either. (2) redactDSNForLog is deleted
+// outright: the two connect-failure log sites now print a credential-free
+// host:port string computed at DSN-build time, never the DSN itself, so there
+// is no redaction step left to have a gap in.
+//
 // WHY NOT ROUTED THROUGH HTTP, UNLIKE THE FLOW-MATRIX DUAL-RUN FILE:
 // breakdown has NO registered document yet -- query_route.go
 // (digestByOperation, ~L478) only registers flowMatrix this wave. Both
@@ -28,18 +65,30 @@
 // -> the real gqlgen marshal call DIRECTLY, the same chain a routed
 // request would use once one exists.
 //
-// TWO SEPARATE, REAL MECHANISMS PROVEN HERE, NOT ONE:
-//  1. ClickHouse's own engine: AVG() over a Nullable(Float64) group whose
-//     rows are ALL NULL returns NaN, not NULL and not 0. This is the
-//     class validate.go:184-201 enumerates as category 2 ("AT RISK"),
-//     verified live rather than read off a doc comment.
+// TWO SEPARATE, REAL MECHANISMS PROVEN HERE, NOT ONE -- UPDATED BY
+// CHAOS-4643/CHAOS-4650: the FIRST live run of this file (CHAOS-4643 was
+// what made a live run possible at all) falsified mechanism 1 below as
+// originally written. It is left here, corrected, as the record of what
+// was assumed and what running it actually found -- see
+// TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN for the
+// current, executed mechanism and CHAOS-4650 (Urgent) for the resulting
+// defect, which this file does not fix:
+//  1. CORRECTED: ClickHouse's own engine (26.7.5.10, matching prod's
+//     engine major version) does NOT return NaN for AVG() over a
+//     Nullable(Float64) group whose rows are ALL NULL -- it returns SQL
+//     NULL, which dev-health-go's client then silently scans into a
+//     non-pointer float64 as 0.0. The class validate.go:184-201 still
+//     enumerates as category 2 ("AT RISK") is real, but the actual risk
+//     is a silent 0.0, not a marshal error -- tracked as CHAOS-4650.
 //  2. gqlgen's own library: graphql.MarshalFloatContext (the exact
 //     function generated.go:91369/94794 call for every non-nullable
 //     Float! field, BreakdownItem.value included --
 //     contracts/graphql/v1/schema.graphql:386) refuses to write a NaN,
 //     returning "cannot marshal infinite no NaN float values"
 //     (gqlgen's float.go:38-45, a stock library check, nothing this
-//     port added).
+//     port added) -- true, but per (1) above, this mechanism never fires
+//     for the all-NULL coverage shape on this engine, because the value
+//     it would refuse never arrives as NaN in the first place.
 //
 // WHY A SYNTHETIC SUBQUERY, NOT AN INSERT INTO THE REAL TABLE: the
 // QueryClient this package uses (clickhouse.Client.Query, dev-health-go
@@ -66,16 +115,32 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
-	"net/url"
+	"net"
 	"os"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
+
+// requireLiveEnv is the single opt-in that turns a missing CLICKHOUSE_URI
+// from a silent skip into a loud failure. Whoever runs this file as a slot
+// proof sets it; CI's deterministic integration shard never does, because
+// this package is not enrolled there -- see ci/go_integration_shards.tsv's
+// INTEGRATION_DENYLIST entry and this file's own header. Deliberately the
+// SAME variable both tests below funnel through nanClassClickHouseURI,
+// rather than a second, easily-forgotten flag.
+const requireLiveEnv = "DEV_HEALTH_REQUIRE_LIVE"
 
 // nanClassClickHouseURI mirrors the Python dual-run harness's
 // _go_clickhouse_uri (test_go_api_dual_run_flow_matrix.py:426-431):
@@ -85,28 +150,154 @@ import (
 // regression). Doing the same translation here lets this test run off
 // the SAME env var value the slot already exports, rather than requiring
 // a second, easily-forgotten one.
-func nanClassClickHouseURI(t *testing.T) string {
+// nanClassClickHouseURI, through round 4, PARSED and REBUILT CLICKHOUSE_URI
+// (port translation, host-list rebuild, credential-shape normalisation).
+// Round 5 (EXECUTED by codex, on tip d10061b49) found that "stop
+// hand-rewriting, use the driver's parser" (round 3's ruling) was still
+// under-scoped: this function kept the REWRITING responsibility, and every
+// step of a rewrite was independently a new way to get malformed input
+// wrong --
+//   - a missing/empty host entry (CLICKHOUSE_URI="clickhouse://ch:ch@,")
+//     silently became ":9000" and DIALED LOCALHOST -- the live proof
+//     PASSED, against the wrong target, silently. This is the same
+//     "reports success while covering something other than what it
+//     claims" shape as every other CHAOS-4643 finding, just not a
+//     credential this time.
+//   - a malformed multi-colon host ("host:123:456") was rebuilt into an
+//     invalid DSN ("[host:123:456]:9000") -- loud, but still wrong
+//     normalisation of malformed input.
+//   - a DSN's OWN ?http_proxy= query value can itself be a malformed URL;
+//     clickhouse.ParseDSN's fromDSN formats THAT inner url.Parse error
+//     with fmt.Errorf("...: %s", err) -- a plain formatted string, not a
+//     wrapped *url.Error -- so round 4's errors.As-based unwrap in
+//     dsnParseErrorForLog could not reach it, and the proxy URL's own
+//     credentials (if any) rode straight through to test output. Likewise
+//     a password of exactly "%ZZ" reached url.Error's own .Err.Error()
+//     text. Type-based unwrapping cannot enumerate every shape an error
+//     can take -- "if you cannot enumerate the shapes an error can take,
+//     you cannot sanitise it, you can only decline to print it."
+//
+// Orchestrator ruling (2026-08-31): STOP REWRITING THE DSN ENTIRELY.
+// CLICKHOUSE_URI must already be a usable native-protocol ClickHouse DSN;
+// this function ONLY VALIDATES that shape (via the driver's own parser,
+// never re-derived by hand) and hands the value to the driver COMPLETELY
+// UNMODIFIED -- no url.Parse of raw, no host-list rebuild, no port
+// substitution, no scheme normalisation. On ANY validation failure the
+// message is FIXED and derives NOTHING from raw or from the underlying
+// parse error's text, for the same reason: this file cannot enumerate
+// every shape a future malformed input's error could take, so it never
+// prints one. This dissolves all three round-5 findings at once: no
+// rebuild means no silent ":9000,:9000" default-to-localhost and no
+// "[host:123:456]:9000"; no interpolated parse error means no http_proxy
+// or "%ZZ" leak, regardless of what shape a future malformed DSN's error
+// takes.
+//
+// PRACTICAL CONSEQUENCE, reported to the orchestrator rather than decided
+// here: this repo's STANDARD CLICKHOUSE_URI convention (e.g.
+// docs/contribute/start/development-environment.md:89,
+// "clickhouse://ch:ch@localhost:8123/default") and the value the slot
+// environment exports for the Python-side stages are BOTH the HTTP-port
+// form. The Python dual-run harness's own _go_clickhouse_uri
+// (test_go_api_dual_run_flow_matrix.py:426-431) translates that HTTP-port
+// value to native-protocol before handing it to the Go SERVER process --
+// but this file reads CLICKHOUSE_URI directly from the OS environment
+// (the same value the Python stages see), and no longer performs that
+// translation itself. Whoever runs this file as a slot proof (Wave 5
+// exit-run step C) must supply an ALREADY-native-protocol CLICKHOUSE_URI
+// for this step specifically, not the repo's usual HTTP-port one.
+//
+// Returns (dsn, hostPort): dsn is raw, VERBATIM, unmodified, handed
+// straight to the driver. hostPort is a comma-joined "host:port" list
+// read from the driver's own validated Addr (no credentials, since
+// Addr never carries them) -- for callers that must name the CONNECTION
+// TARGET in a log line or in a test assertion without ever touching the
+// credentialed DSN a second time. A step-C proof that cannot verify its
+// own target must refuse to run rather than report (the measurement-
+// precondition rule finding 2 above exists to enforce) -- callers MUST
+// check hostPort is non-empty before treating a subsequent connection as
+// proof of anything; see TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly
+// and TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN for the
+// pattern.
+func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 	t.Helper()
 	raw := os.Getenv("CLICKHOUSE_URI")
 	if raw == "" {
-		t.Skip("CLICKHOUSE_URI not set -- this is a live-ClickHouse proof, run only in a container slot")
+		if os.Getenv(requireLiveEnv) == "1" {
+			t.Fatalf("CLICKHOUSE_URI not set but %s=1 -- this is a live-ClickHouse proof and the "+
+				"caller required it to actually run; a slot run that silently skips is exactly the "+
+				"false-pass this flag exists to prevent (CHAOS-4643)", requireLiveEnv)
+		}
+		t.Skip("CLICKHOUSE_URI not set -- this is a live-ClickHouse proof, run only in a container " +
+			"slot; set " + requireLiveEnv + "=1 alongside CLICKHOUSE_URI to make a missing URI fail " +
+			"instead of skip")
 	}
-	parsed, err := url.Parse(raw)
+
+	// Validate-only, via the driver's OWN parser (clickhouse.ParseDSN) --
+	// raw is never touched by url.Parse or any hand-rolled parsing of our
+	// own, and is returned VERBATIM below. On failure: a FIXED message,
+	// nothing derived from err. CHAOS-4643 round 5 found a parse error's
+	// own text can carry a credential fragment through a shape (a nested
+	// ?http_proxy= value's own inner, differently-typed parse error) no
+	// enumerated unwrap could catch -- so this file no longer tries to
+	// print any part of a parse error, ever.
+	opts, err := chdriver.ParseDSN(raw)
 	if err != nil {
-		t.Fatalf("parse CLICKHOUSE_URI: %v", err)
+		t.Fatalf("CLICKHOUSE_URI failed to parse as a ClickHouse DSN -- set it to an already-valid, " +
+			"native-protocol URI (clickhouse://host:9000/db); the parse error's own text is withheld " +
+			"here because it can itself carry credential fragments in shapes this file cannot " +
+			"enumerate ahead of time (CHAOS-4643 round 5)")
 	}
-	host := parsed.Hostname()
-	port := parsed.Port()
-	if port == "8123" || port == "8443" {
-		port = "9000"
-	} else if port == "" {
-		port = "9000"
+	if opts.Protocol == chdriver.HTTP {
+		t.Fatalf("CLICKHOUSE_URI uses an http:// or https:// scheme -- this file requires an " +
+			"already-native-protocol DSN and no longer translates one for you (CHAOS-4643 round 5 " +
+			"ruling: stop rewriting the DSN). If the environment only supplies this repo's usual " +
+			"HTTP-port CLICKHOUSE_URI convention, the caller must supply a native-protocol value for " +
+			"this step specifically")
 	}
-	scheme := parsed.Scheme
-	if scheme == "" || scheme == "http" || scheme == "https" || scheme == "clickhouse+http" {
-		scheme = "clickhouse"
+	// CHAOS-4643 round 9 enumeration (B5): this branch is DEFENSIVE ONLY and
+	// unreachable with clickhouse-go/v2 pinned at v2.47.0 (go.mod:7). Traced
+	// against the module cache: ParseDSN (clickhouse_options.go:103) calls
+	// opt.fromDSN(dsn) and returns its error unchanged; fromDSN
+	// (clickhouse_options.go:186) returns an error at line ~192-194 when
+	// dsn.Host == "" -- BEFORE building Addr -- and otherwise, at line ~203,
+	// always does `o.Addr = append(o.Addr, strings.Split(dsn.Host, ",")...)`,
+	// which for a non-empty Host yields at least one element. setDefaults()
+	// (line ~402), which WOULD inject "localhost:9000" into an empty Addr,
+	// is called only from the connection-establishing paths
+	// (clickhouse_std.go, clickhouse.go) -- never from ParseDSN. So a
+	// successful ParseDSN can never hand back an empty opts.Addr today.
+	// TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins this
+	// assumption directly against the driver: if a future pin bump changes
+	// the contract, that test goes red before this branch silently becomes
+	// reachable-and-uncovered (see the epic handoff's "a contract-mirroring
+	// fake rots silently when the pin moves" -- this is a pin-dependent
+	// claim, not an evergreen one).
+	if len(opts.Addr) == 0 {
+		t.Fatalf("CLICKHOUSE_URI has no host")
 	}
-	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	for _, addr := range opts.Addr {
+		host, port, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil || host == "" || port == "" {
+			// CHAOS-4643 round 5: this used to be "no port present, so
+			// default to 9000" -- which is exactly how an empty host
+			// entry from a malformed multi-host DSN
+			// (CLICKHOUSE_URI="clickhouse://ch:ch@,") silently became
+			// ":9000" and dialed localhost, with the live proof then
+			// PASSING against the wrong target. A malformed or empty
+			// entry is now a hard failure, never a default.
+			t.Fatalf("CLICKHOUSE_URI's host list contains a malformed or empty entry -- every host " +
+				"must be an explicit, non-empty \"host:port\" pair; this file no longer fixes up a " +
+				"malformed entry (CHAOS-4643 round 5: a malformed entry silently redirected a live " +
+				"proof to localhost and still reported PASS)")
+		}
+		if port == "8123" || port == "8443" {
+			t.Fatalf("CLICKHOUSE_URI host %q uses an HTTP port (8123 or 8443) -- this file requires "+
+				"native protocol (port 9000, or your ClickHouse's configured native port) and no "+
+				"longer translates the port for you (CHAOS-4643 round 5 ruling)", host)
+		}
+	}
+
+	return raw, strings.Join(opts.Addr, ",")
 }
 
 // nanClassAllNullGroupSQL and nanClassPopulatedGroupSQL wrap the REAL
@@ -176,10 +367,20 @@ func nanClassRunScalarQuery(t *testing.T, ctx context.Context, client *dhclickho
 // divergence below (same "prove the harness first" discipline as the
 // flow-matrix file's test 1).
 func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) {
-	dsn := nanClassClickHouseURI(t)
+	dsn, hostPort := nanClassClickHouseURI(t)
+	// CHAOS-4643 round 5: a proof that cannot verify its own target must
+	// refuse to run, not report -- finding 2 was a malformed host list
+	// silently dialing localhost and the test PASSING anyway. hostPort is
+	// guaranteed non-empty by nanClassClickHouseURI itself, but this
+	// assertion makes "this test knows and checked what it connected to"
+	// a fact visible IN THIS TEST, not something only the helper enforces.
+	if hostPort == "" {
+		t.Fatalf("refusing to connect: no target host resolved from CLICKHOUSE_URI")
+	}
+	t.Logf("connecting to ClickHouse at %s", hostPort)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", dsn, err)
+		t.Fatalf("connect to ClickHouse at %s: %v", hostPort, err)
 	}
 	ctx := context.Background()
 
@@ -204,67 +405,894 @@ func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) 
 	}
 }
 
-// TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal is THE
-// divergence this file exists to document: a group that HAS rows (the
-// pipeline ran) where line_coverage_pct is NULL in every one of them.
-// AVG() over an all-NULL Nullable(Float64) group is the UNCHARACTERISED
-// shape BRIEF's NaN UPDATE explicitly left open (distinct from the
-// CLEARED zero-source-row shape). Splits into two assertions matching
-// the two mechanisms in the file-level doc comment: the raw ClickHouse
-// value IS NaN (not 0.0, not some driver default -- a wrong fallback
-// here would prove nothing), and the SAME gqlgen call the real response
-// path would use on it refuses to write it.
+// nanClassRawAllNullExpr returns the REAL dbExpression() output
+// (unwrapped -- no toFloat64 cast) over the SAME all-NULL synthetic group
+// nanClassQuerySQL(t, true) uses, so TestNaNClass_AllNullGroup below can
+// observe what ClickHouse's own Nullable(Float64) result column carries
+// BEFORE any Go-side cast or scan touches it.
+func nanClassRawAllNullExpr(t *testing.T) string {
+	t.Helper()
+	measureExpr, err := dbExpression(MeasureCoverageLinePct, false, false)
+	if err != nil {
+		t.Fatalf("dbExpression(MeasureCoverageLinePct): %v", err)
+	}
+	rows := "SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct " +
+		"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct"
+	return fmt.Sprintf(
+		"SELECT %s AS value FROM (%s) AS testops_coverage_metrics_daily",
+		measureExpr, rows,
+	)
+}
+
+// TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN pins a
+// MECHANISM, not the outcome CHAOS-4506/4534's design assumed. This file's
+// original claim -- "AVG() over an all-NULL Nullable(Float64) group
+// returns NaN, not NULL and not 0" -- was written but never executed
+// (this file's own STATUS header said so) until CHAOS-4643 made a live
+// run possible. Running it for the first time, against ClickHouse
+// 26.7.5.10 (matching prod's engine major version), FALSIFIED that claim:
 //
-// IMPORTANT SCOPE NOTE, not to be over-read: this does NOT exercise
-// ExecuteBreakdown's own error return. ExecuteBreakdown would return NO
-// error for this value -- the ClickHouse query itself succeeds and scans
-// a legitimate (if NaN) float64; resolve.go's swallow-to-empty-on-execute-error
-// path (the one flow-matrix test 2's docstring warns can silently
-// masquerade as "the fix took effect") never fires here, because there
-// is no execute error to swallow. The marshal failure this test proves
-// happens at a SEPARATE, LATER step -- when gqlgen serializes the
-// already-successful BreakdownResult into the HTTP response -- which is
-// exactly why this test calls graphql.MarshalFloatContext directly
-// rather than asserting on ExecuteBreakdown's return.
-func TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal(t *testing.T) {
-	dsn := nanClassClickHouseURI(t)
+//  1. ClickHouse's own avg() over an all-NULL Nullable(Float64) group
+//     returns SQL NULL, not NaN -- verified below by scanning the RAW
+//     (unwrapped) dbExpression() output into a *float64, where a true SQL
+//     NULL surfaces as nil.
+//  2. dev-health-go's Client.Query then scans that SQL NULL into a
+//     non-pointer float64 -- the exact shape ExecuteBreakdown's real call
+//     site uses -- as the Go zero value, 0.0, silently, with no error.
+//
+// CHAOS-4650 (Urgent) TRACKS THIS AS A DEFECT, NOT THE INTENDED CONTRACT:
+// an all-NULL coverage group ("no data" -- the pipeline ran, nothing was
+// measured) reaches the wire today as a plain, indistinguishable 0.0
+// ("real zero coverage"), silently -- worse than the NaN-marshal-error
+// CHAOS-4506/4534 was built to catch, because NaN at least announces
+// itself by breaking serialization. This test does not fix that; it pins
+// today's mechanism so that if the engine starts returning NaN, or the
+// client starts erroring on a NULL-into-non-pointer scan, THIS test fails
+// and forces a re-read of this decision -- rather than the divergence
+// staying silent a second time. Do not read a passing run as "the
+// behavior is fine"; read it as "the mechanism is still what CHAOS-4650
+// describes".
+func TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN(t *testing.T) {
+	dsn, hostPort := nanClassClickHouseURI(t)
+	// CHAOS-4643 round 5: see the matching assertion in
+	// TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly -- a
+	// proof that cannot verify its own target must refuse to run.
+	if hostPort == "" {
+		t.Fatalf("refusing to connect: no target host resolved from CLICKHOUSE_URI")
+	}
+	t.Logf("connecting to ClickHouse at %s", hostPort)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", dsn, err)
+		t.Fatalf("connect to ClickHouse at %s: %v", hostPort, err)
 	}
 	ctx := context.Background()
 
-	value := nanClassRunScalarQuery(t, ctx, client, nanClassQuerySQL(t, true))
-
-	if !math.IsNaN(value) {
-		t.Fatalf("expected AVG(line_coverage_pct) over an all-NULL group to be NaN "+
-			"(ClickHouse's avg() over Nullable(Float64) with every value NULL), got %v -- "+
-			"if this is 0.0, a coercion swallowed the NaN before it reached this scan; "+
-			"if this is a ClickHouse NULL surfacing some other way, this AT-RISK "+
-			"classification needs re-checking against the live engine, not assuming "+
-			"the divergence is safely absent", value)
+	// Mechanism half 1: the engine's own result IS a SQL NULL, not NaN.
+	rawSQL := nanClassRawAllNullExpr(t)
+	rawRows, err := client.Query(ctx, rawSQL, nil)
+	if err != nil {
+		t.Fatalf("query failed (statement guard rejection or live ClickHouse error): %v\nsql=%s", err, rawSQL)
+	}
+	defer rawRows.Close()
+	if !rawRows.Next() {
+		t.Fatalf("expected exactly one result row, got zero.\nsql=%s", rawSQL)
+	}
+	var rawValue *float64
+	if err := rawRows.Scan(&rawValue); err != nil {
+		t.Fatalf("scan into *float64: %v", err)
+	}
+	if rawRows.Next() {
+		t.Fatalf("expected exactly one result row, got more than one.\nsql=%s", rawSQL)
+	}
+	if err := rawRows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+	if rawValue != nil {
+		t.Fatalf("expected the raw dbExpression() AVG() over an all-NULL group to be SQL NULL "+
+			"(scanned as nil via *float64), got %v -- if ClickHouse now returns NaN here instead, "+
+			"CHAOS-4650 may be resolved upstream, but do not just update this assertion: re-derive "+
+			"the disposition on CHAOS-4650 first, since the 0.0-coercion mechanism below would also "+
+			"need re-checking", *rawValue)
 	}
 
+	// Mechanism half 2: the SAME query, scanned into the non-pointer
+	// float64 shape ExecuteBreakdown's real call site uses (via
+	// nanClassRunScalarQuery / nanClassQuerySQL's toFloat64 wrap), becomes
+	// the Go zero value, silently.
+	scannedValue := nanClassRunScalarQuery(t, ctx, client, nanClassQuerySQL(t, true))
+	if math.IsNaN(scannedValue) {
+		t.Fatalf("got NaN from the non-pointer scan -- that was the ORIGINAL (falsified) claim; if the " +
+			"engine now genuinely returns NaN, the rawValue assertion above should have failed FIRST -- " +
+			"investigate that mismatch before treating this half alone as stale")
+	}
+	if scannedValue != 0 {
+		t.Fatalf("expected the SQL-NULL-into-non-pointer-float64 scan to silently coerce to the Go "+
+			"zero value 0, got %v -- the coercion mechanism CHAOS-4650 pins may have changed; "+
+			"re-derive CHAOS-4650's disposition before updating this assertion", scannedValue)
+	}
+
+	// The SILENT half of CHAOS-4650, executed: this 0.0 marshals CLEANLY,
+	// no error -- unlike the NaN case CHAOS-4506/4534 catches, nothing
+	// here announces that "no data" just became a plausible zero on the
+	// wire.
 	var buf bytes.Buffer
-	marshalErr := graphql.MarshalFloatContext(value).MarshalGQLContext(ctx, &buf)
-	if marshalErr == nil {
-		t.Fatalf("expected gqlgen's MarshalFloatContext to refuse a NaN value (its own float.go:38-45 "+
-			"check), got a clean write of %q instead -- either gqlgen's behavior changed underneath "+
-			"this pinned dependency version, or this value was not actually NaN by the time it reached "+
-			"the marshaler", buf.String())
+	if err := graphql.MarshalFloatContext(scannedValue).MarshalGQLContext(ctx, &buf); err != nil {
+		t.Fatalf("expected the coerced 0.0 to marshal cleanly -- that IS the silent half of CHAOS-4650, "+
+			"nothing is supposed to error here today -- got an unexpected marshal error instead: %v", err)
 	}
-	// VENDOR STRING, NOT OURS: this exact text is github.com/99designs/gqlgen's
-	// own error (float.go:38-45), pinned at go.mod's current v0.17.66. Same
-	// rot shape the clientcontract_test.go fake's dev-health-go pin already
-	// flags: it documents today's behaviour precisely and will need
-	// revisiting -- an update to the message text, not the mechanism -- on a
-	// future gqlgen bump. Coordinator ruling 2026-08-29: any assertion on
-	// text this package does not own is a scheduled maintenance event: fine
-	// when noted here, expensive when discovered as a mystifying failure in
-	// an unrelated version-bump PR.
-	if got := marshalErr.Error(); got != "cannot marshal infinite no NaN float values" {
-		t.Fatalf("expected gqlgen's exact stock error text, got %q -- if gqlgen's wording changed, "+
-			"that's fine to update here, but confirm it's still the SAME NaN/Inf guard and not a "+
-			"different failure standing in for it", got)
+	if got := strings.TrimSpace(buf.String()); got != "0" {
+		t.Fatalf("expected the marshaled body to be the literal number 0, got %q", got)
+	}
+}
+
+// TestNanClassClickHouseURI_ValidatesAndPassesThroughUnmodified is CHAOS-4643
+// round 5's structural proof: nanClassClickHouseURI no longer rewrites
+// CLICKHOUSE_URI at all -- a well-formed native-protocol DSN passes through
+// VERBATIM (dsn == raw, byte for byte), and a malformed or HTTP-port one is
+// rejected outright rather than "fixed up". This replaces
+// TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild, whose whole
+// premise (port translation, host-list rebuild) round 5 ruled out.
+func TestNanClassClickHouseURI_ValidatesAndPassesThroughUnmodified(t *testing.T) {
+	t.Run("well_formed_native_dsn_passed_through_verbatim", func(t *testing.T) {
+		cases := []string{
+			"clickhouse://chuser:chpass@example.internal:9000/default",
+			"clickhouse://chuser@example.internal:9000/default",
+			"clickhouse://example.internal:9000/default",
+			"clickhouse://chuser:chpass@[::1]:9000/default",
+			"clickhouse://u:p@host1:9000,host2:9000,host3:9000/db",
+			"clickhouse://host:9000/db?username=u&password=p",
+			"clickhouse://chuser:chpass@example.internal:9000/my_custom_db",
+			"clickhouse://ci-user:ci-secret@[fe80::1%25en0]:9000/ci_scratch?secure=true",
+		}
+		for _, raw := range cases {
+			t.Run(raw, func(t *testing.T) {
+				t.Setenv("CLICKHOUSE_URI", raw)
+				t.Setenv(requireLiveEnv, "")
+				got, _ := nanClassClickHouseURI(t)
+				if got != raw {
+					t.Fatalf("nanClassClickHouseURI(%q) = %q, want the EXACT same string (no rewriting) -- "+
+						"CHAOS-4643 round 5 ruling: this function only validates, never rebuilds", raw, got)
+				}
+			})
+		}
+	})
+
+	// codex review round 1 (EXECUTED mutation survivor, still relevant): a
+	// mutant that made nanClassClickHouseURI fail whenever
+	// DEV_HEALTH_REQUIRE_LIVE=1 -- regardless of whether CLICKHOUSE_URI was
+	// even set -- must not survive. The flag is a no-op once CLICKHOUSE_URI
+	// is present; it only changes behavior on the MISSING-URI path (see
+	// TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping).
+	t.Run("require_live_with_uri_present_is_a_no_op", func(t *testing.T) {
+		raw := "clickhouse://chuser:chpass@example.internal:9000/default"
+		t.Setenv("CLICKHOUSE_URI", raw)
+		t.Setenv(requireLiveEnv, "1")
+		got, _ := nanClassClickHouseURI(t)
+		if got != raw {
+			t.Fatalf("nanClassClickHouseURI with CLICKHOUSE_URI set and %s=1 = %q, want %q -- "+
+				"the require-live flag must only affect the missing-URI path", requireLiveEnv, got, raw)
+		}
+	})
+
+	// CHAOS-4643 round 5 findings 2 and 3 (EXECUTED by codex): these two
+	// shapes used to be silently "fixed up" by the deleted rewrite --
+	// finding 2's empty host entry became ":9000" and dialed localhost
+	// (the live proof PASSED against the wrong target); finding 3's
+	// multi-colon host became an invalid bracketed DSN. Both are now hard
+	// validation failures, never a default.
+	t.Run("malformed_host_entries_are_rejected_not_fixed_up", func(t *testing.T) {
+		cases := []struct {
+			name string
+			raw  string
+		}{
+			{
+				name: "empty_host_entry_in_multi_host_list",
+				raw:  "clickhouse://ch:ch@,",
+			},
+			{
+				name: "multi_colon_host",
+				raw:  "clickhouse://host:123:456/db?readonly=1",
+			},
+			{
+				name: "empty_host_no_port_at_all",
+				raw:  "clickhouse://ch:ch@/db",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Setenv("CLICKHOUSE_URI", tc.raw)
+				t.Setenv(requireLiveEnv, "")
+				fake := &fakeSkipFailTB{TB: t}
+				runNanClassClickHouseURI(fake)
+				if !fake.failed || fake.skipped {
+					t.Fatalf("expected a malformed host list to FAIL validation (not skip, not silently "+
+						"default a port), got failed=%v skipped=%v msg=%q", fake.failed, fake.skipped, fake.msg)
+				}
+			})
+		}
+	})
+
+	// CHAOS-4643 round 5 ruling: an HTTP-port DSN (this repo's usual
+	// CLICKHOUSE_URI convention, e.g.
+	// docs/contribute/start/development-environment.md:89) is no longer
+	// translated -- it is rejected, since the caller must now supply an
+	// already-native-protocol value.
+	t.Run("http_port_dsn_is_rejected_not_translated", func(t *testing.T) {
+		cases := []string{
+			"clickhouse://chuser:chpass@example.internal:8123/default",
+			"clickhouse://chuser:chpass@example.internal:8443/default",
+			"http://chuser:chpass@example.internal:9000/default",
+		}
+		for _, raw := range cases {
+			t.Run(raw, func(t *testing.T) {
+				t.Setenv("CLICKHOUSE_URI", raw)
+				t.Setenv(requireLiveEnv, "")
+				fake := &fakeSkipFailTB{TB: t}
+				runNanClassClickHouseURI(fake)
+				if !fake.failed || fake.skipped {
+					t.Fatalf("expected an HTTP-port/HTTP-scheme DSN to FAIL validation (not be translated "+
+						"to native protocol), got failed=%v skipped=%v msg=%q", fake.failed, fake.skipped, fake.msg)
+				}
+			})
+		}
+	})
+}
+
+// TestNanClassClickHouseURI_HostPortForLogNeverCarriesCredentials proves
+// hostPort -- the value the two connect-failure log sites and the live
+// tests' target-assertion print -- never carries a credential, across
+// userinfo, query-param, and multi-host shapes. Unaffected in principle by
+// round 5 (hostPort was already read-only extraction of opts.Addr, never
+// re-parsed from the finished DSN), but the input DSNs below are updated to
+// native-protocol (port 9000) so they pass round 5's new validation and
+// actually reach the point where hostPort is computed.
+func TestNanClassClickHouseURI_HostPortForLogNeverCarriesCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "userinfo_credentials",
+			raw:  "clickhouse://ci-user:ci-secret@example.internal:9000/default",
+		},
+		{
+			name: "query_param_credentials",
+			raw:  "clickhouse://example.internal:9000/default?username=ci-user&password=ci-secret",
+		},
+		{
+			name: "multi_host_with_userinfo_credentials",
+			raw:  "clickhouse://ci-user:ci-secret@host1:9000,host2:9000/default",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLICKHOUSE_URI", tc.raw)
+			t.Setenv(requireLiveEnv, "")
+			_, hostPort := nanClassClickHouseURI(t)
+			if hostPort == "" {
+				t.Fatalf("expected a well-formed DSN to validate and return a non-empty hostPort")
+			}
+			if strings.Contains(hostPort, "ci-secret") {
+				t.Fatalf("hostPort %q leaked the password", hostPort)
+			}
+			if strings.Contains(hostPort, "ci-user") {
+				t.Fatalf("hostPort %q leaked the username", hostPort)
+			}
+			if strings.Contains(hostPort, "@") {
+				t.Fatalf("hostPort %q should never contain the userinfo delimiter '@'", hostPort)
+			}
+		})
+	}
+}
+
+// fakeSkipFailTB is a minimal testing.TB that records whether the code under
+// test called Skip or Fatal(f), instead of letting either call propagate into
+// a REAL subtest failure. A genuine t.Run subtest failure always marks its
+// parent failed too (Go's testing package does this unconditionally,
+// independent of what the parent does with t.Run's returned bool), which
+// would turn this exact proof -- deliberately exercising the FAIL path -- into
+// a permanently red test. Embedding a real testing.TB satisfies its
+// unexported method and is never otherwise called; every method this file
+// uses is overridden below.
+type fakeSkipFailTB struct {
+	testing.TB
+	mu      sync.Mutex
+	failed  bool
+	skipped bool
+	msg     string
+}
+
+func (f *fakeSkipFailTB) Helper() {}
+
+func (f *fakeSkipFailTB) Fatalf(format string, args ...any) {
+	f.mu.Lock()
+	f.failed = true
+	f.msg = fmt.Sprintf(format, args...)
+	f.mu.Unlock()
+	runtime.Goexit()
+}
+
+func (f *fakeSkipFailTB) Skip(args ...any) {
+	f.mu.Lock()
+	f.skipped = true
+	f.msg = fmt.Sprint(args...)
+	f.mu.Unlock()
+	runtime.Goexit()
+}
+
+// runNanClassClickHouseURI calls nanClassClickHouseURI(fake) on its own
+// goroutine and waits for it: Skip/Fatalf call runtime.Goexit, which only
+// unwinds the calling goroutine, so the call must run on one dedicated to it
+// (exactly how the real testing package runs each (sub)test).
+func runNanClassClickHouseURI(fake *fakeSkipFailTB) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		nanClassClickHouseURI(fake)
+	}()
+	<-done
+}
+
+// TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping is
+// CHAOS-4643 defect 3's proof, and needs no container: DEV_HEALTH_REQUIRE_LIVE=1
+// with CLICKHOUSE_URI unset must FAIL, not skip -- otherwise a slot run that
+// failed to receive its ClickHouse URI reports the identical false pass this
+// ticket exists to close, one level down inside the runs meant to prove
+// parity. Also proves the ORIGINAL behaviour (skip, not fail) still holds
+// when the opt-in is not set, so a normal unconfigured run stays a skip, not a
+// surprise failure -- the pair is what distinguishes "the guard fires
+// correctly either way" from "it always fails now", which would be a
+// different, equally wrong bug.
+func TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping(t *testing.T) {
+	t.Run("without_require_live_skips_not_fails", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "")
+		t.Setenv(requireLiveEnv, "")
+		fake := &fakeSkipFailTB{TB: t}
+		runNanClassClickHouseURI(fake)
+		if !fake.skipped || fake.failed {
+			t.Fatalf("expected Skip (not Fatal) when %s is unset, got failed=%v skipped=%v msg=%q",
+				requireLiveEnv, fake.failed, fake.skipped, fake.msg)
+		}
+	})
+
+	t.Run("with_require_live_fails_not_skips", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "")
+		t.Setenv(requireLiveEnv, "1")
+		fake := &fakeSkipFailTB{TB: t}
+		runNanClassClickHouseURI(fake)
+		if !fake.failed || fake.skipped {
+			t.Fatalf("expected Fatal (not Skip) when %s=1 and CLICKHOUSE_URI is unset, got failed=%v "+
+				"skipped=%v msg=%q -- a slot run with a missing URI would silently report green",
+				requireLiveEnv, fake.failed, fake.skipped, fake.msg)
+		}
+	})
+}
+
+// TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput is CHAOS-4643
+// round 5's closing property test, strengthened by round 7 (codex EXECUTED
+// finding 3, ARGUED finding 2 -- both fixed here, per orchestrator ruling:
+// neither needed chris, both are "a guard that cannot fail over ground it
+// appears to cover", the same shape as the round-6 hostlist gap).
+//
+// Every case now carries its OWN username/password (never a shared literal
+// like the old "ci-user"/"ci-secret" every case reused) for two reasons:
+// (1) the cross-case equality check below is only meaningful if credentials
+// actually DIFFER between cases in the same class -- a shared credential
+// can never demonstrate the message ignores it; (2) leak checks assert
+// against the BARE username too, not just the full password or the
+// combined "user:pass" userinfo, closing round 7 finding 2 (codex could
+// not execute this against a read-only review target; the lane can and
+// did -- see the mutation proof this test's own history records).
+//
+// A THIRD class, "protocol" (round 7 finding 3), covers the HTTP-scheme/
+// port rejection branch (~line 246), which the round-5/6 "parse"/"hostlist"
+// classes never reached -- that branch could not fail this guard either,
+// for the same reason the hostlist branch could not before round 6's fix.
+// Its two members deliberately share the SAME host:port (chris's ruling:
+// host:port is sanctioned content in this branch's message) and vary ONLY
+// credentials, so the equality check isolates "did a credential leak" from
+// "did the sanctioned host legitimately differ" -- conflating those would
+// make the check meaningless.
+//
+// A FOURTH class, "httpport" (round 8/9, CHAOS-4643's enumeration table
+// entry B7), covers a SEPARATE branch from "protocol": a native-scheme DSN
+// (clickhouse://, never http://) on port 8123 or 8443 reaches its own later
+// check (~line 271), not the opts.Protocol == chdriver.HTTP check that
+// "protocol" covers. Round 8 found this branch's own dedicated test
+// (http_port_dsn_is_rejected_not_translated, above) asserted only rejection,
+// never credential exclusion or class membership -- the same shape as every
+// prior gap. Round 9 closed it as part of a full enumeration of this
+// function's failure exits (see nanClassClickHouseURIFailureExitInventory
+// below) rather than a fifth reactive patch.
+func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		wantClass string
+		username  string // for leak-checking; the case's own credential.
+		password  string // for leak-checking; may itself be malformed input.
+	}{
+		{
+			// codex round 1-2's shape: unbalanced IPv6 bracket.
+			name:      "unbalanced_bracket",
+			raw:       "clickhouse://unbalbrk-user:unbalbrk-secret@[::1:9000/db",
+			wantClass: "parse",
+			username:  "unbalbrk-user",
+			password:  "unbalbrk-secret",
+		},
+		{
+			name:      "bad_port",
+			raw:       "clickhouse://badport-user:badport-secret@example.internal:notaport/db",
+			wantClass: "parse",
+			username:  "badport-user",
+			password:  "badport-secret",
+		},
+		{
+			name:      "empty_host",
+			raw:       "clickhouse://emptyhost-user:emptyhost-secret@/db",
+			wantClass: "parse",
+			username:  "emptyhost-user",
+			password:  "emptyhost-secret",
+		},
+		{
+			// codex round 4's shape: malformed percent-escape INSIDE the
+			// userinfo, the case most likely to echo a credential fragment.
+			name:      "bad_percent_escape_in_userinfo",
+			raw:       "clickhouse://pctesc-user:pctesc-sec%ZZret@example.internal:9000/db",
+			wantClass: "parse",
+			username:  "pctesc-user",
+			password:  "pctesc-sec%ZZret",
+		},
+		{
+			name:      "multi_host_malformed_with_query_param_credentials",
+			raw:       "clickhouse://host1:9000,[::1:9443/db?username=qpcred-user&password=qpcred-secret",
+			wantClass: "parse",
+			username:  "qpcred-user",
+			password:  "qpcred-secret",
+		},
+		{
+			// codex round 5 finding 1a (EXECUTED): a malformed ?http_proxy=
+			// value's own inner parse error is a FORMATTED string, not a
+			// wrapped *url.Error -- the exact shape no errors.As-based
+			// unwrap could reach.
+			name:      "malformed_http_proxy_query_value",
+			raw:       "clickhouse://httpproxy-user:httpproxy-secret@host:9000/db?http_proxy=http://proxyA-user:proxyA-secret@[",
+			wantClass: "parse",
+			username:  "httpproxy-user",
+			password:  "httpproxy-secret",
+		},
+		{
+			// codex round 5 finding 1b (EXECUTED): a password of exactly
+			// "%ZZ" reaches url.Error's own .Err.Error() text directly (not
+			// through userinfo -- through the escape-diagnostic itself).
+			name:      "password_is_the_literal_bad_escape",
+			raw:       "clickhouse://litesc-user:%ZZ@example.internal:9000/db",
+			wantClass: "parse",
+			username:  "litesc-user",
+			password:  "%ZZ",
+		},
+		{
+			// Round 5 finding 2's shape: ParseDSN succeeds (Host is "," --
+			// not empty -- so ParseDSN's own guard does not fire), and
+			// net.SplitHostPort rejects the resulting empty Addr entries.
+			name:      "empty_host_entry_in_multi_host_list",
+			raw:       "clickhouse://hostlist1-user:hostlist1-secret@,",
+			wantClass: "hostlist",
+			username:  "hostlist1-user",
+			password:  "hostlist1-secret",
+		},
+		{
+			// Round 5 finding 3's shape: ParseDSN succeeds; SplitHostPort
+			// rejects the multi-colon entry.
+			name:      "multi_colon_host",
+			raw:       "clickhouse://hostlist2-user:hostlist2-secret@host:123:456/db",
+			wantClass: "hostlist",
+			username:  "hostlist2-user",
+			password:  "hostlist2-secret",
+		},
+		{
+			// THIRD hostlist member, distinct credentials again.
+			name:      "empty_host_no_port_at_all",
+			raw:       "clickhouse://hostlist3-user:hostlist3-secret@,",
+			wantClass: "hostlist",
+			username:  "hostlist3-user",
+			password:  "hostlist3-secret",
+		},
+		{
+			// Round 7 finding 3: the HTTP-scheme/port rejection branch,
+			// never covered by any class before this fix. SAME host:port
+			// as the next case (sanctioned content, held constant) so the
+			// equality check below isolates credential leakage from
+			// legitimately-varying host content.
+			name:      "http_scheme_credentialed_1",
+			raw:       "http://protoA-user:protoA-secret@example.internal:9000/default",
+			wantClass: "protocol",
+			username:  "protoA-user",
+			password:  "protoA-secret",
+		},
+		{
+			name:      "http_scheme_credentialed_2",
+			raw:       "http://protoB-user:protoB-secret@example.internal:9000/default2",
+			wantClass: "protocol",
+			username:  "protoB-user",
+			password:  "protoB-secret",
+		},
+		{
+			// CHAOS-4643 round 8/9 (B7): a NATIVE-scheme DSN on an HTTP port
+			// reaches a SEPARATE, later check (~line 271, "port == 8123 ||
+			// port == 8443") from the "protocol" class above, which only
+			// covers opts.Protocol == chdriver.HTTP (i.e. an http:// or
+			// https:// scheme). Deliberately NOT http://, so this cannot
+			// land in the "protocol" class by accident -- it must exercise
+			// the port check on its own. SAME host as the next case
+			// (sanctioned content, chris's 09:25 ruling, option A) so the
+			// equality check below isolates credential leakage from the
+			// legitimately-varying (but here held constant) host.
+			name:      "native_scheme_on_http_port_8123",
+			raw:       "clickhouse://httpportA-user:httpportA-secret@example.internal:8123/db",
+			wantClass: "httpport",
+			username:  "httpportA-user",
+			password:  "httpportA-secret",
+		},
+		{
+			// Second httpport member: different port (8443, the other
+			// branch of the `port == "8123" || port == "8443"` check), same
+			// host, different credentials. The message only interpolates
+			// `host`, not `port`, so these two are expected to be
+			// byte-identical -- proving the message ignores which of the
+			// two ports fired, not just which credential was supplied.
+			name:      "native_scheme_on_http_port_8443",
+			raw:       "clickhouse://httpportB-user:httpportB-secret@example.internal:8443/db2",
+			wantClass: "httpport",
+			username:  "httpportB-user",
+			password:  "httpportB-secret",
+		},
+	}
+
+	baselineByClass := map[string]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLICKHOUSE_URI", tc.raw)
+			t.Setenv(requireLiveEnv, "")
+			fake := &fakeSkipFailTB{TB: t}
+			runNanClassClickHouseURI(fake)
+			if !fake.failed || fake.skipped {
+				t.Fatalf("expected this malformed/credentialed DSN to FAIL: failed=%v skipped=%v msg=%q",
+					fake.failed, fake.skipped, fake.msg)
+			}
+			if strings.Contains(fake.msg, tc.password) {
+				t.Fatalf("failure message leaked the PASSWORD: %q", fake.msg)
+			}
+			// Round 7 finding 2 (codex ARGUED, lane EXECUTED): the bare
+			// username must never leak either, not just the full password
+			// or the combined userinfo -- a per-case unique username is
+			// what makes this check able to fail at all.
+			if strings.Contains(fake.msg, tc.username) {
+				t.Fatalf("failure message leaked the USERNAME: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, tc.username+":"+tc.password) {
+				t.Fatalf("failure message leaked the USERINFO: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, "proxyA-secret") || strings.Contains(fake.msg, "proxyA-user:proxyA-secret") {
+				t.Fatalf("failure message leaked the PROXY credential: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, "username="+tc.username) || strings.Contains(fake.msg, "password="+tc.password) {
+				t.Fatalf("failure message leaked the RAW QUERY STRING credentials: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, tc.raw) {
+				t.Fatalf("failure message embedded the entire raw DSN verbatim: %q", fake.msg)
+			}
+			if tc.password != "%ZZ" && strings.Contains(fake.msg, "%ZZ") {
+				t.Fatalf("failure message echoed the malformed escape sequence: %q", fake.msg)
+			}
+			// The stronger property, now covering EVERY class INCLUDING
+			// "protocol" (round 7 finding 3): every case that fails for
+			// the SAME underlying reason (wantClass) produces the
+			// byte-for-byte SAME message, proving nothing about the
+			// specific input leaked through -- not even a fragment too
+			// narrow for the substring checks above to name. This is now
+			// a REAL check for "parse" and "protocol" too, not just
+			// "hostlist": every case in those classes uses a DIFFERENT
+			// credential (round 7 finding 2's fix), so equality can only
+			// hold if the message genuinely ignores the credential.
+			if want, ok := baselineByClass[tc.wantClass]; !ok {
+				baselineByClass[tc.wantClass] = fake.msg
+			} else if fake.msg != want {
+				t.Fatalf("%s-class failure messages differ across inputs (%q vs baseline %q) -- "+
+					"a message that varies with the input can only vary BECAUSE something about the "+
+					"input leaked into it", tc.wantClass, fake.msg, want)
+			}
+		})
+	}
+
+	// Floor check (CHAOS-4643 round 9, brief §2's fallback mechanism):
+	// cheap, redundant belt-and-braces on top of the AST-based inventory
+	// guard below, NOT a substitute for it -- this only catches a class
+	// being silently DROPPED from this table, never a new unclassified
+	// failure exit appearing in nanClassClickHouseURI itself (that is what
+	// TestNanClassClickHouseURI_FailureExitInventoryIsComplete is for).
+	wantClasses := map[string]bool{"parse": true, "hostlist": true, "protocol": true, "httpport": true}
+	if len(baselineByClass) != len(wantClasses) {
+		t.Fatalf("realized class set %v does not match the expected class set %v -- a class was added to "+
+			"or dropped from this table without the count matching", baselineByClass, wantClasses)
+	}
+	for class := range wantClasses {
+		if _, ok := baselineByClass[class]; !ok {
+			t.Fatalf("expected class %q never appeared in the realized class set %v", class, baselineByClass)
+		}
+	}
+}
+
+// TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins the
+// assumption documented above nanClassClickHouseURI's "CLICKHOUSE_URI has no
+// host" branch (B5 in CHAOS-4643 round 9's failure-branch enumeration): with
+// clickhouse-go/v2 pinned at v2.47.0 (go.mod:7), a successful
+// chdriver.ParseDSN can never yield an empty opts.Addr, because fromDSN
+// rejects an empty dsn.Host before populating Addr and otherwise always
+// splits a non-empty Host into at least one element. This is a
+// PIN-DEPENDENT claim -- the exact class of defect the epic handoff calls
+// "a contract-mirroring fake rots silently when the pin moves" -- so it is
+// pinned here directly against the real driver, not assumed. If a future
+// clickhouse-go bump changes fromDSN's behavior, this test goes red and
+// whoever bumped the pin has to re-read nanClassClickHouseURI's B5 branch
+// before trusting that it is still unreachable, instead of it silently
+// becoming reachable-and-uncovered.
+func TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "empty_authority_errors_rather_than_yielding_empty_addr", dsn: "clickhouse:///db"},
+		{name: "comma_only_host_populates_addr_with_empty_elements_not_zero_elements", dsn: "clickhouse://ch:ch@,"},
+		{name: "well_formed_single_host", dsn: "clickhouse://host:9000/db"},
+		{name: "well_formed_multi_host", dsn: "clickhouse://host1:9000,host2:9000/db"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := chdriver.ParseDSN(tc.dsn)
+			if err != nil {
+				// A parse failure is fine and expected for some of these
+				// shapes -- that is B3, already covered by
+				// TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput's
+				// "parse" class. The contract under test here is narrower:
+				// IF ParseDSN succeeds, Addr is never empty.
+				return
+			}
+			if len(opts.Addr) == 0 {
+				t.Fatalf("chdriver.ParseDSN(%q) succeeded with an EMPTY Addr list -- this contradicts the "+
+					"driver contract nanClassClickHouseURI's B5 branch (\"CLICKHOUSE_URI has no host\") "+
+					"relies on being unreachable at the pinned clickhouse-go/v2 version. If this fires, the "+
+					"pin has moved and that branch needs a REAL test, not just a defensive comment "+
+					"(CHAOS-4643 round 9)", tc.dsn)
+			}
+		})
+	}
+}
+
+// nanClassClickHouseURIFailureExit is one t.Fatalf/t.Skip call site inside
+// nanClassClickHouseURI, in SOURCE ORDER -- the only key stable across
+// unrelated edits elsewhere in this file, since only edits to the
+// function's OWN body change call order. See
+// nanClassClickHouseURIFailureExitInventory for why this exists.
+type nanClassClickHouseURIFailureExit struct {
+	call          string // "Fatalf" or "Skip", exactly as it appears in source.
+	justification string
+}
+
+// nanClassClickHouseURIFailureExitInventory is CHAOS-4643 round 9's
+// by-construction guard. Four rounds in a row -- 6 (hostlist), 7 finding 2
+// (bare username), 7 finding 3 (protocol), 8 (httpport) -- found a failure
+// branch of nanClassClickHouseURI that
+// TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput could not
+// fail over, each discovered only AFTER the previous was closed, because
+// nobody had enumerated every failure exit in this function and checked the
+// oracle against the complete set. TestNanClassClickHouseURI_FailureExitInventoryIsComplete
+// walks this function's AST and requires the Fatalf/Skip call sites it
+// finds, IN SOURCE ORDER, to match this list exactly (same count, same call
+// kind at each position). Add a new failure exit to the function under a
+// BARE-IDENTIFIER receiver call (`<param>.Fatalf(...)`/`.Skip(...)`, the
+// only shape this guard matches -- see
+// nanClassClickHouseURINonTerminalMethods's doc comment for the guard's
+// honest, ruled scope boundary after round 10) without adding a line here,
+// and THIS test fails -- before a fifth adversarial round has to find it,
+// and before anyone has to remember to ask "does the oracle cover this."
+var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureExit{
+	{call: "Fatalf", justification: "B1: raw==\"\" && DEV_HEALTH_REQUIRE_LIVE=1 -- no credential input " +
+		"exists (raw is empty); covered by TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping, " +
+		"correctly outside the leak oracle"},
+	{call: "Skip", justification: "B2: raw==\"\" -- not a failure message; same test as B1"},
+	{call: "Fatalf", justification: "B3: chdriver.ParseDSN error -- oracle class \"parse\""},
+	{call: "Fatalf", justification: "B4: opts.Protocol == chdriver.HTTP -- oracle class \"protocol\""},
+	{call: "Fatalf", justification: "B5: len(opts.Addr) == 0 -- defensive-only, unreachable with " +
+		"clickhouse-go/v2 v2.47.0 pinned; see the comment at the call site and " +
+		"TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr, which pins the assumption directly"},
+	{call: "Fatalf", justification: "B6: net.SplitHostPort fails / empty host / empty port -- oracle class \"hostlist\""},
+	{call: "Fatalf", justification: "B7: port == \"8123\" || port == \"8443\" -- oracle class \"httpport\" (CHAOS-4643 round 9)"},
+}
+
+// nanClassClickHouseURINonTerminalMethods is every testing.TB method
+// nanClassClickHouseURI calls that does NOT end the (sub)test -- today just
+// Helper(). TestNanClassClickHouseURI_FailureExitInventoryIsComplete FAILS
+// CLOSED on any BARE-IDENTIFIER `<param>.<Method>(...)` call site it finds
+// (that is, the receiver expression is exactly the identifier named in
+// recvParam) that is neither in this list nor one of the two terminal
+// kinds (nanClassClickHouseURIFailureExitInventory's "Fatalf"/"Skip"): an
+// unrecognized method name on the bare parameter stops the test and forces
+// a human decision.
+//
+// This replaces a WEAKER first version of the guard (CHAOS-4643 round 9,
+// codex EXECUTED finding): that version recognized only literal "Fatalf"
+// and "Skip" by name and ignored every other method call outright, so an
+// overlay adding t.FailNow() -- a real terminal exit under a different name
+// -- passed silently ("ok ... 0.352s"). An allowlist of KNOWN TERMINAL
+// names fails OPEN on any name it does not recognize, which is exactly the
+// "test that cannot fail" shape this whole guard exists to close -- so the
+// check inverted to a DECLARED NON-TERMINAL allowlist instead: anything not
+// explicitly cleared here, and not one of the two recognized terminal
+// kinds, is an error, not a silent pass. Add a name here ONLY if it can
+// NEVER end the (sub)test (e.g. Helper, Log, Logf); if it CAN end the test
+// (Fatal, FailNow, Skipf, SkipNow, ...), it must be classified as a new
+// failure exit in nanClassClickHouseURIFailureExitInventory instead, like
+// every other exit.
+//
+// HONEST SCOPE BOUNDARY (CHAOS-4643 round 10, codex EXECUTED finding,
+// ACCEPTED AS A RULED RESIDUAL -- chris/team-lead, not an unknown): this
+// guard matches ONLY a bare-identifier receiver equal to the function's own
+// parameter name at the call site. It does NOT track aliasing. Round 10's
+// repro, re-confirmed by the lane:
+//
+//	tb := t
+//	if false { tb.FailNow() }
+//
+// -- passes this guard silently, because the receiver expression at the
+// call site is the identifier "tb", not "t", and this check never asked
+// what "tb" refers to. The same blind spot applies to any other way of
+// putting a testing.TB value one hop away from the literal parameter name:
+// an interface-typed wrapper, or handing `t` to a helper function that
+// calls a method on it internally. Chasing every such shape by tracking
+// aliases is an unbounded search (double aliases, closures, struct
+// embedding, wrapper types...) and was explicitly ruled OUT as the fix for
+// round 10 -- the guard raises the floor against a CARELESS addition to
+// this ~60-line function; it is not, and was never meant to be, a sandbox
+// against a DETERMINED author willing to introduce an alias specifically to
+// route around it. If this guard's real behavior ever needs to be stronger
+// than that, the correct mechanism is type information (go/types), not
+// another syntactic special case -- and that is a deliberate future
+// decision, not a silent gap. Also NOT detected by this guard, by design: a
+// bare, unqualified `panic(...)` or `runtime.Goexit()` call inside the
+// function body -- i.e. one that does not go through the <param> receiver
+// at all. nanClassClickHouseURI does not call either today, and this
+// guard's job is enumerating the TESTING.TB-SURFACED failure/skip messages
+// the credential-leak oracle needs to classify; a direct panic/Goexit would
+// bypass testing.TB entirely (no message for the oracle to check, and it
+// would break the goroutine-isolation contract
+// runNanClassClickHouseURI's fakeSkipFailTB depends on), which is a
+// different, more visible defect class a reviewer or `go vet` catches on
+// sight -- not the narrow, easy-to-miss "oracle silently doesn't cover this
+// branch" shape this guard targets.
+var nanClassClickHouseURINonTerminalMethods = map[string]bool{
+	"Helper": true,
+}
+
+// TestNanClassClickHouseURI_FailureExitInventoryIsComplete is the
+// by-construction guard nanClassClickHouseURIFailureExitInventory and
+// nanClassClickHouseURINonTerminalMethods describe: it parses THIS FILE,
+// finds nanClassClickHouseURI's own function body, and requires every
+// BARE-IDENTIFIER method call on the function's own first parameter --
+// i.e. `<param>.Method(...)` where <param> is literally the parameter's own
+// name at the call site, whatever that name is -- to be either declared
+// non-terminal or match a nanClassClickHouseURIFailureExitInventory entry
+// IN SOURCE ORDER (same count, same call kind at each position). A future
+// failure exit added to the function under that bare-identifier shape,
+// recognized or not, fails THIS test: an unrecognized name fails closed
+// (see nanClassClickHouseURINonTerminalMethods's doc comment for why an
+// open-allowlist first version of this check missed t.FailNow()). It does
+// NOT catch a failure exit reached through an ALIAS of the parameter (e.g.
+// `tb := t; tb.FailNow()`) or any other indirection -- CHAOS-4643 round 10
+// EXECUTED that exact evasion, and it is an ACCEPTED, RULED RESIDUAL (see
+// nanClassClickHouseURINonTerminalMethods's doc comment), not a silent gap.
+func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller(0) could not resolve this test file's own path")
+	}
+
+	fset := token.NewFileSet()
+	astFile, err := parser.ParseFile(fset, thisFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", thisFile, err)
+	}
+
+	var fn *ast.FuncDecl
+	for _, decl := range astFile.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Name == nil || fd.Name.Name != "nanClassClickHouseURI" {
+			continue
+		}
+		fn = fd
+		break
+	}
+	if fn == nil || fn.Body == nil {
+		t.Fatalf("could not find nanClassClickHouseURI's function body in %s via go/ast -- has the "+
+			"function been renamed or moved? this guard must be updated in step with any such change", thisFile)
+	}
+
+	recvParam := ""
+	if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 && len(fn.Type.Params.List[0].Names) > 0 {
+		recvParam = fn.Type.Params.List[0].Names[0].Name
+	}
+	if recvParam == "" {
+		t.Fatalf("could not determine nanClassClickHouseURI's first parameter name via go/ast")
+	}
+
+	type discoveredExit struct {
+		line int
+		call string
+	}
+	var found []discoveredExit
+	var unrecognized []string
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != recvParam {
+			return true
+		}
+		method := sel.Sel.Name
+		line := fset.Position(call.Pos()).Line
+
+		// FAIL CLOSED (CHAOS-4643 round 9): anything not explicitly
+		// declared non-terminal, and not one of the two recognized
+		// terminal kinds, is an ERROR -- never silently ignored. This is
+		// the inversion that catches t.FailNow() and anything named after
+		// it that a name-by-name allowlist would keep missing one at a
+		// time.
+		if nanClassClickHouseURINonTerminalMethods[method] {
+			return true
+		}
+		if method != "Fatalf" && method != "Skip" {
+			unrecognized = append(unrecognized, fmt.Sprintf(
+				"  line %d: %s.%s(...) -- not in nanClassClickHouseURINonTerminalMethods and not a "+
+					"recognized terminal call kind (Fatalf/Skip)", line, recvParam, method))
+			return true
+		}
+		found = append(found, discoveredExit{line: line, call: method})
+		return true
+	})
+
+	if len(unrecognized) > 0 {
+		t.Fatalf("nanClassClickHouseURI calls %d method(s) on %s that this guard does not recognize -- "+
+			"add each to nanClassClickHouseURINonTerminalMethods (if it can NEVER end the test) or classify "+
+			"it as a new entry in nanClassClickHouseURIFailureExitInventory (if it CAN) (CHAOS-4643 round 9 "+
+			"by-construction guard, fail-closed after codex's t.FailNow() repro):\n%s",
+			len(unrecognized), recvParam, strings.Join(unrecognized, "\n"))
+	}
+
+	sort.Slice(found, func(i, j int) bool { return found[i].line < found[j].line })
+
+	if len(found) != len(nanClassClickHouseURIFailureExitInventory) {
+		lines := make([]string, 0, len(found))
+		for _, f := range found {
+			lines = append(lines, fmt.Sprintf("  line %d: %s.%s(...)", f.line, recvParam, f.call))
+		}
+		t.Fatalf("nanClassClickHouseURI has %d recognized terminal call site(s) (Fatalf/Skip on %s) but "+
+			"nanClassClickHouseURIFailureExitInventory declares %d -- a failure exit was added or removed "+
+			"without updating the inventory (CHAOS-4643 round 9 by-construction guard). Discovered sites, "+
+			"in source order:\n%s", len(found), recvParam, len(nanClassClickHouseURIFailureExitInventory),
+			strings.Join(lines, "\n"))
+	}
+	for i, f := range found {
+		want := nanClassClickHouseURIFailureExitInventory[i]
+		if f.call != want.call {
+			t.Fatalf("failure exit #%d (line %d): found a %s.%s(...) call, but "+
+				"nanClassClickHouseURIFailureExitInventory[%d] says %q -- %s",
+				i, f.line, recvParam, f.call, i, want.call, want.justification)
+		}
 	}
 }

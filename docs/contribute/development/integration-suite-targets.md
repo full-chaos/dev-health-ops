@@ -408,8 +408,28 @@ Two ways a DSN can break that, both refused:
   changes, and a local Unix socket when it is unset. In a test harness, where
   `t.Setenv` is routine, that is a live way for the drop to go elsewhere.
 
-So the requirement is on the DSN *string*, not on what it happens to resolve to:
-if the host is written down, nothing outside the DSN can move it.
+So the requirement is on the DSN *string* rather than on what it happens to
+resolve to.
+
+**Known limit of that guard, stated rather than implied.** It refuses a DSN that
+names no host, or that names more than one *hostname*. It does **not** catch two
+endpoints that share a hostname, nor a port supplied from outside the DSN:
+
+```
+postgres://u:p@pg-gateway:5432,pg-gateway:15432/acr   1 hostname, 2 endpoints -> accepted
+postgres://u:p@pg-gateway/acr  with PGPORT=15432      port comes from the environment
+```
+
+Either could in principle put the `CREATE` and the `DROP` on different servers,
+by the same mechanism as the cases that *are* refused. This is documented as a
+**harness constraint rather than fixed**, deliberately: it is the sixth instance
+of this class found in review, each previous fix having closed the cases it was
+shown and missed the next one, and the decision was taken that the class is
+better bounded by a stated requirement than by another guard.
+
+**So: point the harness at a single, fully-specified `host:port` endpoint.** The
+recipe above does. A DSN that reaches a pooler or a failover front-end with more
+than one backend is outside what this harness is built for.
 
 `DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN` is needed alongside the native DSN
 whenever a suite reaches ClickHouse over HTTP (the Python migration runner

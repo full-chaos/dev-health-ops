@@ -23,16 +23,36 @@ const (
 type Instance struct {
 	Container testcontainers.Container
 	URI       string
+
+	// cleanup releases whatever this Instance actually holds. A container
+	// instance leaves it nil and is terminated; a remote-DSN instance
+	// (remote.go) sets it to drop the scratch database it created, which is
+	// the only thing standing between a shared server and an unbounded pile
+	// of abandoned databases.
+	cleanup func(context.Context) error
+
+	// httpURI is set only on a remote ClickHouse instance, where there is no
+	// container to ask for a mapped port. See ClickHouseHTTPDSN.
+	httpURI string
 }
 
 func (i *Instance) Close(ctx context.Context) error {
-	if i == nil || i.Container == nil {
+	if i == nil {
+		return nil
+	}
+	if i.cleanup != nil {
+		return i.cleanup(ctx)
+	}
+	if i.Container == nil {
 		return nil
 	}
 	return i.Container.Terminate(ctx)
 }
 
 func StartPostgres(ctx context.Context) (*Instance, error) {
+	if dsn := remoteDSN(PostgresDSNEnv); dsn != "" {
+		return startPostgresRemote(ctx, dsn)
+	}
 	const (
 		user     = "worker_test"
 		password = "worker_test_password"
@@ -86,8 +106,20 @@ const (
 // -- while the PORT must be the HTTP one, because that client speaks HTTP and
 // not the native protocol Instance.URI points at.
 func ClickHouseHTTPDSN(ctx context.Context, instance *Instance) (string, error) {
-	if instance == nil || instance.Container == nil {
-		return "", fmt.Errorf("clickhouse HTTP DSN: no container")
+	if instance == nil {
+		return "", fmt.Errorf("clickhouse HTTP DSN: no instance")
+	}
+	// A remote instance has no container to ask for a mapped port; its HTTP
+	// address came from the environment and was already rewritten to point at
+	// this instance's scratch database.
+	if instance.httpURI != "" {
+		return instance.httpURI, nil
+	}
+	if instance.Container == nil {
+		return "", fmt.Errorf(
+			"clickhouse HTTP DSN: no container, and no HTTP DSN configured -- set %s alongside %s",
+			ClickHouseHTTPDSNEnv, ClickHouseDSNEnv,
+		)
 	}
 	host, err := instance.Container.Host(ctx)
 	if err != nil {
@@ -107,6 +139,9 @@ func ClickHouseHTTPDSN(ctx context.Context, instance *Instance) (string, error) 
 }
 
 func StartClickHouse(ctx context.Context) (*Instance, error) {
+	if dsn := remoteDSN(ClickHouseDSNEnv); dsn != "" {
+		return startClickHouseRemote(ctx, dsn, remoteDSN(ClickHouseHTTPDSNEnv))
+	}
 	const (
 		user     = ClickHouseUser
 		password = ClickHousePassword
@@ -299,12 +334,19 @@ func pingValkeyOnce(ctx context.Context, uri string) error {
 	return client.Do(ctx, client.B().Ping().Build()).Error()
 }
 
+// newGenericContainer is the single point at which this package asks Docker for
+// anything. It is a variable so a test can substitute a recorder and assert
+// that a remote-DSN run reaches Docker ZERO times -- the claim the whole
+// CHAOS-4428 move rests on, and one that cannot be shown by observing a
+// passing test, only by observing that nothing was started.
+var newGenericContainer = testcontainers.GenericContainer
+
 func start(
 	ctx context.Context,
 	request testcontainers.ContainerRequest,
 	containerPort string,
 ) (testcontainers.Container, string, string, error) {
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := newGenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: request,
 		Started:          true,
 	})

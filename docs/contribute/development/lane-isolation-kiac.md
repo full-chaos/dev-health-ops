@@ -604,6 +604,13 @@ Two things the values must NOT do:
 
 ## Testcontainers: which suite runs where
 
+This table is the coarse operational summary. The **per-package decision
+matrix** — every Go integration package with its local target, whether GitHub
+Actions CI can prove it, and the ClickHouse engine versions that decide it — is
+[Integration suite targets](integration-suite-targets.md). Read that before
+routing a suite. The short answer: ClickHouse-touching suites cannot be proven
+by CI, which runs 25.1 against a 26.7 production line.
+
 | Suite | Where |
 | --- | --- |
 | Go unit and `internal/...` seam tests | Host Testcontainers. No cluster dependency. |

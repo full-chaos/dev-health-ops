@@ -489,10 +489,11 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 	return cfg, true
 }
 
-// queryRouteMaxResultRows and queryRouteMaxBytesToRead override
-// dev-health-go/clickhouse's per-request safety-net defaults
-// (Options.MaxResultRows=1,000, Options.MaxBytesToRead=64 MiB) for THIS
-// route.
+// queryRouteMaxResultRows overrides dev-health-go/clickhouse's per-request
+// safety-net default (Options.MaxResultRows=1,000) for THIS route.
+// queryRouteMaxBytesToRead has been RETIRED (CHAOS-4651, below); the route
+// now sends ClickHouse's own "unrestricted" for that setting instead of
+// naming a client-side value at all.
 //
 // ROOT DEFECT (CHAOS-4647): those two defaults were calibrated by
 // CHAOS-3848 for a completely different endpoint -- a 200-row
@@ -507,36 +508,47 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 // org-wide hotspots read and a real membership graph are both
 // spec-valid per contracts/graphql/v1/schema.graphql.
 //
-// BOTH VALUES BELOW ARE PROVISIONAL, each with a named successor that
-// removes it as a lane's independent decision, not a number this PR is
-// asserting is correct:
+//   - MaxBytesToRead: RETIRED (CHAOS-4651, dev-health-go v0.6.1). This was
+//     never a capacity-boundable value -- it protects ClickHouse's OWN
+//     read volume, which is the engine's resource, governed by its
+//     server profile, not a per-client guess. CHAOS-4653 measured that
+//     premise live rather than assuming it: querying system.settings
+//     directly on BOTH the local dev-health-clickhouse-1 container and
+//     prod's fullchaosdev-clickhouse-1 (via `ssh oci`, read-only) shows
+//     max_bytes_to_read/max_result_rows/max_rows_to_read/
+//     max_execution_time/max_memory_usage/max_concurrent_queries_for_user
+//     all at 0 (unrestricted) with changed=0 on BOTH -- so sending
+//     unlimited here restores the status quo those two engines already
+//     run under; it does not open a new hole. CHAOS-4652 measured the
+//     real cost this was gating: an unscoped hotspots scan (repoIds
+//     omitted, spec-valid) reads 6,942,432 rows / ~1002 MiB of
+//     file_hotspot_daily against real org 70d529e0 data -- confirmed via
+//     system.query_log -- because that table's sort key
+//     (repo_id, day, file_path) has no org_id predicate to serve
+//     org-scoping, so an unscoped read degenerates to a full scan of the
+//     retention window; an 8x-headroom 512 MiB ceiling was tried first
+//     and also failed, at 513.63 MiB. That is what "no client-side cap"
+//     actually has to tolerate -- Python's equivalent queries impose none
+//     and have run this way safely for years. dev-health-go @v0.4.0 could
+//     not express literal zero: applyOptions' defaultPositiveUint64
+//     substituted its positive fallback whenever MaxBytesToRead was <= 0,
+//     so deleting the field did NOT remove the cap, it silently reverted
+//     to the ORIGINAL 64 MiB bug. v0.6.1 makes MaxBytesToRead a *uint64:
+//     nil now means "unset, use the 64 MiB default" and a non-nil pointer
+//     to 0 means literal "unrestricted", sent to the driver unchanged
+//     (clickhouse/options.go's resolveCeilingUint64). Those are NOT
+//     interchangeable -- deleting the field lands on nil, i.e. the 64 MiB
+//     default, i.e. CHAOS-4647 again. newQueryRouteClickHouseClient below
+//     therefore passes an explicit pointer to a zero-valued local, never
+//     an absent field. See query_route_integration_test.go's
+//     tip_config_sends_unrestricted_max_bytes_to_read subtest, which
+//     reads system.settings back through this exact constructor and
+//     failed RED (observed "67108864", not "0") against a deliberate
+//     "just delete the field" version of this function before this fix
+//     was written.
 //
-//   - queryRouteMaxBytesToRead: PROVISIONAL, successor CHAOS-4651 /
-//     dev-health-go v0.6.1. This is NOT a capacity-boundable value --
-//     it protects ClickHouse's OWN read volume, which is the engine's
-//     resource, governed by its server profile (CHAOS-4653: prod and
-//     local both currently run with every such setting at 0 already;
-//     removing this client-side cap restores that status quo rather
-//     than opening a new hole). The correct value is "no client-side
-//     cap" -- Python's equivalent queries impose none. dev-health-go
-//     @v0.4.0 cannot express that: applyOptions' defaultPositiveUint64
-//     substitutes its positive fallback whenever Options.MaxBytesToRead
-//     is <= 0, so deleting this field does NOT remove the cap, it
-//     silently reverts to the ORIGINAL 64 MiB bug (found reading
-//     options.go, not assumed). v0.6.1 adds the ability to request
-//     literal 0/unlimited; the ops pin bump to it is a one-line
-//     follow-up that deletes this field for real. Until then: 2 GiB,
-//     EXECUTED against real org 70d529e0 data (live-local runner,
-//     unwrap-chain instrumentation in newQueryHandler below) -- proven
-//     live 12/12 three separate times on this branch, real headroom
-//     (~2x) over the measured ~1002 MiB / 6,942,432-row hotspots scan
-//     (clickhouse-client, max_bytes_to_read=0, system.query_log
-//     confirmed). INVALIDATED BY: v0.6.1 shipping (delete this field
-//     entirely then, don't re-derive a bigger number) OR a legitimate
-//     query needing to read more than 2 GiB before v0.6.1 lands (widen
-//     the value with a fresh EXECUTED measurement, same as this one).
-//
-//   - queryRouteMaxResultRows: PROVISIONAL, successor CHAOS-4654. This
+//   - MaxResultRows (queryRouteMaxResultRows below): still PROVISIONAL,
+//     successor CHAOS-4654, unchanged by this PR. This
 //     IS capacity-boundable in principle -- it protects THIS PROCESS
 //     (query-api's own pooled connections, MaxOpenConns=8 by default,
 //     and the in-memory row slice every resolver buffers before the
@@ -571,10 +583,7 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 //     it fails loudly the moment a new category_kind value appears,
 //     which is the earliest possible signal that this workload
 //     derivation's assumptions changed).
-const (
-	queryRouteMaxResultRows  = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654
-	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB -- PROVISIONAL, successor CHAOS-4651 / dev-health-go v0.6.1
-)
+const queryRouteMaxResultRows uint = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654
 
 // newQueryRouteClickHouseClient is the ONE place this route constructs its
 // ClickHouse client -- pulled out of buildQueryRoute so a test can exercise
@@ -582,10 +591,17 @@ const (
 // driver) instead of a hand-copied literal that could silently drift from
 // what buildQueryRoute actually does (codex review round 1, P3).
 func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
+	maxResultRows := queryRouteMaxResultRows
+	// Explicit pointer to a zero-valued local, NOT an absent field: nil
+	// means "unset, use the 64 MiB default" under dev-health-go v0.6.1
+	// (clickhouse/options.go's resolveCeilingUint64), and a deleted field
+	// zero-values to nil. A non-nil pointer to 0 is the only way to reach
+	// ClickHouse's own "unrestricted" -- see the long comment above.
+	maxBytesToRead := uint64(0)
 	return dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
 		DSN:            dsn,
-		MaxResultRows:  queryRouteMaxResultRows,
-		MaxBytesToRead: queryRouteMaxBytesToRead,
+		MaxResultRows:  &maxResultRows,
+		MaxBytesToRead: &maxBytesToRead,
 	})
 }
 

@@ -301,9 +301,15 @@ An earlier version of this page published 85.2%, and before that 87.9%, then
 21.7% with a 93.3%/96.0% projection. The first two were computed with a single
 target per package, which hid role-creating packages behind another reason,
 and measured re-runnability rather than concurrency. 21.7% was the last
-pre-CHAOS-4661 measurement. 93.3% is no longer a projection: it is this page's
-current, executed state. The figures above are derived from the table by
-script rather than by hand, and every bucket can be recomputed from it.
+pre-CHAOS-4661 measurement. 93.3% is no longer a projection against a
+hypothetical future fix: it is the routing this page's table now asserts,
+because the code shipping in the same change makes it true for all ten
+role-blocked packages by the same mechanism (`containers.RoleName`). The
+figures above are derived from the table by script rather than by hand, and
+every bucket can be recomputed from it. **Executed twice-in-succession proof
+for every individual package is tracked in "Executed evidence: CHAOS-4661"
+below — do not treat the percentage as a substitute for that table, and check
+it for any row still pending rather than assuming green.**
 
 The Valkey and self-test rows will not shrink. Valkey has no `CREATE DATABASE`
 to carve a private namespace out of a shared server, and its container is the
@@ -547,7 +553,7 @@ content (sha256 digest match), never via `git checkout`.
 | `internal/syncdispatchruntime` | **PASS** — the 9 role-creating tests across its 3 files; same host-Valkey caveat as above |
 | `internal/jobs/metrics/daily` | **PASS** — see red-on-baseline and mutation-proof above |
 | `internal/storage/river` | **PASS** — full package, both runs, including the rewritten backup/restore round-trip |
-| `internal/providersync` | *(see below — the 1166s package, run separately)* |
+| `internal/providersync` | **PENDING** — the 1166s package; twice-in-succession proof is running separately (~19 min/run) and is not yet recorded here. Do not treat this row as passing until it is updated with a PASS/PASS result. |
 
 Isolation verified after every run: no leaked scratch databases (`LIKE
 'lane_4661%'` sweep returns 0 throughout); role accumulation from repeated

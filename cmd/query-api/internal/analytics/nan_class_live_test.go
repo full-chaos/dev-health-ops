@@ -747,67 +747,75 @@ func TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping(t *t
 }
 
 // TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput is CHAOS-4643
-// round 5's closing property test, replacing
-// TestDSNParseErrorForLog_NeverLeaksCredentials (the helper it tested,
-// dsnParseErrorForLog, is deleted -- round 5 found that type-based
-// unwrapping cannot enumerate every shape a DSN-parsing error can take: a
-// malformed ?http_proxy= query value's OWN inner url.Parse error is
-// wrapped by clickhouse.ParseDSN with fmt.Errorf("...: %s", err), a plain
-// FORMATTED string, not a *url.Error -- so errors.As could not reach it,
-// and the proxy URL's own credentials rode straight through; separately, a
-// password of exactly "%ZZ" reached url.Error's own .Err.Error() text
-// directly). Rather than adding a sixth error-shape case to an enumeration
-// that keeps growing, nanClassClickHouseURI now NEVER prints any part of
-// a parse error -- every failure message is a FIXED string. This test
-// proves that property holds for a superset of every malformed shape
-// found across all five rounds, including the two round-5 shapes above,
-// by asserting the failure message is IDENTICAL for a well-formed
-// throwaway credential (baseline) and for genuinely secret-shaped inputs --
-// if any credential fragment ever reached the message, it would vary
-// input-to-input, and this test would catch that even for a shape nobody
-// has tried yet.
+// round 5's closing property test, strengthened by round 7 (codex EXECUTED
+// finding 3, ARGUED finding 2 -- both fixed here, per orchestrator ruling:
+// neither needed chris, both are "a guard that cannot fail over ground it
+// appears to cover", the same shape as the round-6 hostlist gap).
+//
+// Every case now carries its OWN username/password (never a shared literal
+// like the old "ci-user"/"ci-secret" every case reused) for two reasons:
+// (1) the cross-case equality check below is only meaningful if credentials
+// actually DIFFER between cases in the same class -- a shared credential
+// can never demonstrate the message ignores it; (2) leak checks assert
+// against the BARE username too, not just the full password or the
+// combined "user:pass" userinfo, closing round 7 finding 2 (codex could
+// not execute this against a read-only review target; the lane can and
+// did -- see the mutation proof this test's own history records).
+//
+// A THIRD class, "protocol" (round 7 finding 3), covers the HTTP-scheme/
+// port rejection branch (~line 246), which the round-5/6 "parse"/"hostlist"
+// classes never reached -- that branch could not fail this guard either,
+// for the same reason the hostlist branch could not before round 6's fix.
+// Its two members deliberately share the SAME host:port (chris's ruling:
+// host:port is sanctioned content in this branch's message) and vary ONLY
+// credentials, so the equality check isolates "did a credential leak" from
+// "did the sanctioned host legitimately differ" -- conflating those would
+// make the check meaningless.
 func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T) {
-	// wantClass distinguishes the TWO fixed messages this function can
-	// produce on a malformed/credentialed input: "parse" (clickhouse.ParseDSN
-	// itself failed) and "hostlist" (ParseDSN succeeded but net.SplitHostPort
-	// validation rejected an entry). Codex round 6 (EXECUTED) found that the
-	// prior version of this test excluded the ENTIRE "hostlist" class from
-	// its cross-case equality check -- so that whole code path could never
-	// fail this guard, no matter what leaked into it. Every class must have
-	// its own baseline and its own equality check, or the guard reports
-	// coverage over ground it does not actually cover.
 	cases := []struct {
 		name      string
 		raw       string
 		wantClass string
+		username  string // for leak-checking; the case's own credential.
+		password  string // for leak-checking; may itself be malformed input.
 	}{
 		{
 			// codex round 1-2's shape: unbalanced IPv6 bracket.
 			name:      "unbalanced_bracket",
-			raw:       "clickhouse://ci-user:ci-secret@[::1:9000/db",
+			raw:       "clickhouse://unbalbrk-user:unbalbrk-secret@[::1:9000/db",
 			wantClass: "parse",
+			username:  "unbalbrk-user",
+			password:  "unbalbrk-secret",
 		},
 		{
 			name:      "bad_port",
-			raw:       "clickhouse://ci-user:ci-secret@example.internal:notaport/db",
+			raw:       "clickhouse://badport-user:badport-secret@example.internal:notaport/db",
 			wantClass: "parse",
+			username:  "badport-user",
+			password:  "badport-secret",
 		},
 		{
 			name:      "empty_host",
-			raw:       "clickhouse://ci-user:ci-secret@/db",
+			raw:       "clickhouse://emptyhost-user:emptyhost-secret@/db",
 			wantClass: "parse",
+			username:  "emptyhost-user",
+			password:  "emptyhost-secret",
 		},
 		{
 			// codex round 4's shape: malformed percent-escape INSIDE the
 			// userinfo, the case most likely to echo a credential fragment.
 			name:      "bad_percent_escape_in_userinfo",
-			raw:       "clickhouse://ci-user:ci-sec%ZZret@example.internal:9000/db",
+			raw:       "clickhouse://pctesc-user:pctesc-sec%ZZret@example.internal:9000/db",
 			wantClass: "parse",
+			username:  "pctesc-user",
+			password:  "pctesc-sec%ZZret",
 		},
 		{
 			name:      "multi_host_malformed_with_query_param_credentials",
-			raw:       "clickhouse://host1:9000,[::1:9443/db?username=ci-user&password=ci-secret",
+			raw:       "clickhouse://host1:9000,[::1:9443/db?username=qpcred-user&password=qpcred-secret",
 			wantClass: "parse",
+			username:  "qpcred-user",
+			password:  "qpcred-secret",
 		},
 		{
 			// codex round 5 finding 1a (EXECUTED): a malformed ?http_proxy=
@@ -815,40 +823,66 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 			// wrapped *url.Error -- the exact shape no errors.As-based
 			// unwrap could reach.
 			name:      "malformed_http_proxy_query_value",
-			raw:       "clickhouse://ci-user:ci-secret@host:9000/db?http_proxy=http://proxy-user:proxy-secret@[",
+			raw:       "clickhouse://httpproxy-user:httpproxy-secret@host:9000/db?http_proxy=http://proxyA-user:proxyA-secret@[",
 			wantClass: "parse",
+			username:  "httpproxy-user",
+			password:  "httpproxy-secret",
 		},
 		{
 			// codex round 5 finding 1b (EXECUTED): a password of exactly
 			// "%ZZ" reaches url.Error's own .Err.Error() text directly (not
 			// through userinfo -- through the escape-diagnostic itself).
 			name:      "password_is_the_literal_bad_escape",
-			raw:       "clickhouse://ci-user:%ZZ@example.internal:9000/db",
+			raw:       "clickhouse://litesc-user:%ZZ@example.internal:9000/db",
 			wantClass: "parse",
+			username:  "litesc-user",
+			password:  "%ZZ",
 		},
 		{
 			// Round 5 finding 2's shape: ParseDSN succeeds (Host is "," --
 			// not empty -- so ParseDSN's own guard does not fire), and
 			// net.SplitHostPort rejects the resulting empty Addr entries.
 			name:      "empty_host_entry_in_multi_host_list",
-			raw:       "clickhouse://ci-user:ci-secret@,",
+			raw:       "clickhouse://hostlist1-user:hostlist1-secret@,",
 			wantClass: "hostlist",
+			username:  "hostlist1-user",
+			password:  "hostlist1-secret",
 		},
 		{
 			// Round 5 finding 3's shape: ParseDSN succeeds; SplitHostPort
 			// rejects the multi-colon entry.
 			name:      "multi_colon_host",
-			raw:       "clickhouse://ci-user:ci-secret@host:123:456/db",
+			raw:       "clickhouse://hostlist2-user:hostlist2-secret@host:123:456/db",
 			wantClass: "hostlist",
+			username:  "hostlist2-user",
+			password:  "hostlist2-secret",
 		},
 		{
-			// SECOND hostlist case with a DIFFERENT credential value, added
-			// specifically so the hostlist class has more than one member to
-			// cross-check for equality -- a class with only one member can
-			// never fail an equality check against itself.
-			name:      "empty_host_entry_different_credential",
-			raw:       "clickhouse://other-user:other-secret@,",
+			// THIRD hostlist member, distinct credentials again.
+			name:      "empty_host_no_port_at_all",
+			raw:       "clickhouse://hostlist3-user:hostlist3-secret@,",
 			wantClass: "hostlist",
+			username:  "hostlist3-user",
+			password:  "hostlist3-secret",
+		},
+		{
+			// Round 7 finding 3: the HTTP-scheme/port rejection branch,
+			// never covered by any class before this fix. SAME host:port
+			// as the next case (sanctioned content, held constant) so the
+			// equality check below isolates credential leakage from
+			// legitimately-varying host content.
+			name:      "http_scheme_credentialed_1",
+			raw:       "http://protoA-user:protoA-secret@example.internal:9000/default",
+			wantClass: "protocol",
+			username:  "protoA-user",
+			password:  "protoA-secret",
+		},
+		{
+			name:      "http_scheme_credentialed_2",
+			raw:       "http://protoB-user:protoB-secret@example.internal:9000/default2",
+			wantClass: "protocol",
+			username:  "protoB-user",
+			password:  "protoB-secret",
 		},
 	}
 
@@ -863,32 +897,41 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 				t.Fatalf("expected this malformed/credentialed DSN to FAIL: failed=%v skipped=%v msg=%q",
 					fake.failed, fake.skipped, fake.msg)
 			}
-			if strings.Contains(fake.msg, "ci-secret") || strings.Contains(fake.msg, "other-secret") {
+			if strings.Contains(fake.msg, tc.password) {
 				t.Fatalf("failure message leaked the PASSWORD: %q", fake.msg)
 			}
-			if strings.Contains(fake.msg, "ci-user:ci-secret") || strings.Contains(fake.msg, "other-user:other-secret") {
+			// Round 7 finding 2 (codex ARGUED, lane EXECUTED): the bare
+			// username must never leak either, not just the full password
+			// or the combined userinfo -- a per-case unique username is
+			// what makes this check able to fail at all.
+			if strings.Contains(fake.msg, tc.username) {
+				t.Fatalf("failure message leaked the USERNAME: %q", fake.msg)
+			}
+			if strings.Contains(fake.msg, tc.username+":"+tc.password) {
 				t.Fatalf("failure message leaked the USERINFO: %q", fake.msg)
 			}
-			if strings.Contains(fake.msg, "proxy-secret") || strings.Contains(fake.msg, "proxy-user:proxy-secret") {
+			if strings.Contains(fake.msg, "proxyA-secret") || strings.Contains(fake.msg, "proxyA-user:proxyA-secret") {
 				t.Fatalf("failure message leaked the PROXY credential: %q", fake.msg)
 			}
-			if strings.Contains(fake.msg, "username=ci-user") || strings.Contains(fake.msg, "password=ci-secret") {
+			if strings.Contains(fake.msg, "username="+tc.username) || strings.Contains(fake.msg, "password="+tc.password) {
 				t.Fatalf("failure message leaked the RAW QUERY STRING credentials: %q", fake.msg)
 			}
 			if strings.Contains(fake.msg, tc.raw) {
 				t.Fatalf("failure message embedded the entire raw DSN verbatim: %q", fake.msg)
 			}
-			if strings.Contains(fake.msg, "%ZZ") {
+			if tc.password != "%ZZ" && strings.Contains(fake.msg, "%ZZ") {
 				t.Fatalf("failure message echoed the malformed escape sequence: %q", fake.msg)
 			}
-			// The stronger property, now covering EVERY class: every case
-			// that fails for the SAME underlying reason (wantClass) produces
-			// the byte-for-byte SAME message, proving nothing about the
+			// The stronger property, now covering EVERY class INCLUDING
+			// "protocol" (round 7 finding 3): every case that fails for
+			// the SAME underlying reason (wantClass) produces the
+			// byte-for-byte SAME message, proving nothing about the
 			// specific input leaked through -- not even a fragment too
-			// narrow for the substring checks above to name. Unlike the
-			// prior version of this test, NO class is excluded: a leak
-			// introduced into the "hostlist" branch now fails this exact
-			// check, which codex round 6 proved it previously could not.
+			// narrow for the substring checks above to name. This is now
+			// a REAL check for "parse" and "protocol" too, not just
+			// "hostlist": every case in those classes uses a DIFFERENT
+			// credential (round 7 finding 2's fix), so equality can only
+			// hold if the message genuinely ignores the credential.
 			if want, ok := baselineByClass[tc.wantClass]; !ok {
 				baselineByClass[tc.wantClass] = fake.msg
 			} else if fake.msg != want {

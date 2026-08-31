@@ -43,18 +43,30 @@
 // -> the real gqlgen marshal call DIRECTLY, the same chain a routed
 // request would use once one exists.
 //
-// TWO SEPARATE, REAL MECHANISMS PROVEN HERE, NOT ONE:
-//  1. ClickHouse's own engine: AVG() over a Nullable(Float64) group whose
-//     rows are ALL NULL returns NaN, not NULL and not 0. This is the
-//     class validate.go:184-201 enumerates as category 2 ("AT RISK"),
-//     verified live rather than read off a doc comment.
+// TWO SEPARATE, REAL MECHANISMS PROVEN HERE, NOT ONE -- UPDATED BY
+// CHAOS-4643/CHAOS-4650: the FIRST live run of this file (CHAOS-4643 was
+// what made a live run possible at all) falsified mechanism 1 below as
+// originally written. It is left here, corrected, as the record of what
+// was assumed and what running it actually found -- see
+// TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN for the
+// current, executed mechanism and CHAOS-4650 (Urgent) for the resulting
+// defect, which this file does not fix:
+//  1. CORRECTED: ClickHouse's own engine (26.7.5.10, matching prod's
+//     engine major version) does NOT return NaN for AVG() over a
+//     Nullable(Float64) group whose rows are ALL NULL -- it returns SQL
+//     NULL, which dev-health-go's client then silently scans into a
+//     non-pointer float64 as 0.0. The class validate.go:184-201 still
+//     enumerates as category 2 ("AT RISK") is real, but the actual risk
+//     is a silent 0.0, not a marshal error -- tracked as CHAOS-4650.
 //  2. gqlgen's own library: graphql.MarshalFloatContext (the exact
 //     function generated.go:91369/94794 call for every non-nullable
 //     Float! field, BreakdownItem.value included --
 //     contracts/graphql/v1/schema.graphql:386) refuses to write a NaN,
 //     returning "cannot marshal infinite no NaN float values"
 //     (gqlgen's float.go:38-45, a stock library check, nothing this
-//     port added).
+//     port added) -- true, but per (1) above, this mechanism never fires
+//     for the all-NULL coverage shape on this engine, because the value
+//     it would refuse never arrives as NaN in the first place.
 //
 // WHY A SYNTHETIC SUBQUERY, NOT AN INSERT INTO THE REAL TABLE: the
 // QueryClient this package uses (clickhouse.Client.Query, dev-health-go
@@ -256,29 +268,54 @@ func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) 
 	}
 }
 
-// TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal is THE
-// divergence this file exists to document: a group that HAS rows (the
-// pipeline ran) where line_coverage_pct is NULL in every one of them.
-// AVG() over an all-NULL Nullable(Float64) group is the UNCHARACTERISED
-// shape BRIEF's NaN UPDATE explicitly left open (distinct from the
-// CLEARED zero-source-row shape). Splits into two assertions matching
-// the two mechanisms in the file-level doc comment: the raw ClickHouse
-// value IS NaN (not 0.0, not some driver default -- a wrong fallback
-// here would prove nothing), and the SAME gqlgen call the real response
-// path would use on it refuses to write it.
+// nanClassRawAllNullExpr returns the REAL dbExpression() output
+// (unwrapped -- no toFloat64 cast) over the SAME all-NULL synthetic group
+// nanClassQuerySQL(t, true) uses, so TestNaNClass_AllNullGroup below can
+// observe what ClickHouse's own Nullable(Float64) result column carries
+// BEFORE any Go-side cast or scan touches it.
+func nanClassRawAllNullExpr(t *testing.T) string {
+	t.Helper()
+	measureExpr, err := dbExpression(MeasureCoverageLinePct, false, false)
+	if err != nil {
+		t.Fatalf("dbExpression(MeasureCoverageLinePct): %v", err)
+	}
+	rows := "SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct " +
+		"UNION ALL SELECT CAST(NULL AS Nullable(Float64)) AS line_coverage_pct"
+	return fmt.Sprintf(
+		"SELECT %s AS value FROM (%s) AS testops_coverage_metrics_daily",
+		measureExpr, rows,
+	)
+}
+
+// TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN pins a
+// MECHANISM, not the outcome CHAOS-4506/4534's design assumed. This file's
+// original claim -- "AVG() over an all-NULL Nullable(Float64) group
+// returns NaN, not NULL and not 0" -- was written but never executed
+// (this file's own STATUS header said so) until CHAOS-4643 made a live
+// run possible. Running it for the first time, against ClickHouse
+// 26.7.5.10 (matching prod's engine major version), FALSIFIED that claim:
 //
-// IMPORTANT SCOPE NOTE, not to be over-read: this does NOT exercise
-// ExecuteBreakdown's own error return. ExecuteBreakdown would return NO
-// error for this value -- the ClickHouse query itself succeeds and scans
-// a legitimate (if NaN) float64; resolve.go's swallow-to-empty-on-execute-error
-// path (the one flow-matrix test 2's docstring warns can silently
-// masquerade as "the fix took effect") never fires here, because there
-// is no execute error to swallow. The marshal failure this test proves
-// happens at a SEPARATE, LATER step -- when gqlgen serializes the
-// already-successful BreakdownResult into the HTTP response -- which is
-// exactly why this test calls graphql.MarshalFloatContext directly
-// rather than asserting on ExecuteBreakdown's return.
-func TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal(t *testing.T) {
+//  1. ClickHouse's own avg() over an all-NULL Nullable(Float64) group
+//     returns SQL NULL, not NaN -- verified below by scanning the RAW
+//     (unwrapped) dbExpression() output into a *float64, where a true SQL
+//     NULL surfaces as nil.
+//  2. dev-health-go's Client.Query then scans that SQL NULL into a
+//     non-pointer float64 -- the exact shape ExecuteBreakdown's real call
+//     site uses -- as the Go zero value, 0.0, silently, with no error.
+//
+// CHAOS-4650 (Urgent) TRACKS THIS AS A DEFECT, NOT THE INTENDED CONTRACT:
+// an all-NULL coverage group ("no data" -- the pipeline ran, nothing was
+// measured) reaches the wire today as a plain, indistinguishable 0.0
+// ("real zero coverage"), silently -- worse than the NaN-marshal-error
+// CHAOS-4506/4534 was built to catch, because NaN at least announces
+// itself by breaking serialization. This test does not fix that; it pins
+// today's mechanism so that if the engine starts returning NaN, or the
+// client starts erroring on a NULL-into-non-pointer scan, THIS test fails
+// and forces a re-read of this decision -- rather than the divergence
+// staying silent a second time. Do not read a passing run as "the
+// behavior is fine"; read it as "the mechanism is still what CHAOS-4650
+// describes".
+func TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN(t *testing.T) {
 	dsn := nanClassClickHouseURI(t)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
@@ -286,38 +323,61 @@ func TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal(t *testing.T) 
 	}
 	ctx := context.Background()
 
-	value := nanClassRunScalarQuery(t, ctx, client, nanClassQuerySQL(t, true))
-
-	if !math.IsNaN(value) {
-		t.Fatalf("expected AVG(line_coverage_pct) over an all-NULL group to be NaN "+
-			"(ClickHouse's avg() over Nullable(Float64) with every value NULL), got %v -- "+
-			"if this is 0.0, a coercion swallowed the NaN before it reached this scan; "+
-			"if this is a ClickHouse NULL surfacing some other way, this AT-RISK "+
-			"classification needs re-checking against the live engine, not assuming "+
-			"the divergence is safely absent", value)
+	// Mechanism half 1: the engine's own result IS a SQL NULL, not NaN.
+	rawSQL := nanClassRawAllNullExpr(t)
+	rawRows, err := client.Query(ctx, rawSQL, nil)
+	if err != nil {
+		t.Fatalf("query failed (statement guard rejection or live ClickHouse error): %v\nsql=%s", err, rawSQL)
+	}
+	defer rawRows.Close()
+	if !rawRows.Next() {
+		t.Fatalf("expected exactly one result row, got zero.\nsql=%s", rawSQL)
+	}
+	var rawValue *float64
+	if err := rawRows.Scan(&rawValue); err != nil {
+		t.Fatalf("scan into *float64: %v", err)
+	}
+	if rawRows.Next() {
+		t.Fatalf("expected exactly one result row, got more than one.\nsql=%s", rawSQL)
+	}
+	if err := rawRows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+	if rawValue != nil {
+		t.Fatalf("expected the raw dbExpression() AVG() over an all-NULL group to be SQL NULL "+
+			"(scanned as nil via *float64), got %v -- if ClickHouse now returns NaN here instead, "+
+			"CHAOS-4650 may be resolved upstream, but do not just update this assertion: re-derive "+
+			"the disposition on CHAOS-4650 first, since the 0.0-coercion mechanism below would also "+
+			"need re-checking", *rawValue)
 	}
 
+	// Mechanism half 2: the SAME query, scanned into the non-pointer
+	// float64 shape ExecuteBreakdown's real call site uses (via
+	// nanClassRunScalarQuery / nanClassQuerySQL's toFloat64 wrap), becomes
+	// the Go zero value, silently.
+	scannedValue := nanClassRunScalarQuery(t, ctx, client, nanClassQuerySQL(t, true))
+	if math.IsNaN(scannedValue) {
+		t.Fatalf("got NaN from the non-pointer scan -- that was the ORIGINAL (falsified) claim; if the " +
+			"engine now genuinely returns NaN, the rawValue assertion above should have failed FIRST -- " +
+			"investigate that mismatch before treating this half alone as stale")
+	}
+	if scannedValue != 0 {
+		t.Fatalf("expected the SQL-NULL-into-non-pointer-float64 scan to silently coerce to the Go "+
+			"zero value 0, got %v -- the coercion mechanism CHAOS-4650 pins may have changed; "+
+			"re-derive CHAOS-4650's disposition before updating this assertion", scannedValue)
+	}
+
+	// The SILENT half of CHAOS-4650, executed: this 0.0 marshals CLEANLY,
+	// no error -- unlike the NaN case CHAOS-4506/4534 catches, nothing
+	// here announces that "no data" just became a plausible zero on the
+	// wire.
 	var buf bytes.Buffer
-	marshalErr := graphql.MarshalFloatContext(value).MarshalGQLContext(ctx, &buf)
-	if marshalErr == nil {
-		t.Fatalf("expected gqlgen's MarshalFloatContext to refuse a NaN value (its own float.go:38-45 "+
-			"check), got a clean write of %q instead -- either gqlgen's behavior changed underneath "+
-			"this pinned dependency version, or this value was not actually NaN by the time it reached "+
-			"the marshaler", buf.String())
+	if err := graphql.MarshalFloatContext(scannedValue).MarshalGQLContext(ctx, &buf); err != nil {
+		t.Fatalf("expected the coerced 0.0 to marshal cleanly -- that IS the silent half of CHAOS-4650, "+
+			"nothing is supposed to error here today -- got an unexpected marshal error instead: %v", err)
 	}
-	// VENDOR STRING, NOT OURS: this exact text is github.com/99designs/gqlgen's
-	// own error (float.go:38-45), pinned at go.mod's current v0.17.66. Same
-	// rot shape the clientcontract_test.go fake's dev-health-go pin already
-	// flags: it documents today's behaviour precisely and will need
-	// revisiting -- an update to the message text, not the mechanism -- on a
-	// future gqlgen bump. Coordinator ruling 2026-08-29: any assertion on
-	// text this package does not own is a scheduled maintenance event: fine
-	// when noted here, expensive when discovered as a mystifying failure in
-	// an unrelated version-bump PR.
-	if got := marshalErr.Error(); got != "cannot marshal infinite no NaN float values" {
-		t.Fatalf("expected gqlgen's exact stock error text, got %q -- if gqlgen's wording changed, "+
-			"that's fine to update here, but confirm it's still the SAME NaN/Inf guard and not a "+
-			"different failure standing in for it", got)
+	if got := strings.TrimSpace(buf.String()); got != "0" {
+		t.Fatalf("expected the marshaled body to be the literal number 0, got %q", got)
 	}
 }
 

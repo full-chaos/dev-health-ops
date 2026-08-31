@@ -106,6 +106,10 @@ concurrency:
   # through to `github.ref_name` (the pushed branch name) there — the same
   # branch produces the same group key from either trigger.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # Live-proof commit for the push-then-PR-open/reopen ordering (round 6,
+  # CHAOS-4676): pushed while PR #2050 was closed, then the PR was reopened
+  # at this exact SHA with no further push, to prove the shared group
+  # cancels the earlier `push` run natively when `pull_request` arrives.
   # PR/branch runs cancel their predecessor, in EITHER direction now, so a
   # fast-follow push (or a PR opening moments after a no-PR push) never
   # leaves two authoritative runs live on one SHA — whichever run GitHub

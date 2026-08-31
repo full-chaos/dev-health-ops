@@ -831,3 +831,70 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','STALE','Stale Project','
 		t.Fatal("STALE was disabled, want it left untouched (unbounded config, absence is not disable-worthy)")
 	}
 }
+
+// TestJiraDiscoveryRebalanceFailureRollsBackTheWholeUpsertAtomically is the
+// GREEN counterpart to the codex round-1 P1 finding this session's
+// TestRedRebalanceFailureLeavesOrgOverLimit proved on the pre-fix commit
+// (5fc9c8c48): upsertJiraSources and rebalanceJiraSourceRepoLimit used to
+// commit in two SEPARATE transactions, so a rebalance failure after a
+// successful over-limit upsert left the org over max_repos with no
+// automatic retry. They now share ONE transaction (mirroring Discover's own
+// jira branch exactly): a rebalance failure must roll back the upsert too,
+// leaving NOTHING durable -- not "upsert kept, cap skipped".
+func TestJiraDiscoveryRebalanceFailureRollsBackTheWholeUpsertAtomically(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx := context.Background()
+	orgID := fixture.occurrence.OrgID
+	// org tier 'community' (startSourceDiscoveryPostgres's own seed) -> max_repos=3.
+
+	discovered := []discoveredSource{
+		{ExternalID: "AAA", SourceType: "project", Name: "AAA", FullName: "AAA", Metadata: map[string]any{}},
+		{ExternalID: "BBB", SourceType: "project", Name: "BBB", FullName: "BBB", Metadata: map[string]any{}},
+		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: map[string]any{}},
+		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: map[string]any{}},
+	}
+
+	// Mirrors Discover()'s own jira branch exactly: ONE transaction shared
+	// by both steps.
+	tx, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _, createdLower, discoveredLower, _, err := service.upsertJiraSources(ctx, tx, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if created != 4 {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("upsertJiraSources() created = %d, want 4", created)
+	}
+
+	// Force the rebalance step to fail: an already-canceled context makes
+	// its own tx.QueryRow fail immediately and deterministically -- standing
+	// in for any real transient failure between what used to be two
+	// separately-committed transactions.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rebalanceErr := service.rebalanceJiraSourceRepoLimit(canceledCtx, tx, orgID, integrationID, createdLower, discoveredLower)
+	if rebalanceErr == nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("test setup bug: expected rebalanceJiraSourceRepoLimit to fail with a canceled context")
+	}
+	t.Logf("rebalanceJiraSourceRepoLimit() error = %v", rebalanceErr)
+
+	// Exactly what Discover()'s defer does on a non-nil err: roll back
+	// instead of committing.
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var total int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, orgID, integrationID).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 0 {
+		t.Fatalf("GREEN did not hold: %d rows persisted after rollback, want 0 -- a rebalance failure must roll back the upsert atomically, not leave it committed uncapped", total)
+	}
+}

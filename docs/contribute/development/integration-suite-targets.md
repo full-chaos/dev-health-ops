@@ -111,18 +111,18 @@ semantics that a version change can move.
 | `internal/providersync` | 1166s | CH+PG | **kiac** | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. |
 | `internal/scheduler/fixed` | 143s | PG | kiac | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | CH | **kiac** | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
-| `internal/storage/postgres` | 91s | PG | kiac | yes | Asserts grant posture; a scratch DB gives a clean role surface. |
+| `internal/storage/postgres` | 91s | PG | **host** (roles) | yes | Creates roles without dropping them first, so a shared cluster fails on re-run. Otherwise pure PostgreSQL. |
 | `internal/testsupport/computeparity` | 50s | CH | **kiac** | **no** | Mixed: `dora_table_parity` is neutral, `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Package-level routing makes the whole package sensitive. |
 | `internal/jobs/report` | 33s | CH+PG | **kiac** | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | PG | kiac | yes | Pure PostgreSQL. |
 | `cmd/dev-health-worker` | 24s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
-| `internal/syncreconciler` | 16s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/syncreconciler` | 16s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/externalrecompute` | 15s | PG+VK | **host** (Valkey) | yes | PostgreSQL from kiac; only Valkey is local. |
-| `internal/joboperator` | 13s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/joboperator` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/synccoverage` | 13s | PG | kiac | yes | Pure PostgreSQL. |
-| `cmd/dev-health-workerctl` | 13s | PG | kiac | yes | Pure PostgreSQL. |
+| `cmd/dev-health-workerctl` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/testsupport/containers` | 13s | CH+PG+VK | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
-| `internal/joboutbox` | 12s | PG | kiac | yes | Pure PostgreSQL. |
+| `internal/joboutbox` | 12s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
 | `internal/jobs/system` | 12s | PG | kiac | yes | Pure PostgreSQL. |
 | `internal/providerfoundation` | 12s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `cmd/dev-health-reconciler` | 10s | PG | kiac | yes | Pure PostgreSQL. |
@@ -130,7 +130,7 @@ semantics that a version change can move.
 | `internal/jobs/pagerduty` | 9s | PG | kiac | yes | Pure PostgreSQL. |
 | `internal/jobs/workgraph` | 7s | PG | kiac | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | PG | kiac | yes | **Demonstrated** — see below. |
-| `internal/jobs/metrics/daily` | 6s | CH+PG | **kiac** | **no** | Sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
+| `internal/jobs/metrics/daily` | 6s | CH+PG | **host** (roles) | **no** | Creates roles without dropping them first -- this is the package the failure was found on. Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
 | `internal/jobs/metrics/remaining` | 6s | CH+PG | **kiac** | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
 | `internal/syncdispatchruntime` | 6s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. |
 | `internal/jobrescue` | 5s | PG | kiac | yes | Pure PostgreSQL. |
@@ -154,19 +154,56 @@ and `cmd/dev-health-worker/multi_family_boot` (may transitively hit the
 ordering guard but asserts nothing about it). Both sit inside packages already
 routed to kiac, so the uncertainty changes no routing decision today.
 
+### The second blocker: PostgreSQL roles are cluster-scoped
+
+A scratch **database** isolates tables. It does **not** isolate roles, tablespaces
+or event triggers — those live in the cluster, which is shared.
+
+19 test files across 10 packages run `CREATE ROLE`, and **17 of them do not drop
+the role first**; they rely on the container being a brand-new cluster. Point
+one of those at a shared server and the first run passes, leaves the role
+behind, and the second run fails:
+
+```
+ERROR: role "finalize_redrive_test_domain" already exists (SQLSTATE 42710)
+```
+
+Found by running `internal/jobs/metrics/daily` twice against kiac. It is a
+re-runnability failure, not a correctness one, and it is invisible on the first
+run — which is exactly what makes it worth writing down.
+
+Two packages (`internal/providersync`, `internal/storage/river`) already
+`DROP ROLE` before creating, so they are safe to re-run. Even those are not
+*concurrency* safe: two lanes on one cluster would race on the same fixed role
+name.
+
+**Until role names are parameterised per run, the affected packages keep a local
+container.** That is a per-test change, not a harness change — the harness
+cannot rename a role the test hard-codes, and having it drop unknown roles on a
+shared server would be far more dangerous than the problem it solves.
+
 ### What that adds up to
 
 31 packages, **1852s (30.9 min)** of declared integration weight.
 
 | Class | Weight | Share |
 | --- | --- | --- |
-| Movable to kiac (no Valkey) | 1778s | **96.0%** |
-| Must keep a Docker container (Valkey-touching) | 74s | 4.0% |
+| Movable to kiac today | 1627s | **87.8%** |
+| Blocked by Valkey | 74s | 4.0% |
+| Blocked by unparameterised roles | 151s | 8.2% |
 
-Even the 4% only keeps a *Valkey* container: those packages take their
-PostgreSQL and ClickHouse from kiac like everything else. Valkey's container is
-the cheapest of the three, so the residual Docker load is far below 4% of the
-current cost.
+The role blocker is the removable one: parameterising those role names would
+take the movable share to **96.0%**. The Valkey remainder keeps only a *Valkey*
+container — those packages still take PostgreSQL and ClickHouse from kiac, and
+Valkey's container is the cheapest of the three.
+
+### Orphans after a hard failure
+
+A passing run leaks nothing — verified by diffing the full database listings
+before and after. A run that fails hard can leave its scratch database behind,
+which is what the per-lane prefix and the create/drop log exist for. A failed
+`DROP` additionally logs `ORPHANED`, because callers routinely discard
+`Instance.Close`'s error and would otherwise never see it.
 
 ## Why Valkey stays on Testcontainers
 
@@ -210,6 +247,12 @@ export DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN="clickhouse://${ACR_TEST_TRIAL_CH_USE
 # be swept without matching a concurrent lane's live ones.
 export DEV_HEALTH_TEST_SCRATCH_PREFIX=lane_<ticket>
 
+# ClickHouse suites that apply the real migration chain shell out to python3
+# (internal/testsupport/chschema). The ambient interpreter is not enough --
+# without the repo venv on PATH they fail with ModuleNotFoundError:
+# typing_extensions, which reads as a ClickHouse problem and is not one.
+export PATH="<repo>/.venv/bin:$PATH"
+
 go test -tags=integration ./internal/jobroute/ -count=1
 ```
 
@@ -245,9 +288,13 @@ count was **22 before and 22 after every run**.
 
 | Suite | Language | Stores | Result |
 | --- | --- | --- | --- |
-| `internal/jobroute` | Go | PostgreSQL | **PASS**, 0.979s |
-| `internal/jobs/metrics/daily` | Go | PostgreSQL + ClickHouse | **PASS**, 5.002s |
+| `internal/jobroute` | Go | PostgreSQL | **PASS** — run twice, 0.85s / 0.94s |
+| `internal/jobs/report` | Go | PostgreSQL + ClickHouse | **PASS** — run twice, 1.04s / 1.10s |
 | `tests/test_dispatch_outbox.py` (the two `test_real_postgres_*` cases) | Python | PostgreSQL | **PASS**, 6.68s |
+
+Each Go suite was run **twice** deliberately. A single green run against a
+shared server proves less than it looks: the role collision described above
+passes on the first run and only fails on the second.
 
 The Python pair is the CHAOS-4457 sub-item (b) result: both are recorded there
 as failing against a seeded lane database, and both pass against a scratch one

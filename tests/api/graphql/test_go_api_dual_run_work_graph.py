@@ -75,6 +75,10 @@ from typing import Any, cast
 
 import pytest
 import sqlalchemy as sa
+
+# Plain module import, not `from . import ...` -- this directory has no
+# __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
+from _tie_boundary_seeding import tied_row_count_for_limit
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -1012,6 +1016,131 @@ async def test_dual_run_edges_dedup_is_expected_divergence(
         selected_operation="workGraphEdges",
         terminal_state=go_api_comparator.TERMINAL_STATE_MISMATCH,
         org_id=org_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dual_run_edges_tied_confidence_at_limit_boundary_matches(
+    query_api_binary, registry_postgres, jwks_path
+):
+    """CHAOS-4513: workGraphEdges' `ORDER BY confidence DESC, edge_id ASC`
+    (CHAOS-2442/CHAOS-4493) has a total-order tie-break -- `edge_id` is the
+    table's own ReplacingMergeTree dedup key, unique per logical edge. But
+    neither the clean-data test above (4 edges, well under any LIMIT) nor
+    the dedup-divergence test (a single logical edge) ever seeds enough
+    DISTINCT edges tied on `confidence` to exceed `limit` and actually
+    exercise the truncation boundary -- so the tie-break was never proven
+    to matter. This test is that proof: `tied_count` distinct edges (each
+    its own unique `edge_id` -- deliberately NOT the CHAOS-4515
+    version-conflict shape, which is out of scope here and already has its
+    own dedicated test above), all sharing `confidence=0.5`, seeded via
+    SEPARATE `write_work_graph_edges` calls (CHAOS-4513's shared
+    `_tie_boundary_seeding` standard).
+    """
+    assert CLICKHOUSE_URI is not None
+    _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
+    sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
+    sink.ensure_schema(force=True)
+
+    org_id = f"chaos-4513-edges-tie-boundary-{uuid.uuid4()}"
+    ts = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
+    limit = 10
+    tied_count = tied_row_count_for_limit(limit)
+
+    records = [
+        _edge_record(
+            edge_id=f"tie-edge-{i:03d}",
+            source_type="issue",
+            source_id=f"ISSUE-{i:03d}",
+            target_type="pr",
+            target_id=f"PR-{i:03d}",
+            edge_type="references",
+            confidence=0.5,
+            evidence=f"e{i:03d}",
+            org_id=org_id,
+            last_synced=ts,
+        )
+        for i in range(tied_count)
+    ]
+
+    token, jwks, issuer, audience = _mint_envelope(org_id)
+    jwks_file = jwks_path / "jwks-edges-tie-boundary.json"
+    jwks_file.write_text(json.dumps(jwks))
+
+    edges_digest = _document_digest(WORK_GRAPH_EDGES_DOCUMENT)
+    await _seed_candidate_and_enable_canary(
+        registry_postgres["async"], edges_digest, "workGraphEdges"
+    )
+
+    server = _start_go_server(
+        query_api_binary,
+        CLICKHOUSE_URI,
+        registry_postgres["go"],
+        str(jwks_file),
+        issuer,
+        audience,
+    )
+    try:
+        # One write_work_graph_edges call PER record -- `tied_count`
+        # separate INSERTs, never one batched call (CHAOS-4513: a single
+        # INSERT typically collapses to one part, which reads back stably
+        # with or without a tie-break and proves nothing).
+        for record in records:
+            sink.write_work_graph_edges([record])
+
+        ctx = GraphQLContext(org_id=org_id, db_url=CLICKHOUSE_URI, client=sink.client)
+        python_edges = await resolve_work_graph_edges(
+            ctx, WorkGraphEdgeFilterInput(limit=limit)
+        )
+        go_edges = _post_graphql(
+            server.base_url,
+            token,
+            WORK_GRAPH_EDGES_DOCUMENT,
+            {"orgId": org_id, "filters": {"limit": limit}},
+        )
+    finally:
+        server.stop()
+        sink.client.command(
+            "ALTER TABLE work_graph_edges DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
+        sink.close()
+
+    assert "errors" not in go_edges, f"Go workGraphEdges carried errors: {go_edges}"
+    assert len(python_edges.edges) == limit, (
+        f"expected exactly {limit} of {tied_count} tied rows to survive the "
+        f"LIMIT boundary, got {len(python_edges.edges)}"
+    )
+
+    # Every edge shares confidence=0.5, so the deterministic tie-break
+    # (edge_id ASC) alone decides the survivors: the lexicographically
+    # smallest `limit` edge_ids. Assert Python matches THAT expected set,
+    # independent of Go, before ever comparing the two planes to each
+    # other -- two planes agreeing on the WRONG set is not evidence.
+    expected_edge_ids = sorted(r.edge_id for r in records)[:limit]
+    actual_edge_ids = sorted(e.edge_id for e in python_edges.edges)
+    assert actual_edge_ids == expected_edge_ids, (
+        f"Python's surviving tied-row set was not the deterministic "
+        f"lexicographically-smallest {limit} of {tied_count} -- "
+        f"CHAOS-2442/4493 regression: got {actual_edge_ids}, "
+        f"expected {expected_edge_ids}"
+    )
+
+    comparison = go_api_comparator.compare_responses(
+        _edges_python_snapshot(python_edges), _edges_go_snapshot(go_edges)
+    )
+    await _record_dual_run_proof(
+        registry_postgres["async"],
+        document_digest=edges_digest,
+        selected_operation="workGraphEdges",
+        terminal_state=comparison.terminal_state,
+        org_id=org_id,
+    )
+    assert comparison.is_match, (
+        f"workGraphEdges tie-boundary dual-run MISMATCH: "
+        f"terminal_state={comparison.terminal_state} findings={comparison.findings}\n"
+        f"python={_edges_python_snapshot(python_edges)}\ngo={_edges_go_snapshot(go_edges)}"
     )
 
 

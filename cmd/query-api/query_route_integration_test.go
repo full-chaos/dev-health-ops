@@ -1324,6 +1324,59 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 			t.Fatalf("got %d rows, want %d", n, byteBudgetRowCount)
 		}
 	})
+
+	// tip_config_sends_unrestricted_max_bytes_to_read closes a gap the two
+	// subtests above do NOT cover: they can only tell "rejected" from
+	// "accepted" at ~88 MiB, so they cannot distinguish an explicit
+	// pointer-to-zero (unlimited) from any other value comfortably above
+	// 88 MiB -- including a value a future edit reintroduces by mistake.
+	// This subtest instead reads back the LITERAL value that reached the
+	// driver, through the real production wiring
+	// (newQueryRouteClickHouseClient), by querying ClickHouse's own
+	// system.settings -- the same session the client just opened.
+	//
+	// This is the subtest that catches CHAOS-4651's trap: query_route.go
+	// carried a comment instructing a future reader to "delete this field
+	// entirely" once dev-health-go v0.6.1 shipped. That instruction is
+	// wrong under v0.6.1's actual semantics (clickhouse/options.go,
+	// resolveCeilingUint64): a nil *uint64 means "unset, use
+	// DefaultMaxBytesToRead" (64 MiB, "67108864" -- the original
+	// CHAOS-4647 defect), not unlimited. Only an explicit non-nil pointer
+	// to 0 sends ClickHouse's own "unrestricted" value, "0". Deleting the
+	// field compiles cleanly (the struct field is simply omitted, zero
+	// pointer value nil) -- the two byte-volume subtests above WOULD also
+	// catch that specific regression, because their ~88 MiB payload
+	// exceeds the 64 MiB default, but only as an accident of that payload
+	// size; a smaller probe, or a future edit to it, could stop catching
+	// it. This subtest catches the regression directly and unambiguously,
+	// independent of any payload-size coincidence.
+	t.Run("tip_config_sends_unrestricted_max_bytes_to_read", func(t *testing.T) {
+		client, err := newQueryRouteClickHouseClient(ch.URI)
+		if err != nil {
+			t.Fatalf("construct ClickHouse client via newQueryRouteClickHouseClient: %v", err)
+		}
+		defer func() { _ = client.Close() }()
+
+		rows, err := client.Query(ctx, "SELECT value FROM system.settings WHERE name = 'max_bytes_to_read'", nil)
+		if err != nil {
+			t.Fatalf("query system.settings for max_bytes_to_read: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		if !rows.Next() {
+			t.Fatalf("system.settings returned no row for max_bytes_to_read")
+		}
+		var value string
+		if scanErr := rows.Scan(&value); scanErr != nil {
+			t.Fatalf("scan max_bytes_to_read: %v", scanErr)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate max_bytes_to_read: %v", err)
+		}
+		if value != "0" {
+			t.Fatalf("max_bytes_to_read reached the driver as %q, want \"0\" (ClickHouse's own \"unrestricted\"); production wiring is not sending an explicit pointer-to-zero", value)
+		}
+	})
 }
 
 // seedByteBudgetProbeTable creates a REAL MergeTree table with rowCount

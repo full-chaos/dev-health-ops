@@ -435,7 +435,44 @@ func currentIncidentTitle(
 var (
 	migratedStores     = map[OperationalOrderingContract]driver.Conn{}
 	migratedStoresLock sync.Mutex
+	// migratedInstances holds the dependency behind each cached conn so it can
+	// be released when the package finishes.
+	//
+	// The conn is cached for the whole package on purpose -- the migration
+	// chain is expensive -- so it must outlive any single test and t.Cleanup
+	// is the wrong hook: it would drop the store while other tests are still
+	// reading through the cached conn. TestMain is the only scope that
+	// matches the cache's lifetime.
+	//
+	// This mattered only once the harness gained a remote-DSN path. Against a
+	// container, discarding the Instance was harmless: the daemon reaps the
+	// container when the run ends. Against a shared server the Instance holds
+	// the ONLY closure that drops the scratch database, so discarding it
+	// leaks a database per contract on every run -- silently, and on passing
+	// runs.
+	migratedInstances []*containers.Instance
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	closeMigratedStores()
+	os.Exit(code)
+}
+
+func closeMigratedStores() {
+	migratedStoresLock.Lock()
+	defer migratedStoresLock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, instance := range migratedInstances {
+		if err := instance.Close(ctx); err != nil {
+			// Cannot fail the run from here -- m.Run has already returned --
+			// so make the orphan findable by name instead of silent.
+			fmt.Fprintf(os.Stderr, "close migrated ClickHouse store: %v\n", err)
+		}
+	}
+	migratedInstances = nil
+}
 
 func migratedClickHouse(
 	t *testing.T, ctx context.Context, contract OperationalOrderingContract,
@@ -489,6 +526,7 @@ func migratedClickHouse(
 	}
 
 	migratedStores[contract] = conn
+	migratedInstances = append(migratedInstances, instance)
 	return conn
 }
 

@@ -141,7 +141,7 @@ semantics that a version change can move.
 | `internal/streamrunner` | 2s | VK | **host** | yes | Valkey only. |
 
 **Nine packages carry engine-sensitive ClickHouse SQL and cannot be proven by
-CI at all** — 1402s, 76% of the total integration weight. Three of them
+CI at all** — 1416s, 76.5% of the total integration weight. Three of them
 (`computeparity`, `jobs/report`, `jobs/metrics/remaining`) are sensitive only
 in *some* files; splitting those files into their own packages would let the
 neutral remainder defer to CI, which is a worthwhile follow-up but is not done
@@ -189,20 +189,44 @@ shared server would be far more dangerous than the problem it solves.
 | Class | Weight | Share |
 | --- | --- | --- |
 | Movable to kiac today | 1627s | **87.8%** |
-| Blocked by Valkey | 74s | 4.0% |
 | Blocked by unparameterised roles | 151s | 8.2% |
+| Blocked by Valkey | 61s | 3.3% |
+| The harness's own self-test | 13s | 0.7% |
 
 The role blocker is the removable one: parameterising those role names would
-take the movable share to **96.0%**. The Valkey remainder keeps only a *Valkey*
-container — those packages still take PostgreSQL and ClickHouse from kiac, and
-Valkey's container is the cheapest of the three.
+take the movable share to **96.0%**.
 
-### Orphans after a hard failure
+The other two are not blockers and will not shrink. The Valkey packages keep
+only a *Valkey* container — they still take PostgreSQL and ClickHouse from kiac,
+and Valkey's container is the cheapest of the three. `internal/testsupport/containers`
+is separated out deliberately rather than folded in with them: it is the
+harness's own self-test and must keep exercising the container path, because
+that path is the thing under test.
 
-A passing run leaks nothing — verified by diffing the full database listings
-before and after. A run that fails hard can leave its scratch database behind,
-which is what the per-lane prefix and the create/drop log exist for. A failed
-`DROP` additionally logs `ORPHANED`, because callers routinely discard
+### Before moving a suite: check it actually closes its Instance
+
+**This is the precondition that is easiest to miss, because the container path
+hid it.** Discarding an `Instance` and keeping only a connection was harmless
+against a container — the daemon reaps the container when the run ends. Against
+a shared server the `Instance` holds the *only* closure that drops the scratch
+database, so a suite that discards it leaks a database on **every run,
+including passing ones**.
+
+`internal/jobs/metrics/remaining` did exactly this: its `migratedClickHouse`
+helper cached the `driver.Conn` package-wide and dropped the `Instance` on the
+floor. It now keeps the instances and releases them from `TestMain`, which is
+the only scope matching the cache's lifetime — `t.Cleanup` would drop the store
+while other tests still read through the cached conn.
+
+So before routing a suite here, confirm every `StartPostgres` / `StartClickHouse`
+result is eventually `Close`d. A suite that caches across tests needs a
+`TestMain`, not a `t.Cleanup`.
+
+### Orphans
+
+A run that fails hard can also leave its scratch database behind, which is what
+the per-lane prefix and the create/drop log exist for. A failed `DROP`
+additionally logs `ORPHANED`, because callers routinely discard
 `Instance.Close`'s error and would otherwise never see it.
 
 ## Why Valkey stays on Testcontainers

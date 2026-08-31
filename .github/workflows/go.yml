@@ -158,6 +158,23 @@ jobs:
   # real (33418461163); once the PR existed, this second push's `push` run
   # is superseded (guard skip=true) while its `pull_request` run is the sole
   # authoritative one — see the PR body / merge note for the cited run ids.
+  #
+  # TOCTOU (codex round 3, CHAOS-4676): the above only covers a push that
+  # arrives AFTER a PR is already open. The reverse order is also live and
+  # was proved on this PR's own FIRST commit: push commit C while the
+  # branch has no open PR → guard correctly runs for real (skip=false, its
+  # only coverage) → `gh pr create` opens the PR at that same C with NO new
+  # push → the `pull_request` guard's non-push fast path unconditionally
+  # returned skip=false, so a second real run started on the identical SHA
+  # (push run 33418461163 + pull_request run 33418491525, both real, both
+  # on 397cc5ab1325b323c9a0b44da5f47abf9defc955). The fix mirrors the
+  # push-side cancellation from the other direction: a `pull_request` run
+  # always proceeds (it is the authoritative event per this design), but
+  # first cancels any still-active `push`-triggered run it finds at the
+  # identical head SHA, closing the window instead of racing it.
+  # `merge_group`/`workflow_dispatch`/`schedule` are unaffected — none of
+  # them are reachable from the proved scenario (a same-SHA `push` racing a
+  # same-SHA `pull_request` open/reopen).
   guard:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -175,8 +192,26 @@ jobs:
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -uo pipefail
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            # TOCTOU close (codex round 3, CHAOS-4676 — see the job-family
+            # comment above): this run is always authoritative and always
+            # proceeds, but first cancel any still-active `push`-triggered
+            # run at the IDENTICAL head SHA, so a push-then-PR-open/reopen
+            # at one commit can never leave two real runs live on it.
+            if ids=$(gh api --method GET -f event=push -f "head_sha=${PR_HEAD_SHA}" "repos/${REPO}/actions/workflows/go.yml/runs" --jq '[.workflow_runs[] | select(.status != "completed") | .id] | .[]' 2>/tmp/guard-supersede.err); then
+              for id in ${ids}; do
+                echo "cancelling superseded same-SHA push run ${id} (this pull_request run is authoritative)" >&2
+                gh api --method POST "repos/${REPO}/actions/runs/${id}/cancel" >/dev/null 2>&1 || true
+              done
+            else
+              echo "same-SHA push-run lookup failed, proceeding anyway (pull_request always runs for real): $(cat /tmp/guard-supersede.err)" >&2
+            fi
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           if [ "${EVENT_NAME}" != "push" ]; then
             echo "skip=false" >> "${GITHUB_OUTPUT}"
             exit 0

@@ -160,13 +160,36 @@ def test_go_handoff_mints_occurrence_and_trigger_row_when_flag_on(
     assert trigger_row.triggered_by == "manual"
 
 
-def test_go_handoff_disabled_by_default_even_for_planner_managed_config(
+def test_go_handoff_enabled_by_default_for_planner_managed_config(
     sqlite_session, monkeypatch
 ):
-    """Fork 1/rollout-flag default-off: a planner_managed config still goes
-    through the pre-existing in-process path unless the flag is explicitly
-    on -- this is what makes the rollout safe to ship dark."""
+    """CHAOS-4629 (chris ruling, 2026-08-31 06:20 PT): the rollout flag's
+    default flipped PERMANENTLY ON now that this parity ticket has landed --
+    a planner_managed config routes to the Go hand-off with NO env var set
+    at all, pinning the new default so a future edit that silently reverts
+    it fails this test instead of shipping unnoticed."""
     monkeypatch.delenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", raising=False)
+    config = _seed_planner_managed_config(sqlite_session)
+
+    result = create_sync_execution_trigger(
+        sqlite_session, config, "org-a", triggered_by="manual", mode="incremental"
+    )
+    sqlite_session.flush()
+
+    assert result is not None
+    assert result.occurrence_id is not None
+    assert result.awaiting_materialization is True
+    assert sqlite_session.query(SyncManualTrigger).count() == 1, (
+        "default-true means the Go hand-off path mints a sync_manual_triggers "
+        "row with no env var set at all"
+    )
+
+
+def test_go_handoff_can_still_be_explicitly_disabled(sqlite_session, monkeypatch):
+    """The escape hatch survives the default flip: an operator/ops override
+    explicitly setting the flag to a falsy value still routes to the legacy
+    in-process path, exactly like the old default-off behavior did."""
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false")
     config = _seed_planner_managed_config(sqlite_session)
 
     result = create_sync_execution_trigger(

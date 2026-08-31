@@ -489,7 +489,7 @@ func TestDiscoverJiraMapsProjectsByKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-	sources, err := service.discoverJira(context.Background(), credential)
+	sources, err := service.discoverJira(context.Background(), credential, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,6 +505,77 @@ func TestDiscoverJiraMapsProjectsByKey(t *testing.T) {
 	}
 	if len(doer.paths) != 1 || !strings.HasPrefix(doer.paths[0], "/rest/api/3/project/search") {
 		t.Fatalf("discoverJira() requested paths = %v", doer.paths)
+	}
+}
+
+// TestDiscoverJiraFiltersToExplicitScope is CHAOS-4629's prerequisite for
+// supersedeStaleScopedJiraSources: mirrors
+// discovery/repos.py::discover_jira_projects' own filtering exactly --
+// project_id, once present, is the ENTIRE scope (a stale project_key
+// alongside it is ignored, not additionally enforced); project_key alone
+// filters by normalized key. Without this filter, a bounded config's
+// discovery pass would keep returning the OLD project forever (Jira's own
+// API has no server-side "list one project" filter), silently defeating the
+// supersede step, which trusts the returned set to mean "the scope's
+// CURRENT membership".
+func TestDiscoverJiraFiltersToExplicitScope(t *testing.T) {
+	body := `{
+		"values":[
+			{"id":"10001","key":"CHAOS","name":"Chaos Engineering"},
+			{"id":"10002","key":"PLAT","name":"Platform"}
+		],
+		"isLast":true
+	}`
+	credentialFor := func(t *testing.T) providerfoundation.Credential {
+		t.Helper()
+		credential, err := providerfoundation.Credential{Provider: "jira"}.WithEphemeralSecret("email", secrets.NewValue("bot@example.com"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		credential, err = credential.WithEphemeralSecret("api_token", secrets.NewValue("jira-token"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		credential, err = credential.WithEphemeralSecret("base_url", secrets.NewValue("https://acme.atlassian.net"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return credential
+	}
+
+	for _, test := range []struct {
+		name        string
+		syncOptions map[string]any
+		wantIDs     []string
+	}{
+		{name: "no scope: every project", syncOptions: nil, wantIDs: []string{"CHAOS", "PLAT"}},
+		{name: "project_key scope", syncOptions: map[string]any{"project_key": "plat"}, wantIDs: []string{"PLAT"}},
+		{
+			name:        "project_id wins over a stale project_key",
+			syncOptions: map[string]any{"project_key": "CHAOS", "project_id": "10002"},
+			wantIDs:     []string{"10002"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &fakeSourceDiscoveryDoer{t: t, body: body}
+			service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+			sources, err := service.discoverJira(context.Background(), credentialFor(t), test.syncOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotIDs := make([]string, len(sources))
+			for i, source := range sources {
+				gotIDs[i] = source.ExternalID
+			}
+			if len(gotIDs) != len(test.wantIDs) {
+				t.Fatalf("discoverJira() external ids = %v, want %v", gotIDs, test.wantIDs)
+			}
+			for i, want := range test.wantIDs {
+				if gotIDs[i] != want {
+					t.Fatalf("discoverJira() external ids = %v, want %v", gotIDs, test.wantIDs)
+				}
+			}
+		})
 	}
 }
 
@@ -535,7 +606,7 @@ func TestDiscoverJiraFallsBackToLegacyProjectEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-	sources, err := service.discoverJira(context.Background(), credential)
+	sources, err := service.discoverJira(context.Background(), credential, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +656,7 @@ func TestDiscoverJiraDoesNotFallBackOnAuthenticationOrRateLimitErrors(t *testing
 				t.Fatal(err)
 			}
 			service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-			_, err = service.discoverJira(context.Background(), credential)
+			_, err = service.discoverJira(context.Background(), credential, nil)
 			if err == nil {
 				t.Fatalf("discoverJira() with a %d response = nil error, want the classified failure surfaced, not silently retried", test.status)
 			}
@@ -623,7 +694,7 @@ func TestDiscoverJiraLegacyFallbackFailureSurfacesItsOwnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
-	_, err = service.discoverJira(context.Background(), credential)
+	_, err = service.discoverJira(context.Background(), credential, nil)
 	if err == nil {
 		t.Fatal("discoverJira() with both endpoints failing = nil error, want the legacy endpoint's own failure surfaced")
 	}
@@ -787,5 +858,67 @@ func TestRecordSourceDiscoveryOutcomeObservesAZeroResultAsExisting(t *testing.T)
 				t.Fatalf("output missing %q -- a successful zero-source run must be distinguishable from discovery never running:\n%s", wantExistingLine, output)
 			}
 		})
+	}
+}
+
+// --- CHAOS-4629: Jira parity with #2036/CHAOS-4584's hardened Python
+// discover_sources_for_integration behaviors (pure-unit coverage; the
+// case-insensitive-matching/capping/supersede transactional behavior itself
+// needs a real Postgres and is covered by
+// source_discovery_integration_test.go) ---------------------------------
+
+// TestNormalizeSourceKeyMatchesJiraKeyNorm mirrors
+// discovery/repos.py::jira_key_norm's own docstring examples exactly:
+// strip-then-lower, nothing else. This is the ONE normalization
+// implementation every Go comparison in this file must go through -- no
+// SQL-side mirror (chris's ruling, CHAOS-4584 gate round 7 / CHAOS-4629).
+func TestNormalizeSourceKeyMatchesJiraKeyNorm(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"ENG", "eng"},
+		{"  eng  ", "eng"},
+		{"Eng-Ops", "eng-ops"},
+		{"", ""},
+		{"already-lower", "already-lower"},
+	} {
+		if got := normalizeSourceKey(test.input); got != test.want {
+			t.Errorf("normalizeSourceKey(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+// TestRepoLimitAdvisoryLockKeyMatchesPython pins Go's advisory-lock key
+// formula against values independently computed with Python's own
+// discovery.py::_acquire_repo_limit_lock algorithm
+// (`uuid.UUID(org_id).int & ((1<<63)-1)`, falling back to
+// `uuid.uuid5(uuid.NAMESPACE_URL, org_id).int & ((1<<63)-1)` for a non-UUID
+// org_id) -- this key MUST agree across languages, or Python's
+// create_sync_config repo-limit preflight and this Go rebalance step stop
+// serializing against each other during the coexistence window.
+func TestRepoLimitAdvisoryLockKeyMatchesPython(t *testing.T) {
+	for _, test := range []struct {
+		orgID string
+		want  int64
+	}{
+		{"11111111-1111-1111-1111-111111111111", 1229782938247303441},
+		{"70d529e0-3c06-4597-8480-794fd02328b6", 324392556872018102},
+		{"not-a-uuid-org", 1247898447986800358},
+	} {
+		if got := repoLimitAdvisoryLockKey(test.orgID); got != test.want {
+			t.Errorf("repoLimitAdvisoryLockKey(%q) = %d, want %d (Python parity)", test.orgID, got, test.want)
+		}
+	}
+}
+
+// TestJiraMaxReposTierDefaultsMatchPython pins the hardcoded fallback tier
+// against models/licensing.py::TIER_LIMITS_DEFAULTS' max_repos entries.
+func TestJiraMaxReposTierDefaultsMatchPython(t *testing.T) {
+	if got := jiraMaxReposTierDefaults["community"]; got == nil || *got != 3 {
+		t.Errorf("community max_repos default = %v, want 3", got)
+	}
+	if got := jiraMaxReposTierDefaults["team"]; got == nil || *got != 10 {
+		t.Errorf("team max_repos default = %v, want 10", got)
+	}
+	if got := jiraMaxReposTierDefaults["enterprise"]; got != nil {
+		t.Errorf("enterprise max_repos default = %v, want nil (unlimited)", *got)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -1133,13 +1134,23 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 // This test does not re-seed millions of rows (the live-local runner
 // above already proved the real case against real data); it pins the
 // MECHANISM instead, against a real ClickHouse test container:
-// `system.numbers` cheaply produces exactly `queryRouteMaxResultRows+1`
-// rows, deterministically on the row-count side of the SAME two knobs
+// `system.numbers` cheaply produces however many rows a subtest needs,
+// deterministically, on the row-count side of the SAME two knobs
 // buildQueryRoute configures. The subtest using the OLD (unset) defaults
 // is the FAILS-ON-PARENT half -- it fails today, on this same commit,
 // proving the guard is real, not just that a bigger number was typed in.
+//
+// Every subtest that exercises the FIXED configuration goes through
+// newQueryRouteClickHouseClient (query_route.go) -- the SAME function
+// buildQueryRoute calls -- rather than reconstructing the options
+// inline. Codex review round 1 (P3, CONFIRMED by this lane) found the
+// first version of this test hand-copied the option literals, which
+// would stay green even if buildQueryRoute's real wiring silently
+// stopped using them; only the deliberately-simulating-the-old-behavior
+// subtest below still builds a client by hand, because it exists
+// specifically to NOT be the fixed configuration.
 func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	ch, err := containers.StartClickHouse(ctx)
@@ -1148,13 +1159,7 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 	}
 	defer func() { _ = ch.Container.Terminate(context.Background()) }()
 
-	// One row more than the OLD 1,000-row default -- small enough to
-	// seed instantly via system.numbers, large enough to trip the old
-	// ceiling deterministically every run.
-	const rowCount = 1001
-	statement := "SELECT number FROM system.numbers LIMIT " + itoa(rowCount)
-
-	countRows := func(t *testing.T, opts clickhouse.Options) (int, error) {
+	countRowsWithOptions := func(t *testing.T, opts clickhouse.Options, rowCount int) (int, error) {
 		t.Helper()
 		opts.DSN = ch.URI
 		client, err := clickhouse.NewClickHouseQueryClientWithOptions(opts)
@@ -1162,28 +1167,32 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 			t.Fatalf("construct ClickHouse client: %v", err)
 		}
 		defer func() { _ = client.Close() }()
+		return countRows(t, ctx, client, rowCount)
+	}
 
-		rows, err := client.Query(ctx, statement, nil)
+	countRowsWithProductionClient := func(t *testing.T, rowCount int) (int, error) {
+		t.Helper()
+		// The REAL production wiring, not a hand-copied literal (codex
+		// review round 1, P3): if buildQueryRoute ever stops passing
+		// queryRouteMaxResultRows/queryRouteMaxBytesToRead, this call
+		// changes with it and the subtests below start failing.
+		client, err := newQueryRouteClickHouseClient(ch.URI)
 		if err != nil {
-			return 0, err
+			t.Fatalf("construct ClickHouse client via newQueryRouteClickHouseClient: %v", err)
 		}
-		defer func() { _ = rows.Close() }()
-		n := 0
-		for rows.Next() {
-			var v uint64
-			if scanErr := rows.Scan(&v); scanErr != nil {
-				return n, scanErr
-			}
-			n++
-		}
-		return n, rows.Err()
+		defer func() { _ = client.Close() }()
+		return countRows(t, ctx, client, rowCount)
 	}
 
 	t.Run("parent_defaults_fail_on_real_volume", func(t *testing.T) {
 		// buildQueryRoute's config BEFORE CHAOS-4647: dhclickhouse.Options{DSN: ...}
 		// with MaxResultRows/MaxBytesToRead left at their zero value, which
 		// dev-health-go/clickhouse's applyOptions defaults to 1,000 rows.
-		n, err := countRows(t, clickhouse.Options{})
+		// One row more than that default -- small enough to seed instantly
+		// via system.numbers, large enough to trip the old ceiling
+		// deterministically every run.
+		const rowCount = 1001
+		n, err := countRowsWithOptions(t, clickhouse.Options{}, rowCount)
 		if err == nil {
 			t.Fatalf("expected the old 1,000-row default to reject %d rows, got %d rows with no error", rowCount, n)
 		}
@@ -1197,10 +1206,8 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 	})
 
 	t.Run("tip_config_tolerates_real_volume", func(t *testing.T) {
-		n, err := countRows(t, clickhouse.Options{
-			MaxResultRows:  queryRouteMaxResultRows,
-			MaxBytesToRead: queryRouteMaxBytesToRead,
-		})
+		const rowCount = 1001
+		n, err := countRowsWithProductionClient(t, rowCount)
 		if err != nil {
 			t.Fatalf("buildQueryRoute's configured client rejected a real-shaped %d-row result: %v", rowCount, err)
 		}
@@ -1208,6 +1215,52 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 			t.Fatalf("got %d rows, want %d", n, rowCount)
 		}
 	})
+
+	// codex review round 1 (P2, EXECUTED by codex, RE-RUN and CONFIRMED by
+	// this lane): a bare 100,000-row cap only pushes the CHAOS-4647
+	// failure class one step out. workgraph.MaxEdgesLimit is the real,
+	// already-enforced ceiling on a single workGraphEdges request's
+	// filters.limit (clampEdgesLimit, edges.go); each edge can contribute
+	// up to 2 distinct (node_type, node_id) endpoints to
+	// batchResolveMembership's one unLIMITed batch query, so the
+	// worst-case single request touches 2*MaxEdgesLimit distinct
+	// endpoints. This subtest proves queryRouteMaxResultRows (derived
+	// from that same constant in query_route.go) actually clears the
+	// worst case, not just today's smaller real-data measurement above.
+	t.Run("tolerates_the_worst_case_edges_endpoint_volume", func(t *testing.T) {
+		const rowCount = 2 * workgraph.MaxEdgesLimit
+		n, err := countRowsWithProductionClient(t, rowCount)
+		if err != nil {
+			t.Fatalf("buildQueryRoute's configured client rejected the worst-case %d-row (2*workgraph.MaxEdgesLimit) result: %v", rowCount, err)
+		}
+		if n != rowCount {
+			t.Fatalf("got %d rows, want %d", n, rowCount)
+		}
+	})
+}
+
+// countRows runs a cheap system.numbers query for exactly rowCount rows
+// through client and returns how many were actually read back, or the
+// first error encountered (row-iteration errors surface via rows.Err()
+// after Next() stops, not from Query() itself -- see this file's other
+// CHAOS-4647 comments).
+func countRows(t *testing.T, ctx context.Context, client *clickhouse.Client, rowCount int) (int, error) {
+	t.Helper()
+	statement := "SELECT number FROM system.numbers LIMIT " + itoa(rowCount)
+	rows, err := client.Query(ctx, statement, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var v uint64
+		if scanErr := rows.Scan(&v); scanErr != nil {
+			return n, scanErr
+		}
+		n++
+	}
+	return n, rows.Err()
 }
 
 // itoa avoids importing strconv solely for one call site's row-count

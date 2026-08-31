@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 )
 
 // registeredFeatureFlagsDocument is the ONE query document query-api
@@ -532,10 +533,40 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 // these are Go-plane-only defaults this route inherited and never
 // overrode. max_execution_time (10s, unaffected by this change) remains
 // the time-based safety net; the 67ms measured above is nowhere near it.
+//
+// queryRouteMaxResultRows is NOT a flat 100,000: codex review (round 1,
+// P2, EXECUTED, re-run and CONFIRMED by this lane) found that a bare
+// 100,000 only pushes the SAME failure class one step out rather than
+// closing it. workgraph.MaxEdgesLimit (edges.go) is the real, already
+// codebase-enforced ceiling on a single workGraphEdges request's
+// `filters.limit` -- clampEdgesLimit forces every caller-supplied limit
+// into [1, MaxEdgesLimit] before the edges query runs. Each edge
+// contributes up to 2 distinct (node_type, node_id) endpoints
+// (source + target) to batchResolveMembership's ONE unLIMITed batch
+// query (membership.go), so a single request at the clamp ceiling can
+// touch up to 2*MaxEdgesLimit distinct endpoints in the worst case (no
+// endpoint reuse across edges) -- a real, code-enforced upper bound, not
+// an organically-growing one like hotspots' byte need above. Deriving
+// the row budget FROM that constant (plus real headroom) keeps the two
+// in lockstep if MaxEdgesLimit ever changes, instead of silently
+// re-opening this exact gap.
 const (
-	queryRouteMaxResultRows  = 100_000
-	queryRouteMaxBytesToRead = 2 << 30 // 2 GiB
+	queryRouteMaxResultRows  = 2*workgraph.MaxEdgesLimit + 100_000 // = 300,000: 2x the 100,000-edge clamp ceiling's worst-case distinct-endpoint count, plus 100,000 rows of headroom
+	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB
 )
+
+// newQueryRouteClickHouseClient is the ONE place this route constructs its
+// ClickHouse client -- pulled out of buildQueryRoute so a test can exercise
+// the REAL production wiring (these exact options reaching the real
+// driver) instead of a hand-copied literal that could silently drift from
+// what buildQueryRoute actually does (codex review round 1, P3).
+func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
+	return dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
+		DSN:            dsn,
+		MaxResultRows:  queryRouteMaxResultRows,
+		MaxBytesToRead: queryRouteMaxBytesToRead,
+	})
+}
 
 // buildQueryRoute wires the real featureFlags path from env-sourced
 // config: the shared dev-health-go ClickHouse client, a real Postgres
@@ -543,11 +574,7 @@ const (
 // newQueryHandler. The returned cleanup func closes the Postgres pool;
 // call it on shutdown.
 func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
-	chClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
-		DSN:            cfg.ClickHouseURI,
-		MaxResultRows:  queryRouteMaxResultRows,
-		MaxBytesToRead: queryRouteMaxBytesToRead,
-	})
+	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
 		return nil, nil, err
 	}

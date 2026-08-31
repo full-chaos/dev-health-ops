@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,34 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 )
+
+// TestMain clears every environment variable this package's behaviour depends
+// on, once, before any test runs.
+//
+// Three review rounds found tests in this package whose assertions were
+// defeated by an inherited value -- an invalid DEV_HEALTH_TEST_SCRATCH_PREFIX
+// makes a "never reached Docker" test pass (or fail) before it ever reaches
+// the path it exists to prove. Each round found one instance; a sweep found
+// five. Pinning them one at a time is what produced that recurrence, so the
+// class is removed by construction here instead: no test in this package can
+// inherit these values, whatever the developer or CI runner has exported.
+//
+// Individual tests still t.Setenv what they mean to exercise; this only
+// guarantees the baseline they start from.
+func TestMain(m *testing.M) {
+	for _, key := range []string{
+		PostgresDSNEnv,
+		ClickHouseDSNEnv,
+		ClickHouseHTTPDSNEnv,
+		ScratchPrefixEnv,
+	} {
+		if err := os.Unsetenv(key); err != nil {
+			fmt.Fprintf(os.Stderr, "clear %s: %v\n", key, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 // errContainerStarted is returned by the recording stub so the caller unwinds
 // immediately: these tests care about WHETHER Docker was asked, never about

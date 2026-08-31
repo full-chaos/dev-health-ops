@@ -32,6 +32,28 @@
 // userinfo, so even a correct slot run with real credentials failed
 // ClickHouse auth -- nanClassClickHouseURI now carries parsed.User through.
 //
+// CHAOS-4643 round 3 (EXECUTED, both P2): the hand-rolled url.Parse +
+// Hostname()/Port() + net.JoinHostPort rewrite -- three rounds of
+// string-surgery patches by this point -- had a FOURTH gap: a comma-joined
+// multi-host DSN ("host1:8123,host2:8123") corrupted into one bogus bracketed
+// host, because Hostname()/Port() only ever see the first host. That composed
+// with a second gap in the redactor this rewrite required in the first place:
+// redactDSNForLog never looked at ?username=/?password= query-param
+// credentials, and returned the raw DSN verbatim on its own parse failure --
+// which multi-host corruption could trigger. Ruling: three same-class bugs in
+// one hand-rolled rewriter means the approach was the defect, not each gap.
+// Two structural changes replace it: (1) nanClassClickHouseURI now sources
+// the host list and credentials from clickhouse.ParseDSN (the driver's own
+// parser, backed by lib/churl, which correctly splits multi-host and folds
+// query-param credentials the same way it folds userinfo) instead of
+// hand-rewriting; Path/RawQuery still come from a plain net/url parse, which
+// is safe because Go 1.27's stdlib leaves those fields correct even on a
+// multi-host authority -- only Hostname()/Port() are corrupted by the comma,
+// and this file no longer calls either. (2) redactDSNForLog is deleted
+// outright: the two connect-failure log sites now print a credential-free
+// host:port string computed at DSN-build time, never the DSN itself, so there
+// is no redaction step left to have a gap in.
+//
 // WHY NOT ROUTED THROUGH HTTP, UNLIKE THE FLOW-MATRIX DUAL-RUN FILE:
 // breakdown has NO registered document yet -- query_route.go
 // (digestByOperation, ~L478) only registers flowMatrix this wave. Both
@@ -104,6 +126,7 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -124,7 +147,12 @@ const requireLiveEnv = "DEV_HEALTH_REQUIRE_LIVE"
 // regression). Doing the same translation here lets this test run off
 // the SAME env var value the slot already exports, rather than requiring
 // a second, easily-forgotten one.
-func nanClassClickHouseURI(t testing.TB) string {
+// nanClassClickHouseURI returns (dsn, hostPort): dsn is the full rebuilt
+// connection string for the driver; hostPort is host:port only (no
+// credentials, no path, no query) for callers that need to name the target
+// in a log/error line without ever handling the credentialed DSN a second
+// time -- see the CHAOS-4643 round 3 note above the package doc comment.
+func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 	t.Helper()
 	raw := os.Getenv("CLICKHOUSE_URI")
 	if raw == "" {
@@ -137,64 +165,87 @@ func nanClassClickHouseURI(t testing.TB) string {
 			"slot; set " + requireLiveEnv + "=1 alongside CLICKHOUSE_URI to make a missing URI fail " +
 			"instead of skip")
 	}
-	parsed, err := url.Parse(raw)
+
+	// Path/RawQuery only, from a plain net/url parse. Safe even on a
+	// multi-host DSN: Go 1.27's stdlib Parse leaves u.Path/u.RawQuery
+	// correct on a comma-joined Host authority -- only its Hostname()/
+	// Port() accessors are corrupted by the comma, and this function
+	// never calls either of those.
+	pathQuery, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse CLICKHOUSE_URI: %v", err)
 	}
-	host := parsed.Hostname()
-	port := parsed.Port()
-	if port == "8123" || port == "8443" {
-		port = "9000"
-	} else if port == "" {
-		port = "9000"
+
+	// Host list and credentials come ONLY from the driver's OWN DSN
+	// parser (clickhouse.ParseDSN, backed by lib/churl) -- never
+	// re-derived by string surgery. churl.Parse is a copy of net/url's
+	// parser specifically patched to keep a comma-joined multi-host
+	// authority intact in dsn.Host (see its own header comment), and
+	// ParseDSN splits that correctly into Addr -- unlike Hostname()/
+	// Port(), which only ever see the FIRST host of such a string. It
+	// also folds ?username=/?password= query-param credentials into Auth
+	// the same way it folds userinfo, so this file has exactly one
+	// source of truth for "what are the hosts and credentials", not two
+	// half-implementations of the same job.
+	opts, err := chdriver.ParseDSN(raw)
+	if err != nil {
+		t.Fatalf("clickhouse.ParseDSN(CLICKHOUSE_URI): %v", err)
 	}
-	scheme := parsed.Scheme
-	if scheme == "" || scheme == "http" || scheme == "https" || scheme == "clickhouse+http" {
+	if len(opts.Addr) == 0 {
+		t.Fatalf("CLICKHOUSE_URI has no host: %q", raw)
+	}
+
+	translated := make([]string, len(opts.Addr))
+	for i, addr := range opts.Addr {
+		host, port, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			// No port present at all (a bare host, or a bracketed IPv6
+			// literal with no port -- SplitHostPort requires ":port"
+			// even then). Strip any brackets ourselves so JoinHostPort
+			// below does not double them up.
+			host = addr
+			port = ""
+			if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+				host = host[1 : len(host)-1]
+			}
+		}
+		if port == "8123" || port == "8443" || port == "" {
+			port = "9000"
+		}
+		translated[i] = net.JoinHostPort(host, port)
+	}
+	hostPort = strings.Join(translated, ",")
+
+	scheme := pathQuery.Scheme
+	switch scheme {
+	case "", "http", "https", "clickhouse+http":
 		scheme = "clickhouse"
 	}
-	// Rebuild via a copy of the parsed *url.URL, not a hand-written
-	// Sprintf -- codex review rounds 1 and 2 both found real gaps in the
-	// string-concatenation approach:
-	//   - round 1: Hostname() strips IPv6 brackets ("::1", not "[::1]"),
-	//     so a bare "%s:%s" produced an unparseable host:port.
-	//   - round 2: an IPv6 zone ID's "%" needs to be re-escaped as "%25"
-	//     to round-trip through a URI host component (Hostname() returns
-	//     it DECODED, e.g. "fe80::1%en0"), and the rebuild dropped the
-	//     source URI's Path/RawQuery entirely -- losing a non-default
-	//     database name or a "?secure=true" TLS flag, which the Python
-	//     harness's own _go_clickhouse_uri (this function's stated mirror
-	//     target) does NOT drop, since it only rewrites netloc via
-	//     urlsplit/urlunsplit and passes path/query through unchanged.
-	// u.String() gets all three right for free: it re-escapes Host
-	// (including zone IDs) and preserves every field this copy did not
-	// touch (User, Path, RawQuery, Fragment).
-	rebuilt := *parsed
-	rebuilt.Scheme = scheme
-	rebuilt.Host = net.JoinHostPort(host, port)
-	return rebuilt.String()
-}
 
-// redactDSNForLog returns dsn with any password blanked out, for use in
-// log/error output only -- never for the actual connection. CHAOS-4643
-// round 1 fixed nanClassClickHouseURI to carry real credentials through
-// the DSN rebuild (previously it silently dropped them); codex review
-// round 2 caught that this meant every subsequent connect-failure log line
-// below started printing that same credentialed DSN verbatim into
-// CI/test output. If dsn fails to re-parse (should not happen -- it is
-// always this file's own rebuilt output), the raw string is returned
-// rather than risking a second bug in the redaction path masking a real
-// connection error.
-func redactDSNForLog(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return dsn
+	var userinfo *url.Userinfo
+	if opts.Auth.Password != "" {
+		userinfo = url.UserPassword(opts.Auth.Username, opts.Auth.Password)
+	} else if opts.Auth.Username != "" {
+		userinfo = url.User(opts.Auth.Username)
 	}
-	if u.User != nil {
-		if _, hasPassword := u.User.Password(); hasPassword {
-			u.User = url.UserPassword(u.User.Username(), "REDACTED")
-		}
+
+	// Path/RawQuery pass through unchanged, same invariant as before --
+	// except the "username"/"password" query keys, which are now
+	// expressed as userinfo above (whichever form the source DSN used)
+	// and must not also survive in the query, or the credential would
+	// appear twice in the same string.
+	query := pathQuery.Query()
+	query.Del("username")
+	query.Del("password")
+
+	rebuilt := url.URL{
+		Scheme:   scheme,
+		User:     userinfo,
+		Host:     hostPort,
+		Path:     pathQuery.Path,
+		RawQuery: query.Encode(),
 	}
-	return u.String()
+	return rebuilt.String(), hostPort
 }
 
 // nanClassAllNullGroupSQL and nanClassPopulatedGroupSQL wrap the REAL
@@ -264,10 +315,10 @@ func nanClassRunScalarQuery(t *testing.T, ctx context.Context, client *dhclickho
 // divergence below (same "prove the harness first" discipline as the
 // flow-matrix file's test 1).
 func TestNaNClass_PopulatedGroup_ReturnsRealValue_MarshalsCleanly(t *testing.T) {
-	dsn := nanClassClickHouseURI(t)
+	dsn, hostPort := nanClassClickHouseURI(t)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", redactDSNForLog(dsn), err)
+		t.Fatalf("connect to ClickHouse at %s: %v", hostPort, err)
 	}
 	ctx := context.Background()
 
@@ -340,10 +391,10 @@ func nanClassRawAllNullExpr(t *testing.T) string {
 // behavior is fine"; read it as "the mechanism is still what CHAOS-4650
 // describes".
 func TestNaNClass_AllNullGroup_ReturnsSQLNullScannedAsZero_NotNaN(t *testing.T) {
-	dsn := nanClassClickHouseURI(t)
+	dsn, hostPort := nanClassClickHouseURI(t)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: dsn})
 	if err != nil {
-		t.Fatalf("connect to ClickHouse at %s: %v", redactDSNForLog(dsn), err)
+		t.Fatalf("connect to ClickHouse at %s: %v", hostPort, err)
 	}
 	ctx := context.Background()
 
@@ -447,12 +498,40 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 			raw:  "clickhouse://chuser:chpass@[::1]:8123/default",
 			want: "clickhouse://chuser:chpass@[::1]:9000/default",
 		},
+		{
+			// codex review round 3 (EXECUTED): a comma-joined multi-host DSN's
+			// Hostname()/Port() only ever saw the FIRST host under the old
+			// url.Parse + string-surgery approach, corrupting the rebuild into
+			// one bogus bracketed host ("[host1:8123,host2]:9000"). Fixed by
+			// sourcing the host list from clickhouse.ParseDSN's Addr (churl-
+			// backed, comma-aware) and translating every entry.
+			name: "multi_host_dsn_all_hosts_translated",
+			raw:  "clickhouse://u:p@host1:8123,host2:8443,host3:9000/db",
+			want: "clickhouse://u:p@host1:9000,host2:9000,host3:9000/db",
+		},
+		{
+			// codex review round 3 (EXECUTED): credentials carried as
+			// ?username=/?password= query params (clickhouse-connect's other
+			// DSN form) were previously ignored entirely by the old
+			// url.Parse-based rebuild, which only ever looked at u.User. Now
+			// folded into userinfo via the same clickhouse.ParseDSN call that
+			// reads the hosts, and dropped from the query so the credential
+			// does not end up duplicated.
+			name: "query_param_credentials_folded_into_userinfo",
+			raw:  "clickhouse://host:8123/db?username=u&password=p",
+			want: "clickhouse://u:p@host:9000/db",
+		},
+		{
+			name: "non_default_database_path",
+			raw:  "clickhouse://chuser:chpass@example.internal:8123/my_custom_db",
+			want: "clickhouse://chuser:chpass@example.internal:9000/my_custom_db",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CLICKHOUSE_URI", tc.raw)
 			t.Setenv(requireLiveEnv, "")
-			got := nanClassClickHouseURI(t)
+			got, _ := nanClassClickHouseURI(t)
 			if got != tc.want {
 				t.Fatalf("nanClassClickHouseURI(%q) = %q, want %q -- credentials or host/port were "+
 					"dropped or mangled in the rebuild", tc.raw, got, tc.want)
@@ -470,7 +549,7 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 	t.Run("require_live_with_uri_present_is_a_no_op", func(t *testing.T) {
 		t.Setenv("CLICKHOUSE_URI", "clickhouse://chuser:chpass@example.internal:8123/default")
 		t.Setenv(requireLiveEnv, "1")
-		got := nanClassClickHouseURI(t)
+		got, _ := nanClassClickHouseURI(t)
 		want := "clickhouse://chuser:chpass@example.internal:9000/default"
 		if got != want {
 			t.Fatalf("nanClassClickHouseURI with CLICKHOUSE_URI set and %s=1 = %q, want %q -- "+
@@ -486,7 +565,7 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 	t.Run("ipv6_zone_id_and_path_query_preserved", func(t *testing.T) {
 		t.Setenv("CLICKHOUSE_URI", "clickhouse://ci-user:ci-secret@[fe80::1%25en0]:8123/ci_scratch?secure=true")
 		t.Setenv(requireLiveEnv, "")
-		got := nanClassClickHouseURI(t)
+		got, _ := nanClassClickHouseURI(t)
 		want := "clickhouse://ci-user:ci-secret@[fe80::1%25en0]:9000/ci_scratch?secure=true"
 		if got != want {
 			t.Fatalf("nanClassClickHouseURI with an IPv6-zone-ID + non-default-db + query CLICKHOUSE_URI "+
@@ -496,44 +575,52 @@ func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
 	})
 }
 
-// TestRedactDSNForLog_BlanksPasswordButKeepsRestOfDSN is CHAOS-4643 codex
-// review round 2's third EXECUTED finding: after nanClassClickHouseURI
-// started carrying real credentials through the DSN rebuild (round 1 fix),
-// the two connect-failure t.Fatalf call sites started printing that same
-// credentialed DSN verbatim into CI/test logs. redactDSNForLog must blank
-// the password while leaving the rest of the DSN (username, host, port,
-// path) intact, so a connect-failure log line is still useful for
-// debugging without leaking the secret.
-func TestRedactDSNForLog_BlanksPasswordButKeepsRestOfDSN(t *testing.T) {
+// TestNanClassClickHouseURI_HostPortForLogNeverCarriesCredentials is CHAOS-4643
+// round 3 finding B's structural fix, proved rather than patched: there is no
+// longer any redactDSNForLog function whose job is "take a credentialed DSN
+// and hope to strip the password before it is logged" -- codex found that
+// function never inspected ?username=/?password= query-param credentials,
+// and its own comment admitted it fell back to returning the raw DSN on a
+// parse failure it called "should not happen". Both gaps are gone because the
+// thing they gated no longer exists: the two connect-failure log sites now
+// print nanClassClickHouseURI's second return value, hostPort, which is
+// built from the pre-credential host list inside the function -- never by
+// re-parsing the finished (credentialed) DSN string -- so there is no
+// parse-failure path that could fall back to leaking the secret. This test
+// proves hostPort carries no credential for every shape codex's round 3
+// findings and this ruling named: userinfo, ?username=/?password= query
+// params, and a multi-host DSN combining userinfo with several hosts.
+func TestNanClassClickHouseURI_HostPortForLogNeverCarriesCredentials(t *testing.T) {
 	cases := []struct {
 		name string
-		dsn  string
-		want string
+		raw  string
 	}{
 		{
-			name: "password_redacted",
-			dsn:  "clickhouse://ci-user:ci-secret@127.0.0.1:1/default",
-			want: "clickhouse://ci-user:REDACTED@127.0.0.1:1/default",
+			name: "userinfo_credentials",
+			raw:  "clickhouse://ci-user:ci-secret@example.internal:8123/default",
 		},
 		{
-			name: "user_only_unchanged",
-			dsn:  "clickhouse://ci-user@127.0.0.1:1/default",
-			want: "clickhouse://ci-user@127.0.0.1:1/default",
+			name: "query_param_credentials",
+			raw:  "clickhouse://example.internal:8123/default?username=ci-user&password=ci-secret",
 		},
 		{
-			name: "no_userinfo_unchanged",
-			dsn:  "clickhouse://127.0.0.1:1/default",
-			want: "clickhouse://127.0.0.1:1/default",
+			name: "multi_host_with_userinfo_credentials",
+			raw:  "clickhouse://ci-user:ci-secret@host1:8123,host2:8443/default",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactDSNForLog(tc.dsn)
-			if got != tc.want {
-				t.Fatalf("redactDSNForLog(%q) = %q, want %q", tc.dsn, got, tc.want)
+			t.Setenv("CLICKHOUSE_URI", tc.raw)
+			t.Setenv(requireLiveEnv, "")
+			_, hostPort := nanClassClickHouseURI(t)
+			if strings.Contains(hostPort, "ci-secret") {
+				t.Fatalf("hostPort %q leaked the password", hostPort)
 			}
-			if tc.name == "password_redacted" && strings.Contains(got, "ci-secret") {
-				t.Fatalf("redacted DSN %q still contains the raw password", got)
+			if strings.Contains(hostPort, "ci-user") {
+				t.Fatalf("hostPort %q leaked the username", hostPort)
+			}
+			if strings.Contains(hostPort, "@") {
+				t.Fatalf("hostPort %q should never contain the userinfo delimiter '@'", hostPort)
 			}
 		})
 	}

@@ -61,6 +61,11 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
+	defer containers.DropRole(admin, runtimeAuthorizationDomainRole, t.Logf)
+	defer containers.DropRole(admin, runtimeAuthorizationQueueRole, t.Logf)
+	defer containers.DropRole(admin, semanticCapabilityRole, t.Logf)
+	defer containers.DropRole(admin, elevatedRole, t.Logf)
+	defer containers.DropRole(admin, riverCapabilityRole, t.Logf)
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",

@@ -73,10 +73,12 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer containers.DropRole(adminPool, outboxDomainRole, t.Logf)
 	outboxQueueRole, err := containers.RoleName("outbox_queue_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer containers.DropRole(adminPool, outboxQueueRole, t.Logf)
 	createOutboxRoles(t, ctx, adminPool, outboxDomainRole, outboxQueueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:     "river",

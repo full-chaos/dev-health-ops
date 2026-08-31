@@ -88,6 +88,8 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
+	defer containers.DropRole(adminPool, kernelDomainRole, t.Logf)
+	defer containers.DropRole(adminPool, kernelQueueRole, t.Logf)
 	if err := createKernelIntegrationFixture(ctx, adminPool, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}

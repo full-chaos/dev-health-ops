@@ -541,6 +541,8 @@ func newFinalizeRedriveTestStackWithRiverSchema(t *testing.T) (*pgxpool.Pool, *P
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(pool, riverSchemaTestDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(pool, riverSchemaTestQueueRole, t.Logf) })
 
 	for _, statement := range []string{
 		"CREATE ROLE " + riverSchemaTestDomainRole +

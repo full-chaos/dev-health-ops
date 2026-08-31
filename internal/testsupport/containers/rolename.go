@@ -28,7 +28,12 @@
 package containers
 
 import (
+	"context"
 	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -133,4 +138,65 @@ func RoleName(prefix string, instance *Instance) (string, error) {
 		)
 	}
 	return name, nil
+}
+
+// roleNamePattern is the identifier class DropRole will interpolate into
+// DROP OWNED BY / DROP ROLE. It matches RoleName's own composition
+// (`prefix + "_" + suffix`, both lower-cased ASCII) -- never a literal
+// widened to accept anything a caller might pass.
+var roleNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+
+// roleExecer is the narrow write surface DropRole needs. *pgxpool.Pool and
+// *pgx.Conn both satisfy it structurally -- callers pass whichever admin
+// connection created the role, without this package importing pgxpool.
+type roleExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+// DropRole releases a cluster-scoped role a test created via RoleName (or
+// RoleSuffix composed by hand). CREATE ROLE is the half of the remote/kiac
+// lifecycle StartPostgres does not clean up on its own: Instance.Close drops
+// only the scratch DATABASE it created (remote.go), never a role a test
+// layered on top of it. Making every role name unique per call (RoleName's
+// whole point, CHAOS-4661) also disabled the old collision-avoidance
+// side-effect that used to bound this: two runs never share a name anymore,
+// so nothing ever exercises "DROP ROLE IF EXISTS" before a CREATE, and the
+// role a test does not drop itself becomes a PERMANENT, unbounded addition
+// to the shared cluster -- one per test per run, forever. Every test that
+// creates a role must therefore call this itself, from a defer or
+// t.Cleanup, registered so it runs while pool is still open.
+//
+// DROP OWNED BY runs first because a plain DROP ROLE fails closed against
+// its own GRANTs: "role ... cannot be dropped because some objects depend
+// on it / DETAIL: privileges for table ..." -- reproduced against a live
+// kiac cluster on the exact GRANT shape these tests use (SELECT/INSERT/
+// UPDATE/DELETE on ALL TABLES IN SCHEMA public). DROP OWNED BY revokes
+// every privilege the role holds and drops anything it owns in pool's
+// current database, which is where those GRANTs live; DROP ROLE then
+// succeeds unconditionally. Verified independently to work even while a
+// SEPARATE connection is still logged in as role (a live session held open
+// with pg_sleep during the DROP OWNED BY / DROP ROLE pair) -- callers do
+// not need to sequence this after closing a restricted pool that connected
+// as the role, only after pool (the admin connection) is still usable.
+//
+// Both statements use IF EXISTS-equivalent tolerance: DROP OWNED BY on a
+// role with nothing owned is a no-op, and DROP ROLE IF EXISTS never errors
+// on an absent role -- calling this twice, or after a test already dropped
+// it manually, is safe. A failure is logged through logf (typically
+// t.Logf) rather than surfaced as an error: this runs from a defer/
+// t.Cleanup after the test has already recorded its own pass/fail, and a
+// cleanup problem must be visible without being able to flip that result.
+func DropRole(pool roleExecer, role string, logf func(format string, args ...any)) {
+	if !roleNamePattern.MatchString(role) {
+		logf("DropRole: refusing to drop unsafe role name %q", role)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, "DROP OWNED BY "+role); err != nil {
+		logf("DropRole: drop owned by %s: %v", role, err)
+	}
+	if _, err := pool.Exec(ctx, "DROP ROLE IF EXISTS "+role); err != nil {
+		logf("DropRole: drop role %s: %v", role, err)
+	}
 }

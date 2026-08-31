@@ -36,6 +36,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
+	defer containers.DropRole(admin, queueAuthorizationFenceRole, t.Logf)
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",

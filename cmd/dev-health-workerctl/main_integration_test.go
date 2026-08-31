@@ -88,6 +88,9 @@ func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, str
 		queue:       "workerctl_queue_runtime_" + roleSuffix,
 		coordinator: "workerctl_coordinator_runtime_" + roleSuffix,
 	}
+	t.Cleanup(func() { containers.DropRole(admin, roles.domain, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, roles.queue, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, roles.coordinator, t.Logf) })
 
 	setup := []string{
 		"CREATE ROLE " + roles.domain + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlDomainPass + "'",

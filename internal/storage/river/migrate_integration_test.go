@@ -75,6 +75,8 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
 	assertRuntimeRolePreflightHasNoSideEffects(t, ctx, adminPool, instance)
 	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	assertRuntimeRolePosture(t, ctx, adminPool, domainRole)

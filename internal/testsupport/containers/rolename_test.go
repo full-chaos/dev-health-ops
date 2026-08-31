@@ -1,8 +1,13 @@
 package containers
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDatabaseNameReadsTheRealConnectedDatabase(t *testing.T) {
@@ -137,5 +142,112 @@ func TestRoleNameRejectsAPrefixThatWouldOverflowNamedatalen(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RoleName(%d-byte prefix) = %q (%d bytes): want an error, not a name at or over 63 bytes",
 			len(overlong), name, len(name))
+	}
+}
+
+// fakeRoleExecer stands in for the admin *pgxpool.Pool DropRole writes
+// through, recording every statement (in order) and letting a test script
+// which calls fail.
+type fakeRoleExecer struct {
+	statements []string
+	failOn     map[string]error
+}
+
+func (f *fakeRoleExecer) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	f.statements = append(f.statements, sql)
+	if f.failOn != nil {
+		if err, ok := f.failOn[sql]; ok {
+			return pgconn.CommandTag{}, err
+		}
+	}
+	return pgconn.CommandTag{}, nil
+}
+
+// TestDropRoleIssuesDropOwnedThenDropRole pins the exact statement order
+// DropRole depends on: DROP OWNED BY must run before DROP ROLE, because a
+// role still holding GRANTs makes a plain DROP ROLE fail with "some objects
+// depend on it" (reproduced against a live kiac cluster; see DropRole's
+// doc comment). Swap the order and this test catches it without needing a
+// real Postgres connection.
+func TestDropRoleIssuesDropOwnedThenDropRole(t *testing.T) {
+	t.Parallel()
+
+	exec := &fakeRoleExecer{}
+	var logs []string
+	DropRole(exec, "workerctl_domain_runtime_abc123def456", func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	want := []string{
+		"DROP OWNED BY workerctl_domain_runtime_abc123def456",
+		"DROP ROLE IF EXISTS workerctl_domain_runtime_abc123def456",
+	}
+	if len(exec.statements) != len(want) {
+		t.Fatalf("statements = %v, want %v", exec.statements, want)
+	}
+	for i, s := range want {
+		if exec.statements[i] != s {
+			t.Errorf("statement %d = %q, want %q", i, exec.statements[i], s)
+		}
+	}
+	if len(logs) != 0 {
+		t.Errorf("unexpected logf calls on a clean drop: %v", logs)
+	}
+}
+
+// TestDropRoleStillAttemptsDropRoleAfterDropOwnedFails is the non-vacuity
+// guard for the "both statements always run" contract: a cleanup helper
+// that returns early on its first error would silently skip DROP ROLE
+// whenever DROP OWNED BY hit a transient problem, leaving the role behind
+// with no signal beyond a log line nobody reads. Both must still be
+// attempted, and the failure must reach logf.
+func TestDropRoleStillAttemptsDropRoleAfterDropOwnedFails(t *testing.T) {
+	t.Parallel()
+
+	role := "outbox_domain_runtime_fedcba987654"
+	exec := &fakeRoleExecer{failOn: map[string]error{
+		"DROP OWNED BY " + role: errors.New("connection reset"),
+	}}
+	var logs []string
+	DropRole(exec, role, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if len(exec.statements) != 2 {
+		t.Fatalf("statements = %v, want 2 calls (DROP OWNED BY attempted THEN DROP ROLE attempted regardless)", exec.statements)
+	}
+	if exec.statements[1] != "DROP ROLE IF EXISTS "+role {
+		t.Errorf("DROP ROLE was not attempted after DROP OWNED BY failed: statements = %v", exec.statements)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "drop owned by") {
+		t.Errorf("want exactly one logf call surfacing the DROP OWNED BY failure, got %v", logs)
+	}
+}
+
+// TestDropRoleRefusesAnUnsafeRoleName is the injection-defense case: every
+// caller composes role with RoleName/RoleSuffix, but DropRole re-validates
+// rather than trusting that -- the same posture DatabaseName takes for
+// database names one level down.
+func TestDropRoleRefusesAnUnsafeRoleName(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"robert'; DROP TABLE users;--",
+		"Has-A-Dash",
+		"UPPERCASE",
+		"",
+	}
+	for _, role := range cases {
+		exec := &fakeRoleExecer{}
+		var logs []string
+		DropRole(exec, role, func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		})
+		if len(exec.statements) != 0 {
+			t.Errorf("DropRole(%q): issued statements %v, want none", role, exec.statements)
+		}
+		if len(logs) != 1 {
+			t.Errorf("DropRole(%q): want exactly one logf call refusing it, got %v", role, logs)
+		}
 	}
 }

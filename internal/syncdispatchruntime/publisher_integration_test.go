@@ -61,6 +61,8 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
+	defer containers.DropRole(adminPool, integrationDomainRole, t.Logf)
+	defer containers.DropRole(adminPool, integrationQueueRole, t.Logf)
 	for _, statement := range []string{
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + integrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + integrationDomainPassword + "'",

@@ -67,6 +67,8 @@ func startActiveActiveHarness(t *testing.T, ctx context.Context) activeActiveHar
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, kernelDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, kernelQueueRole, t.Logf) })
 	if err := createKernelIntegrationFixture(ctx, admin, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}

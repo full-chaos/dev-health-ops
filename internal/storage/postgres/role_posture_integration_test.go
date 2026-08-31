@@ -72,6 +72,7 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -157,10 +158,12 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, roleA, t.Logf) })
 	roleB, err := containers.RoleName("attribution_role_b", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, roleB, t.Logf) })
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -292,10 +295,12 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, roleA, t.Logf) })
 	roleB, err := containers.RoleName("shared_table_role_b", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, roleB, t.Logf) })
 	for _, statement := range []string{
 		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -442,10 +447,12 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
 	coordinatorRole, err := containers.RoleName("manifest_coordinator_role", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, coordinatorRole, t.Logf) })
 	domain := domainPosture()
 	coordinator := coordinatorPosture()
 	domainExclusive := firstExclusivePostureTable(t, domain, coordinator)

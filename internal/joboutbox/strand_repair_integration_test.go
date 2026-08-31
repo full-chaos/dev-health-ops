@@ -69,10 +69,12 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer containers.DropRole(admin, strandDomainRole, t.Logf)
 	strandQueueRole, err := containers.RoleName("strand_queue_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer containers.DropRole(admin, strandQueueRole, t.Logf)
 	createStrandRoles(t, ctx, admin, strandDomainRole, strandQueueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:     "river",

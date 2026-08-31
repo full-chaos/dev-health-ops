@@ -61,6 +61,8 @@ func TestRiverWorkerClientRunsReindexerWithoutPermissionErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, reindexDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, reindexQueueRole, t.Logf) })
 	for _, statement := range []string{
 		"CREATE SCHEMA river",
 		"CREATE ROLE " + reindexDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +

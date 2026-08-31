@@ -151,10 +151,10 @@ semantics that a version change can move.
 
 | Package | Weight | PG | CH | Valkey | CI proof? | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `internal/providersync` | 1166s | kiac | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. Role name parameterised by CHAOS-4661; the role already DROPped first, so this was the re-run-safe half of the fix -- the concurrent-safety half is what CHAOS-4661 added. |
+| `internal/providersync` | 1166s | kiac | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. Role name parameterised by CHAOS-4661 for both re-run- and concurrency-safety; self-cleans via `containers.DropRole` (see "Executed evidence" below). |
 | `internal/scheduler/fixed` | 143s | kiac | — | — | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | — | kiac | — | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
-| `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (10 files in this package: the 6 that literally `CREATE ROLE`, plus 4 same-package consumers of the same role-name constants a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation). Otherwise pure PostgreSQL. |
+| `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
 | `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Out of CHAOS-4661 scope; tracked as CHAOS-4677. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
@@ -170,7 +170,7 @@ semantics that a version change can move.
 | `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `cmd/dev-health-reconciler` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (`migrate_integration_test.go` plus same-package consumer `telemetry_integration_test.go`). The role already DROPped first, so this was the re-run-safe half -- concurrency-safety is what CHAOS-4661 added. **New host dependency**: its backup/restore test called `instance.Container.Exec` for `pg_dump`/`createdb`/`pg_restore`, which is nil on the kiac remote path (no container); rewritten to run those as host client processes against the instance's real address instead (the restored database name is suffixed the same way the roles are). This makes `pg_dump`/`createdb`/`pg_restore` PostgreSQL 18+ client tools a requirement on the machine running this suite -- `assertPostgresClientToolsAvailable` checks PATH and each tool's major version before the first one runs and fails with an install instruction (not an opaque exec error) if either is missing. |
+| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **New host dependency**: its backup/restore test called `instance.Container.Exec` for `pg_dump`/`createdb`/`pg_restore`, which is nil on the kiac remote path (no container); rewritten to run those as host client processes against the instance's real address instead (the restored database name is suffixed the same way the roles are). This makes `pg_dump`/`createdb`/`pg_restore` PostgreSQL 18+ client tools a requirement on the machine running this suite -- `assertPostgresClientToolsAvailable` checks PATH and each tool's major version before the first one runs and fails with an install instruction (not an opaque exec error) if either is missing. |
 | `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
 | `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised by CHAOS-4661 -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
@@ -553,13 +553,53 @@ content (sha256 digest match), never via `git checkout`.
 | `internal/syncdispatchruntime` | **PASS** — the 9 role-creating tests across its 3 files; same host-Valkey caveat as above |
 | `internal/jobs/metrics/daily` | **PASS** — see red-on-baseline and mutation-proof above |
 | `internal/storage/river` | **PASS** — full package, both runs, including the rewritten backup/restore round-trip |
-| `internal/providersync` | **PENDING** — the 1166s package; twice-in-succession proof is running separately (~19 min/run) and is not yet recorded here. Do not treat this row as passing until it is updated with a PASS/PASS result. |
+| `internal/providersync` | **PASS/PASS** — RUN 1 963.826s (16m5.834s), RUN 2 899.627s (15m1.354s), fresh pair, `go test -tags=integration -timeout=30m ./internal/providersync/...` |
+
+**Concurrent-pair proof**: `internal/providersync` and `internal/storage/postgres` run
+SIMULTANEOUSLY against the same shared `acr-local` cluster (distinct
+`DEV_HEALTH_TEST_SCRATCH_PREFIX` each) — both green (`exit=0`), 19:31:46Z→19:46:56Z,
+proving the role-name parameterisation holds under real concurrency, not only
+across successive runs.
+
+**Role cleanup — every role-creating test is now self-cleaning.** Unique-per-call
+role names (the fix above) silently disabled the old collision-avoidance side
+effect that used to bound a role's lifetime: two calls never share a name
+anymore, so the leading `DROP ROLE IF EXISTS` never fires for real, and
+without an explicit cleanup every role a test creates became a PERMANENT,
+unbounded addition to the shared cluster — one per test per run, forever, not
+the bounded/self-healing accumulation the fixed-name era had. This was found
+mid-review (both fresh, clean runs above still left roles behind) and fixed
+across all 22 role-creating files in scope: `containers.DropRole(pool, role,
+logf)` (`internal/testsupport/containers/rolename.go`) runs `DROP OWNED BY
+<role>` then `DROP ROLE IF EXISTS <role>` from a `defer`/`t.Cleanup`
+registered after the admin pool's own close-cleanup (so it fires while the
+pool is still open) — `DROP OWNED BY` first because a plain `DROP ROLE` fails
+closed against the role's own `GRANT`s ("some objects depend on it"),
+verified against a live cluster; it works even while a separate connection is
+still logged in as that role. 4 unit tests in `rolename_test.go` cover
+statement order, non-vacuity (both statements still attempt even if the first
+fails) and unsafe-name refusal. **Proof, no manual sweep**:
+`internal/joboperator`'s role count (`operator_domain/queue/coordinator_runtime`)
+held at 12 before → after RUN 1 → after RUN 2, twice-in-succession, both green,
+zero growth. **Mutation-spot-check (non-vacuity)**: removing one `defer
+containers.DropRole(...)` line and re-running once moved the domain-role count
+4→5 (a real leak, caught); the line was restored (verified byte-identical via
+`git diff`) and the single leaked role dropped.
 
 Isolation verified after every run: no leaked scratch databases (`LIKE
-'lane_4661%'` sweep returns 0 throughout); role accumulation from repeated
-proof runs (roles are not designed to be dropped — see "why not a harness
-change" above) was swept between rounds, and the cluster carries none of this
-lane's roles at close-out beyond what a normal single test run leaves.
+'lane_4661%'` sweep returns 0 throughout). Roles are a separate story from
+scratch databases: a **pre-existing backlog of 477 roles** (matching every
+prefix these test files use — `grant_*`, `operator_*`, `kernel_*`, `sweep_*`,
+`workerctl_*`, etc.) was found on the shared cluster on 2026-08-31, accumulated
+from runs across this ticket's own verification history before the cleanup fix
+above existed. It was deliberately **not** bulk-swept as part of this change —
+enumerating and dropping roles by pattern on a server other lanes are actively
+using is exactly the harness-level danger "why not a harness change" (above)
+warns against; a blind sweep could drop a role a concurrent lane's live test
+still owns. Every role created by code in THIS PR from here forward
+self-cleans (proof above); the historical backlog is a separate, explicitly
+flagged cleanup decision for whoever owns a quiet window on the shared
+cluster, not a defect in this fix.
 
 ## acr's Go suites
 

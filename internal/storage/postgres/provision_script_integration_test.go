@@ -121,14 +121,17 @@ func TestProvisionScriptGrantsNoTablePrivileges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
 	queueRole, err := containers.RoleName("grant_queue_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, queueRole, t.Logf) })
 	coordinatorRole, err := containers.RoleName("grant_coordinator_runtime", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, coordinatorRole, t.Logf) })
 	roles := grantRoleNames{
 		domain:      domainRole,
 		queue:       queueRole,

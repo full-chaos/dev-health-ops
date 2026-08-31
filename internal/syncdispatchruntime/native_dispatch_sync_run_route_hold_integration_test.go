@@ -172,6 +172,8 @@ CREATE TABLE public.worker_job_runs (
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer containers.DropRole(pool, routeHoldDomainRole, t.Logf)
+	defer containers.DropRole(pool, routeHoldQueueRole, t.Logf)
 	roleSetup := []string{
 		"CREATE ROLE " + routeHoldDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
 		"CREATE ROLE " + routeHoldQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",

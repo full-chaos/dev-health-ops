@@ -124,6 +124,9 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	// runs, and two concurrent lanes, collision-free.
 	operatorIntegrationDomainRole, operatorIntegrationQueueRole, operatorIntegrationCoordinatorRole :=
 		createOperatorIntegrationSchema(t, ctx, instance, adminPool)
+	defer containers.DropRole(adminPool, operatorIntegrationDomainRole, t.Logf)
+	defer containers.DropRole(adminPool, operatorIntegrationQueueRole, t.Logf)
+	defer containers.DropRole(adminPool, operatorIntegrationCoordinatorRole, t.Logf)
 	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:                  "river",
@@ -410,6 +413,9 @@ func TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials(t *test
 	// runs, and two concurrent lanes, collision-free.
 	operatorIntegrationDomainRole, operatorIntegrationQueueRole, operatorIntegrationCoordinatorRole :=
 		createOperatorIntegrationSchema(t, ctx, instance, adminPool)
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationQueueRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationCoordinatorRole, t.Logf) })
 	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:                  "river",

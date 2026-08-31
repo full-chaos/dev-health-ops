@@ -304,6 +304,9 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, coordinatorRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, queueRole, t.Logf) })
 	roles = splitRoleNames{
 		domain:      domainRole,
 		coordinator: coordinatorRole,

@@ -59,6 +59,8 @@ func TestRuntimePoolsObserveRealAcquireLatency(t *testing.T) {
 
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
+	defer containers.DropRole(admin, poolAcquireDomainRole, t.Logf)
+	defer containers.DropRole(admin, poolAcquireQueueRole, t.Logf)
 	for _, statement := range []string{
 		"CREATE ROLE " + poolAcquireDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + poolAcquireDomainPass + "'",
 		"CREATE ROLE " + poolAcquireQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + poolAcquireQueuePass + "'",

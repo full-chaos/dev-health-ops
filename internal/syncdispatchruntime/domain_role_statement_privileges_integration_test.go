@@ -207,6 +207,8 @@ func startDomainRoleHarness(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { containers.DropRole(admin, privilegeDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, privilegeQueueRole, t.Logf) })
 
 	for _, statement := range []string{
 		"CREATE ROLE " + privilegeDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +

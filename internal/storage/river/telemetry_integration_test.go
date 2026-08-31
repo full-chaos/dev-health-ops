@@ -44,6 +44,8 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
 	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
@@ -273,6 +275,8 @@ func TestQueueSaturationIsPerProcessAcrossReplicas(t *testing.T) {
 
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
 	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,

@@ -85,22 +85,30 @@ one package can get a different answer for each of its three.
 ```mermaid
 flowchart TD
     A[Integration suite] --> P{Is every Start* result<br/>eventually Closed?}
-    P -- no --> PF[Fix that FIRST<br/>a discarded Instance leaks a<br/>database on every run,<br/>including passing ones]
-    P -- yes --> Q[Decide EACH store separately]
+    P -- no --> PF[Fix that FIRST: a discarded Instance<br/>leaks a database on every run,<br/>including passing ones]
+    P -- yes --> Q[Ask these of EACH store<br/>independently]
 
-    Q --> V{Uses Valkey?}
-    V -- yes --> V1[Valkey: local container<br/>no CREATE DATABASE to<br/>isolate parallel callers]
+    Q --> O{Is anything created<br/>behind the harness?}
+    O -- yes --> O1[Nothing namespaces or drops it,<br/>so lanes collide]
 
-    Q --> PGQ{Uses PostgreSQL?}
-    PGQ -- yes --> R{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
-    R -- yes --> R1[PostgreSQL: local container<br/>a scratch database does not<br/>isolate roles, and two lanes<br/>collide on a fixed name<br/>even if the suite drops it first]
-    R -- no --> R2[PostgreSQL: kiac<br/>CI is a sufficient backstop:<br/>the versions match]
+    Q --> R{Does it create cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
+    R -- yes --> R1[A scratch database does not isolate<br/>these, and two lanes collide on a<br/>fixed name even if one drops it first]
 
-    Q --> CHQ{Uses ClickHouse?}
-    CHQ -- yes --> O{Created only through<br/>the harness?}
-    O -- no --> O1[ClickHouse: local container<br/>nothing namespaces or drops<br/>a resource made behind it]
-    O -- yes --> O2[ClickHouse: kiac<br/>the sole target on prod's 26.7 line;<br/>CI cannot prove engine behaviour]
+    Q --> V{Does it use Valkey?}
+    V -- yes --> V1[Valkey has no CREATE DATABASE<br/>to isolate parallel callers]
+
+    Q --> C{Does it touch ClickHouse?}
+    C -- yes --> C1[CI runs 25.1 against a 26.7<br/>production line, so it cannot<br/>prove engine behaviour]
+
+    O1 --> T[Read that store's cell<br/>in the table below]
+    R1 --> T
+    V1 --> T
+    C1 --> T
 ```
+
+The flow asks the questions; **the table answers them**. A `yes` to any of these
+is a reason a store may be blocked, not a routing decision — the row is the
+routing decision.
 
 Note what is **not** a fork here. "Does it assert a pristine database?" used to
 be one, and should not be: every caller gets a freshly created scratch database,
@@ -150,9 +158,9 @@ semantics that a version change can move.
 | `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
-| `cmd/dev-health-worker` | 24s | **host** | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
+| `cmd/dev-health-worker` | 24s | **host** | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. |
 | `internal/syncreconciler` | 16s | **host** | — | — | yes | Creates roles without dropping them first. |
-| `internal/externalrecompute` | 15s | kiac | — | **host** | yes | PostgreSQL from kiac; only Valkey is local. |
+| `internal/externalrecompute` | 15s | kiac | — | **host** | yes | Uses Valkey. |
 | `cmd/dev-health-workerctl` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
 | `internal/joboperator` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
 | `internal/synccoverage` | 13s | kiac | — | — | yes | Pure PostgreSQL. |

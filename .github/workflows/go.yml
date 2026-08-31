@@ -112,7 +112,69 @@ permissions:
   contents: read
 
 jobs:
+  # CHAOS-4676: `push` (scoped to all branches, for coverage when a branch
+  # has no open PR — see the `schedule` comment above) and `pull_request`
+  # both trigger on every push to a PR branch, same SHA, racing each other
+  # for capacity and producing two same-name check runs a rollup reader
+  # can't tell apart (one FAILURE while the other is still running or
+  # already `success`; this made two same-commit contentions read as
+  # ambiguous "is CI green" answers on 2026-08-31, and manufactured at least
+  # one integration timing flake by doubling the suite's concurrent load).
+  #
+  # This job makes the choice explicit instead: a `push` run on a branch
+  # that already has an open PR is redundant, because the `pull_request` run
+  # on the identical commit is authoritative, so every substantive job below
+  # is skipped (not removed) for that case. A GitHub Actions "skipped"
+  # conclusion counts as passing for a required check, so `go-quality`
+  # (required on main via the ruleset) still satisfies branch protection on
+  # a no-PR branch push, and post-merge pushes to main (which never have an
+  # open PR with that head) are unaffected and keep running for real.
+  #
+  # Replacement for the flake-control this removes (ticket comment,
+  # 2026-08-31): the duplicate run had started serving as an unintended
+  # same-commit control — twice in one day, "the other run passed on
+  # identical code" made an infra flake provable rather than merely
+  # suspected. That diagnostic goes away with the duplicate. The deliberate
+  # replacement: a suspected infra flake on a required check gets an
+  # EXPLICIT rerun of just that job (`gh run rerun <run-id> --job <job-id>`,
+  # runs enumerated by full 40-char SHA per the ticket's CI-verdict rules),
+  # not a second full fan-out. Slower, and it costs the "simultaneous pass
+  # on identical code" evidence, but it does not reintroduce the capacity
+  # waste or the ambiguous rollup this ticket exists to remove.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Decide whether this push run is superseded by an open PR
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "push" ]; then
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          owner="${REPO%%/*}"
+          count=$(gh api "repos/${REPO}/pulls?head=${owner}:${BRANCH}&state=open" --jq 'length')
+          if [ "${count}" -gt 0 ]; then
+            echo "skipping: branch '${BRANCH}' has ${count} open PR(s); the pull_request run on this SHA is authoritative" >&2
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "running: branch '${BRANCH}' has no open PR; this push run provides its only gate coverage" >&2
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   go-quality:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -161,6 +223,8 @@ jobs:
         run: bash ci/check_river_compat_static.sh
 
   go-storage-integration-plan:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -180,7 +244,8 @@ jobs:
 
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
-    needs: go-storage-integration-plan
+    needs: [guard, go-storage-integration-plan]
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -221,8 +286,9 @@ jobs:
   # aggregate result only after every shard has reached a terminal state.
   go-storage-integration:
     name: go-storage-integration
-    if: ${{ always() }}
+    if: ${{ needs.guard.outputs.skip != 'true' && always() }}
     needs:
+      - guard
       - go-storage-integration-plan
       - go-storage-integration-shard
     runs-on: ubuntu-latest
@@ -242,6 +308,8 @@ jobs:
           echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -251,6 +319,8 @@ jobs:
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -299,6 +369,8 @@ jobs:
           version: v0.70.0
 
   go-container-reproducibility:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -308,6 +380,8 @@ jobs:
         run: bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

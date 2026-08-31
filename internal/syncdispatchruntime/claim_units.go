@@ -180,7 +180,9 @@ RETURNING id::text`,
 	// Reading last cannot double-count what was just claimed: every claimed
 	// row is now DISPATCHING with updated_at = now, which matches none of the
 	// three predicates below (a fresh DISPATCHING row is not past the stale
-	// cutoff), and every claimed row is in authorizedSlice anyway.
+	// cutoff), and every claimed row is in authorizedSlice anyway. It is also
+	// excluded by claimedIDs explicitly -- see that parameter's doc for why the
+	// ordering is a compile-time data dependency and not a convention.
 	//
 	// This is a narrower window, not a closed one: a writer can still commit
 	// after this read. That residue is not a liveness hole -- the reconciler's
@@ -188,7 +190,7 @@ RETURNING id::text`,
 	// due-RETRYING units and re-arms dispatch (internal/syncreconciler/
 	// materializer.go), so a row this probe misses is still picked up. The arm
 	// here exists to make the common case prompt, not to be the only backstop.
-	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, authorizedSlice, cappedSlice, now)
+	deferredOutsideSnapshot, err := claimableOutsideSnapshot(ctx, tx, syncRunID, claimedIDs, authorizedSlice, cappedSlice, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -223,17 +225,37 @@ ORDER BY id`,
 
 // claimableOutsideSnapshot returns, in id order, every unit of this run that
 // the three claim statements' own predicates match RIGHT NOW but that this
-// pass never authorized and never deliberately capped -- i.e. exactly the
-// rows the snapshot-to-claim window (CHAOS-4605) made claimable after
-// authorizeRun had already decided this pass's capacity.
+// pass did not take -- i.e. exactly the rows the snapshot-to-claim window
+// (CHAOS-4605) made claimable after authorizeRun had already decided this
+// pass's capacity.
 //
 // The predicate is the disjunction of the three claim statements' status/
-// timing tests, kept in the same file and the same order as the statements
-// it mirrors so the two cannot drift silently. capped ids are excluded
-// because a capped unit is a DELIBERATE deferral the guard already accounts
-// for and already re-arms; only the unauthorized remainder is news.
+// timing tests, kept in the same file and the same order as the statements it
+// mirrors so the two cannot drift silently. capped ids are excluded because a
+// capped unit is a DELIBERATE deferral the guard already accounts for and
+// already re-arms; only the unclaimed remainder is news.
+//
+// claimedIDs is what makes the ORDERING structural rather than conventional.
+// This must run AFTER the three claim statements (codex sol architecture round,
+// reservation 3): probing first means a row made claimable between the probe
+// and the claims is refused SILENTLY, with no wakeup armed for it. A comment
+// saying "call me last" is not enforcement, and the obvious guard -- a test
+// asserting the ordering -- does not work: the two positions are
+// indistinguishable unless a commit lands exactly between them, which no test
+// can arrange without a production seam. (Confirmed the hard way: a mutation
+// moving this call back to the head SURVIVED an ordering test built without
+// that seam.)
+//
+// So the ordering is expressed as a data dependency instead. claimedIDs does
+// not exist until all three statements have run, so a caller CANNOT invoke this
+// early -- it stops compiling. That the exclusion is also semantically the right
+// one is what makes this honest rather than a fake argument: "rows this pass did
+// not take" is literally `NOT claimed`, and every claimed id is in
+// authorizedSlice anyway, so the clause changes no result. It states the
+// contract directly instead of through a proxy, and gets the enforcement free.
 func claimableOutsideSnapshot(
-	ctx context.Context, tx pgx.Tx, syncRunID string, authorizedSlice, cappedSlice []string, now time.Time,
+	ctx context.Context, tx pgx.Tx, syncRunID string, claimedIDs map[string]bool,
+	authorizedSlice, cappedSlice []string, now time.Time,
 ) ([]string, error) {
 	ids, err := execReturningIDs(ctx, tx, `
 SELECT id::text FROM public.sync_run_units
@@ -245,9 +267,11 @@ WHERE sync_run_id = $1::uuid
       )
   AND NOT (id = ANY($7::uuid[]))
   AND NOT (id = ANY($8::uuid[]))
+  AND NOT (id = ANY($9::uuid[]))
 ORDER BY id`,
 		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusRetrying, now,
-		syncRunUnitStatusDispatching, staleDispatchCutoff(now), authorizedSlice, cappedSlice)
+		syncRunUnitStatusDispatching, staleDispatchCutoff(now), authorizedSlice, cappedSlice,
+		mapKeysToSlice(claimedIDs))
 	if err != nil {
 		return nil, fmt.Errorf("load claimable units outside the guard snapshot: %w", err)
 	}

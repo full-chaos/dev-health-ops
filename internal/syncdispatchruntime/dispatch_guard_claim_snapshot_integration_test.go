@@ -489,3 +489,87 @@ WHERE id = $1::uuid AND status = 'running'`,
 		}
 	})
 }
+
+// TestClaimableOutsideSnapshotMustBeProbedAfterTheClaimsNotBefore is the red
+// evidence for the probe-ordering fix (codex sol architecture round,
+// reservation 3).
+//
+// The two orderings are indistinguishable WITHOUT a concurrent writer: the
+// probe excludes authorized ∪ capped, and the claim statements only ever touch
+// authorized ids, so with a quiet table both orderings return the same set.
+// The difference is exactly one thing -- a commit landing between them -- so
+// the test produces that commit and runs BOTH probe positions against it.
+//
+// HONEST SCOPE, because this was checked rather than assumed. This test
+// demonstrates the GAP -- a probe taken before a concurrent commit cannot see
+// it, so probing early refuses the unit silently and arms no wakeup. It is NOT
+// a regression guard for the ordering: a mutation moving the probe back to the
+// head of claimUnits SURVIVED an earlier version of this test, because the
+// commit below lands before claimUnits is entered at all, so both probe
+// positions sit on the same side of it. Arranging a commit strictly between the
+// probe and the three claim statements would need a production test-seam, which
+// is not worth carrying.
+//
+// The ordering is therefore enforced by the COMPILER instead, not by this test:
+// claimableOutsideSnapshot takes claimedIDs, which does not exist until all
+// three claim statements have run, so calling it early does not build. See its
+// doc comment. This test's job is to justify why that enforcement is wanted.
+func TestClaimableOutsideSnapshotMustBeProbedAfterTheClaimsNotBefore(t *testing.T) {
+	withClaimSnapshotPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		bucketCap := syncUnitConcurrencyPerBucket()
+		guardNow := pgNow()
+		claimNow := guardNow.Add(400 * time.Millisecond)
+
+		saturateClaimSnapshotBucket(t, ctx, pool, bucketCap, guardNow)
+		owner := "dead-worker"
+		expired := guardNow.Add(-time.Minute)
+		lostUnit := "00000000-0000-4000-8000-0000000004f1"
+		insertClaimSnapshotUnit(t, ctx, pool, claimSnapshotUnitFixture{
+			id: lostUnit, status: syncRunUnitStatusRunning, updatedAt: guardNow,
+			leaseOwner: &owner, leaseExpiresAt: &expired,
+		})
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		decision, err := authorizeRun(ctx, tx, nil, claimSnapshotOrg, claimSnapshotRun, guardNow)
+		if err != nil {
+			t.Fatalf("authorizeRun: %v", err)
+		}
+		authorizedSlice := mapKeysToSlice(decision.authorizedUnitIDs)
+
+		// The OLD ordering: probe at the head of claimUnits, before any claim
+		// statement has run and before the concurrent writer commits.
+		probedFirst, err := claimableOutsideSnapshot(ctx, tx, claimSnapshotRun, nil, authorizedSlice, nil, claimNow)
+		if err != nil {
+			t.Fatalf("claimableOutsideSnapshot (old position): %v", err)
+		}
+
+		// The commit the two orderings disagree about.
+		leaseRepairFlipToRetrying(t, ctx, pool, lostUnit, guardNow.Add(200*time.Millisecond), guardNow)
+
+		claimed, probedLast, err := claimUnits(ctx, tx, claimSnapshotRun, decision.authorizedUnitIDs, nil, claimNow)
+		if err != nil {
+			t.Fatalf("claimUnits: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(probedFirst) != 0 {
+			t.Fatalf("probe at the OLD position returned %v; the fixture is wrong -- it must run before the flip commits, so it can only see a RUNNING row", probedFirst)
+		}
+		if got := idsOf(claimed); len(got) != 0 {
+			t.Fatalf("claimUnits claimed %v; want nothing -- the unit was never authorized", got)
+		}
+		// The whole point: the unit was correctly REFUSED either way, but only
+		// the last-position probe REPORTS it, and only a reported unit gets a
+		// redispatch armed for it by the caller.
+		if len(probedLast) != 1 || probedLast[0] != lostUnit {
+			t.Fatalf("probe at the NEW (last) position returned %v; want exactly [%s] -- probing first refuses the unit silently and the caller arms no wakeup for it", probedLast, lostUnit)
+		}
+	})
+}

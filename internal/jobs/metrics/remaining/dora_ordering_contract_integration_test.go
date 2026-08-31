@@ -488,6 +488,11 @@ func migratedClickHouse(
 	if err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}
+	// Register for teardown the moment the store exists, NOT after the
+	// migration chain below. Everything between here and the end of this
+	// function can t.Fatalf, and a fatal after an unregistered create leaks
+	// the scratch database on a shared server.
+	migratedInstances = append(migratedInstances, instance)
 
 	previous, had := os.LookupEnv(operationalOrderingContractEnv)
 	if err := os.Setenv(
@@ -526,7 +531,6 @@ func migratedClickHouse(
 	}
 
 	migratedStores[contract] = conn
-	migratedInstances = append(migratedInstances, instance)
 	return conn
 }
 

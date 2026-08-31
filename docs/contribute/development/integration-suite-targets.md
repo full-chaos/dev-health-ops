@@ -188,10 +188,12 @@ shared server would be far more dangerous than the problem it solves.
 
 | Class | Weight | Share |
 | --- | --- | --- |
-| Movable to kiac today | 1627s | **87.8%** |
+| Movable to kiac today | 1627s | **87.9%** |
 | Blocked by unparameterised roles | 151s | 8.2% |
 | Blocked by Valkey | 61s | 3.3% |
 | The harness's own self-test | 13s | 0.7% |
+
+Exactly, 1627/1852 = **87.85%**, rounded to 87.9% above.
 
 The role blocker is the removable one: parameterising those role names would
 take the movable share to **96.0%**.
@@ -291,14 +293,25 @@ variable rather than a connection failure.
 
 ### Sweeping orphans
 
-Each scratch database is logged as it is created and dropped:
+Each scratch database is announced before it is created, confirmed, and logged
+again when dropped:
 
 ```
-containers: created scratch postgres database "lane_4428_8a2c4feb5e391ab5"
-containers: dropped scratch postgres database "lane_4428_8a2c4feb5e391ab5"
+containers: creating scratch postgres database "lane_4428_8a2c4feb5e391ab5"
+containers: created  scratch postgres database "lane_4428_8a2c4feb5e391ab5"
+containers: dropped  scratch postgres database "lane_4428_8a2c4feb5e391ab5"
 ```
 
-A run killed between the two leaves the database behind. Find them by prefix:
+The first line exists because a server can commit `CREATE DATABASE` and the
+client still lose the response to a timeout or a dropped connection. Logging
+only on success would leave that database with no name anywhere. **The sweep
+rule is therefore: any `creating` with no matching `dropped` is a candidate
+orphan** — not any `created`.
+
+That race cannot be closed, only made findable: there is no way to create a
+database and register its cleanup atomically across a network.
+
+A run killed at any point leaves the database behind. Find them by prefix:
 
 ```sql
 SELECT datname FROM pg_database WHERE datname LIKE 'lane_<ticket>%';

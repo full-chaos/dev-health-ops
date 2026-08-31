@@ -242,6 +242,13 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 	}
 	defer func() { _ = admin.Close(ctx) }()
 
+	// Announce the name BEFORE attempting the CREATE. The server can commit
+	// the statement and the client still lose the response to a timeout or a
+	// dropped connection; logging only on success would leave that database
+	// with no name anywhere, invisible to the prefix sweep. Findability is the
+	// whole design here -- the race itself cannot be closed, because there is
+	// no way to create and register atomically across a network.
+	logScratch("creating", "postgres", database)
 	if _, err := admin.Exec(ctx, createStatement); err != nil {
 		return nil, fmt.Errorf("create scratch database %q: %w", database, err)
 	}
@@ -314,6 +321,8 @@ func startClickHouseRemote(ctx context.Context, dsn string, httpDSN string) (*In
 	}
 	defer func() { _ = admin.Close() }()
 
+	// Announced before the attempt for the same reason as the PostgreSQL path.
+	logScratch("creating", "clickhouse", database)
 	if err := admin.Exec(ctx, createStatement); err != nil {
 		return nil, fmt.Errorf("create scratch ClickHouse database %q: %w", database, err)
 	}

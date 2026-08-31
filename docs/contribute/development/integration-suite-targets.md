@@ -14,7 +14,7 @@ lifecycle: active
 
 # Integration suite targets: Testcontainers, kiac, or CI
 
-Every Go integration suite in this repository needs a real datastore. There are
+Every Go integration suite in dev-health-ops needs a real datastore. There are
 three places it can come from, and picking the wrong one produces a green run
 that proves nothing.
 
@@ -51,13 +51,13 @@ Three consequences follow, and they are the whole decision procedure:
    is accepted on 26.7 and rejected on 24.8 with
    `Code: 403 Unsupported JOIN ON conditions`, under every analyzer setting.
    A version gap changes *what SQL is accepted at all*.
-2. **This repository's host Testcontainers cannot prove it either.** They run
+2. **The ops host Testcontainers cannot prove it either.** They run
    26.6.1, one minor **below** the 26.7 floor acr ruled for exactly this
    reason — so an ops host container would fail acr's own
    `AtLeastVersionFloor` check. This is the caveat that is easiest to miss:
    "I ran it against a real ClickHouse locally" is not the same claim as "I
    ran it against production's engine".
-3. **kiac is the only target in this repository that matches production's
+3. **kiac is the only target in dev-health-ops that matches production's
    ClickHouse line.** So moving ClickHouse-touching suites there is a
    correctness upgrade, not only a Docker saving.
 
@@ -82,7 +82,7 @@ flowchart TD
     H -- no --> J[kiac in-cluster<br/>CI is an acceptable backstop]
 ```
 
-## Per-package matrix — Go, this repository
+## Per-package matrix — Go, dev-health-ops
 
 Weights are the declared CI shard weights from `ci/go_integration_shards.tsv`;
 they are the best available proxy for what each package costs. "Stores" is

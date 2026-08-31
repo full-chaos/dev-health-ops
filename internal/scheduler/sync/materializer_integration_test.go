@@ -27,10 +27,11 @@ CREATE TABLE public.sync_configurations (
  last_sync_at timestamptz,last_sync_success boolean,last_sync_error text,last_sync_stats json,
  updated_at timestamptz NOT NULL,
  -- parent_id (real column, models/settings.py::SyncConfiguration.parent_id):
- -- added for CHAOS-4629's repo-limit rebalance, which mirrors
- -- discovery.py::_active_repo_usage_count_for_limit's "planner-managed
- -- PARENT" distinction (parent_id IS NULL) exactly. No prior query in this
- -- package needed it.
+ -- added for CHAOS-4629's repo-limit rebalance
+ -- (activeRepoUsageCountForLimit/rebalanceJiraSourceRepoLimit), which
+ -- mirrors discovery.py::_active_repo_usage_count_for_limit's "planner-
+ -- managed PARENT" distinction (parent_id IS NULL) exactly. No prior query
+ -- in this package needed it.
  parent_id uuid
 );
 CREATE TABLE public.integrations (

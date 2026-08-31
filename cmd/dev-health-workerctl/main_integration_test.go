@@ -34,15 +34,21 @@ import (
 // authority CheckCoordinatorAuthorization itself asserts against -- rather
 // than a hand-copied list that could drift from it.
 const (
-	workerctlDomainRole      = "workerctl_domain_runtime"
-	workerctlQueueRole       = "workerctl_queue_runtime"
-	workerctlCoordinatorRole = "workerctl_coordinator_runtime"
 	workerctlDomainPass      = "workerctl_domain_password"
 	workerctlQueuePass       = "workerctl_queue_password"
 	workerctlCoordinatorPass = "workerctl_coordinator_password"
 	workerctlSchema          = "river"
-	workerctlDatabase        = "worker_test"
 )
+
+// workerctlRoleNames holds one call's cluster-scoped role names. CREATE ROLE
+// is cluster-scoped, not database-scoped -- a scratch database does not
+// isolate it (CHAOS-4661) -- so every name here is derived from this call's
+// own database identity rather than hard-coded.
+type workerctlRoleNames struct {
+	domain      string
+	queue       string
+	coordinator string
+}
 
 // startJobRouteHarness starts a real PostgreSQL container, creates the three
 // least-privilege runtime roles the production binary authenticates as, and
@@ -50,7 +56,7 @@ const (
 // grants derived from postgres.CoordinatorPosture()) against it. It returns
 // the admin pool (for seeding fixtures) and the instance URI (for connecting
 // as each restricted role).
-func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string) {
+func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string, workerctlRoleNames) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -69,12 +75,29 @@ func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, str
 	}
 	t.Cleanup(admin.Close)
 
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := workerctlRoleNames{
+		domain:      "workerctl_domain_runtime_" + roleSuffix,
+		queue:       "workerctl_queue_runtime_" + roleSuffix,
+		coordinator: "workerctl_coordinator_runtime_" + roleSuffix,
+	}
+	t.Cleanup(func() { containers.DropRole(admin, roles.domain, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, roles.queue, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, roles.coordinator, t.Logf) })
+
 	setup := []string{
-		"CREATE ROLE " + workerctlDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlDomainPass + "'",
-		"CREATE ROLE " + workerctlQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlQueuePass + "'",
-		"CREATE ROLE " + workerctlCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlCoordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE " + workerctlDatabase + " TO " + workerctlDomainRole + ", " + workerctlQueueRole + ", " + workerctlCoordinatorRole,
-		"REVOKE TEMPORARY ON DATABASE " + workerctlDatabase + " FROM PUBLIC",
+		"CREATE ROLE " + roles.domain + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlDomainPass + "'",
+		"CREATE ROLE " + roles.queue + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlQueuePass + "'",
+		"CREATE ROLE " + roles.coordinator + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + workerctlCoordinatorPass + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roles.domain + ", " + roles.queue + ", " + roles.coordinator,
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		// Real production shapes: the three worker_job_* tables newJobRouteController's
 		// coordinator pool touches (control.go), and sync_run_units, which the
@@ -119,14 +142,14 @@ func startJobRouteHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, str
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:            workerctlSchema,
-		DomainRole:        workerctlDomainRole,
-		QueueRole:         workerctlQueueRole,
-		CoordinatorRole:   workerctlCoordinatorRole,
+		DomainRole:        roles.domain,
+		QueueRole:         roles.queue,
+		CoordinatorRole:   roles.coordinator,
 		CoordinatorGrants: coordinatorGrants,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return admin, instance.URI
+	return admin, instance.URI, roles
 }
 
 // connectAsRole opens a pool authenticated as one of the harness's restricted
@@ -149,7 +172,7 @@ func connectAsRole(t *testing.T, ctx context.Context, rawURI, role, password str
 func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	admin, uri := startJobRouteHarness(t, ctx)
+	admin, uri, roles := startJobRouteHarness(t, ctx)
 
 	if _, err := admin.Exec(ctx, `
 		INSERT INTO public.worker_job_routes
@@ -168,9 +191,9 @@ func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
 	// pool. If newJobRouteController were wired back onto the domain role (the
 	// CHAOS-3113 regression), every coordinator statement below would fail
 	// with 42501 rather than the assertions below failing on their own terms.
-	coordinatorPool := connectAsRole(t, ctx, uri, workerctlCoordinatorRole, workerctlCoordinatorPass)
-	domainPool := connectAsRole(t, ctx, uri, workerctlDomainRole, workerctlDomainPass)
-	queuePool := connectAsRole(t, ctx, uri, workerctlQueueRole, workerctlQueuePass)
+	coordinatorPool := connectAsRole(t, ctx, uri, roles.coordinator, workerctlCoordinatorPass)
+	domainPool := connectAsRole(t, ctx, uri, roles.domain, workerctlDomainPass)
+	queuePool := connectAsRole(t, ctx, uri, roles.queue, workerctlQueuePass)
 
 	controller, err := newJobRouteController(coordinatorPool, domainPool, queuePool, workerctlSchema, registry)
 	if err != nil {

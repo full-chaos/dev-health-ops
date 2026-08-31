@@ -160,9 +160,23 @@ CREATE TABLE public.worker_job_runs (
 	// QueueRole only need to EXIST for ApplyPinnedMigrations's role-
 	// eligibility preflight; this test never connects as either (functional
 	// behavior, not privilege-boundary coverage -- CHAOS-4209 owns that).
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	routeHoldDomainRole, err := containers.RoleName("routehold_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeHoldQueueRole, err := containers.RoleName("routehold_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer containers.DropRole(pool, routeHoldDomainRole, t.Logf)
+	defer containers.DropRole(pool, routeHoldQueueRole, t.Logf)
 	roleSetup := []string{
-		"CREATE ROLE routehold_domain_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
-		"CREATE ROLE routehold_queue_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
+		"CREATE ROLE " + routeHoldDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
+		"CREATE ROLE " + routeHoldQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
 	}
 	for _, statement := range roleSetup {
 		if _, err := pool.Exec(ctx, statement); err != nil {
@@ -171,8 +185,8 @@ CREATE TABLE public.worker_job_runs (
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, pool, riverstore.MigrationOptions{
 		Schema:     "river",
-		DomainRole: "routehold_domain_runtime",
-		QueueRole:  "routehold_queue_runtime",
+		DomainRole: routeHoldDomainRole,
+		QueueRole:  routeHoldQueueRole,
 	}); err != nil {
 		t.Fatal(err)
 	}

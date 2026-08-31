@@ -539,7 +539,25 @@ INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
 	// full posture audit, not this venue. Successful
 	// prepare/load/complete below is therefore readiness evidence derived from
 	// the domain-accessible snapshot surface, not public.alembic_version.
-	const role = "providersync_domain_probe"
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). This role already DROPped
+	// itself first, which makes a lone re-run safe, but two concurrent lanes
+	// on the same shared kiac cluster still race on the fixed name and one
+	// can drop the role out from under the other mid-test. Deriving it from
+	// this call's own database identity removes the collision outright.
+	role, err := containers.RoleName("providersync_domain_probe", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unique-per-call names (above) removed the old collision-avoidance
+	// side effect that used to bound this role's lifetime: two runs never
+	// share a name anymore, so nothing before this line ever exercises the
+	// leading "DROP ROLE IF EXISTS" for real, and without an explicit
+	// cleanup this role becomes a permanent, unbounded addition to the
+	// shared cluster (CHAOS-4661 follow-up). DropRole runs DROP OWNED BY
+	// before DROP ROLE so it succeeds against this role's own GRANTs
+	// (below) rather than failing "some objects depend on it".
+	defer containers.DropRole(ownerPool, role, t.Logf)
 	for _, statement := range []string{
 		`DROP ROLE IF EXISTS ` + role,
 		`CREATE ROLE ` + role + ` LOGIN PASSWORD 'probe'`,

@@ -151,31 +151,31 @@ semantics that a version change can move.
 
 | Package | Weight | PG | CH | Valkey | CI proof? | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `internal/providersync` | 1166s | **host** | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. |
+| `internal/providersync` | 1166s | kiac | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. Role name parameterised by CHAOS-4661 for both re-run- and concurrency-safety; self-cleans via `containers.DropRole` (see "Executed evidence" below). |
 | `internal/scheduler/fixed` | 143s | kiac | — | — | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | — | kiac | — | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
-| `internal/storage/postgres` | 91s | **host** | — | — | yes | Creates roles without dropping them first, so a shared cluster fails on re-run. Otherwise pure PostgreSQL. |
-| `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. |
+| `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
+| `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Out of CHAOS-4661 scope; tracked as CHAOS-4677. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
-| `cmd/dev-health-worker` | 24s | **host** | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. |
-| `internal/syncreconciler` | 16s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `cmd/dev-health-worker` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
+| `internal/syncreconciler` | 16s | kiac | — | — | yes | Role names parameterised by CHAOS-4661: `unreclaimable_sweep_role_split_integration_test.go` plus 3 same-package consumers of `kernel_integration_test.go`'s shared role fixture (`active_active_integration_test.go`, `terminal_delivery_repair_integration_test.go` × 3 call sites) that a `CREATE ROLE` grep could not see. |
 | `internal/externalrecompute` | 15s | kiac | — | **host** | yes | Uses Valkey. |
-| `cmd/dev-health-workerctl` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
-| `internal/joboperator` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `cmd/dev-health-workerctl` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661. |
+| `internal/joboperator` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (2 test functions sharing 1 setup helper). |
 | `internal/synccoverage` | 13s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/testsupport/containers` | 13s | **host** | **host** | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
-| `internal/joboutbox` | 12s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `internal/joboutbox` | 12s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (`relay_integration_test.go`, `strand_repair_integration_test.go`). |
 | `internal/jobs/system` | 12s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `cmd/dev-health-reconciler` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/storage/river` | 9s | **host** | — | — | yes | Applies the River schema to a scratch DB. |
+| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **Dual-path backup/restore**: its round-trip test dispatches on `instance.Container` -- non-nil (host Testcontainers, including CI) runs `pg_dump`/`createdb`/`pg_restore` via `instance.Container.Exec`, reusing the `postgres:18-alpine` image's own bundled PostgreSQL 18 client tools with zero host dependency (this is the original, pre-CHAOS-4661 mechanism, restored); nil (the kiac remote path, no container to exec into) runs the same three binaries as host processes instead. **Host-tools requirement is remote-path only**: `assertPostgresClientToolsAvailable` (PATH + PostgreSQL 18+ major-version check, failing with an install instruction rather than an opaque exec error) gates only the host-process branch -- CI, which runs the container path, carries no such dependency and is unaffected by what PostgreSQL client tools its runner happens to have. |
 | `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
-| `internal/jobs/metrics/daily` | 6s | **host** | kiac | — | **no** | Creates roles without dropping them first -- this is the package the failure was found on. Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
+| `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised by CHAOS-4661 -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
 | `internal/jobs/metrics/remaining` | 6s | kiac | kiac | — | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
-| `internal/syncdispatchruntime` | 6s | **host** | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. |
+| `internal/syncdispatchruntime` | 6s | kiac | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. Role names parameterised by CHAOS-4661 across 3 files (7 test functions sharing 1 setup helper, plus 2 standalone files); still host-bound overall for Valkey, same as `cmd/dev-health-worker`. Also fixed a cross-*package* literal collision: this package and `internal/storage/postgres`'s grant-reconciliation suite hard-coded the identical role name `grant_domain_runtime`, which ordinary `go test ./...` parallelism could already collide on, independent of any lane/cluster concept. |
 | `cmd/query-api/internal/routeswitch` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobrescue` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobruntime` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
@@ -197,47 +197,62 @@ and `cmd/dev-health-worker/multi_family_boot` (may transitively hit the
 ordering guard but asserts nothing about it). Both sit inside packages already
 routed to kiac, so the uncertainty changes no routing decision today.
 
-### The second blocker: PostgreSQL roles are cluster-scoped
+### The second blocker: PostgreSQL roles are cluster-scoped — RESOLVED by CHAOS-4661
 
 A scratch **database** isolates tables. It does **not** isolate roles, tablespaces
 or event triggers — those live in the cluster, which is shared.
 
-19 test files across 10 packages run `CREATE ROLE`, and **17 of them do not drop
-the role first**; they rely on the container being a brand-new cluster. Point
-one of those at a shared server and the first run passes, leaves the role
-behind, and the second run fails:
+19 test files across 10 packages ran `CREATE ROLE`, and **17 of them did not drop
+the role first**; they relied on the container being a brand-new cluster. Point
+one of those at a shared server and the first run passed, left the role
+behind, and the second run failed:
 
 ```
 ERROR: role "finalize_redrive_test_domain" already exists (SQLSTATE 42710)
 ```
 
-Found by running `internal/jobs/metrics/daily` twice against kiac. It is a
-re-runnability failure, not a correctness one, and it is invisible on the first
-run — which is exactly what makes it worth writing down.
+Found by running `internal/jobs/metrics/daily` twice against kiac, and
+independently reproduced by CHAOS-4661 on a fresh detached worktree at the
+untouched parent commit before any fix: run 1 passed, run 2 failed with the
+same SQLSTATE. It was a re-runnability failure, not a correctness one, and it
+was invisible on the first run — which is exactly what made it worth writing
+down.
 
 Two packages (`internal/providersync`, `internal/storage/river`) already
-`DROP ROLE` before creating, so they are safe to **re-run**. They are still not
-safe to run **concurrently**: two lanes race on the same fixed role name, and
-the one that drops it does so out from under the other.
+`DROP ROLE`d before creating, so they were safe to **re-run**. They were still
+not safe to run **concurrently**: two lanes would race on the same fixed role
+name, and the one that dropped it would do so out from under the other.
 
 **Under the concurrent bar that is the deciding test, so a fixed role name
-blocks its package's PostgreSQL — including where the package drops the role
-first.** This is the single largest constraint on this page:
-`internal/providersync` alone is 1166s, and it is in this set. Which packages
-that covers, and what it means for each of their stores, is the table's to say.
+blocked its package's PostgreSQL — including where the package dropped the
+role first.** This was the single largest constraint on this page:
+`internal/providersync` alone is 1166s, and it was in this set.
 
-The fix is a per-test change, not a harness change — the harness cannot rename a
-role a test hard-codes, and having it drop unknown roles on a shared server
-would be far more dangerous than the problem it solves. Tracked as CHAOS-4661,
-which the table below shows is worth more than everything else combined.
+**CHAOS-4661 fixed this in the tests, not the harness** — the harness cannot
+rename a role a test hard-codes, and having it drop unknown roles on a shared
+server would be far more dangerous than the problem it solves. Every role name
+in the 19 files (plus same-package and cross-file consumers a literal
+`CREATE ROLE` grep could not see — shared setup helpers, an external
+`provision_river_roles.sql` invocation, and a cross-*package* literal
+collision between two packages) is now suffixed with
+`containers.RoleSuffix(instance)`: the scratch database's own crypto-random
+suffix (`internal/testsupport/containers/rolename.go`), so two successive runs
+and two concurrent lanes on the same kiac cluster never collide. The same
+literal-hardcoding defect existed one level down for the DATABASE name — about
+a dozen files `GRANT`/`REVOKE`d against a hard-coded `worker_test`, which only
+exists on the host container path and does not exist on kiac at all — fixed
+the same way, via `containers.DatabaseName(instance.URI)`. All ten packages'
+PostgreSQL now routes to kiac in the table above.
 
 ### What that adds up to
 
 31 packages, **1852s (30.9 min)** of declared integration weight.
 
+**Before CHAOS-4661:**
+
 | Class | Weight | Share |
 | --- | --- | --- |
-| Movable to kiac today | 402s | **21.7%** |
+| Movable to kiac | 402s | **21.7%** |
 | Blocked by unparameterised role names | 1356s | 73.2% |
 | Blocked by out-of-band fixed-name databases | 50s | 2.7% |
 | Blocked by Valkey | 31s | 1.7% |
@@ -245,38 +260,56 @@ which the table below shows is worth more than everything else combined.
 
 Exactly, 402/1852 = **21.71%**, rounded to 21.7% above.
 
-**That number is small because of one package.** `internal/providersync` alone
-is 1166s — 63% of all integration weight — and it creates fixed role names. It
-drops them first, so it is fine run on its own, and it is unsafe beside a
-concurrent lane. Under the concurrent bar it counts as blocked.
+**That number was small because of one package.** `internal/providersync` alone
+is 1166s — 63% of all integration weight — and it created a fixed role name. It
+dropped it first, so it was fine run on its own, and it was unsafe beside a
+concurrent lane. Under the concurrent bar it counted as blocked.
 
-Two of the five classes are removable, and they are tracked:
+**After CHAOS-4661 (current state, this page):**
 
-| After | Movable | Share |
+| Class | Weight | Share |
 | --- | --- | --- |
-| today | 402s | 21.7% |
-| CHAOS-4661 — parameterise role names | 1728s | **93.3%** |
-| CHAOS-4661 + CHAOS-4677 — and namespace the parity databases | 1778s | **96.0%** |
+| Movable to kiac | 1728s | **93.3%** |
+| Blocked by out-of-band fixed-name databases | 50s | 2.7% |
+| Blocked by Valkey | 31s | 1.7% |
+| Blocked by roles **and** Valkey (`cmd/dev-health-worker`, `internal/syncdispatchruntime`) — Valkey is now the ONLY blocker, but it still blocks | 30s | 1.6% |
+| The harness's own self-test | 13s | 0.7% |
 
-**Projections here are derived, not typed: a package counts as movable under a
-hypothetical only when EVERY blocking store is resolved.** That distinction is
-not pedantry — it is the correction that produced these numbers. Adding the
-blocked buckets together over-counts, because `cmd/dev-health-worker` and
-`internal/syncdispatchruntime` are blocked by roles **and** Valkey, so fixing
-the role names moves their PostgreSQL and leaves them host-bound anyway. The
-same 30s pair had already caused two earlier errors on this page.
+1728/1852 = **93.30%**, rounded to 93.3% above — re-derived by script from
+`ci/go_integration_shards.tsv` against the exact set of packages this page
+marks role-blocked, not typed: `movable_today (402) + role_blocked (1356) -
+still_blocked_by_valkey_too (30) = 1728`.
 
-**CHAOS-4661 is the priority unlock**: it is worth about 72 percentage points on
-its own (21.7% → 93.3%), far more than anything else here. CHAOS-4677 then adds
-2.7 (93.3% → 96.0%). The residual **74s (4.0%)** is Valkey, the harness's own
-self-test, and the two packages that need both fixes, and it does not shrink
-further.
+**A package counts as movable only when EVERY blocking store is resolved.**
+That distinction is not pedantry — it is the correction that produced this
+number. Adding the blocked buckets together over-counts, because
+`cmd/dev-health-worker` and `internal/syncdispatchruntime` were blocked by
+roles **and** Valkey, so CHAOS-4661 moved their PostgreSQL and left them
+host-bound anyway (CHAOS-4666 tracks the Valkey side). The same 30s pair had
+already caused two earlier arithmetic errors on this page while it was still a
+projection.
 
-An earlier version of this page published 85.2%, and before that 87.9%. Both
-were computed with a single target per package, which hid role-creating
-packages behind another reason, and both measured re-runnability rather than
-concurrency. The figures above are derived from the table by script rather than
-by hand, and every bucket can be recomputed from it.
+**CHAOS-4661 was the priority unlock**: it moved 72 percentage points on its
+own (21.7% → 93.3%), far more than anything else on this page. CHAOS-4677 would
+add another 2.7 (93.3% → 96.0%) by namespacing the compute-parity databases.
+The residual **124s (6.7%)** is Valkey (61s: the 31s Valkey-only packages plus
+the 30s pair now blocked by Valkey alone), the out-of-band databases (50s), and
+the harness's own self-test (13s), and it does not shrink further without
+CHAOS-4677 and CHAOS-4666.
+
+An earlier version of this page published 85.2%, and before that 87.9%, then
+21.7% with a 93.3%/96.0% projection. The first two were computed with a single
+target per package, which hid role-creating packages behind another reason,
+and measured re-runnability rather than concurrency. 21.7% was the last
+pre-CHAOS-4661 measurement. 93.3% is no longer a projection against a
+hypothetical future fix: it is the routing this page's table now asserts,
+because the code shipping in the same change makes it true for all ten
+role-blocked packages by the same mechanism (`containers.RoleName`). The
+figures above are derived from the table by script rather than by hand, and
+every bucket can be recomputed from it. **Executed twice-in-succession proof
+for every individual package is tracked in "Executed evidence: CHAOS-4661"
+below — do not treat the percentage as a substitute for that table, and check
+it for any row still pending rather than assuming green.**
 
 The Valkey and self-test rows will not shrink. Valkey has no `CREATE DATABASE`
 to carve a private namespace out of a shared server, and its container is the
@@ -489,6 +522,106 @@ Isolation was verified by comparing the full `pg_database` and
 baselines, and a `LIKE 'lane_4428%'` sweep returns 0. The shared trial
 ClickHouse `default` database and the real-data `dh_0830` database were never
 written to.
+
+## Executed evidence: CHAOS-4661 (2026-08-31)
+
+Against `acr-local`'s in-cluster data plane — PostgreSQL 18.6 — with the Docker
+daemon left untouched.
+
+**Red-on-baseline**, independently reproduced (not only cited from the
+finding): a detached worktree at the untouched parent commit, running
+`internal/jobs/metrics/daily`'s
+`TestReconcileOrphanedFinalizeRedriveRunsClosesAnEventWhenRiverDiscardedTheJob`
+twice against kiac — run 1 **PASS**, run 2 **FAIL**
+`ERROR: role "finalize_redrive_test_domain" already exists (SQLSTATE 42710)`.
+
+**Mutation-proof**: on the fixed tree, restoring one role name to its old
+hard-coded literal reproduced the same twice-in-succession failure (run 1
+PASS, run 2 FAIL, same SQLSTATE); the tree was restored from the pre-mutation
+content (sha256 digest match), never via `git checkout`.
+
+**Twice-in-succession, every affected package, green both times:**
+
+| Package | Result |
+| --- | --- |
+| `internal/storage/postgres` | **PASS** — full package, both runs |
+| `internal/joboutbox` | **PASS** — full package, both runs |
+| `internal/joboperator` | **PASS** — full package, both runs |
+| `internal/syncreconciler` | **PASS** — full package, both runs |
+| `cmd/dev-health-workerctl` | **PASS** — full package, both runs |
+| `cmd/dev-health-worker` | **PASS** — the role-creating test (`TestRiverWorkerClientRunsReindexerWithoutPermissionErrors`); the package's other tests are Valkey/ClickHouse suites this ticket does not touch and stay host-bound regardless (see the matrix) |
+| `internal/syncdispatchruntime` | **PASS** — the 9 role-creating tests across its 3 files; same host-Valkey caveat as above |
+| `internal/jobs/metrics/daily` | **PASS** — see red-on-baseline and mutation-proof above |
+| `internal/storage/river` | **PASS** — full package, both runs, including the rewritten backup/restore round-trip |
+| `internal/providersync` | **PASS/PASS** — RUN 1 963.826s (16m5.834s), RUN 2 899.627s (15m1.354s), fresh pair, `go test -tags=integration -timeout=30m ./internal/providersync/...` |
+
+**Concurrent-pair proof**: `internal/providersync` and `internal/storage/postgres` run
+SIMULTANEOUSLY against the same shared `acr-local` cluster (distinct
+`DEV_HEALTH_TEST_SCRATCH_PREFIX` each) — both green (`exit=0`), 19:31:46Z→19:46:56Z,
+proving the role-name parameterisation holds under real concurrency, not only
+across successive runs.
+
+**Role cleanup — every role-creating test is now self-cleaning.** Unique-per-call
+role names (the fix above) silently disabled the old collision-avoidance side
+effect that used to bound a role's lifetime: two calls never share a name
+anymore, so the leading `DROP ROLE IF EXISTS` never fires for real, and
+without an explicit cleanup every role a test creates became a PERMANENT,
+unbounded addition to the shared cluster — one per test per run, forever, not
+the bounded/self-healing accumulation the fixed-name era had. This was found
+mid-review (both fresh, clean runs above still left roles behind) and fixed
+across all 22 role-creating files in scope: `containers.DropRole(pool, role,
+logf)` (`internal/testsupport/containers/rolename.go`) runs `DROP OWNED BY
+<role>` then `DROP ROLE IF EXISTS <role>` from a `defer`/`t.Cleanup`
+registered after the admin pool's own close-cleanup (so it fires while the
+pool is still open) — `DROP OWNED BY` first because a plain `DROP ROLE` fails
+closed against the role's own `GRANT`s ("some objects depend on it"),
+verified against a live cluster; it works even while a separate connection is
+still logged in as that role. 4 unit tests in `rolename_test.go` cover
+statement order, non-vacuity (both statements still attempt even if the first
+fails) and unsafe-name refusal. **Proof, no manual sweep**:
+`internal/joboperator`'s role count (`operator_domain/queue/coordinator_runtime`)
+held at 12 before → after RUN 1 → after RUN 2, twice-in-succession, both green,
+zero growth. **Mutation-spot-check (non-vacuity)**: removing one `defer
+containers.DropRole(...)` line and re-running once moved the domain-role count
+4→5 (a real leak, caught); the line was restored (verified byte-identical via
+`git diff`) and the single leaked role dropped.
+
+**River backup/restore: CI regression found and fixed.** The first version of
+`assertBackupRestore` ran `pg_dump`/`createdb`/`pg_restore` as host processes
+unconditionally, which is required on the remote/kiac path but broke CI: CI
+runs the host-Testcontainers path, where the test previously reused the
+`postgres:18-alpine` container's own bundled v18 client tools via
+`instance.Container.Exec`, and the CI runner's own `pg_dump` is major version
+16 (below this suite's PostgreSQL 18 floor) -- red on every push once the
+unconditional rewrite landed, confirmed identical failure on this branch's
+CI going back to before this session, `main` unaffected (doesn't have the
+test yet). Fixed with a dual-path dispatch on `instance.Container` (see the
+matrix row above). **Proof**: both paths run green locally -- container path
+(no `DEV_HEALTH_TEST_POSTGRES_DSN` set) PASS in 3.04s reusing the container's
+tools; kiac remote path PASS/PASS twice-in-succession (2.02s, 3.19s, full
+package, 21 tests). **Mutation-spot-check (non-vacuity)**: inverting the
+dispatch condition and running on the remote path (where `instance.Container`
+is nil) forced the container-exec branch, which panicked immediately with a
+nil-pointer dereference at the mutated line -- loud, not silent -- confirming
+the dispatch is load-bearing; the panic's `defer`s still ran (Go's unwind
+semantics), leaving zero leaked roles/databases even from the crashed run.
+The condition was restored and re-verified (`git diff` byte-identical,
+build/vet/gofmt clean, both paths re-run green).
+
+Isolation verified after every run: no leaked scratch databases (`LIKE
+'lane_4661%'` sweep returns 0 throughout). Roles are a separate story from
+scratch databases: a **pre-existing backlog of 477 roles** (matching every
+prefix these test files use — `grant_*`, `operator_*`, `kernel_*`, `sweep_*`,
+`workerctl_*`, etc.) was found on the shared cluster on 2026-08-31, accumulated
+from runs across this ticket's own verification history before the cleanup fix
+above existed. It was deliberately **not** bulk-swept as part of this change —
+enumerating and dropping roles by pattern on a server other lanes are actively
+using is exactly the harness-level danger "why not a harness change" (above)
+warns against; a blind sweep could drop a role a concurrent lane's live test
+still owns. Every role created by code in THIS PR from here forward
+self-cleans (proof above); the historical backlog is a separate, explicitly
+flagged cleanup decision for whoever owns a quiet window on the shared
+cluster, not a defect in this fix.
 
 ## acr's Go suites
 

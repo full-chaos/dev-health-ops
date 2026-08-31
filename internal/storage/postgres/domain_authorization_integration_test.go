@@ -14,10 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	authorizedDomainRole    = "domain_authorized"
-	domainAuthorizationPass = "domain_authorized_password"
-)
+const domainAuthorizationPass = "domain_authorized_password"
 
 func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -29,10 +26,26 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 	}
 	defer closePostgresInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving the role name from
+	// this call's own database identity is what makes two successive runs,
+	// and two concurrent lanes, collision-free. Likewise "worker_test" as a
+	// literal DATABASE target only resolves on the container path; dbName is
+	// the database this call actually created.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizedDomainRole, err := containers.RoleName("domain_authorized", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
+	defer containers.DropRole(admin, authorizedDomainRole, t.Logf)
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE SCHEMA river",
 		"CREATE TABLE river.river_job (id bigint PRIMARY KEY)",
@@ -127,7 +140,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SEQUENCE public.unrelated_sequence",
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + authorizedDomainRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
 		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
@@ -181,7 +194,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 	)
 	defer domain.Close()
 
-	assertDomainAuthorized(t, ctx, domain)
+	assertDomainAuthorized(t, ctx, domain, authorizedDomainRole)
 	if _, err := domain.Exec(ctx, "SELECT id FROM public.integrations"); err != nil {
 		t.Fatalf("domain SELECT-only inventory access failed: %v", err)
 	}
@@ -333,25 +346,25 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			if _, err := admin.Exec(ctx, test.grant); err != nil {
 				t.Fatal(err)
 			}
-			assertDomainUnauthorized(t, ctx, domain)
+			assertDomainUnauthorized(t, ctx, domain, authorizedDomainRole)
 			if _, err := admin.Exec(ctx, test.revoke); err != nil {
 				t.Fatal(err)
 			}
-			assertDomainAuthorized(t, ctx, domain)
+			assertDomainAuthorized(t, ctx, domain, authorizedDomainRole)
 		})
 	}
 }
 
-func assertDomainAuthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertDomainAuthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool, role string) {
 	t.Helper()
-	if err := postgresstore.CheckDomainAuthorization(ctx, pool, authorizedDomainRole, "river"); err != nil {
+	if err := postgresstore.CheckDomainAuthorization(ctx, pool, role, "river"); err != nil {
 		t.Fatalf("domain readiness failed: %v", err)
 	}
 }
 
-func assertDomainUnauthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertDomainUnauthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool, role string) {
 	t.Helper()
-	if err := postgresstore.CheckDomainAuthorization(ctx, pool, authorizedDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+	if err := postgresstore.CheckDomainAuthorization(ctx, pool, role, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
 		t.Fatalf("domain readiness error = %v, want ErrUnavailable", err)
 	}
 }

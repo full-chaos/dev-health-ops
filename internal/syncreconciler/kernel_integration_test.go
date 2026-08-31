@@ -27,8 +27,6 @@ import (
 const (
 	integrationDispatchID = "00000000-0000-4000-8000-000000003301"
 	integrationStaleID    = "00000000-0000-4000-8000-000000003302"
-	kernelDomainRole      = "kernel_domain_runtime"
-	kernelQueueRole       = "kernel_queue_runtime"
 	kernelDomainPassword  = "kernel_domain_password"
 	kernelQueuePassword   = "kernel_queue_password"
 )
@@ -68,12 +66,31 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 		}
 	}()
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelDomainRole, err := containers.RoleName("kernel_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelQueueRole, err := containers.RoleName("kernel_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
-	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+	defer containers.DropRole(adminPool, kernelDomainRole, t.Logf)
+	defer containers.DropRole(adminPool, kernelQueueRole, t.Logf)
+	if err := createKernelIntegrationFixture(ctx, adminPool, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
@@ -891,13 +908,15 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 	})
 }
 
-func createKernelIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
+func createKernelIntegrationFixture(
+	ctx context.Context, pool *pgxpool.Pool, domainRole, queueRole, dbName string,
+) error {
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
-		"CREATE ROLE " + kernelDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelDomainPassword + "'",
-		"CREATE ROLE " + kernelQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelQueuePassword + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + kernelDomainRole + ", " + kernelQueueRole,
+		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelDomainPassword + "'",
+		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + kernelQueuePassword + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + domainRole + ", " + queueRole,
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",

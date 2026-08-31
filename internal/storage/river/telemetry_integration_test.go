@@ -25,9 +25,28 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	}
 	defer closeInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole, err := containers.RoleName("worker_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("worker_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
-	createRuntimeRoles(t, ctx, adminPool)
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
+	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
 	}); err != nil {
@@ -64,7 +83,7 @@ func TestQueueTelemetrySamplerReadsPinnedRiverSchemaWithoutClaimingJobs(t *testi
 	insertTelemetryJob("running", "retention", "system.retention_cleanup", `{"contract_version":1}`, now, []string{"other-client"})
 	insertTelemetryJob("available", "other-profile", "unknown.kind", `{"contract_version":99}`, now.Add(-24*time.Hour), nil)
 
-	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, "worker_test")
+	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, dbName)
 	queuePool := openPool(t, ctx, queueURI)
 	defer queuePool.Close()
 	sampler, err := riverstore.NewQueueTelemetrySampler(queuePool, riverstore.QueueTelemetryConfig{
@@ -237,16 +256,35 @@ func TestQueueSaturationIsPerProcessAcrossReplicas(t *testing.T) {
 	}
 	defer closeInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole, err := containers.RoleName("worker_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("worker_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
-	createRuntimeRoles(t, ctx, adminPool)
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
+	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	queuePool := openPool(t, ctx, roleURI(t, instance.URI, queueRole, queuePassword, "worker_test"))
+	queuePool := openPool(t, ctx, roleURI(t, instance.URI, queueRole, queuePassword, dbName))
 	defer queuePool.Close()
 	samplerFor := func(clientID string) *riverstore.QueueTelemetrySampler {
 		t.Helper()

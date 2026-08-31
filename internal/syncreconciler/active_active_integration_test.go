@@ -45,12 +45,31 @@ func startActiveActiveHarness(t *testing.T, ctx context.Context) activeActiveHar
 			t.Errorf("terminate PostgreSQL: %v", err)
 		}
 	})
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelDomainRole, err := containers.RoleName("kernel_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelQueueRole, err := containers.RoleName("kernel_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	admin, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
-	if err := createKernelIntegrationFixture(ctx, admin); err != nil {
+	t.Cleanup(func() { containers.DropRole(admin, kernelDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, kernelQueueRole, t.Logf) })
+	if err := createKernelIntegrationFixture(ctx, admin, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{

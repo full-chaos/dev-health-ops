@@ -15,8 +15,6 @@ import (
 )
 
 const (
-	poolAcquireDomainRole = "pool_acquire_domain"
-	poolAcquireQueueRole  = "pool_acquire_queue"
 	poolAcquireDomainPass = "pool_acquire_domain_password"
 	poolAcquireQueuePass  = "pool_acquire_queue_password"
 )
@@ -39,12 +37,34 @@ func TestRuntimePoolsObserveRealAcquireLatency(t *testing.T) {
 	}
 	defer closePostgresInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving the role name from
+	// this call's own database identity (worker_test on the container path,
+	// a unique scratch database on the kiac remote path) is what makes two
+	// successive runs, and two concurrent lanes, collision-free. Likewise
+	// "worker_test" as a literal DATABASE target only resolves on the
+	// container path; dbName is the database this call actually created.
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolAcquireDomainRole, err := containers.RoleName("pool_acquire_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolAcquireQueueRole, err := containers.RoleName("pool_acquire_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
+	defer containers.DropRole(admin, poolAcquireDomainRole, t.Logf)
+	defer containers.DropRole(admin, poolAcquireQueueRole, t.Logf)
 	for _, statement := range []string{
 		"CREATE ROLE " + poolAcquireDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + poolAcquireDomainPass + "'",
 		"CREATE ROLE " + poolAcquireQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + poolAcquireQueuePass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + poolAcquireDomainRole + ", " + poolAcquireQueueRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + poolAcquireDomainRole + ", " + poolAcquireQueueRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

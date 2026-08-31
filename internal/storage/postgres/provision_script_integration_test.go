@@ -55,14 +55,14 @@ func provisionScriptPath(t *testing.T) string {
 // creation is guarded by WHERE NOT EXISTS), so calling it more than once
 // must never error -- and, the property this suite exists to prove, must
 // never remove a grant a prior go-river-migrate run established.
-func runProvisionScript(t *testing.T, ctx context.Context, uri string) {
+func runProvisionScript(t *testing.T, ctx context.Context, uri string, roles grantRoleNames) {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "psql",
 		uri,
 		"--set=ON_ERROR_STOP=1",
-		"--set=domain_role="+grantDomainRole,
-		"--set=queue_role="+grantQueueRole,
-		"--set=coordinator_role="+grantCoordinatorRole,
+		"--set=domain_role="+roles.domain,
+		"--set=queue_role="+roles.queue,
+		"--set=coordinator_role="+roles.coordinator,
 		"--set=domain_password="+grantDomainPass,
 		"--set=queue_password="+grantQueuePass,
 		"--set=coordinator_password="+grantCoordinatorPass,
@@ -113,9 +113,34 @@ func TestProvisionScriptGrantsNoTablePrivileges(t *testing.T) {
 	}
 	t.Cleanup(admin.Close)
 
-	runProvisionScript(t, ctx, instance.URI)
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). This test creates its own
+	// instance rather than sharing startGrantHarness's, so it derives its
+	// own role names from it the same way that helper does.
+	domainRole, err := containers.RoleName("grant_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
+	queueRole, err := containers.RoleName("grant_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, queueRole, t.Logf) })
+	coordinatorRole, err := containers.RoleName("grant_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, coordinatorRole, t.Logf) })
+	roles := grantRoleNames{
+		domain:      domainRole,
+		queue:       queueRole,
+		coordinator: coordinatorRole,
+	}
 
-	for _, role := range []string{grantDomainRole, grantQueueRole, grantCoordinatorRole} {
+	runProvisionScript(t, ctx, instance.URI, roles)
+
+	for _, role := range []string{roles.domain, roles.queue, roles.coordinator} {
 		if count := tableGrantCount(t, ctx, admin, role); count != 0 {
 			t.Errorf(
 				"provision_river_roles.sql left %s holding %d table-level grant(s); "+
@@ -146,16 +171,16 @@ func TestProvisionScriptNeverWipesMigrateGrants(t *testing.T) {
 	// ApplyPinnedMigrations -- the same setup every other test in this
 	// package's grant suite trusts, so reusing it here means this test
 	// starts from a state already independently proven correct.
-	admin, uri := startGrantHarness(t, ctx)
+	admin, uri, roles := startGrantHarness(t, ctx)
 
-	assertFullRuntimePostureHolds(t, ctx, admin, uri)
+	assertFullRuntimePostureHolds(t, ctx, admin, uri, roles)
 
 	// The regression: run the checked-in provisioning script again, as if a
 	// pgbouncer or go-workerctl invocation had reached go-river-provision
 	// without go-river-migrate.
-	runProvisionScript(t, ctx, uri)
+	runProvisionScript(t, ctx, uri, roles)
 
-	assertFullRuntimePostureHolds(t, ctx, admin, uri)
+	assertFullRuntimePostureHolds(t, ctx, admin, uri, roles)
 }
 
 // assertFullRuntimePostureHolds runs the same three readiness checks the
@@ -167,20 +192,20 @@ func TestProvisionScriptNeverWipesMigrateGrants(t *testing.T) {
 // connection -- these must be run over a connection actually authenticated
 // as that role, never the admin/owner connection every other helper in this
 // file uses.
-func assertFullRuntimePostureHolds(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) {
+func assertFullRuntimePostureHolds(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string, roles grantRoleNames) {
 	t.Helper()
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
-		gaps, _ := DiagnoseRolePosture(ctx, admin, grantDomainRole, domainPosture())
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
+		gaps, _ := DiagnoseRolePosture(ctx, admin, roles.domain, domainPosture())
 		t.Fatalf("domain role posture check failed: %v (gaps: %v)", err, gaps)
 	}
-	queue := connectAs(t, ctx, uri, grantQueueRole, grantQueuePass)
-	if err := CheckQueueAuthorization(ctx, queue, grantQueueRole, grantSchema); err != nil {
+	queue := connectAs(t, ctx, uri, roles.queue, grantQueuePass)
+	if err := CheckQueueAuthorization(ctx, queue, roles.queue, grantSchema); err != nil {
 		t.Fatalf("queue role posture check failed: %v", err)
 	}
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
-		gaps, _ := DiagnoseRolePosture(ctx, admin, grantCoordinatorRole, coordinatorPosture())
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err != nil {
+		gaps, _ := DiagnoseRolePosture(ctx, admin, roles.coordinator, coordinatorPosture())
 		t.Fatalf("coordinator role posture check failed: %v (gaps: %v)", err, gaps)
 	}
 }
@@ -200,9 +225,9 @@ func TestQueuePostureMatchesTheGrantsItIsPairedWith(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	admin, _ := startGrantHarness(t, ctx)
+	admin, _, roles := startGrantHarness(t, ctx)
 
-	gaps, err := DiagnoseRolePosture(ctx, admin, grantQueueRole, QueuePosture())
+	gaps, err := DiagnoseRolePosture(ctx, admin, roles.queue, QueuePosture())
 	if err != nil {
 		t.Fatalf("DiagnoseRolePosture: %v", err)
 	}
@@ -225,16 +250,16 @@ func TestExecutedProofCatchesAMissingCoordinatorSequenceGrant(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	admin, uri := startGrantHarness(t, ctx)
-	assertFullRuntimePostureHolds(t, ctx, admin, uri)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	assertFullRuntimePostureHolds(t, ctx, admin, uri, roles)
 
 	if _, err := admin.Exec(
-		ctx, "REVOKE USAGE ON SEQUENCE public.worker_operator_audits_id_seq FROM "+grantCoordinatorRole,
+		ctx, "REVOKE USAGE ON SEQUENCE public.worker_operator_audits_id_seq FROM "+roles.coordinator,
 	); err != nil {
 		t.Fatalf("revoke sequence usage: %v", err)
 	}
 
-	gaps, err := DiagnoseRolePosture(ctx, admin, grantCoordinatorRole, coordinatorPosture())
+	gaps, err := DiagnoseRolePosture(ctx, admin, roles.coordinator, coordinatorPosture())
 	if err != nil {
 		t.Fatalf("DiagnoseRolePosture: %v", err)
 	}
@@ -248,8 +273,8 @@ func TestExecutedProofCatchesAMissingCoordinatorSequenceGrant(t *testing.T) {
 		t.Fatalf("DiagnoseRolePosture did not report the revoked sequence grant as a gap: %v", gaps)
 	}
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err == nil {
 		t.Fatal("CheckCoordinatorAuthorization must fail once the sequence grant is revoked")
 	}
 }

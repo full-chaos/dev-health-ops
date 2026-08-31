@@ -26,9 +26,6 @@ import (
 )
 
 const (
-	operatorIntegrationDomainRole      = "operator_domain_runtime"
-	operatorIntegrationQueueRole       = "operator_queue_runtime"
-	operatorIntegrationCoordinatorRole = "operator_coordinator_runtime"
 	operatorIntegrationDomainPass      = "operator_domain_runtime_password"
 	operatorIntegrationQueuePass       = "operator_queue_runtime_password"
 	operatorIntegrationCoordinatorPass = "operator_coordinator_runtime_password"
@@ -121,7 +118,15 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 
 	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
 	defer adminPool.Close()
-	createOperatorIntegrationSchema(t, ctx, adminPool)
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving every role name
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	operatorIntegrationDomainRole, operatorIntegrationQueueRole, operatorIntegrationCoordinatorRole :=
+		createOperatorIntegrationSchema(t, ctx, instance, adminPool)
+	defer containers.DropRole(adminPool, operatorIntegrationDomainRole, t.Logf)
+	defer containers.DropRole(adminPool, operatorIntegrationQueueRole, t.Logf)
+	defer containers.DropRole(adminPool, operatorIntegrationCoordinatorRole, t.Logf)
 	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:                  "river",
@@ -402,7 +407,15 @@ func TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials(t *test
 	})
 	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
 	t.Cleanup(adminPool.Close)
-	createOperatorIntegrationSchema(t, ctx, adminPool)
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving every role name
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	operatorIntegrationDomainRole, operatorIntegrationQueueRole, operatorIntegrationCoordinatorRole :=
+		createOperatorIntegrationSchema(t, ctx, instance, adminPool)
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationQueueRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationCoordinatorRole, t.Logf) })
 	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:                  "river",
@@ -481,8 +494,26 @@ func TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials(t *test
 	}
 }
 
-func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func createOperatorIntegrationSchema(
+	t *testing.T, ctx context.Context, instance *containers.Instance, pool *pgxpool.Pool,
+) (domainRole, queueRole, coordinatorRole string) {
 	t.Helper()
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole, err = containers.RoleName("operator_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err = containers.RoleName("operator_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err = containers.RoleName("operator_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := sha256.Sum256([]byte(operatorIntegrationToken))
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -490,15 +521,15 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	statements := []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
-		"CREATE ROLE " + operatorIntegrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
-		"CREATE ROLE " + operatorIntegrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
+		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationDomainPass + "'",
+		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationQueuePass + "'",
 		// Created here, before ApplyPinnedMigrations, because the migration's
 		// role-eligibility preflight rejects a coordinator role that does not
 		// yet exist as a least-privilege login. This mirrors the real deploy
 		// order: provision roles (scripts/worker/provision_river_roles.sql),
 		// then migrate.
-		"CREATE ROLE " + operatorIntegrationCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationCoordinatorPass + "'",
+		"CREATE ROLE " + coordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + operatorIntegrationCoordinatorPass + "'",
 		`CREATE TABLE public.internal_service_credentials (
 			id uuid PRIMARY KEY,
 			service_name text NOT NULL,
@@ -676,6 +707,7 @@ func createOperatorIntegrationSchema(t *testing.T, ctx context.Context, pool *pg
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	return domainRole, queueRole, coordinatorRole
 }
 
 func insertOperatorIntegrationJob(

@@ -23,8 +23,6 @@ import (
 )
 
 const (
-	reindexDomainRole     = "reindex_domain_runtime"
-	reindexQueueRole      = "reindex_queue_runtime"
 	reindexRolePassword   = "reindex_test_password"
 	reindexObservedWindow = 90 * time.Second
 )
@@ -45,11 +43,26 @@ func TestRiverWorkerClientRunsReindexerWithoutPermissionErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = postgres.Close(context.Background()) })
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	reindexDomainRole, err := containers.RoleName("reindex_domain_runtime", postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reindexQueueRole, err := containers.RoleName("reindex_queue_runtime", postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	admin, err := pgxpool.New(ctx, postgres.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, reindexDomainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, reindexQueueRole, t.Logf) })
 	for _, statement := range []string{
 		"CREATE SCHEMA river",
 		"CREATE ROLE " + reindexDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +

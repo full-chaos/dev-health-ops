@@ -38,9 +38,7 @@ import (
 // domain_authorization.go rather than hidden in a test fixture here.
 
 const (
-	splitDomainRole      = "sweep_domain_runtime"
 	splitDomainPass      = "sweep_domain_password"
-	splitCoordinatorRole = "sweep_coordinator_runtime"
 	splitCoordinatorPass = "sweep_coordinator_password"
 	// CHAOS-4097 adds the THIRD role. river_job lives in the River schema,
 	// which internal/storage/river/migrate.go grants USAGE on to the queue
@@ -48,7 +46,6 @@ const (
 	// tidier on its own pool -- it is impossible on either of the other two.
 	// TestSweepDeliveryLivenessReadIsRefusedToTheOtherRoles proves that
 	// rather than asserting it.
-	splitQueueRole   = "sweep_queue_runtime"
 	splitQueuePass   = "sweep_queue_password"
 	splitRiverSchema = "river"
 
@@ -58,6 +55,16 @@ const (
 	splitIntgr  = "00000000-0000-4000-8000-000000005003"
 	splitSource = "00000000-0000-4000-8000-000000005004"
 )
+
+// splitRoleNames holds one call's cluster-scoped role names. CREATE ROLE is
+// cluster-scoped, not database-scoped -- a scratch database does not
+// isolate it (CHAOS-4661) -- so every name here is derived from this call's
+// own database identity rather than hard-coded.
+type splitRoleNames struct {
+	domain      string
+	coordinator string
+	queue       string
+}
 
 // splitSchemaDDL is derived from the alembic migrations column for column,
 // NOT invented for this test. CHAOS-3997 is the standing lesson: an
@@ -262,7 +269,7 @@ func splitTablesPresent() map[string]bool {
 // startRoleSplitHarness provisions the production role shape: two
 // least-privilege logins, each granted exactly its own posture, on a schema
 // derived from the alembic migrations.
-func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Pool, uri string) {
+func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Pool, uri string, roles splitRoleNames) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -281,40 +288,65 @@ func startRoleSplitHarness(t *testing.T, ctx context.Context) (admin *pgxpool.Po
 	}
 	t.Cleanup(admin.Close)
 
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole, err := containers.RoleName("sweep_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorRole, err := containers.RoleName("sweep_coordinator_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("sweep_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, domainRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, coordinatorRole, t.Logf) })
+	t.Cleanup(func() { containers.DropRole(admin, queueRole, t.Logf) })
+	roles = splitRoleNames{
+		domain:      domainRole,
+		coordinator: coordinatorRole,
+		queue:       queueRole,
+	}
+
 	statements := []string{
-		"CREATE ROLE " + splitDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitDomainPass + "'",
-		"CREATE ROLE " + splitCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitCoordinatorPass + "'",
-		"CREATE ROLE " + splitQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitQueuePass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + splitDomainRole + ", " + splitCoordinatorRole + ", " + splitQueueRole,
-		"GRANT USAGE ON SCHEMA public TO " + splitDomainRole + ", " + splitCoordinatorRole + ", " + splitQueueRole,
+		"CREATE ROLE " + roles.domain + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitDomainPass + "'",
+		"CREATE ROLE " + roles.coordinator + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitCoordinatorPass + "'",
+		"CREATE ROLE " + roles.queue + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + splitQueuePass + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roles.domain + ", " + roles.coordinator + ", " + roles.queue,
+		"GRANT USAGE ON SCHEMA public TO " + roles.domain + ", " + roles.coordinator + ", " + roles.queue,
 		// PUBLIC holds CREATE on public in older defaults and TEMPORARY on the
 		// database; both are privileges neither runtime role is supposed to
 		// have, and leaving them would weaken every assertion below.
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 	}
 	statements = append(statements, splitSchemaDDL()...)
 	statements = append(statements, splitRiverSchemaDDL()...)
 	present := splitTablesPresent()
 	statements = append(statements,
-		splitGrantStatements(splitDomainRole, postgres.DomainPosture(), present)...)
+		splitGrantStatements(roles.domain, postgres.DomainPosture(), present)...)
 	statements = append(statements,
-		splitGrantStatements(splitCoordinatorRole, postgres.CoordinatorPosture(), present)...)
+		splitGrantStatements(roles.coordinator, postgres.CoordinatorPosture(), present)...)
 	// The queue role's River grants mirror internal/storage/river/migrate.go:
 	// USAGE on the River schema goes to the queue role alone, and the other
 	// two roles are given nothing there. That asymmetry IS the harness --
 	// granting the schema more widely here would make every assertion in this
 	// file about the liveness read vacuous.
 	statements = append(statements,
-		"GRANT USAGE ON SCHEMA "+splitRiverSchema+" TO "+splitQueueRole,
-		"GRANT SELECT ON TABLE "+splitRiverSchema+".river_job TO "+splitQueueRole,
+		"GRANT USAGE ON SCHEMA "+splitRiverSchema+" TO "+roles.queue,
+		"GRANT SELECT ON TABLE "+splitRiverSchema+".river_job TO "+roles.queue,
 	)
 	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("harness setup failed: %v\n  statement: %s", err, collapseSQL(statement))
 		}
 	}
-	return admin, instance.URI
+	return admin, instance.URI, roles
 }
 
 // splitRiverSchemaDDL is River v0.44's job table, reduced to the columns this
@@ -420,12 +452,12 @@ func splitSweepConfig(mode SweepMode) UnreclaimableSweepConfig {
 func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	// The route read: coordinator-only. This is the 42501 production served
 	// once a second.
@@ -573,11 +605,11 @@ func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 		privilege string
 		want      bool
 	}{
-		{splitDomainRole, "worker_job_routes", "SELECT", false},
-		{splitCoordinatorRole, "worker_job_routes", "SELECT", true},
-		{splitDomainRole, "sync_run_units", "UPDATE", true},
-		{splitCoordinatorRole, "sync_run_units", "UPDATE", false},
-		{splitDomainRole, "worker_job_outbox", "SELECT", true},
+		{roles.domain, "worker_job_routes", "SELECT", false},
+		{roles.coordinator, "worker_job_routes", "SELECT", true},
+		{roles.domain, "sync_run_units", "UPDATE", true},
+		{roles.coordinator, "sync_run_units", "UPDATE", false},
+		{roles.domain, "worker_job_outbox", "SELECT", true},
 	} {
 		var got bool
 		if err := admin.QueryRow(ctx,
@@ -600,12 +632,12 @@ func TestUnreclaimableSweepStatementsAgainstTheRealRoleSplit(t *testing.T) {
 func TestUnreclaimableSweepCompletesAFullPassUnderTheRealRoleSplit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeActive))
 	if err != nil {
@@ -641,12 +673,12 @@ func TestUnreclaimableSweepCompletesAFullPassUnderTheRealRoleSplit(t *testing.T)
 func TestUnreclaimableSweepShadowPassUnderTheRealRoleSplit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeShadow))
 	if err != nil {
@@ -723,12 +755,12 @@ func (routes *flipOnSecondRead) Begin(ctx context.Context) (pgx.Tx, error) {
 func TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	routes := &flipOnSecondRead{t: t, ctx: ctx, admin: admin, coordinator: coordinator}
 	sweep, err := newUnreclaimableSweep(routes, domain.Begin, queue, "river", splitSweepConfig(SweepModeActive))
@@ -768,12 +800,12 @@ func TestUnreclaimableSweepDeclinesWhenTheRouteRollsBackMidPass(t *testing.T) {
 func TestUnreclaimableSweepFenceDoesNotFireOnAStableRoute(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	sweep, err := NewUnreclaimableSweep(coordinator, domain, queue, splitRiverSchema, splitSweepConfig(SweepModeActive))
 	if err != nil {
@@ -804,12 +836,12 @@ func TestUnreclaimableSweepFenceDoesNotFireOnAStableRoute(t *testing.T) {
 func TestUnreclaimableSweepDeclinesWhenTheRouteRowIsLockedByAMutation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startRoleSplitHarness(t, ctx)
+	admin, uri, roles := startRoleSplitHarness(t, ctx)
 	now := time.Now().UTC()
 	seedSplitStrand(t, ctx, admin, now)
-	domain := connectAsRole(t, ctx, uri, splitDomainRole, splitDomainPass)
-	coordinator := connectAsRole(t, ctx, uri, splitCoordinatorRole, splitCoordinatorPass)
-	queue := connectAsRole(t, ctx, uri, splitQueueRole, splitQueuePass)
+	domain := connectAsRole(t, ctx, uri, roles.domain, splitDomainPass)
+	coordinator := connectAsRole(t, ctx, uri, roles.coordinator, splitCoordinatorPass)
+	queue := connectAsRole(t, ctx, uri, roles.queue, splitQueuePass)
 
 	// An in-flight route mutation, held open for the duration of the pass.
 	// FOR UPDATE is what jobroute's UPDATE effectively takes, and it conflicts

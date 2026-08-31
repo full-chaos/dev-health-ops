@@ -27190,14 +27190,10 @@ func (ec *executionContext) _BreakdownItem_value(ctx context.Context, field grap
 	}()
 	// CHAOS-4650 (chris 2026-08-31 04:18, Option B): hand-edited to a
 	// nullable marshal, matching model.BreakdownItem.Value's *float64
-	// type (see that field's doc comment). Was generated as
-	// marshalNFloat2float64 with a "must not be null" guard when
-	// gqlgen last ran against contracts/graphql/v1/schema.graphql's
-	// still-unwidened `value: Float!` -- see models_gen.go's
-	// BreakdownItem comment for why the SDL pin is not touched by this
-	// change and what must happen when a go_api_routing_state row
-	// enables this field's dispatch (routeswitch; no such row exists
-	// today, verified locally -- production is unverified).
+	// type. POINTER, NOT THE EXPLANATION -- this file is
+	// gqlgen-generated and gets overwritten wholesale by the next
+	// `gqlgen generate`; the durable copy of why lives in breakdown.go's
+	// breakdownRow.Value doc comment. Read that, not this.
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil

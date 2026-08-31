@@ -370,27 +370,13 @@ type AnalyticsResult struct {
 
 // BreakdownItem.Value is *float64, not float64 -- CHAOS-4650 (chris
 // 2026-08-31 04:18, Option B). Hand-edited, NOT regenerated from
-// contracts/graphql/v1/schema.graphql: the canonical SDL pin is
-// byte-for-byte checked against the live Strawberry export
-// (tests/api/graphql/test_schema_sdl_pinned.py) and stays `value:
-// Float!` on the Python side (root AGENTS.md GO-ONLY rule -- no
-// further work in the Python GraphQL layer). Reachability, checked by
-// mechanism not by ticket state (CHAOS-4538 itself merged 08-30/31,
-// bba15566d -- citing it as the blocker is stale): `investmentBreakdown`
-// IS pre-registered in query_route.go, but dispatch requires its OWN
-// row in routeswitch's dynamic switch (switch.go), and no
-// go_api_routing_state row currently enables `investmentBreakdown` or
-// `investmentFull` -- verified locally; PRODUCTION ROUTING STATE IS
-// UNVERIFIED, this is a local fact only. So nothing observes the
-// internal/schema nullability mismatch TODAY, but that could change
-// the moment a routing-state row is added, with no further code
-// change. Whoever enables that row MUST widen
-// contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
-// Float` (and its Python Strawberry counterpart,
-// src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)
-// in that same change, or a live all-NULL group will make gqlgen's
-// exec engine reject the whole response ("must not be null") instead
-// of rendering the empty state this ticket exists to enable.
+// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
+// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and
+// gets overwritten wholesale by the next `gqlgen generate` -- the
+// durable copy of why this diverges from the schema, the reachability
+// mechanism, and the CHAOS-4658 hazard this creates lives in
+// breakdown.go's breakdownRow.Value doc comment. Read that, not this.
 type BreakdownItem struct {
 	Key   string   `json:"key"`
 	Value *float64 `json:"value"`

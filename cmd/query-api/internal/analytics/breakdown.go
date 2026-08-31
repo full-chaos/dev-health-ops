@@ -162,6 +162,33 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // executeTimeseriesRaw scans the same category-2 measures into a bare
 // float64 at timeseries.go:287-288 and has the SAME latent defect --
 // tracked separately, out of this ticket's scope, not yet fixed here).
+//
+// REACHABILITY, checked by mechanism not by ticket state (CHAOS-4538
+// itself merged 08-30/31, bba15566d -- citing it as a blocker is
+// stale): `investmentBreakdown` IS pre-registered in query_route.go,
+// but dispatch requires its OWN row in routeswitch's dynamic switch
+// (switch.go), and no go_api_routing_state row currently enables
+// `investmentBreakdown` or `investmentFull` -- verified locally.
+// PRODUCTION ROUTING STATE IS UNVERIFIED; this is a local fact only.
+// So nothing observes the internal/schema nullability mismatch TODAY
+// -- BUT THAT COULD CHANGE THE MOMENT A ROUTING-STATE ROW IS ADDED,
+// WITH NO FURTHER CODE CHANGE. That is the sharp edge of CHAOS-4658:
+// the mismatch becomes observable through a DATA change (a routing
+// row), not a code change, so no code review will ever catch it
+// turning live. Whoever enables that row MUST widen
+// contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
+// Float` (and its Python Strawberry counterpart,
+// src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)
+// in that same change, or a live all-NULL group will make gqlgen's
+// exec engine reject the whole response ("must not be null") instead
+// of rendering the empty state this ticket exists to enable. THIS
+// COMMENT, NOT the ones in models_gen.go/generated.go, is the durable
+// copy: gqlgen generate overwrites both of those files wholesale (see
+// this repo's PR history/CI logs for the CHAOS-4650 PR for an
+// executed proof that a regen reverts BreakdownItem.Value to float64
+// and fails the build at this file's own construction site) -- this
+// file is hand-written and survives regeneration, so the explanation
+// of why lives here, not there.
 type breakdownRow struct {
 	DimensionValue string
 	Value          *float64

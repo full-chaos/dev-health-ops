@@ -130,29 +130,8 @@ func checkExecutedGrantPosture(
 		result.PostureMissing[roleLabel] = len(missing)
 		result.PostureExcess[roleLabel] = len(excess)
 		result.GrantsApplied[roleLabel] = declared - len(missing)
-		if len(missing) == 0 {
-			logger.Info("runtime grant posture confirmed", "role", roleLabel, "grants_applied", declared)
-		} else {
+		if !logPostureCheck(logger, roleLabel, declared, missing, excess) {
 			result.OK = false
-			details := make([]string, len(missing))
-			for i, gap := range missing {
-				details[i] = gap.String()
-			}
-			logger.Error("runtime grant posture gap", "role", roleLabel, "gaps", details)
-		}
-		if len(excess) > 0 {
-			// This is the CHAOS-4675 case: nothing above is missing (the gate
-			// would otherwise print "confirmed" and go-worker-migrate's own
-			// telemetry would read clean), but the role also holds a
-			// table-wide grant on a table declared column-scoped -- exactly
-			// the granularity drift that let workerctl fail
-			// runtime_role_unauthorized right after a "posture confirmed" run.
-			result.OK = false
-			details := make([]string, len(excess))
-			for i, gap := range excess {
-				details[i] = gap.String()
-			}
-			logger.Error("runtime grant posture excess", "role", roleLabel, "gaps", details)
 		}
 	}
 
@@ -161,6 +140,65 @@ func checkExecutedGrantPosture(
 	checkTablePosture("coordinator", coordinatorRole, postgresstore.CoordinatorPosture())
 
 	return result
+}
+
+// logPostureCheck emits the structured log line(s) describing one role's
+// posture-check outcome and reports whether that role's posture is OK
+// (both missing and excess empty). Split out of checkTablePosture's
+// closure so the exact log text is unit-testable without a live database
+// connection (CHAOS-4675 round-1 codex finding, P3): the prior inline
+// version logged "runtime grant posture confirmed" whenever missing was
+// empty, even when excess was not -- a false "confirmed" line immediately
+// followed by the contradicting excess-gap line for the same role.
+// Logging "confirmed" now requires BOTH slices empty.
+func logPostureCheck(logger *slog.Logger, roleLabel string, declared int, missing, excess []postgresstore.PostureGap) bool {
+	if len(missing) == 0 && len(excess) == 0 {
+		logger.Info("runtime grant posture confirmed", "role", roleLabel, "grants_applied", declared)
+		return true
+	}
+	if len(missing) > 0 {
+		details := make([]string, len(missing))
+		for i, gap := range missing {
+			details[i] = gap.String()
+		}
+		logger.Error("runtime grant posture gap", "role", roleLabel, "gaps", details)
+	}
+	if len(excess) > 0 {
+		// The CHAOS-4675 case: the role also holds a table-wide grant on a
+		// table declared column-scoped -- the granularity drift that let
+		// workerctl fail runtime_role_unauthorized right after a
+		// "posture confirmed" run.
+		details := make([]string, len(excess))
+		for i, gap := range excess {
+			details[i] = gap.String()
+		}
+		logger.Error("runtime grant posture excess", "role", roleLabel, "gaps", details)
+	}
+	return false
+}
+
+// postureFailureKind names which kind(s) of gap made postureGateResult.OK
+// false, summed across all three roles, for go-river-migrate's terminal
+// stderr message (main.go). Before CHAOS-4675 round 2 that message always
+// said "missing privileges" even when the actual failure was an
+// excess-only gap (missing=0, excess>0) -- misleading an operator reading
+// only the final stderr line, not the preceding structured logs.
+func postureFailureKind(result postureGateResult) string {
+	var missingTotal, excessTotal int
+	for _, n := range result.PostureMissing {
+		missingTotal += n
+	}
+	for _, n := range result.PostureExcess {
+		excessTotal += n
+	}
+	switch {
+	case missingTotal > 0 && excessTotal > 0:
+		return "missing and excess privileges"
+	case excessTotal > 0:
+		return "excess privileges"
+	default:
+		return "missing privileges"
+	}
 }
 
 // writePostureTelemetry renders checkExecutedGrantPosture's result as a

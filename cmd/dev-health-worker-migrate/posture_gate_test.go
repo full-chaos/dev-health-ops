@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
+
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // TestWritePostureTelemetryEmitsBothMetricsForEveryRole pins the exposition
@@ -73,5 +76,129 @@ func TestWritePostureTelemetryDefaultsUnrecordedRolesToZero(t *testing.T) {
 				t.Errorf("expected zero-value line %q for unrecorded role, got:\n%s", want, output)
 			}
 		}
+	}
+}
+
+// TestLogPostureCheckExcessOnlyDoesNotClaimConfirmed pins the CHAOS-4675
+// round-1 codex finding (P3): a correct declared grant set plus a stray
+// table-wide grant on a column-scoped table (missing=0, excess=1) must NOT
+// log "runtime grant posture confirmed" -- the prior code did, immediately
+// followed by the contradicting excess-gap line for the same role. Also
+// asserts the excess line still fires and the function reports the role
+// as not-OK, so go-worker-migrate's exit-code-1 behavior (unchanged by
+// this fix) still has a true signal behind it.
+func TestLogPostureCheckExcessOnlyDoesNotClaimConfirmed(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	excess := []postgresstore.PostureGap{
+		{TableName: "integration_credentials", Excess: []string{"SELECT"}},
+	}
+
+	ok := logPostureCheck(logger, "coordinator", 3, nil, excess)
+	output := buf.String()
+
+	if ok {
+		t.Error("logPostureCheck reported OK=true for an excess-only gap; want false")
+	}
+	if strings.Contains(output, "runtime grant posture confirmed") {
+		t.Errorf("excess-only posture check logged a false \"confirmed\" line; got:\n%s", output)
+	}
+	if !strings.Contains(output, "runtime grant posture excess") {
+		t.Errorf("excess-only posture check did not log the excess gap; got:\n%s", output)
+	}
+}
+
+// TestLogPostureCheckMissingOnlyLogsGapNotConfirmed guards the companion
+// case: a missing-only gap (excess empty) must still log "gap", not
+// "confirmed", and must not spuriously log an "excess" line.
+func TestLogPostureCheckMissingOnlyLogsGapNotConfirmed(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	missing := []postgresstore.PostureGap{
+		{TableName: "work_items", ColumnName: "status", Missing: []string{"SELECT"}},
+	}
+
+	ok := logPostureCheck(logger, "domain", 5, missing, nil)
+	output := buf.String()
+
+	if ok {
+		t.Error("logPostureCheck reported OK=true for a missing-only gap; want false")
+	}
+	if strings.Contains(output, "runtime grant posture confirmed") {
+		t.Errorf("missing-only posture check logged a false \"confirmed\" line; got:\n%s", output)
+	}
+	if !strings.Contains(output, "runtime grant posture gap") {
+		t.Errorf("missing-only posture check did not log the missing gap; got:\n%s", output)
+	}
+	if strings.Contains(output, "runtime grant posture excess") {
+		t.Errorf("missing-only posture check spuriously logged an excess line; got:\n%s", output)
+	}
+}
+
+// TestLogPostureCheckCleanLogsConfirmed guards the true-positive path: no
+// missing, no excess, still logs "confirmed" and reports OK=true.
+func TestLogPostureCheckCleanLogsConfirmed(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	ok := logPostureCheck(logger, "queue", 4, nil, nil)
+	output := buf.String()
+
+	if !ok {
+		t.Error("logPostureCheck reported OK=false for a clean posture; want true")
+	}
+	if !strings.Contains(output, "runtime grant posture confirmed") {
+		t.Errorf("clean posture check did not log \"confirmed\"; got:\n%s", output)
+	}
+}
+
+// TestPostureFailureKindNamesTheGapKind pins the round-2 fix to main.go's
+// stderr message: it must name which kind(s) of gap fired instead of
+// always saying "missing privileges" (the round-1 finding's caller-side
+// half -- codex noted main.go:159 said "missing privileges" for either
+// gap kind).
+func TestPostureFailureKindNamesTheGapKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		missing map[string]int
+		excess  map[string]int
+		want    string
+	}{
+		{
+			name:    "missing only",
+			missing: map[string]int{"domain": 1},
+			excess:  map[string]int{},
+			want:    "missing privileges",
+		},
+		{
+			name:    "excess only",
+			missing: map[string]int{"coordinator": 0},
+			excess:  map[string]int{"coordinator": 1},
+			want:    "excess privileges",
+		},
+		{
+			name:    "both",
+			missing: map[string]int{"domain": 1},
+			excess:  map[string]int{"coordinator": 1},
+			want:    "missing and excess privileges",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := postureGateResult{PostureMissing: tc.missing, PostureExcess: tc.excess}
+			if got := postureFailureKind(result); got != tc.want {
+				t.Errorf("postureFailureKind() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

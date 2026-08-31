@@ -77,17 +77,20 @@ stays local.
 flowchart TD
     A[Integration suite] --> P{Is every Start* result<br/>eventually Closed?}
     P -- no --> PF[Fix that FIRST<br/>a discarded Instance leaks a<br/>database on every run,<br/>including passing ones]
-    P -- yes --> O{Does anything create a datastore<br/>the harness does not own?}
-    O -- yes --> OF[Host Testcontainers<br/>nothing namespaces or drops it,<br/>so lanes collide - until the<br/>names are namespaced]
-    O -- no --> B{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
-    B -- yes --> C[Host Testcontainers<br/>a scratch database does not<br/>isolate roles - until the names<br/>are parameterised]
-    B -- no --> D{Needs Valkey?}
-    D -- yes --> E[Valkey from a local container;<br/>PostgreSQL and ClickHouse<br/>still from kiac]
-    D -- no --> F{Touches ClickHouse?}
-    F -- yes --> G[kiac only<br/>the sole target on prod's 26.7 line;<br/>CI cannot prove engine behaviour]
-    F -- no --> H{Needs real org data?}
-    H -- yes --> I[kiac<br/>live data plane required]
-    H -- no --> J[kiac<br/>and CI is a sufficient backstop:<br/>the PostgreSQL versions match]
+    P -- yes --> Q[Decide EACH store separately]
+
+    Q --> V{Uses Valkey?}
+    V -- yes --> V1[Valkey: local container<br/>no CREATE DATABASE to<br/>isolate parallel callers]
+
+    Q --> PGQ{Uses PostgreSQL?}
+    PGQ -- yes --> R{Creates cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
+    R -- yes --> R1[PostgreSQL: local container<br/>a scratch database does not<br/>isolate roles, and two lanes<br/>collide on a fixed name<br/>even if the suite drops it first]
+    R -- no --> R2[PostgreSQL: kiac<br/>CI is a sufficient backstop:<br/>the versions match]
+
+    Q --> CHQ{Uses ClickHouse?}
+    CHQ -- yes --> O{Created only through<br/>the harness?}
+    O -- no --> O1[ClickHouse: local container<br/>nothing namespaces or drops<br/>a resource made behind it]
+    O -- yes --> O2[ClickHouse: kiac<br/>the sole target on prod's 26.7 line;<br/>CI cannot prove engine behaviour]
 ```
 
 Note what is **not** a fork here. "Does it assert a pristine database?" used to
@@ -104,11 +107,20 @@ derived from which harness entry points the package's files call — including
 files that reach the harness through a package-local helper without importing
 `testcontainers` themselves, which is the majority.
 
-Two questions are answered separately, because they are separate:
+**Routing is per store, and the table says so per store.** An earlier version
+of this page gave each package a single target, which cannot express a package
+that needs Valkey local for one reason and PostgreSQL local for another — and
+it silently lost the second reason wherever both applied. A column per store
+removes that failure by construction.
 
-- **Local target** — where the suite runs on a developer's machine.
-- **Is CI sufficient proof?** — whether the `go-storage-integration-*` jobs can
-  stand in for a local run at all. This is where the version table bites.
+Alongside it, one separate question: **is CI sufficient proof?** — whether the
+`go-storage-integration-*` jobs can stand in for a local run at all. That is
+where the version table bites.
+
+**The bar is two lanes running concurrently** (chris, 2026-08-31), which is
+CHAOS-4428's own scope item 5. That is what makes a fixed name disqualifying:
+a suite creating `CREATE ROLE reindex_domain_runtime` is re-runnable on its own
+and still unsafe beside a second lane doing the same.
 
 PostgreSQL-only packages get **yes**: CI's PostgreSQL is the same 18 line as
 kiac (18.6) and production, so nothing about the engine differs. ClickHouse-
@@ -120,39 +132,39 @@ constructs in this codebase are `FINAL` on `ReplacingMergeTree`, `argMax`
 tie-breaks, window functions, and insert-block dedup `SETTINGS` — all of them
 semantics that a version change can move.
 
-| Package | Weight | Stores | Local target | CI proof? | Engine notes |
-| --- | --- | --- | --- | --- | --- |
-| `internal/providersync` | 1166s | CH+PG | **kiac** | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. |
-| `internal/scheduler/fixed` | 143s | PG | kiac | yes | Self-seeding PostgreSQL. |
-| `internal/streamhandlers` | 113s | CH | **kiac** | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
-| `internal/storage/postgres` | 91s | PG | **host** (roles) | yes | Creates roles without dropping them first, so a shared cluster fails on re-run. Otherwise pure PostgreSQL. |
-| `internal/testsupport/computeparity` | 50s | CH | **host** (out-of-band) | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. |
-| `internal/jobs/report` | 33s | CH+PG | **kiac** | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
-| `internal/scheduler/sync` | 32s | PG | kiac | yes | Pure PostgreSQL. |
-| `cmd/dev-health-worker` | 24s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
-| `internal/syncreconciler` | 16s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
-| `internal/externalrecompute` | 15s | PG+VK | **host** (Valkey) | yes | PostgreSQL from kiac; only Valkey is local. |
-| `internal/joboperator` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
-| `internal/synccoverage` | 13s | PG | kiac | yes | Pure PostgreSQL. |
-| `cmd/dev-health-workerctl` | 13s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
-| `internal/testsupport/containers` | 13s | CH+PG+VK | **host** (self-test) | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
-| `internal/joboutbox` | 12s | PG | **host** (roles) | yes | Creates roles without dropping them first. |
-| `internal/jobs/system` | 12s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/providerfoundation` | 12s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
-| `cmd/dev-health-reconciler` | 10s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/storage/river` | 9s | PG | kiac | yes | Applies the River schema to a scratch DB. |
-| `internal/jobs/pagerduty` | 9s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/jobs/workgraph` | 7s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/jobroute` | 6s | PG | kiac | yes | **Demonstrated** — see below. |
-| `internal/jobs/metrics/daily` | 6s | CH+PG | **host** (roles) | **no** | Creates roles without dropping them first -- this is the package the failure was found on. Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
-| `internal/jobs/metrics/remaining` | 6s | CH+PG | **kiac** | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
-| `internal/syncdispatchruntime` | 6s | CH+PG+VK | **host** (Valkey) | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. |
-| `internal/jobrescue` | 5s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/jobruntime` | 5s | PG | kiac | yes | Pure PostgreSQL. |
-| `cmd/query-api/internal/routeswitch` | 5s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/syncroute` | 3s | PG | kiac | yes | Pure PostgreSQL. |
-| `internal/cacheinvalidation` | 2s | VK | **host** (Valkey) | yes | Valkey only. |
-| `internal/streamrunner` | 2s | VK | **host** (Valkey) | yes | Valkey only. |
+| Package | Weight | PG | CH | Valkey | CI proof? | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `internal/providersync` | 1166s | **host** | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. |
+| `internal/scheduler/fixed` | 143s | kiac | — | — | yes | Self-seeding PostgreSQL. |
+| `internal/streamhandlers` | 113s | — | kiac | — | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
+| `internal/storage/postgres` | 91s | **host** | — | — | yes | Creates roles without dropping them first, so a shared cluster fails on re-run. Otherwise pure PostgreSQL. |
+| `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. |
+| `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
+| `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
+| `cmd/dev-health-worker` | 24s | **host** | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. PG/CH still come from kiac. |
+| `internal/syncreconciler` | 16s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `internal/externalrecompute` | 15s | kiac | — | **host** | yes | PostgreSQL from kiac; only Valkey is local. |
+| `cmd/dev-health-workerctl` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `internal/joboperator` | 13s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `internal/synccoverage` | 13s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/testsupport/containers` | 13s | **host** | **host** | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
+| `internal/joboutbox` | 12s | **host** | — | — | yes | Creates roles without dropping them first. |
+| `internal/jobs/system` | 12s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
+| `cmd/dev-health-reconciler` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/storage/river` | 9s | **host** | — | — | yes | Applies the River schema to a scratch DB. |
+| `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
+| `internal/jobs/metrics/daily` | 6s | **host** | kiac | — | **no** | Creates roles without dropping them first -- this is the package the failure was found on. Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
+| `internal/jobs/metrics/remaining` | 6s | kiac | kiac | — | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
+| `internal/syncdispatchruntime` | 6s | **host** | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. |
+| `cmd/query-api/internal/routeswitch` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/jobrescue` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/jobruntime` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/syncroute` | 3s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/cacheinvalidation` | 2s | — | — | **host** | yes | Valkey only. |
+| `internal/streamrunner` | 2s | — | — | **host** | yes | Valkey only. |
 
 **Nine packages carry engine-sensitive ClickHouse SQL and cannot be proven by
 CI at all** — 1416s, 76.5% of the total integration weight. Three of them
@@ -187,14 +199,19 @@ re-runnability failure, not a correctness one, and it is invisible on the first
 run — which is exactly what makes it worth writing down.
 
 Two packages (`internal/providersync`, `internal/storage/river`) already
-`DROP ROLE` before creating, so they are safe to re-run. Even those are not
-*concurrency* safe: two lanes on one cluster would race on the same fixed role
-name.
+`DROP ROLE` before creating, so they are safe to **re-run**. They are still not
+safe to run **concurrently**: two lanes race on the same fixed role name, and
+the one that drops it does so out from under the other.
 
-**Until role names are parameterised per run, the affected packages keep a local
-container.** That is a per-test change, not a harness change — the harness
-cannot rename a role the test hard-codes, and having it drop unknown roles on a
-shared server would be far more dangerous than the problem it solves.
+**Under the concurrent bar that is the deciding test, so all ten role-creating
+packages take their PostgreSQL from a local container — including the two that
+drop first.** This is the single largest constraint on this page:
+`internal/providersync` alone is 1166s, and it is in this set.
+
+The fix is a per-test change, not a harness change — the harness cannot rename a
+role a test hard-codes, and having it drop unknown roles on a shared server
+would be far more dangerous than the problem it solves. Tracked as CHAOS-4661,
+which the table below shows is worth more than everything else combined.
 
 ### What that adds up to
 
@@ -202,17 +219,36 @@ shared server would be far more dangerous than the problem it solves.
 
 | Class | Weight | Share |
 | --- | --- | --- |
-| Movable to kiac today | 1577s | **85.2%** |
-| Blocked by unparameterised roles | 151s | 8.2% |
-| Blocked by Valkey | 61s | 3.3% |
+| Movable to kiac today | 402s | **21.7%** |
+| Blocked by unparameterised role names | 1356s | 73.2% |
 | Blocked by out-of-band fixed-name databases | 50s | 2.7% |
+| Blocked by Valkey | 31s | 1.7% |
 | The harness's own self-test | 13s | 0.7% |
 
-Exactly, 1577/1852 = **85.15%**, rounded to 85.2% above.
+Exactly, 402/1852 = **21.71%**, rounded to 21.7% above.
 
-Two of these are removable. Parameterising the role names recovers 151s;
-namespacing `computeparity`'s fixed database names recovers its 50s. Together
-they would take the movable share to **96.0%**.
+**That number is small because of one package.** `internal/providersync` alone
+is 1166s — 63% of all integration weight — and it creates fixed role names. It
+drops them first, so it is fine run on its own, and it is unsafe beside a
+concurrent lane. Under the concurrent bar it counts as blocked.
+
+Two of the five classes are removable, and they are tracked:
+
+| After | Movable | Share |
+| --- | --- | --- |
+| today | 402s | 21.7% |
+| CHAOS-4661 — parameterise role names | 1758s | **94.9%** |
+| CHAOS-4661 + CHAOS-4677 — and namespace the parity databases | 1808s | **97.6%** |
+
+**CHAOS-4661 is therefore the priority unlock**: it is worth 73 percentage
+points on its own, far more than anything else on this page. The residual 44s
+(2.4%) is Valkey plus the harness's own self-test, and does not shrink.
+
+An earlier version of this page published 85.2%, and before that 87.9%. Both
+were computed with a single target per package, which hid role-creating
+packages behind another reason, and both measured re-runnability rather than
+concurrency. The figures above are derived from the table by script rather than
+by hand, and every bucket can be recomputed from it.
 
 The other two are not blockers and will not shrink. The Valkey packages keep
 only a *Valkey* container — they still take PostgreSQL and ClickHouse from kiac,

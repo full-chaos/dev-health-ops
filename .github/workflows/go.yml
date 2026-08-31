@@ -131,7 +131,20 @@ concurrency:
   # but a burst of fast-follow merges to main WOULD cancel each other's Go
   # coverage if this were left unconditionally true, the same failure mode
   # merge_group already guards against.
-  cancel-in-progress: ${{ github.event_name != 'merge_group' && github.ref_name != 'main' }}
+  #
+  # The exemption MUST use the same effective-branch expression as the
+  # group key above (codex round 6, CHAOS-4676): `github.ref_name` alone is
+  # WRONG for a `pull_request` event, where it is the synthetic
+  # `<pr-number>/merge` ref, never the literal string `main` -- even when
+  # the PR's actual head branch IS `main` (real, not hypothetical: PR #1274
+  # in this repo had `headRefName: main`). Comparing raw `ref_name` let
+  # such a PR's run carry `cancel-in-progress=true` while still sharing the
+  # `Go-main` group (via `head_ref`) with an in-progress direct-main push,
+  # reintroducing the exact CHAOS-3948 burst-cancellation problem this
+  # exemption exists to prevent. `head_ref || ref_name` closes it: a push
+  # to main (head_ref empty, falls to ref_name `main`) and a main-headed PR
+  # (head_ref `main` directly) are now exempted identically.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' && (github.head_ref || github.ref_name) != 'main' }}
 
 permissions:
   contents: read

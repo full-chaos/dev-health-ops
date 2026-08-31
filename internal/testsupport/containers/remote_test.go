@@ -424,6 +424,87 @@ func TestStartPostgresRejectsAnUnrewritableDSNBeforeCreating(t *testing.T) {
 	}
 }
 
+// TestMultiHostDSNsAreRefusedBeforeAnythingIsCreated pins the guarantee the
+// orphan log depends on.
+//
+// A scratch database is created on one connection and dropped on a later,
+// separate one. Both drivers accept a multi-host DSN and may pick a different
+// host each time, so the drop could reach a server that never saw the create --
+// DROP ... IF EXISTS succeeds as a no-op, "dropped" is logged, and the real
+// database is stranded with nothing naming it. That is the single failure mode
+// that makes the log lie, and the documented sweep rests on the log being true.
+//
+// Both DSN forms are covered for PostgreSQL because pgx accepts multi-host in
+// each, and both ClickHouse variables are covered because either can be the one
+// an operator gets wrong.
+func TestMultiHostDSNsAreRefusedBeforeAnythingIsCreated(t *testing.T) {
+	t.Run("postgres URL form", func(t *testing.T) {
+		recordDockerCalls(t)
+		t.Setenv(PostgresDSNEnv, "postgres://u:p@a:5432,b:5432/acr?sslmode=disable")
+		_, err := StartPostgres(shortCtx(t))
+		requireMultiHostRefusal(t, err, PostgresDSNEnv)
+	})
+	t.Run("postgres keyword/value form", func(t *testing.T) {
+		recordDockerCalls(t)
+		t.Setenv(PostgresDSNEnv, "host=a,b port=5432,5432 user=u dbname=acr")
+		_, err := StartPostgres(shortCtx(t))
+		requireMultiHostRefusal(t, err, PostgresDSNEnv)
+	})
+	t.Run("clickhouse native DSN", func(t *testing.T) {
+		recordDockerCalls(t)
+		t.Setenv(ClickHouseDSNEnv, "clickhouse://u:p@a:9000,b:9000/default")
+		_, err := StartClickHouse(shortCtx(t))
+		requireMultiHostRefusal(t, err, ClickHouseDSNEnv)
+	})
+	t.Run("clickhouse HTTP DSN", func(t *testing.T) {
+		recordDockerCalls(t)
+		t.Setenv(ClickHouseDSNEnv, unreachableClickHouseDSN)
+		t.Setenv(ClickHouseHTTPDSNEnv, "clickhouse://u:p@a:8123,b:8123/default")
+		_, err := StartClickHouse(shortCtx(t))
+		requireMultiHostRefusal(t, err, ClickHouseHTTPDSNEnv)
+	})
+}
+
+// requireMultiHostRefusal asserts the refusal happened, names the offending
+// variable, and -- the part that matters -- happened BEFORE any connection was
+// attempted, so nothing can have been created and left behind.
+func requireMultiHostRefusal(t *testing.T, err error, env string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("want a multi-host DSN refused, got nil")
+	}
+	if !strings.Contains(err.Error(), env) {
+		t.Errorf("refusal does not name %s: %v", env, err)
+	}
+	if !strings.Contains(err.Error(), "single-host") {
+		t.Errorf("refusal does not explain the constraint: %v", err)
+	}
+	for _, tooLate := range []string{"connect to remote", "create scratch"} {
+		if strings.Contains(err.Error(), tooLate) {
+			t.Errorf("refused only after connecting or creating: %v", err)
+		}
+	}
+}
+
+// TestSingleHostDSNsAreStillAccepted is the control: the guard must not reject
+// the shape every documented caller actually uses.
+func TestSingleHostDSNsAreStillAccepted(t *testing.T) {
+	for name, check := range map[string]func() error{
+		"postgres URL": func() error { return assertSingleHostPostgres(unreachablePostgresDSN, PostgresDSNEnv) },
+		"postgres kv":  func() error { return assertSingleHostPostgres("host=a port=5432 user=u dbname=acr", PostgresDSNEnv) },
+		"clickhouse":   func() error { return assertSingleHostClickHouse(unreachableClickHouseDSN, ClickHouseDSNEnv) },
+		"clickhouse http": func() error {
+			return assertSingleHostClickHouse("clickhouse://u:p@a:8123/default", ClickHouseHTTPDSNEnv)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); err != nil {
+				t.Errorf("single-host DSN wrongly refused: %v", err)
+			}
+		})
+	}
+}
+
 // TestCloseRunsCleanupInsteadOfTerminating pins that a remote instance drops
 // its scratch database. A remote Instance has a nil Container, and the old
 // Close returned nil for exactly that case -- so without this the scratch

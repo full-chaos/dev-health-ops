@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
@@ -212,6 +213,65 @@ func clickHouseScratchDDL(database string) (createStatement string, dropStatemen
 	return "CREATE DATABASE `" + database + "`", "DROP DATABASE IF EXISTS `" + database + "`"
 }
 
+// A scratch database is created on one connection and dropped on a later,
+// separate one. Both drivers accept a MULTI-HOST DSN and are free to pick a
+// different host each time -- ClickHouse by connection_open_strategy, pgx by
+// its fallback list -- so the drop could land on a server that never saw the
+// create. `DROP DATABASE IF EXISTS` then succeeds as a no-op, this package logs
+// "dropped", and the real database is stranded on the other host with nothing
+// naming it.
+//
+// That is the one failure mode that makes the orphan log LIE, and the sweep
+// procedure documented for this harness rests on that log being true. Rather
+// than make cleanup host-affine, a multi-host DSN is refused outright: it has
+// no use in a test harness, and refusing is a smaller guarantee to verify than
+// pinning.
+
+// assertSingleHostClickHouse rejects a ClickHouse DSN naming more than one host.
+func assertSingleHostClickHouse(dsn string, env string) error {
+	options, err := clickhousego.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", env, err)
+	}
+	if len(options.Addr) != 1 {
+		return fmt.Errorf(
+			"%s names %d hosts (%v): this harness requires a single-host DSN, because a "+
+				"scratch database is dropped on a different connection than the one that "+
+				"created it and the drop must reach the same server",
+			env, len(options.Addr), options.Addr,
+		)
+	}
+	return nil
+}
+
+// assertSingleHostPostgres rejects a PostgreSQL DSN naming more than one host.
+// pgx spreads additional hosts across Fallbacks, and accepts them in both the
+// URL and the keyword/value form.
+func assertSingleHostPostgres(dsn string, env string) error {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", env, err)
+	}
+	hosts := map[string]struct{}{config.Host: {}}
+	for _, fallback := range config.Fallbacks {
+		hosts[fallback.Host] = struct{}{}
+	}
+	if len(hosts) != 1 {
+		names := make([]string, 0, len(hosts))
+		for host := range hosts {
+			names = append(names, host)
+		}
+		sort.Strings(names)
+		return fmt.Errorf(
+			"%s names %d hosts (%v): this harness requires a single-host DSN, because a "+
+				"scratch database is dropped on a different connection than the one that "+
+				"created it and the drop must reach the same server",
+			env, len(hosts), names,
+		)
+	}
+	return nil
+}
+
 // startPostgresRemote creates a scratch database on the server named by dsn
 // and returns an Instance addressed at it. Close drops it again.
 func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
@@ -220,6 +280,9 @@ func startPostgresRemote(ctx context.Context, dsn string) (*Instance, error) {
 		return nil, err
 	}
 	if err := assertSafeIdentifier(database); err != nil {
+		return nil, err
+	}
+	if err := assertSingleHostPostgres(dsn, PostgresDSNEnv); err != nil {
 		return nil, err
 	}
 	// pgx.Identifier.Sanitize is the driver's own identifier quoting; the
@@ -288,6 +351,14 @@ func startClickHouseRemote(ctx context.Context, dsn string, httpDSN string) (*In
 	}
 	if err := assertSafeIdentifier(database); err != nil {
 		return nil, err
+	}
+	if err := assertSingleHostClickHouse(dsn, ClickHouseDSNEnv); err != nil {
+		return nil, err
+	}
+	if httpDSN != "" {
+		if err := assertSingleHostClickHouse(httpDSN, ClickHouseHTTPDSNEnv); err != nil {
+			return nil, err
+		}
 	}
 	// ClickHouse quotes identifiers with backticks and, like PostgreSQL,
 	// cannot parameterise one in DDL. assertSafeIdentifier above is what makes

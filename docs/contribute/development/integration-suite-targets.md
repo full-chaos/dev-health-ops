@@ -391,6 +391,14 @@ go test -tags=integration ./internal/jobroute/ -count=1
 Set neither DSN and the harness starts containers exactly as before — the
 default is unchanged, so nothing that works today stops working.
 
+**Each DSN must name exactly one host.** A multi-host DSN is refused with a
+loud error rather than accepted, because a scratch database is created on one
+connection and dropped on a later, separate one: both drivers may pick a
+different host each time, the drop would then reach a server that never saw the
+create, `DROP ... IF EXISTS` would succeed as a no-op, and the harness would log
+`dropped` for a database that still exists. That is the one failure mode that
+makes the orphan log lie, and the sweep below depends on it not lying.
+
 `DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN` is needed alongside the native DSN
 whenever a suite reaches ClickHouse over HTTP (the Python migration runner
 does). A remote instance has no container to ask for a mapped port, so the HTTP

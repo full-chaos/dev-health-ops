@@ -180,6 +180,24 @@ var schedulerEligibilityParity = []eligibilityPredicate{
 			"config row, same ineligibility branch in materializer.go:392.",
 	},
 	{
+		Name:       "non-planner-managed config with an explicit source_id (CHAOS-4604)",
+		Phase:      "B",
+		PythonSite: "sync/execution_trigger.py create_sync_execution_trigger's Go-routing gate: (planner_managed OR source_id is not None) AND flag AND triggered_by in (manual, backfill)",
+		GoSite:     "occurrence_reconciler.go lockPendingOccurrenceSQL + PendingOccurrence.ConfigSourceID; materializer.go's Materialize gate: !ConfigPlannerManaged && ConfigSourceID==nil still refuses",
+		Verdict:    verdictMatch,
+		Note: "CHAOS-4604 (follow-up to CHAOS-4602/CHAOS-4174, which scoped the " +
+			"Go planner port to planner-managed parents only): a non-planner-managed " +
+			"CHILD config pinned to one explicit IntegrationSource (source_id set) " +
+			"keeps its own manual/backfill trigger routing but is now ALSO admitted " +
+			"by Materialize -- exactly one more shape, not a permissive default. A " +
+			"non-planner-managed config with source_id NULL (a legacy, unscoped " +
+			"standalone config -- the overwhelming majority) is still refused: a " +
+			"bug in the Python routing check cannot accidentally mint a Go " +
+			"occurrence for one and get it silently mis-planned, because " +
+			"Materialize's own gate would refuse it LOUD " +
+			"(ErrOccurrenceIneligible) regardless of what routed it here.",
+	},
+	{
 		Name:       "PagerDuty is exempt from planner tag scoping",
 		Phase:      "B",
 		PythonSite: "sync/trigger_routing.py:191-197, explicit provider != \"pagerduty\" with rationale",
@@ -518,12 +536,21 @@ func TestCandidateSQLPredicateSurfaceIsPinned(t *testing.T) {
 // materialize a real sync run for a fixture/legacy config just because it was
 // already sitting in the table. See materializer.go:392, which re-checks it
 // exactly like ConfigActive.
+//
+// config.source_id (CHAOS-4604) is present for the same re-check reason:
+// Materialize's eligibility gate now admits a non-planner-managed occurrence
+// ONLY when its config carries an explicit source_id (a child config pinned
+// to one IntegrationSource) -- every other non-planner-managed config is
+// still refused. See materializer.go's Materialize gate and
+// schedulerEligibilityParity's "non-planner-managed config with an explicit
+// source_id" row.
 func TestLockedMaterializationPredicateSurfaceIsPinned(t *testing.T) {
 	want := []string{
 		"config.id",
 		"config.is_active",
 		"config.org_id",
 		"config.planner_managed",
+		"config.source_id",
 		"job.id",
 		"job.job_type",
 		"job.org_id",

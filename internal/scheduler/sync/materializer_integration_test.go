@@ -25,7 +25,13 @@ CREATE TABLE public.sync_configurations (
  sync_options json NOT NULL, integration_id uuid, is_active boolean NOT NULL,
  source_id uuid, planner_managed boolean NOT NULL,provider text NOT NULL,
  last_sync_at timestamptz,last_sync_success boolean,last_sync_error text,last_sync_stats json,
- updated_at timestamptz NOT NULL
+ updated_at timestamptz NOT NULL,
+ -- parent_id (real column, models/settings.py::SyncConfiguration.parent_id):
+ -- added for CHAOS-4629's repo-limit rebalance, which mirrors
+ -- discovery.py::_active_repo_usage_count_for_limit's "planner-managed
+ -- PARENT" distinction (parent_id IS NULL) exactly. No prior query in this
+ -- package needed it.
+ parent_id uuid
 );
 CREATE TABLE public.integrations (
  id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
@@ -1576,6 +1582,125 @@ func TestNativeMaterializerRoutesBackfillTriggerToBuildBackfillPlan(t *testing.T
 	}
 	if jobTriggeredBy != "backfill" {
 		t.Errorf("job_runs.triggered_by = %q, want %q", jobTriggeredBy, "backfill")
+	}
+}
+
+// startChildConfigTriggerFixture is CHAOS-4604's fixture: a NON-planner-managed
+// child config (planner_managed=FALSE) pinned to one explicit
+// IntegrationSource (source_id set), with a sync_manual_triggers row --
+// the shape the ticket's own suggested relaxation names ("!ConfigPlannerManaged
+// && source_id IS NOT NULL"). explicitSourceID controls whether the config
+// row itself carries a source_id: passing "" builds the REGRESSION case (a
+// legacy, fully-unscoped non-planner-managed config), which must stay
+// ineligible.
+func startChildConfigTriggerFixture(t *testing.T, fixture materializerFixture, explicitSourceID string) PendingOccurrence {
+	t.Helper()
+	ctx := context.Background()
+	const (
+		githubIntegrationID = "00000000-0000-4000-8000-000000003002"
+		githubConfigID      = "00000000-0000-4000-8000-000000003001"
+		githubSourceID      = "00000000-0000-4000-8000-000000003003"
+		githubDatasetID     = "00000000-0000-4000-8000-000000003004"
+		githubJobID         = "00000000-0000-4000-8000-000000003005"
+	)
+	orgID := fixture.occurrence.OrgID
+	occurrenceID := "occurrence:v1:child-config-" + explicitSourceID
+	if explicitSourceID == "" {
+		occurrenceID = "occurrence:v1:child-config-unscoped"
+	}
+	var sourceIDColumn any
+	if explicitSourceID != "" {
+		sourceIDColumn = explicitSourceID
+	}
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO integrations VALUES ($1::uuid,$2,'github',NULL,TRUE,'{}'::jsonb)`, []any{githubIntegrationID, orgID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'github','repository','full-chaos/dev-health','dev-health','full-chaos/dev-health',TRUE,'{}'::jsonb,now(),now())`, []any{githubSourceID, orgID, githubIntegrationID}},
+		// Deliberately planner_managed=FALSE: a legacy per-source child
+		// config, never the planner-managed-parent shape CHAOS-4602 covers.
+		// No schedule_cron: same "intentionally unscheduled, driven only by
+		// the manual trigger" shape startBackfillTriggerFixture uses.
+		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["git"]'::jsonb,'{}'::jsonb,$3::uuid,TRUE,$4::uuid,FALSE,'github',now())`, []any{githubConfigID, orgID, githubIntegrationID, sourceIDColumn}},
+		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'commits',TRUE,'{}'::jsonb)`, []any{githubDatasetID, orgID, githubIntegrationID}},
+		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',1,FALSE)`, []any{githubJobID, orgID, githubConfigID}},
+		{`INSERT INTO scheduled_sync_occurrences (occurrence_id,identity_version,org_id,sync_config_id,scheduled_job_id,scheduled_for,reconcile_status) VALUES ($1,$2,$3,$4::uuid,$5::uuid,$6,'pending')`,
+			[]any{occurrenceID, OccurrenceIdentityVersion, orgID, githubConfigID, githubJobID, time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)}},
+		{`INSERT INTO sync_manual_triggers (occurrence_id,mode,triggered_by) VALUES ($1,'incremental','manual')`, []any{occurrenceID}},
+	}
+	for _, statement := range statements {
+		if _, err := fixture.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	occurrence := PendingOccurrence{
+		ID: occurrenceID, IdentityVersion: OccurrenceIdentityVersion,
+		OrgID: orgID, ConfigID: githubConfigID, JobID: githubJobID,
+		ScheduledFor:         time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		ConfigActive:         true,
+		ConfigPlannerManaged: false,
+		JobStatus:            1, JobType: "sync",
+	}
+	if explicitSourceID != "" {
+		occurrence.ConfigSourceID = &explicitSourceID
+	}
+	return occurrence
+}
+
+// TestNativeMaterializerAdmitsNonPlannerManagedChildConfigWithExplicitSource
+// is CHAOS-4604's positive acceptance case: a non-planner-managed child
+// config pinned to one explicit IntegrationSource, driven by a manual
+// trigger, must now materialize -- before this ticket, Materialize's gate
+// (occurrence.ConfigPlannerManaged alone) refused this outright with
+// ErrOccurrenceIneligible.
+func TestNativeMaterializerAdmitsNonPlannerManagedChildConfigWithExplicitSource(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	occurrence := startChildConfigTriggerFixture(t, fixture, "00000000-0000-4000-8000-000000003003")
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
+	if err != nil {
+		t.Fatalf("Materialize() for a non-planner-managed child config with an explicit source_id = %v, want nil (CHAOS-4604 widens the gate to admit this shape)", err)
+	}
+	if plan.PlannedUnits == 0 {
+		t.Fatal("plan.PlannedUnits = 0, want > 0 -- the pinned source/dataset should have planned units")
+	}
+
+	var sourceID string
+	if err := fixture.pool.QueryRow(context.Background(),
+		`SELECT source_id::text FROM sync_run_units WHERE sync_run_id=$1::uuid LIMIT 1`, plan.SyncRunID,
+	).Scan(&sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if sourceID != "00000000-0000-4000-8000-000000003003" {
+		t.Errorf("sync_run_units.source_id = %q, want the config's own pinned source", sourceID)
+	}
+}
+
+// TestNativeMaterializerStillRefusesNonPlannerManagedConfigWithoutSourceID is
+// the regression guard for the structural property the ticket calls out: a
+// bug in Python's flag-routing check must never silently mis-plan an
+// occurrence -- it must fail LOUD. A non-planner-managed config with NO
+// explicit source_id (a legacy, fully-unscoped standalone config -- the
+// shape CHAOS-4604 does NOT widen the gate for) must still be refused with
+// ErrOccurrenceIneligible, exactly as before this ticket.
+func TestNativeMaterializerStillRefusesNonPlannerManagedConfigWithoutSourceID(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	occurrence := startChildConfigTriggerFixture(t, fixture, "")
+	if occurrence.ConfigSourceID != nil {
+		t.Fatal("test setup bug: ConfigSourceID must be nil for the unscoped regression case")
+	}
+
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializeAndCommit(t, fixture, materializer, occurrence); !errors.Is(err, ErrOccurrenceIneligible) {
+		t.Fatalf("Materialize() for a non-planner-managed config with no source_id = %v, want %v -- CHAOS-4604 widens the gate for exactly ONE shape, this is not it", err, ErrOccurrenceIneligible)
 	}
 }
 

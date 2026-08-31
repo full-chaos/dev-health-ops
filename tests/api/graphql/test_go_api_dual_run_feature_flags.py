@@ -748,15 +748,33 @@ async def test_dual_run_missing_table_degrades_on_both_sides(
     admin_client.command(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
 
     registry_db_name, registry_dsn = _create_scratch_postgres_db(POSTGRES_TEST_URI)
-    _create_routing_state_table(registry_dsn)
-    _set_routing_mode(registry_dsn, "canary")
+    # CHAOS-4649 (executed regression, caught running this test 2026-08-31:
+    # "cannot parse ...: failed to parse as keyword/value"): this call site
+    # builds its OWN scratch registry DB inline rather than going through
+    # the `registry_postgres` fixture, so it must repeat that fixture's
+    # Go-facing normalization itself -- `registry_dsn` keeps
+    # `_create_scratch_postgres_db`'s admin_uri drivername (e.g.
+    # postgresql+asyncpg://, the project's mandated opt-in test DSN form),
+    # which the Go binary cannot parse.
+    registry_go_dsn = (
+        make_url(registry_dsn)
+        .set(drivername="postgresql")
+        .render_as_string(hide_password=False)
+    )
+    _create_routing_state_table(registry_go_dsn)
+    _set_routing_mode(registry_go_dsn, "canary")
 
     token, jwks, issuer, audience = _mint_envelope(org_id)
     jwks_file = jwks_path / "jwks-degraded.json"
     jwks_file.write_text(json.dumps(jwks))
 
     server = _start_go_server(
-        query_api_binary, unmigrated_uri, registry_dsn, str(jwks_file), issuer, audience
+        query_api_binary,
+        unmigrated_uri,
+        registry_go_dsn,
+        str(jwks_file),
+        issuer,
+        audience,
     )
     try:
         python_client = clickhouse_connect.get_client(dsn=unmigrated_uri)

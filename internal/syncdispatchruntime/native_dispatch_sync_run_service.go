@@ -523,15 +523,20 @@ WHERE id = $1::uuid`,
 	if riverQueued > 0 {
 		switch {
 		// CHAOS-4605: a unit left unclaimed because it became claimable
-		// after the guard's snapshot is due NOW, not at nextDeferredAt --
-		// it is not a deferral, it just missed this pass's decision. Arm
-		// the default countdown so the next pass picks it up, ahead of any
-		// longer budget backoff. Without this arm, the riverQueued > 0 path
-		// can commit with nothing scheduled (no nextDeferredAt, no capped
-		// ids) and strand it: the tail's computePendingUnitCounts re-arm
-		// only runs when riverQueued == 0.
+		// after the guard's snapshot is due NOW -- it is not a deferral, it
+		// just missed this pass's capacity decision. Without an arm here the
+		// riverQueued > 0 path can commit with nothing scheduled (no
+		// nextDeferredAt, no capped ids) and strand it: the tail's
+		// computePendingUnitCounts re-arm only runs when riverQueued == 0.
+		//
+		// Arm the EARLIER of the default countdown and any budget deferral,
+		// so neither delays the other: scheduleRedispatch writes ONE wakeup
+		// and its second statement overwrites a pending row unconditionally,
+		// so picking the wrong one of the two would push the other back.
 		case len(deferredOutsideSnapshot) > 0:
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+			armAt := service.nowUTC()
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
+				earlierOf(nextDeferredAt, armAt.Add(redispatchCountdown())), armAt)
 		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
 		case len(cappedIDs) > 0:

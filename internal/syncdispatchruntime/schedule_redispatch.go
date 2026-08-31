@@ -24,12 +24,20 @@ import (
 // the caller used to reach its own terminal state (Dispatch()'s main
 // claim/route/enqueue session has already closed by every call site that
 // reaches this).
+// redispatchCountdown is _schedule_redispatch's own default wakeup delay,
+// named so a caller that must compare against it (CHAOS-4605's
+// deferred-outside-snapshot arm in dispatch_sync_run) reads the SAME env var
+// with the SAME default rather than keeping a second copy of the number.
+func redispatchCountdown() time.Duration {
+	return time.Duration(budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", 60)) * time.Second
+}
+
 func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, syncRunID string, availableAt *time.Time, now time.Time) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	countdown := budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", 60)
-	redispatchAt := now.Add(time.Duration(countdown) * time.Second)
+	countdown := redispatchCountdown()
+	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
 		redispatchAt = *availableAt
 	}
@@ -70,5 +78,5 @@ WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_toke
 		return
 	}
 	logger.InfoContext(ctx, "dispatch_sync_run.redispatch_rearmed",
-		slog.String("sync_run_id", syncRunID), slog.Int("countdown", countdown), slog.Time("available_at", redispatchAt))
+		slog.String("sync_run_id", syncRunID), slog.Int("countdown", int(countdown.Seconds())), slog.Time("available_at", redispatchAt))
 }

@@ -1107,15 +1107,57 @@ var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureEx
 	{call: "Fatalf", justification: "B7: port == \"8123\" || port == \"8443\" -- oracle class \"httpport\" (CHAOS-4643 round 9)"},
 }
 
+// nanClassClickHouseURINonTerminalMethods is every testing.TB method
+// nanClassClickHouseURI calls that does NOT end the (sub)test -- today just
+// Helper(). TestNanClassClickHouseURI_FailureExitInventoryIsComplete FAILS
+// CLOSED on any <param>.<Method>(...) call site it finds that is neither in
+// this list nor one of the two terminal kinds
+// (nanClassClickHouseURIFailureExitInventory's "Fatalf"/"Skip"): an
+// unrecognized method name stops the test and forces a human decision.
+//
+// This replaces a WEAKER first version of the guard (CHAOS-4643 round 9,
+// codex EXECUTED finding): that version recognized only literal "Fatalf"
+// and "Skip" by name and ignored every other method call outright, so an
+// overlay adding t.FailNow() -- a real terminal exit under a different name
+// -- passed silently ("ok ... 0.352s"). An allowlist of KNOWN TERMINAL
+// names fails OPEN on any name it does not recognize, which is exactly the
+// "test that cannot fail" shape this whole guard exists to close -- so the
+// check now inverts to a DECLARED NON-TERMINAL allowlist instead: anything
+// not explicitly cleared here, and not one of the two recognized terminal
+// kinds, is an error, not a silent pass. Add a name here ONLY if it can
+// NEVER end the (sub)test (e.g. Helper, Log, Logf); if it CAN end the test
+// (Fatal, FailNow, Skipf, SkipNow, ...), it must be classified as a new
+// failure exit in nanClassClickHouseURIFailureExitInventory instead, like
+// every other exit.
+//
+// NOT detected by this guard, by design: a bare, unqualified `panic(...)`
+// or `runtime.Goexit()` call inside the function body -- i.e. one that does
+// not go through the <param> receiver at all. nanClassClickHouseURI does
+// not call either today, and this guard's job is enumerating the
+// TESTING.TB-SURFACED failure/skip messages the credential-leak oracle
+// needs to classify; a direct panic/Goexit would bypass testing.TB
+// entirely (no message for the oracle to check, and it would break the
+// goroutine-isolation contract runNanClassClickHouseURI's
+// fakeSkipFailTB depends on), which is a different, more visible defect
+// class a reviewer or `go vet` catches on sight -- not the narrow,
+// easy-to-miss "oracle silently doesn't cover this branch" shape this
+// guard targets.
+var nanClassClickHouseURINonTerminalMethods = map[string]bool{
+	"Helper": true,
+}
+
 // TestNanClassClickHouseURI_FailureExitInventoryIsComplete is the
-// by-construction guard nanClassClickHouseURIFailureExitInventory
-// describes: it parses THIS FILE, finds nanClassClickHouseURI's own
-// function body, and requires every <param>.Fatalf(...) / <param>.Skip(...)
-// call site inside it -- where <param> is the function's own first
-// parameter name, whatever it is called -- to appear, in source order,
-// exactly once in the inventory above. A future failure exit added to the
-// function without a matching inventory entry fails THIS test, not a future
-// codex round.
+// by-construction guard nanClassClickHouseURIFailureExitInventory and
+// nanClassClickHouseURINonTerminalMethods describe: it parses THIS FILE,
+// finds nanClassClickHouseURI's own function body, and requires every
+// method call on the function's own first parameter -- whatever it is
+// named -- to be either declared non-terminal or match a
+// nanClassClickHouseURIFailureExitInventory entry IN SOURCE ORDER (same
+// count, same call kind at each position). A future failure exit added to
+// the function under ANY method name, recognized or not, fails THIS test:
+// an unrecognized name fails closed (see
+// nanClassClickHouseURINonTerminalMethods's doc comment for why an
+// open-allowlist first version of this check missed t.FailNow()).
 func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -1155,6 +1197,7 @@ func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
 		call string
 	}
 	var found []discoveredExit
+	var unrecognized []string
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -1168,15 +1211,36 @@ func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
 		if !ok || recv.Name != recvParam {
 			return true
 		}
-		if sel.Sel.Name != "Fatalf" && sel.Sel.Name != "Skip" {
+		method := sel.Sel.Name
+		line := fset.Position(call.Pos()).Line
+
+		// FAIL CLOSED (CHAOS-4643 round 9): anything not explicitly
+		// declared non-terminal, and not one of the two recognized
+		// terminal kinds, is an ERROR -- never silently ignored. This is
+		// the inversion that catches t.FailNow() and anything named after
+		// it that a name-by-name allowlist would keep missing one at a
+		// time.
+		if nanClassClickHouseURINonTerminalMethods[method] {
 			return true
 		}
-		found = append(found, discoveredExit{
-			line: fset.Position(call.Pos()).Line,
-			call: sel.Sel.Name,
-		})
+		if method != "Fatalf" && method != "Skip" {
+			unrecognized = append(unrecognized, fmt.Sprintf(
+				"  line %d: %s.%s(...) -- not in nanClassClickHouseURINonTerminalMethods and not a "+
+					"recognized terminal call kind (Fatalf/Skip)", line, recvParam, method))
+			return true
+		}
+		found = append(found, discoveredExit{line: line, call: method})
 		return true
 	})
+
+	if len(unrecognized) > 0 {
+		t.Fatalf("nanClassClickHouseURI calls %d method(s) on %s that this guard does not recognize -- "+
+			"add each to nanClassClickHouseURINonTerminalMethods (if it can NEVER end the test) or classify "+
+			"it as a new entry in nanClassClickHouseURIFailureExitInventory (if it CAN) (CHAOS-4643 round 9 "+
+			"by-construction guard, fail-closed after codex's t.FailNow() repro):\n%s",
+			len(unrecognized), recvParam, strings.Join(unrecognized, "\n"))
+	}
+
 	sort.Slice(found, func(i, j int) bool { return found[i].line < found[j].line })
 
 	if len(found) != len(nanClassClickHouseURIFailureExitInventory) {
@@ -1184,10 +1248,10 @@ func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
 		for _, f := range found {
 			lines = append(lines, fmt.Sprintf("  line %d: %s.%s(...)", f.line, recvParam, f.call))
 		}
-		t.Fatalf("nanClassClickHouseURI has %d %s.Fatalf/%s.Skip call site(s) but "+
+		t.Fatalf("nanClassClickHouseURI has %d recognized terminal call site(s) (Fatalf/Skip on %s) but "+
 			"nanClassClickHouseURIFailureExitInventory declares %d -- a failure exit was added or removed "+
 			"without updating the inventory (CHAOS-4643 round 9 by-construction guard). Discovered sites, "+
-			"in source order:\n%s", len(found), recvParam, recvParam, len(nanClassClickHouseURIFailureExitInventory),
+			"in source order:\n%s", len(found), recvParam, len(nanClassClickHouseURIFailureExitInventory),
 			strings.Join(lines, "\n"))
 	}
 	for i, f := range found {

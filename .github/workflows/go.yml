@@ -89,24 +89,62 @@ on:
     - cron: '17 8 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # PR runs cancel their predecessor so fast-follow pushes don't queue behind
-  # a stale diff, which bounds this workflow to ONE live fan-out per PR --
-  # ~13 jobs, several at a 25-minute cap.
+  # CHAOS-4676 (redesigned round 6, replacing the imperative `guard` job
+  # after 5 rounds of a lookup/cancel/poll approach that each surfaced a
+  # new race or silent-pass mode — a distributed-consistency problem does
+  # not belong solved with best-effort REST calls inside a CI job). `push`
+  # and `pull_request` runs for the SAME branch now share ONE concurrency
+  # group, so GitHub itself is the single source of truth for "only one
+  # authoritative run per branch tip" — no lookups, no polls, no
+  # eventual-consistency windows. See the design note in
+  # .codex-review-context.md for the full ordering analysis (push-then-PR-
+  # open, PR-open-then-push, ordinary re-push) and how each of the prior
+  # 10 findings is now structurally impossible or obsolete.
+  #
+  # `github.head_ref` is the PR's source branch name (set only for
+  # pull_request/pull_request_target) and empty for push, so it falls
+  # through to `github.ref_name` (the pushed branch name) there — the same
+  # branch produces the same group key from either trigger.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # Live-proof commit for the push-then-PR-open/reopen ordering (round 6,
+  # CHAOS-4676): pushed while PR #2050 was closed, then the PR was reopened
+  # at this exact SHA with no further push, to prove the shared group
+  # cancels the earlier `push` run natively when `pull_request` arrives.
+  # PR/branch runs cancel their predecessor, in EITHER direction now, so a
+  # fast-follow push (or a PR opening moments after a no-PR push) never
+  # leaves two authoritative runs live on one SHA — whichever run GitHub
+  # starts second in the shared group cancels whichever was there first,
+  # regardless of which trigger fired which one. This bounds the workflow
+  # to ONE live fan-out per branch -- ~13 jobs, several at a 25-minute cap.
   #
   # merge_group runs must not be cancelled: a burst of merges lands several
-  # within the same `github.ref` group in quick succession, and with an
-  # unconditional cancel-in-progress every one but the last gets cancelled
-  # before go-storage-integration finishes — so most merges never get a real
+  # within the same group in quick succession, and with an unconditional
+  # cancel-in-progress every one but the last gets cancelled before
+  # go-storage-integration finishes — so most merges never get a real
   # pass/fail, only "cancelled". integration.yml (push-to-main integration
   # suite) already sets cancel-in-progress: false for the same reason;
-  # docs-cloudflare.yml uses this same event-conditional pattern. The same
-  # applies to `on.push`: it is the one trigger here that cannot be
-  # cancelled AND fires per-commit -- CHAOS-3948 turned it off because that
-  # combination exhausted the org's Actions concurrency. It is enabled again
-  # (owner-ratified), scoped by the same path filter `pull_request` uses, so
-  # this risk is worth watching rather than a solved problem.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # docs-cloudflare.yml uses this same event-conditional pattern.
+  #
+  # Direct pushes to `main` must also not be cancelled, for the identical
+  # reason (CHAOS-3948): main is never a PR's head branch in this repo's
+  # normal flow, so a main push never actually races a pull_request run --
+  # but a burst of fast-follow merges to main WOULD cancel each other's Go
+  # coverage if this were left unconditionally true, the same failure mode
+  # merge_group already guards against.
+  #
+  # The exemption MUST use the same effective-branch expression as the
+  # group key above (codex round 6, CHAOS-4676): `github.ref_name` alone is
+  # WRONG for a `pull_request` event, where it is the synthetic
+  # `<pr-number>/merge` ref, never the literal string `main` -- even when
+  # the PR's actual head branch IS `main` (real, not hypothetical: PR #1274
+  # in this repo had `headRefName: main`). Comparing raw `ref_name` let
+  # such a PR's run carry `cancel-in-progress=true` while still sharing the
+  # `Go-main` group (via `head_ref`) with an in-progress direct-main push,
+  # reintroducing the exact CHAOS-3948 burst-cancellation problem this
+  # exemption exists to prevent. `head_ref || ref_name` closes it: a push
+  # to main (head_ref empty, falls to ref_name `main`) and a main-headed PR
+  # (head_ref `main` directly) are now exempted identically.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' && (github.head_ref || github.ref_name) != 'main' }}
 
 permissions:
   contents: read

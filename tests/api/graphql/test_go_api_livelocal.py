@@ -80,6 +80,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -1108,9 +1109,19 @@ async def test_registered_document_executes_on_local_stack(
     #    violation -- see _shape_check's doc comment for the ruling.
     shape = _shape_check(document, payload["data"])
     if shape.notes:
-        print(
+        # codex review round 4 (2026-08-30, EXECUTED): a bare `print()`
+        # is captured by pytest's default output capture and only
+        # surfaces for a FAILING test -- a repro confirmed a PASSING
+        # test with a note produced NO visible "NOTE" text without `-s`.
+        # chris's ruling was explicit: "downgrading them to notes must
+        # not make them invisible." `warnings.warn` fixes this because
+        # pytest always prints its "warnings summary" at the end of a
+        # run by default, independent of output capture / `-s` -- a
+        # different mechanism than stdout capture entirely.
+        warnings.warn(
             f"[{operation}] shape notes (const {const_name}) -- spec-valid "
-            "nulls on schema-nullable fields, NOT failures:\n" + "\n".join(shape.notes)
+            "nulls on schema-nullable fields, NOT failures: " + "; ".join(shape.notes),
+            stacklevel=2,
         )
     assert not shape.violations, (
         f"[{operation}] LIVE-LOCAL FIND: shape violations (const "

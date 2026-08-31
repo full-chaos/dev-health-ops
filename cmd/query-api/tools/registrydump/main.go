@@ -142,6 +142,7 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 	// not assume that function's name so a future refactor that moves
 	// the map does not silently stop being found).
 	operationToConst := map[string]string{}
+	assignmentCount := 0
 	var mapErr error
 	ast.Inspect(file, func(n ast.Node) bool {
 		if mapErr != nil {
@@ -154,6 +155,22 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		lhsIdent, ok := assign.Lhs[0].(*ast.Ident)
 		if !ok || lhsIdent.Name != "digestByOperation" {
 			return true
+		}
+		// codex review round 4 (2026-08-30, EXECUTED): a SECOND,
+		// unrelated local variable also named digestByOperation
+		// anywhere else in the file (a dead helper, a doc example, a
+		// future refactor's leftover) previously had its entries
+		// silently MERGED into the same operationToConst map, since
+		// this walk never stopped after the first match -- reported
+		// repro produced count=13 including a bogus
+		// "not-a-production-route" entry, with no error. This walk
+		// intentionally does not anchor to a specific function name
+		// (see the doc comment above), so the fix is to detect and
+		// reject ambiguity explicitly rather than assume uniqueness.
+		assignmentCount++
+		if assignmentCount > 1 {
+			mapErr = fmt.Errorf("found MORE THAN ONE assignment to an identifier named digestByOperation in %s -- this tool requires exactly one, to stay unambiguous about which map is the route's real source of truth; disambiguate (rename the unrelated one, or remove dead code) before re-running", filePath)
+			return false
 		}
 		composite, ok := assign.Rhs[0].(*ast.CompositeLit)
 		if !ok {

@@ -237,12 +237,22 @@ Two of the five classes are removable, and they are tracked:
 | After | Movable | Share |
 | --- | --- | --- |
 | today | 402s | 21.7% |
-| CHAOS-4661 — parameterise role names | 1758s | **94.9%** |
-| CHAOS-4661 + CHAOS-4677 — and namespace the parity databases | 1808s | **97.6%** |
+| CHAOS-4661 — parameterise role names | 1728s | **93.3%** |
+| CHAOS-4661 + CHAOS-4677 — and namespace the parity databases | 1778s | **96.0%** |
 
-**CHAOS-4661 is therefore the priority unlock**: it is worth 73 percentage
-points on its own, far more than anything else on this page. The residual 44s
-(2.4%) is Valkey plus the harness's own self-test, and does not shrink.
+**Projections here are derived, not typed: a package counts as movable under a
+hypothetical only when EVERY blocking store is resolved.** That distinction is
+not pedantry — it is the correction that produced these numbers. Adding the
+blocked buckets together over-counts, because `cmd/dev-health-worker` and
+`internal/syncdispatchruntime` are blocked by roles **and** Valkey, so fixing
+the role names moves their PostgreSQL and leaves them host-bound anyway. The
+same 30s pair had already caused two earlier errors on this page.
+
+**CHAOS-4661 is the priority unlock**: it is worth about 72 percentage points on
+its own (21.7% → 93.3%), far more than anything else here. CHAOS-4677 then adds
+2.7 (93.3% → 96.0%). The residual **74s (4.0%)** is Valkey, the harness's own
+self-test, and the two packages that need both fixes, and it does not shrink
+further.
 
 An earlier version of this page published 85.2%, and before that 87.9%. Both
 were computed with a single target per package, which hid role-creating

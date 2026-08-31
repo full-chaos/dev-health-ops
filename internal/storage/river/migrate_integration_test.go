@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +19,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -24,8 +28,6 @@ import (
 )
 
 const (
-	domainRole     = "worker_domain_runtime"
-	queueRole      = "worker_queue_runtime"
 	domainPassword = "domain_test_password"
 	queuePassword  = "queue_test_password"
 )
@@ -52,10 +54,26 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 	}
 	defer closeInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Every role this test
+	// creates, in this function and its helpers, is suffixed from this
+	// call's own database identity so two successive runs, and two
+	// concurrent lanes, never collide on a CREATE ROLE.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole := "worker_domain_runtime_" + roleSuffix
+	queueRole := "worker_queue_runtime_" + roleSuffix
+
 	adminPool := openPool(t, ctx, instance.URI)
 	defer adminPool.Close()
-	assertRuntimeRolePreflightHasNoSideEffects(t, ctx, adminPool)
-	createRuntimeRoles(t, ctx, adminPool)
+	assertRuntimeRolePreflightHasNoSideEffects(t, ctx, adminPool, roleSuffix)
+	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
 	assertRuntimeRolePosture(t, ctx, adminPool, domainRole)
 	assertRuntimeRolePosture(t, ctx, adminPool, queueRole)
 	for _, statement := range []string{
@@ -112,9 +130,9 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	domainURI := roleURI(t, instance.URI, domainRole, domainPassword, "worker_test")
-	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, "worker_test")
-	assertPrefixUpgrade(t, ctx, adminPool)
+	domainURI := roleURI(t, instance.URI, domainRole, domainPassword, dbName)
+	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, dbName)
+	assertPrefixUpgrade(t, ctx, adminPool, domainRole, queueRole)
 
 	// Pool construction alone is deliberately DDL-free.
 	runtimePools, err := postgresstore.OpenRuntimePools(ctx, postgresstore.RuntimeConfig{
@@ -166,26 +184,38 @@ func TestRiverMigrationRolesRetentionGrowthAndRestore(t *testing.T) {
 	assertRuntimePrivileges(t, ctx, domainURI, queueURI)
 	assertRetention(t, ctx, adminPool, queueURI)
 	assertGrowthAndVacuum(t, ctx, adminPool, queueURI)
-	assertBackupRestore(t, ctx, instance, adminPool, queueURI)
+	assertBackupRestore(t, ctx, instance, adminPool, queueURI, dbName, roleSuffix)
 	assertSuffixMismatchFailsClosed(t, ctx, adminPool)
 }
 
-func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Context, pool *pgxpool.Pool, roleSuffix string) {
 	t.Helper()
-	const validDomainRole = "preflight_domain_valid"
-	const validQueueRole = "preflight_queue_valid"
+	// CREATE ROLE is cluster-scoped (CHAOS-4661); every name below, including
+	// the two never-created "missing" roles asserted absent, is suffixed so
+	// this preflight sweep cannot collide with a concurrent lane's or this
+	// package's own runtime roles either.
+	validDomainRole := "preflight_domain_valid_" + roleSuffix
+	validQueueRole := "preflight_queue_valid_" + roleSuffix
+	queueMissingRole := "preflight_queue_missing_" + roleSuffix
+	domainMissingRole := "preflight_domain_missing_" + roleSuffix
+	noLoginRole := "preflight_no_login_" + roleSuffix
+	superuserRole := "preflight_superuser_" + roleSuffix
+	createDBRole := "preflight_createdb_" + roleSuffix
+	createRoleRole := "preflight_createrole_" + roleSuffix
+	replicationRole := "preflight_replication_" + roleSuffix
+	bypassRLSRole := "preflight_bypassrls_" + roleSuffix
 	roles := []struct {
 		name       string
 		attributes string
 	}{
 		{name: validDomainRole, attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
 		{name: validQueueRole, attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
-		{name: "preflight_no_login", attributes: "NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
-		{name: "preflight_superuser", attributes: "LOGIN SUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
-		{name: "preflight_createdb", attributes: "LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
-		{name: "preflight_createrole", attributes: "LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS"},
-		{name: "preflight_replication", attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION NOBYPASSRLS"},
-		{name: "preflight_bypassrls", attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS"},
+		{name: noLoginRole, attributes: "NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
+		{name: superuserRole, attributes: "LOGIN SUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
+		{name: createDBRole, attributes: "LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"},
+		{name: createRoleRole, attributes: "LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS"},
+		{name: replicationRole, attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION NOBYPASSRLS"},
+		{name: bypassRLSRole, attributes: "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS"},
 	}
 	for _, role := range roles {
 		if _, err := pool.Exec(ctx, "CREATE ROLE "+role.name+" "+role.attributes); err != nil {
@@ -197,20 +227,20 @@ func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Contex
 		domainRole string
 		queueRole  string
 	}{
-		{name: "missing_queue", domainRole: validDomainRole, queueRole: "preflight_queue_missing"},
-		{name: "missing_domain", domainRole: "preflight_domain_missing", queueRole: validQueueRole},
-		{name: "domain_no_login", domainRole: "preflight_no_login", queueRole: validQueueRole},
-		{name: "domain_superuser", domainRole: "preflight_superuser", queueRole: validQueueRole},
-		{name: "domain_createdb", domainRole: "preflight_createdb", queueRole: validQueueRole},
-		{name: "domain_createrole", domainRole: "preflight_createrole", queueRole: validQueueRole},
-		{name: "domain_replication", domainRole: "preflight_replication", queueRole: validQueueRole},
-		{name: "domain_bypassrls", domainRole: "preflight_bypassrls", queueRole: validQueueRole},
-		{name: "queue_no_login", domainRole: validDomainRole, queueRole: "preflight_no_login"},
-		{name: "queue_superuser", domainRole: validDomainRole, queueRole: "preflight_superuser"},
-		{name: "queue_createdb", domainRole: validDomainRole, queueRole: "preflight_createdb"},
-		{name: "queue_createrole", domainRole: validDomainRole, queueRole: "preflight_createrole"},
-		{name: "queue_replication", domainRole: validDomainRole, queueRole: "preflight_replication"},
-		{name: "queue_bypassrls", domainRole: validDomainRole, queueRole: "preflight_bypassrls"},
+		{name: "missing_queue", domainRole: validDomainRole, queueRole: queueMissingRole},
+		{name: "missing_domain", domainRole: domainMissingRole, queueRole: validQueueRole},
+		{name: "domain_no_login", domainRole: noLoginRole, queueRole: validQueueRole},
+		{name: "domain_superuser", domainRole: superuserRole, queueRole: validQueueRole},
+		{name: "domain_createdb", domainRole: createDBRole, queueRole: validQueueRole},
+		{name: "domain_createrole", domainRole: createRoleRole, queueRole: validQueueRole},
+		{name: "domain_replication", domainRole: replicationRole, queueRole: validQueueRole},
+		{name: "domain_bypassrls", domainRole: bypassRLSRole, queueRole: validQueueRole},
+		{name: "queue_no_login", domainRole: validDomainRole, queueRole: noLoginRole},
+		{name: "queue_superuser", domainRole: validDomainRole, queueRole: superuserRole},
+		{name: "queue_createdb", domainRole: validDomainRole, queueRole: createDBRole},
+		{name: "queue_createrole", domainRole: validDomainRole, queueRole: createRoleRole},
+		{name: "queue_replication", domainRole: validDomainRole, queueRole: replicationRole},
+		{name: "queue_bypassrls", domainRole: validDomainRole, queueRole: bypassRLSRole},
 	}
 	for index, test := range tests {
 		schema := fmt.Sprintf("river_preflight_%02d", index)
@@ -248,7 +278,7 @@ func assertRuntimeRolePreflightHasNoSideEffects(t *testing.T, ctx context.Contex
 			t.Fatalf("ineligible-role preflight created migration table %s", *migrationTable)
 		}
 	}
-	for _, missingRole := range []string{"preflight_queue_missing", "preflight_domain_missing"} {
+	for _, missingRole := range []string{queueMissingRole, domainMissingRole} {
 		var roleExists bool
 		if err := pool.QueryRow(
 			ctx,
@@ -284,7 +314,7 @@ func assertRuntimeRolePosture(t *testing.T, ctx context.Context, pool *pgxpool.P
 	}
 }
 
-func assertPrefixUpgrade(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertPrefixUpgrade(t *testing.T, ctx context.Context, pool *pgxpool.Pool, domainRole, queueRole string) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, "CREATE SCHEMA river_prefix"); err != nil {
 		t.Fatal(err)
@@ -322,7 +352,7 @@ func assertSuffixMismatchFailsClosed(t *testing.T, ctx context.Context, pool *pg
 	}
 }
 
-func createRuntimeRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func createRuntimeRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool, domainRole, queueRole string) {
 	t.Helper()
 	for _, statement := range []string{
 		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainPassword + "'",
@@ -748,6 +778,8 @@ func assertBackupRestore(
 	instance *containers.Instance,
 	adminPool *pgxpool.Pool,
 	queueURI string,
+	dbName string,
+	roleSuffix string,
 ) {
 	t.Helper()
 	queuePool := openPool(t, ctx, queueURI)
@@ -768,11 +800,50 @@ func assertBackupRestore(
 		t.Fatal(err)
 	}
 
-	runContainerCommand(t, ctx, instance, "pg_dump", "--username=worker_test", "--dbname=worker_test", "--schema=river", "--format=custom", "--file=/tmp/river.dump")
-	runContainerCommand(t, ctx, instance, "createdb", "--username=worker_test", "restored_worker_test")
-	runContainerCommand(t, ctx, instance, "pg_restore", "--username=worker_test", "--dbname=restored_worker_test", "--exit-on-error", "--no-owner", "--no-privileges", "/tmp/river.dump")
+	// restoredDatabase is a NEW database this test creates outside the
+	// harness's own scratch-database ownership (StartPostgres already gave
+	// this call one, but restoring INTO it would collide with the schema
+	// already loaded there). Like the roles above, a fixed name would race
+	// two concurrent lanes on the same shared kiac cluster, so it is
+	// suffixed the same way and dropped explicitly, since Instance.Close
+	// only ever drops the database it created itself.
+	restoredDatabase := "restored_river_" + roleSuffix
+	adminConfig, err := pgx.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminUser := adminConfig.User
+	dumpFile := filepath.Join(t.TempDir(), "river.dump")
 
-	restoredURI := roleURI(t, instance.URI, "worker_test", "worker_test_password", "restored_worker_test")
+	// pg_dump/createdb/pg_restore run as host processes against instance's
+	// network address, exactly like every other client in this test file
+	// (pgx does the same) -- NOT via `docker exec` into a container. That
+	// only ever worked on the container path (Instance.Container is nil on
+	// the kiac remote path, CHAOS-4661) and this host already carries a
+	// matching-major-version client (verified: PostgreSQL 18 client tools
+	// against both a postgres:18-alpine container and kiac's PostgreSQL
+	// 18.6).
+	runPostgresClientCommand(t, ctx, adminConfig, "pg_dump",
+		"--username="+adminUser, "--dbname="+dbName, "--schema=river", "--format=custom", "--file="+dumpFile)
+	runPostgresClientCommand(t, ctx, adminConfig, "createdb", "--username="+adminUser, restoredDatabase)
+	// A plain defer, not t.Cleanup: t.Cleanup funcs run after the OUTER
+	// test's own defers (including closeInstance, which drops the scratch
+	// database this admin connection lives on), so a t.Cleanup here would
+	// try to drop through an already-dropped connection. This defer runs
+	// when assertBackupRestore itself returns, while instance is still open.
+	defer func() {
+		dropCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dropPool := openPool(t, dropCtx, instance.URI)
+		defer dropPool.Close()
+		if _, err := dropPool.Exec(dropCtx, "DROP DATABASE IF EXISTS "+restoredDatabase+" WITH (FORCE)"); err != nil {
+			t.Errorf("drop restored database %s: %v", restoredDatabase, err)
+		}
+	}()
+	runPostgresClientCommand(t, ctx, adminConfig, "pg_restore",
+		"--username="+adminUser, "--dbname="+restoredDatabase, "--exit-on-error", "--no-owner", "--no-privileges", dumpFile)
+
+	restoredURI := roleURI(t, instance.URI, adminUser, adminConfig.Password, restoredDatabase)
 	restoredPool := openPool(t, ctx, restoredURI)
 	defer restoredPool.Close()
 	for id, wantState := range map[int64]string{available.Job.ID: "available", completed.Job.ID: "completed"} {
@@ -789,18 +860,21 @@ func assertBackupRestore(
 	}
 }
 
-func runContainerCommand(t *testing.T, ctx context.Context, instance *containers.Instance, command ...string) {
+// runPostgresClientCommand runs a PostgreSQL client binary (pg_dump,
+// createdb, pg_restore, ...) against the server named by config, over the
+// network, using config's own host/port/password -- never `docker exec`
+// into a container, which has no equivalent on the kiac remote path.
+func runPostgresClientCommand(t *testing.T, ctx context.Context, config *pgx.ConnConfig, name string, args ...string) {
 	t.Helper()
-	exitCode, output, err := instance.Container.Exec(ctx, command)
+	fullArgs := append([]string{
+		"--host=" + config.Host,
+		"--port=" + strconv.Itoa(int(config.Port)),
+	}, args...)
+	cmd := exec.CommandContext(ctx, name, fullArgs...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+config.Password)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatal(err)
-	}
-	data, readErr := io.ReadAll(io.LimitReader(output, 16*1024))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if exitCode != 0 {
-		t.Fatalf("container command %s failed with %d: %s", command[0], exitCode, strings.TrimSpace(string(data)))
+		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(fullArgs, " "), err, strings.TrimSpace(string(output)))
 	}
 }
 

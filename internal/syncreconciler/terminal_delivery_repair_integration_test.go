@@ -54,12 +54,27 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 		}
 	}()
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelDomainRole := "kernel_domain_runtime_" + roleSuffix
+	kernelQueueRole := "kernel_queue_runtime_" + roleSuffix
+
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
-	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+	if err := createKernelIntegrationFixture(ctx, adminPool, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
@@ -443,12 +458,27 @@ func TestTerminalDeliveryRepairJoinUsesJobPrimaryKey(t *testing.T) {
 		}
 	}()
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelDomainRole := "kernel_domain_runtime_" + roleSuffix
+	kernelQueueRole := "kernel_queue_runtime_" + roleSuffix
+
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
-	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+	if err := createKernelIntegrationFixture(ctx, adminPool, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
@@ -847,12 +877,27 @@ func TestReclaimedCoordinatorDeliveryRepublishesAsANewRiverJob(t *testing.T) {
 			t.Errorf("terminate PostgreSQL: %v", err)
 		}
 	}()
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelDomainRole := "kernel_domain_runtime_" + roleSuffix
+	kernelQueueRole := "kernel_queue_runtime_" + roleSuffix
+
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer adminPool.Close()
-	if err := createKernelIntegrationFixture(ctx, adminPool); err != nil {
+	if err := createKernelIntegrationFixture(ctx, adminPool, kernelDomainRole, kernelQueueRole, dbName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{

@@ -63,10 +63,7 @@ import (
 // rather than listing their statements here — a list in this file could not
 // see a query those services grow later.
 
-const (
-	grantCoordinatorRole = "grant_coordinator_runtime"
-	grantCoordinatorPass = "grant_coordinator_password"
-)
+const grantCoordinatorPass = "grant_coordinator_password"
 
 // coordinatorExclusiveDDL creates the relations the Option B split assigns to
 // the coordinator role and that the domain-side harness therefore never needed.
@@ -324,8 +321,8 @@ func coordinatorDualGrantStatements() []coordinatorStatement {
 func TestCoordinatorStatementsAreDeniedToTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
 	for _, statement := range coordinatorStatements() {
 		err := execInRolledBackTransaction(t, ctx, domain, statement.sql)
@@ -361,9 +358,9 @@ func TestCoordinatorStatementsAreDeniedToTheDomainRole(t *testing.T) {
 func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
+	_, uri, roles := startGrantHarness(t, ctx)
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 	for _, statement := range append(coordinatorStatements(), coordinatorDualGrantStatements()...) {
 		if err := execInRolledBackTransaction(t, ctx, coordinator, statement.sql); err != nil {
 			t.Errorf("%s: denied to the coordinator role, so coordinatorPosture is missing %s\n  site: %s\n  statement: %s\n  error: %v",
@@ -385,7 +382,7 @@ func TestCoordinatorStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 func TestCoordinatorMaterializerCanInsertSyncDispatchOutbox(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
+	_, uri, roles := startGrantHarness(t, ctx)
 
 	statement := `INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts,
@@ -394,13 +391,13 @@ func TestCoordinatorMaterializerCanInsertSyncDispatchOutbox(t *testing.T) {
 			gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
 			'post_sync', 'pending', now(), 0, now(), now()
 		) ON CONFLICT (sync_run_id, kind) DO NOTHING`
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 	if err := execInRolledBackTransaction(t, ctx, coordinator, statement); err != nil {
 		t.Errorf("restricted coordinator cannot execute syncreconciler materializer INSERT: %v", err)
 	}
 
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Errorf("coordinator grant changed the domain role's privilege posture: %v", err)
 	}
 }
@@ -412,9 +409,9 @@ func TestCoordinatorMaterializerCanInsertSyncDispatchOutbox(t *testing.T) {
 func TestScheduledMaterializerRoleBoundary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
 	domainStatements := []string{
 		"INSERT INTO public.integration_sources (id) VALUES (gen_random_uuid())",
@@ -464,10 +461,10 @@ func TestScheduledMaterializerRoleBoundary(t *testing.T) {
 func TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
+	admin, uri, roles := startGrantHarness(t, ctx)
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err != nil {
 		t.Fatalf("coordinator readiness rejected the grants the migration emitted for it: %v", err)
 	}
 
@@ -475,17 +472,17 @@ func TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes(t *testing.T) {
 	// to be "tidied" away by a reader who greps for UPDATE statements and
 	// finds none, so that is the privilege revoked here.
 	if _, err := admin.Exec(ctx,
-		"REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+grantCoordinatorRole); err != nil {
+		"REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+roles.coordinator); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err == nil {
 		t.Error("coordinator readiness passed without worker_job_outbox UPDATE, so it is not checking the posture it declares")
 	}
 	if _, err := admin.Exec(ctx,
-		"GRANT UPDATE ON TABLE public.worker_job_outbox TO "+grantCoordinatorRole); err != nil {
+		"GRANT UPDATE ON TABLE public.worker_job_outbox TO "+roles.coordinator); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err != nil {
 		t.Fatalf("coordinator readiness did not recover once the privilege was restored: %v", err)
 	}
 }

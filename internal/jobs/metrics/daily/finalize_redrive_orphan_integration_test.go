@@ -492,8 +492,6 @@ WHERE run_id = $1::uuid ORDER BY created_at LIMIT 1`, runID).
 // (superuser) is reused for every read/write, matching newFinalizeRedrive
 // TestStackWithRiverSchema's own doc comment.
 const (
-	riverSchemaTestDomainRole     = "finalize_redrive_test_domain"
-	riverSchemaTestQueueRole      = "finalize_redrive_test_queue"
 	riverSchemaTestDomainPassword = "finalize_redrive_test_domain_password"
 	riverSchemaTestQueuePassword  = "finalize_redrive_test_queue_password"
 )
@@ -530,6 +528,17 @@ func newFinalizeRedriveTestStackWithRiverSchema(t *testing.T) (*pgxpool.Pool, *P
 	}
 	t.Cleanup(pool.Close)
 	createDailyTables(t, ctx, pool)
+
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving the role name from
+	// this call's own database identity is what makes two successive runs,
+	// and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	riverSchemaTestDomainRole := "finalize_redrive_test_domain_" + roleSuffix
+	riverSchemaTestQueueRole := "finalize_redrive_test_queue_" + roleSuffix
 
 	for _, statement := range []string{
 		"CREATE ROLE " + riverSchemaTestDomainRole +

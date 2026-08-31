@@ -29,12 +29,22 @@ import (
 // missing grants survived until now.
 
 const (
-	grantDomainRole = "grant_domain_runtime"
-	grantQueueRole  = "grant_queue_runtime"
 	grantDomainPass = "grant_domain_password"
 	grantQueuePass  = "grant_queue_password"
 	grantSchema     = "river"
 )
+
+// grantRoleNames holds one call's cluster-scoped role names. CREATE ROLE is
+// cluster-scoped, not database-scoped -- a scratch database does not
+// isolate it (CHAOS-4661) -- so every name here is derived from this call's
+// own database identity rather than hard-coded, which is what makes two
+// successive runs, and two concurrent lanes on the same kiac cluster, never
+// collide on a CREATE ROLE.
+type grantRoleNames struct {
+	domain      string
+	queue       string
+	coordinator string
+}
 
 // domainTables is every relation the domain role is asserted to hold
 // privileges on, with the statement shapes the production code actually runs
@@ -314,7 +324,7 @@ func reconciliationTables() []domainTable {
 	}
 }
 
-func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string) {
+func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string, grantRoleNames) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -333,17 +343,31 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	}
 	t.Cleanup(admin.Close)
 
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := grantRoleNames{
+		domain:      "grant_domain_runtime_" + roleSuffix,
+		queue:       "grant_queue_runtime_" + roleSuffix,
+		coordinator: "grant_coordinator_runtime_" + roleSuffix,
+	}
+
 	// The coordinator role is created here, before ApplyPinnedMigrations, for
 	// the same reason the coordinator tables are: the migration's own
 	// role-eligibility preflight rejects a coordinator role that does not yet
 	// exist as a least-privilege login, so this mirrors the real deploy order
 	// (provision roles, then migrate) rather than working around it.
 	setup := []string{
-		"CREATE ROLE " + grantDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantDomainPass + "'",
-		"CREATE ROLE " + grantQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantQueuePass + "'",
-		"CREATE ROLE " + grantCoordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantCoordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + grantDomainRole + ", " + grantQueueRole + ", " + grantCoordinatorRole,
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"CREATE ROLE " + roles.domain + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantDomainPass + "'",
+		"CREATE ROLE " + roles.queue + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantQueuePass + "'",
+		"CREATE ROLE " + roles.coordinator + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + grantCoordinatorPass + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roles.domain + ", " + roles.queue + ", " + roles.coordinator,
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 	}
 	for _, table := range reconciliationTables() {
@@ -581,16 +605,16 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	coordinatorSequences := append([]string(nil), coordinatorPosture.RequiredSequences...)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:                  grantSchema,
-		DomainRole:              grantDomainRole,
-		QueueRole:               grantQueueRole,
-		CoordinatorRole:         grantCoordinatorRole,
+		DomainRole:              roles.domain,
+		QueueRole:               roles.queue,
+		CoordinatorRole:         roles.coordinator,
 		CoordinatorGrants:       coordinatorGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
 		CoordinatorSequences:    coordinatorSequences,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return admin, instance.URI
+	return admin, instance.URI, roles
 }
 
 func connectAs(t *testing.T, ctx context.Context, rawURI, role, password string) *pgxpool.Pool {
@@ -613,8 +637,8 @@ func connectAs(t *testing.T, ctx context.Context, rawURI, role, password string)
 func TestDomainRoleCanRunEveryProductionStatementShape(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
 	for _, table := range reconciliationTables() {
 		for index, statement := range table.exercise {
@@ -639,10 +663,10 @@ func TestDomainRoleCanRunEveryProductionStatementShape(t *testing.T) {
 func TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 }
@@ -655,7 +679,7 @@ func TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith(t *testing.T) {
 func TestGrantsAndAssertionCoverTheSameRelations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, _ := startGrantHarness(t, ctx)
+	admin, _, roles := startGrantHarness(t, ctx)
 
 	rows, err := admin.Query(ctx, `
 SELECT class.relname
@@ -672,7 +696,7 @@ WHERE namespace.nspname = 'public'
 		-- with ONLY column privileges must still count as granted here.
 		OR has_any_column_privilege($1, class.oid, 'SELECT, INSERT, UPDATE')
   )
-ORDER BY class.relname`, grantDomainRole)
+ORDER BY class.relname`, roles.domain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,18 +752,18 @@ ORDER BY class.relname`, grantDomainRole)
 func TestPostgreSQLPrivilegeRequirementsThisChangesetRelinesOn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
+	admin, uri, roles := startGrantHarness(t, ctx)
 
 	for _, statement := range []string{
 		"CREATE TABLE public.privilege_probe (id integer PRIMARY KEY, v text)",
 		"INSERT INTO public.privilege_probe VALUES (1, 'a')",
-		"GRANT SELECT ON public.privilege_probe TO " + grantDomainRole,
+		"GRANT SELECT ON public.privilege_probe TO " + roles.domain,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
 	denied := func(statement string) bool {
 		tx, err := domain.Begin(ctx)
@@ -774,8 +798,8 @@ func TestPostgreSQLPrivilegeRequirementsThisChangesetRelinesOn(t *testing.T) {
 func TestDomainRoleCompletionFenceGrantIsColumnScoped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
 	sqlState := func(err error) string {
 		var pgErr *pgconn.PgError
@@ -826,10 +850,10 @@ func TestDomainRoleCompletionFenceGrantIsColumnScoped(t *testing.T) {
 func TestDomainAuthorizationRejectsColumnPrivilegeGrantedToPublic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 	if _, err := admin.Exec(
@@ -838,7 +862,7 @@ func TestDomainAuthorizationRejectsColumnPrivilegeGrantedToPublic(t *testing.T) 
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 		t.Fatal("domain role unexpectedly authorized: a PUBLIC grant on completed_at went undetected")
 	}
 	if _, err := admin.Exec(
@@ -847,7 +871,7 @@ func TestDomainAuthorizationRejectsColumnPrivilegeGrantedToPublic(t *testing.T) 
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization did not recover after revoking the PUBLIC grant: %v", err)
 	}
 }
@@ -864,32 +888,32 @@ func TestDomainAuthorizationRejectsColumnPrivilegeGrantedToPublic(t *testing.T) 
 func TestDomainAuthorizationColumnScopeAcceptsExactlyTheDeclaredPrivileges(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected exactly the declared column privileges: %v", err)
 	}
 
 	for _, extra := range []string{"UPDATE", "REFERENCES"} {
 		grant := fmt.Sprintf(
 			"GRANT %s (completion_key) ON TABLE public.worker_job_completion_fences TO %s",
-			extra, grantDomainRole,
+			extra, roles.domain,
 		)
 		revoke := fmt.Sprintf(
 			"REVOKE %s (completion_key) ON TABLE public.worker_job_completion_fences FROM %s",
-			extra, grantDomainRole,
+			extra, roles.domain,
 		)
 		if _, err := admin.Exec(ctx, grant); err != nil {
 			t.Fatalf("%s: %v", grant, err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 			t.Fatalf("domain role unexpectedly authorized with an undeclared %s (completion_key) grant", extra)
 		}
 		if _, err := admin.Exec(ctx, revoke); err != nil {
 			t.Fatalf("%s: %v", revoke, err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("authorization did not recover after revoking undeclared %s (completion_key): %v", extra, err)
 		}
 	}
@@ -906,32 +930,32 @@ func TestDomainAuthorizationColumnScopeAcceptsExactlyTheDeclaredPrivileges(t *te
 func TestDomainAuthorizationRejectsPrivilegeHeldWithGrantOption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 
 	t.Run("table-level: SELECT on a required table", func(t *testing.T) {
 		if _, err := admin.Exec(
 			ctx,
-			"GRANT SELECT ON TABLE public.integrations TO "+grantDomainRole+" WITH GRANT OPTION",
+			"GRANT SELECT ON TABLE public.integrations TO "+roles.domain+" WITH GRANT OPTION",
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 			t.Fatal("domain role unexpectedly authorized: SELECT WITH GRANT OPTION on integrations went undetected")
 		}
 		// Revoking only the option, not the underlying privilege, proves the
 		// check is reacting to the option specifically.
 		if _, err := admin.Exec(
 			ctx,
-			"REVOKE GRANT OPTION FOR SELECT ON TABLE public.integrations FROM "+grantDomainRole,
+			"REVOKE GRANT OPTION FOR SELECT ON TABLE public.integrations FROM "+roles.domain,
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("authorization did not recover after revoking the SELECT option, base privilege intact: %v", err)
 		}
 		if _, err := domain.Exec(ctx, "SELECT id FROM public.integrations"); err != nil {
@@ -942,20 +966,20 @@ func TestDomainAuthorizationRejectsPrivilegeHeldWithGrantOption(t *testing.T) {
 	t.Run("column-scoped: SELECT (completion_key) on the fence table", func(t *testing.T) {
 		if _, err := admin.Exec(
 			ctx,
-			"GRANT SELECT (completion_key) ON TABLE public.worker_job_completion_fences TO "+grantDomainRole+" WITH GRANT OPTION",
+			"GRANT SELECT (completion_key) ON TABLE public.worker_job_completion_fences TO "+roles.domain+" WITH GRANT OPTION",
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 			t.Fatal("domain role unexpectedly authorized: SELECT (completion_key) WITH GRANT OPTION went undetected")
 		}
 		if _, err := admin.Exec(
 			ctx,
-			"REVOKE GRANT OPTION FOR SELECT (completion_key) ON TABLE public.worker_job_completion_fences FROM "+grantDomainRole,
+			"REVOKE GRANT OPTION FOR SELECT (completion_key) ON TABLE public.worker_job_completion_fences FROM "+roles.domain,
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("authorization did not recover after revoking the completion_key SELECT option, base privilege intact: %v", err)
 		}
 		if _, err := domain.Exec(ctx, "SELECT completion_key FROM public.worker_job_completion_fences"); err != nil {
@@ -979,30 +1003,30 @@ func TestDomainAuthorizationRejectsPrivilegeHeldWithGrantOption(t *testing.T) {
 func TestDomainAuthorizationRejectsDeleteHeldWithGrantOption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 	if _, err := admin.Exec(
 		ctx,
-		"GRANT DELETE ON TABLE public.external_ingest_batches TO "+grantDomainRole+" WITH GRANT OPTION",
+		"GRANT DELETE ON TABLE public.external_ingest_batches TO "+roles.domain+" WITH GRANT OPTION",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 		t.Fatal("domain role unexpectedly authorized: DELETE WITH GRANT OPTION on external_ingest_batches went undetected")
 	}
 	// Revoking only the option, not the underlying privilege, proves the
 	// check is reacting to the option specifically.
 	if _, err := admin.Exec(
 		ctx,
-		"REVOKE GRANT OPTION FOR DELETE ON TABLE public.external_ingest_batches FROM "+grantDomainRole,
+		"REVOKE GRANT OPTION FOR DELETE ON TABLE public.external_ingest_batches FROM "+roles.domain,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization did not recover after revoking the DELETE option, base privilege intact: %v", err)
 	}
 	if _, err := domain.Exec(ctx, "DELETE FROM public.external_ingest_batches WHERE id = gen_random_uuid()"); err != nil {
@@ -1027,8 +1051,8 @@ func TestDomainAuthorizationRejectsDeleteHeldWithGrantOption(t *testing.T) {
 func TestDomainRoleCanClaimAndTransitionTheWorkGraphLedgerThroughARealConflict(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
 	const requestID = "00000000-0000-4000-8000-0000000000f1"
 	const firstToken = "00000000-0000-4000-8000-0000000000f2"
@@ -1111,28 +1135,28 @@ WHERE request_id = $5::uuid AND state = 'executing' AND claim_token = $6::uuid`,
 func TestDomainAuthorizationRejectsColumnLevelGrantOptionOnRequiredTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 	if _, err := admin.Exec(
 		ctx,
-		"GRANT SELECT (id) ON TABLE public.integrations TO "+grantDomainRole+" WITH GRANT OPTION",
+		"GRANT SELECT (id) ON TABLE public.integrations TO "+roles.domain+" WITH GRANT OPTION",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 		t.Fatal("domain role unexpectedly authorized: column-level SELECT (id) WITH GRANT OPTION on integrations went undetected")
 	}
 	if _, err := admin.Exec(
 		ctx,
-		"REVOKE GRANT OPTION FOR SELECT (id) ON TABLE public.integrations FROM "+grantDomainRole,
+		"REVOKE GRANT OPTION FOR SELECT (id) ON TABLE public.integrations FROM "+roles.domain,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization did not recover after revoking the column-level option, base privilege intact: %v", err)
 	}
 	if _, err := domain.Exec(ctx, "SELECT id FROM public.integrations"); err != nil {
@@ -1149,30 +1173,34 @@ func TestDomainAuthorizationRejectsColumnLevelGrantOptionOnRequiredTable(t *test
 func TestDomainAuthorizationRejectsAmbientPrivilegeGrantOption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
+	dbName, err := containers.DatabaseName(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
 
 	t.Run("CONNECT on the database", func(t *testing.T) {
 		if _, err := admin.Exec(
 			ctx,
-			"GRANT CONNECT ON DATABASE worker_test TO "+grantDomainRole+" WITH GRANT OPTION",
+			"GRANT CONNECT ON DATABASE "+dbName+" TO "+roles.domain+" WITH GRANT OPTION",
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 			t.Fatal("domain role unexpectedly authorized: CONNECT WITH GRANT OPTION went undetected")
 		}
 		if _, err := admin.Exec(
 			ctx,
-			"REVOKE GRANT OPTION FOR CONNECT ON DATABASE worker_test FROM "+grantDomainRole,
+			"REVOKE GRANT OPTION FOR CONNECT ON DATABASE "+dbName+" FROM "+roles.domain,
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("authorization did not recover after revoking the CONNECT option: %v", err)
 		}
 	})
@@ -1180,20 +1208,20 @@ func TestDomainAuthorizationRejectsAmbientPrivilegeGrantOption(t *testing.T) {
 	t.Run("USAGE on the public schema", func(t *testing.T) {
 		if _, err := admin.Exec(
 			ctx,
-			"GRANT USAGE ON SCHEMA public TO "+grantDomainRole+" WITH GRANT OPTION",
+			"GRANT USAGE ON SCHEMA public TO "+roles.domain+" WITH GRANT OPTION",
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 			t.Fatal("domain role unexpectedly authorized: public-schema USAGE WITH GRANT OPTION went undetected")
 		}
 		if _, err := admin.Exec(
 			ctx,
-			"REVOKE GRANT OPTION FOR USAGE ON SCHEMA public FROM "+grantDomainRole,
+			"REVOKE GRANT OPTION FOR USAGE ON SCHEMA public FROM "+roles.domain,
 		); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("authorization did not recover after revoking the public-schema USAGE option: %v", err)
 		}
 	})
@@ -1207,22 +1235,22 @@ func TestDomainAuthorizationRejectsAmbientPrivilegeGrantOption(t *testing.T) {
 func TestDomainAuthorizationRejectsRiverSchemaCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT CREATE ON SCHEMA "+grantSchema+" TO "+grantDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT CREATE ON SCHEMA "+grantSchema+" TO "+roles.domain); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 		t.Fatal("domain role unexpectedly authorized: River-schema CREATE went undetected")
 	}
-	if _, err := admin.Exec(ctx, "REVOKE CREATE ON SCHEMA "+grantSchema+" FROM "+grantDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE CREATE ON SCHEMA "+grantSchema+" FROM "+roles.domain); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization did not recover after revoking River-schema CREATE: %v", err)
 	}
 }
@@ -1239,28 +1267,28 @@ func TestDomainAuthorizationRejectsRiverSchemaCreate(t *testing.T) {
 func TestDomainAuthorizationRejectsSelfOwnedSchema(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	domain := connectAs(t, ctx, uri, grantDomainRole, grantDomainPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization rejected the privileges its own grants produced: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA owned_probe AUTHORIZATION "+grantDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA owned_probe AUTHORIZATION "+roles.domain); err != nil {
 		t.Fatal(err)
 	}
 	// The owner still holds every privilege WITH GRANT OPTION at this point;
 	// revoking the ordinary form is exactly what a base has_*_privilege check
 	// cannot distinguish from never having had access at all.
-	if _, err := admin.Exec(ctx, "REVOKE ALL ON SCHEMA owned_probe FROM "+grantDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE ALL ON SCHEMA owned_probe FROM "+roles.domain); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err == nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err == nil {
 		t.Fatal("domain role unexpectedly authorized: self-owned schema with all ordinary privileges revoked went undetected")
 	}
 	if _, err := admin.Exec(ctx, "DROP SCHEMA owned_probe"); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDomainAuthorization(ctx, domain, grantDomainRole, grantSchema); err != nil {
+	if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 		t.Fatalf("authorization did not recover after dropping the self-owned schema: %v", err)
 	}
 }

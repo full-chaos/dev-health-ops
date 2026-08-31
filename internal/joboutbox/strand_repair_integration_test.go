@@ -25,8 +25,6 @@ import (
 // admit one new reader is how a least-privilege posture quietly stops meaning
 // anything.
 const (
-	strandQueueRole      = "strand_queue_runtime"
-	strandDomainRole     = "strand_domain_runtime"
 	strandQueuePassword  = "strand_queue_password"
 	strandDomainPassword = "strand_domain_password"
 )
@@ -63,7 +61,17 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	admin := openIntegrationPool(t, ctx, instance.URI)
 	defer admin.Close()
 	createStrandSchema(t, ctx, admin)
-	createStrandRoles(t, ctx, admin)
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strandDomainRole := "strand_domain_runtime_" + roleSuffix
+	strandQueueRole := "strand_queue_runtime_" + roleSuffix
+	createStrandRoles(t, ctx, admin, strandDomainRole, strandQueueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema:     "river",
 		DomainRole: strandDomainRole,
@@ -681,11 +689,11 @@ func (stub resurrectingDelete) JobDeleteTx(context.Context, pgx.Tx, int64) (*riv
 	return &rivertype.JobRow{ID: stub.id, State: rivertype.JobStateAvailable}, nil
 }
 
-func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool, domainRole, queueRole string) {
 	t.Helper()
 	for _, statement := range []string{
-		"CREATE ROLE " + strandDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + strandDomainPassword + "'",
-		"CREATE ROLE " + strandQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + strandQueuePassword + "'",
+		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + strandDomainPassword + "'",
+		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + strandQueuePassword + "'",
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

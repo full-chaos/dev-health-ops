@@ -57,16 +57,27 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	}
 	t.Cleanup(admin.Close)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661), so the role name is derived
+	// from this call's own database identity rather than hard-coded.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const (
-		role     = "synthetic_posture_role"
 		password = "synthetic_posture_password"
 		schema   = "synthetic_river"
 	)
+	role := "synthetic_posture_role_" + roleSuffix
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + role,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + role,
 		"GRANT USAGE ON SCHEMA public TO " + role,
 		"CREATE SCHEMA " + schema,
 		"CREATE TABLE public.synthetic_alpha (id uuid PRIMARY KEY)",
@@ -131,19 +142,30 @@ func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T)
 	}
 	t.Cleanup(admin.Close)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661), so both role names are
+	// derived from this call's own database identity rather than hard-coded.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const (
-		roleA     = "attribution_role_a"
-		roleB     = "attribution_role_b"
 		passwordA = "attribution_role_a_password"
 		passwordB = "attribution_role_b_password"
 		schema    = "attribution_river"
 	)
+	roleA := "attribution_role_a_" + roleSuffix
+	roleB := "attribution_role_b_" + roleSuffix
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + roleA + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordA + "'",
 		"CREATE ROLE " + roleB + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordB + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + roleA + ", " + roleB,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roleA + ", " + roleB,
 		"GRANT USAGE ON SCHEMA public TO " + roleA + ", " + roleB,
 		"CREATE SCHEMA " + schema,
 		"CREATE TABLE public.attribution_a_only (id uuid PRIMARY KEY)",
@@ -253,19 +275,30 @@ func TestCheckRolePostureAllowsATableRequiredByBothRoles(t *testing.T) {
 	}
 	t.Cleanup(admin.Close)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661), so both role names are
+	// derived from this call's own database identity rather than hard-coded.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const (
-		roleA     = "shared_table_role_a"
-		roleB     = "shared_table_role_b"
 		passwordA = "shared_table_role_a_password"
 		passwordB = "shared_table_role_b_password"
 		schema    = "shared_table_river"
 	)
+	roleA := "shared_table_role_a_" + roleSuffix
+	roleB := "shared_table_role_b_" + roleSuffix
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + roleA + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordA + "'",
 		"CREATE ROLE " + roleB + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + passwordB + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + roleA + ", " + roleB,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roleA + ", " + roleB,
 		"GRANT USAGE ON SCHEMA public TO " + roleA + ", " + roleB,
 		"CREATE SCHEMA " + schema,
 		"CREATE TABLE public.shared_dual_granted (id uuid PRIMARY KEY)",
@@ -390,13 +423,24 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	}
 	t.Cleanup(admin.Close)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661), so both role names are
+	// derived from this call's own database identity rather than hard-coded.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const (
-		domainRole      = "manifest_domain_role"
-		coordinatorRole = "manifest_coordinator_role"
 		domainPassword  = "manifest_domain_role_password"
 		coordinatorPass = "manifest_coordinator_role_password"
 		schema          = "manifest_attribution_river"
 	)
+	domainRole := "manifest_domain_role_" + roleSuffix
+	coordinatorRole := "manifest_coordinator_role_" + roleSuffix
 	domain := domainPosture()
 	coordinator := coordinatorPosture()
 	domainExclusive := firstExclusivePostureTable(t, domain, coordinator)
@@ -443,11 +487,11 @@ func TestDomainAndCoordinatorPosturesSatisfyAttributionAgainstTheRealManifest(t 
 	}
 
 	setup := []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainPassword + "'",
 		"CREATE ROLE " + coordinatorRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + coordinatorPass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + domainRole + ", " + coordinatorRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + domainRole + ", " + coordinatorRole,
 		"GRANT USAGE ON SCHEMA public TO " + domainRole + ", " + coordinatorRole,
 		"CREATE SCHEMA " + schema,
 	}

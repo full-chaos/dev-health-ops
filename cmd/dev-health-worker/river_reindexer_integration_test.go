@@ -23,8 +23,6 @@ import (
 )
 
 const (
-	reindexDomainRole     = "reindex_domain_runtime"
-	reindexQueueRole      = "reindex_queue_runtime"
 	reindexRolePassword   = "reindex_test_password"
 	reindexObservedWindow = 90 * time.Second
 )
@@ -44,6 +42,17 @@ func TestRiverWorkerClientRunsReindexerWithoutPermissionErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = postgres.Close(context.Background()) })
+
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reindexDomainRole := "reindex_domain_runtime_" + roleSuffix
+	reindexQueueRole := "reindex_queue_runtime_" + roleSuffix
 
 	admin, err := pgxpool.New(ctx, postgres.URI)
 	if err != nil {

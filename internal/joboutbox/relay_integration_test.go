@@ -26,8 +26,6 @@ import (
 )
 
 const (
-	outboxDomainRole     = "outbox_domain_runtime"
-	outboxQueueRole      = "outbox_queue_runtime"
 	outboxDomainPassword = "outbox_domain_password"
 	outboxQueuePassword  = "outbox_queue_password"
 )
@@ -67,7 +65,17 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	adminPool := openIntegrationPool(t, ctx, instance.URI)
 	defer adminPool.Close()
 	createOutboxSchema(t, ctx, adminPool)
-	createOutboxRoles(t, ctx, adminPool)
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outboxDomainRole := "outbox_domain_runtime_" + roleSuffix
+	outboxQueueRole := "outbox_queue_runtime_" + roleSuffix
+	createOutboxRoles(t, ctx, adminPool, outboxDomainRole, outboxQueueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
 		Schema:     "river",
 		DomainRole: outboxDomainRole,
@@ -1433,11 +1441,11 @@ func resetOutboxTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	}
 }
 
-func createOutboxRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func createOutboxRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool, domainRole, queueRole string) {
 	t.Helper()
 	statements := []string{
-		"CREATE ROLE " + outboxDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + outboxDomainPassword + "'",
-		"CREATE ROLE " + outboxQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + outboxQueuePassword + "'",
+		"CREATE ROLE " + domainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + outboxDomainPassword + "'",
+		"CREATE ROLE " + queueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + outboxQueuePassword + "'",
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement); err != nil {

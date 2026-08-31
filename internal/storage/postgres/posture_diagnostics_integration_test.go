@@ -36,15 +36,15 @@ import (
 func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	admin, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
 	// Missing-table gap: a table the posture requires that was never
 	// created. This is exactly CHAOS-3142's shape -- a synthetic posture is
 	// used here (rather than dropping a table the harness's other suites
 	// depend on) purely to isolate the missing-table path.
 	const missingTable = "table_that_does_not_exist_for_this_test"
-	tableGaps, err := DiagnoseRolePosture(ctx, coordinator, grantCoordinatorRole, RolePosture{
+	tableGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, RolePosture{
 		RequiredTables: []TablePrivilege{{TableName: missingTable, AllowUpdate: true}},
 	})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 	// Missing-privilege gap: a real, existing coordinator table with one
 	// privilege the posture requires actually revoked.
 	if _, err := admin.Exec(ctx,
-		"REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+grantCoordinatorRole,
+		"REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+roles.coordinator,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +65,12 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		if _, err := admin.Exec(cleanupCtx,
-			"GRANT UPDATE ON TABLE public.worker_job_outbox TO "+grantCoordinatorRole,
+			"GRANT UPDATE ON TABLE public.worker_job_outbox TO "+roles.coordinator,
 		); err != nil {
 			t.Errorf("restore worker_job_outbox UPDATE: %v", err)
 		}
 	})
-	privilegeGaps, err := DiagnoseRolePosture(ctx, coordinator, grantCoordinatorRole, RolePosture{
+	privilegeGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, RolePosture{
 		RequiredTables: []TablePrivilege{{TableName: "worker_job_outbox", AllowUpdate: true}},
 	})
 	if err != nil {
@@ -107,17 +107,17 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 func TestDiagnoseRolePostureReturnsNoGapsOnceGrantsAreCorrect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
-	gaps, err := DiagnoseRolePosture(ctx, coordinator, grantCoordinatorRole, CoordinatorPosture())
+	gaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, CoordinatorPosture())
 	if err != nil {
 		t.Fatalf("DiagnoseRolePosture: %v", err)
 	}
 	if len(gaps) != 0 {
 		t.Errorf("expected no gaps against the real migration-emitted grants, got %+v", gaps)
 	}
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err != nil {
 		t.Fatalf("CheckCoordinatorAuthorization disagrees with DiagnoseRolePosture's empty result: %v", err)
 	}
 }

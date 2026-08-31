@@ -14,8 +14,6 @@ import (
 )
 
 const (
-	runtimeAuthorizationDomainRole = "runtime_authorization_domain"
-	runtimeAuthorizationQueueRole  = "runtime_authorization_queue"
 	runtimeAuthorizationDomainPass = "runtime_authorization_domain_password"
 	runtimeAuthorizationQueuePass  = "runtime_authorization_queue_password"
 )
@@ -30,10 +28,30 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	}
 	defer closePostgresInstance(t, instance)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Every role this test
+	// creates -- the two runtime pool roles and the three capability probe
+	// roles further down -- is suffixed from this call's own database
+	// identity so two successive runs, and two concurrent lanes, never
+	// collide on a CREATE ROLE.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeAuthorizationDomainRole := "runtime_authorization_domain_" + roleSuffix
+	runtimeAuthorizationQueueRole := "runtime_authorization_queue_" + roleSuffix
+	semanticCapabilityRole := "runtime_authorization_semantic_capability_" + roleSuffix
+	elevatedRole := "runtime_authorization_elevated_" + roleSuffix
+	riverCapabilityRole := "runtime_authorization_river_capability_" + roleSuffix
+
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE TABLE public.runtime_semantic_probe (id bigserial PRIMARY KEY, value text NOT NULL)",
 		"CREATE TABLE public.integrations (id bigint PRIMARY KEY)",
@@ -126,7 +144,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"REVOKE ALL ON FUNCTION public.runtime_public_probe() FROM PUBLIC",
 		"CREATE ROLE " + runtimeAuthorizationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationDomainPass + "'",
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
@@ -233,7 +251,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	if _, err := queue.Exec(ctx, "UPDATE public.sync_run_units SET state = state"); err == nil {
 		t.Fatal("queue unexpectedly mutates sync-run-unit recovery state")
 	}
-	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE worker_test TO PUBLIC"); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT TEMPORARY ON DATABASE "+dbName+" TO PUBLIC"); err != nil {
 		t.Fatal(err)
 	}
 	for _, check := range []struct {
@@ -251,7 +269,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 			t.Fatalf("%s authorization with ambient PUBLIC TEMPORARY error = %v, want ErrUnavailable", check.name, err)
 		}
 	}
-	if _, err := admin.Exec(ctx, "REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC"); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE TEMPORARY ON DATABASE "+dbName+" FROM PUBLIC"); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
@@ -427,31 +445,31 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
 		t.Fatalf("domain authorization did not recover after revoking public function execute: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE ROLE runtime_authorization_semantic_capability NOLOGIN"); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+semanticCapabilityRole+" NOLOGIN"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.runtime_semantic_probe TO runtime_authorization_semantic_capability"); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE public.runtime_semantic_probe TO "+semanticCapabilityRole); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.Exec(ctx, "ALTER ROLE "+runtimeAuthorizationQueueRole+" NOINHERIT"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT runtime_authorization_semantic_capability TO "+runtimeAuthorizationQueueRole); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT "+semanticCapabilityRole+" TO "+runtimeAuthorizationQueueRole); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
 		t.Fatalf("queue NOINHERIT capability membership error = %v, want ErrUnavailable", err)
 	}
-	if _, err := admin.Exec(ctx, "REVOKE runtime_authorization_semantic_capability FROM "+runtimeAuthorizationQueueRole); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE "+semanticCapabilityRole+" FROM "+runtimeAuthorizationQueueRole); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); err != nil {
 		t.Fatalf("queue authorization did not recover after revoking capability membership: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE ROLE runtime_authorization_elevated NOLOGIN CREATEROLE"); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+elevatedRole+" NOLOGIN CREATEROLE"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT runtime_authorization_elevated TO "+runtimeAuthorizationQueueRole); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT "+elevatedRole+" TO "+runtimeAuthorizationQueueRole); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckQueueAuthorization(ctx, queue, runtimeAuthorizationQueueRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
@@ -470,25 +488,25 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {
 		t.Fatalf("domain authorization did not recover after revoking Alembic access: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE ROLE runtime_authorization_river_capability NOLOGIN"); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+riverCapabilityRole+" NOLOGIN"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT USAGE ON SCHEMA river TO runtime_authorization_river_capability"); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT USAGE ON SCHEMA river TO "+riverCapabilityRole); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE river.river_job TO runtime_authorization_river_capability"); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON TABLE river.river_job TO "+riverCapabilityRole); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.Exec(ctx, "ALTER ROLE "+runtimeAuthorizationDomainRole+" NOINHERIT"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT runtime_authorization_river_capability TO "+runtimeAuthorizationDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT "+riverCapabilityRole+" TO "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
 		t.Fatalf("domain NOINHERIT capability membership error = %v, want ErrUnavailable", err)
 	}
-	if _, err := admin.Exec(ctx, "REVOKE runtime_authorization_river_capability FROM "+runtimeAuthorizationDomainRole); err != nil {
+	if _, err := admin.Exec(ctx, "REVOKE "+riverCapabilityRole+" FROM "+runtimeAuthorizationDomainRole); err != nil {
 		t.Fatal(err)
 	}
 	if err := postgresstore.CheckDomainAuthorization(ctx, domain, runtimeAuthorizationDomainRole, "river"); err != nil {

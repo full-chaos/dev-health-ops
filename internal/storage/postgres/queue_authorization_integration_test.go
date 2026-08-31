@@ -13,10 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	queueAuthorizationFenceRole = "queue_authorization_fence"
-	queueAuthorizationFencePass = "queue_authorization_fence_password"
-)
+const queueAuthorizationFencePass = "queue_authorization_fence_password"
 
 func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -28,10 +25,20 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 	}
 	defer closePostgresInstance(t, instance)
 
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueAuthorizationFenceRole := "queue_authorization_fence_" + roleSuffix
+
 	admin := openPostgresPool(t, ctx, instance.URI)
 	defer admin.Close()
 	for _, statement := range []string{
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.worker_job_delivery_abandonments (dedupe_key text PRIMARY KEY)",
@@ -51,7 +58,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 		"CREATE FUNCTION river.queue_authorization_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
 		"REVOKE ALL ON FUNCTION river.queue_authorization_probe() FROM PUBLIC",
 		"CREATE ROLE " + queueAuthorizationFenceRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + queueAuthorizationFencePass + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + queueAuthorizationFenceRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + queueAuthorizationFenceRole,
 		"GRANT USAGE ON SCHEMA public, river TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox, public.worker_job_completion_fences TO " + queueAuthorizationFenceRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + queueAuthorizationFenceRole,
@@ -73,7 +80,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 
 	queue := openPostgresPool(t, ctx, postgresRoleURI(t, instance.URI, queueAuthorizationFenceRole, queueAuthorizationFencePass))
 	defer queue.Close()
-	assertQueueFenceAuthorized(t, ctx, queue)
+	assertQueueFenceAuthorized(t, ctx, queue, queueAuthorizationFenceRole)
 
 	for _, test := range []struct {
 		name    string
@@ -115,7 +122,7 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 			if _, err := admin.Exec(ctx, statement); err != nil {
 				t.Fatal(err)
 			}
-			assertQueueFenceAuthorized(t, ctx, queue)
+			assertQueueFenceAuthorized(t, ctx, queue, queueAuthorizationFenceRole)
 		})
 	}
 
@@ -158,14 +165,14 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 			if _, err := admin.Exec(ctx, statement); err != nil {
 				t.Fatal(err)
 			}
-			assertQueueFenceAuthorized(t, ctx, queue)
+			assertQueueFenceAuthorized(t, ctx, queue, queueAuthorizationFenceRole)
 		})
 	}
 }
 
-func assertQueueFenceAuthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func assertQueueFenceAuthorized(t *testing.T, ctx context.Context, pool *pgxpool.Pool, role string) {
 	t.Helper()
-	if err := postgresstore.CheckQueueAuthorization(ctx, pool, queueAuthorizationFenceRole, "river"); err != nil {
+	if err := postgresstore.CheckQueueAuthorization(ctx, pool, role, "river"); err != nil {
 		t.Fatalf("queue authorization failed: %v", err)
 	}
 }

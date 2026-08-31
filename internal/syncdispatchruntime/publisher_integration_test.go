@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	integrationDomainRole     = "sync_dispatch_runtime_domain"
 	integrationDomainPassword = "sync_dispatch_runtime_domain_password"
-	integrationQueueRole      = "sync_dispatch_runtime_queue"
 	integrationQueuePassword  = "sync_dispatch_runtime_queue_password"
 )
 
@@ -41,6 +39,21 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 		}
 	}()
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationDomainRole := "sync_dispatch_runtime_domain_" + roleSuffix
+	integrationQueueRole := "sync_dispatch_runtime_queue_" + roleSuffix
+
 	adminPool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +63,7 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 		"CREATE ROLE " + integrationDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + integrationDomainPassword + "'",
 		"CREATE ROLE " + integrationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + integrationQueuePassword + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + integrationDomainRole + ", " + integrationQueueRole,
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + integrationDomainRole + ", " + integrationQueueRole,
 		"CREATE TABLE public.worker_job_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_outbox (id uuid PRIMARY KEY, state text NOT NULL)",
 		"CREATE TABLE public.sync_dispatch_transport_routes (kind text PRIMARY KEY, generation bigint NOT NULL)",
@@ -65,7 +78,7 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queuePool, err := pgxpool.New(ctx, integrationRoleURI(t, instance.URI))
+	queuePool, err := pgxpool.New(ctx, integrationRoleURI(t, instance.URI, integrationQueueRole))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,12 +156,12 @@ func TestPublisherInsertTxPostgres(t *testing.T) {
 	}
 }
 
-func integrationRoleURI(t *testing.T, rawURI string) string {
+func integrationRoleURI(t *testing.T, rawURI string, role string) string {
 	t.Helper()
 	parsed, err := url.Parse(rawURI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed.User = url.UserPassword(integrationQueueRole, integrationQueuePassword)
+	parsed.User = url.UserPassword(role, integrationQueuePassword)
 	return parsed.String()
 }

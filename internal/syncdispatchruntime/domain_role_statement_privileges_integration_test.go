@@ -71,9 +71,7 @@ import (
 // for.
 
 const (
-	privilegeDomainRole     = "grant_domain_runtime"
 	privilegeDomainPassword = "grant_domain_password"
-	privilegeQueueRole      = "grant_queue_runtime"
 	privilegeQueuePassword  = "grant_queue_password"
 	privilegeRiverSchema    = "river"
 )
@@ -169,7 +167,7 @@ func startDomainRoleHarness(
 	t *testing.T,
 	ctx context.Context,
 	createTables func(*testing.T, context.Context, *pgxpool.Pool),
-) (*pgxpool.Pool, *pgxpool.Pool, *denialRecorder) {
+) (*pgxpool.Pool, *pgxpool.Pool, *denialRecorder, string) {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -190,13 +188,31 @@ func startDomainRoleHarness(
 
 	createTables(t, ctx, admin)
 
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). Deriving both role names
+	// from this call's own database identity is what makes two successive
+	// runs, and two concurrent lanes, collision-free -- including two
+	// concurrent PACKAGES: internal/storage/postgres's grant-reconciliation
+	// suite creates roles with these exact same literal names, and ordinary
+	// `go test ./...` already runs different packages' tests in parallel.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privilegeDomainRole := "grant_domain_runtime_" + roleSuffix
+	privilegeQueueRole := "grant_queue_runtime_" + roleSuffix
+
 	for _, statement := range []string{
 		"CREATE ROLE " + privilegeDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +
 			"NOREPLICATION NOBYPASSRLS PASSWORD '" + privilegeDomainPassword + "'",
 		"CREATE ROLE " + privilegeQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE " +
 			"NOREPLICATION NOBYPASSRLS PASSWORD '" + privilegeQueuePassword + "'",
-		"GRANT CONNECT ON DATABASE worker_test TO " + privilegeDomainRole + ", " + privilegeQueueRole,
-		"REVOKE TEMPORARY ON DATABASE worker_test FROM PUBLIC",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + privilegeDomainRole + ", " + privilegeQueueRole,
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
@@ -228,7 +244,7 @@ func startDomainRoleHarness(
 		t.Fatal(err)
 	}
 	t.Cleanup(domain.Close)
-	return admin, domain, recorder
+	return admin, domain, recorder, privilegeDomainRole
 }
 
 // TestNativeReferenceDiscoveryExecutesEntirelyAsTheDomainRole is CHAOS-4209
@@ -246,7 +262,7 @@ func startDomainRoleHarness(
 func TestNativeReferenceDiscoveryExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
 	seedDiscoveryRoute(t, ctx, admin)
 
 	executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
@@ -379,7 +395,7 @@ VALUES ('00000000-0000-4000-8000-0000000000da',$1,$2,'github','commits',
 func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials := startDomainRoleHarness(t, ctx, createFinalizeTables)
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createFinalizeTables)
 	seedFinalizeRoute(t, ctx, admin)
 
 	jobRunID := "00000000-0000-4000-8000-0000000000f8"
@@ -491,11 +507,11 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
+	admin, domain, denials, domainRole := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
 	seedDiscoveryRoute(t, ctx, admin)
 
 	if _, err := admin.Exec(ctx,
-		"REVOKE INSERT ON TABLE public.sync_run_reference_discoveries FROM "+privilegeDomainRole); err != nil {
+		"REVOKE INSERT ON TABLE public.sync_run_reference_discoveries FROM "+domainRole); err != nil {
 		t.Fatal(err)
 	}
 
@@ -538,7 +554,7 @@ func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
 	// Restoring the grant must make the same run clean again. Without this the
 	// test could pass against a role that is broken for some unrelated reason.
 	if _, err := admin.Exec(ctx,
-		"GRANT INSERT ON TABLE public.sync_run_reference_discoveries TO "+privilegeDomainRole); err != nil {
+		"GRANT INSERT ON TABLE public.sync_run_reference_discoveries TO "+domainRole); err != nil {
 		t.Fatal(err)
 	}
 	denials.reset()
@@ -598,7 +614,7 @@ CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, li
 func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, domain, _ := startDomainRoleHarness(t, ctx, createBoundaryTables)
+	_, domain, _, _ := startDomainRoleHarness(t, ctx, createBoundaryTables)
 
 	for _, withheld := range []struct {
 		table     string
@@ -721,7 +737,7 @@ func TestDomainRoleStillLacksTheVerbsItWasNotGranted(t *testing.T) {
 func TestDomainRoleCanTakeTheAdvisoryLockFinalizeNeeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, domain, denials := startDomainRoleHarness(t, ctx, createBoundaryTables)
+	_, domain, denials, _ := startDomainRoleHarness(t, ctx, createBoundaryTables)
 
 	tx, err := domain.Begin(ctx)
 	if err != nil {
@@ -807,7 +823,7 @@ CREATE TABLE public.provider_rate_limit_observations (
 func TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials := startDomainRoleHarness(t, ctx, createDispatchTables)
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createDispatchTables)
 	seedDispatchRoute(t, ctx, admin)
 	markReferenceDiscoverySucceeded(t, ctx, admin)
 

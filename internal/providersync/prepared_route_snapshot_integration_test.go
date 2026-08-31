@@ -539,7 +539,17 @@ INSERT INTO public.alembic_version (version_num) VALUES ('0093')`); err != nil {
 	// full posture audit, not this venue. Successful
 	// prepare/load/complete below is therefore readiness evidence derived from
 	// the domain-accessible snapshot surface, not public.alembic_version.
-	const role = "providersync_domain_probe"
+	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
+	// database does not isolate it (CHAOS-4661). This role already DROPped
+	// itself first, which makes a lone re-run safe, but two concurrent lanes
+	// on the same shared kiac cluster still race on the fixed name and one
+	// can drop the role out from under the other mid-test. Deriving it from
+	// this call's own database identity removes the collision outright.
+	roleSuffix, err := containers.RoleSuffix(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := "providersync_domain_probe_" + roleSuffix
 	for _, statement := range []string{
 		`DROP ROLE IF EXISTS ` + role,
 		`CREATE ROLE ` + role + ` LOGIN PASSWORD 'probe'`,

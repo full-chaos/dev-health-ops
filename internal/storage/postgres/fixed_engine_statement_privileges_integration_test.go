@@ -349,15 +349,15 @@ func fixedEngineStatements() []fixedEngineStatement {
 // from coordinatorPosture entirely, worker_job_outbox was SELECT+UPDATE (the
 // UPDATE existing only for the jobroute LOCK), and worker_job_completion_fences
 // had no coordinator grant of any kind.
-func preCHAOS3114CoordinatorRevocations() []string {
+func preCHAOS3114CoordinatorRevocations(coordinatorRole string) []string {
 	return []string{
-		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_runs FROM " + grantCoordinatorRole,
-		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_partitions FROM " + grantCoordinatorRole,
-		"REVOKE ALL PRIVILEGES ON TABLE public.work_graph_execution_requests FROM " + grantCoordinatorRole,
-		"REVOKE ALL PRIVILEGES ON TABLE public.daily_metrics_runs FROM " + grantCoordinatorRole,
-		"REVOKE INSERT ON TABLE public.worker_job_outbox FROM " + grantCoordinatorRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_runs FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.remaining_metric_partitions FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.work_graph_execution_requests FROM " + coordinatorRole,
+		"REVOKE ALL PRIVILEGES ON TABLE public.daily_metrics_runs FROM " + coordinatorRole,
+		"REVOKE INSERT ON TABLE public.worker_job_outbox FROM " + coordinatorRole,
 		"REVOKE SELECT (completion_key), INSERT (completion_key) " +
-			"ON TABLE public.worker_job_completion_fences FROM " + grantCoordinatorRole,
+			"ON TABLE public.worker_job_completion_fences FROM " + coordinatorRole,
 	}
 }
 
@@ -369,9 +369,9 @@ func preCHAOS3114CoordinatorRevocations() []string {
 func TestFixedEngineStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
+	_, uri, roles := startGrantHarness(t, ctx)
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 	for _, statement := range fixedEngineStatements() {
 		if err := execInRolledBackTransaction(t, ctx, coordinator, statement.sql); err != nil {
 			t.Errorf("%s: denied to the coordinator role, so coordinatorPosture is missing %s\n  site: %s\n  statement: %s\n  error: %v",
@@ -380,7 +380,7 @@ func TestFixedEngineStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 	}
 	// Readiness must accept the same role, or the statements succeeding would
 	// be worthless: the process would never start.
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err != nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err != nil {
 		t.Fatalf("coordinator readiness rejected the grants the migration emitted for it: %v", err)
 	}
 }
@@ -398,10 +398,10 @@ func TestFixedEngineStatementsArePermittedToTheCoordinatorRole(t *testing.T) {
 func TestFixedEngineStatementsAreDeniedByThePreCHAOS3114CoordinatorGrants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
+	admin, uri, roles := startGrantHarness(t, ctx)
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	for _, revocation := range preCHAOS3114CoordinatorRevocations() {
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	for _, revocation := range preCHAOS3114CoordinatorRevocations(roles.coordinator) {
 		if _, err := admin.Exec(ctx, revocation); err != nil {
 			t.Fatalf("%s: %v", revocation, err)
 		}
@@ -437,7 +437,7 @@ func TestFixedEngineStatementsAreDeniedByThePreCHAOS3114CoordinatorGrants(t *tes
 	// Readiness must fail too. The posture and the grants are one declaration,
 	// so a coordinator login carrying the old grant set is not merely unable to
 	// run the engine — it must refuse to report ready at all.
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err == nil {
 		t.Error("coordinator readiness passed with the pre-CHAOS-3114 grant set, so it is not checking the posture it declares")
 	}
 }
@@ -451,9 +451,9 @@ func TestFixedEngineStatementsAreDeniedByThePreCHAOS3114CoordinatorGrants(t *tes
 func TestDailyFanoutReplayReadNeedsCoordinatorSelect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
-	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.daily_metrics_runs FROM "+grantCoordinatorRole); err != nil {
+	admin, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON TABLE public.daily_metrics_runs FROM "+roles.coordinator); err != nil {
 		t.Fatal(err)
 	}
 	var insert, replay *fixedEngineStatement
@@ -486,8 +486,8 @@ func TestDailyFanoutReplayReadNeedsCoordinatorSelect(t *testing.T) {
 func TestFixedEngineCompletionFenceGrantStaysColumnScoped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	_, uri := startGrantHarness(t, ctx)
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	_, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
 	for _, forbidden := range []struct {
 		name string
@@ -548,9 +548,9 @@ func reportProducerStatements() []fixedEngineStatement {
 func TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, uri := startGrantHarness(t, ctx)
+	admin, uri, roles := startGrantHarness(t, ctx)
 
-	coordinator := connectAs(t, ctx, uri, grantCoordinatorRole, grantCoordinatorPass)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
 	statements := reportProducerStatements()
 	if len(statements) == 0 {
@@ -566,7 +566,7 @@ func TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants(t *testin
 	}
 
 	for _, table := range []string{"saved_reports", "scheduled_report_occurrences", "report_runs"} {
-		revocation := "REVOKE ALL PRIVILEGES ON TABLE public." + table + " FROM " + grantCoordinatorRole
+		revocation := "REVOKE ALL PRIVILEGES ON TABLE public." + table + " FROM " + roles.coordinator
 		if _, err := admin.Exec(ctx, revocation); err != nil {
 			t.Fatalf("%s: %v", revocation, err)
 		}
@@ -588,7 +588,7 @@ func TestScheduledReportStatementsAreDeniedWithoutTheReportTableGrants(t *testin
 	// The posture and the grants are one declaration, so a coordinator login
 	// missing the report grants must refuse to report ready rather than start
 	// and fail every schedule cycle -- which is exactly what production did.
-	if err := CheckCoordinatorAuthorization(ctx, coordinator, grantCoordinatorRole, grantSchema); err == nil {
+	if err := CheckCoordinatorAuthorization(ctx, coordinator, roles.coordinator, grantSchema); err == nil {
 		t.Error("coordinator readiness passed without the report table grants, so it is not checking the posture it declares")
 	}
 }

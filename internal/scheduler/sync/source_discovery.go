@@ -366,18 +366,39 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		// capping / rescope-supersede path that parities #2036/CHAOS-4584's
 		// hardened Python behaviors. github/gitlab keep the plain exact-match
 		// upsertSources path below (Python's own out-of-scope decision).
-		var createdLower, discoveredLower map[string]struct{}
-		created, existing, createdLower, discoveredLower, superseded, err = service.upsertJiraSources(
-			ctx, args.OrgID, args.IntegrationID, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded,
-		)
-		if err == nil {
-			if rebalanceErr := service.rebalanceJiraSourceRepoLimit(ctx, args.OrgID, args.IntegrationID, createdLower, discoveredLower); rebalanceErr != nil {
-				// Best-effort, matching this whole step's contract (loud log,
-				// never fails the occurrence): the upsert above already
-				// committed and is not rolled back by a capping failure.
-				service.log().Error("jira source repo-limit rebalance failed",
-					"org_id", args.OrgID, "integration_id", args.IntegrationID, "error", rebalanceErr)
-				service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
+		//
+		// upsertJiraSources and rebalanceJiraSourceRepoLimit share ONE
+		// transaction (codex review P1): committing the upsert separately
+		// from the cap/recovery step left a window where a rebalance
+		// failure after a successful over-limit upsert left the org over
+		// its max_repos entitlement with no automatic retry. One atomic
+		// transaction means either both succeed or neither does -- a
+		// failure here is retried wholesale on the next discovery pass,
+		// the same "log loud, never fails the occurrence, nothing half-done"
+		// contract every other discovery failure in this file already has.
+		tx, txErr := service.domainPool.Begin(ctx)
+		if txErr != nil {
+			err = fmt.Errorf("begin jira source discovery domain transaction: %w", txErr)
+		} else {
+			txCommitted := false
+			defer func() {
+				if !txCommitted {
+					_ = tx.Rollback(context.WithoutCancel(ctx))
+				}
+			}()
+			var createdLower, discoveredLower map[string]struct{}
+			created, existing, createdLower, discoveredLower, superseded, err = service.upsertJiraSources(
+				ctx, tx, args.OrgID, args.IntegrationID, discovered, service.nowUTC(), args.ConfigID, args.PlannerManaged, unbounded,
+			)
+			if err == nil {
+				err = service.rebalanceJiraSourceRepoLimit(ctx, tx, args.OrgID, args.IntegrationID, createdLower, discoveredLower)
+			}
+			if err == nil {
+				if commitErr := tx.Commit(ctx); commitErr != nil {
+					err = fmt.Errorf("commit jira source discovery domain transaction: %w", commitErr)
+				} else {
+					txCommitted = true
+				}
 			}
 		}
 	} else {
@@ -1130,11 +1151,21 @@ RETURNING id::text`,
 // already-enabled candidate wins ties, so an existing sync in progress is
 // never silently stopped).
 //
+// Takes an already-open tx (never begins/commits its own): the caller
+// (Discover) runs this and rebalanceJiraSourceRepoLimit in ONE transaction
+// (codex review P1: two separate commits left a window where a rebalance
+// failure after a successful over-limit upsert committed left the org over
+// its entitlement with no automatic retry -- one atomic transaction means
+// either both succeed or neither does, and a failure here is retried
+// wholesale on the next discovery pass, exactly like every other discovery
+// failure this file already treats as "log loud, never fails the
+// occurrence, nothing was silently left half-done").
+//
 // Returns the created/discovered external_id sets (normalized) the caller
 // needs for repo-limit capping/recovery, and the count of sources this run
 // superseded for a rescoped explicit config.
 func (service *NativeSourceDiscoveryService) upsertJiraSources(
-	ctx context.Context, orgID, integrationID string, sources []discoveredSource, now time.Time,
+	ctx context.Context, tx pgx.Tx, orgID, integrationID string, sources []discoveredSource, now time.Time,
 	configID string, plannerManaged, unbounded bool,
 ) (created, existingCount int, createdLower, discoveredLower map[string]struct{}, superseded int, err error) {
 	discoveredLower = make(map[string]struct{}, len(sources))
@@ -1146,26 +1177,26 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 		return 0, 0, createdLower, discoveredLower, 0, nil
 	}
 
-	tx, err := service.domainPool.Begin(ctx)
-	if err != nil {
-		return 0, 0, nil, nil, 0, fmt.Errorf("begin jira source discovery domain transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-
 	existingRows, err := fetchExistingSourceRows(ctx, tx, orgID, integrationID)
 	if err != nil {
 		return 0, 0, nil, nil, 0, err
 	}
 
-	// stampNewRows mirrors upsertSources' own isUnboundedDiscovery-gated
-	// tagging exactly (see that function's doc comment): only a genuinely
-	// unbounded planner-managed config gets every discovered row tagged.
-	stampNewRows := plannerManaged && configID != "" && unbounded
+	// stampNewRows (codex review P1): tag EVERY discovered row whenever this
+	// integration has a planner-managed parent, bounded or unbounded --
+	// UNLIKE upsertSources' own isUnboundedDiscovery-gated tagging (used for
+	// github/gitlab, which have no listing-time scope filter of their own).
+	// discoverJira now filters its OWN listing to the config's explicit
+	// project_key/project_id scope (see that function's doc comment) BEFORE
+	// this function ever sees the results, so a bounded config's discovered
+	// set can only ever contain its own current scope -- there is no "other
+	// visible project" left to accidentally over-tag, which is exactly what
+	// upsertSources' unbounded gate exists to prevent for providers that
+	// have no such listing-time filter. Gating jira's OWN tag on unbounded
+	// was the bug: a bounded config's rescope (OLD -> NEW) inserted NEW
+	// untagged, so loadPlanSources' tag-filtered SELECT never saw it -- the
+	// rescoped project silently planned zero units forever.
+	stampNewRows := plannerManaged && configID != ""
 
 	for _, source := range sources {
 		normalizedKey := normalizeSourceKey(source.ExternalID)
@@ -1268,10 +1299,6 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 		superseded = count
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, nil, nil, 0, fmt.Errorf("commit jira source discovery domain transaction: %w", err)
-	}
-	committed = true
 	return created, existingCount, createdLower, discoveredLower, superseded, nil
 }
 
@@ -1468,22 +1495,15 @@ type repoLimitCandidateRow struct {
 // at its limit must not lose real, relied-upon sources just because this run
 // also discovered new ones); recovers previously cap-disabled rows once
 // headroom returns, but only ones discovery just reconfirmed exist.
+//
+// Takes an already-open tx, shared with upsertJiraSources -- see that
+// function's doc comment for why capping/recovery must commit atomically
+// with the upsert (codex review P1) rather than in its own transaction.
 func (service *NativeSourceDiscoveryService) rebalanceJiraSourceRepoLimit(
-	ctx context.Context, orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
+	ctx context.Context, tx pgx.Tx, orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
 ) error {
-	tx, err := service.domainPool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin jira repo-limit rebalance transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-
 	var plannerConfigActive *bool
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 SELECT is_active FROM public.sync_configurations
 WHERE integration_id=$1::uuid AND org_id=$2 AND planner_managed AND parent_id IS NULL
 LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
@@ -1495,7 +1515,7 @@ LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
 		// count), and recovery could wrongly re-enable every capped source
 		// for it -- skip cap/recovery entirely while paused (CHAOS-4584
 		// round 2 P1). The PATCH reactivation handler re-runs discovery.
-		return tx.Commit(ctx)
+		return nil
 	}
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, repoLimitAdvisoryLockKey(orgID)); err != nil {
@@ -1557,10 +1577,6 @@ ORDER BY external_id DESC`, orgID, integrationID)
 				service.log().Warn("jira_project_discovery_capped_by_repo_limit",
 					"org_id", orgID, "integration_id", integrationID, "capped_count", len(capped), "max_repos", *maxRepos)
 			}
-			if err := tx.Commit(ctx); err != nil {
-				return fmt.Errorf("commit jira repo-limit cap: %w", err)
-			}
-			committed = true
 			return nil
 		}
 	}
@@ -1593,7 +1609,7 @@ ORDER BY external_id ASC`, orgID, integrationID)
 	}
 	rows.Close()
 	if len(recoverable) == 0 {
-		return tx.Commit(ctx)
+		return nil
 	}
 	if maxRepos != nil {
 		usage, err := activeRepoUsageCountForLimit(ctx, tx, orgID)
@@ -1620,10 +1636,6 @@ ORDER BY external_id ASC`, orgID, integrationID)
 		service.log().Info("jira_project_discovery_recovered_from_repo_limit_cap",
 			"org_id", orgID, "integration_id", integrationID, "recovered_count", len(recoverable))
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit jira repo-limit recovery: %w", err)
-	}
-	committed = true
 	return nil
 }
 

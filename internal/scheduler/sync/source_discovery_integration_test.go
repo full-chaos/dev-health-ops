@@ -437,6 +437,52 @@ func TestUpsertSourcesNeverTagsANewlyVisibleSourceForABoundedJiraConfig(t *testi
 // --- CHAOS-4629: Jira parity with #2036/CHAOS-4584's hardened Python
 // discover_sources_for_integration behaviors -----------------------------
 
+// mustUpsertJiraSourcesInOwnTx opens, runs, and commits a transaction for a
+// direct upsertJiraSources call in a test -- mirroring how Discover itself
+// now wraps the upsert and rebalanceJiraSourceRepoLimit in ONE transaction
+// (codex review P1: two separate commits left a window where a rebalance
+// failure after a successful over-limit upsert committed left the org over
+// its entitlement with no automatic retry).
+func mustUpsertJiraSourcesInOwnTx(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeSourceDiscoveryService,
+	orgID, integrationID string, sources []discoveredSource, now time.Time, configID string, plannerManaged, unbounded bool,
+) (created, existing int, createdLower, discoveredLower map[string]struct{}, superseded int) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, existing, createdLower, discoveredLower, superseded, err = service.upsertJiraSources(ctx, tx, orgID, integrationID, sources, now, configID, plannerManaged, unbounded)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return created, existing, createdLower, discoveredLower, superseded
+}
+
+// mustRebalanceJiraSourceRepoLimitInOwnTx is mustUpsertJiraSourcesInOwnTx's
+// sibling for a direct rebalanceJiraSourceRepoLimit call.
+func mustRebalanceJiraSourceRepoLimitInOwnTx(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeSourceDiscoveryService,
+	orgID, integrationID string, createdLower, discoveredLower map[string]struct{},
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.rebalanceJiraSourceRepoLimit(ctx, tx, orgID, integrationID, createdLower, discoveredLower); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestUpsertJiraSourcesCaseInsensitiveMatchUpdatesExistingRowInsteadOfDuplicating
 // is the exact latent case-duplicate bug #2036 fixed on the Python side
 // (CHAOS-4584 round 2): a pre-existing row was created (or manually
@@ -463,10 +509,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','eng','Eng (stale)','Eng 
 	discovered := []discoveredSource{
 		{ExternalID: "ENG", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: map[string]any{"project_id": "1"}},
 	}
-	created, existing, _, _, superseded, err := service.upsertJiraSources(ctx, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	created, existing, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 	if created != 0 || existing != 1 || superseded != 0 {
 		t.Fatalf("upsertJiraSources() = created=%d existing=%d superseded=%d, want 0,1,0 (case-insensitive match, no duplicate)", created, existing, superseded)
 	}
@@ -525,9 +568,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','ENG','Eng (enabled survi
 	discovered := []discoveredSource{
 		{ExternalID: "Eng", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: map[string]any{"project_id": "1"}},
 	}
-	if _, _, _, _, _, err := service.upsertJiraSources(ctx, orgID, integrationID, discovered, time.Now().UTC(), "", false, true); err != nil {
-		t.Fatal(err)
-	}
+	mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 
 	var enabledCount int
 	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationID).Scan(&enabledCount); err != nil {
@@ -593,17 +634,12 @@ VALUES ($1::uuid,$2,$3::uuid,'jira','project',$4,$4,$4,TRUE,'{}'::jsonb,now(),no
 		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: map[string]any{}},
 		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: map[string]any{}},
 	}
-	created, _, createdLower, discoveredLower, _, err := service.upsertJiraSources(ctx, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	created, _, createdLower, discoveredLower, _ := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 	if created != 2 {
 		t.Fatalf("upsertJiraSources() created = %d, want 2 (CCC, DDD)", created)
 	}
 
-	if err := service.rebalanceJiraSourceRepoLimit(ctx, orgID, integrationID, createdLower, discoveredLower); err != nil {
-		t.Fatal(err)
-	}
+	mustRebalanceJiraSourceRepoLimitInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, createdLower, discoveredLower)
 
 	var enabledCount int
 	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationID).Scan(&enabledCount); err != nil {
@@ -672,9 +708,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','BBB','BBB','BBB',TRUE,'{
 	}
 
 	discoveredLower := map[string]struct{}{"aaa": {}, "bbb": {}}
-	if err := service.rebalanceJiraSourceRepoLimit(ctx, orgID, integrationID, map[string]struct{}{}, discoveredLower); err != nil {
-		t.Fatal(err)
-	}
+	mustRebalanceJiraSourceRepoLimitInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, map[string]struct{}{}, discoveredLower)
 
 	var isEnabled bool
 	var metadataJSON []byte
@@ -720,10 +754,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','OLD','Old Project','OLD'
 	discovered := []discoveredSource{
 		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "2"}},
 	}
-	created, existing, _, _, superseded, err := service.upsertJiraSources(ctx, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	created, existing, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
 	if created != 1 || existing != 0 {
 		t.Fatalf("upsertJiraSources() = created=%d existing=%d, want 1,0", created, existing)
 	}
@@ -745,6 +776,20 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','OLD','Old Project','OLD'
 	}
 	if oldMetadata["superseded_by_scope_change"] != true {
 		t.Fatalf("OLD metadata = %#v, want superseded_by_scope_change=true", oldMetadata)
+	}
+
+	// codex review P1: NEW must ALSO get tagged, or loadPlanSources' own
+	// tag-filtered SELECT never sees it and the rescoped project silently
+	// plans zero units forever -- the original bug was gating this tag on
+	// `unbounded` (bounded rescopes never got it); discoverJira's own
+	// project_key/project_id filtering (TestDiscoverJiraFiltersToExplicitScope)
+	// is what makes tagging unconditionally-on-planner-managed safe now.
+	var newTaggedConfigID string
+	if err := fixture.pool.QueryRow(ctx, `SELECT metadata->>'planner_managed_sync_config_id' FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND external_id='NEW'`, orgID, integrationID).Scan(&newTaggedConfigID); err != nil {
+		t.Fatal(err)
+	}
+	if newTaggedConfigID != configID {
+		t.Fatalf("NEW planner_managed_sync_config_id = %q, want %q so loadPlanSources can plan the rescoped project", newTaggedConfigID, configID)
 	}
 }
 
@@ -773,10 +818,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','STALE','Stale Project','
 	}
 	// unbounded=true: STALE is absent from this pass but must NOT be
 	// superseded -- this is an unscoped "discover everything" config.
-	_, _, _, _, superseded, err := service.upsertJiraSources(ctx, orgID, integrationID, discovered, time.Now().UTC(), configID, true, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, _, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, true)
 	if superseded != 0 {
 		t.Fatalf("upsertJiraSources() superseded = %d, want 0 (unbounded configs never supersede on absence)", superseded)
 	}

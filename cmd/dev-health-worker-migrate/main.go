@@ -159,7 +159,7 @@ func execute(
 	if !postureResult.OK {
 		fmt.Fprintln(
 			stderr,
-			"migration failed: executed grant posture check found missing privileges "+
+			"migration failed: executed grant posture check found "+postureFailureKind(postureResult)+" "+
 				"after go-river-migrate; see the preceding structured log lines for the "+
 				"affected role(s) and table(s)",
 		)

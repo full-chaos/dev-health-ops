@@ -30,6 +30,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
     "cmd/query-api",
+    "cmd/query-api/internal/hotspots",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -236,8 +237,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # per orchestrator ruling 2026-08-29 (see the file's own STATUS header),
     # now run explicitly with CLICKHOUSE_URI + DEV_HEALTH_REQUIRE_LIVE=1, not
     # via this gate.
-    assert "33 package(s) discovered, 1 denylisted, 32 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 32 package(s)" in result.stdout
+    #
+    # CHAOS-4684 added cmd/query-api/internal/hotspots (33 -> 34 discovered,
+    # 32 -> 33 will run): the argMax(<col>, (day, computed_at)) tie-break
+    # regression guard runs against a REAL ClickHouse container (a fake
+    # QueryClient cannot exercise how ClickHouse itself resolves an argMax
+    # tie), so the package picked up its first -tags=integration file.
+    # Weight 10s, measured from a local single-container run of both
+    # subtests; LPT re-balanced shards 2/3 to 356s/355s (still within 1s).
+    assert "34 package(s) discovered, 1 denylisted, 33 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 33 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -263,7 +272,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 32
+    assert len(flattened) == len(set(flattened)) == 33
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1478,7 +1487,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 31
+    assert len(selected_packages) == len(set(selected_packages)) == 32
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

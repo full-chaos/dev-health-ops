@@ -58,7 +58,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # discretionary, slot-only proof per orchestrator ruling 2026-08-29 (see
     # the file's own STATUS header); denylisting it stops the shard from
     # implying coverage it structurally cannot deliver.
-    assert "33 package(s) discovered, 1 denylisted, 32 will run" in result.stdout
+    # CHAOS-4684 added cmd/query-api/internal/hotspots (33 -> 34 discovered,
+    # 32 -> 33 will run): the argMax(<col>, (day, computed_at)) tie-break
+    # regression guard runs against a real ClickHouse container.
+    assert "34 package(s) discovered, 1 denylisted, 33 will run" in result.stdout
     # Name the denylisted package explicitly (SET DIFFERENCE), not just the
     # count -- a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

@@ -4,9 +4,26 @@
 // plan §6 Wave 3's second operation, ported after complexityTimeseries
 // (CHAOS-4369, PR #1992).
 //
-// Ported deliberately verbatim: same argMax(<col>, computed_at) latest-
-// compute-pass selection over the append-only file_hotspot_daily table,
-// same optional repo_ids filter resolved through the org-scoped repos
+// Ported deliberately verbatim, with ONE deliberate Go-only divergence
+// (CHAOS-4684): each argMax's ordering argument is the tuple
+// (day, computed_at), not the bare computed_at Python still uses.
+// computed_at is stamped once per compute RUN, not per row, so a single
+// run can write the identical computed_at across dozens of different
+// days; the bare-computed_at form's GROUP BY (repo_id, file_path) then
+// ties every one of those days together and argMax picks an arbitrary
+// row among them -- measured on real data: 686/11,953 groups ambiguous,
+// 5 in the returned top-50, risk_score spread up to 31.096 on the ORDER
+// BY key (CHAOS-4684). ClickHouse compares the tuple lexicographically,
+// so this reads latest DAY first, then latest computed_at within that
+// day -- the "latest-compute read" this doc comment already claimed but
+// the bare form did not deliver. Go-only per the standing ruling (no
+// further Python graphql/metrics work); Python keeps the defect as
+// expected divergence. This does not reduce the scan -- it costs more
+// (~2x duration, ~3.5x memory on the measured dataset) because tuple
+// comparison is pricier per row; correctness is the entire
+// justification, not performance.
+//
+// Same optional repo_ids filter resolved through the org-scoped repos
 // catalog (bounded to MAX_ROWS=1000 -- NOT the row limit -- before it
 // becomes a bind parameter, exactly mirroring Python's
 // `list(repo_ids)[:MAX_ROWS]`), same `ORDER BY risk_score DESC NULLS
@@ -144,18 +161,24 @@ type hotspotRow struct {
 	riskScore          float64
 }
 
-// fetchHotspotRows ports _fetch_hotspot_rows verbatim.
+// fetchHotspotRows ports _fetch_hotspot_rows, EXCEPT each argMax's
+// ordering argument is (day, computed_at) rather than the bare
+// computed_at Python still uses (CHAOS-4684) -- see the package doc
+// comment. All six argMax calls carry the tuple: each is an independent
+// aggregate, and a partial edit would leave the others tied and mix
+// values from different days into a single row, which is strictly worse
+// than the defect being fixed.
 func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
 	query := `
         SELECT
             toString(repo_id) AS repo_id,
             file_path,
-            argMax(churn_loc_30d,       computed_at) AS churn_loc_30d,
-            argMax(churn_commits_30d,   computed_at) AS churn_commits_30d,
-            argMax(cyclomatic_total,    computed_at) AS cyclomatic_total,
-            argMax(cyclomatic_avg,      computed_at) AS cyclomatic_avg,
-            argMax(blame_concentration, computed_at) AS blame_concentration,
-            argMax(risk_score,          computed_at) AS risk_score
+            argMax(churn_loc_30d,       (day, computed_at)) AS churn_loc_30d,
+            argMax(churn_commits_30d,   (day, computed_at)) AS churn_commits_30d,
+            argMax(cyclomatic_total,    (day, computed_at)) AS cyclomatic_total,
+            argMax(cyclomatic_avg,      (day, computed_at)) AS cyclomatic_avg,
+            argMax(blame_concentration, (day, computed_at)) AS blame_concentration,
+            argMax(risk_score,          (day, computed_at)) AS risk_score
         FROM file_hotspot_daily
         WHERE org_id = {org_id:String}
           AND day >= {since_day:Date}

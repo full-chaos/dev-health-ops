@@ -1089,10 +1089,13 @@ type nanClassClickHouseURIFailureExit struct {
 // oracle against the complete set. TestNanClassClickHouseURI_FailureExitInventoryIsComplete
 // walks this function's AST and requires the Fatalf/Skip call sites it
 // finds, IN SOURCE ORDER, to match this list exactly (same count, same call
-// kind at each position). Add a new failure exit to the function without
-// adding a line here, and THIS test fails -- before a fifth adversarial
-// round has to find it, and before anyone has to remember to ask "does the
-// oracle cover this."
+// kind at each position). Add a new failure exit to the function under a
+// BARE-IDENTIFIER receiver call (`<param>.Fatalf(...)`/`.Skip(...)`, the
+// only shape this guard matches -- see
+// nanClassClickHouseURINonTerminalMethods's doc comment for the guard's
+// honest, ruled scope boundary after round 10) without adding a line here,
+// and THIS test fails -- before a fifth adversarial round has to find it,
+// and before anyone has to remember to ask "does the oracle cover this."
 var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureExit{
 	{call: "Fatalf", justification: "B1: raw==\"\" && DEV_HEALTH_REQUIRE_LIVE=1 -- no credential input " +
 		"exists (raw is empty); covered by TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping, " +
@@ -1110,10 +1113,12 @@ var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureEx
 // nanClassClickHouseURINonTerminalMethods is every testing.TB method
 // nanClassClickHouseURI calls that does NOT end the (sub)test -- today just
 // Helper(). TestNanClassClickHouseURI_FailureExitInventoryIsComplete FAILS
-// CLOSED on any <param>.<Method>(...) call site it finds that is neither in
-// this list nor one of the two terminal kinds
-// (nanClassClickHouseURIFailureExitInventory's "Fatalf"/"Skip"): an
-// unrecognized method name stops the test and forces a human decision.
+// CLOSED on any BARE-IDENTIFIER `<param>.<Method>(...)` call site it finds
+// (that is, the receiver expression is exactly the identifier named in
+// recvParam) that is neither in this list nor one of the two terminal
+// kinds (nanClassClickHouseURIFailureExitInventory's "Fatalf"/"Skip"): an
+// unrecognized method name on the bare parameter stops the test and forces
+// a human decision.
 //
 // This replaces a WEAKER first version of the guard (CHAOS-4643 round 9,
 // codex EXECUTED finding): that version recognized only literal "Fatalf"
@@ -1122,26 +1127,49 @@ var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureEx
 // -- passed silently ("ok ... 0.352s"). An allowlist of KNOWN TERMINAL
 // names fails OPEN on any name it does not recognize, which is exactly the
 // "test that cannot fail" shape this whole guard exists to close -- so the
-// check now inverts to a DECLARED NON-TERMINAL allowlist instead: anything
-// not explicitly cleared here, and not one of the two recognized terminal
+// check inverted to a DECLARED NON-TERMINAL allowlist instead: anything not
+// explicitly cleared here, and not one of the two recognized terminal
 // kinds, is an error, not a silent pass. Add a name here ONLY if it can
 // NEVER end the (sub)test (e.g. Helper, Log, Logf); if it CAN end the test
 // (Fatal, FailNow, Skipf, SkipNow, ...), it must be classified as a new
 // failure exit in nanClassClickHouseURIFailureExitInventory instead, like
 // every other exit.
 //
-// NOT detected by this guard, by design: a bare, unqualified `panic(...)`
-// or `runtime.Goexit()` call inside the function body -- i.e. one that does
-// not go through the <param> receiver at all. nanClassClickHouseURI does
-// not call either today, and this guard's job is enumerating the
-// TESTING.TB-SURFACED failure/skip messages the credential-leak oracle
-// needs to classify; a direct panic/Goexit would bypass testing.TB
-// entirely (no message for the oracle to check, and it would break the
-// goroutine-isolation contract runNanClassClickHouseURI's
-// fakeSkipFailTB depends on), which is a different, more visible defect
-// class a reviewer or `go vet` catches on sight -- not the narrow,
-// easy-to-miss "oracle silently doesn't cover this branch" shape this
-// guard targets.
+// HONEST SCOPE BOUNDARY (CHAOS-4643 round 10, codex EXECUTED finding,
+// ACCEPTED AS A RULED RESIDUAL -- chris/team-lead, not an unknown): this
+// guard matches ONLY a bare-identifier receiver equal to the function's own
+// parameter name at the call site. It does NOT track aliasing. Round 10's
+// repro, re-confirmed by the lane:
+//
+//	tb := t
+//	if false { tb.FailNow() }
+//
+// -- passes this guard silently, because the receiver expression at the
+// call site is the identifier "tb", not "t", and this check never asked
+// what "tb" refers to. The same blind spot applies to any other way of
+// putting a testing.TB value one hop away from the literal parameter name:
+// an interface-typed wrapper, or handing `t` to a helper function that
+// calls a method on it internally. Chasing every such shape by tracking
+// aliases is an unbounded search (double aliases, closures, struct
+// embedding, wrapper types...) and was explicitly ruled OUT as the fix for
+// round 10 -- the guard raises the floor against a CARELESS addition to
+// this ~60-line function; it is not, and was never meant to be, a sandbox
+// against a DETERMINED author willing to introduce an alias specifically to
+// route around it. If this guard's real behavior ever needs to be stronger
+// than that, the correct mechanism is type information (go/types), not
+// another syntactic special case -- and that is a deliberate future
+// decision, not a silent gap. Also NOT detected by this guard, by design: a
+// bare, unqualified `panic(...)` or `runtime.Goexit()` call inside the
+// function body -- i.e. one that does not go through the <param> receiver
+// at all. nanClassClickHouseURI does not call either today, and this
+// guard's job is enumerating the TESTING.TB-SURFACED failure/skip messages
+// the credential-leak oracle needs to classify; a direct panic/Goexit would
+// bypass testing.TB entirely (no message for the oracle to check, and it
+// would break the goroutine-isolation contract
+// runNanClassClickHouseURI's fakeSkipFailTB depends on), which is a
+// different, more visible defect class a reviewer or `go vet` catches on
+// sight -- not the narrow, easy-to-miss "oracle silently doesn't cover this
+// branch" shape this guard targets.
 var nanClassClickHouseURINonTerminalMethods = map[string]bool{
 	"Helper": true,
 }
@@ -1150,14 +1178,19 @@ var nanClassClickHouseURINonTerminalMethods = map[string]bool{
 // by-construction guard nanClassClickHouseURIFailureExitInventory and
 // nanClassClickHouseURINonTerminalMethods describe: it parses THIS FILE,
 // finds nanClassClickHouseURI's own function body, and requires every
-// method call on the function's own first parameter -- whatever it is
-// named -- to be either declared non-terminal or match a
-// nanClassClickHouseURIFailureExitInventory entry IN SOURCE ORDER (same
-// count, same call kind at each position). A future failure exit added to
-// the function under ANY method name, recognized or not, fails THIS test:
-// an unrecognized name fails closed (see
-// nanClassClickHouseURINonTerminalMethods's doc comment for why an
-// open-allowlist first version of this check missed t.FailNow()).
+// BARE-IDENTIFIER method call on the function's own first parameter --
+// i.e. `<param>.Method(...)` where <param> is literally the parameter's own
+// name at the call site, whatever that name is -- to be either declared
+// non-terminal or match a nanClassClickHouseURIFailureExitInventory entry
+// IN SOURCE ORDER (same count, same call kind at each position). A future
+// failure exit added to the function under that bare-identifier shape,
+// recognized or not, fails THIS test: an unrecognized name fails closed
+// (see nanClassClickHouseURINonTerminalMethods's doc comment for why an
+// open-allowlist first version of this check missed t.FailNow()). It does
+// NOT catch a failure exit reached through an ALIAS of the parameter (e.g.
+// `tb := t; tb.FailNow()`) or any other indirection -- CHAOS-4643 round 10
+// EXECUTED that exact evasion, and it is an ACCEPTED, RULED RESIDUAL (see
+// nanClassClickHouseURINonTerminalMethods's doc comment), not a silent gap.
 func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

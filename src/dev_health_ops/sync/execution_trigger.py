@@ -78,6 +78,10 @@ def _manual_trigger_await_seconds() -> float:
             if value > 0 and math.isfinite(value):
                 return value
         except ValueError:
+            # A non-numeric SYNC_MANUAL_TRIGGER_AWAIT_SECONDS (unset, blank,
+            # or a typo'd operator override) falls through to the default
+            # below -- same fallback the non-finite/non-positive case above
+            # takes, deliberately not a hard failure of the admin request.
             pass
     return _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS
 

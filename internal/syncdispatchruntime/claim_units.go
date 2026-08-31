@@ -11,8 +11,9 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// execReturningIDs runs an UPDATE ... RETURNING id::text and collects the
-// returned ids, closing the rows before returning.
+// execReturningIDs runs a statement whose result set is a single id::text
+// column -- an UPDATE ... RETURNING id::text, or a plain SELECT id::text --
+// and collects the ids, closing the rows before returning.
 func execReturningIDs(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]string, error) {
 	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {

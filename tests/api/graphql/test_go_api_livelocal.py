@@ -548,6 +548,28 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
                         "a parity question for claim 1 (the dual-run), not "
                         "an execution-shape failure here."
                     )
+                else:
+                    # Round-5 codex finding (P3, 2026-08-30): a nullable
+                    # SCALAR (no sub-selection, e.g. `WorkGraphFlow.
+                    # degradedReason: String`) returning null fell through
+                    # both branches above -- not a violation (field IS
+                    # nullable) and not a note (no selection_set to build
+                    # the sub-fields message from) -- so it produced NO
+                    # signal at all, contradicting this file's own stated
+                    # ruling that every nullable null is reported as a
+                    # note. A nullable scalar null is exactly as spec-valid
+                    # as a nullable object null; it gets the same note
+                    # treatment, just without a sub-fields list (there is
+                    # nothing under a scalar to list).
+                    result.notes.append(
+                        f"{path}.{key}: null (schema-nullable scalar field "
+                        f"{getattr(inner, 'name', inner)}."
+                        f"{selection.name.value}) -- spec-valid per claim "
+                        "2's ruling: whether the Go plane SHOULD return "
+                        "non-null here is a parity question for claim 1 "
+                        "(the dual-run), not an execution-shape failure "
+                        "here."
+                    )
                 continue
             if selection.selection_set is not None:
                 walk(selection.selection_set, value, f"{path}.{key}", field_def.type)

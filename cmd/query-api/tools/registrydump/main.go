@@ -149,7 +149,49 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 			return false
 		}
 		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		if !ok {
+			return true
+		}
+
+		// A write like `digestByOperation["runtimeOnly"] = digestHex(x)`
+		// is a valid, distinct Go statement -- Go permits adding or
+		// overwriting map entries after the composite literal that
+		// creates the map, and this is not the same AST shape as the
+		// `digestByOperation = map[string]string{...}` case handled
+		// below. Pass 2's cross-check only walks the composite literal a
+		// few lines down; a post-literal write like this would register
+		// an operation production actually serves that this tool can
+		// never see, silently under-enumerating -- exactly the failure
+		// mode this whole tool exists to prevent (round-5 codex finding,
+		// P2, 2026-08-30: the map literal has 12 entries but a
+		// hypothetical 13th added this way would make the proof run only
+		// 12 while still reporting success). Reject it loudly, naming the
+		// exact line, rather than silently discover fewer documents than
+		// the route actually registers.
+		for _, lhs := range assign.Lhs {
+			indexExpr, ok := lhs.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			xIdent, ok := indexExpr.X.(*ast.Ident)
+			if !ok || xIdent.Name != "digestByOperation" {
+				continue
+			}
+			pos := fset.Position(assign.Pos())
+			mapErr = fmt.Errorf(
+				"%s:%d: found a write to digestByOperation[...] outside its map literal -- "+
+					"this tool only enumerates the composite literal (see pass 2 below); a "+
+					"post-literal write here would register a document production actually "+
+					"serves that this tool can never discover, silently under-reporting the "+
+					"registered-document count. Fold this entry into the digestByOperation "+
+					"literal, or extend registrydump to account for post-literal writes, "+
+					"before trusting its output again",
+				pos.Filename, pos.Line,
+			)
+			return false
+		}
+
+		if len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
 			return true
 		}
 		lhsIdent, ok := assign.Lhs[0].(*ast.Ident)

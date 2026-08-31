@@ -115,10 +115,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -250,6 +254,24 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 			"HTTP-port CLICKHOUSE_URI convention, the caller must supply a native-protocol value for " +
 			"this step specifically")
 	}
+	// CHAOS-4643 round 9 enumeration (B5): this branch is DEFENSIVE ONLY and
+	// unreachable with clickhouse-go/v2 pinned at v2.47.0 (go.mod:7). Traced
+	// against the module cache: ParseDSN (clickhouse_options.go:103) calls
+	// opt.fromDSN(dsn) and returns its error unchanged; fromDSN
+	// (clickhouse_options.go:186) returns an error at line ~192-194 when
+	// dsn.Host == "" -- BEFORE building Addr -- and otherwise, at line ~203,
+	// always does `o.Addr = append(o.Addr, strings.Split(dsn.Host, ",")...)`,
+	// which for a non-empty Host yields at least one element. setDefaults()
+	// (line ~402), which WOULD inject "localhost:9000" into an empty Addr,
+	// is called only from the connection-establishing paths
+	// (clickhouse_std.go, clickhouse.go) -- never from ParseDSN. So a
+	// successful ParseDSN can never hand back an empty opts.Addr today.
+	// TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins this
+	// assumption directly against the driver: if a future pin bump changes
+	// the contract, that test goes red before this branch silently becomes
+	// reachable-and-uncovered (see the epic handoff's "a contract-mirroring
+	// fake rots silently when the pin moves" -- this is a pin-dependent
+	// claim, not an evergreen one).
 	if len(opts.Addr) == 0 {
 		t.Fatalf("CLICKHOUSE_URI has no host")
 	}
@@ -771,6 +793,17 @@ func TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping(t *t
 // credentials, so the equality check isolates "did a credential leak" from
 // "did the sanctioned host legitimately differ" -- conflating those would
 // make the check meaningless.
+//
+// A FOURTH class, "httpport" (round 8/9, CHAOS-4643's enumeration table
+// entry B7), covers a SEPARATE branch from "protocol": a native-scheme DSN
+// (clickhouse://, never http://) on port 8123 or 8443 reaches its own later
+// check (~line 271), not the opts.Protocol == chdriver.HTTP check that
+// "protocol" covers. Round 8 found this branch's own dedicated test
+// (http_port_dsn_is_rejected_not_translated, above) asserted only rejection,
+// never credential exclusion or class membership -- the same shape as every
+// prior gap. Round 9 closed it as part of a full enumeration of this
+// function's failure exits (see nanClassClickHouseURIFailureExitInventory
+// below) rather than a fifth reactive patch.
 func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -884,6 +917,36 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 			username:  "protoB-user",
 			password:  "protoB-secret",
 		},
+		{
+			// CHAOS-4643 round 8/9 (B7): a NATIVE-scheme DSN on an HTTP port
+			// reaches a SEPARATE, later check (~line 271, "port == 8123 ||
+			// port == 8443") from the "protocol" class above, which only
+			// covers opts.Protocol == chdriver.HTTP (i.e. an http:// or
+			// https:// scheme). Deliberately NOT http://, so this cannot
+			// land in the "protocol" class by accident -- it must exercise
+			// the port check on its own. SAME host as the next case
+			// (sanctioned content, chris's 09:25 ruling, option A) so the
+			// equality check below isolates credential leakage from the
+			// legitimately-varying (but here held constant) host.
+			name:      "native_scheme_on_http_port_8123",
+			raw:       "clickhouse://httpportA-user:httpportA-secret@example.internal:8123/db",
+			wantClass: "httpport",
+			username:  "httpportA-user",
+			password:  "httpportA-secret",
+		},
+		{
+			// Second httpport member: different port (8443, the other
+			// branch of the `port == "8123" || port == "8443"` check), same
+			// host, different credentials. The message only interpolates
+			// `host`, not `port`, so these two are expected to be
+			// byte-identical -- proving the message ignores which of the
+			// two ports fired, not just which credential was supplied.
+			name:      "native_scheme_on_http_port_8443",
+			raw:       "clickhouse://httpportB-user:httpportB-secret@example.internal:8443/db2",
+			wantClass: "httpport",
+			username:  "httpportB-user",
+			password:  "httpportB-secret",
+		},
 	}
 
 	baselineByClass := map[string]string{}
@@ -940,5 +1003,199 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 					"input leaked into it", tc.wantClass, fake.msg, want)
 			}
 		})
+	}
+
+	// Floor check (CHAOS-4643 round 9, brief §2's fallback mechanism):
+	// cheap, redundant belt-and-braces on top of the AST-based inventory
+	// guard below, NOT a substitute for it -- this only catches a class
+	// being silently DROPPED from this table, never a new unclassified
+	// failure exit appearing in nanClassClickHouseURI itself (that is what
+	// TestNanClassClickHouseURI_FailureExitInventoryIsComplete is for).
+	wantClasses := map[string]bool{"parse": true, "hostlist": true, "protocol": true, "httpport": true}
+	if len(baselineByClass) != len(wantClasses) {
+		t.Fatalf("realized class set %v does not match the expected class set %v -- a class was added to "+
+			"or dropped from this table without the count matching", baselineByClass, wantClasses)
+	}
+	for class := range wantClasses {
+		if _, ok := baselineByClass[class]; !ok {
+			t.Fatalf("expected class %q never appeared in the realized class set %v", class, baselineByClass)
+		}
+	}
+}
+
+// TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins the
+// assumption documented above nanClassClickHouseURI's "CLICKHOUSE_URI has no
+// host" branch (B5 in CHAOS-4643 round 9's failure-branch enumeration): with
+// clickhouse-go/v2 pinned at v2.47.0 (go.mod:7), a successful
+// chdriver.ParseDSN can never yield an empty opts.Addr, because fromDSN
+// rejects an empty dsn.Host before populating Addr and otherwise always
+// splits a non-empty Host into at least one element. This is a
+// PIN-DEPENDENT claim -- the exact class of defect the epic handoff calls
+// "a contract-mirroring fake rots silently when the pin moves" -- so it is
+// pinned here directly against the real driver, not assumed. If a future
+// clickhouse-go bump changes fromDSN's behavior, this test goes red and
+// whoever bumped the pin has to re-read nanClassClickHouseURI's B5 branch
+// before trusting that it is still unreachable, instead of it silently
+// becoming reachable-and-uncovered.
+func TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "empty_authority_errors_rather_than_yielding_empty_addr", dsn: "clickhouse:///db"},
+		{name: "comma_only_host_populates_addr_with_empty_elements_not_zero_elements", dsn: "clickhouse://ch:ch@,"},
+		{name: "well_formed_single_host", dsn: "clickhouse://host:9000/db"},
+		{name: "well_formed_multi_host", dsn: "clickhouse://host1:9000,host2:9000/db"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := chdriver.ParseDSN(tc.dsn)
+			if err != nil {
+				// A parse failure is fine and expected for some of these
+				// shapes -- that is B3, already covered by
+				// TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput's
+				// "parse" class. The contract under test here is narrower:
+				// IF ParseDSN succeeds, Addr is never empty.
+				return
+			}
+			if len(opts.Addr) == 0 {
+				t.Fatalf("chdriver.ParseDSN(%q) succeeded with an EMPTY Addr list -- this contradicts the "+
+					"driver contract nanClassClickHouseURI's B5 branch (\"CLICKHOUSE_URI has no host\") "+
+					"relies on being unreachable at the pinned clickhouse-go/v2 version. If this fires, the "+
+					"pin has moved and that branch needs a REAL test, not just a defensive comment "+
+					"(CHAOS-4643 round 9)", tc.dsn)
+			}
+		})
+	}
+}
+
+// nanClassClickHouseURIFailureExit is one t.Fatalf/t.Skip call site inside
+// nanClassClickHouseURI, in SOURCE ORDER -- the only key stable across
+// unrelated edits elsewhere in this file, since only edits to the
+// function's OWN body change call order. See
+// nanClassClickHouseURIFailureExitInventory for why this exists.
+type nanClassClickHouseURIFailureExit struct {
+	call          string // "Fatalf" or "Skip", exactly as it appears in source.
+	justification string
+}
+
+// nanClassClickHouseURIFailureExitInventory is CHAOS-4643 round 9's
+// by-construction guard. Four rounds in a row -- 6 (hostlist), 7 finding 2
+// (bare username), 7 finding 3 (protocol), 8 (httpport) -- found a failure
+// branch of nanClassClickHouseURI that
+// TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput could not
+// fail over, each discovered only AFTER the previous was closed, because
+// nobody had enumerated every failure exit in this function and checked the
+// oracle against the complete set. TestNanClassClickHouseURI_FailureExitInventoryIsComplete
+// walks this function's AST and requires the Fatalf/Skip call sites it
+// finds, IN SOURCE ORDER, to match this list exactly (same count, same call
+// kind at each position). Add a new failure exit to the function without
+// adding a line here, and THIS test fails -- before a fifth adversarial
+// round has to find it, and before anyone has to remember to ask "does the
+// oracle cover this."
+var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureExit{
+	{call: "Fatalf", justification: "B1: raw==\"\" && DEV_HEALTH_REQUIRE_LIVE=1 -- no credential input " +
+		"exists (raw is empty); covered by TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping, " +
+		"correctly outside the leak oracle"},
+	{call: "Skip", justification: "B2: raw==\"\" -- not a failure message; same test as B1"},
+	{call: "Fatalf", justification: "B3: chdriver.ParseDSN error -- oracle class \"parse\""},
+	{call: "Fatalf", justification: "B4: opts.Protocol == chdriver.HTTP -- oracle class \"protocol\""},
+	{call: "Fatalf", justification: "B5: len(opts.Addr) == 0 -- defensive-only, unreachable with " +
+		"clickhouse-go/v2 v2.47.0 pinned; see the comment at the call site and " +
+		"TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr, which pins the assumption directly"},
+	{call: "Fatalf", justification: "B6: net.SplitHostPort fails / empty host / empty port -- oracle class \"hostlist\""},
+	{call: "Fatalf", justification: "B7: port == \"8123\" || port == \"8443\" -- oracle class \"httpport\" (CHAOS-4643 round 9)"},
+}
+
+// TestNanClassClickHouseURI_FailureExitInventoryIsComplete is the
+// by-construction guard nanClassClickHouseURIFailureExitInventory
+// describes: it parses THIS FILE, finds nanClassClickHouseURI's own
+// function body, and requires every <param>.Fatalf(...) / <param>.Skip(...)
+// call site inside it -- where <param> is the function's own first
+// parameter name, whatever it is called -- to appear, in source order,
+// exactly once in the inventory above. A future failure exit added to the
+// function without a matching inventory entry fails THIS test, not a future
+// codex round.
+func TestNanClassClickHouseURI_FailureExitInventoryIsComplete(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller(0) could not resolve this test file's own path")
+	}
+
+	fset := token.NewFileSet()
+	astFile, err := parser.ParseFile(fset, thisFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", thisFile, err)
+	}
+
+	var fn *ast.FuncDecl
+	for _, decl := range astFile.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Name == nil || fd.Name.Name != "nanClassClickHouseURI" {
+			continue
+		}
+		fn = fd
+		break
+	}
+	if fn == nil || fn.Body == nil {
+		t.Fatalf("could not find nanClassClickHouseURI's function body in %s via go/ast -- has the "+
+			"function been renamed or moved? this guard must be updated in step with any such change", thisFile)
+	}
+
+	recvParam := ""
+	if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 && len(fn.Type.Params.List[0].Names) > 0 {
+		recvParam = fn.Type.Params.List[0].Names[0].Name
+	}
+	if recvParam == "" {
+		t.Fatalf("could not determine nanClassClickHouseURI's first parameter name via go/ast")
+	}
+
+	type discoveredExit struct {
+		line int
+		call string
+	}
+	var found []discoveredExit
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != recvParam {
+			return true
+		}
+		if sel.Sel.Name != "Fatalf" && sel.Sel.Name != "Skip" {
+			return true
+		}
+		found = append(found, discoveredExit{
+			line: fset.Position(call.Pos()).Line,
+			call: sel.Sel.Name,
+		})
+		return true
+	})
+	sort.Slice(found, func(i, j int) bool { return found[i].line < found[j].line })
+
+	if len(found) != len(nanClassClickHouseURIFailureExitInventory) {
+		lines := make([]string, 0, len(found))
+		for _, f := range found {
+			lines = append(lines, fmt.Sprintf("  line %d: %s.%s(...)", f.line, recvParam, f.call))
+		}
+		t.Fatalf("nanClassClickHouseURI has %d %s.Fatalf/%s.Skip call site(s) but "+
+			"nanClassClickHouseURIFailureExitInventory declares %d -- a failure exit was added or removed "+
+			"without updating the inventory (CHAOS-4643 round 9 by-construction guard). Discovered sites, "+
+			"in source order:\n%s", len(found), recvParam, recvParam, len(nanClassClickHouseURIFailureExitInventory),
+			strings.Join(lines, "\n"))
+	}
+	for i, f := range found {
+		want := nanClassClickHouseURIFailureExitInventory[i]
+		if f.call != want.call {
+			t.Fatalf("failure exit #%d (line %d): found a %s.%s(...) call, but "+
+				"nanClassClickHouseURIFailureExitInventory[%d] says %q -- %s",
+				i, f.line, recvParam, f.call, i, want.call, want.justification)
+		}
 	}
 }

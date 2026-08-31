@@ -368,10 +368,19 @@ type AnalyticsResult struct {
 	EvidenceQualityStats        *EvidenceQualityStats `json:"evidenceQualityStats,omitempty"`
 }
 
+// BreakdownItem.Value is *float64, not float64 -- CHAOS-4650 (chris
+// 2026-08-31 04:18, Option B). Hand-edited, NOT regenerated from
+// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
+// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and
+// gets overwritten wholesale by the next `gqlgen generate` -- the
+// durable copy of why this diverges from the schema, the reachability
+// mechanism, and the CHAOS-4658 hazard this creates lives in
+// breakdown.go's breakdownRow.Value doc comment. Read that, not this.
 type BreakdownItem struct {
-	Key   string  `json:"key"`
-	Value float64 `json:"value"`
-	Label *string `json:"label,omitempty"`
+	Key   string   `json:"key"`
+	Value *float64 `json:"value"`
+	Label *string  `json:"label,omitempty"`
 }
 
 type BreakdownRequestInput struct {

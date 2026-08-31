@@ -130,9 +130,68 @@ SETTINGS max_execution_time = {timeout:UInt64}
 
 // breakdownRow is one row of the raw breakdown query result, before
 // label resolution.
+//
+// Value is *float64, not float64 -- CHAOS-4650 (chris 2026-08-31 04:18,
+// Option B). dbExpression's category-2 measures (validate.go's AT-RISK
+// Nullable(Float64) list) can return SQL NULL for an all-NULL group even
+// after the toFloat64(...) coercion in CompileBreakdown -- Nullable
+// propagates through toFloat64, it does not collapse it. Scanning that
+// NULL into a bare, non-pointer float64 silently reads back as the Go
+// zero value 0.0 (verified against the pinned clickhouse-go v2.47.0
+// driver: Float64.ScanRow's `case *float64` branch never sees the NULL
+// at all -- Nullable.ScanRow intercepts it first and only recognises
+// `case **float64: *v = nil` as a nullable-aware destination), which is
+// indistinguishable on the wire from "genuinely measured zero". That
+// silent collapse is the defect this ticket removes: scanning into
+// *float64 (Nullable.ScanRow's own documented nullable destination,
+// clickhouse-go/v2/lib/column/nullable.go) preserves the NULL as a nil
+// pointer instead of manufacturing a number, and BreakdownItem.Value
+// carries it through so a nil marshals as a genuine JSON null rather
+// than the literal 0.
+//
+// EXPECTED DIVERGENCE, class = product-decision (CHAOS-4650, chris
+// 2026-08-31 04:18): Python's _build_breakdown_item
+// (analytics.py:367, `float(row.get("value") or 0)`) still collapses
+// the same all-NULL case to 0.0 -- deliberately left unchanged (root
+// AGENTS.md GO-ONLY rule: no further work in the Python GraphQL layer).
+// This is a one-field divergence, not a prefix: it names exactly
+// BreakdownItem.Value on the non-investment breakdown path and no
+// other query. Do not resolve it by reverting Go to Python's 0.0
+// collapse, and do not read it as covering any other measure/field
+// pair sharing the AVG(Nullable(Float64)) shape (timeseries.go's
+// executeTimeseriesRaw scans the same category-2 measures into a bare
+// float64 at timeseries.go:287-288 and has the SAME latent defect --
+// tracked separately, out of this ticket's scope, not yet fixed here).
+//
+// REACHABILITY, checked by mechanism not by ticket state (CHAOS-4538
+// itself merged 08-30/31, bba15566d -- citing it as a blocker is
+// stale): `investmentBreakdown` IS pre-registered in query_route.go,
+// but dispatch requires its OWN row in routeswitch's dynamic switch
+// (switch.go), and no go_api_routing_state row currently enables
+// `investmentBreakdown` or `investmentFull` -- verified locally.
+// PRODUCTION ROUTING STATE IS UNVERIFIED; this is a local fact only.
+// So nothing observes the internal/schema nullability mismatch TODAY
+// -- BUT THAT COULD CHANGE THE MOMENT A ROUTING-STATE ROW IS ADDED,
+// WITH NO FURTHER CODE CHANGE. That is the sharp edge of CHAOS-4658:
+// the mismatch becomes observable through a DATA change (a routing
+// row), not a code change, so no code review will ever catch it
+// turning live. Whoever enables that row MUST widen
+// contracts/graphql/v1/schema.graphql's `value: Float!` to `value:
+// Float` (and its Python Strawberry counterpart,
+// src/dev_health_ops/api/graphql/models/outputs.py's BreakdownItem)
+// in that same change, or a live all-NULL group will make gqlgen's
+// exec engine reject the whole response ("must not be null") instead
+// of rendering the empty state this ticket exists to enable. THIS
+// COMMENT, NOT the ones in models_gen.go/generated.go, is the durable
+// copy: gqlgen generate overwrites both of those files wholesale (see
+// this repo's PR history/CI logs for the CHAOS-4650 PR for an
+// executed proof that a regen reverts BreakdownItem.Value to float64
+// and fails the build at this file's own construction site) -- this
+// file is hand-written and survives regeneration, so the explanation
+// of why lives here, not there.
 type breakdownRow struct {
 	DimensionValue string
-	Value          float64
+	Value          *float64
 }
 
 // ExecuteBreakdownRaw runs the compiled query and returns the raw rows
@@ -155,7 +214,7 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 	var out []breakdownRow
 	for rows.Next() {
 		var dimValue string
-		var value float64
+		var value *float64 // nullable scan destination -- see breakdownRow.Value's doc comment (CHAOS-4650)
 		if scanErr := rows.Scan(&dimValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}

@@ -82,11 +82,55 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			}
 			*ptr = v
 		case *float64:
+			// CHAOS-4650: a nil fixture cell stands in for a NULL
+			// Nullable(Float64) value. Verified against the real
+			// driver, not assumed: nullable.go's Nullable.ScanRow only
+			// recognises **T (double-pointer) cases in its NULL switch
+			// (case **uint64/**float64/etc, all `*v = nil`) -- a bare
+			// *float64 matches none of them, is not an sql.Scanner
+			// either, so the NULL branch falls through to `return nil`
+			// WITHOUT writing to *ptr at all. The destination is left
+			// at its zero-initialised value (Go's `var value float64`
+			// defaults to 0.0) -- silently, no error. THIS is the
+			// documented CHAOS-4650 mechanism (SQL NULL scanned into a
+			// non-nullable float64 silently reads back as 0.0); a real
+			// type-mismatch (fixture holds neither float64 nor nil) is
+			// still an error below, matching every other case's
+			// contract.
+			if row[i] == nil {
+				continue
+			}
 			v, ok := row[i].(float64)
 			if !ok {
 				return fmt.Errorf("scan col %d: destination *float64 but fixture holds %T -- an aggregate returning UInt64 cannot be scanned into float64 by the native driver (see reviewedges.go:145's UInt32 note)", i, row[i])
 			}
 			*ptr = v
+		case **float64:
+			// CHAOS-4650: the nullable-aware destination breakdown.go's
+			// executeBreakdownRaw now scans category-2 AT-RISK measures
+			// into (var value *float64; rows.Scan(&dimValue, &value)).
+			// Verified against the real driver, not assumed:
+			// clickhouse-go v2.47.0's lib/column/nullable.go
+			// Nullable.ScanRow intercepts a NULL row FIRST and only
+			// recognises `case **float64: *v = nil` as a nullable
+			// destination (a bare *float64 never sees the NULL at
+			// all -- Float64.ScanRow's `case *float64` branch is
+			// unreachable for a null cell); a non-NULL row falls
+			// through to Float64.ScanRow, whose `case **float64`
+			// allocates a fresh float64 and sets *d = &value. A
+			// fixture row cell of literal `nil` stands in for the
+			// NULL case; anything else must be a float64, matching a
+			// real non-NULL Nullable(Float64) row.
+			if row[i] == nil {
+				*ptr = nil
+				continue
+			}
+			v, ok := row[i].(float64)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination **float64 but fixture holds %T (want float64 or nil)", i, row[i])
+			}
+			allocated := v
+			*ptr = &allocated
 		case *time.Time:
 			// The native driver's Date.ScanRow accepts *time.Time,
 			// **time.Time or sql.Scanner -- and NOTHING else. It used to
@@ -106,7 +150,7 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			// notably *graphqldate.Date, which has no Scan method and is
 			// therefore not an sql.Scanner. Scan the driver's type
 			// (time.Time) and convert after, as reviewedges.go:152 does.
-			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *int64, *float64, *time.Time, sql.Scanner)", i, d)
+			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *int64, *float64, **float64, *time.Time, sql.Scanner)", i, d)
 		}
 	}
 	return nil

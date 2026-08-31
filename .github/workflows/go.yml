@@ -259,7 +259,7 @@ jobs:
   # aggregate result only after every shard has reached a terminal state.
   go-storage-integration:
     name: go-storage-integration
-    if: always()
+    if: ${{ always() }}
     needs:
       - go-storage-integration-plan
       - go-storage-integration-shard

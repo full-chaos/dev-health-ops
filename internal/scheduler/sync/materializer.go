@@ -418,7 +418,21 @@ func (materializer *NativeMaterializer) Materialize(
 	if materializer == nil || materializer.domainPool == nil || ctx == nil || coordinatorTx == nil {
 		return PlanResult{}, ErrInvalidMaterializer
 	}
-	if !occurrence.ConfigActive || !occurrence.ConfigPlannerManaged || occurrence.JobType != "sync" {
+	if !occurrence.ConfigActive || occurrence.JobType != "sync" {
+		return PlanResult{}, ErrOccurrenceIneligible
+	}
+	// CHAOS-4604: admits exactly ONE more shape beyond a planner-managed
+	// parent -- a non-planner-managed CHILD config pinned to one explicit
+	// IntegrationSource (occurrence.ConfigSourceID set). Every other
+	// non-planner-managed config (a legacy, unscoped standalone -- the
+	// overwhelming majority) is still refused here: a bug in Python's
+	// create_sync_execution_trigger flag-routing check (trigger_routing.py)
+	// cannot accidentally send such an occurrence into this materializer
+	// and get it silently mis-planned -- it fails LOUD
+	// (ErrOccurrenceIneligible), exactly like the planner-managed-only gate
+	// always has. This is a widening of admitted shapes, never a permissive
+	// default.
+	if !occurrence.ConfigPlannerManaged && occurrence.ConfigSourceID == nil {
 		return PlanResult{}, ErrOccurrenceIneligible
 	}
 	// occurrence.JobStatus (scheduled_jobs.status) is checked further down, in

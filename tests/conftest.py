@@ -63,6 +63,20 @@ def setup_test_env(monkeypatch):
     # Rate limiter (CHAOS-1554) hard-fails at startup when REDIS_URL is unset
     # in non-dev environments. Mark tests as a dev-equivalent environment.
     monkeypatch.setenv("ENVIRONMENT", "test")
+    # CHAOS-4629 (codex review, final gate round -- EXECUTED repros against
+    # test_sync_configs.py and test_new_user_journey.py): the flag's
+    # production default flipped to true, but MANY pre-existing sqlite-based
+    # test fixtures across the suite use a reduced table set that predates
+    # scheduled_sync_occurrences/sync_manual_triggers (CHAOS-4602) and were
+    # never written expecting a planner-managed config's manual/backfill
+    # trigger to route through the Go hand-off at all. Pinning the OLD
+    # default here, suite-wide, is the single fix for every such fixture
+    # instead of a per-file patch (the whack-a-mole this comment replaces:
+    # test_backfill_jobrun.py got its own file-local fixture first, then
+    # codex found two more files with the identical latent gap). Tests that
+    # specifically assert the NEW default use monkeypatch.delenv to
+    # override, same pattern as JWT_SECRET_KEY above.
+    monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "false")
 
 
 @pytest.fixture(autouse=True)

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1216,27 +1218,144 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 		}
 	})
 
-	// codex review round 1 (P2, EXECUTED by codex, RE-RUN and CONFIRMED by
-	// this lane): a bare 100,000-row cap only pushes the CHAOS-4647
-	// failure class one step out. workgraph.MaxEdgesLimit is the real,
-	// already-enforced ceiling on a single workGraphEdges request's
-	// filters.limit (clampEdgesLimit, edges.go); each edge can contribute
-	// up to 2 distinct (node_type, node_id) endpoints to
-	// batchResolveMembership's one unLIMITed batch query, so the
-	// worst-case single request touches 2*MaxEdgesLimit distinct
-	// endpoints. This subtest proves queryRouteMaxResultRows (derived
-	// from that same constant in query_route.go) actually clears the
-	// worst case, not just today's smaller real-data measurement above.
+	// codex review round 1 (P2) + round 2 (P2, EXECUTED by codex, RE-RUN
+	// and CONFIRMED by this lane): round 1's bare 100,000-row cap pushed
+	// the CHAOS-4647 failure class one step out; round 1's FIX (a flat
+	// 2*MaxEdgesLimit) still undercounted, because
+	// batchResolveMembership's query returns up to 2 ClickHouse-side rows
+	// PER ENDPOINT (one for category_kind='theme', one for
+	// category_kind='subcategory' -- work_unit_membership's grain,
+	// 046_work_unit_membership.sql), not 1; Go's Next()/Scan() loop
+	// collapses those into one map entry per endpoint only AFTER every
+	// row has already counted against max_result_rows. workgraph.MaxEdgesLimit
+	// (edges.go) is the real, already-enforced ceiling on a single
+	// workGraphEdges request's filters.limit (clampEdgesLimit); each edge
+	// contributes up to 2 distinct endpoints, and each endpoint up to 2
+	// membership rows, so the real worst case is 4*MaxEdgesLimit
+	// ClickHouse-side rows. This subtest proves queryRouteMaxResultRows
+	// (derived from that same constant in query_route.go) actually
+	// clears THAT worst case, not just today's smaller real-data
+	// measurement above or round 1's undercounted one.
 	t.Run("tolerates_the_worst_case_edges_endpoint_volume", func(t *testing.T) {
-		const rowCount = 2 * workgraph.MaxEdgesLimit
+		const rowCount = 4 * workgraph.MaxEdgesLimit
 		n, err := countRowsWithProductionClient(t, rowCount)
 		if err != nil {
-			t.Fatalf("buildQueryRoute's configured client rejected the worst-case %d-row (2*workgraph.MaxEdgesLimit) result: %v", rowCount, err)
+			t.Fatalf("buildQueryRoute's configured client rejected the worst-case %d-row (4*workgraph.MaxEdgesLimit) result: %v", rowCount, err)
 		}
 		if n != rowCount {
 			t.Fatalf("got %d rows, want %d", n, rowCount)
 		}
 	})
+
+	// codex review round 2 (P3, ARGUED, CONFIRMED by this lane): every
+	// subtest above uses system.numbers, whose rows are ~8 raw bytes each
+	// -- even 400,000 of them stay far under the OLD 64 MiB byte default,
+	// so none of them would notice MaxBytesToRead silently dropping from
+	// buildQueryRoute's wiring. codex's own executed control against the
+	// real hotspots query proved the byte budget is the thing that
+	// actually gates hotspots (code 307 at 64.45 MiB under the old
+	// default, clean under 2 GiB).
+	//
+	// A FIRST version of these two subtests tried to reuse system.numbers
+	// with a `repeat()`-generated wide column, on the theory that a wider
+	// row means more bytes read -- WRONG, executed and caught by this
+	// lane before push: max_bytes_to_read accounts bytes read from a
+	// real source (MergeTree columns on disk), not the size of a
+	// function's computed output, so that version's "old defaults"
+	// subtest never failed (900 rows x ~100 KiB of repeat() output read
+	// with NO error under the 64 MiB default). Real on-disk MergeTree
+	// column data is required to exercise the SAME accounting path
+	// hotspots' real file_hotspot_daily scan hits, so these subtests seed
+	// one via a raw clickhouse-go connection (DDL/INSERT is intentionally
+	// OUTSIDE dev-health-go's read-only-enforced Client -- its
+	// validateReadOnlyStatement rejects anything but a literal leading
+	// SELECT by design; the actual budget-carrying SELECT below still
+	// goes through the same client construction as every other subtest).
+	const (
+		byteBudgetRowCount      = 900                                          // < both the old 1,000-row default and the new row cap -- rows alone can never trip either budget here
+		byteBudgetPayloadPerRow = 100 * 1024                                   // ~100 KiB/row
+		byteBudgetTotalBytes    = byteBudgetRowCount * byteBudgetPayloadPerRow // ~88 MiB: over the OLD 64 MiB default, comfortably under the new 2 GiB cap
+	)
+	seedByteBudgetProbeTable(t, ctx, ch.URI, byteBudgetRowCount, byteBudgetPayloadPerRow)
+	const byteBudgetStatement = "SELECT id, payload FROM byte_budget_probe"
+	countPayloadRows := func(t *testing.T, client *clickhouse.Client) (int, error) {
+		t.Helper()
+		rows, err := client.Query(ctx, byteBudgetStatement, nil)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = rows.Close() }()
+		n := 0
+		for rows.Next() {
+			var id uint64
+			var payload string
+			if scanErr := rows.Scan(&id, &payload); scanErr != nil {
+				return n, scanErr
+			}
+			n++
+		}
+		return n, rows.Err()
+	}
+
+	t.Run("parent_defaults_fail_on_real_byte_volume", func(t *testing.T) {
+		opts := clickhouse.Options{DSN: ch.URI}
+		client, err := clickhouse.NewClickHouseQueryClientWithOptions(opts)
+		if err != nil {
+			t.Fatalf("construct ClickHouse client: %v", err)
+		}
+		defer func() { _ = client.Close() }()
+		n, err := countPayloadRows(t, client)
+		if err == nil {
+			t.Fatalf("expected the old 64 MiB default to reject a ~%d-byte real MergeTree result (%d rows), got %d rows with no error", byteBudgetTotalBytes, byteBudgetRowCount, n)
+		}
+	})
+
+	t.Run("tip_config_tolerates_real_byte_volume", func(t *testing.T) {
+		client, err := newQueryRouteClickHouseClient(ch.URI)
+		if err != nil {
+			t.Fatalf("construct ClickHouse client via newQueryRouteClickHouseClient: %v", err)
+		}
+		defer func() { _ = client.Close() }()
+		n, err := countPayloadRows(t, client)
+		if err != nil {
+			t.Fatalf("buildQueryRoute's configured client rejected a ~%d-byte real MergeTree result (%d rows): %v", byteBudgetTotalBytes, byteBudgetRowCount, err)
+		}
+		if n != byteBudgetRowCount {
+			t.Fatalf("got %d rows, want %d", n, byteBudgetRowCount)
+		}
+	})
+}
+
+// seedByteBudgetProbeTable creates a REAL MergeTree table with rowCount
+// rows of an on-disk String column payloadBytes wide each, via a raw
+// clickhouse-go connection -- NOT dev-health-go's read-only Client, whose
+// validateReadOnlyStatement rejects any non-SELECT statement by design.
+// This is the ONLY way to exercise max_bytes_to_read's real accounting
+// (bytes read from an actual source), which a computed column
+// (`repeat()` over system.numbers, tried first and proven NOT to work)
+// does not.
+func seedByteBudgetProbeTable(t *testing.T, ctx context.Context, dsn string, rowCount, payloadBytes int) {
+	t.Helper()
+	opts, err := stdclickhouse.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN for seeding: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection for seeding: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.Exec(ctx, "CREATE TABLE byte_budget_probe (id UInt64, payload String) ENGINE = MergeTree ORDER BY id"); err != nil {
+		t.Fatalf("create byte_budget_probe: %v", err)
+	}
+	insert := fmt.Sprintf(
+		"INSERT INTO byte_budget_probe SELECT number, repeat('x', %d) FROM system.numbers LIMIT %s",
+		payloadBytes, itoa(rowCount),
+	)
+	if err := conn.Exec(ctx, insert); err != nil {
+		t.Fatalf("seed byte_budget_probe: %v", err)
+	}
 }
 
 // countRows runs a cheap system.numbers query for exactly rowCount rows

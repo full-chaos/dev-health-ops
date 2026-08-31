@@ -534,24 +534,38 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 // overrode. max_execution_time (10s, unaffected by this change) remains
 // the time-based safety net; the 67ms measured above is nowhere near it.
 //
-// queryRouteMaxResultRows is NOT a flat 100,000: codex review (round 1,
-// P2, EXECUTED, re-run and CONFIRMED by this lane) found that a bare
-// 100,000 only pushes the SAME failure class one step out rather than
-// closing it. workgraph.MaxEdgesLimit (edges.go) is the real, already
+// queryRouteMaxResultRows is NOT a flat number: codex review round 1
+// (P2, EXECUTED, re-run and CONFIRMED by this lane) found a bare 100,000
+// only pushed the SAME failure class one step out. Round 2 (P2, EXECUTED
+// by codex, re-run and CONFIRMED by this lane) found the round-1 fix
+// STILL undercounted: work_unit_membership (046_work_unit_membership.sql)
+// emits ONE is_dominant=1 row per (node, category_kind), and
+// category_kind has exactly two values -- 'theme' and 'subcategory' (that
+// migration's own doc comment: "category_kind distinguishes 'theme' rows
+// from 'subcategory' rows... argmax category within each kind is ALWAYS
+// emitted... with is_dominant=1"). batchResolveMembership's query filters
+// is_dominant=1 but does NOT collapse theme+subcategory into one row --
+// that collapse happens in Go, in the Next()/Scan() loop, AFTER every row
+// has already counted against ClickHouse's max_result_rows. So each
+// endpoint can contribute up to 2 ClickHouse-side rows, not 1. Codex's
+// EXECUTED evidence: real data shows max 2 rows/endpoint; a synthetic
+// 400,000-row case against a 300,000 cap failed at code 396 (current
+// rows: 327.05 thousand).
+//
+// workgraph.MaxEdgesLimit (edges.go) is the real, already
 // codebase-enforced ceiling on a single workGraphEdges request's
 // `filters.limit` -- clampEdgesLimit forces every caller-supplied limit
-// into [1, MaxEdgesLimit] before the edges query runs. Each edge
-// contributes up to 2 distinct (node_type, node_id) endpoints
-// (source + target) to batchResolveMembership's ONE unLIMITed batch
-// query (membership.go), so a single request at the clamp ceiling can
-// touch up to 2*MaxEdgesLimit distinct endpoints in the worst case (no
-// endpoint reuse across edges) -- a real, code-enforced upper bound, not
-// an organically-growing one like hotspots' byte need above. Deriving
-// the row budget FROM that constant (plus real headroom) keeps the two
-// in lockstep if MaxEdgesLimit ever changes, instead of silently
-// re-opening this exact gap.
+// into [1, MaxEdgesLimit]. Each edge contributes up to 2 distinct
+// (node_type, node_id) endpoints (source + target), and each endpoint
+// contributes up to 2 membership rows (theme + subcategory), so the real
+// worst case is 4*MaxEdgesLimit ClickHouse-side rows for a single
+// request -- a code-enforced upper bound, not an organically-growing one
+// like hotspots' byte need above. Deriving the row budget FROM that
+// constant (plus real headroom) keeps the two in lockstep if
+// MaxEdgesLimit ever changes, instead of silently re-opening this gap a
+// third time.
 const (
-	queryRouteMaxResultRows  = 2*workgraph.MaxEdgesLimit + 100_000 // = 300,000: 2x the 100,000-edge clamp ceiling's worst-case distinct-endpoint count, plus 100,000 rows of headroom
+	queryRouteMaxResultRows  = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000: 2 endpoints/edge x 2 membership rows/endpoint (theme + subcategory) x the 100,000-edge clamp ceiling, plus 100,000 rows of headroom
 	queryRouteMaxBytesToRead = 2 << 30                             // 2 GiB
 )
 

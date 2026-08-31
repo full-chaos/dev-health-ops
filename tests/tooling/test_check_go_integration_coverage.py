@@ -48,4 +48,19 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # NaN-class live proof (nan_class_live_test.go) is proved against a
     # real ClickHouse container -- the analytics package's first
     # -tags integration file.
-    assert "33 package(s) discovered, 0 denylisted, 33 will run" in result.stdout
+    # CHAOS-4643 denylisted cmd/query-api/internal/analytics (discovered
+    # count stays 33; denylisted 0 -> 1, will-run 33 -> 32). CI's
+    # integration-shard job gives every other package its own ClickHouse via
+    # testcontainers, but nan_class_live_test.go dials an externally supplied
+    # CLICKHOUSE_URI instead (mirroring the Python dual-run slot harness) and
+    # .github/workflows/go.yml never sets that var -- the enrolled test
+    # skipped on every CI run and the skip reported as a pass. It is a
+    # discretionary, slot-only proof per orchestrator ruling 2026-08-29 (see
+    # the file's own STATUS header); denylisting it stops the shard from
+    # implying coverage it structurally cannot deliver.
+    assert "33 package(s) discovered, 1 denylisted, 32 will run" in result.stdout
+    # Name the denylisted package explicitly (SET DIFFERENCE), not just the
+    # count -- a bare count is exactly what let CHAOS-4643's own literal drift
+    # 31 -> 32 -> 33 unnoticed.
+    assert "  SKIP cmd/query-api/internal/analytics: " in result.stdout
+    assert "  RUN  cmd/query-api/internal/analytics" not in result.stdout

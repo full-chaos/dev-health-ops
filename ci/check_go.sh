@@ -636,7 +636,9 @@ check_contract() {
 # or "it currently fails" are NOT valid reasons; a failing package belongs in
 # the run set, failing loudly, not hidden here. Legitimate reasons look like
 # "needs a live vendor credential CI does not provision."
-declare -A INTEGRATION_DENYLIST=()
+declare -A INTEGRATION_DENYLIST=(
+  ["cmd/query-api/internal/analytics"]="nan_class_live_test.go needs a live vendor credential CI does not provision: it dials CLICKHOUSE_URI directly (mirroring the Python dual-run slot harness), and .github/workflows/go.yml's integration-shard job never sets that var -- every other integration-tagged package instead gets its own ClickHouse via testcontainers (StartClickHouse), which this file deliberately does not use. Enrolling it in the deterministic shard let it skip silently on every CI run while reading as coverage (CHAOS-4643). It is a discretionary, slot-only proof per orchestrator ruling 2026-08-29 (see the file's own STATUS header); run it explicitly with CLICKHOUSE_URI + DEV_HEALTH_REQUIRE_LIVE=1 set, not via this gate."
+)
 declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
 declare -a INTEGRATION_SHARD_TOTALS=()

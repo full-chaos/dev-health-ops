@@ -17,6 +17,21 @@
 // divergence) the standing NaN-class ruling requires -- neither file
 // alone is the proof.
 //
+// CHAOS-4643: this file used to be enrolled in ci/go_integration_shards.tsv
+// even though .github/workflows/go.yml never sets CLICKHOUSE_URI for the
+// integration-shard job -- CI ran the package, the guard below fired on
+// every run, and the resulting skip reported as a pass, silently, forever.
+// It is now denylisted out of that shard (see INTEGRATION_DENYLIST in
+// ci/check_go.sh) instead of enrolled-but-perpetually-skipping: the STATUS
+// note above already says this proof is discretionary and slot-only, so an
+// enrolment CI could never satisfy was actively misleading, not merely
+// unused. A missing CLICKHOUSE_URI now only skips when nanClassClickHouseURI
+// is called without DEV_HEALTH_REQUIRE_LIVE=1; set that alongside
+// CLICKHOUSE_URI when running this as an actual slot proof and a still-missing
+// URI fails loudly instead. The rebuilt DSN also used to drop the URI's
+// userinfo, so even a correct slot run with real credentials failed
+// ClickHouse auth -- nanClassClickHouseURI now carries parsed.User through.
+//
 // WHY NOT ROUTED THROUGH HTTP, UNLIKE THE FLOW-MATRIX DUAL-RUN FILE:
 // breakdown has NO registered document yet -- query_route.go
 // (digestByOperation, ~L478) only registers flowMatrix this wave. Both
@@ -69,13 +84,24 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
+
+// requireLiveEnv is the single opt-in that turns a missing CLICKHOUSE_URI
+// from a silent skip into a loud failure. Whoever runs this file as a slot
+// proof sets it; CI's deterministic integration shard never does, because
+// this package is not enrolled there -- see ci/go_integration_shards.tsv's
+// INTEGRATION_DENYLIST entry and this file's own header. Deliberately the
+// SAME variable both tests below funnel through nanClassClickHouseURI,
+// rather than a second, easily-forgotten flag.
+const requireLiveEnv = "DEV_HEALTH_REQUIRE_LIVE"
 
 // nanClassClickHouseURI mirrors the Python dual-run harness's
 // _go_clickhouse_uri (test_go_api_dual_run_flow_matrix.py:426-431):
@@ -85,11 +111,18 @@ import (
 // regression). Doing the same translation here lets this test run off
 // the SAME env var value the slot already exports, rather than requiring
 // a second, easily-forgotten one.
-func nanClassClickHouseURI(t *testing.T) string {
+func nanClassClickHouseURI(t testing.TB) string {
 	t.Helper()
 	raw := os.Getenv("CLICKHOUSE_URI")
 	if raw == "" {
-		t.Skip("CLICKHOUSE_URI not set -- this is a live-ClickHouse proof, run only in a container slot")
+		if os.Getenv(requireLiveEnv) == "1" {
+			t.Fatalf("CLICKHOUSE_URI not set but %s=1 -- this is a live-ClickHouse proof and the "+
+				"caller required it to actually run; a slot run that silently skips is exactly the "+
+				"false-pass this flag exists to prevent (CHAOS-4643)", requireLiveEnv)
+		}
+		t.Skip("CLICKHOUSE_URI not set -- this is a live-ClickHouse proof, run only in a container " +
+			"slot; set " + requireLiveEnv + "=1 alongside CLICKHOUSE_URI to make a missing URI fail " +
+			"instead of skip")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -105,6 +138,16 @@ func nanClassClickHouseURI(t *testing.T) string {
 	scheme := parsed.Scheme
 	if scheme == "" || scheme == "http" || scheme == "https" || scheme == "clickhouse+http" {
 		scheme = "clickhouse"
+	}
+	// Carry the userinfo through the rebuild (CHAOS-4643 defect 1): a
+	// credentialed CLICKHOUSE_URI (clickhouse://user:pass@host:8123/db)
+	// used to lose "user:pass" here, so even a correct slot run with a
+	// real password failed ClickHouse auth. parsed.User.String() returns
+	// the same percent-encoded "user[:pass]" form url.URL itself accepts
+	// back in, matching how the Python harness's string-replace on netloc
+	// (which never touches the userinfo segment) already preserves it.
+	if parsed.User != nil {
+		return fmt.Sprintf("%s://%s@%s:%s", scheme, parsed.User.String(), host, port)
 	}
 	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
 }
@@ -267,4 +310,133 @@ func TestNaNClass_AllNullGroup_ProducesNaN_GqlgenRefusesToMarshal(t *testing.T) 
 			"that's fine to update here, but confirm it's still the SAME NaN/Inf guard and not a "+
 			"different failure standing in for it", got)
 	}
+}
+
+// TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild is CHAOS-4643
+// defect 1's proof, and needs no container: it only exercises the pure
+// string-rebuild in nanClassClickHouseURI, never dials ClickHouse. Before
+// the fix, the rebuilt DSN dropped parsed.User entirely -- a credentialed
+// CLICKHOUSE_URI became uncredentialed, so even a correct slot run with a
+// real password failed ClickHouse auth.
+func TestNanClassClickHouseURI_CarriesUserinfoThroughRebuild(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "user_and_password_preserved_and_port_translated",
+			raw:  "clickhouse://chuser:chpass@example.internal:8123/default",
+			want: "clickhouse://chuser:chpass@example.internal:9000",
+		},
+		{
+			name: "user_only_preserved",
+			raw:  "clickhouse://chuser@example.internal:8443/default",
+			want: "clickhouse://chuser@example.internal:9000",
+		},
+		{
+			name: "no_userinfo_still_works",
+			raw:  "clickhouse://example.internal:8123/default",
+			want: "clickhouse://example.internal:9000",
+		},
+		{
+			name: "http_scheme_and_native_port_pass_through",
+			raw:  "http://chuser:chpass@example.internal:9000/default",
+			want: "clickhouse://chuser:chpass@example.internal:9000",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLICKHOUSE_URI", tc.raw)
+			t.Setenv(requireLiveEnv, "")
+			got := nanClassClickHouseURI(t)
+			if got != tc.want {
+				t.Fatalf("nanClassClickHouseURI(%q) = %q, want %q -- credentials or host/port were "+
+					"dropped or mangled in the rebuild", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// fakeSkipFailTB is a minimal testing.TB that records whether the code under
+// test called Skip or Fatal(f), instead of letting either call propagate into
+// a REAL subtest failure. A genuine t.Run subtest failure always marks its
+// parent failed too (Go's testing package does this unconditionally,
+// independent of what the parent does with t.Run's returned bool), which
+// would turn this exact proof -- deliberately exercising the FAIL path -- into
+// a permanently red test. Embedding a real testing.TB satisfies its
+// unexported method and is never otherwise called; every method this file
+// uses is overridden below.
+type fakeSkipFailTB struct {
+	testing.TB
+	mu      sync.Mutex
+	failed  bool
+	skipped bool
+	msg     string
+}
+
+func (f *fakeSkipFailTB) Helper() {}
+
+func (f *fakeSkipFailTB) Fatalf(format string, args ...any) {
+	f.mu.Lock()
+	f.failed = true
+	f.msg = fmt.Sprintf(format, args...)
+	f.mu.Unlock()
+	runtime.Goexit()
+}
+
+func (f *fakeSkipFailTB) Skip(args ...any) {
+	f.mu.Lock()
+	f.skipped = true
+	f.msg = fmt.Sprint(args...)
+	f.mu.Unlock()
+	runtime.Goexit()
+}
+
+// runNanClassClickHouseURI calls nanClassClickHouseURI(fake) on its own
+// goroutine and waits for it: Skip/Fatalf call runtime.Goexit, which only
+// unwinds the calling goroutine, so the call must run on one dedicated to it
+// (exactly how the real testing package runs each (sub)test).
+func runNanClassClickHouseURI(fake *fakeSkipFailTB) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		nanClassClickHouseURI(fake)
+	}()
+	<-done
+}
+
+// TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping is
+// CHAOS-4643 defect 3's proof, and needs no container: DEV_HEALTH_REQUIRE_LIVE=1
+// with CLICKHOUSE_URI unset must FAIL, not skip -- otherwise a slot run that
+// failed to receive its ClickHouse URI reports the identical false pass this
+// ticket exists to close, one level down inside the runs meant to prove
+// parity. Also proves the ORIGINAL behaviour (skip, not fail) still holds
+// when the opt-in is not set, so a normal unconfigured run stays a skip, not a
+// surprise failure -- the pair is what distinguishes "the guard fires
+// correctly either way" from "it always fails now", which would be a
+// different, equally wrong bug.
+func TestNanClassClickHouseURI_MissingURI_RequireLiveFailsInsteadOfSkipping(t *testing.T) {
+	t.Run("without_require_live_skips_not_fails", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "")
+		t.Setenv(requireLiveEnv, "")
+		fake := &fakeSkipFailTB{TB: t}
+		runNanClassClickHouseURI(fake)
+		if !fake.skipped || fake.failed {
+			t.Fatalf("expected Skip (not Fatal) when %s is unset, got failed=%v skipped=%v msg=%q",
+				requireLiveEnv, fake.failed, fake.skipped, fake.msg)
+		}
+	})
+
+	t.Run("with_require_live_fails_not_skips", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_URI", "")
+		t.Setenv(requireLiveEnv, "1")
+		fake := &fakeSkipFailTB{TB: t}
+		runNanClassClickHouseURI(fake)
+		if !fake.failed || fake.skipped {
+			t.Fatalf("expected Fatal (not Skip) when %s=1 and CLICKHOUSE_URI is unset, got failed=%v "+
+				"skipped=%v msg=%q -- a slot run with a missing URI would silently report green",
+				requireLiveEnv, fake.failed, fake.skipped, fake.msg)
+		}
+	})
 }

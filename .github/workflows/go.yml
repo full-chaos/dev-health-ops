@@ -141,6 +141,11 @@ jobs:
   # not a second full fan-out. Slower, and it costs the "simultaneous pass
   # on identical code" evidence, but it does not reintroduce the capacity
   # waste or the ambiguous rollup this ticket exists to remove.
+  #
+  # Proved live on PR #2050's own tip: a push while no PR was open ran for
+  # real (33418461163); once the PR existed, this second push's `push` run
+  # is superseded (guard skip=true) while its `pull_request` run is the sole
+  # authoritative one — see the PR body / merge note for the cited run ids.
   guard:
     runs-on: ubuntu-latest
     timeout-minutes: 2

@@ -105,6 +105,7 @@ from dev_health_ops.api.graphql import principal_envelope
 from dev_health_ops.api.graphql.go_api_registry import register_candidate_build
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.licensing.types import LicenseTier
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.git import Base as GitBase
 from dev_health_ops.models.go_api_registry import CandidateBuild, ProofRun, RoutingState
 
@@ -137,6 +138,54 @@ ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
 
 SCHEMA_DIGEST = "sha256:lane-go-api-livelocal-schema-digest"
 CANDIDATE_BUILD = "lane-go-api-livelocal-candidate-build"
+
+
+def _assert_real_local_data_present(clickhouse_uri: str, org_id: str) -> None:
+    """Precondition for the `local` evidence label -- codex review round 2
+    (2026-08-30) caught that this file accepted ANY nonempty
+    `CLICKHOUSE_URI` without ever confirming it actually points at the
+    real local stack with `org_id`'s synced data (repro: forwarded
+    `CLICKHOUSE_URI=clickhouse://ch:ch@localhost:9000/ci_local_validate`,
+    a scratch/CI endpoint, and nothing here rejected it). A misconfigured
+    or scratch endpoint would still produce PASS/FAIL results, just
+    mislabeled `local` -- silently wrong evidence, not a loud failure.
+
+    Checks for at least one `repos` row for `org_id`: every real synced
+    org has repos, and this is a cheap, read-only, single-row COUNT --
+    not a deep data-quality check, just "does this look like the org this
+    proof claims to be running against."
+    """
+    sink = ClickHouseMetricsSink(clickhouse_uri)
+    try:
+        result = sink.client.query(
+            "SELECT count() FROM repos WHERE org_id = {org_id:String}",
+            parameters={"org_id": org_id},
+        )
+        count = result.result_rows[0][0] if result.result_rows else 0
+    finally:
+        sink.close()
+    if not count:
+        pytest.fail(
+            f"LIVE-LOCAL PRECONDITION FAILED: CLICKHOUSE_URI has ZERO "
+            f"`repos` rows for org {org_id} -- this does not look like the "
+            f"real local stack with synced data. Refusing to run and "
+            f"mislabel results as `local`. This check does not inspect "
+            f"CLICKHOUSE_URI's value, only whether the org it points at "
+            f"actually has data."
+        )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_local_data_precondition() -> None:
+    """Runs once before any of the 12 parametrized tests actually
+    execute (autouse; session-scoped so it is one ClickHouse round trip,
+    not twelve). Never invoked for a marker-deselected or env-var-skipped
+    run -- pytest only sets up fixtures for tests that are actually
+    selected to run, and the empty-list / skip-marked parametrizations
+    from `pytest_generate_tests` never reach fixture setup.
+    """
+    assert CLICKHOUSE_URI is not None  # module skipif already guarantees this
+    _assert_real_local_data_present(CLICKHOUSE_URI, ORG_ID)
 
 
 # --------------------------------------------------------------------------
@@ -207,12 +256,45 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     #
     # When this module's own precondition is already false, the go
     # toolchain is not needed at all -- parametrize with an EMPTY list,
-    # which pytest reports as a clean skip, not an error. When the
-    # precondition IS true (an operator genuinely wants this proof to
-    # run), missing `go` still fails loudly via
-    # _enumerate_registered_documents's RuntimeError, exactly as before.
+    # which pytest reports as a clean skip, not an error.
     if not CLICKHOUSE_URI or not POSTGRES_TEST_URI:
         metafunc.parametrize("registered_doc", [], ids=[])
+        return
+    # codex review round 2 (2026-08-30) caught that the fix above still
+    # doesn't cover every collection-safe path: a run invoked with
+    # `-m 'not clickhouse'` to DESELECT this file's tests can still have
+    # CLICKHOUSE_URI/POSTGRES_TEST_URI set (e.g. exported globally by a CI
+    # harness for OTHER test files that need them) -- marker-based
+    # deselection happens AFTER collection, same timing problem as the
+    # skipif fix above one layer up. Reproduced by hand: both env vars
+    # set, `go` removed from PATH -> `RuntimeError: go toolchain not on
+    # PATH`, collection ERROR, even though `-m 'not clickhouse'` would
+    # have excluded every test this file generates anyway.
+    #
+    # Evaluating the run's `-m` mark expression ourselves to predict
+    # deselection would duplicate pytest's own marker engine and could
+    # still be wrong. Simpler and correct either way: missing `go` is
+    # ALWAYS a clean, visible SKIP now (one item, not zero, so a human
+    # reading the report sees exactly why), never a collection-time raise.
+    # An operator who genuinely wants this proof to run and is missing
+    # `go` sees "1 skipped -- go toolchain not on PATH" in the test
+    # report, which is loud enough without being a hard error that can
+    # take an unrelated tier down with it.
+    if shutil.which("go") is None:
+        metafunc.parametrize(
+            "registered_doc",
+            [
+                pytest.param(
+                    {"operation": "SKIPPED", "document": "", "const_name": ""},
+                    marks=pytest.mark.skip(
+                        reason="go toolchain not on PATH -- required to "
+                        "enumerate registered documents by reflection over "
+                        "query_route.go. This live-local proof did NOT run."
+                    ),
+                )
+            ],
+            ids=["go-missing"],
+        )
         return
     docs = _enumerate_registered_documents()
     metafunc.parametrize(
@@ -261,6 +343,36 @@ def _response_key(selection: gql_ast.FieldNode) -> str:
     return selection.alias.value if selection.alias else selection.name.value
 
 
+def _find_fragment_usage(
+    selection_set: gql_ast.SelectionSetNode, path: str = "$"
+) -> list[str]:
+    """Statically scans a selection set -- the DOCUMENT's AST, never
+    response data -- for any fragment spread / inline fragment,
+    recursively through every nested selection set. Decoupled from
+    runtime data on purpose: codex review round 2 (2026-08-30, EXECUTED)
+    showed the walker's per-node fragment check only fires when it
+    actually descends into non-empty response data for that selection
+    set, so a document with a fragment under a field that happens to
+    return an EMPTY list (`rows: []`) passed with zero violations even
+    though the fragment is structurally unsupported regardless of what
+    the response contains. Called once, up front, before any data
+    walking -- a document's fragment usage does not depend on what any
+    particular response looks like.
+    """
+    found: list[str] = []
+    for selection in selection_set.selections:
+        if isinstance(selection, gql_ast.FieldNode):
+            if selection.selection_set is not None:
+                found.extend(
+                    _find_fragment_usage(
+                        selection.selection_set, f"{path}.{_response_key(selection)}"
+                    )
+                )
+        else:
+            found.append(f"{path}: {type(selection).__name__}")
+    return found
+
+
 def _unwrap_to_named_type(type_: GraphQLOutputType) -> GraphQLOutputType:
     while isinstance(type_, (GraphQLNonNull, GraphQLList)):
         type_ = type_.of_type
@@ -303,16 +415,51 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
     )
     result = _ShapeCheck(violations=[], notes=[])
 
+    # Static, data-independent fragment check FIRST (see
+    # _find_fragment_usage's doc comment) -- a document's use of
+    # fragments is a property of the document, not of whatever the
+    # response happens to contain this run.
+    fragment_uses = _find_fragment_usage(operation.selection_set)
+    if fragment_uses:
+        result.violations.extend(
+            f"{loc}: document uses a fragment -- _shape_check does not "
+            "resolve fragments yet, so this document's shape cannot be "
+            "confirmed. Extend _shape_check before claiming this "
+            "document shape-sane."
+            for loc in fragment_uses
+        )
+        return result
+
     def walk(
         selection_set: gql_ast.SelectionSetNode | None,
         node: Any,
         path: str,
         parent_type: Any,
+        element_nullable: bool = True,
     ) -> None:
         if selection_set is None:
             return
         if isinstance(node, list):
+            # `element_nullable` describes the LIST'S ELEMENT type (e.g.
+            # `[Thing]` has nullable elements, `[Thing!]` does not) --
+            # threaded down from the field-processing call below, not
+            # from this list value's own (outer) nullability, which was
+            # already checked before we ever got here. codex review
+            # round 2 (2026-08-30, EXECUTED, synthetic schema) caught
+            # that this branch previously recursed into every item
+            # unconditionally, so a spec-valid `null` element inside a
+            # nullable-element list fell through to the "expected an
+            # object or list" violation below instead of being recognized
+            # as a legitimate null -- the same class of over-strictness
+            # chris's ruling already fixed one level up for FIELD nulls.
             for i, item in enumerate(node):
+                if item is None:
+                    if not element_nullable:
+                        result.violations.append(
+                            f"{path}[{i}]: NULL list element on a "
+                            "NON-nullable element type -- contract violation"
+                        )
+                    continue
                 walk(selection_set, item, f"{path}[{i}]", parent_type)
             return
         if not isinstance(node, dict):
@@ -329,26 +476,20 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
             return
         for selection in selection_set.selections:
             if not isinstance(selection, gql_ast.FieldNode):
-                # Fragment spread / inline fragment: none of the current 12
-                # documents use one (confirmed by reading every
-                # registered*Document const), but codex review (2026-08-30)
-                # correctly flagged that silently `continue`ing past one
-                # means a FUTURE document using a fragment would have every
-                # field inside it go completely unchecked -- a null on a
-                # non-nullable field behind a fragment would pass with zero
-                # violations, exactly the "check that cannot fail" root
-                # AGENTS.md's four verification rules warn against. Fail
-                # loudly instead of silently doing less than the module doc
-                # comment claims; whoever adds the first fragment-using
-                # document extends this walker to resolve it properly.
-                result.violations.append(
-                    f"{path}: document uses a fragment "
-                    f"({type(selection).__name__}) at this selection set -- "
-                    "_shape_check does not resolve fragments yet, so this "
-                    "document's shape cannot be confirmed here. Extend "
-                    "_shape_check before claiming this document shape-sane."
+                # Unreachable in practice: _shape_check's static
+                # _find_fragment_usage pre-check (see its doc comment)
+                # already returns early on ANY fragment anywhere in the
+                # document, so walk() is never invoked at all for a
+                # document that uses one. Kept as a loud defensive
+                # assertion rather than a silent `continue`, in case a
+                # future refactor calls walk() directly and bypasses the
+                # pre-check.
+                raise AssertionError(
+                    f"{path}: reached a non-field selection "
+                    f"({type(selection).__name__}) inside walk() -- the "
+                    "static fragment pre-check should have caught this "
+                    "before walk() was ever called"
                 )
-                continue
             key = _response_key(selection)
             if key not in node:
                 result.violations.append(
@@ -390,11 +531,27 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
                     )
                 continue
             if selection.selection_set is not None:
+                # Determine THIS field's list-element nullability (if it
+                # is a list at all) to thread down to walk()'s list
+                # branch -- `[Thing]` has nullable elements, `[Thing!]`
+                # does not; a non-list field passes the default (True,
+                # meaningless since it's never consulted for a non-list).
+                unwrapped_once = (
+                    field_def.type.of_type
+                    if isinstance(field_def.type, GraphQLNonNull)
+                    else field_def.type
+                )
+                element_nullable = True
+                if isinstance(unwrapped_once, GraphQLList):
+                    element_nullable = not isinstance(
+                        unwrapped_once.of_type, GraphQLNonNull
+                    )
                 walk(
                     selection.selection_set,
                     value,
                     f"{path}.{key}",
                     _unwrap_to_named_type(field_def.type),
+                    element_nullable,
                 )
 
     walk(operation.selection_set, data, "$", query_type)
@@ -585,6 +742,22 @@ def _create_scratch_postgres_db(admin_uri: str) -> tuple[str, str]:
     try:
         with engine.connect() as connection:
             connection.exec_driver_sql(f'CREATE DATABASE "{db_name}"')
+    except Exception:
+        # codex review round 2 (2026-08-30, EXECUTED fault injection): the
+        # CREATE DATABASE statement can already have reached and succeeded
+        # on the server even though THIS client-side call is about to
+        # raise (e.g. the connection drops right after the server acks
+        # it). The caller never receives `db_name` in that case, so its
+        # own cleanup can never run -- best-effort drop it here, on a
+        # FRESH connection (this one may be broken), before propagating
+        # the original error. `_drop_scratch_postgres_db` uses `DROP
+        # DATABASE IF EXISTS`, so this is a safe no-op on the more common
+        # case where CREATE DATABASE never actually landed.
+        try:
+            _drop_scratch_postgres_db(admin_uri, db_name)
+        except Exception:
+            pass  # don't mask the original error with a cleanup failure
+        raise
     finally:
         engine.dispose()
     base_url = make_url(admin_uri)
@@ -815,7 +988,18 @@ def _start_go_server(
     try:
         _wait_for_ready(base_url)
     except TimeoutError:
+        # codex review round 2 (2026-08-30, EXECUTED): `.kill()` alone
+        # sends SIGKILL but never reaps the child -- `.stdout.read()`
+        # unblocks once the pipe's write end closes on exit, which is NOT
+        # the same as the parent calling waitpid() on it. Without `.wait()`
+        # the killed query-api process stays a zombie while pytest
+        # continues running the other 11 parametrized tests. Mirrors
+        # `_RunningGoServer.stop()`'s existing kill+wait pattern below.
         process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # already sent SIGKILL; nothing more to do but not hang
         out = process.stdout.read() if process.stdout else ""
         pytest.fail(f"query-api never became ready:\n{out}")
     return _RunningGoServer(process, base_url)

@@ -729,17 +729,21 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','BBB','BBB','BBB',TRUE,'{
 	}
 }
 
-// TestUpsertJiraSourcesSupersedesAMixedCaseProviderRowOnRescope is the codex
-// round-3 P1 regression case: provider casing is not write-time validated
-// anywhere in this codebase (Integration.provider accepts "JIRA" as freely
-// as "jira", the same latent shape CHAOS-4584 itself had to account for on
-// external_id/project_key). A tagged legacy row with provider="JIRA" must
-// still be found and superseded on a bounded rescope -- an exact-match
-// `provider='jira'` SQL predicate would silently skip it, leaving OLD
-// enabled (and permanently uncountable for repo-limit capping, since
-// activeRepoUsageCountForLimit counts it toward usage with no provider
-// filter at all).
-func TestUpsertJiraSourcesSupersedesAMixedCaseProviderRowOnRescope(t *testing.T) {
+// TestUpsertJiraSourcesSupersedesAMixedCaseWhitespacePaddedProviderRowOnRescope
+// covers TWO codex findings against the SAME root cause: provider is
+// unconstrained text, not write-time validated anywhere in this codebase
+// (Integration.provider accepts "JIRA" or " JIRA " as freely as "jira", the
+// same latent shape CHAOS-4584 itself had to account for on
+// external_id/project_key). Round 3 found case (`provider='jira'` exact
+// match); round 5 found whitespace surviving THAT fix
+// (`lower(provider)='jira'` still doesn't trim). Both are fixed by the same
+// change: no SQL-side provider predicate at all, filtered in Go via
+// normalizeSourceKey like every other comparison in this file. A tagged
+// legacy row with provider=" JIRA " must still be found and superseded on a
+// bounded rescope -- otherwise OLD stays enabled (and permanently
+// uncountable for repo-limit capping, since activeRepoUsageCountForLimit
+// counts it toward usage with no provider filter at all).
+func TestUpsertJiraSourcesSupersedesAMixedCaseWhitespacePaddedProviderRowOnRescope(t *testing.T) {
 	fixture, integrationID := startSourceDiscoveryPostgres(t)
 	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
 	ctx := context.Background()
@@ -749,7 +753,7 @@ func TestUpsertJiraSourcesSupersedesAMixedCaseProviderRowOnRescope(t *testing.T)
 	if _, err := fixture.pool.Exec(ctx, `
 INSERT INTO public.integration_sources
  (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
-VALUES (gen_random_uuid(),$1,$2::uuid,'JIRA','project','OLD','Old Project','OLD',TRUE,$3::jsonb,now(),now())`,
+VALUES (gen_random_uuid(),$1,$2::uuid,' JIRA ','project','OLD','Old Project','OLD',TRUE,$3::jsonb,now(),now())`,
 		orgID, integrationID, fmt.Sprintf(`{"planner_managed_sync_config_id":"%s"}`, configID)); err != nil {
 		t.Fatal(err)
 	}
@@ -759,7 +763,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'JIRA','project','OLD','Old Project','OLD'
 	}
 	_, _, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
 	if superseded != 1 {
-		t.Fatalf("superseded = %d, want 1 -- a mixed-case provider='JIRA' row must still be found and disabled on rescope", superseded)
+		t.Fatalf("superseded = %d, want 1 -- a mixed-case/whitespace-padded provider=' JIRA ' row must still be found and disabled on rescope", superseded)
 	}
 
 	var oldEnabled bool
@@ -767,7 +771,45 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'JIRA','project','OLD','Old Project','OLD'
 		t.Fatal(err)
 	}
 	if oldEnabled {
-		t.Fatal("OLD (provider='JIRA') is still enabled -- the exact-match provider='jira' SQL predicate silently skipped it")
+		t.Fatal("OLD (provider=' JIRA ') is still enabled -- a SQL-side provider predicate silently skipped it")
+	}
+}
+
+// TestRebalanceJiraSourceRepoLimitCountsWhitespacePaddedProviderRowAsCandidate
+// is round 5's other half: a whitespace-padded provider row must also be
+// visible to capping/recovery, not just supersede.
+func TestRebalanceJiraSourceRepoLimitCountsWhitespacePaddedProviderRowAsCandidate(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx := context.Background()
+	orgID := fixture.occurrence.OrgID
+	// org tier 'community' -> max_repos=3.
+
+	if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO public.integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES (gen_random_uuid(),$1,$2::uuid,' JIRA ','project','WSP','WSP','WSP',TRUE,'{}'::jsonb,now(),now())`,
+		orgID, integrationID); err != nil {
+		t.Fatal(err)
+	}
+	for _, externalID := range []string{"AAA", "BBB", "CCC"} {
+		if _, err := fixture.pool.Exec(ctx, `
+INSERT INTO public.integration_sources
+ (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at)
+VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project',$3,$3,$3,TRUE,'{}'::jsonb,now(),now())`,
+			orgID, integrationID, externalID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 4 enabled sources (1 whitespace-padded + 3 canonical) for a
+	// max_repos=3 org -- overflow=1. No new discovery this pass.
+	mustRebalanceJiraSourceRepoLimitInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, map[string]struct{}{}, map[string]struct{}{})
+	var enabledCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationID).Scan(&enabledCount); err != nil {
+		t.Fatal(err)
+	}
+	if enabledCount != 3 {
+		t.Fatalf("enabled count = %d, want 3 (max_repos) -- the whitespace-padded provider row must be a valid capping candidate, not invisible to the SELECT", enabledCount)
 	}
 }
 

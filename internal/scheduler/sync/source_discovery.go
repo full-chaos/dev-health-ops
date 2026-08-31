@@ -1335,11 +1335,20 @@ func supersedeStaleScopedJiraSources(
 	if len(discoveredLower) == 0 {
 		return 0, nil
 	}
+	// No SQL-side provider filter (codex review round-5 P1, ARGUED): a
+	// second attempt at this same normalization mismatch, this time
+	// whitespace rather than case -- lower(provider)='jira' still would not
+	// match ' JIRA ' (integration_sources.provider is unconstrained text,
+	// no write-time trim). Rather than patch the SQL predicate a third
+	// time, drop it entirely and filter with normalizeSourceKey in Go, the
+	// SAME function every other comparison in this file already goes
+	// through -- chris's ruling (CHAOS-4584 gate round 7): one normalization
+	// implementation, no SQL counterpart left to fall out of sync with it.
 	rows, err := tx.Query(ctx, `
-SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND is_enabled`, orgID, integrationID)
+SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationID)
 	if err != nil {
-		return 0, fmt.Errorf("load enabled jira sources for supersede: %w", err)
+		return 0, fmt.Errorf("load enabled sources for supersede: %w", err)
 	}
 	type candidateRow struct {
 		id         string
@@ -1349,10 +1358,14 @@ WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND is_en
 	var superseded []candidateRow
 	for rows.Next() {
 		var row candidateRow
+		var provider string
 		var metadataJSON []byte
-		if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
 			rows.Close()
 			return 0, err
+		}
+		if normalizeSourceKey(provider) != "jira" {
+			continue
 		}
 		_ = json.Unmarshal(metadataJSON, &row.metadata)
 		tag, _ := row.metadata["planner_managed_sync_config_id"].(string)
@@ -1560,30 +1573,36 @@ LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
 		}
 		overflow := usage - *maxRepos
 		if overflow > 0 {
-			// lower(provider)='jira' (codex review round-3 P1): provider
-			// casing is not write-time validated anywhere in this codebase
-			// (Integration.provider accepts "JIRA" as freely as "jira" --
-			// the same latent shape CHAOS-4584's own case-normalization
-			// work already had to account for). activeRepoUsageCountForLimit
-			// below counts EVERY enabled source on this integration with no
-			// provider filter at all, so a mixed-case row already counts
-			// toward usage; this SELECT must find it too, or it becomes
-			// permanently invisible to capping -- over max_repos with no
-			// candidate left to cap.
+			// No SQL-side provider filter (codex review rounds 3 and 5,
+			// P1 both times: case, then whitespace): provider is
+			// unconstrained text, not write-time validated anywhere in
+			// this codebase, and no SQL predicate stayed in sync with
+			// normalizeSourceKey through two attempts. Filter in Go
+			// instead, the SAME function every other comparison in this
+			// file already goes through. activeRepoUsageCountForLimit
+			// below counts EVERY enabled source on this integration with
+			// no provider filter at all, so a mixed-case/whitespace row
+			// already counts toward usage; this SELECT must find it too,
+			// or it becomes permanently invisible to capping -- over
+			// max_repos with no candidate left to cap.
 			rows, err := tx.Query(ctx, `
-SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND is_enabled
+SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled
 ORDER BY external_id DESC`, orgID, integrationID)
 			if err != nil {
-				return 0, 0, fmt.Errorf("load enabled jira sources for capping: %w", err)
+				return 0, 0, fmt.Errorf("load enabled sources for capping: %w", err)
 			}
 			var createdRows, preExistingRows []repoLimitCandidateRow
 			for rows.Next() {
 				var row repoLimitCandidateRow
+				var provider string
 				var metadataJSON []byte
-				if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+				if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
 					rows.Close()
 					return 0, 0, err
+				}
+				if normalizeSourceKey(provider) != "jira" {
+					continue
 				}
 				_ = json.Unmarshal(metadataJSON, &row.metadata)
 				if _, ok := createdLower[normalizeSourceKey(row.externalID)]; ok {
@@ -1612,20 +1631,25 @@ ORDER BY external_id DESC`, orgID, integrationID)
 		}
 	}
 
+	// No SQL-side provider filter, same reasoning as the capping query above.
 	rows, err := tx.Query(ctx, `
-SELECT id::text, external_id, metadata::jsonb FROM public.integration_sources
-WHERE org_id=$1 AND integration_id=$2::uuid AND lower(provider)='jira' AND NOT is_enabled
+SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND NOT is_enabled
 ORDER BY external_id ASC`, orgID, integrationID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("load disabled jira sources for recovery: %w", err)
+		return 0, 0, fmt.Errorf("load disabled sources for recovery: %w", err)
 	}
 	var recoverable []repoLimitCandidateRow
 	for rows.Next() {
 		var row repoLimitCandidateRow
+		var provider string
 		var metadataJSON []byte
-		if err := rows.Scan(&row.id, &row.externalID, &metadataJSON); err != nil {
+		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
 			rows.Close()
 			return 0, 0, err
+		}
+		if normalizeSourceKey(provider) != "jira" {
+			continue
 		}
 		_ = json.Unmarshal(metadataJSON, &row.metadata)
 		capped, _ := row.metadata[sourceCapMarkerKey].(bool)

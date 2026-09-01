@@ -298,6 +298,23 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 			// from this check above: their admission is governed by the
 			// atomic-family collapse below.
 			descriptor, known := providersync.Descriptor(provider, dataset.Key)
+			// CHAOS-4731: observe the gate's own verdict before acting on it,
+			// so a pair silently stuck at executed_proof_unsatisfied (or any
+			// other refusal) is visible on sync_plan_gate_total instead of
+			// only inferable from ClickHouse row counts two months later.
+			switch {
+			case !known:
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeUnknownPair)
+			case !descriptor.RouteReady || !descriptor.Plannable:
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
+			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
+				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+					slog.String("provider", provider),
+					slog.String("dataset", dataset.Key),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID))
+			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				// CHAOS-4060: fixture/golden proof no longer licenses new work
 				// on its own -- a route must also have a live executed run
@@ -314,6 +331,7 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				// fetched nothing. See normalizeStampingWindow.
 				continue
 			}
+			globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomePlanned)
 			units = append(units, newPlannedUnit(input, source, dataset.Key, spec, start, end))
 		}
 		// Individual family ALIASES are deliberately unchecked above -- their
@@ -383,6 +401,20 @@ func buildWorkItemFamilyUnit(
 	canonicalDescriptor, known := providersync.Descriptor(
 		provider, canonicalWorkItemsDataset,
 	)
+	// CHAOS-4731: same visibility as the non-family gate above.
+	switch {
+	case !known:
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeUnknownPair)
+	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
+	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalWorkItemsDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		// CHAOS-4060: same executed-proof requirement as the non-family gate
 		// in BuildScheduledPlan, applied to the canonical claim the family
@@ -458,6 +490,7 @@ func buildWorkItemFamilyUnit(
 	}
 	unit := newPlannedUnit(input, source, canonicalWorkItemsDataset, canonical, earliest, latest)
 	unit.ProcessorFlags = flags
+	globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomePlanned)
 	return unit, true
 }
 
@@ -477,6 +510,20 @@ func foldContributingFamilyUnit(
 		return PlannedUnit{}, false
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalDataset)
+	// CHAOS-4731: same visibility as the two work-item gates above.
+	switch {
+	case !known:
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeUnknownPair)
+	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
+	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
+	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 		return PlannedUnit{}, false
@@ -558,6 +605,7 @@ func foldContributingFamilyUnit(
 	}
 	unit := newPlannedUnit(input, source, canonicalDataset, canonicalSpec, earliest, latest)
 	unit.ProcessorFlags = flags
+	globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomePlanned)
 	return unit, true
 }
 

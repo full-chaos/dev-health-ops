@@ -1,8 +1,10 @@
 package sync
 
 import (
+	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -462,7 +464,52 @@ func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(
 	// applied to the family-collapse gate: the canonical work-items claim
 	// must not plan against non-nil evidence recording it as attempted but
 	// never proven.
+	//
+	// CHAOS-4731: this used github/work-items until that pair got an
+	// ExecutedProofWaiver (execution_registry.go) -- switched to gitlab/
+	// work-items, which carries RouteReady/Plannable=true and no waiver, so
+	// the negative control still exercises a genuinely unwaived pair.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	units, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "gitlab", FullName: "owner/repo"}},
+		Datasets: []PlanDataset{{Key: "work-items"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven:    map[string]bool{"gitlab/commits": true},
+			Attempted: map[string]bool{"gitlab/commits": true, "gitlab/work-items": true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("units=%+v, want zero: gitlab/work-items was attempted and never proven, and has no waiver", units)
+	}
+}
+
+func TestBuildScheduledPlanWorkItemFamilyExecutedProofWaiverBypassesUnprovenEvidence(t *testing.T) {
+	// CHAOS-4731: github/work-items has been Attempted-but-never-Proven since
+	// 2026-06-21 per the live sync_executed_proof_ledger row (attempted_at
+	// set, proven_at NULL) -- every pre-2026-08-19 sync_run_units success row
+	// for this pair carries neither result.go_provider_route.records nor
+	// result.persisted, so none of the 290 historical "successes" ever
+	// satisfied executedProofProvenPredicateSQL. CHAOS-4060 (merged
+	// 2026-08-22) then started enforcing ExecutedProofSatisfied at plan time,
+	// and with no ExecutedProofWaiver on github/work-items this pair has been
+	// silently, permanently vetoed ever since -- even though the composite
+	// GitHubWorkItemsRouteHandler producer (internal/providersync/
+	// github_work_items_route.go) was rewritten correctly on 2026-08-19..25
+	// and has never been given a single chance to run.
+	//
+	// This is the CHAOS-4731 fix: an ExecutedProofWaiver on github/work-items
+	// mirroring github/repo-metadata's CHAOS-4054 precedent, self-retiring
+	// once a live unit reports a nonzero persisted-row count. Mirrors
+	// TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence, but
+	// against evidence that actually records the pair as attempted-and-
+	// unproven (repo-metadata's test only ever exercises the "never
+	// attempted" empty-evidence case) -- the waiver must bypass a REAL
+	// negative, not just an absent one.
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
 		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
@@ -475,8 +522,67 @@ func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero: github/work-items was attempted and never proven, and has no waiver", units)
+	if len(units) != 1 {
+		t.Fatalf(
+			"units=%+v, want exactly one: github/work-items' ExecutedProofWaiver must bypass attempted-but-unproven evidence",
+			units,
+		)
+	}
+}
+
+func TestPlanGateTelemetryObservesExecutedProofOutcomes(t *testing.T) {
+	// CHAOS-4731: sync_plan_gate_total{provider,dataset,outcome} is the new
+	// per-pair signal -- verify it actually records what BuildScheduledPlan
+	// decided, both the refusal that went unnoticed for two months
+	// (executed_proof_unsatisfied) and the ordinary success case (planned),
+	// and that WritePrometheus renders both series. Uses github/security
+	// (not github/work-items) so this test's assertions stay valid
+	// independent of whichever waiver CHAOS-4731 lands for work-items.
+	globalPlanGateTelemetry.resetForTest()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	if _, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:  []PlanSource{{ID: "s1", ExternalID: "owner/repo1", Provider: "github", FullName: "owner/repo1"}},
+		Datasets: []PlanDataset{{Key: "security"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven:    map[string]bool{},
+			Attempted: map[string]bool{"github/security": true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := globalPlanGateTelemetry.snapshotForTest("github", "security", planGateOutcomeExecutedProofUnsatisfied); got != 1 {
+		t.Fatalf("executed_proof_unsatisfied count = %d, want 1", got)
+	}
+
+	if _, err := BuildScheduledPlan(PlannerInput{
+		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+		Sources:  []PlanSource{{ID: "s2", ExternalID: "owner/repo2", Provider: "github", FullName: "owner/repo2"}},
+		Datasets: []PlanDataset{{Key: "security"}},
+		ExecutedProof: &providersync.ExecutedProofEvidence{
+			Proven:    map[string]bool{"github/security": true},
+			Attempted: map[string]bool{"github/security": true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := globalPlanGateTelemetry.snapshotForTest("github", "security", planGateOutcomePlanned); got != 1 {
+		t.Fatalf("planned count = %d, want 1", got)
+	}
+
+	var buf bytes.Buffer
+	if err := globalPlanGateTelemetry.WritePrometheus(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`sync_plan_gate_total{provider="github",dataset="security",outcome="executed_proof_unsatisfied"} 1`,
+		`sync_plan_gate_total{provider="github",dataset="security",outcome="planned"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("WritePrometheus output missing %q, got:\n%s", want, out)
+		}
 	}
 }
 

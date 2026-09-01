@@ -363,9 +363,15 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 	// needed. A materializer with no discovery service (sourceDiscovery ==
 	// nil, the pre-CHAOS-4602 default) writes nothing extra here.
 	if source, ok := materializer.sourceDiscovery.(interface{ WritePrometheus(io.Writer) error }); ok {
-		return source.WritePrometheus(output)
+		if err := source.WritePrometheus(output); err != nil {
+			return err
+		}
 	}
-	return nil
+	// CHAOS-4731: fold in sync_plan_gate_total the same way -- a package-level
+	// singleton (BuildScheduledPlan/BuildBackfillPlan are free functions with
+	// signatures dozens of existing tests already pin), so there is no
+	// per-materializer instance to thread it through.
+	return globalPlanGateTelemetry.WritePrometheus(output)
 }
 
 // boundedEnvInt mirrors the two Python settings readers this materializer

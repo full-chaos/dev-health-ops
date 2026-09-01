@@ -11,24 +11,25 @@ import (
 	"testing"
 )
 
-// --- CHAOS-4655: tupled (node_type, node_id) match --------------------
+// --- CHAOS-4655: pair-bound (node_type, node_id) match ------------------
 
-// TestMembershipPairsLiteral_RendersATupleArrayAndEscapesQuotes locks the
-// exact ClickHouse Array(Tuple(String, String)) parameter text
-// batchResolveMembership's node_pairs binding sends -- a plain string
-// binding whose VALUE is this literal (see that function's doc comment for
-// why: dev-health-go@v0.6.1's clickhouse.Binding has no native tuple-array
-// encoding). A node_type/node_id containing a single quote is a real input
-// shape (arbitrary provider-sourced ids), not a hypothetical -- escaping it
-// wrong would either corrupt the query or, worse, let one endpoint's id
-// break out of its own tuple.
-func TestMembershipPairsLiteral_RendersATupleArrayAndEscapesQuotes(t *testing.T) {
+// TestMembershipPairsLiteral_RendersHexPairs locks the exact ClickHouse
+// Array(String) parameter text batchResolveMembership's node_pairs binding
+// sends -- a plain string binding whose VALUE is this literal (see that
+// function's doc comment for why: dev-health-go@v0.6.1's clickhouse.Binding
+// has no native tuple-array encoding, and a quoted Array(Tuple(String,
+// String)) literal was tried and proven broken against a real engine --
+// see membership_integration_test.go's round-trip test). Each pair is
+// hex(nodeType)+":"+hex(nodeID); hex digits need no quoting/escaping for
+// any input, which is the entire point of this shape.
+func TestMembershipPairsLiteral_RendersHexPairs(t *testing.T) {
 	pairs := []membershipKey{
 		{nodeType: "issue", nodeID: "a"},
 		{nodeType: "pr", nodeID: `o'brien`},
 	}
 	got := membershipPairsLiteral(pairs)
-	want := `[('issue','a'),('pr','o\'brien')]`
+	// hex("issue")=6973737565 hex("a")=61 hex("pr")=7072 hex("o'brien")=6f27627269656e
+	want := `['6973737565:61','7072:6f27627269656e']`
 	if got != want {
 		t.Fatalf("membershipPairsLiteral() = %q, want %q", got, want)
 	}
@@ -40,17 +41,18 @@ func TestMembershipPairsLiteral_Empty(t *testing.T) {
 	}
 }
 
-// TestBatchResolveMembership_QueriesATupledMatch is CHAOS-4655's structural
-// regression guard: it locks the WHERE clause shape (a tupled match, not
-// two independent Array(String) IN predicates) and the binding set, so a
-// future edit cannot silently reintroduce the cross-product shape while
-// every other test (which only exercises small fixtures where the two
-// shapes agree) stays green. The seeded-data red/green proof against a
-// REAL ClickHouse engine -- where the two shapes actually DISAGREE on rows
-// returned -- lives in the `integration`-tagged test in this package,
-// which this fake-client test cannot substitute for (a fake only proves
-// SQL TEXT changed, never that it executes correctly against the engine).
-func TestBatchResolveMembership_QueriesATupledMatch(t *testing.T) {
+// TestBatchResolveMembership_QueriesAPairBoundMatch is CHAOS-4655's
+// structural regression guard: it locks the WHERE clause shape (a single
+// hex+concat pair match, not two independent Array(String) IN predicates)
+// and the binding set, so a future edit cannot silently reintroduce the
+// cross-product shape while every other test (which only exercises small
+// fixtures where the two shapes agree) stays green. The seeded-data
+// red/green proof against a REAL ClickHouse engine -- where the two shapes
+// actually DISAGREE on rows returned -- lives in the `integration`-tagged
+// tests in this package, which this fake-client test cannot substitute for
+// (a fake only proves SQL TEXT changed, never that it executes correctly
+// against the engine).
+func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
 		{"issue", "ep-1", "theme", "reliability"},
 	}}}}
@@ -71,18 +73,19 @@ func TestBatchResolveMembership_QueriesATupledMatch(t *testing.T) {
 		t.Fatalf("got %d Query calls, want 1", len(client.statements))
 	}
 	stmt := client.statements[0]
-	if !strings.Contains(stmt, "(m.node_type, m.node_id) IN {node_pairs:Array(Tuple(String, String))}") {
-		t.Fatalf("query is not a tupled match: %s", stmt)
+	if !strings.Contains(stmt, "concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}") {
+		t.Fatalf("query is not a pair-bound hex+concat match: %s", stmt)
 	}
-	if strings.Contains(stmt, "node_types") || strings.Contains(stmt, "node_ids") {
-		t.Fatalf("query still references the independent-IN binding names: %s", stmt)
+	if strings.Contains(stmt, "node_types") || strings.Contains(stmt, "node_ids") || strings.Contains(stmt, "Tuple") {
+		t.Fatalf("query still references the independent-IN binding names or a Tuple type: %s", stmt)
 	}
 
 	pairsVal, ok := bindingValue(client.bindings[0], "node_pairs")
 	if !ok {
 		t.Fatalf("no node_pairs binding")
 	}
-	if want := "[('issue','ep-1'),('pr','ep-2')]"; pairsVal != want {
+	// hex("issue")=6973737565 hex("ep-1")=65702d31 hex("pr")=7072 hex("ep-2")=65702d32
+	if want := "['6973737565:65702d31','7072:65702d32']"; pairsVal != want {
 		t.Fatalf("node_pairs binding = %v, want %q", pairsVal, want)
 	}
 	if _, ok := bindingValue(client.bindings[0], "node_types"); ok {

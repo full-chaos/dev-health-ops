@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -114,22 +115,28 @@ type membershipEntry struct {
 // as isMissingMembershipTableError) -- every OTHER error propagates so real
 // failures surface loudly instead of a silent empty annotation.
 //
-// CHAOS-4655: the WHERE clause matches on the TUPLE (m.node_type, m.node_id),
-// not two independent IN lists. Filtering node_type and node_id as separate
-// Array(String) IN predicates (the shape this query had before this fix, and
-// the shape work_graph.py:588-590 still has -- confirmed a shared
-// pre-existing characteristic, not a Go-side port divergence, so Python is
-// deliberately left untouched here per the Go-only rule) matches every row
-// whose type is ANYWHERE in the type-set AND whose id is ANYWHERE in the
-// id-set, independently -- a cross-product over the org's real data shape
-// rather than a set bounded by the endpoints actually requested. With N
-// distinct node types and M distinct ids across the request's endpoints,
-// that is up to N*M matching rows for as few as max(N,M) real endpoints.
-// codex's engine-level repro (CHAOS-4655): a 100k-edge page with 200k ids
-// across three node types produced ClickHouse Code 396 (max_result_rows
-// exceeded) at 588.68k rows returned. A tupled match bounds the row count by
-// the endpoints actually requested, which is what every one of CHAOS-4647's
-// three row-budget derivation rounds assumed was already true.
+// CHAOS-4655: the WHERE clause matches on the PAIR (m.node_type, m.node_id)
+// as a single bound unit, not two independent IN lists. Filtering node_type
+// and node_id as separate Array(String) IN predicates (the shape this query
+// had before this fix, and the shape work_graph.py:588-590 still has --
+// confirmed a shared pre-existing characteristic, not a Go-side port
+// divergence, so Python is deliberately left untouched here per the Go-only
+// rule) matches every row whose type is ANYWHERE in the type-set AND whose
+// id is ANYWHERE in the id-set, independently -- a cross-product over the
+// org's real data shape rather than a set bounded by the endpoints actually
+// requested. With N distinct node types and M distinct ids across the
+// request's endpoints, that is up to N*M matching rows for as few as
+// max(N,M) real endpoints. codex's engine-level repro (CHAOS-4655): a
+// 100k-edge page with 200k ids across three node types produced ClickHouse
+// Code 396 (max_result_rows exceeded) at 588.68k rows returned. Matching the
+// pair as one unit bounds the row count by the endpoints actually requested,
+// which is what every one of CHAOS-4647's three row-budget derivation rounds
+// assumed was already true.
+//
+// The match is expressed as `concat(hex(node_type),':',hex(node_id)) IN
+// {node_pairs:Array(String)}`, not a SQL `(node_type, node_id) IN
+// {pairs:Array(Tuple(...))}` -- see the node_pairs binding comment below for
+// why a literal Tuple-typed parameter was tried first and abandoned.
 func batchResolveMembership(ctx context.Context, client QueryClient, orgID string, rows []edgeEndpoint, scope *filterScope) (map[membershipKey]membershipEntry, error) {
 	endpointSeen := map[membershipKey]struct{}{}
 	var pairs []membershipKey
@@ -169,15 +176,47 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 		// tuple-array encoding (clickhouse/bindings.go's clickHouseParameter
 		// handles only string/[]string/time.Time/ints -- scope.go's
 		// themeFilter doc comment already notes this for a different call
-		// site). node_pairs is therefore PRE-RENDERED as a ClickHouse
-		// Array(Tuple(String, String)) literal (membershipPairsLiteral,
-		// below) and bound as an ordinary string value: the driver's
-		// query-parameter protocol parses that text as the type the query
-		// declares for {node_pairs:...}, the same mechanism
-		// clickHouseStringArray already relies on for Array(String) params
-		// -- proven against local ClickHouse 26.7.5.10 (matches prod's 26.7
-		// line): a tupled IN correctly excludes a constructed cross-product
-		// row that an independent-IN pair of predicates would have matched.
+		// site), so a typed Binding cannot carry a set of pairs directly.
+		//
+		// The first attempt at this fix pre-rendered a ClickHouse
+		// `Array(Tuple(String, String))` parameter literal
+		// (`('a','b')`-style tuples with quote-escaped strings) and bound
+		// it as plain text under a `{node_pairs:Array(Tuple(String,
+		// String))}` placeholder -- the same "pre-render the literal"
+		// technique `clickHouseStringArray` already uses for
+		// `Array(String)`. Proven WRONG against a real engine while
+		// building this fix's round-trip test (team-lead review,
+		// CHAOS-4655, 2026-09-01): ClickHouse's native-protocol
+		// query-parameter parser rejects backslash-escaped quotes
+		// outright (`Cannot parse escape sequence`) for String,
+		// Array(String), AND Array(Tuple(...)) alike -- the SAME defect
+		// dev-health-go's clickHouseStringArray already carries live,
+		// today, for every Array(String) binding with a quote in it, not
+		// just this one (filed as CHAOS-4745). Switching quote-escaping to
+		// SQL's doubled-quote form (`''`) fixes the simple cases, but a
+		// literal backslash directly adjacent to a doubled quote INSIDE a
+		// Tuple element still breaks the parser (`Cannot parse input:
+		// expected ')' before...`) -- reproduced directly, isolated down
+		// to a 1-tuple repro, ad hoc against local ClickHouse 26.7.5.10.
+		// ClickHouse's parameter-value grammar for nested Tuple string
+		// escaping is not simply "the same as top-level String" and this
+		// lane could not fully characterize it from outside within the
+		// granted review window.
+		//
+		// So node_pairs SIDESTEPS string escaping entirely instead of
+		// chasing further edge cases in an undocumented parser: each
+		// endpoint is rendered as `hex(nodeType) + ":" + hex(nodeID)`
+		// (membershipPairsLiteral, below) -- hex digits and `:` can never
+		// require escaping, for ANY input byte sequence (quotes,
+		// backslashes, unicode, control bytes, empty strings), because the
+		// character set hex encoding produces has no meaning to ClickHouse's
+		// string-literal grammar at all. The WHERE clause decodes the
+		// SAME way on the table side (concat(lower(hex(m.node_type)),
+		// ':', lower(hex(m.node_id)))) so the match is exact and
+		// collision-free: hex output never contains ':', so the first ':'
+		// in the concatenation is always the unambiguous type/id boundary.
+		// See TestMembershipPairsLiteral_RoundTripsHostileStringsThroughTheRealEngine
+		// (membership_integration_test.go) for the adversarial proof.
 		{Name: "node_pairs", Value: membershipPairsLiteral(pairs)},
 	}
 	bindings = addMembershipScopeBindings(bindings, scope)
@@ -204,7 +243,7 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
             INNER JOIN (%s) AS latest_run ON 1 = 1
             %s
             WHERE m.org_id = {org_id:String}
-              AND (m.node_type, m.node_id) IN {node_pairs:Array(Tuple(String, String))}
+              AND concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}
               AND m.is_dominant = 1
               AND latest_run.latest_run_id != ''
               AND (%s)
@@ -253,27 +292,24 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	return result, nil
 }
 
-// membershipPairsLiteral renders pairs as a ClickHouse Array(Tuple(String,
-// String)) parameter literal, e.g. "[('issue','a'),('pr','b')]". See
-// batchResolveMembership's node_pairs binding comment for why this is
-// pre-rendered text rather than a typed clickhouse.Binding value.
+// membershipPairsLiteral renders pairs as a ClickHouse Array(String)
+// parameter literal of hex(nodeType)+":"+hex(nodeID) tokens, e.g.
+// `['69737375653a6130','70723a6231']`-shaped (illustrative, not literal
+// output). See batchResolveMembership's node_pairs binding comment for why
+// this hex+concat shape exists instead of a quoted Array(Tuple(String,
+// String)) literal or a typed clickhouse.Binding value.
+//
+// hex.EncodeToString produces only [0-9a-f] -- a character set ClickHouse's
+// string-literal grammar never treats specially -- so wrapping each token
+// in plain single quotes needs NO escaping logic at all, for ANY input byte
+// sequence. ':' is a safe, unambiguous separator because hex output can
+// never contain one.
 func membershipPairsLiteral(pairs []membershipKey) string {
 	encoded := make([]string, len(pairs))
 	for i, pair := range pairs {
-		encoded[i] = "(" + chStringLiteral(pair.nodeType) + "," + chStringLiteral(pair.nodeID) + ")"
+		encoded[i] = "'" + hex.EncodeToString([]byte(pair.nodeType)) + ":" + hex.EncodeToString([]byte(pair.nodeID)) + "'"
 	}
 	return "[" + strings.Join(encoded, ",") + "]"
-}
-
-// chStringLiteral quotes value as a single ClickHouse String literal, using
-// the SAME escaping dev-health-go@v0.6.1's clickhouse/bindings.go
-// clickHouseStringArray applies to its own Array(String) parameter values
-// (backslash, then single quote) -- this must match it exactly, since both
-// literals are parsed by the identical ClickHouse query-parameter parser.
-var chStringLiteralReplacer = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
-
-func chStringLiteral(value string) string {
-	return "'" + chStringLiteralReplacer.Replace(value) + "'"
 }
 
 // nodeTypeRank mirrors work_graph.py:446's _type_rank -- issue before pr

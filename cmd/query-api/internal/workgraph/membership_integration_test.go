@@ -4,6 +4,7 @@ package workgraph
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -141,5 +142,162 @@ func TestBatchResolveMembership_TupledMatchExcludesCrossProductRows(t *testing.T
 	}
 	if got := result[membershipKey{nodeType: "pr", nodeID: "ep-2"}].dominantTheme; got != "requested-2" {
 		t.Fatalf("pr/ep-2 dominantTheme = %q, want %q", got, "requested-2")
+	}
+}
+
+// TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine
+// is team-lead's required proof (CHAOS-4655 review, 2026-09-01): the
+// node_pairs encoding must be verified against the REAL ClickHouse
+// parameter parser for adversarial node_type/node_id content, not assumed
+// correct by analogy to dev-health-go's clickHouseStringArray. That
+// analogy is exactly what broke: chStringLiteral's first version escaped
+// a quote as `\'`, matching clickHouseStringArray's own convention, and
+// ClickHouse's native-protocol query-parameter parser REJECTED it
+// outright (`Cannot parse escape sequence`) -- reproduced directly, for
+// String, Array(String), and Array(Tuple(String,String)) parameters
+// alike. A second attempt (SQL-standard doubled-quote escaping, two
+// single-quote characters in a row)
+// fixed the simple cases but still broke on a literal backslash directly
+// adjacent to a doubled quote INSIDE a Tuple element (`Cannot parse
+// input: expected ')' before...`), also reproduced directly. Rather than
+// keep chasing an undocumented parser's edge cases, membershipPairsLiteral
+// now sidesteps string escaping entirely: each endpoint is
+// hex(nodeType)+":"+hex(nodeID), a character set ClickHouse's
+// string-literal grammar never treats specially, so no escaping logic
+// exists to get wrong.
+//
+// This test exercises the FULL batchResolveMembership path (not a
+// hand-rolled probe query) against a real ClickHouse container seeded via
+// chschema's real migration chain, with adversarial node_type/node_id
+// content: single quote, backslash, comma, parentheses, non-ASCII (incl. a
+// 4-byte emoji), and backslash directly adjacent to a quote. Alongside
+// each hostile pair, a DECOY row differing by exactly one character is
+// seeded too (e.g. missing byte, swapped quote/backslash) -- if hex+concat
+// matching were ambiguous (e.g. the ':' separator were reachable inside a
+// hex block, or encode/decode disagreed), a decoy would leak into the
+// result for a hostile key it does not belong to, or a hostile key would
+// resolve to the wrong category.
+func TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const orgID = "org-4655-hostile"
+	const runID = "run-4655-hostile"
+	now := time.Now().UTC()
+	if err := admin.Exec(ctx, `
+        INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at)
+        VALUES (?, ?, ?)
+    `, orgID, runID, now); err != nil {
+		t.Fatalf("seed work_unit_membership_runs: %v", err)
+	}
+
+	type keyedRow struct {
+		key      membershipKey
+		category string // "" for a decoy: seeded, but must never be looked up
+	}
+	rows := []keyedRow{
+		{key: membershipKey{nodeType: "issue", nodeID: "a'b"}, category: "quote"},
+		{key: membershipKey{nodeType: "issue", nodeID: "a"}, category: ""}, // decoy: truncated at the quote
+		{key: membershipKey{nodeType: "pr", nodeID: `back\slash`}, category: "backslash"},
+		{key: membershipKey{nodeType: "comma,type", nodeID: "id,with,commas"}, category: "commas"},
+		{key: membershipKey{nodeType: "paren(type)", nodeID: "id(with)parens"}, category: "parens"},
+		{key: membershipKey{nodeType: "unicode-业务", nodeID: "日本語-\U0001F4A1"}, category: "unicode"},
+		{key: membershipKey{nodeType: `both\'x`, nodeID: `x\'both`}, category: "backslash-quote"},
+		{key: membershipKey{nodeType: `both\'x`, nodeID: `x'both`}, category: ""}, // decoy: missing the backslash
+		{key: membershipKey{nodeType: "decoy", nodeID: "decoy"}, category: ""},
+	}
+
+	batch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO work_unit_membership (
+            org_id, node_type, node_id, work_unit_id, category_kind, category,
+            weight, is_dominant, categorization_status, computed_at, run_id
+        )
+    `)
+	if err != nil {
+		t.Fatalf("prepare membership batch: %v", err)
+	}
+	for i, row := range rows {
+		category := row.category
+		if category == "" {
+			category = fmt.Sprintf("decoy-%d", i)
+		}
+		if err := batch.Append(
+			orgID, row.key.nodeType, row.key.nodeID, fmt.Sprintf("wu-%d", i), "theme", category,
+			1.0, uint8(1), "ok", now, runID,
+		); err != nil {
+			t.Fatalf("append row %+v: %v", row, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send membership batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Request only the hostile keys (never the decoys) -- pack them as
+	// edgeEndpoint source/target pairs, wrapping around if the count is
+	// odd.
+	var hostile []membershipKey
+	for _, row := range rows {
+		if row.category != "" {
+			hostile = append(hostile, row.key)
+		}
+	}
+	var edgeRows []edgeEndpoint
+	for i := 0; i < len(hostile); i += 2 {
+		j := i + 1
+		if j >= len(hostile) {
+			j = 0 // odd count: pair the last one with the first again (harmless duplicate endpoint)
+		}
+		edgeRows = append(edgeRows, edgeEndpoint{
+			sourceType: hostile[i].nodeType, sourceID: hostile[i].nodeID,
+			targetType: hostile[j].nodeType, targetID: hostile[j].nodeID,
+		})
+	}
+
+	result, err := batchResolveMembership(ctx, client, orgID, edgeRows, newFilterScope(nil, nil))
+	if err != nil {
+		t.Fatalf("batchResolveMembership: %v", err)
+	}
+
+	if len(result) != len(hostile) {
+		t.Fatalf("got %d resolved endpoints, want exactly the %d hostile keys (no extra/fewer): %+v", len(result), len(hostile), result)
+	}
+	for _, row := range rows {
+		entry, ok := result[row.key]
+		if row.category == "" {
+			if ok {
+				t.Fatalf("decoy %+v leaked into the result as %+v -- hex+concat matching is ambiguous", row.key, entry)
+			}
+			continue
+		}
+		if !ok {
+			t.Fatalf("hostile key %+v did not round-trip -- missing from result %+v", row.key, result)
+		}
+		if entry.dominantTheme != row.category {
+			t.Fatalf("hostile key %+v resolved to theme %q, want %q -- hex+concat matched the wrong row", row.key, entry.dominantTheme, row.category)
+		}
 	}
 }

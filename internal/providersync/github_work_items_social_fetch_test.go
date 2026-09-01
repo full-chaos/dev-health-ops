@@ -373,7 +373,7 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 			`[{"databaseId":9007199254740993,"body":"Blocked by https://linear.app/fullchaos/issue/CHAOS-501/task","createdAt":"2026-08-03T08:30:00Z","author":{"login":"linear[bot]"}}]`, false, nil,
 		) + `,"timelineItems":` + gitHubWorkItemPRSocialConnectionJSON(
 			`[{"__typename":"ClosedEvent","createdAt":"2026-08-02T08:00:00Z","actor":{"login":"closer"}},{"__typename":"ReopenedEvent","createdAt":"2026-08-03T08:00:00Z","actor":{"login":"reopener"}},{"__typename":"MergedEvent","createdAt":"2026-08-03T09:00:00Z","actor":{"login":"merger"}}]`, false, nil,
-		) + `}}}}`,
+		) + `,"closingIssuesReferences":{"nodes":[{"number":501,"repository":{"nameWithOwner":"acme/api"}}]}}}}}`,
 	}}
 	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
 		context.Background(), gitHubWorkItemPRSocialClaim(),
@@ -381,6 +381,9 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 	)
 	if err != nil || !result.Complete() {
 		t.Fatalf("fetch result=%+v error=%v", result, err)
+	}
+	if len(result.Payloads[42].ClosingIssueRefs) != 1 {
+		t.Fatalf("fetch did not carry closingIssuesReferences through: payload=%+v", result.Payloads[42])
 	}
 	adapted, err := adaptGitHubWorkItemPRSocialPayload(result.Payloads[42])
 	if err != nil {
@@ -397,15 +400,15 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 		  "labels":[],"assignees":[],"user":{"login":"author"},
 		  "head":{"ref":"feature/repair"}
 		}`),
-		adapted.Events, adapted.Comments, nil,
-		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+		adapted.Events, adapted.Comments, adapted.ClosingIssueRefs,
+		nil, time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows.WorkItems) != 1 || len(rows.StatusTransitions) != 3 ||
 		len(rows.ReopenEvents) != 1 || len(rows.Interactions) != 1 ||
-		len(rows.Dependencies) != 1 {
+		len(rows.Dependencies) != 2 {
 		t.Fatalf("fetch->adapter->normalize dropped semantic rows: %+v", rows)
 	}
 	if rows.Interactions[0].Actor == nil || *rows.Interactions[0].Actor != "github:linear[bot]" ||
@@ -423,6 +426,14 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 	if dependency := rows.Dependencies[0]; dependency.TargetWorkItemID != "extkey:CHAOS-501" ||
 		dependency.RelationshipType != "blocked_by" {
 		t.Fatalf("dependency=%+v", dependency)
+	}
+	// CHAOS-4757: the PRIMARY closingIssuesReferences dependency rides the same
+	// fetch->adapt->normalize path, alongside (not instead of) the FALLBACK
+	// text-parse dependency above.
+	if closing := rows.Dependencies[1]; closing.SourceWorkItemID != "ghpr:acme/api#42" ||
+		closing.TargetWorkItemID != "gh:acme/api#501" || closing.RelationshipType != "relates_to" ||
+		closing.RelationshipTypeRaw != "github_closing_reference" {
+		t.Fatalf("closing-reference dependency=%+v", closing)
 	}
 	merged := rows.StatusTransitions[2]
 	if merged.ToStatus != "done" || merged.ToStatusRaw == nil || *merged.ToStatusRaw != "merged" {

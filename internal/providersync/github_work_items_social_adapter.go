@@ -42,6 +42,13 @@ type githubWorkItemPRSocialEvent struct {
 type githubWorkItemPRSocialSemanticPayload struct {
 	Comments []json.RawMessage
 	Events   []json.RawMessage
+	// ClosingIssueRefs (CHAOS-4757) passes the raw closingIssuesReferences
+	// nodes straight through: unlike Comments/Events there is no Python
+	// conversion this needs to mirror byte-for-byte (no Python producer exists
+	// for this field — Go-only per the standing sync-ownership rule), so
+	// extractGitHubClosingIssueReferences parses the GraphQL node shape
+	// directly rather than through an intermediate semantic struct.
+	ClosingIssueRefs []json.RawMessage
 }
 
 type githubWorkItemPRSocialRawComment struct {
@@ -67,8 +74,9 @@ func adaptGitHubWorkItemPRSocialPayload(
 	payload GitHubWorkItemPRSocialPayload,
 ) (githubWorkItemPRSocialSemanticPayload, error) {
 	adapted := githubWorkItemPRSocialSemanticPayload{
-		Comments: make([]json.RawMessage, 0, len(payload.Comments)),
-		Events:   make([]json.RawMessage, 0, len(payload.Events)),
+		Comments:         make([]json.RawMessage, 0, len(payload.Comments)),
+		Events:           make([]json.RawMessage, 0, len(payload.Events)),
+		ClosingIssueRefs: append([]json.RawMessage(nil), payload.ClosingIssueRefs...),
 	}
 	for _, raw := range payload.Comments {
 		comment, err := adaptGitHubWorkItemPRSocialComment(raw)

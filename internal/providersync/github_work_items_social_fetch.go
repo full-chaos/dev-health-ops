@@ -18,6 +18,15 @@ const (
 	gitHubWorkItemPRSocialPageSize           = 100
 	gitHubWorkItemPRSocialDefaultMaxRequests = 1000
 	gitHubWorkItemPRSocialMaxRequests        = 1000
+	// gitHubWorkItemPRSocialClosingRefsLimit bounds the PRIMARY provider-attached
+	// PR-issue link mechanism (CHAOS-4757): GitHub's own closingIssuesReferences,
+	// requested once per PR on the top-level (non-continuation) batch page only —
+	// unlike comments/events this has no drain/pagination loop, since a PR
+	// realistically closes at most a handful of issues. A PR at or beyond this
+	// limit degrades gracefully (the extra references are simply not captured;
+	// no incompleteness record), consistent with treating this as best-effort
+	// supplementary data rather than a completeness-bearing fetch.
+	gitHubWorkItemPRSocialClosingRefsLimit = 20
 )
 
 // GitHubWorkItemPRSocialPayload preserves the GraphQL node payloads consumed
@@ -26,6 +35,15 @@ const (
 type GitHubWorkItemPRSocialPayload struct {
 	Comments []json.RawMessage
 	Events   []json.RawMessage
+	// ClosingIssueRefs holds the raw closingIssuesReferences nodes for this PR
+	// (CHAOS-4757 PRIMARY link mechanism). Nil/absent from the wire response is
+	// tolerated as "no closing references" rather than a hard error: unlike
+	// Comments/Events (which the query always requests through an explicit,
+	// caller-controlled limit and therefore treats a nil connection as a
+	// protocol mismatch), this field is requested unconditionally whenever the
+	// fetch runs at all, so treating its absence strictly would fail every
+	// caller that does not also stub it in a mocked response.
+	ClosingIssueRefs []json.RawMessage
 }
 
 // GitHubWorkItemPRSocialUsage is safe provider-budget evidence. It records
@@ -160,11 +178,20 @@ func (fetcher GitHubWorkItemPRSocialFetcher) Fetch(
 					return fetcher.finishFailure(result, err)
 				}
 			}
+			// closingIssuesReferences is requested unconditionally on this
+			// top-level page (see gitHubWorkItemPRSocialQuery) but tolerated as
+			// absent — see GitHubWorkItemPRSocialPayload.ClosingIssueRefs.
+			if pull.ClosingIssuesReferences != nil {
+				appendGitHubWorkItemPRSocialNodes(
+					&payload.ClosingIssueRefs, pull.ClosingIssuesReferences.Nodes,
+					gitHubWorkItemPRSocialClosingRefsLimit,
+				)
+			}
 			result.Payloads[number] = payload
 		}
 	}
 	for _, payload := range result.Payloads {
-		result.Evidence.Records += len(payload.Comments) + len(payload.Events)
+		result.Evidence.Records += len(payload.Comments) + len(payload.Events) + len(payload.ClosingIssueRefs)
 	}
 	return result, nil
 }
@@ -366,9 +393,10 @@ type gitHubWorkItemPRSocialGraphQLEnvelope struct {
 }
 
 type gitHubWorkItemPRSocialGraphQLPull struct {
-	Number        int                               `json:"number"`
-	Comments      *gitHubWorkItemPRSocialConnection `json:"comments"`
-	TimelineItems *gitHubWorkItemPRSocialConnection `json:"timelineItems"`
+	Number                  int                               `json:"number"`
+	Comments                *gitHubWorkItemPRSocialConnection `json:"comments"`
+	TimelineItems           *gitHubWorkItemPRSocialConnection `json:"timelineItems"`
+	ClosingIssuesReferences *gitHubWorkItemPRSocialConnection `json:"closingIssuesReferences"`
 }
 
 type gitHubWorkItemPRSocialConnection struct {
@@ -390,6 +418,13 @@ func gitHubWorkItemPRSocialQuery(
 ) string {
 	commentsCursor, _ := json.Marshal(commentsAfter)
 	eventsCursor, _ := json.Marshal(eventsAfter)
+	// closingIssuesReferences (CHAOS-4757) is requested only on the top-level
+	// batch page, never on a comments/events continuation page: both cursor
+	// args are nil exactly once per PR, on the initial fetchPage call from
+	// Fetch's main loop (drainComments/drainEvents each hold one cursor
+	// non-nil), so re-requesting it on every continuation page would be
+	// redundant work for data that never changes within one Fetch call.
+	topLevelBatchPage := commentsAfter == nil && eventsAfter == nil
 	aliases := make([]string, 0, len(numbers))
 	for index, number := range numbers {
 		fields := []string{"number"}
@@ -403,6 +438,12 @@ func gitHubWorkItemPRSocialQuery(
 			fields = append(fields, fmt.Sprintf(
 				"timelineItems(itemTypes: [MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT], first: %d, after: %s) { nodes { __typename ... on MergedEvent { createdAt actor { login } } ... on ClosedEvent { createdAt actor { login } } ... on ReopenedEvent { createdAt actor { login } } } pageInfo { hasNextPage endCursor } }",
 				eventsFirst, eventsCursor,
+			))
+		}
+		if topLevelBatchPage {
+			fields = append(fields, fmt.Sprintf(
+				"closingIssuesReferences(first: %d) { nodes { number repository { nameWithOwner } } }",
+				gitHubWorkItemPRSocialClosingRefsLimit,
 			))
 		}
 		aliases = append(aliases, fmt.Sprintf(

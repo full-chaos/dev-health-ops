@@ -133,6 +133,60 @@ func TestGitHubWorkItemCompositeDeclaresEveryPythonBatchFamily(t *testing.T) {
 	}
 }
 
+// CHAOS-4757: closingIssuesReferences is GitHub's own PRIMARY provider-
+// attached PR-issue link mechanism (as opposed to extractGitHubWorkItemDependencies'
+// FALLBACK text-parse, covered by TestNormalizeGitHubPullRequestBundlePreservesPythonPRSemantics).
+// This is red on origin/main: extractGitHubClosingIssueReferences does not
+// exist there, so this test does not compile against that tree.
+func TestExtractGitHubClosingIssueReferencesEmitsDedupedCrossRepoEdges(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	workItemID := "ghpr:acme/api#42"
+	raw := []json.RawMessage{
+		json.RawMessage(`{"number":501,"repository":{"nameWithOwner":"acme/api"}}`),
+		// Duplicate target must not produce a second row.
+		json.RawMessage(`{"number":501,"repository":{"nameWithOwner":"acme/api"}}`),
+		// Cross-repo closing reference (a PR in one repo closing an issue in
+		// another) must resolve to the OTHER repo, not the PR's own.
+		json.RawMessage(`{"number":9,"repository":{"nameWithOwner":"acme/docs"}}`),
+		// Zero/missing number or repository must be skipped, not error.
+		json.RawMessage(`{"number":0,"repository":{"nameWithOwner":"acme/api"}}`),
+		json.RawMessage(`{"number":7,"repository":{"nameWithOwner":""}}`),
+	}
+	rows, err := extractGitHubClosingIssueReferences(claim, workItemID, raw, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(rows))
+	for _, row := range rows {
+		got = append(got, row.SourceWorkItemID+"|"+row.TargetWorkItemID+"|"+row.RelationshipType+"|"+row.RelationshipTypeRaw)
+		if row.OrgID != claim.OrgID || !row.LastSynced.Equal(normalizedAt) ||
+			row.RelationshipSemanticsVersion != "canonical-blocks.v2" {
+			t.Fatalf("row=%+v", row)
+		}
+	}
+	want := []string{
+		"ghpr:acme/api#42|gh:acme/api#501|relates_to|github_closing_reference",
+		"ghpr:acme/api#42|gh:acme/docs#9|relates_to|github_closing_reference",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("closing-reference rows=%v want=%v", got, want)
+	}
+}
+
+func TestExtractGitHubClosingIssueReferencesRejectsMalformedNode(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	_, err := extractGitHubClosingIssueReferences(
+		claim, "ghpr:acme/api#42", []json.RawMessage{json.RawMessage(`not-json`)}, normalizedAt,
+	)
+	if err == nil {
+		t.Fatal("expected a normalization error for a malformed node")
+	}
+}
+
 func githubWorkItemOracleClaim() Claim {
 	return Claim{Unit: Unit{
 		ID:        "11111111-1111-4111-8111-111111111111",

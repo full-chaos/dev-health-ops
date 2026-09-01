@@ -307,3 +307,61 @@ func TestCheckJWKS_ValidFile_ReturnsNil(t *testing.T) {
 		t.Fatalf("CheckJWKS: unexpected error for a valid JWKS document: %v", err)
 	}
 }
+
+// TestCheckJWKS_ConcatenatedDocuments_ReturnsError is codex round 1's P1
+// (gpt-5.6-terra, xhigh, chaos-4708-20260901T065704), re-executed and
+// CONFIRMED before this fix landed: authverify.Ed25519JWKSVerifier.Keys()
+// parses with a streaming json.Decoder.Decode, which reads only the
+// FIRST JSON value in a file and never checks for trailing content. A
+// file holding two concatenated JWKS documents (kid "old" then kid
+// "new") made Keys() return a NIL error with ONLY {"old": <key>} --
+// CheckJWKS (before this test's fix) reported the instance healthy while
+// a token signed with "new" would fail Verify() with "no jwks key for
+// kid \"new\"". This is exactly the failure shape CHAOS-4708 exists to
+// catch, at one remove: an atomically-wrong rotation write (append
+// instead of replace) is indistinguishable, from Keys()'s point of view,
+// from a clean single-document file containing only the stale key.
+//
+// RED-on-pre-fix (executed): before CheckJWKS re-read the raw file and
+// required json.Valid on the whole byte slice, this test's
+// `err == nil` branch was taken -- CheckJWKS returned nil for a
+// two-document file, matching the reproduction above exactly.
+func TestCheckJWKS_ConcatenatedDocuments_ReturnsError(t *testing.T) {
+	oldPub, _, _ := ed25519.GenerateKey(nil)
+	newPub, _, _ := ed25519.GenerateKey(nil)
+	docOld := jwksDocBytes(t, oldPub, "old")
+	docNew := jwksDocBytes(t, newPub, "new")
+
+	path := filepath.Join(t.TempDir(), "concatenated.json")
+	if err := os.WriteFile(path, append(docOld, docNew...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for two concatenated JWKS documents (a rotation-appended-instead-of-replaced shape), got nil -- " +
+			"this is CHAOS-4708 codex round 1's P1: readiness would report healthy while a token signed with the second document's key fails Verify()")
+	}
+}
+
+// jwksDocBytes marshals a one-key JWKS document (no trailing newline) --
+// a helper for TestCheckJWKS_ConcatenatedDocuments_ReturnsError, which
+// needs to concatenate two such documents byte-for-byte rather than
+// write one via writeJWKS.
+func jwksDocBytes(t *testing.T, pub ed25519.PublicKey, kid string) []byte {
+	t.Helper()
+	doc := map[string]any{
+		"keys": []map[string]any{
+			{
+				"kty": "OKP", "crv": "Ed25519",
+				"x":   base64.RawURLEncoding.EncodeToString(pub),
+				"kid": kid, "use": "sig", "alg": "EdDSA",
+			},
+		},
+	}
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}

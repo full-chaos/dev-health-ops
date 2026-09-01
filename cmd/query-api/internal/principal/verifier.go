@@ -1,8 +1,10 @@
 package principal
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -19,6 +21,7 @@ var ErrUnsupportedSchemaVersion = errors.New("principal: unsupported envelope sc
 // dev-health-go's authverify.Ed25519JWKSVerifier for key material (CHAOS-4377).
 type Verifier struct {
 	jwks     *authverify.Ed25519JWKSVerifier
+	jwksPath string
 	issuer   string
 	audience string
 }
@@ -45,6 +48,7 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 	}
 	return &Verifier{
 		jwks:     authverify.NewEd25519JWKSVerifier(jwksPath),
+		jwksPath: jwksPath,
 		issuer:   issuer,
 		audience: audience,
 	}, nil
@@ -73,9 +77,43 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 //     per-key base64/size validation -- no network I/O, so it is cheap
 //     enough to run uncached on every probe, the same cost model
 //     readinessCheck already applies to ClickHouse/Postgres Ping.
+//
+// codex round 1 (gpt-5.6-terra, xhigh, chaos-4708-20260901T065704), P1,
+// CONFIRMED (re-executed independently before fixing, not taken on the
+// review's word): Keys() parses the JWKS file with a streaming
+// json.Decoder.Decode, which reads only the FIRST JSON value in the file
+// and silently ignores any bytes after it -- it does NOT require the
+// decoder to reach EOF. A file containing two concatenated JWKS
+// documents (e.g. a rotation script that appended a new document instead
+// of replacing the old one, or any other non-atomic-write mishap) still
+// returns a nil error from Keys(), with ONLY the first document's keys.
+// Reproduced: a two-document file with kid "old" then kid "new" makes
+// Keys() return {"old": <key>} and nil error -- Verify() for a token
+// signed with "new" then fails with "no jwks key for kid \"new\"", while
+// this check alone would have reported the instance healthy. A JWKS
+// document is defined (RFC 7517) as exactly one JSON object; trailing
+// content of ANY kind is therefore untrustworthy, whether or not
+// authverify's own load path happens to tolerate it. Independently
+// re-reads the same file and requires it to be a single well-formed JSON
+// value end to end (json.Valid on the whole byte slice, which -- unlike
+// Decoder.Decode -- rejects trailing non-whitespace content) as a
+// defense-in-depth check Keys() does not perform. This does not change
+// Verify()'s own load path (still authverify's, still permissive of
+// trailing content) -- it only makes readiness correctly distrust a file
+// Verify() would silently mishandle.
 func (v *Verifier) CheckJWKS() error {
-	_, err := v.jwks.Keys()
-	return err
+	if _, err := v.jwks.Keys(); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(v.jwksPath)
+	if err != nil {
+		return err
+	}
+	if !json.Valid(raw) {
+		return fmt.Errorf("jwks document at %s is not a single well-formed JSON value "+
+			"(trailing or malformed content after what may be a valid document)", v.jwksPath)
+	}
+	return nil
 }
 
 // Verify parses and verifies tokenString as an effective-principal

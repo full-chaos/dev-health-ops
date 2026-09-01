@@ -30,6 +30,7 @@ cmd/query-api	15
 cmd/query-api/internal/analytics	22
 cmd/query-api/internal/hotspots	26
 cmd/query-api/internal/routeswitch	5
+cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	15
 internal/joboperator	13

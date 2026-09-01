@@ -116,30 +116,63 @@ type membershipEntry struct {
 // failures surface loudly instead of a silent empty annotation.
 //
 // CHAOS-4655: the WHERE clause matches on the PAIR (m.node_type, m.node_id)
-// as a single bound unit, not two independent IN lists. Filtering node_type
-// and node_id as separate Array(String) IN predicates (the shape this query
-// had before this fix, and the shape work_graph.py:588-590 still has --
-// confirmed a shared pre-existing characteristic, not a Go-side port
-// divergence, so Python is deliberately left untouched here per the Go-only
-// rule) matches every row whose type is ANYWHERE in the type-set AND whose
-// id is ANYWHERE in the id-set, independently -- a cross-product over the
-// org's real data shape rather than a set bounded by the endpoints actually
-// requested. With N distinct node types and M distinct ids across the
-// request's endpoints, that is up to N*M matching rows for as few as
+// as a single bound unit, not ONLY two independent IN lists. Filtering
+// node_type and node_id as separate Array(String) IN predicates alone (the
+// shape this query had before this fix, and the shape work_graph.py:588-590
+// still has -- confirmed a shared pre-existing characteristic, not a Go-side
+// port divergence, so Python is deliberately left untouched here per the
+// Go-only rule) matches every row whose type is ANYWHERE in the type-set AND
+// whose id is ANYWHERE in the id-set, independently -- a cross-product over
+// the org's real data shape rather than a set bounded by the endpoints
+// actually requested. With N distinct node types and M distinct ids across
+// the request's endpoints, that is up to N*M matching rows for as few as
 // max(N,M) real endpoints. codex's engine-level repro (CHAOS-4655): a
 // 100k-edge page with 200k ids across three node types produced ClickHouse
-// Code 396 (max_result_rows exceeded) at 588.68k rows returned. Matching the
-// pair as one unit bounds the row count by the endpoints actually requested,
-// which is what every one of CHAOS-4647's three row-budget derivation rounds
-// assumed was already true.
+// Code 396 (max_result_rows exceeded) at 588.68k rows returned.
 //
-// The match is expressed as `concat(hex(node_type),':',hex(node_id)) IN
-// {node_pairs:Array(String)}`, not a SQL `(node_type, node_id) IN
-// {pairs:Array(Tuple(...))}` -- see the node_pairs binding comment below for
-// why a literal Tuple-typed parameter was tried first and abandoned.
+// The fix keeps the ORIGINAL node_type/node_id IN lists (nodeTypes/nodeIDs
+// below) AND adds a pair-exactness filter -- it does not replace one with
+// the other. Team-lead review (CHAOS-4655, 2026-09-01): the independent IN
+// lists are the only sargable predicate against this table's primary key
+// (ORDER BY (org_id, node_type, node_id, category_kind, category) --
+// 046_work_unit_membership.sql), so dropping them for a hex+concat-only
+// match would trade the cross-product over-fetch for a full-column-scan
+// regression the moment a per-org table grows past a handful of primary-key
+// granules. Measured directly against org 70d529e0's real data (2026-09-01,
+// `EXPLAIN indexes=1`): the independent IN lists alone prune to Granules:
+// 2/4 via the PrimaryKey index; a hex+concat-only match against the SAME
+// data reads Granules: 4/4 (org_id is the only index key it can use --
+// hex()/concat() are opaque to primary-key range analysis). Combining both
+// predicates reproduces the SAME 2/4 granule pruning as the original,
+// confirmed by `EXPLAIN indexes=1` and by `system.query_log` read_rows
+// (via a materialized real-endpoint-set temp table, to avoid re-scanning
+// the source edges per IN-subquery reference): 33,955 read_rows for the
+// original shape vs 35,246 for prefilter+hex against the SAME 1000-edge
+// real page (the ~1,291-row delta is the temporary endpoints table being
+// referenced one extra time, not additional work_unit_membership scanning
+// -- both variants read effectively the whole ~31k-row table, matching
+// the granule math above; hex-only alone reads a near-identical 32,664,
+// meaning the pruning difference is real but not yet visible at this
+// table's CURRENT size -- exactly the "future-proofing, not premature
+// optimization" case the prefilter exists for).
+//
+// Matching the pair as one unit -- prefilter narrows candidates via the
+// index, the exactness filter (below) then removes the cross-product rows
+// the prefilter alone cannot -- bounds the FINAL row count by the endpoints
+// actually requested, which is what every one of CHAOS-4647's three
+// row-budget derivation rounds assumed was already true.
+//
+// The exactness filter is expressed as `concat(hex(node_type),':',
+// hex(node_id)) IN {node_pairs:Array(String)}`, not a SQL `(node_type,
+// node_id) IN {pairs:Array(Tuple(...))}` -- see the node_pairs binding
+// comment below for why a literal Tuple-typed parameter was tried first
+// and abandoned.
 func batchResolveMembership(ctx context.Context, client QueryClient, orgID string, rows []edgeEndpoint, scope *filterScope) (map[membershipKey]membershipEntry, error) {
 	endpointSeen := map[membershipKey]struct{}{}
+	typeSeen := map[string]struct{}{}
+	idSeen := map[string]struct{}{}
 	var pairs []membershipKey
+	var nodeTypes, nodeIDs []string
 	add := func(nodeType, nodeID string) {
 		nodeID = strings.TrimSpace(nodeID)
 		nodeType = strings.TrimSpace(nodeType)
@@ -152,6 +185,14 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 		}
 		endpointSeen[k] = struct{}{}
 		pairs = append(pairs, k)
+		if _, ok := typeSeen[nodeType]; !ok {
+			typeSeen[nodeType] = struct{}{}
+			nodeTypes = append(nodeTypes, nodeType)
+		}
+		if _, ok := idSeen[nodeID]; !ok {
+			idSeen[nodeID] = struct{}{}
+			nodeIDs = append(nodeIDs, nodeID)
+		}
 	}
 	for _, row := range rows {
 		add(row.sourceType, row.sourceID)
@@ -169,9 +210,21 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 		}
 		return pairs[i].nodeID < pairs[j].nodeID
 	})
+	sort.Strings(nodeTypes)
+	sort.Strings(nodeIDs)
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
+		// The sargable prefilter -- see the WHERE clause and this
+		// function's doc comment for why these stay even though the
+		// exactness filter below (node_pairs) alone would already be
+		// correct: ONLY these two Array(String) IN predicates can use
+		// work_unit_membership's primary-key index (org_id, node_type,
+		// node_id, ...). Over-fetching here is fine; node_pairs removes
+		// every row this prefilter over-fetches down to the exact
+		// requested endpoints.
+		{Name: "node_types", Value: nodeTypes},
+		{Name: "node_ids", Value: nodeIDs},
 		// dev-health-go@v0.6.1's clickhouse.Binding wire format has no
 		// tuple-array encoding (clickhouse/bindings.go's clickHouseParameter
 		// handles only string/[]string/time.Time/ints -- scope.go's
@@ -243,6 +296,8 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
             INNER JOIN (%s) AS latest_run ON 1 = 1
             %s
             WHERE m.org_id = {org_id:String}
+              AND m.node_type IN {node_types:Array(String)}
+              AND m.node_id IN {node_ids:Array(String)}
               AND concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}
               AND m.is_dominant = 1
               AND latest_run.latest_run_id != ''

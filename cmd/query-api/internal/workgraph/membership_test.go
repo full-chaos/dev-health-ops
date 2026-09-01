@@ -42,16 +42,19 @@ func TestMembershipPairsLiteral_Empty(t *testing.T) {
 }
 
 // TestBatchResolveMembership_QueriesAPairBoundMatch is CHAOS-4655's
-// structural regression guard: it locks the WHERE clause shape (a single
-// hex+concat pair match, not two independent Array(String) IN predicates)
-// and the binding set, so a future edit cannot silently reintroduce the
-// cross-product shape while every other test (which only exercises small
-// fixtures where the two shapes agree) stays green. The seeded-data
-// red/green proof against a REAL ClickHouse engine -- where the two shapes
+// structural regression guard: it locks the WHERE clause shape -- BOTH the
+// sargable node_type/node_id IN prefilter (kept for primary-key index
+// pruning; team-lead review, CHAOS-4655, 2026-09-01 -- see
+// batchResolveMembership's doc comment) AND the hex+concat pair-exactness
+// filter that removes the prefilter's cross-product over-fetch -- and the
+// full binding set, so a future edit cannot silently drop either half
+// while every other test (which only exercises small fixtures where the
+// shapes agree on final RESULT rows) stays green. The seeded-data
+// red/green proof against a REAL ClickHouse engine -- where the shapes
 // actually DISAGREE on rows returned -- lives in the `integration`-tagged
 // tests in this package, which this fake-client test cannot substitute for
-// (a fake only proves SQL TEXT changed, never that it executes correctly
-// against the engine).
+// (a fake only proves SQL TEXT changed, never that it executes correctly,
+// or efficiently, against the engine).
 func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
 		{"issue", "ep-1", "theme", "reliability"},
@@ -73,13 +76,31 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 		t.Fatalf("got %d Query calls, want 1", len(client.statements))
 	}
 	stmt := client.statements[0]
-	if !strings.Contains(stmt, "concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}") {
-		t.Fatalf("query is not a pair-bound hex+concat match: %s", stmt)
+	if !strings.Contains(stmt, "m.node_type IN {node_types:Array(String)}") ||
+		!strings.Contains(stmt, "m.node_id IN {node_ids:Array(String)}") {
+		t.Fatalf("query is missing the sargable node_type/node_id prefilter: %s", stmt)
 	}
-	if strings.Contains(stmt, "node_types") || strings.Contains(stmt, "node_ids") || strings.Contains(stmt, "Tuple") {
-		t.Fatalf("query still references the independent-IN binding names or a Tuple type: %s", stmt)
+	if !strings.Contains(stmt, "concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}") {
+		t.Fatalf("query is missing the pair-exactness hex+concat filter: %s", stmt)
+	}
+	if strings.Contains(stmt, "Tuple") {
+		t.Fatalf("query references a Tuple type (proven broken against a real engine, see membership.go's comment): %s", stmt)
 	}
 
+	typesVal, ok := bindingValue(client.bindings[0], "node_types")
+	if !ok {
+		t.Fatalf("no node_types binding")
+	}
+	if want := []string{"issue", "pr"}; !equalStringSlices(typesVal.([]string), want) {
+		t.Fatalf("node_types binding = %v, want %v", typesVal, want)
+	}
+	idsVal, ok := bindingValue(client.bindings[0], "node_ids")
+	if !ok {
+		t.Fatalf("no node_ids binding")
+	}
+	if want := []string{"ep-1", "ep-2"}; !equalStringSlices(idsVal.([]string), want) {
+		t.Fatalf("node_ids binding = %v, want %v", idsVal, want)
+	}
 	pairsVal, ok := bindingValue(client.bindings[0], "node_pairs")
 	if !ok {
 		t.Fatalf("no node_pairs binding")
@@ -87,12 +108,6 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	// hex("issue")=6973737565 hex("ep-1")=65702d31 hex("pr")=7072 hex("ep-2")=65702d32
 	if want := "['6973737565:65702d31','7072:65702d32']"; pairsVal != want {
 		t.Fatalf("node_pairs binding = %v, want %q", pairsVal, want)
-	}
-	if _, ok := bindingValue(client.bindings[0], "node_types"); ok {
-		t.Fatalf("unexpected node_types binding still present")
-	}
-	if _, ok := bindingValue(client.bindings[0], "node_ids"); ok {
-		t.Fatalf("unexpected node_ids binding still present")
 	}
 
 	if len(result) != 1 || result[membershipKey{nodeType: "issue", nodeID: "ep-1"}].dominantTheme != "reliability" {

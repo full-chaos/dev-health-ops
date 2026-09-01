@@ -27,9 +27,12 @@ import (
 // 200k ids / 3 node types -> ClickHouse Code 396, max_result_rows
 // exceeded).
 //
-// A tupled `(m.node_type, m.node_id) IN {node_pairs:...}` match must
-// exclude both phantoms; the independent-IN shape this query had before
-// CHAOS-4655 matches them.
+// The pair-exactness `concat(hex(node_type),':',hex(node_id)) IN
+// {node_pairs:...}` filter this fix adds must exclude both phantoms even
+// though the kept node_type/node_id IN prefilter (retained for primary-key
+// index pruning -- see batchResolveMembership's doc comment) still matches
+// them; the independent-IN-ONLY shape this query had before CHAOS-4655
+// matches them all the way through to the result.
 //
 // RED ON ORIGIN/MAIN (512c4e77b): with membership.go and membership_test.go
 // reverted to that commit (this file left in place -- membershipKey,
@@ -38,7 +41,7 @@ import (
 // this test FAILS: the result carries 4 entries (both phantoms included)
 // instead of 2. Restoring the fix turns it green. See the PR's
 // TEST-EVIDENCE for the exact commands run to produce that red, and
-// membershipPairsLiteral's and TestBatchResolveMembership_QueriesATupledMatch's
+// membershipPairsLiteral's and TestBatchResolveMembership_QueriesAPairBoundMatch's
 // (membership_test.go) fake-client test for the corresponding SQL-shape
 // regression guard that runs in the ordinary unit gate.
 func TestBatchResolveMembership_TupledMatchExcludesCrossProductRows(t *testing.T) {

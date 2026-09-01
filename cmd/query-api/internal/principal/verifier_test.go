@@ -251,3 +251,155 @@ func TestVerify_RejectsAlgConfusion(t *testing.T) {
 		t.Fatal("Verify: expected error for alg=none, got nil")
 	}
 }
+
+// --- CheckJWKS (CHAOS-4708) ------------------------------------------------
+//
+// Fast, no-network, no-container proof of CheckJWKS's own contract, at the
+// unit level -- the end-to-end proof against a real /readyz server lives in
+// cmd/query-api's query_route_readyz_jwks_integration_test.go (needs real
+// ClickHouse/Postgres to reach buildQueryRoute/readinessCheck at all).
+// These pin the same three states that ticket's evidence bar asks for --
+// missing, malformed, and valid -- directly against the method the
+// readiness check calls, independent of the HTTP plumbing around it.
+
+func TestCheckJWKS_MissingFile_ReturnsError(t *testing.T) {
+	v := mustVerifier(t, filepath.Join(t.TempDir(), "does-not-exist.json"), testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a JWKS path that does not exist, got nil")
+	}
+}
+
+func TestCheckJWKS_MalformedFile_ReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "malformed.json")
+	if err := os.WriteFile(path, []byte("not json at all"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a malformed (non-JSON) JWKS document, got nil")
+	}
+}
+
+func TestCheckJWKS_EmptyKeysArray_ReturnsError(t *testing.T) {
+	// Structurally valid JSON, zero keys -- a distinct malformed shape
+	// from "not JSON at all": authverify.Ed25519JWKSVerifier.Keys()
+	// treats an empty key set the same as a decode failure
+	// (ErrInvalidJWKS), not as a vacuously "healthy" zero-key success.
+	path := filepath.Join(t.TempDir(), "empty-keys.json")
+	if err := os.WriteFile(path, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a JWKS document with zero keys, got nil")
+	}
+}
+
+// TestCheckJWKS_ValidFile_ReturnsNil is the OTHER direction, in the same
+// file as the three error cases above: a fix that made CheckJWKS always
+// return an error (or, at the /readyz layer, always 503) would still pass
+// every test above but must fail this one.
+func TestCheckJWKS_ValidFile_ReturnsNil(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	jwksPath := writeJWKS(t, pub, testKID)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err != nil {
+		t.Fatalf("CheckJWKS: unexpected error for a valid JWKS document: %v", err)
+	}
+}
+
+// TestCheckJWKS_ConcatenatedDocuments_ReturnsError is codex round 1's P1
+// (gpt-5.6-terra, xhigh, chaos-4708-20260901T065704), re-executed and
+// CONFIRMED before this fix landed: authverify.Ed25519JWKSVerifier.Keys()
+// parses with a streaming json.Decoder.Decode, which reads only the
+// FIRST JSON value in a file and never checks for trailing content. A
+// file holding two concatenated JWKS documents (kid "old" then kid
+// "new") made Keys() return a NIL error with ONLY {"old": <key>} --
+// CheckJWKS (before this test's fix) reported the instance healthy while
+// a token signed with "new" would fail Verify() with "no jwks key for
+// kid \"new\"". This is exactly the failure shape CHAOS-4708 exists to
+// catch, at one remove: an atomically-wrong rotation write (append
+// instead of replace) is indistinguishable, from Keys()'s point of view,
+// from a clean single-document file containing only the stale key.
+//
+// RED-on-pre-fix (executed): before CheckJWKS re-read the raw file and
+// required json.Valid on the whole byte slice, this test's
+// `err == nil` branch was taken -- CheckJWKS returned nil for a
+// two-document file, matching the reproduction above exactly.
+func TestCheckJWKS_ConcatenatedDocuments_ReturnsError(t *testing.T) {
+	oldPub, _, _ := ed25519.GenerateKey(nil)
+	newPub, _, _ := ed25519.GenerateKey(nil)
+	docOld := jwksDocBytes(t, oldPub, "old")
+	docNew := jwksDocBytes(t, newPub, "new")
+
+	path := filepath.Join(t.TempDir(), "concatenated.json")
+	if err := os.WriteFile(path, append(docOld, docNew...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for two concatenated JWKS documents (a rotation-appended-instead-of-replaced shape), got nil -- " +
+			"this is CHAOS-4708 codex round 1's P1: readiness would report healthy while a token signed with the second document's key fails Verify()")
+	}
+}
+
+// jwksDocBytes marshals a one-key JWKS document (no trailing newline) --
+// a helper for TestCheckJWKS_ConcatenatedDocuments_ReturnsError, which
+// needs to concatenate two such documents byte-for-byte rather than
+// write one via writeJWKS.
+func jwksDocBytes(t *testing.T, pub ed25519.PublicKey, kid string) []byte {
+	t.Helper()
+	doc := map[string]any{
+		"keys": []map[string]any{
+			{
+				"kty": "OKP", "crv": "Ed25519",
+				"x":   base64.RawURLEncoding.EncodeToString(pub),
+				"kid": kid, "use": "sig", "alg": "EdDSA",
+			},
+		},
+	}
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+// TestCheckJWKS_SucceedsWithNoWritableTempStorage is codex round 3
+// (gpt-5.6-terra, xhigh, chaos-4708-round3-...), P2, re-executed and
+// CONFIRMED before this fix: an earlier version of CheckJWKS wrote its
+// validated bytes to a temp file (via os.CreateTemp) before re-validating
+// key material from it, which made readiness depend on writable temp
+// storage that Verify()'s real load path never touches. Reproduced: with
+// TMPDIR pointed at a directory that does not exist, CheckJWKS against a
+// perfectly valid, readable JWKS failed with "create snapshot temp file:
+// ... no such file or directory" while a real Verify() call against the
+// SAME file succeeded -- a false-unhealthy, deployment-blocking state
+// CHAOS-4512's "a fix that makes /readyz always 503 is not a fix"
+// instruction warns against.
+//
+// This test pins the fix: CheckJWKS must succeed for a valid JWKS
+// regardless of TMPDIR's state, because it performs no filesystem writes
+// at all (hasUsableEd25519Key validates the already-read bytes in
+// memory).
+func TestCheckJWKS_SucceedsWithNoWritableTempStorage(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeJWKS(t, pub, testKID)
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	// TMPDIR alone does not cover every platform/libc's temp-dir
+	// resolution (os.TempDir consults TMPDIR on unix, but some
+	// implementations also fall back to /tmp); os.CreateTemp("", ...)
+	// resolves via os.TempDir(), so this env var is what a
+	// temp-file-based implementation would actually consult first.
+
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err != nil {
+		t.Fatalf("CheckJWKS: unexpected error with a valid JWKS and an unavailable TMPDIR: %v -- "+
+			"codex round 3's P2: readiness must not depend on writable temp storage Verify() never uses", err)
+	}
+}

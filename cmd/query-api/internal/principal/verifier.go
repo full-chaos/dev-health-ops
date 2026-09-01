@@ -16,6 +16,15 @@ import (
 // handle. See SupportedSchemaVersion's doc comment.
 var ErrUnsupportedSchemaVersion = errors.New("principal: unsupported envelope schema version")
 
+// readJWKSFileForCheck is CheckJWKS's ONLY read of the live jwksPath --
+// a seam so a test can prove that invariant deterministically (codex
+// round 2, P2: two independent reads of a mutable file can observe two
+// different, individually-plausible snapshots and produce an
+// internally-inconsistent verdict; see CheckJWKS's doc comment) without
+// depending on OS-level FIFO/timing races to force the interleaving.
+// Production code always uses os.ReadFile; only tests swap this.
+var readJWKSFileForCheck = os.ReadFile
+
 // Verifier verifies effective-principal envelopes minted by the Python
 // edge's principal_envelope.issue_effective_principal_envelope, using
 // dev-health-go's authverify.Ed25519JWKSVerifier for key material (CHAOS-4377).
@@ -93,25 +102,54 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 // this check alone would have reported the instance healthy. A JWKS
 // document is defined (RFC 7517) as exactly one JSON object; trailing
 // content of ANY kind is therefore untrustworthy, whether or not
-// authverify's own load path happens to tolerate it. Independently
-// re-reads the same file and requires it to be a single well-formed JSON
-// value end to end (json.Valid on the whole byte slice, which -- unlike
-// Decoder.Decode -- rejects trailing non-whitespace content) as a
-// defense-in-depth check Keys() does not perform. This does not change
-// Verify()'s own load path (still authverify's, still permissive of
-// trailing content) -- it only makes readiness correctly distrust a file
-// Verify() would silently mishandle.
+// authverify's own load path happens to tolerate it.
+//
+// codex round 2 (gpt-5.6-terra, xhigh, chaos-4708-round2-20260901T073251),
+// P2, CONFIRMED (re-executed independently with a FIFO-backed path
+// forcing the exact interleaving, before fixing): round 1's fix called
+// Keys() (which does its OWN os.ReadFile internally) and THEN a second,
+// separate os.ReadFile for the trailing-content check -- two independent
+// reads of a mutable file. A rotation landing between them (e.g.
+// replacing a valid JWKS with a syntactically-valid-but-empty-keys one)
+// let the first read see the OLD valid content (Keys() succeeds) while
+// the second saw the NEW content (json.Valid on {"keys":[]} is also
+// true), so CheckJWKS returned nil from an internally-inconsistent
+// verdict, even though neither snapshot alone was both current AND
+// usable. Fixed by reading the file exactly ONCE and validating BOTH
+// properties (single well-formed JSON value, AND yields >=1 usable key)
+// against that SAME byte slice: the trailing-content check runs directly
+// on the read bytes, and the key-material check runs authverify's own
+// Keys() against a private temp-file snapshot of those exact bytes
+// (rather than re-implementing authverify's OKP/Ed25519/EdDSA/kid/size
+// validation locally, which would drift from the vendored package's own
+// rules over time) -- so both checks now see identical content by
+// construction, closing the race rather than narrowing its window.
 func (v *Verifier) CheckJWKS() error {
-	if _, err := v.jwks.Keys(); err != nil {
-		return err
-	}
-	raw, err := os.ReadFile(v.jwksPath)
+	raw, err := readJWKSFileForCheck(v.jwksPath)
 	if err != nil {
 		return err
 	}
 	if !json.Valid(raw) {
 		return fmt.Errorf("jwks document at %s is not a single well-formed JSON value "+
 			"(trailing or malformed content after what may be a valid document)", v.jwksPath)
+	}
+
+	snapshot, err := os.CreateTemp("", "jwks-readyz-check-*.json")
+	if err != nil {
+		return fmt.Errorf("jwks: create snapshot temp file: %w", err)
+	}
+	snapshotPath := snapshot.Name()
+	defer os.Remove(snapshotPath)
+	if _, err := snapshot.Write(raw); err != nil {
+		snapshot.Close()
+		return fmt.Errorf("jwks: write snapshot: %w", err)
+	}
+	if err := snapshot.Close(); err != nil {
+		return fmt.Errorf("jwks: close snapshot: %w", err)
+	}
+
+	if _, err := authverify.NewEd25519JWKSVerifier(snapshotPath).Keys(); err != nil {
+		return err
 	}
 	return nil
 }

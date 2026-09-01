@@ -1145,9 +1145,10 @@ def record_ingest_legacy_auth_rejected(*, reason: str) -> None:
 
     Called from ``api.ingest.auth.validate_ingest_auth`` for every 401 it
     raises. ``reason`` is drawn from a fixed vocabulary (never request
-    contents): "api_keys_not_configured" / "signing_secret_not_configured"
-    for the fail-closed branch, "invalid_api_key" / "invalid_signature" for
-    an ordinary wrong-credential rejection.
+    contents): "no_credential_configured" for the fail-closed branch (neither
+    INGEST_API_KEYS nor INGEST_SIGNING_SECRET set outside a development
+    environment), "invalid_api_key" / "invalid_signature" for an ordinary
+    wrong-credential rejection.
     """
     INGEST_LEGACY_AUTH_REJECTED_TOTAL.labels(reason=reason).inc()
 

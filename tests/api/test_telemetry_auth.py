@@ -44,7 +44,10 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 
 from dev_health_ops.api.auth.router import get_current_user  # noqa: E402
 from dev_health_ops.api.main import app  # noqa: E402
-from dev_health_ops.api.services.auth import AuthenticatedUser  # noqa: E402
+from dev_health_ops.api.services.auth import (  # noqa: E402
+    AuthenticatedUser,
+    set_impersonation_context,
+)
 from dev_health_ops.models.audit import AuditLog  # noqa: E402
 from dev_health_ops.models.git import Base  # noqa: E402
 from dev_health_ops.models.settings import Setting  # noqa: E402
@@ -287,3 +290,80 @@ async def test_report_platform_role_allowed(db, client, monkeypatch):
         app.dependency_overrides.pop(get_current_user, None)
     assert resp.status_code == 200, resp.text
     assert resp.json()["total_organizations"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Part 3 -- impersonation must not leak platform capability (codex round 1,
+# P2, executed repro; same defect class as CHAOS-2303's
+# require_platform_admin / has_permission). The real superuser's JWT
+# ``is_superuser`` claim stays True while they are impersonating a
+# (necessarily non-superuser) target -- these prove the impersonation
+# context, not that claim, decides the effective identity.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def impersonation_context():
+    """Activate an ImpersonationContext for the duration of one request.
+
+    Mirrors ImpersonationMiddleware's effect without needing a live admin
+    session row -- exactly how test_org_id_middleware_membership.py
+    exercises OrgIdMiddleware's contextvar-based state directly. httpx's
+    ASGITransport awaits the app in the same task as the test, so a
+    contextvar set here is visible inside the request.
+    """
+    real_user_id = str(uuid.uuid4())
+    target_user_id = str(uuid.uuid4())
+    target_org_id = str(uuid.uuid4())
+    token = set_impersonation_context(
+        target_user_id=target_user_id,
+        target_org_id=target_org_id,
+        target_role="member",
+        real_user_id=real_user_id,
+    )
+    try:
+        yield target_org_id
+    finally:
+        from dev_health_ops.api.services.auth import _impersonation_ctx
+
+        _impersonation_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_report_blocked_while_impersonating_even_for_real_superuser(
+    client, impersonation_context
+):
+    """A real superuser's JWT `is_superuser=True` must not leak platform
+    capability through an active impersonation session (CHAOS-2303 class)."""
+    target_org_id = impersonation_context
+    real_superuser_id = uuid.uuid4()
+    app.dependency_overrides[get_current_user] = lambda: _fake_user(
+        real_superuser_id, uuid.uuid4(), is_superuser=True
+    )
+    try:
+        resp = await client.post(REPORT, headers={"X-Org-Id": target_org_id})
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_status_impersonation_confined_to_target_org(
+    db, client, impersonation_context
+):
+    """While impersonating, only the target's own org is reachable -- an
+    arbitrary X-Org-Id (even one the real superuser could reach outside
+    impersonation) must still 403."""
+    del db  # patches get_postgres_session for the sqlite-backed test session
+    target_org_id = impersonation_context
+    real_superuser_id = uuid.uuid4()
+    app.dependency_overrides[get_current_user] = lambda: _fake_user(
+        real_superuser_id, uuid.uuid4(), is_superuser=True
+    )
+    try:
+        foreign_resp = await client.get(STATUS, headers={"X-Org-Id": str(uuid.uuid4())})
+        target_resp = await client.get(STATUS, headers={"X-Org-Id": target_org_id})
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert foreign_resp.status_code == 403, foreign_resp.text
+    assert target_resp.status_code == 200, target_resp.text

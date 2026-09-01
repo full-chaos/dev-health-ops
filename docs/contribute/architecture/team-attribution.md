@@ -1305,6 +1305,73 @@ PR to their own issue drives that PR's attribution — the feature working as
 intended on collaborative data, not a forgery (same-org analytics, not an authz
 boundary).
 
+**This tier table is a per-provider PRIMARY/FALLBACK rule, not a Linear-only rule** (chris,
+CHAOS-4752 investigation, 2026-09-01): the intended design for *every* PM provider is PRIMARY =
+the provider's own attached-PR mapping (Linear's issue-attachment integration, Jira's
+dev-status/GitHub-for-Jira panel, GitHub's own linked-PR/closing-reference tracking); FALLBACK =
+text parsing (magic-word/branch-convention, the Secondary/Tertiary rows above) only when no
+provider mapping exists. Today:
+
+| Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Fallback (text-parse) |
+|---|---|---|---|
+| Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **byte-for-byte ported, no loss** | Not used for Linear by design (edges arrive as attachments, never needed) |
+| Jira | **Not built** — `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) covers issue↔issue `issuelinks` only, no dev-status/PR ingestion | N/A (nothing to port) | Only mechanism today (`jira_key_lookup`, `work_graph/builder.py`) |
+| GitHub Issues | **Not built** — no `closingIssuesReferences`/timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); moot while the GitHub `work-items` dataset stays disabled (no native `work_items` rows to look up against) |
+
+A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
+setup to attach github ↔ project management that's the user's problem"*) legitimately falls
+through to fallback or stays unlinked — that is not a defect. A PR whose provider mapping DOES
+exist but never reaches evidence IS a defect; see the investment-materializer path below, which is
+exactly this failure mode (CHAOS-4752).
+
+### Investment work-graph consumption (structural evidence bridge, CHAOS-4752)
+
+§2 above documents one consumer of `work_item_dependencies`: `job_work_items` →
+`build_linked_issue_team_resolver` → `work_item_cycle_times` (rank-5 `linked_issue`, per-metric
+attribution). A **second, independent consumer** reads the same captured edges into the
+*investment* work-graph — the path that feeds `work_unit_investments.structural_evidence_json`
+and, through it, `native_team` (rank 0) via `build_unit_team_subquery`. The two paths share only
+`work_item_dependencies`; everything downstream of it is separate code, separate tables, and (per
+CHAOS-4752) a separate defect the §2 diagram does not cover:
+
+```mermaid
+flowchart TD
+    WID[("work_item_dependencies<br/>(Go providersync writes; Python producer is the reference impl)")]
+
+    subgraph PathA["Path A — §2 above (cycle-time attribution)"]
+        direction TB
+        BuildResolver["build_linked_issue_team_resolver<br/>Python · job_work_items"]
+        CycleTimes[("work_item_cycle_times<br/>team_id via linked_issue, rank 5")]
+        BuildResolver --> CycleTimes
+    end
+
+    subgraph PathB["Path B — investment work-unit evidence (this section)"]
+        direction TB
+        Derive["_derive_issue_pr_links_from_dependencies<br/>Python · work_graph/builder.py"]
+        WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
+        FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
+        WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
+        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ SNAPSHOT — writes structural_evidence_json ONCE<br/>per work_unit_id, never refreshed on a later edge<br/>(CHAOS-4752, confirmed root cause)"]
+        SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
+        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py"]
+        NativeTeam(["native_team, rank 0"])
+        Derive --> WGIP --> FastPath --> WGE --> Materialize --> SEJ --> UnitTeam --> NativeTeam
+    end
+
+    WID --> BuildResolver
+    WID --> Derive
+```
+
+**Ownership:** every node in both paths is Python plane (`src/dev_health_ops/work_graph`,
+`src/dev_health_ops/api`) — there is no Go port of either consumer; Go's role stops at writing
+`work_item_dependencies` (verified correct for Linear, see the table above). The materializer node
+is marked as the confirmed CHAOS-4752 defect: `work_unit_id` is a content hash of the connected
+component's node membership, so a `work_graph_edges` row that arrives *after* a unit is
+materialized is never picked up — nothing re-triggers recomputation, and the stale row is never
+tombstoned even once a later run produces a correct, merged replacement under a different
+`work_unit_id`. A proposed fix (re-link/refresh pass, modeled on the existing
+`run_membership_backfill` no-LLM-recompute precedent) is scoped on the ticket, not yet built.
+
 ---
 
 ## 3. Data flow & relationships (ER)

@@ -41,6 +41,12 @@ dependencies = [
   "PyGithub>=2.1.0,<3.0.0",
   "requests>=2.34.0",
   "pydantic>=2.7.0",
+  # CHAOS-3273 L3: ci/check_endpoint_profiles.py validates
+  # contracts/auth/v1/endpoint-profiles.ops.json against
+  # endpoint-profile.schema.json under real Draft 2020-12 JSON Schema
+  # semantics (Draft202012Validator) rather than a hand-rolled re-derivation
+  # of the schema's own rules.
+  "jsonschema>=4.23.0",
   "PyYAML>=6.0.3",
   "typing_extensions>=4.15.0",
   "jira>=3.10.5",
@@ -105,6 +111,13 @@ dev = [
   # CHAOS-3479: grpc arrives transitively via opentelemetry-exporter-otlp-proto-grpc;
   # stubs needed for tests/workers/test_celery_otel_export.py's direct `import grpc`.
   "types-grpcio>=1.83.0.20260730",
+  # ci/check_endpoint_profiles.py imports jsonschema directly. Without the stubs
+  # mypy sees an untyped import, which loses the type checking that justifies the
+  # dependency and makes the Optional-annotated guarded import read as a
+  # redefinition. Declared here rather than left to `mypy --install-types`, so a
+  # local run and CI type-check the same code the same way -- CI does not install
+  # stubs on demand, and a local gate run does.
+  "types-jsonschema>=4.23.0",
   # CHAOS-3034 compatibility probe only. Production Python code must enqueue
   # through the worker_job_outbox fallback unless a compatible client ships.
   "riverqueue==0.7.0",

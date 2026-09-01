@@ -15,6 +15,9 @@ con-ask-dev-v2	con-arch	/contribute/architecture/ask-dev-contracts-v2/	Ask Dev v
 con-ask-dev-preflight	con-arch	/contribute/architecture/ask-dev-subject-preflight/	Ask Dev subject preflight	architecture	true	public	planned	false	
 con-ask-dev-role-readiness	con-arch	/contribute/architecture/ask-dev-role-readiness/	Ask Dev role readiness	architecture	true	public	planned	false	
 con-go-api-wave-0-proof-infrastructure	con-arch	/contribute/architecture/go-api-wave-0-proof-infrastructure/	Go API Wave 0 proof infrastructure	architecture	true	public	planned	false	Effective-principal envelope contract and operation rollout registry + proof ledger for CHAOS-4366/CHAOS-4352.
+con-auth-cp-threat-model	con-arch	/contribute/architecture/auth-control-plane-threat-model/	Auth Control Plane threat model	architecture	true	public	planned	false	Stub for the Wave 0 threat model, held privately in Linear under fix-first disclosure; sections publish here as their fixes land. Telemetry (CHAOS-4722) and legacy ingest (CHAOS-4720) are published.
+con-auth-cp-adrs	con-arch	/contribute/architecture/auth-control-plane-adrs/	Auth Control Plane ADRs	architecture	true	public	planned	false	The eleven ADRs TRD section 26 requires before cutover, plus one raised by the threat model, drafted at status Proposed.
+con-auth-cp-decision-sheet	con-arch	/contribute/architecture/auth-control-plane-decision-sheet/	Auth Control Plane decision sheet	architecture	true	public	planned	false	One-pass ratification: recommendation, alternatives, and risk per ADR, plus the contract changes and residual risks that need a ruling.
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
 con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	

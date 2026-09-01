@@ -1,0 +1,425 @@
+{
+  "$defs": {
+    "anchor": {
+      "description": "A repo-relative file:line citation, or null when the fact could not be anchored to source. null MUST be paired with an entry in the row's gaps array explaining why.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "line": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "line_end": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Path relative to the root of the repo that OWNS this inventory file (ops rows -> ops repo, web rows -> web repo, acr rows -> acr repo). A citation into a different repo is written repo-qualified in a note or in issued_credential.verified_by, never here.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "line"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "endpointProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_credential_classes": {
+          "description": "class_id values from contracts/auth/v1/credential-classes.json this route's intended validator accepts. Empty for a genuinely public route.",
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "action": {
+          "description": "Bounded action/permission this route performs, where the code names one explicitly (e.g. an Action/Scope enum). null + gaps note otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classification": {
+          "enum": [
+            "protected",
+            "public"
+          ]
+        },
+        "current_state_cache_behavior": {
+          "description": "TRD §14 cache class, where applicable (e.g. epoch_scoped, no-cache webhook, stateless). null + gaps note otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disclosure_behavior": {
+          "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entitlement_requirement": {
+          "description": "A licensing/gating.py feature key gating this route, where present. null when none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exposure": {
+          "additionalProperties": false,
+          "description": "Whether this surface is reachable from the PUBLIC INTERNET. This is decided by the EDGE PATH-MAP, not by whether the app mounts the route: two routes in the same app can differ. Proven case -- /api/v1/telemetry/* answers a live unauthenticated request through the edge (200 + body, 2026-09-01), while /api/v1/ingest/* on the SAME app is private-network-only and never publicly routed. A coverage claim that does not separate these conflates two different threat classes: an unauthenticated route behind a private network is a defense-in-depth item, the same route at the edge is an incident. The `source` field is REQUIRED and must name the artifact the claim was read FROM -- an asserted security boundary with no cited source is the defect class this whole inventory exists to prevent.",
+          "properties": {
+            "note": {
+              "type": "string"
+            },
+            "observed_at": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reachability": {
+              "description": "unknown is a legitimate value and MUST be paired with a gaps entry; it is the correct answer whenever the edge path-map was not consulted. Never infer public reachability from a route being mounted, and never infer private from it being internal-sounding.",
+              "enum": [
+                "public_via_edge",
+                "private_network_only",
+                "unknown"
+              ]
+            },
+            "source": {
+              "description": "The artifact this was read from -- edge/ingress path-map config, or a dated executed probe with its result. NOT a repo file that merely mounts the route: none of the ops/web/acr repos contains the edge path-map, so a repo-only citation cannot support a reachability claim.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reachability",
+            "source"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "gaps": {
+          "description": "Every field on this row that could not be anchored/determined in this pass, with a reason. Empty array means fully determined for this row.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "graphql_field_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable id: '<METHOD> <full_path> [<service>]' for REST (service-qualified because the same method+path can be registered on more than one deployed app -- see /api/v1/billing/webhooks/stripe and each app's own '/health'), 'graphql:<field|mutation>:<name>' for GraphQL, 'server_action:<repo-relative module path>#<exported function name>' for Next.js Server Actions (module path + export name, NEVER the per-build action id, which changes on every build). Never renamed once a CI gate references it.",
+          "type": "string"
+        },
+        "impersonation_policy": {
+          "description": "Whether ImpersonationMiddleware's org-context override (api/middleware/impersonation.py) can affect this route. Every main-app route is technically subject to the middleware running (it has no path exemption), but only routes that read the org_id contextvar are actually affected by an override.",
+          "enum": [
+            "subject_to_impersonation_override",
+            "exempt_no_org_context",
+            "not_applicable_non_main_app",
+            "unknown"
+          ]
+        },
+        "issued_credential": {
+          "description": "Every credential this surface MINTS, inbound-facing profile's mirror image. THREE distinct values, do not conflate them: a non-empty array lists the mints; [] means the surface was ASSESSED and positively issues nothing; null means issuance was NOT determined in this pass and MUST be paired with an entry in the row's gaps array, exactly like a null anchor. The property is OPTIONAL in v1 (added after the ops/web/acr inventories were frozen, so an untouched row is absent rather than wrong) -- absence means the repo's pass predates the field. Backfilled only where issuance was PROVEN by tracing the mint site, never by family pattern.",
+          "items": {
+            "$ref": "#/$defs/issuedCredential"
+          },
+          "minItems": 0,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "method": {
+          "description": "HTTP verb for REST (upper-case), or 'api_route' when the route registers a runtime method list. null for GraphQL and for server_action.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "primary_validator": {
+          "description": "The route's OWN intended validator (may be a router-level dependency shared by every route in its family, in which case the anchor points at the dependency function, not this specific route). null for a genuinely public route with no validator at all.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/anchor"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "public_rationale": {
+          "description": "Required (non-null) when classification is 'public'.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reachable_validators": {
+          "description": "EVERY validator that can observe/attempt to process this route's credential before or instead of its intended one -- the CHAOS-3271 class. Derived from the middleware stack (CorrelationId -> OrgId -> Impersonation -> SlowAPI -> OriginValidation/CSRF -> GraphQLQuerySizeLimit -> SecurityHeaders -> CORS -> route, per api/_middleware.py) and mount path, not from re-reading the route body. Empty only for billing-edge-app routes, which share no middleware with the main app.",
+          "items": {
+            "$ref": "#/$defs/reachableValidator"
+          },
+          "type": "array"
+        },
+        "resource_resolver": {
+          "description": "How the target resource/org is resolved from the request (path param, body field, credential claim). null + gaps note otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "description": "Full resolved mount path for REST (e.g. '/api/v1/admin/teams'). null for GraphQL, which has no HTTP path, and null for server_action, which is dispatched by action id rather than path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service": {
+          "description": "Which DEPLOYED APPLICATION serves this surface. Profiles are per-app, not per-path: the same logical route can appear under two apps with different middleware stacks (see /api/v1/billing/webhooks/stripe, served by both dev-health-ops-api with the full middleware stack incl. OrgIdMiddleware/ImpersonationMiddleware, and the separately-deployed dev-health-ops-billing-edge with ZERO shared middleware). This is a CLOSED vocabulary -- an unknown service must fail validation rather than be accepted, per guardrail G-26. Adding a newly deployed app means adding it here first.",
+          "enum": [
+            "dev-health-ops-api",
+            "dev-health-ops-billing-edge",
+            "dev-health-web",
+            "dev-health-acr-api",
+            "dev-health-acr-mcp"
+          ]
+        },
+        "source": {
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "router_local_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "line"
+          ],
+          "type": "object"
+        },
+        "surface_kind": {
+          "description": "server_action covers Next.js Server Actions ('use server'). They ARE auth surfaces and count toward coverage, but they are NOT method+path surfaces: Next.js dispatches them by an opaque per-build action id that changes every build, so a gate can never key on it. Key them on what IS stable in source -- module path + exported function name -- and leave method/route null.",
+          "enum": [
+            "rest",
+            "graphql_field",
+            "graphql_mutation",
+            "server_action"
+          ]
+        },
+        "tenant_requirement": {
+          "enum": [
+            "org_scoped",
+            "cross_org_superuser_only",
+            "none",
+            "unknown"
+          ]
+        },
+        "token_shape": {
+          "description": "Issuer/audience/token-type/algorithm, where determinable and applicable (TRD §10). null fields inside the object are fine; the object itself is null when no field applies at all (e.g. a public route, or an HMAC-signature route with no issuer/audience concept).",
+          "properties": {
+            "algorithm": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "issuer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "token_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "surface_kind",
+        "method",
+        "route",
+        "service",
+        "source",
+        "classification",
+        "gaps"
+      ],
+      "type": "object"
+    },
+    "issuedCredential": {
+      "additionalProperties": false,
+      "description": "ONE credential this surface MINTS. The rest of this schema models what a route ACCEPTS; an auth control plane must also know what each surface ISSUES (guardrail G-12: signing keys are issuer-only; G-61: one active issuer per token class). Anchor the MINT SITE -- the line that signs/creates the credential -- not the line that sends it.",
+      "properties": {
+        "algorithm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        },
+        "audience": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "class_id": {
+          "description": "class_id from contracts/auth/v1/credential-classes.json, the same closed vocabulary accepted_credential_classes draws on. A minted credential with no class there is a Wave 0 finding, not a value to invent.",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        "direction": {
+          "description": "outbound_to_dependency: minted to authenticate THIS service's own call to a downstream dependency (the caller never sees it). returned_to_caller: handed back to the requester in the response body, a header, or a Set-Cookie.",
+          "enum": [
+            "outbound_to_dependency",
+            "returned_to_caller"
+          ]
+        },
+        "issuer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key_source": {
+          "description": "Where the signing key/secret comes from -- an env var NAME, a JWKS path, or a key-management surface. NEVER a key value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifetime_seconds": {
+          "description": "Nominal validity window at mint time, where the code sets one literally. null + a gaps entry when it is configuration-driven or not determinable.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        },
+        "verified_by": {
+          "description": "Repo-qualified file:line of the counterpart that VALIDATES this credential, when it is known and lives in the Wave 0 read set (e.g. 'acr:internal/auth/web_assertion.go:96'). null + a gaps entry when the verifier was not located.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "class_id",
+        "direction",
+        "anchor"
+      ],
+      "type": "object"
+    },
+    "reachableValidator": {
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        },
+        "description": {
+          "type": "string"
+        },
+        "is_intended_validator": {
+          "type": "boolean"
+        },
+        "reachable_but_not_owner": {
+          "description": "true marks a CHAOS-3271-class finding: this validator can observe/attempt to parse the credential before (or regardless of) the route's own intended validator, without owning that credential's class.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "description",
+        "anchor",
+        "is_intended_validator"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://fullchaos.dev/contracts/auth/v1/endpoint-profile.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "CHAOS-3273 Wave 0 freeze of every REST route and GraphQL resolver discovered under dev-health-ops's src/dev_health_ops/api, as of the anchors' commit. Guardrail G-1: a route without a registered profile fails CI and may not ship. Rows are generated from ci/discover_ops_routes.py's independent source discovery (contracts/auth/v1/endpoint-profiles.ops.json is NOT hand-maintained; regenerate + re-annotate rather than hand-editing paths/methods/anchors). accepted_credential_class values are a closed vocabulary keyed to contracts/auth/v1/credential-classes.json's class_id field -- a class not there is a Wave 0 finding, not a value to invent. Produced by lane auth-cp/L1; do not hand-edit without re-verifying anchors.",
+  "properties": {
+    "credential_class_source": {
+      "description": "Path to the closed-vocabulary credential-class file rows' accepted_credential_classes are drawn from.",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/$defs/endpointProfile"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "endpoint-profile.v1"
+    },
+    "source_commit": {
+      "description": "The exact ops commit rows were discovered/annotated against.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated_at",
+    "source_commit",
+    "rows"
+  ],
+  "title": "Dev Health ops endpoint authentication profile inventory",
+  "type": "object"
+}

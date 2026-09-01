@@ -1367,7 +1367,7 @@ flowchart TD
         WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
         FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
-        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ SNAPSHOT — writes structural_evidence_json ONCE<br/>per work_unit_id, not refreshed on a later edge<br/>(CHAOS-4752, confirmed root cause — a native-Go<br/>re-link job is in progress to close this gap)"]
+        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ CHAOS-4752/CHAOS-4758 — a PR-only work unit's<br/>structural_evidence_json can lose its issue link when<br/>the CHAOS-2775 oversized-component split's hub removal<br/>orphans the PR from its component; fix in progress"]
         SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
         UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · cmd/query-api/internal/analytics/investment.go"]
         Resolved(["team with the most votes across the unit's evidence<br/>items' PRIMARY attributions (work_item_team_attributions,<br/>is_primary = 1), tie-broken by team_id — NOT simply the<br/>single highest-ranked source. native_team (rank 0) is this<br/>section's worked example outcome, not the only reachable one"])
@@ -1382,17 +1382,17 @@ flowchart TD
 through `structural_evidence_json`) are Python-only — no Go port exists for them. `build_unit_team_subquery`,
 the READ side that turns that evidence into a team vote, IS ported to Go
 (`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
-WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no Go
-equivalent; Go's role there stops at writing `work_item_dependencies` (verified correct for Linear,
-see the table above). The materializer node is marked as the confirmed CHAOS-4752 defect: `work_unit_id`
-is a content hash of the connected
-component's node membership, so a `work_graph_edges` row that arrives *after* a unit is
-materialized is never picked up — nothing re-triggers recomputation, and the stale row is never
-tombstoned even once a later run produces a correct, merged replacement under a different
-`work_unit_id`. Fix in progress: chris ruled the fix lands as a **native-Go re-link job**
-(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see
-CHAOS-4752 for the fix-shape writeup (kept there as the reference the Go port implements against)
-and its scoping comment for the package/wiring plan.
+WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no
+Go-native COMPUTE — Go does own the execution orchestration (River job registration and the
+HTTP compatibility bridge to Python, `cmd/dev-health-worker/workgraph.go:23-53`) and the
+`work_item_dependencies` write (verified correct for Linear, see the table above); it just doesn't
+run the graph/materialization logic itself. The materializer node is marked as the confirmed CHAOS-4752 defect, root-caused
+as **CHAOS-4758**: Linear `relates`/`blocks` edges captured at confidence 1.0 (`work_graph/builder.py:905`)
+fuse issues into an oversized connected component; the CHAOS-2775 size-cap split cannot drop edges to
+stay under the cap, so its hub-removal step deletes issue nodes to shrink the component — orphaning
+the PRs that reached their issue only through a removed hub. Fix in progress as a **native-Go job**
+(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see CHAOS-4752
+for the fix-shape writeup and CHAOS-4758 for the root-cause mechanism.
 
 ---
 

@@ -321,6 +321,15 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // in the SAME change, together with the Python Strawberry counterparts,
 // AND give the web client's mergeToSpark (or equivalent) a real
 // null-handling branch first -- see CHAOS-4658.
+//
+// generated.go's _TimeseriesBucket object marshaler (its "value" case)
+// carries a matching landmine comment for the SDL-widening step above:
+// CHAOS-4658 codex round 2 found the sibling BreakdownItem object
+// marshaler still incrementing Invalids on a null value after its SDL
+// widened but before that check was dropped to match -- a null value
+// would otherwise collapse the whole item, then the non-null
+// `[TimeseriesBucket!]!` list on top of that. Whoever widens
+// TimeseriesBucket's SDL must drop that Invalids++ in the SAME commit.
 func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string) ([]model.TimeseriesResult, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {

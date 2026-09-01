@@ -86630,6 +86630,29 @@ func (ec *executionContext) _TimeseriesBucket(ctx context.Context, sel ast.Selec
 				out.Invalids++
 			}
 		case "value":
+			// CHAOS-4657/CHAOS-4658 FUTURE-LANDMINE, flagged not fixed
+			// (lane-4657, 2026-08-31, after watching codex round 2 catch
+			// the IDENTICAL bug on _BreakdownItem's sibling case): this
+			// Invalids++ is CORRECT and MUST STAY exactly as long as the
+			// SDL's TimeseriesBucket.value stays `Float!`
+			// (contracts/graphql/v1/schema.graphql) -- it is the null-
+			// bubbling mechanism a genuinely non-null field requires, and
+			// model.TimeseriesBucket.Value being *float64 (CHAOS-4657)
+			// does not by itself change what the PUBLISHED schema
+			// promises. Do NOT drop this check in isolation. The moment
+			// (and ONLY the moment) TimeseriesBucket.value's SDL is
+			// widened to `Float` in a future change, this case must be
+			// hand-edited in the SAME commit to match
+			// _BreakdownItem's "value" case (this file, CHAOS-4658 codex
+			// round 2 fix) -- drop the Invalids++ entirely, matching the
+			// nullable "date"... no, matching the always-nullable "label"
+			// pattern BreakdownItem uses. Skipping that pairing repeats
+			// exactly the defect codex round 2 found: a genuinely-nil
+			// value would flip Invalids and collapse the WHOLE
+			// TimeseriesBucket to null, then TimeseriesResult.buckets'
+			// non-null list-item contract collapses on top of that --
+			// two swallowed nulls where CHAOS-4657/4658 together exist to
+			// produce exactly one (a null `value`, nothing else).
 			out.Values[i] = ec._TimeseriesBucket_value(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++

@@ -1316,7 +1316,7 @@ provider mapping exists. Today:
 |---|---|---|---|
 | Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **byte-for-byte ported, no loss** | Not used for Linear by design (edges arrive as attachments, never needed) |
 | Jira | **Not built** — `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) covers issue↔issue `issuelinks` only, no dev-status/PR ingestion | N/A (nothing to port) | Only mechanism today (`jira_key_lookup`, `work_graph/builder.py`) |
-| GitHub Issues | **Not built** — no `closingIssuesReferences`/timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); moot while the GitHub `work-items` dataset stays disabled (no native `work_items` rows to look up against) |
+| GitHub Issues | **Not built** — both planes fetch `timelineItems` (`internal/providersync/github_work_items_social_fetch.go`, `providers/github/client.py`) for social/review signals, but neither parses them for `closingIssuesReferences`/closing-reference links, so there is no *link-bearing* timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); moot while the GitHub `work-items` dataset stays disabled (no native `work_items` rows to look up against) |
 
 A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
 setup to attach github ↔ project management that's the user's problem"*) legitimately falls
@@ -1353,19 +1353,23 @@ flowchart TD
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
         Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ SNAPSHOT — writes structural_evidence_json ONCE<br/>per work_unit_id, never refreshed on a later edge<br/>(CHAOS-4752, confirmed root cause)"]
         SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
-        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py"]
-        NativeTeam(["native_team, rank 0"])
-        Derive --> WGIP --> FastPath --> WGE --> Materialize --> SEJ --> UnitTeam --> NativeTeam
+        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · cmd/query-api/internal/analytics/investment.go"]
+        Resolved(["highest-precedence PRIMARY attribution row<br/>(work_item_team_attributions, is_primary = 1 —<br/>NOT filtered to native_team; whichever source ranked<br/>highest wins. native_team (rank 0) is this section's<br/>worked example outcome, not the only reachable one)"])
+        Derive --> WGIP --> FastPath --> WGE --> Materialize --> SEJ --> UnitTeam --> Resolved
     end
 
     WID --> BuildResolver
     WID --> Derive
 ```
 
-**Ownership:** every node in both paths is Python plane (`src/dev_health_ops/work_graph`,
-`src/dev_health_ops/api`) — there is no Go port of either consumer; Go's role stops at writing
-`work_item_dependencies` (verified correct for Linear, see the table above). The materializer node
-is marked as the confirmed CHAOS-4752 defect: `work_unit_id` is a content hash of the connected
+**Ownership:** the graph-construction and materializer nodes (`_derive_issue_pr_links_from_dependencies`
+through `structural_evidence_json`) are Python-only — no Go port exists for them. `build_unit_team_subquery`,
+the READ side that turns that evidence into a team vote, IS ported to Go
+(`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
+WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no Go
+equivalent; Go's role there stops at writing `work_item_dependencies` (verified correct for Linear,
+see the table above). The materializer node is marked as the confirmed CHAOS-4752 defect: `work_unit_id`
+is a content hash of the connected
 component's node membership, so a `work_graph_edges` row that arrives *after* a unit is
 materialized is never picked up — nothing re-triggers recomputation, and the stale row is never
 tombstoned even once a later run produces a correct, merged replacement under a different

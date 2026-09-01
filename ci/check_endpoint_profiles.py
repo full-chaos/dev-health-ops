@@ -156,6 +156,23 @@ non-empty string) is checked.
 
 What this gate does NOT guarantee (read before trusting a green run for
 anything this list doesn't cover):
+  * It does not discover GraphQL SUBSCRIPTIONS. Discovery matches
+    ``@strawberry.field`` and ``@strawberry.mutation`` only, so the three
+    ``@strawberry.subscription`` resolvers in ``api/graphql/subscriptions.py``
+    (``:60``, ``:97``, ``:134``) are neither discovered nor profiled, despite
+    being mounted on the served schema (``api/graphql/schema.py:1028``). The
+    361-row count EXCLUDES them, and a green run says nothing about them.
+    They are not unauthenticated: all three authenticate at connect through
+    the same ``context_getter``/``get_context`` path as every other GraphQL
+    surface, before the websocket is accepted. The gap is in coverage, not in
+    enforcement.
+    Tracked as CHAOS-4761, which replaces source-text discovery with
+    enumeration from the served application and schema objects -- the set a
+    text pattern can miss, a live object cannot. This is the same root cause
+    as the multi-mount gap below: the discoverer's scope is narrower than the
+    claim built on it, and a cross-check between an inventory and a discoverer
+    that share a blind spot is self-consistent while proving nothing about
+    what neither looks at.
   * It does not model a route mounted more than once. Discovery's mount
     walk (``ci/discover_ops_routes.py``) collapses a router included from
     multiple FastAPI parents to the FIRST resolvable parent chain's prefix

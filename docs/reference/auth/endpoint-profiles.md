@@ -44,6 +44,22 @@ walking the `include_router` graph from each `FastAPI()` root.
 
 **303 REST decorator surfaces + 58 GraphQL resolvers = 361 total.**
 
+!!! warning "Known gap: GraphQL subscriptions are not covered"
+    Discovery matches `@strawberry.field` and `@strawberry.mutation` only, so
+    the three `@strawberry.subscription` resolvers in
+    `api/graphql/subscriptions.py` (`:60`, `:97`, `:134`) are **neither
+    discovered nor profiled**, even though they are mounted on the served
+    schema (`api/graphql/schema.py:1028`). The 361 above **excludes** them.
+    They *are* authenticated: all three go through the same connect-time
+    context path as every other GraphQL surface (`schema.py`'s
+    `context_getter` → `get_context` → `GraphQLContext.__post_init__`), which
+    runs before the websocket is accepted. So this is a gap in what the
+    inventory covers, not an unauthenticated surface.
+    Tracked as **CHAOS-4761**, which replaces source-text discovery with
+    enumeration from the served application and schema objects — the set a
+    pattern can miss, an object cannot. Until that lands, a green run of this
+    gate says nothing about those three surfaces.
+
 !!! warning "Discrepancy vs. the orchestrator's 279"
     The lane brief's baseline count (279 `@router|@app.<method>(` matches)
     undercounts by exactly **24**: two files use router-alias names the
@@ -84,6 +100,7 @@ main app to be reachable through.
 | Protected | 339 |
 | Public | 22 |
 | Unclassifiable in this pass | 0 |
+| Not discovered (GraphQL subscriptions, CHAOS-4761) | 3 |
 
 Every protected row carries `accepted_credential_classes` drawn from
 [credential-classes.json](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/credential-classes.json)'s

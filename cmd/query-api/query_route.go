@@ -21,6 +21,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -909,25 +910,37 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
-	// digestByOperation is this route's registered-document inventory:
-	// operation name -> the sha256 digest of that operation's registered
-	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
-	// as two named locals (featureFlagsDigest, reviewEdgesDigest) into a
-	// map keyed by operation name, so a later wave adding a further
-	// operation extends this map rather than threading another positional
-	// parameter through newQueryHandler/operationForDocument.
-	// NOTE (CHAOS-4538): "investmentBreakdown"/"investmentFull" below are
-	// this route's OWN internal Mux/PostgresSwitch operation keys, chosen
-	// to disambiguate the TWO distinct registered documents that both
-	// invoke the SAME GraphQL root field (`analytics`) -- unlike every
-	// other row in this map, where the key already matches the GraphQL
-	// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
-	// never by GraphQL operation/field name, so this key only has to be
-	// internally consistent across this map, digestByOperation's reverse
-	// index, and each go_api_routing_state row PostgresSwitch looks up by
-	// this same string -- it is never compared against request text.
-	digestByOperation := map[string]string{
+// queryRouteDigestByOperation is this route's registered-document
+// inventory: operation name -> the sha256 digest of that operation's
+// registered document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2
+// hardcoded as two named locals (featureFlagsDigest, reviewEdgesDigest)
+// into a map keyed by operation name, so a later wave adding a further
+// operation extends this map rather than threading another positional
+// parameter through newQueryHandler/operationForDocument.
+// NOTE (CHAOS-4538): "investmentBreakdown"/"investmentFull" below are
+// this route's OWN internal Mux/PostgresSwitch operation keys, chosen
+// to disambiguate the TWO distinct registered documents that both
+// invoke the SAME GraphQL root field (`analytics`) -- unlike every
+// other row in this map, where the key already matches the GraphQL
+// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
+// never by GraphQL operation/field name, so this key only has to be
+// internally consistent across this map, digestByOperation's reverse
+// index, and each go_api_routing_state row PostgresSwitch looks up by
+// this same string -- it is never compared against request text.
+//
+// CHAOS-4710 deliverable 3: pulled out to a package-level pure function
+// (previously a local var inside newQueryHandler) so main.go's
+// mount-confirmation log line can be DERIVED from this exact map instead
+// of the hand-typed, six-of-twelve literal it used to carry -- see
+// sortedOperationNames and mountedRouteLogMessage below, and
+// query_route_mounted_log_test.go's
+// TestMountedRouteLogMessage_ListsExactlyRegisteredOperations, which
+// parses the actual produced message and asserts its operation set
+// equals this map's key set. A list derived from this map cannot drift
+// the way CHAOS-4512's stale readyz comment, and this route's own
+// previous mount log line, both did.
+func queryRouteDigestByOperation() map[string]string {
+	return map[string]string{
 		"featureFlags":         digestHex(registeredFeatureFlagsDocument),
 		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
 		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
@@ -941,6 +954,42 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":  digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":       digestHex(registeredInvestmentFullDocument),
 	}
+}
+
+// sortedOperationNames returns digestByOperation's keys sorted -- a
+// deterministic ordering for a log line (map iteration order is
+// intentionally randomized by the Go runtime, so printing a map's keys
+// directly would make the mounted-route log line non-reproducible
+// between restarts).
+func sortedOperationNames(digestByOperation map[string]string) []string {
+	names := make([]string, 0, len(digestByOperation))
+	for operation := range digestByOperation {
+		names = append(names, operation)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// mountedRouteLogMessage is the CHAOS-4710 deliverable-3 replacement for
+// main.go's former hardcoded, stale literal ("featureFlags, reviewEdges,
+// cognitiveLoad, complexityTimeseries, hotspots, operatingReview" -- six
+// of the twelve operations actually registered by
+// queryRouteDigestByOperation, unmaintained since Wave 3). Following
+// CHAOS-4512's precedent explicitly ("remove the false claim rather than
+// correcting the list, so it cannot go stale again"): this function takes
+// the SAME map newQueryHandler registers against, so the printed set is
+// always exactly the registered set, by construction, and a thirteenth
+// operation added to queryRouteDigestByOperation appears here with no
+// separate edit required.
+func mountedRouteLogMessage(digestByOperation map[string]string) string {
+	return fmt.Sprintf(
+		"query-api: /query route mounted (%s)",
+		strings.Join(sortedOperationNames(digestByOperation), ", "),
+	)
+}
+
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
+	digestByOperation := queryRouteDigestByOperation()
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 

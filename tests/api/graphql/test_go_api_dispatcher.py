@@ -13,6 +13,7 @@ CHAOS-4697's brief sets ("prove it with a row you insert and remove").
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -28,6 +29,9 @@ from alembic.config import Config
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
+from starlette.responses import Response
+from strawberry.fastapi import GraphQLRouter
+from strawberry.types.unset import UNSET
 
 from dev_health_ops.api.graphql import go_api_dispatcher
 from dev_health_ops.api.graphql.context import GraphQLContext
@@ -554,6 +558,198 @@ async def test_get_request_dispatched_as_post_to_go(
     assert result.status_code == 200
     assert seen["method"] == "POST"
     assert seen["body"]["query"] == TEST_QUERY
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-4710: a Go-served request must be observable regardless of OTel
+# export posture -- an INFO log line on the plane decision, and an
+# env-gated response header reflecting the ACTUAL plane that served the
+# response (both directions: go and every fallback to python).
+# ---------------------------------------------------------------------------
+
+
+async def test_served_go_logs_info_line_naming_operation_plane_and_digest(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """RED on the parent commit: before CHAOS-4710, every logger.* call in
+    this module sat on a failure/fallback branch -- a request Go served
+    successfully logged nothing at all, so this assertion finds zero
+    matching records against the unmodified dispatcher."""
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(200, json={"data": {"thing": {"id": "1"}}})
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    expected_digest = go_api_dispatcher.document_digest(TEST_QUERY)
+
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None
+    assert result.status_code == 200
+    served = [
+        r.getMessage()
+        for r in caplog.records
+        if "go_api_dispatch.served_go" in r.getMessage()
+    ]
+    assert len(served) == 1, f"want exactly one served_go log line, got {served}"
+    assert f"operation={TEST_OPERATION}" in served[0]
+    assert "plane=go" in served[0]
+    assert f"document_digest={expected_digest}" in served[0]
+
+
+@pytest.mark.parametrize(
+    "mode,expected_reason",
+    [
+        (None, "no_routing_row"),
+        ("python", "mode_python"),
+        ("disabled", "mode_disabled"),
+    ],
+)
+async def test_fallback_logs_info_line_naming_operation_plane_and_reason(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    caplog: pytest.LogCaptureFixture,
+    mode: str | None,
+    expected_reason: str,
+):
+    """RED on the parent commit: these three fallback branches (no routing
+    row; mode='python'; mode='disabled') called ONLY the counter, never a
+    logger -- the plane decision was silent on these paths even though a
+    handful of OTHER fallback reasons already logged at ERROR. This proves
+    the fallback branches now log at a CONSISTENT level too, not just the
+    ones that already happened to."""
+    routing_row_mode(mode)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is None
+    fallback = [
+        r.getMessage()
+        for r in caplog.records
+        if "go_api_dispatch.fallback" in r.getMessage()
+    ]
+    assert len(fallback) == 1, f"want exactly one fallback log line, got {fallback}"
+    assert f"operation={TEST_OPERATION}" in fallback[0]
+    assert "plane=python" in fallback[0]
+    assert f"reason={expected_reason}" in fallback[0]
+
+
+async def test_plane_header_absent_by_default_on_go_served_response(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Default OFF, the security-adjacent half: with
+    GO_API_PLANE_HEADER_ENABLED unset, the header must be absent even on a
+    response Go actually served."""
+    monkeypatch.delenv("GO_API_PLANE_HEADER_ENABLED", raising=False)
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(200, json={"data": {"thing": {"id": "1"}}})
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    request = _post_request(TEST_QUERY)
+
+    result = await router.run(request, context=context)
+
+    assert result.status_code == 200
+    assert "x-dev-health-plane" not in result.headers
+
+
+async def test_plane_header_go_direction_when_enabled(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """RED on the parent commit: router.run() never touches headers, so
+    this header is never present regardless of the env var."""
+    monkeypatch.setenv("GO_API_PLANE_HEADER_ENABLED", "true")
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(200, json={"data": {"thing": {"id": "1"}}})
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    request = _post_request(TEST_QUERY)
+
+    result = await router.run(request, context=context)
+
+    assert result.status_code == 200
+    assert result.headers.get("x-dev-health-plane") == "go"
+
+
+async def test_plane_header_python_direction_when_enabled(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The other direction, same env var: a request that falls back to
+    Python (no routing row -- _maybe_dispatch_to_go returns None, so
+    run() reaches strawberry's own super().run()) must be labeled
+    'python', never 'go' and never absent. super().run() itself is
+    monkeypatched to a cheap stand-in Response -- this test is about the
+    header this dispatcher applies to whatever strawberry returns, not
+    about exercising real schema execution."""
+    monkeypatch.setenv("GO_API_PLANE_HEADER_ENABLED", "true")
+    routing_row_mode(None)
+
+    async def _fake_super_run(self, request, context=UNSET, root_value=UNSET):
+        return Response(content=b"{}", status_code=200, media_type="application/json")
+
+    monkeypatch.setattr(GraphQLRouter, "run", _fake_super_run)
+
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    request = _post_request(TEST_QUERY)
+
+    result = await router.run(request, context=context)
+
+    assert result.status_code == 200
+    assert result.headers.get("x-dev-health-plane") == "python"
+
+
+async def test_plane_header_absent_by_default_on_python_fallback_response(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Default OFF, the other direction: with the env var unset, a
+    fallback-to-python response must ALSO carry no header -- proving "off"
+    is genuinely off for both planes, not just the go-served one."""
+    monkeypatch.delenv("GO_API_PLANE_HEADER_ENABLED", raising=False)
+    routing_row_mode(None)
+
+    async def _fake_super_run(self, request, context=UNSET, root_value=UNSET):
+        return Response(content=b"{}", status_code=200, media_type="application/json")
+
+    monkeypatch.setattr(GraphQLRouter, "run", _fake_super_run)
+
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    request = _post_request(TEST_QUERY)
+
+    result = await router.run(request, context=context)
+
+    assert result.status_code == 200
+    assert "x-dev-health-plane" not in result.headers
 
 
 # ---------------------------------------------------------------------------

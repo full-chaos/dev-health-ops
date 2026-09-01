@@ -156,7 +156,13 @@ func main() {
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
 		ready = readyFn
-		log.Print("query-api: /query route mounted (featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, hotspots, operatingReview)")
+		// CHAOS-4710 deliverable 3: derived from queryRouteDigestByOperation,
+		// the SAME map newQueryHandler registers against -- see that
+		// function's doc comment (query_route.go) for why the previous
+		// hand-typed, six-of-twelve literal here was the exact "correcting
+		// the list instead of removing the false claim" drift class
+		// CHAOS-4512 already named once, applied to a second log line.
+		log.Print(mountedRouteLogMessage(queryRouteDigestByOperation()))
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
 	}

@@ -33,6 +33,7 @@ EXPECTED_PACKAGES = {
     "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/hotspots",
     "cmd/query-api/internal/routeswitch",
+    "cmd/query-api/internal/workgraph",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
     "internal/joboperator",
@@ -270,8 +271,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # run of both new tests together (21.575s, each starting its own
     # container); LPT re-balanced shards 2/3 to 374s/375s (still within
     # 1s).
-    assert "34 package(s) discovered, 0 denylisted, 34 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 34 package(s)" in result.stdout
+    # CHAOS-4655 added cmd/query-api/internal/workgraph (34 -> 35
+    # discovered, 34 -> 35 will run): the batch-membership pair-bound-match
+    # fix (a cross-product-over-fetch correctness bug, not covered by any
+    # fake-client unit test) needed a real-engine red/green proof plus an
+    # adversarial round-trip test against a real ClickHouse container, so
+    # the package picked up its first -tags=integration files. Weight 60s,
+    # ceil() of a local run of both tests together (each starting its own
+    # container).
+    assert "35 package(s) discovered, 0 denylisted, 35 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 35 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -297,7 +306,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 34
+    assert len(flattened) == len(set(flattened)) == 35
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1512,10 +1521,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    # CHAOS-4730: 33, not 32 -- cmd/query-api/internal/analytics
-    # un-denylisted (34 discovered - 1 for the providersync shard-1
-    # package = 33 across shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 33
+    # CHAOS-4655: 34, not 33 -- cmd/query-api/internal/workgraph added
+    # (35 discovered - 1 for the providersync shard-1 package = 34 across
+    # shards 2/3).
+    assert len(selected_packages) == len(set(selected_packages)) == 34
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

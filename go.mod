@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/99designs/gqlgen v0.17.66
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
-	github.com/full-chaos/dev-health-go v0.6.1
+	github.com/full-chaos/dev-health-go v0.6.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0

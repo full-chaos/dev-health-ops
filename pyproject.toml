@@ -111,6 +111,13 @@ dev = [
   # CHAOS-3479: grpc arrives transitively via opentelemetry-exporter-otlp-proto-grpc;
   # stubs needed for tests/workers/test_celery_otel_export.py's direct `import grpc`.
   "types-grpcio>=1.83.0.20260730",
+  # ci/check_endpoint_profiles.py imports jsonschema directly. Without the stubs
+  # mypy sees an untyped import, which loses the type checking that justifies the
+  # dependency and makes the Optional-annotated guarded import read as a
+  # redefinition. Declared here rather than left to `mypy --install-types`, so a
+  # local run and CI type-check the same code the same way -- CI does not install
+  # stubs on demand, and a local gate run does.
+  "types-jsonschema>=4.23.0",
   # CHAOS-3034 compatibility probe only. Production Python code must enqueue
   # through the worker_job_outbox fallback unless a compatible client ships.
   "riverqueue==0.7.0",

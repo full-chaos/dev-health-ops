@@ -29,7 +29,7 @@ import (
 //
 // The pair-exactness `concat(hex(node_type),':',hex(node_id)) IN
 // {node_pairs:...}` filter this fix adds must exclude both phantoms even
-// though the kept node_type/node_id IN prefilter (retained for primary-key
+// though the kept node_type-only IN prefilter (retained for primary-key
 // index pruning -- see batchResolveMembership's doc comment) still matches
 // them; the independent-IN-ONLY shape this query had before CHAOS-4655
 // matches them all the way through to the result.
@@ -151,35 +151,59 @@ func TestBatchResolveMembership_TupledMatchExcludesCrossProductRows(t *testing.T
 // TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine
 // is team-lead's required proof (CHAOS-4655 review, 2026-09-01): the
 // node_pairs encoding must be verified against the REAL ClickHouse
-// parameter parser for adversarial node_type/node_id content, not assumed
-// correct by analogy to dev-health-go's clickHouseStringArray. That
-// analogy is exactly what broke: chStringLiteral's first version escaped
-// a quote as `\'`, matching clickHouseStringArray's own convention, and
-// ClickHouse's native-protocol query-parameter parser REJECTED it
-// outright (`Cannot parse escape sequence`) -- reproduced directly, for
-// String, Array(String), and Array(Tuple(String,String)) parameters
-// alike. A second attempt (SQL-standard doubled-quote escaping, two
-// single-quote characters in a row)
-// fixed the simple cases but still broke on a literal backslash directly
-// adjacent to a doubled quote INSIDE a Tuple element (`Cannot parse
-// input: expected ')' before...`), also reproduced directly. Rather than
-// keep chasing an undocumented parser's edge cases, membershipPairsLiteral
-// now sidesteps string escaping entirely: each endpoint is
+// parameter parser for adversarial node_id content, not assumed correct by
+// analogy to dev-health-go's clickHouseStringArray. That analogy is
+// exactly what broke, three separate times, all reproduced directly
+// against a real engine:
+//  1. A quoted `Array(Tuple(String,String))` literal escaping a quote as
+//     `\'` (clickHouseStringArray's own convention) -- REJECTED outright
+//     (`Cannot parse escape sequence`), for String, Array(String), AND
+//     Array(Tuple(...)) parameters alike. This is CHAOS-4745: a LIVE bug
+//     in dev-health-go's own Array(String) binding helper, not specific to
+//     this query.
+//  2. SQL-standard doubled-quote escaping (two single quotes in a row)
+//     fixed that, but broke on
+//     a literal backslash directly adjacent to a doubled quote -- `Cannot
+//     parse input`/`Cannot read array from text`, for Array(String) AND
+//     Array(Tuple(...)) alike.
+//  3. ClickHouse `\x`-hex-byte escapes (`\x27`, `\x5c`) -- no ambiguous
+//     adjacency, but STILL broken for an Array(String) ELEMENT
+//     specifically: `\x27` alone breaks the same case (2) broke, even
+//     though it works fine for a bare top-level String parameter; `\x5c`
+//     SILENTLY DROPS the escaped backslash byte inside an array element
+//     (no error, wrong data -- a worse class than an outright rejection).
+//
+// No hand-rolled escaping scheme survives ClickHouse's native-protocol
+// Array(String)/Array(Tuple) PARAMETER grammar for arbitrary content.
+// membershipPairsLiteral sidesteps string escaping entirely instead:
 // hex(nodeType)+":"+hex(nodeID), a character set ClickHouse's
 // string-literal grammar never treats specially, so no escaping logic
-// exists to get wrong.
+// exists to get wrong. This is also why node_id carries NO sargable
+// prefilter (unlike node_type, which is validated against a closed enum
+// and therefore safe to bind normally) -- see batchResolveMembership's
+// doc comment.
+//
+// CLI-VS-DRIVER TRAP (recorded here so it isn't repeated): `clickhouse-client
+// --param_x=...` decodes `\x`/backslash escapes CLIENT-SIDE before they
+// reach the wire, so probing escaping via the CLI is NOT a valid proxy for
+// `stdclickhouse.WithParameters` (the native-protocol mechanism
+// dev-health-go's Client actually uses) -- two of the three failures above
+// were found ONLY by testing through the real driver in this file, after
+// CLI probes gave false confidence.
 //
 // This test exercises the FULL batchResolveMembership path (not a
 // hand-rolled probe query) against a real ClickHouse container seeded via
-// chschema's real migration chain, with adversarial node_type/node_id
-// content: single quote, backslash, comma, parentheses, non-ASCII (incl. a
-// 4-byte emoji), and backslash directly adjacent to a quote. Alongside
-// each hostile pair, a DECOY row differing by exactly one character is
-// seeded too (e.g. missing byte, swapped quote/backslash) -- if hex+concat
-// matching were ambiguous (e.g. the ':' separator were reachable inside a
-// hex block, or encode/decode disagreed), a decoy would leak into the
-// result for a hostile key it does not belong to, or a hostile key would
-// resolve to the wrong category.
+// chschema's real migration chain, with adversarial node_id content: single
+// quote, backslash, comma, parentheses, non-ASCII (incl. a 4-byte emoji),
+// and backslash directly adjacent to a quote -- node_type stays a real
+// valid value (issue/pr) throughout, since an invalid one is now rejected
+// before the query ever runs (TestBatchResolveMembership_RejectsUnknownNodeType,
+// membership_test.go). Alongside each hostile pair, a DECOY row differing
+// by exactly one character is seeded too (e.g. missing byte, swapped
+// quote/backslash) -- if hex+concat matching were ambiguous (e.g. the ':'
+// separator were reachable inside a hex block, or encode/decode
+// disagreed), a decoy would leak into the result for a hostile key it does
+// not belong to, or a hostile key would resolve to the wrong category.
 func TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -220,12 +244,12 @@ func TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine(t *
 		{key: membershipKey{nodeType: "issue", nodeID: "a'b"}, category: "quote"},
 		{key: membershipKey{nodeType: "issue", nodeID: "a"}, category: ""}, // decoy: truncated at the quote
 		{key: membershipKey{nodeType: "pr", nodeID: `back\slash`}, category: "backslash"},
-		{key: membershipKey{nodeType: "comma,type", nodeID: "id,with,commas"}, category: "commas"},
-		{key: membershipKey{nodeType: "paren(type)", nodeID: "id(with)parens"}, category: "parens"},
-		{key: membershipKey{nodeType: "unicode-业务", nodeID: "日本語-\U0001F4A1"}, category: "unicode"},
-		{key: membershipKey{nodeType: `both\'x`, nodeID: `x\'both`}, category: "backslash-quote"},
-		{key: membershipKey{nodeType: `both\'x`, nodeID: `x'both`}, category: ""}, // decoy: missing the backslash
-		{key: membershipKey{nodeType: "decoy", nodeID: "decoy"}, category: ""},
+		{key: membershipKey{nodeType: "issue", nodeID: "id,with,commas"}, category: "commas"},
+		{key: membershipKey{nodeType: "pr", nodeID: "id(with)parens"}, category: "parens"},
+		{key: membershipKey{nodeType: "issue", nodeID: "日本語-\U0001F4A1"}, category: "unicode"},
+		{key: membershipKey{nodeType: "pr", nodeID: `x\'both`}, category: "backslash-quote"},
+		{key: membershipKey{nodeType: "pr", nodeID: `x'both`}, category: ""}, // decoy: missing the backslash
+		{key: membershipKey{nodeType: "issue", nodeID: "decoy"}, category: ""},
 	}
 
 	batch, err := admin.PrepareBatch(ctx, `

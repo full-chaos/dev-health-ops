@@ -43,7 +43,7 @@ func TestMembershipPairsLiteral_Empty(t *testing.T) {
 
 // TestBatchResolveMembership_QueriesAPairBoundMatch is CHAOS-4655's
 // structural regression guard: it locks the WHERE clause shape -- BOTH the
-// sargable node_type/node_id IN prefilter (kept for primary-key index
+// sargable node_type-only IN prefilter (kept for primary-key index
 // pruning; team-lead review, CHAOS-4655, 2026-09-01 -- see
 // batchResolveMembership's doc comment) AND the hex+concat pair-exactness
 // filter that removes the prefilter's cross-product over-fetch -- and the
@@ -76,9 +76,11 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 		t.Fatalf("got %d Query calls, want 1", len(client.statements))
 	}
 	stmt := client.statements[0]
-	if !strings.Contains(stmt, "m.node_type IN {node_types:Array(String)}") ||
-		!strings.Contains(stmt, "m.node_id IN {node_ids:Array(String)}") {
-		t.Fatalf("query is missing the sargable node_type/node_id prefilter: %s", stmt)
+	if !strings.Contains(stmt, "m.node_type IN {node_types:Array(String)}") {
+		t.Fatalf("query is missing the sargable node_type prefilter: %s", stmt)
+	}
+	if strings.Contains(stmt, "node_ids") {
+		t.Fatalf("query still references a node_id prefilter -- node_id must be matched ONLY by node_pairs (see membership.go's doc comment: no hand-rolled Array(String) escaping survives arbitrary node_id content): %s", stmt)
 	}
 	if !strings.Contains(stmt, "concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}") {
 		t.Fatalf("query is missing the pair-exactness hex+concat filter: %s", stmt)
@@ -87,19 +89,18 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 		t.Fatalf("query references a Tuple type (proven broken against a real engine, see membership.go's comment): %s", stmt)
 	}
 
+	// node_types is bound as a plain []string value (routes through
+	// dev-health-go's clickHouseStringArray, CHAOS-4745) -- safe ONLY
+	// because batchResolveMembership validates every value against the
+	// closed node-type enum before it ever reaches this binding, so a
+	// quote/backslash (the characters that trip CHAOS-4745) can never
+	// appear here. node_id gets no such binding at all -- see above.
 	typesVal, ok := bindingValue(client.bindings[0], "node_types")
 	if !ok {
 		t.Fatalf("no node_types binding")
 	}
 	if want := []string{"issue", "pr"}; !equalStringSlices(typesVal.([]string), want) {
 		t.Fatalf("node_types binding = %v, want %v", typesVal, want)
-	}
-	idsVal, ok := bindingValue(client.bindings[0], "node_ids")
-	if !ok {
-		t.Fatalf("no node_ids binding")
-	}
-	if want := []string{"ep-1", "ep-2"}; !equalStringSlices(idsVal.([]string), want) {
-		t.Fatalf("node_ids binding = %v, want %v", idsVal, want)
 	}
 	pairsVal, ok := bindingValue(client.bindings[0], "node_pairs")
 	if !ok {
@@ -115,6 +116,25 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	}
 	if len(recorded) != 1 || recorded[0].rows != 1 || recorded[0].endpoints != 2 {
 		t.Fatalf("telemetry not recorded correctly: %+v", recorded)
+	}
+}
+
+// TestBatchResolveMembership_RejectsUnknownNodeType is team-lead's binding
+// requirement (CHAOS-4655 review, 2026-09-01): node_type is only safe to
+// bind as a plain Array(String) IN list because it is validated against the
+// closed enum before binding -- an unvalidated node_type would reopen
+// CHAOS-4745 on this field. Asserts the error fires AND that the query
+// never runs (client.statements stays empty), not just that some error is
+// eventually surfaced from a query that already executed.
+func TestBatchResolveMembership_RejectsUnknownNodeType(t *testing.T) {
+	client := &fakeClient{}
+	rows := []edgeEndpoint{{sourceType: "not-a-real-node-type", sourceID: "ep-1", targetType: "pr", targetID: "ep-2"}}
+	_, err := batchResolveMembership(context.Background(), client, "org1", rows, newFilterScope(nil, nil))
+	if err == nil {
+		t.Fatalf("expected an error for an unrecognized node_type, got nil")
+	}
+	if len(client.statements) != 0 {
+		t.Fatalf("query must not run when node_type validation fails, got %d Query call(s)", len(client.statements))
 	}
 }
 

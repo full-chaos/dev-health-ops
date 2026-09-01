@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +39,14 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 		_ = ch.Close(closeCtx)
 	})
 
+	// CHAOS-4708: must be a REAL, valid JWKS now -- buildQueryRoute's new
+	// eager JWKS check would otherwise fail this build for the wrong
+	// reason (a malformed JWKS at "/dev/null"), proving nothing about
+	// the Postgres-laziness defect this test exists to prove.
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := queryRouteConfig{
 		ClickHouseURI: ch.URI,
 		// Deliberately unreachable -- nothing listens on port 1. Same
@@ -45,7 +54,7 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 		// (query_route_integration_test.go) uses for an "unused, must not
 		// be dialed for this test to prove what it claims" Postgres DSN.
 		RegistryPostgresURI: "postgres://unused:unused@127.0.0.1:1/unused",
-		EnvelopeJWKSPath:    "/dev/null",
+		EnvelopeJWKSPath:    writeTestJWKS(t, pub),
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
 		// CHAOS-4696 PR2: must be the REAL digest -- verifySchemaDigest
@@ -105,10 +114,17 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		_ = pg.Close(closeCtx)
 	})
 
+	// CHAOS-4708: must be a REAL, valid JWKS now -- see the identical
+	// comment in TestReadyz_PostgresUnreachableSinceStartup_Returns503
+	// above.
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := queryRouteConfig{
 		ClickHouseURI:       ch.URI,
 		RegistryPostgresURI: pg.URI,
-		EnvelopeJWKSPath:    "/dev/null",
+		EnvelopeJWKSPath:    writeTestJWKS(t, pub),
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
 		// CHAOS-4696 PR2: must be the REAL digest -- verifySchemaDigest

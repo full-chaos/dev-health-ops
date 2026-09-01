@@ -767,14 +767,18 @@ func verifySchemaDigest(configured string) error {
 // config: the shared dev-health-go ClickHouse client, a real Postgres
 // pool, and the effective-principal verifier, then hands them to
 // newQueryHandler. The returned cleanup func closes the Postgres pool;
-// call it on shutdown. The returned ready func is CHAOS-4512's fix: a
-// live liveness check of the SAME two dependencies /query actually reads
-// (ClickHouse via chClient.Ping, the registry Postgres pool via
-// pgPool.Ping), for main.go's readyzHandler to call on every /readyz
-// request -- co-located here, not in main.go, because these are the only
-// two places this route's live dependency handles exist. See
+// call it on shutdown. The returned ready func is CHAOS-4512's fix,
+// extended by CHAOS-4708: a live liveness check of the THREE dependencies
+// /query actually reads (ClickHouse via chClient.Ping, the registry
+// Postgres pool via pgPool.Ping, the envelope JWKS via
+// verifier.CheckJWKS), for main.go's readyzHandler to call on every
+// /readyz request -- co-located here, not in main.go, because these are
+// the only places this route's live dependency handles exist. See
 // readyzHandler's doc comment in main.go for the full contract this
-// closes over.
+// closes over. CHAOS-4708 also adds an EAGER JWKS check below, matching
+// the ClickHouse Ping's fail-fast-at-boot discipline -- see that check's
+// own comment for why it does not substitute for the live one in
+// readinessCheck.
 func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Context) error, func(), error) {
 	// CHAOS-4696 PR2: verify BEFORE any network I/O (ClickHouse client,
 	// Postgres pool, JWKS verifier all cost real dials/reads) -- a schema
@@ -820,23 +824,38 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 		pgPool.Close()
 		return nil, nil, nil, err
 	}
+	// CHAOS-4708: eager readiness check, matching the ClickHouse Ping
+	// above's "measurement that did not happen must FAIL, loudly"
+	// discipline -- a missing, unreadable, empty, or malformed JWKS is a
+	// hopeless config exactly like a wrong ClickHouse protocol port is:
+	// refuse to start rather than mount /query behind a verifier that
+	// will 401 every authenticated request. This does NOT substitute for
+	// readinessCheck's live JWKS re-check below: this one-shot call says
+	// nothing about a JWKS that goes bad LATER (deleted, rotated wrong,
+	// truncated by a bad mount refresh) -- exactly the gap this ticket
+	// exists to close for readiness, the same way the ClickHouse
+	// readiness check below does not substitute for THIS eager Ping.
+	if err := verifier.CheckJWKS(); err != nil {
+		pgPool.Close()
+		return nil, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
+	}
 
 	handler := newQueryHandler(chClient, pgPool, verifier, cfg.SchemaDigest)
 	cleanup := func() { pgPool.Close() }
-	ready := readinessCheck(chClient, pgPool)
+	ready := readinessCheck(chClient, pgPool, verifier)
 	return handler, ready, cleanup, nil
 }
 
-// readinessCheck returns a func that pings BOTH of /query's live
-// dependencies -- ClickHouse and the registry Postgres pool -- and
-// returns the first error either reports. This is CHAOS-4512's actual
-// fix: buildQueryRoute above already pings ClickHouse ONCE, eagerly, at
-// startup (so a ClickHouse that is down at boot refuses to start the
-// process at all -- "measurement that did not happen must FAIL, loudly").
-// That one-shot check says nothing about a ClickHouse that goes
-// unreachable LATER, and says nothing about Postgres at all:
-// pgxpool.New above is lazy by design (pgx does not dial until a query
-// or Ping is issued), so an unreachable or misconfigured
+// readinessCheck returns a func that checks ALL THREE of /query's live
+// dependencies -- ClickHouse, the registry Postgres pool, and (CHAOS-4708)
+// the envelope JWKS -- and returns the first error any of them reports.
+// This is CHAOS-4512's actual fix: buildQueryRoute above already pings
+// ClickHouse ONCE, eagerly, at startup (so a ClickHouse that is down at
+// boot refuses to start the process at all -- "measurement that did not
+// happen must FAIL, loudly"). That one-shot check says nothing about a
+// ClickHouse that goes unreachable LATER, and says nothing about Postgres
+// at all: pgxpool.New above is lazy by design (pgx does not dial until a
+// query or Ping is issued), so an unreachable or misconfigured
 // GO_API_REGISTRY_POSTGRES_URI has never failed startup -- the process
 // comes up, the OLD readyzHandler answered 200 unconditionally, and every
 // real request then failed against a pool that has never once connected.
@@ -844,13 +863,28 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 // by the caller) is what closes that gap: readiness now reflects the
 // CURRENT reachability of both dependencies, not their state at process
 // start.
-func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool) func(context.Context) error {
+//
+// CHAOS-4708 closes the same gap for the third dependency /query reads:
+// principal.NewVerifier loads its JWKS lazily, per Verify call, by
+// deliberate design (a rotated key is picked up without a restart -- see
+// that constructor's doc comment) -- which means a missing, unreadable,
+// empty, or malformed GO_API_ENVELOPE_JWKS_PATH was, before this fix,
+// invisible to BOTH startup (buildQueryRoute never read the file) AND
+// readiness (nothing here checked it): the process would start, mount
+// /query, and answer /readyz with exactly "ready", while every
+// authenticated request 401'd. verifier.CheckJWKS() closes that -- see
+// its own doc comment for why calling it here, uncached, on every probe,
+// preserves the no-restart rotation contract rather than defeating it.
+func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if err := chClient.Ping(ctx); err != nil {
 			return fmt.Errorf("clickhouse: %w", err)
 		}
 		if err := pgPool.Ping(ctx); err != nil {
 			return fmt.Errorf("registry postgres: %w", err)
+		}
+		if err := verifier.CheckJWKS(); err != nil {
+			return fmt.Errorf("jwks: %w", err)
 		}
 		return nil
 	}

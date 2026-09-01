@@ -50,6 +50,34 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 	}, nil
 }
 
+// CheckJWKS proves the verifier's configured JWKS document can currently
+// produce usable Ed25519 key material -- CHAOS-4708: /readyz needs a
+// bounded, live way to answer "will this instance verify a token"
+// distinct from "will it 500/401 on the first request", and Verify alone
+// cannot answer that without a real signed token to run through it.
+//
+// Delegates entirely to authverify.Ed25519JWKSVerifier.Keys(), which:
+//   - reads jwksPath fresh on every call (never cached) -- calling this
+//     from a /readyz probe therefore preserves the no-restart rotation
+//     contract NewVerifier's doc comment describes: a JWKS that goes bad
+//     AFTER boot (deleted, truncated, rotated-wrong) is caught on the
+//     very next probe, not hidden behind a stale cached success.
+//   - already guarantees at least one structurally-valid Ed25519 signing
+//     key on a nil return (an empty or all-invalid key set is
+//     ErrInvalidJWKS, never a nil error with zero keys) -- so a nil
+//     return from this method already means "yields >=1 usable key",
+//     the strongest of the three checks CHAOS-4708 considered (file
+//     exists / parses / yields a usable key). See that method's own doc
+//     comment for the exact validation it performs.
+//   - costs one local os.ReadFile plus an in-memory JSON decode and
+//     per-key base64/size validation -- no network I/O, so it is cheap
+//     enough to run uncached on every probe, the same cost model
+//     readinessCheck already applies to ClickHouse/Postgres Ping.
+func (v *Verifier) CheckJWKS() error {
+	_, err := v.jwks.Keys()
+	return err
+}
+
 // Verify parses and verifies tokenString as an effective-principal
 // envelope: EdDSA signature against the JWKS (looked up by the token's
 // `kid` header -- an alg-confusion attempt using any other signing method

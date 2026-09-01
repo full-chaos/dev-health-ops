@@ -251,3 +251,59 @@ func TestVerify_RejectsAlgConfusion(t *testing.T) {
 		t.Fatal("Verify: expected error for alg=none, got nil")
 	}
 }
+
+// --- CheckJWKS (CHAOS-4708) ------------------------------------------------
+//
+// Fast, no-network, no-container proof of CheckJWKS's own contract, at the
+// unit level -- the end-to-end proof against a real /readyz server lives in
+// cmd/query-api's query_route_readyz_jwks_integration_test.go (needs real
+// ClickHouse/Postgres to reach buildQueryRoute/readinessCheck at all).
+// These pin the same three states that ticket's evidence bar asks for --
+// missing, malformed, and valid -- directly against the method the
+// readiness check calls, independent of the HTTP plumbing around it.
+
+func TestCheckJWKS_MissingFile_ReturnsError(t *testing.T) {
+	v := mustVerifier(t, filepath.Join(t.TempDir(), "does-not-exist.json"), testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a JWKS path that does not exist, got nil")
+	}
+}
+
+func TestCheckJWKS_MalformedFile_ReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "malformed.json")
+	if err := os.WriteFile(path, []byte("not json at all"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a malformed (non-JSON) JWKS document, got nil")
+	}
+}
+
+func TestCheckJWKS_EmptyKeysArray_ReturnsError(t *testing.T) {
+	// Structurally valid JSON, zero keys -- a distinct malformed shape
+	// from "not JSON at all": authverify.Ed25519JWKSVerifier.Keys()
+	// treats an empty key set the same as a decode failure
+	// (ErrInvalidJWKS), not as a vacuously "healthy" zero-key success.
+	path := filepath.Join(t.TempDir(), "empty-keys.json")
+	if err := os.WriteFile(path, []byte(`{"keys":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := mustVerifier(t, path, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err == nil {
+		t.Fatal("CheckJWKS: expected error for a JWKS document with zero keys, got nil")
+	}
+}
+
+// TestCheckJWKS_ValidFile_ReturnsNil is the OTHER direction, in the same
+// file as the three error cases above: a fix that made CheckJWKS always
+// return an error (or, at the /readyz layer, always 503) would still pass
+// every test above but must fail this one.
+func TestCheckJWKS_ValidFile_ReturnsNil(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	jwksPath := writeJWKS(t, pub, testKID)
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err != nil {
+		t.Fatalf("CheckJWKS: unexpected error for a valid JWKS document: %v", err)
+	}
+}

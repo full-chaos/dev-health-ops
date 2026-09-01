@@ -1305,6 +1305,95 @@ PR to their own issue drives that PR's attribution — the feature working as
 intended on collaborative data, not a forgery (same-org analytics, not an authz
 boundary).
 
+**This tier table is a per-provider PRIMARY/FALLBACK rule, not a Linear-only rule** (chris,
+CHAOS-4752 investigation, 2026-09-01): the intended design for *every* PM provider is PRIMARY =
+the provider's own attached-PR mapping (Linear's issue-attachment integration, Jira's
+dev-status/GitHub-for-Jira panel, GitHub's own linked-PR/closing-reference tracking), preferred at
+*resolution* time whenever it is present — FALLBACK = text parsing (magic-word/branch-convention).
+This is a design *intent*, not a literal capture-time gate or a tier-ranked resolver: the
+Secondary/Tertiary rows above are captured unconditionally alongside Primary (neither is gated on
+the other's presence — `providers/github/normalize.py:954,1023` emit `extkey` dependencies
+regardless of whether an attachment link already exists for the same PR), and the resolver that
+picks a winner among several candidate edges from one PR (`build_linked_issue_team_resolver`,
+`metrics/compute_work_items.py:895-952`) does **not** rank by capture tier at all — it collapses to
+one edge per `(source, target)` by recency, then tie-breaks multiple *distinct* targets
+lexicographically by canonical target id. A conflicting text-parse edge to a different target can
+therefore outrank an attachment edge to the intended one. In practice Primary usually wins because
+it is the only edge for a well-configured PR, not because the resolver privileges it structurally.
+
+**The table below is about a DIFFERENT, Path-B-specific fallback** — `work_graph/builder.py`'s
+`extract_jira_keys`/`extract_github_issue_refs`/`jira_key_lookup`/`gh_issue_lookup` text-parse (used by the investment work-graph consumer
+this section covers), not the §2 Secondary/Tertiary mechanism above (which serves Path A, the
+cycle-time consumer, and DOES apply to Linear). Today:
+
+| Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
+|---|---|---|---|
+| Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **ported with equivalent trust-gate semantics (sourceType + host allowlist), no loss.** One minor divergence: Python's PR/MR-number match requires digits (`\d+`, `normalize.py:77`); Go accepts any final path segment (`linear_work_items_route.go:890`) — functionally inert (a non-numeric segment can't match a real `git_pull_requests.number`), not literally byte-for-byte. | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
+| Jira | **Not built** — `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) covers issue↔issue `issuelinks` only, no dev-status/PR ingestion | N/A (nothing to port) | Only mechanism today (`jira_key_lookup`, `work_graph/builder.py`) |
+| GitHub Issues | **Not built** — both planes fetch `timelineItems` (`internal/providersync/github_work_items_social_fetch.go`, `providers/github/client.py`) for social/review signals, but neither parses them for `closingIssuesReferences`/closing-reference links, so there is no *link-bearing* timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); the GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+
+A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
+setup to attach github ↔ project management that's the user's problem"*) legitimately falls
+through to fallback or stays unlinked — that is not a defect. A PR whose provider mapping DOES
+exist but never reaches evidence IS a defect; see the investment-materializer path below, which is
+exactly this failure mode (CHAOS-4752).
+
+### Investment work-graph consumption (structural evidence bridge, CHAOS-4752)
+
+§2 above documents one consumer of `work_item_dependencies`: `job_work_items` →
+`build_linked_issue_team_resolver` → `work_item_cycle_times` (rank-5 `linked_issue`, per-metric
+attribution). A **second, independent consumer** reads the same captured edges into the
+*investment* work-graph — the path that feeds `work_unit_investments.structural_evidence_json`
+and, through it, a per-unit team vote across its evidence items' PRIMARY attributions via
+`build_unit_team_subquery` (often resolving to `native_team`, rank 0, for a Linear-primary org like
+this ticket's — but not the only reachable outcome; see the diagram). The two paths share only
+`work_item_dependencies`; everything downstream of it is separate code, separate tables, and (per
+CHAOS-4752) a separate defect the §2 diagram does not cover:
+
+```mermaid
+flowchart TD
+    WID[("work_item_dependencies<br/>(Go providersync writes; Python producer is the reference impl)")]
+
+    subgraph PathA["Path A — §2 above (cycle-time attribution)"]
+        direction TB
+        BuildResolver["build_linked_issue_team_resolver<br/>Python · job_work_items"]
+        CycleTimes[("work_item_cycle_times<br/>team_id via linked_issue, rank 5")]
+        BuildResolver --> CycleTimes
+    end
+
+    subgraph PathB["Path B — investment work-unit evidence (this section)"]
+        direction TB
+        Derive["_derive_issue_pr_links_from_dependencies<br/>Python · work_graph/builder.py"]
+        WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
+        FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
+        WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
+        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ CHAOS-4752/CHAOS-4758 — a PR-only work unit's<br/>structural_evidence_json can lose its issue link when<br/>the CHAOS-2775 oversized-component split's hub removal<br/>orphans the PR from its component; fix in progress"]
+        SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
+        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · cmd/query-api/internal/analytics/investment.go"]
+        Resolved(["team with the most votes across the unit's evidence<br/>items' PRIMARY attributions (work_item_team_attributions,<br/>is_primary = 1), tie-broken by team_id — NOT simply the<br/>single highest-ranked source. native_team (rank 0) is this<br/>section's worked example outcome, not the only reachable one"])
+        Derive --> WGIP --> FastPath --> WGE --> Materialize --> SEJ --> UnitTeam --> Resolved
+    end
+
+    WID --> BuildResolver
+    WID --> Derive
+```
+
+**Ownership:** the graph-construction and materializer nodes (`_derive_issue_pr_links_from_dependencies`
+through `structural_evidence_json`) are Python-only — no Go port exists for them. `build_unit_team_subquery`,
+the READ side that turns that evidence into a team vote, IS ported to Go
+(`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
+WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no
+Go-native COMPUTE — Go does own the execution orchestration (River job registration and the
+HTTP compatibility bridge to Python, `cmd/dev-health-worker/workgraph.go:23-53`) and the
+`work_item_dependencies` write (verified correct for Linear, see the table above); it just doesn't
+run the graph/materialization logic itself. The materializer node is marked as the confirmed CHAOS-4752 defect, root-caused
+as **CHAOS-4758**: Linear `relates`/`blocks` edges captured at confidence 1.0 (`work_graph/builder.py:905`)
+fuse issues into an oversized connected component; the CHAOS-2775 size-cap split cannot drop edges to
+stay under the cap, so its hub-removal step deletes issue nodes to shrink the component — orphaning
+the PRs that reached their issue only through a removed hub. Fix in progress as a **native-Go job**
+(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see CHAOS-4752
+for the fix-shape writeup and CHAOS-4758 for the root-cause mechanism.
+
 ---
 
 ## 3. Data flow & relationships (ER)

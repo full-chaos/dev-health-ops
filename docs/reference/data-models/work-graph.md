@@ -54,3 +54,8 @@ page) intentionally read a stored team column instead.
 For the full precedence decision tree, the source reference matrix, the provider coverage contract,
 symptom-to-fix diagnostics, and the recovery/backfill runbook, see
 [Work-item team attribution](../../contribute/architecture/team-attribution.md).
+
+For how a captured PR↔issue link (per-provider primary mapping vs. text-parse fallback) reaches
+*investment* work-unit evidence specifically — a separate consumer from the cycle-time attribution
+path above, with its own current defect — see
+[Investment work-graph consumption](../../contribute/architecture/team-attribution.md#investment-work-graph-consumption-structural-evidence-bridge-chaos-4752).

@@ -41,6 +41,12 @@ dependencies = [
   "PyGithub>=2.1.0,<3.0.0",
   "requests>=2.34.0",
   "pydantic>=2.7.0",
+  # CHAOS-3273 L3: ci/check_endpoint_profiles.py validates
+  # contracts/auth/v1/endpoint-profiles.ops.json against
+  # endpoint-profile.schema.json under real Draft 2020-12 JSON Schema
+  # semantics (Draft202012Validator) rather than a hand-rolled re-derivation
+  # of the schema's own rules.
+  "jsonschema>=4.23.0",
   "PyYAML>=6.0.3",
   "typing_extensions>=4.15.0",
   "jira>=3.10.5",

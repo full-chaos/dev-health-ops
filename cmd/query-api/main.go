@@ -156,7 +156,17 @@ func main() {
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
 		ready = readyFn
-		log.Print("query-api: /query route mounted (featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, hotspots, operatingReview)")
+		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
+		// live here as a hand-typed, six-of-twelve literal (stale since
+		// Wave 3 -- the real registration is all twelve of
+		// newQueryHandler's digestByOperation keys). It is now emitted
+		// from inside newQueryHandler itself (query_route.go), right next
+		// to the digestByOperation map it describes, via
+		// mountedRouteLogMessage -- see that function's doc comment for
+		// why it cannot be a package-level function called from here
+		// instead (cmd/query-api/tools/registrydump's AST parser requires
+		// digestByOperation's composite literal to stay exactly where it
+		// is, assigned directly, not returned from a helper).
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
 	}

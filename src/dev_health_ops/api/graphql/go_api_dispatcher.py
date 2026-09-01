@@ -43,6 +43,34 @@ CHAOS-4697's brief, "Wave 7".
 ``routeswitch.PostgresSwitch.Enabled`` on the Go side (it takes no org
 argument). A ``canary`` row is "on for everyone, revocable", not "on for
 N% of traffic" -- this dispatcher does not pretend otherwise.
+
+**Observability (CHAOS-4710).** With ``OTEL_ENABLED=false`` (the deliberate
+local posture), the counters above are recorded but exported nowhere, and
+every ``logger.*`` call before this ticket sat on a failure/fallback
+branch -- a request Go served successfully was silent by construction,
+making a routing-row enablement unfalsifiable from outside. Two additions,
+both independent of OTel posture:
+
+* An unconditional INFO line on every terminal plane decision (served-go
+  in :func:`_forward_to_go`'s 200 branch; every fallback in
+  :meth:`GoApiDispatchRouter._fallback`), naming the operation, the plane,
+  and -- for the served-go line specifically -- the document digest. Judged
+  against sampling and decided against it: this method only runs for
+  requests whose document digest already matched the registered-operation
+  catalog (``GO_API_DISPATCH_ATTEMPTED_TOTAL``'s population, not all
+  GraphQL traffic -- the overwhelming-majority "not a Go-eligible document"
+  case returns before either log site and stays silent, exactly as
+  before), so volume is bounded by dispatch attempts, not site traffic. An
+  operator clicking once in a browser must reliably see that one request;
+  a sampled line that misses it would be worse than none.
+* ``x-dev-health-plane: go|python`` on the HTTP response, gated by
+  ``GO_API_PLANE_HEADER_ENABLED`` (see :func:`_plane_header_enabled`) --
+  default OFF, set on the local stack only (ruling: team-lead,
+  2026-09-01). Applied once, in :meth:`GoApiDispatchRouter.run`, after the
+  plane is already decided (dispatched vs. ``super().run()``) so it always
+  reflects the response actually being sent, including every fallback path
+  -- a header that claimed ``go`` after a fallback would be worse than no
+  header at all.
 """
 
 from __future__ import annotations
@@ -92,6 +120,38 @@ _SAFE_DEFAULT_MODES = frozenset({"python", "disabled"})
 #: Modes for which the row says "reachable" -- see RoutingState's
 #: docstring; canary and primary are the only two.
 _REACHABLE_MODES = frozenset({"canary", "primary"})
+
+#: CHAOS-4710 deliverable 2. Response header naming the plane that actually
+#: served the request -- gated by GO_API_PLANE_HEADER_ENABLED (see
+#: _plane_header_enabled below), OFF by default. Documented beside this
+#: dispatcher's other GO_API_* knobs (GO_API_QUERY_API_URL above,
+#: GO_API_DISPATCH_TIMEOUT_SECONDS below): set on the local stack's `api`
+#: service only (ruling: team-lead, 2026-09-01) -- the env var lives in the
+#: repo-root compose.yml, outside this repo, not in this PR.
+_PLANE_HEADER_NAME = "x-dev-health-plane"
+
+_PLANE_HEADER_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _plane_header_enabled() -> bool:
+    """Default OFF, fail *quiet* not fail *on*: an unset, empty, or
+    unrecognized value all mean "do not emit the header" -- there is no
+    misconfiguration shape here that turns the header on by accident."""
+    return (os.getenv("GO_API_PLANE_HEADER_ENABLED") or "").strip().lower() in (
+        _PLANE_HEADER_TRUTHY
+    )
+
+
+def _with_plane_header(response: Response, plane: str) -> Response:
+    """Stamp `response` with the plane that actually served it, iff the
+    env gate is on. Called from exactly one place (`GoApiDispatchRouter.run`,
+    after the plane is already decided) so every response this router
+    returns -- served-go AND every fallback path -- gets a header that
+    reflects the truth, never a stale or optimistic guess."""
+    if _plane_header_enabled():
+        response.headers[_PLANE_HEADER_NAME] = plane
+    return response
+
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -239,11 +299,12 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         if not isinstance(context, UnsetType):
             dispatched = await self._maybe_dispatch_to_go(request, context)
             if dispatched is not None:
-                return dispatched
+                return _with_plane_header(dispatched, "go")
 
-        return await super().run(
+        response = await super().run(
             request=request, context=context, root_value=root_value
         )
+        return _with_plane_header(response, "python")
 
     async def _maybe_dispatch_to_go(
         self, request: Request, context: GraphQLContext
@@ -294,10 +355,16 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 "go_api_dispatch.digest_computation_failed",
                 extra={"query_length": len(query_text)},
             )
-            GO_API_DISPATCH_FALLBACK_TOTAL.labels(
-                operation="unknown", reason="digest_computation_error"
-            ).inc()
-            return None
+            # CHAOS-4710 codex round 1 (P2, EXECUTED): this branch used to
+            # increment the fallback counter directly, bypassing
+            # _fallback()'s new consistent INFO line -- the one fallback
+            # reason that could occur BEFORE an operation/digest is known
+            # was exactly the one left out of the "no branch stays
+            # half-instrumented" fix. Route through _fallback() like every
+            # other fallback reason, even though "unknown" is a placeholder
+            # operation name here (no catalog match was attempted -- the
+            # digest itself could not be computed).
+            return self._fallback("unknown", "digest_computation_error")
 
         selected_operation = operation_for_digest(doc_digest)
         if selected_operation is None:
@@ -440,6 +507,16 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 plane="go", outcome="served"
             ).observe(elapsed)
             GO_API_DISPATCH_SERVED_GO_TOTAL.labels(operation=selected_operation).inc()
+            # CHAOS-4710 deliverable 1: the ONE line proving a specific
+            # request was served by Go, independent of OTel export posture
+            # (OTEL_ENABLED=false exports GO_API_DISPATCH_SERVED_GO_TOTAL
+            # nowhere locally -- this line works regardless). Unconditional,
+            # not sampled -- see this module's docstring for why.
+            logger.info(
+                "go_api_dispatch.served_go operation=%s plane=go document_digest=%s",
+                selected_operation,
+                doc_digest,
+            )
             return Response(
                 content=resp.content,
                 status_code=200,
@@ -494,5 +571,18 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
 
     @staticmethod
     def _fallback(operation: str, reason: str) -> None:
+        # CHAOS-4710: the single funnel every fallback decision passes
+        # through -- one consistent INFO line here means the plane
+        # decision is never half-instrumented, regardless of whether the
+        # specific reason ALSO gets one of the pre-existing
+        # logger.exception/logger.error calls upstream (those narrate the
+        # exceptional condition; this one narrates the plane decision
+        # itself, uniformly, for every reason including the quiet ones
+        # like "mode_python" that previously logged nothing at all).
+        logger.info(
+            "go_api_dispatch.fallback operation=%s plane=python reason=%s",
+            operation,
+            reason,
+        )
         GO_API_DISPATCH_FALLBACK_TOTAL.labels(operation=operation, reason=reason).inc()
         return None

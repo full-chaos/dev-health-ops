@@ -67744,6 +67744,13 @@ func (ec *executionContext) _TimeseriesBucket_value(ctx context.Context, field g
 			ret = graphql.Null
 		}
 	}()
+	// CHAOS-4657 (chris 2026-08-31 04:18, Option B; same shape as
+	// CHAOS-4650's BreakdownItem.Value): hand-edited to a nullable
+	// marshal, matching model.TimeseriesBucket.Value's *float64 type.
+	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+	// gets overwritten wholesale by the next `gqlgen generate`; the
+	// durable copy of why lives in timeseries.go's ExecuteTimeseries
+	// doc comment. Read that, not this.
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil
@@ -67753,14 +67760,11 @@ func (ec *executionContext) _TimeseriesBucket_value(ctx context.Context, field g
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TimeseriesBucket_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {

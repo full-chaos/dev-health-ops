@@ -365,3 +365,41 @@ func jwksDocBytes(t *testing.T, pub ed25519.PublicKey, kid string) []byte {
 	}
 	return encoded
 }
+
+// TestCheckJWKS_SucceedsWithNoWritableTempStorage is codex round 3
+// (gpt-5.6-terra, xhigh, chaos-4708-round3-...), P2, re-executed and
+// CONFIRMED before this fix: an earlier version of CheckJWKS wrote its
+// validated bytes to a temp file (via os.CreateTemp) before re-validating
+// key material from it, which made readiness depend on writable temp
+// storage that Verify()'s real load path never touches. Reproduced: with
+// TMPDIR pointed at a directory that does not exist, CheckJWKS against a
+// perfectly valid, readable JWKS failed with "create snapshot temp file:
+// ... no such file or directory" while a real Verify() call against the
+// SAME file succeeded -- a false-unhealthy, deployment-blocking state
+// CHAOS-4512's "a fix that makes /readyz always 503 is not a fix"
+// instruction warns against.
+//
+// This test pins the fix: CheckJWKS must succeed for a valid JWKS
+// regardless of TMPDIR's state, because it performs no filesystem writes
+// at all (hasUsableEd25519Key validates the already-read bytes in
+// memory).
+func TestCheckJWKS_SucceedsWithNoWritableTempStorage(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeJWKS(t, pub, testKID)
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	// TMPDIR alone does not cover every platform/libc's temp-dir
+	// resolution (os.TempDir consults TMPDIR on unix, but some
+	// implementations also fall back to /tmp); os.CreateTemp("", ...)
+	// resolves via os.TempDir(), so this env var is what a
+	// temp-file-based implementation would actually consult first.
+
+	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
+	if err := v.CheckJWKS(); err != nil {
+		t.Fatalf("CheckJWKS: unexpected error with a valid JWKS and an unavailable TMPDIR: %v -- "+
+			"codex round 3's P2: readiness must not depend on writable temp storage Verify() never uses", err)
+	}
+}

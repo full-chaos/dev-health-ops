@@ -1,10 +1,14 @@
 package principal
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -115,15 +119,36 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 // the second saw the NEW content (json.Valid on {"keys":[]} is also
 // true), so CheckJWKS returned nil from an internally-inconsistent
 // verdict, even though neither snapshot alone was both current AND
-// usable. Fixed by reading the file exactly ONCE and validating BOTH
-// properties (single well-formed JSON value, AND yields >=1 usable key)
-// against that SAME byte slice: the trailing-content check runs directly
-// on the read bytes, and the key-material check runs authverify's own
-// Keys() against a private temp-file snapshot of those exact bytes
-// (rather than re-implementing authverify's OKP/Ed25519/EdDSA/kid/size
-// validation locally, which would drift from the vendored package's own
-// rules over time) -- so both checks now see identical content by
-// construction, closing the race rather than narrowing its window.
+// usable.
+//
+// codex round 3 (gpt-5.6-terra, xhigh, chaos-4708-round3-...), P2,
+// CONFIRMED (re-executed independently with an unavailable TMPDIR, before
+// fixing): round 2's fix closed the race by writing the validated bytes
+// to a private temp file and pointing a throwaway
+// authverify.Ed25519JWKSVerifier at it, so the key-material check ran
+// against the exact same bytes as the trailing-content check -- but that
+// introduced a NEW false-unhealthy failure mode: readiness now depended
+// on writable temp storage that Verify()'s real load path never touches
+// at all. Reproduced: a valid, readable JWKS with TMPDIR pointed at a
+// nonexistent directory made CheckJWKS fail ("create snapshot temp file:
+// ... no such file or directory") while Verify() against the SAME file
+// succeeded -- exactly a deployment-blocking false negative CHAOS-4512's
+// "a fix that makes /readyz always 503 is not a fix" instruction warns
+// against, one condition removed.
+//
+// Fixed by reading the file exactly ONCE and validating BOTH properties
+// -- single well-formed JSON value, AND yields >=1 usable Ed25519 key --
+// directly against that SAME in-memory byte slice, with NO filesystem
+// writes at all. hasUsableEd25519Key below duplicates
+// authverify.Ed25519JWKSVerifier.Keys()'s validation rules (its
+// unexported jwk/jwksDocument shape and validKeyID helper give no
+// bytes-based entry point to call instead) rather than reading via a
+// file a second time in ANY form -- the durable fix for both round 2 and
+// round 3's classes at once: one read, zero extra I/O, so there is
+// nothing left to be inconsistent OR unavailable between. If
+// authverify's own validation rules ever change, this copy needs a
+// matching update; it is a diagnostic re-check, not the load path
+// Verify() actually uses, which is unchanged.
 func (v *Verifier) CheckJWKS() error {
 	raw, err := readJWKSFileForCheck(v.jwksPath)
 	if err != nil {
@@ -133,25 +158,59 @@ func (v *Verifier) CheckJWKS() error {
 		return fmt.Errorf("jwks document at %s is not a single well-formed JSON value "+
 			"(trailing or malformed content after what may be a valid document)", v.jwksPath)
 	}
+	return hasUsableEd25519Key(raw)
+}
 
-	snapshot, err := os.CreateTemp("", "jwks-readyz-check-*.json")
-	if err != nil {
-		return fmt.Errorf("jwks: create snapshot temp file: %w", err)
-	}
-	snapshotPath := snapshot.Name()
-	defer os.Remove(snapshotPath)
-	if _, err := snapshot.Write(raw); err != nil {
-		snapshot.Close()
-		return fmt.Errorf("jwks: write snapshot: %w", err)
-	}
-	if err := snapshot.Close(); err != nil {
-		return fmt.Errorf("jwks: close snapshot: %w", err)
-	}
+// jwksKeyEntry and jwksDoc mirror authverify.jwks.go's unexported jwk and
+// jwksDocument shapes (RFC 7517 JWKS) closely enough to re-validate key
+// material in-memory. See CheckJWKS's doc comment for why this exists
+// instead of a second file read in any form.
+type jwksKeyEntry struct {
+	KeyType string `json:"kty"`
+	Curve   string `json:"crv"`
+	KeyID   string `json:"kid"`
+	Use     string `json:"use"`
+	Alg     string `json:"alg"`
+	X       string `json:"x"`
+}
 
-	if _, err := authverify.NewEd25519JWKSVerifier(snapshotPath).Keys(); err != nil {
-		return err
+type jwksDoc struct {
+	Keys []jwksKeyEntry `json:"keys"`
+}
+
+// hasUsableEd25519Key re-validates the SAME rules
+// authverify.Ed25519JWKSVerifier.Keys() applies -- OKP/Ed25519/EdDSA,
+// empty-or-"sig" use, a non-empty <=256-byte unique kid, and a
+// correctly-sized Ed25519 public key -- directly against raw, returning
+// authverify.ErrInvalidJWKS on any violation (the same sentinel Keys()
+// itself returns, for a consistent error identity across both code
+// paths).
+func hasUsableEd25519Key(raw []byte) error {
+	var doc jwksDoc
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&doc); err != nil || len(doc.Keys) == 0 {
+		return authverify.ErrInvalidJWKS
+	}
+	seen := make(map[string]bool, len(doc.Keys))
+	for _, candidate := range doc.Keys {
+		key, err := base64.RawURLEncoding.DecodeString(candidate.X)
+		if err != nil || candidate.KeyType != "OKP" || candidate.Curve != "Ed25519" || candidate.Alg != "EdDSA" ||
+			(candidate.Use != "" && candidate.Use != "sig") || !validJWKSKeyID(candidate.KeyID) ||
+			len(key) != ed25519.PublicKeySize {
+			return authverify.ErrInvalidJWKS
+		}
+		if seen[candidate.KeyID] {
+			return authverify.ErrInvalidJWKS
+		}
+		seen[candidate.KeyID] = true
 	}
 	return nil
+}
+
+func validJWKSKeyID(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= 256
 }
 
 // Verify parses and verifies tokenString as an effective-principal

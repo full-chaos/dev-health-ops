@@ -4,12 +4,31 @@ inventory contract (guardrail G-1: a route without a registered profile
 fails CI and may not ship).
 
 Modelled on ``ci/check_transitional_inventory.py`` (CUT-01) -- same shape:
-independent re-discovery from source (never trusts
+independent re-discovery (never trusts
 ``contracts/auth/v1/endpoint-profiles.ops.json`` itself for what surfaces
 exist), a discovery/inventory cross-check, and staleness/content-drift
 validation on every anchor. Discovery is delegated to
-``ci/discover_ops_routes.py`` (already built by lane auth-cp/L1 as this
-gate's discovery half) rather than re-implemented here.
+``ci/discover_ops_routes.py`` rather than re-implemented here.
+
+CHAOS-4761 changed what "independent" means here, and it is the single most
+important property of this gate. Discovery used to re-derive the surface set
+by matching decorators and ``include_router`` calls in SOURCE TEXT. The
+inventory was built from the same patterns, so the two shared a blind spot:
+they agreed with each other while saying nothing about anything neither
+looked at. Discovery now enumerates from the SERVED objects -- ``app.routes``
+on each deployed FastAPI application and every resolver-bearing field on the
+served ``strawberry.Schema`` -- so the set is what the frameworks will
+dispatch, not what a pattern remembered to match. Three defects that survived
+the old cross-check and cannot survive this one: three ``@strawberry.
+subscription`` resolvers that no pattern matched; a router mounted twice,
+collapsed to its first mount; and two ``@strawberry.field`` examples inside a
+DOCSTRING, profiled as if they were live surfaces.
+
+A row is matched to a surface by its DEPLOYED IDENTITY -- ``(service, method,
+route)`` for REST, the resolver's python name for GraphQL -- not by its source
+anchor. The anchor is then verified against where the served callable is
+actually defined. Identity-by-anchor was what made a legitimate two-mount
+pair look like a duplicate (CHAOS-4760).
 
 Every check EXPRESSIBLE as a plain JSON Schema constraint (required fields,
 field types, enums, ``additionalProperties``, nested ``$defs`` shapes like
@@ -28,14 +47,15 @@ anchors (need a filesystem read), cross-row uniqueness, the discovery
 cross-check, and the "null must carry a gaps entry" business rule.
 
 Fails (exit 1, with a human-readable report) when:
-  1. UNOWNED SURFACE -- a discovered REST route or GraphQL resolver has no
-     row in the inventory.
-  2. PHANTOM ROW -- a row's ``source`` anchor does not correspond to any
-     independently-discovered surface (stale row).
+  1. UNOWNED SURFACE -- a REST route or GraphQL resolver the application
+     actually serves has no row in the inventory.
+  2. PHANTOM ROW -- a row names a surface the served application/schema does
+     not expose: either it was removed, or it never existed.
   3. DUPLICATE ID -- two rows share the same ``id``; or DUPLICATE SURFACE
-     OWNERSHIP -- two rows with DIFFERENT ids both claim the same
-     discovered ``(file, line)`` surface (worse than a missing row: both
-     look registered, possibly with contradicting classifications).
+     OWNERSHIP -- two rows with DIFFERENT ids both claim the same served
+     surface (worse than a missing row: both look registered, possibly with
+     contradicting classifications). Keyed on the deployed identity, so the
+     two correct rows for one router mounted on two apps are NOT a duplicate.
   4. CLOSED-VOCABULARY VIOLATION -- an ``accepted_credential_classes`` or
      ``issued_credential[].class_id`` entry absent from
      ``contracts/auth/v1/credential-classes.json`` (the one closed
@@ -47,9 +67,14 @@ Fails (exit 1, with a human-readable report) when:
      value outside the schema's own enum -- read live by the real
      validator, so a schema-level vocabulary addition (e.g.
      ``server_action``) is accepted without a checker code change.
-  5. ANCHOR DRIFT -- a matched row's ``method``/``route``
-     (REST) or ``graphql_field_name``/``surface_kind`` (GraphQL) no longer
-     agrees with what independent discovery finds at that same file:line;
+  5. STALE ANCHOR -- a matched row's ``source`` file:line is not where the
+     served endpoint/resolver is defined, or (GraphQL) its ``surface_kind``
+     disagrees with what the served schema says the field is; or
+     EXTERNAL SURFACE WITHOUT PROVENANCE -- a row owning a surface whose
+     handler comes from a third-party package (fastapi's ``/docs`` and
+     ``/openapi.json``, strawberry's GraphQL router, the prometheus
+     instrumentator's ``/metrics``) does not name that package in ``gaps``,
+     so it reads as describing code in this repository when it does not;
      or TRIVIAL ANCHOR -- a ``primary_validator``/``reachable_validators``/
      ``issued_credential`` anchor whose line is an obviously-trivial
      placeholder (``return {}``, a bare ``}``, ...) rather than real
@@ -120,25 +145,23 @@ Fails (exit 1, with a human-readable report) when:
       to keep. Merge-gate-verified gap: duplicating a real class (same
       ``class_id``, different ``display_name``) previously passed with
       ``errors == []``.
-  11. UNVERIFIED ROUTE -- a row's REST ``source`` anchor resolves (via
-      discovery's own ``(file, line)`` key) to a route discovery could NOT
-      attribute to a mount path (``resolution`` is ``UNRESOLVED_ROUTER`` or
-      ``UNMOUNTED_ROUTER`` -- a dotted or otherwise dynamic
-      ``include_router`` discovery's static AST walk cannot follow, see
-      ``ci/discover_ops_routes.py``). Without a resolved ``full_path``/
-      ``app_root``, this file cannot check the row's claimed ``route`` or
-      ``service`` against anything real -- previously it silently skipped
-      both checks (merge-gate P1: a row with a false ``route`` and a
-      wrong-but-VALID ``service`` passed unchecked, the exact "looks
-      registered, isn't actually verified" defect class this whole gate
-      exists to close). Now it FAILS CLOSED: exits non-zero naming the row,
-      unless that row's id has an entry with a non-empty ``reason`` in
-      ``contracts/auth/v1/unresolved-route-allowlist.json`` (a human
-      reviewed it and is vouching for the row some other way -- code
-      review, manual route verification, ...). An allowlist entry excuses
-      exactly ONE row id, never a pattern or a whole file; an entry with no
-      ``reason`` is itself an error (ALLOWLIST ENTRY MISSING REASON) so the
-      file can never be used to blanket-suppress this check.
+  11. DISCOVERY UNAVAILABLE -- the deployed apps or the served GraphQL
+      schema could not be imported, or the format checker backing
+      ``"format": "date-time"`` is not installed. Both raise rather than
+      returning an error list, and ``main()`` turns the raise into a non-zero
+      exit with a message naming the fix. Neither degrades to a partial or
+      unchecked run: a discovery that cannot see the application would make
+      every cross-check above pass while checking nothing, which is the exact
+      defect class this gate exists to close.
+
+      This REPLACES the former ``UNVERIFIED ROUTE`` failure and its
+      ``unresolved-route-allowlist.json`` escape hatch, both removed with
+      CHAOS-4761. They existed because a static walk could not follow a
+      dynamic ``include_router`` and had to fail closed on the routes it
+      could not resolve. Enumerating ``app.routes`` has nothing to resolve:
+      a route the app serves is in that list however it got there, so the
+      set is complete by construction and there is nothing left for a human
+      to vouch for.
 
 ``issued_credential`` is deliberately kept three/four-valued, never
 collapsed: non-empty array (mints these -- every class_id validated, every
@@ -156,43 +179,39 @@ non-empty string) is checked.
 
 What this gate does NOT guarantee (read before trusting a green run for
 anything this list doesn't cover):
-  * It does not discover GraphQL SUBSCRIPTIONS. Discovery matches
-    ``@strawberry.field`` and ``@strawberry.mutation`` only, so the three
-    ``@strawberry.subscription`` resolvers in ``api/graphql/subscriptions.py``
-    (``:60``, ``:97``, ``:134``) are neither discovered nor profiled, despite
-    being mounted on the served schema (``api/graphql/schema.py:1028``). The
-    361-row count EXCLUDES them, and a green run says nothing about them.
-    They are not unauthenticated: all three authenticate at connect through
-    the same ``context_getter``/``get_context`` path as every other GraphQL
-    surface, before the websocket is accepted. The gap is in coverage, not in
-    enforcement.
-    Tracked as CHAOS-4761, which replaces source-text discovery with
-    enumeration from the served application and schema objects -- the set a
-    text pattern can miss, a live object cannot. This is the same root cause
-    as the multi-mount gap below: the discoverer's scope is narrower than the
-    claim built on it, and a cross-check between an inventory and a discoverer
-    that share a blind spot is self-consistent while proving nothing about
-    what neither looks at.
-  * It does not model a route mounted more than once. Discovery's mount
-    walk (``ci/discover_ops_routes.py``) collapses a router included from
-    multiple FastAPI parents to the FIRST resolvable parent chain's prefix
-    only (``full_prefix()``'s ``prefixes[0]``) -- a second, different mount
-    of the same router is never checked against, so this gate cannot notice
-    a row that is only correct for the collapsed-away mount. Known gap,
-    tracked separately as CHAOS-4760, not fixed here.
-  * A row whose surface discovery cannot resolve (see failure 11,
-    UNVERIFIED ROUTE, above) fails closed pending a reasoned entry in the
-    unresolved-route allowlist -- it is not verified, only explicitly
-    accepted by a human reviewer.
+  * The surface set is the set THIS PROCESS'S environment produces. Discovery
+    imports the apps; a router mounted only under some runtime configuration
+    is enumerated only when that configuration is present. On this tree every
+    ``include_router`` reachable from either app root is unconditional and the
+    ``/metrics`` mount is backed by a hard dependency -- a property of the
+    tree, not a guarantee of the mechanism. A route whose presence is
+    configuration-dependent must say so in its row's ``gaps``.
+  * A router that is never mounted on either app root is not reported. It
+    serves no request, so it is not an auth surface -- but neither is it
+    audited here, and dead code that a later commit mounts arrives as a new
+    UNOWNED SURFACE rather than as a row already thought through.
+  * A GraphQL row is keyed on the resolver's python name alone; the inventory
+    has no field for the resolver's parent type. A name that resolves on two
+    types is reported (AMBIGUOUS RESOLVER NAME) rather than absorbed, but the
+    schema would need a new field to profile both.
+  * ``exposure`` remains an ASSERTED boundary. No repo in this gate's read set
+    contains the edge path-map, so nothing here can verify whether a surface
+    the app mounts is actually reachable from outside. ``reachability:
+    "unknown"`` plus a gaps entry is the honest state, and the gate enforces
+    that it is stated rather than defaulted.
+  * A row's reasoning fields (``classification``, ``accepted_credential_
+    classes``, ``primary_validator`` and the rest) are checked for
+    consistency, vocabulary and anchor validity -- never for being RIGHT
+    about what the code does. The set is now verified; the judgement in each
+    row is still human work.
 This file makes no claim of complete or exhaustive coverage anywhere else
 either: every check above is scoped to what it can independently verify
-from discovery and the schemas, nothing more.
+from the served objects and the schemas, nothing more.
 
 Usage:
     python3 ci/check_endpoint_profiles.py [--root PATH] [--inventory PATH]
         [--schema PATH] [--credential-classes PATH]
         [--credential-classes-schema PATH]
-        [--unresolved-route-allowlist PATH]
 """
 
 from __future__ import annotations
@@ -235,7 +254,6 @@ DEFAULT_INVENTORY = "contracts/auth/v1/endpoint-profiles.ops.json"
 DEFAULT_SCHEMA = "contracts/auth/v1/endpoint-profile.schema.json"
 DEFAULT_CREDENTIAL_CLASSES = "contracts/auth/v1/credential-classes.json"
 DEFAULT_CREDENTIAL_CLASSES_SCHEMA = "contracts/auth/v1/credential-classes.schema.json"
-DEFAULT_UNRESOLVED_ROUTE_ALLOWLIST = "contracts/auth/v1/unresolved-route-allowlist.json"
 DEFAULT_DISCOVERER = "ci/discover_ops_routes.py"
 
 # Deployed FastAPI() app roots discover_ops_routes.py resolves ops REST
@@ -371,84 +389,105 @@ def _check_duplicate_class_ids(credential_classes: dict) -> list[str]:
     return errors
 
 
-def _load_unresolved_route_allowlist(path: Path) -> tuple[set[str], list[str]]:
-    """Loads the unresolved-route allowlist -- a narrow, human-reviewed
-    escape hatch for guardrail 11 (UNVERIFIED ROUTE, see module docstring).
-    Format::
-
-        {
-          "schema_version": "unresolved-route-allowlist.v1",
-          "entries": [
-            {"id": "<exact row id>", "reason": "<why this was reviewed>"}
-          ]
-        }
-
-    Returns (row ids excused with a valid non-empty reason, format errors).
-    An entry excuses EXACTLY the one row id it names -- there is no pattern
-    or wildcard form. An entry with a missing/empty `reason` does NOT
-    excuse its row (fails closed) and is itself reported as
-    ALLOWLIST ENTRY MISSING REASON, so this file can never be turned into a
-    blanket suppression by leaving `reason` off. Malformed shapes (not an
-    object, `entries` not a list, an unreadable/non-JSON file) degrade to
-    an empty allowlist plus a reported error, rather than crashing -- same
-    fail-closed-and-say-why posture as the rest of this file."""
-    try:
-        data = load_json(path)
-    except (OSError, json.JSONDecodeError) as exc:
-        return set(), [
-            f"ALLOWLIST UNREADABLE: {path} could not be read as JSON ({exc})"
-        ]
-    if not isinstance(data, dict):
-        return set(), [f"ALLOWLIST MALFORMED: {path} top level must be an object"]
-    entries = data.get("entries", [])
-    if not isinstance(entries, list):
-        return set(), [f"ALLOWLIST MALFORMED: {path} 'entries' must be an array"]
-
-    allowlisted: set[str] = set()
-    errors: list[str] = []
-    for idx, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            errors.append(
-                f"ALLOWLIST MALFORMED: entries[{idx}] in {path.name} must be an object"
-            )
-            continue
-        rid = entry.get("id")
-        if not isinstance(rid, str) or not rid:
-            errors.append(
-                f"ALLOWLIST MALFORMED: entries[{idx}] in {path.name} is missing "
-                "a non-empty string 'id'"
-            )
-            continue
-        reason = entry.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            errors.append(
-                f"ALLOWLIST ENTRY MISSING REASON: {rid!r} (entries[{idx}] in "
-                f"{path.name}) has no non-empty 'reason' -- every allowlist "
-                "entry must explain why this specific row was reviewed and "
-                "accepted despite an unresolved route"
-            )
-            continue
-        allowlisted.add(rid)
-    return allowlisted, errors
-
-
 # ---------------------------------------------------------------------------
 # Discovery cross-check
 # ---------------------------------------------------------------------------
 
 
-def _discovered_surface_map(discovered: dict) -> dict[tuple[str, int], dict]:
-    """Every discovered REST route + GraphQL resolver keyed by (file, line),
-    tagged with a ``_surface_type`` ('rest'/'graphql') distinct from the
-    GraphQL resolver's own ``kind`` field ('field'/'mutation'), so a matched
-    row's content can be checked against the right shape without either
-    clobbering the other."""
-    out: dict[tuple[str, int], dict] = {}
+def _live_surface_map(discovered: dict) -> tuple[dict[tuple, dict], list[str]]:
+    """Every surface the deployed apps and the served GraphQL schema actually
+    serve, keyed by its DEPLOYED IDENTITY, plus any errors raised while
+    building the map.
+
+    The key was ``(file, line)`` until CHAOS-4761. That was the defect behind
+    CHAOS-4760, not merely adjacent to it: one router mounted at two prefixes
+    is TWO served surfaces with two different paths and possibly two different
+    middleware stacks, but only ONE ``(file, line)``, so the two correct rows
+    describing them collided under the duplicate-surface rule while a row
+    covering only one of them looked complete. Keying on what the framework
+    dispatches -- ``(service, method, path)`` for REST, the resolver's python
+    name for GraphQL -- makes mount multiplicity fall out of the object graph.
+    The anchor is still checked; it is an ATTRIBUTE of the surface now rather
+    than its identity.
+    """
+    errors: list[str] = []
+    out: dict[tuple, dict] = {}
+
     for r in discovered["routes"]:
-        out[(r["file"], r["line"])] = {"_surface_type": "rest", **r}
+        app_root = r.get("app_root")
+        service = _APP_ROOT_SERVICE.get(app_root) if isinstance(app_root, str) else None
+        if service is None:
+            errors.append(
+                f"UNKNOWN APP ROOT: {r.get('method')} {r.get('path')} is served by "
+                f"app_root {app_root!r}, which is not in _APP_ROOT_SERVICE -- a "
+                "newly deployed FastAPI() app must be added there (and to "
+                "DEPLOYED_APPS in ci/discover_ops_routes.py) before this gate can "
+                "attribute rows to it"
+            )
+            continue
+        key: tuple = ("rest", service, r["method"], r["path"])
+        if key in out:
+            errors.append(
+                f"AMBIGUOUS LIVE SURFACE: {service} serves {r['method']} "
+                f"{r['path']} from more than one route object -- discovery "
+                "cannot attribute a row to one of them"
+            )
+            continue
+        out[key] = {"_surface_type": "rest", "service": service, **r}
+
     for r in discovered["graphql"]:
-        out[(r["file"], r["line"])] = {"_surface_type": "graphql", **r}
-    return out
+        python_name = r.get("python_name")
+        if not python_name:
+            errors.append(
+                f"UNNAMED RESOLVER: {r.get('parent_type')}.{r.get('name')} has no "
+                "python_name -- the inventory keys GraphQL rows on it"
+            )
+            continue
+        key = ("graphql", python_name)
+        if key in out:
+            # The inventory has no field for the resolver's parent type, so a
+            # python_name collision between (say) a root field and a nested
+            # one would silently let one row stand for two surfaces. Reported
+            # rather than absorbed; the fix would be a schema field for the
+            # parent type, which this tree does not need yet.
+            errors.append(
+                f"AMBIGUOUS RESOLVER NAME: {python_name!r} resolves on more than "
+                f"one type ({out[key].get('parent_type')} and {r.get('parent_type')}) "
+                "-- inventory rows key on python_name alone and cannot tell them "
+                "apart"
+            )
+            continue
+        out[key] = {"_surface_type": "graphql", **r}
+
+    return out, errors
+
+
+def _row_surface_key(row: dict) -> tuple | None:
+    """The deployed identity a row claims, in the same shape
+    ``_live_surface_map`` keys on. ``None`` when the row does not carry
+    enough to name a surface (already reported by schema validation)."""
+    kind = row.get("surface_kind")
+    if kind == "rest":
+        service, method, route = row.get("service"), row.get("method"), row.get("route")
+        if not (
+            isinstance(service, str)
+            and isinstance(method, str)
+            and isinstance(route, str)
+        ):
+            return None
+        return ("rest", service, method, route)
+    if kind in ("graphql_field", "graphql_mutation", "graphql_subscription"):
+        name = row.get("graphql_field_name")
+        if not isinstance(name, str):
+            return None
+        return ("graphql", name)
+    return None
+
+
+def _describe_key(key: tuple) -> str:
+    if key[0] == "rest":
+        return f"REST {key[2]} {key[3]} [{key[1]}]"
+    return f"GraphQL resolver {key[1]!r}"
 
 
 def check(
@@ -457,7 +496,6 @@ def check(
     schema_path: Path,
     credential_classes_path: Path,
     credential_classes_schema_path: Path | None = None,
-    unresolved_route_allowlist_path: Path | None = None,
 ) -> list[str]:
     if jsonschema is None:
         raise RuntimeError(
@@ -468,6 +506,22 @@ def check(
             "nothing. Install it (uv sync in an environment where that "
             "works, or `pip install jsonschema` for a quick local check) "
             f"and retry. Original import error: {_JSONSCHEMA_IMPORT_ERROR}"
+        )
+
+    # A `format_checker` is not enough on its own. `jsonschema` only checks
+    # "date-time" when a backing implementation is importable; without
+    # `rfc3339-validator` it registers no checker for that format and
+    # `generated_at: "not-a-date"` validates cleanly -- the fix would look
+    # applied while changing nothing, which is the exact defect class this
+    # gate exists to close. Declared in pyproject.toml as `rfc3339-validator`;
+    # verified here rather than assumed, and fatal rather than degraded.
+    if "date-time" not in jsonschema.Draft202012Validator.FORMAT_CHECKER.checkers:
+        raise RuntimeError(
+            "jsonschema has no 'date-time' format checker registered, so "
+            '`"format": "date-time"` in the schemas would validate ANY '
+            "string -- refusing to run with a format check that silently "
+            "checks nothing. Install the backing implementation "
+            "('rfc3339-validator', declared in pyproject.toml) and retry."
         )
 
     errors: list[str] = []
@@ -484,18 +538,15 @@ def check(
         )
     credential_classes_schema = load_json(credential_classes_schema_path)
 
-    if unresolved_route_allowlist_path is None:
-        unresolved_route_allowlist_path = inventory_path.with_name(
-            "unresolved-route-allowlist.json"
-        )
-    allowlisted_route_ids, allowlist_errors = _load_unresolved_route_allowlist(
-        unresolved_route_allowlist_path
-    )
-    errors.extend(allowlist_errors)
-
+    # Discovery IMPORTS the deployed apps and the served GraphQL schema
+    # (CHAOS-4761). An import failure is fatal here for the same reason a
+    # missing `jsonschema` is: the alternative is an empty or partial surface
+    # set, which makes every cross-check below pass while checking nothing.
+    # Never caught and downgraded to a warning.
     discoverer = _load_module(root / DEFAULT_DISCOVERER, "discover_ops_routes")
     discovered = discoverer.discover(root)
-    surface_map = _discovered_surface_map(discovered)
+    surface_map, surface_map_errors = _live_surface_map(discovered)
+    errors.extend(surface_map_errors)
     discovered_keys = set(surface_map)
 
     # --- 6. FULL Draft 2020-12 JSON Schema validation ------------------
@@ -511,7 +562,9 @@ def check(
     # every other enum, so a legitimate future schema addition to either
     # would have been rejected as UNKNOWN). Errors are sorted by JSON path
     # for stable, diffable output.
-    validator = jsonschema.Draft202012Validator(schema)
+    validator = jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+    )
     for err in sorted(
         validator.iter_errors(inventory), key=lambda e: list(map(str, e.path))
     ):
@@ -531,7 +584,10 @@ def check(
     # guarantee this vocabulary exists to enforce. Validated the same way
     # the inventory is validated above: real Draft 2020-12 structural
     # validation, not a hand-rolled re-derivation of the schema's rules.
-    cc_validator = jsonschema.Draft202012Validator(credential_classes_schema)
+    cc_validator = jsonschema.Draft202012Validator(
+        credential_classes_schema,
+        format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+    )
     for err in sorted(
         cc_validator.iter_errors(credential_classes),
         key=lambda e: list(map(str, e.path)),
@@ -561,16 +617,21 @@ def check(
     # re-derived here -- see this function's own history for the bug class
     # that produces.
     ids_seen: dict[str, str] = {}
-    row_keys: set[tuple[str, int]] = set()
-    # Every (file, line) claimed as a row's `source`, mapped to every row
-    # id that claims it -- a discovered surface must be owned by EXACTLY
-    # one row. Two distinct ids anchored at the same surface (Codex-verified
-    # gap: possible with conflicting classifications, e.g. one row says
-    # public/no-creds and another says protected for the identical route)
-    # is worse than a missing row: both look registered, so neither reviewer
-    # nor gate has a reason to look closer. Not expressible as a JSON Schema
-    # constraint -- it's a cross-row uniqueness rule.
-    surface_owners: dict[tuple[str, int], list[str]] = {}
+    row_keys: set[tuple] = set()
+    # Every DEPLOYED IDENTITY claimed by a row, mapped to every row id that
+    # claims it -- a served surface must be owned by EXACTLY one row. Two
+    # distinct ids on the same surface (Codex-verified gap: possible with
+    # conflicting classifications, e.g. one row says public/no-creds and
+    # another says protected for the identical route) is worse than a missing
+    # row: both look registered, so neither reviewer nor gate has a reason to
+    # look closer. Not expressible as a JSON Schema constraint -- it's a
+    # cross-row uniqueness rule.
+    #
+    # Keyed on (service, method, path) / resolver name since CHAOS-4761, NOT
+    # on the source anchor: two rows legitimately share one `file:line` when
+    # one router is mounted on two apps, and rejecting that pair was the false
+    # positive half of CHAOS-4760.
+    surface_owners: dict[tuple, list[str]] = {}
     for idx, row in enumerate(rows):
         if not isinstance(row, dict):
             # Already reported by the full schema validation above; nothing
@@ -713,34 +774,49 @@ def check(
                     label=f"reachable_validators[{rv_idx}] anchor",
                 )
 
-        # --- source anchor: required, existence + content-drift ---------
-        src = row.get("source")
-        if isinstance(src, dict) and "file" in src and "line" in src:
-            key = (src["file"], src["line"])
-            row_keys.add(key)
-            surface_owners.setdefault(key, []).append(rid)
+        # --- the deployed identity this row claims ----------------------
+        surface_key = _row_surface_key(row)
+        if surface_key is not None:
+            row_keys.add(surface_key)
+            surface_owners.setdefault(surface_key, []).append(rid)
 
     # 3b. duplicate surface ownership: two DIFFERENT ids both claiming the
-    # same discovered (file, line) surface. Worse than a missing row -- both
-    # look registered, possibly with contradicting classifications, and
-    # nothing else here would notice (the plain duplicate-id check above
-    # only catches identical ids; the discovery cross-check below only
-    # notices a surface with ZERO owners, not two).
+    # same served surface. Worse than a missing row -- both look registered,
+    # possibly with contradicting classifications, and nothing else here would
+    # notice (the plain duplicate-id check above only catches identical ids;
+    # the parity cross-check below only notices a surface with ZERO owners,
+    # not two).
     for key, owners in surface_owners.items():
         if len(owners) > 1:
-            file, line = key
             errors.append(
                 f"DUPLICATE SURFACE OWNERSHIP: rows {sorted(owners)!r} all claim "
-                f"{file}:{line} -- exactly one row may own a discovered surface"
+                f"{_describe_key(key)} -- exactly one row may own a served surface"
             )
 
     # --- 1 & 2. bidirectional surface/row parity ------------------------
+    # Both directions, against the SERVED set: a surface the apps serve with
+    # no row fails, and a row naming a surface the apps do not serve fails.
+    # Neither direction can be satisfied by agreeing with a source-text
+    # pattern, which is what made the old cross-check self-consistent while
+    # proving nothing (CHAOS-4761).
     for key, surface in surface_map.items():
         if key not in row_keys:
-            file, line = key
+            # For a third-party handler the definition site is inside a
+            # virtualenv, which is noise in a CI log and unreviewable in a
+            # diff -- name the providing module instead.
+            in_ops = surface.get(
+                "endpoint_in_ops_source", surface.get("resolver_in_ops_source")
+            )
+            if in_ops and surface.get("file"):
+                anchor = f" ({surface['file']}:{surface['line']})"
+            elif surface.get("endpoint_module"):
+                anchor = f" (handler from {surface['endpoint_module']})"
+            else:
+                anchor = ""
             errors.append(
-                f"UNOWNED SURFACE: {surface['_surface_type']} at {file}:{line} has no row in "
-                f"{inventory_path.name}. Add an owning row (guardrail G-1)."
+                f"UNOWNED SURFACE: {_describe_key(key)}{anchor} is served by the "
+                f"application but has no row in {inventory_path.name}. Add an "
+                "owning row (guardrail G-1)."
             )
 
     for row in rows:
@@ -749,112 +825,118 @@ def check(
         src = row.get("source")
         if not isinstance(src, dict) or "file" not in src or "line" not in src:
             continue
-        key = (src["file"], src["line"])
         rid = row.get("id", "<no id>")
-        if key not in discovered_keys:
+        row_key = _row_surface_key(row)
+        if row_key is None:
+            if row.get("surface_kind") == "server_action":
+                # Schema-valid (ruling: server_action IS a surface kind) but
+                # not something ops serves -- ops is a Python FastAPI backend,
+                # and Next.js Server Actions live in web, checked by web's own
+                # gate. Reported rather than skipped: a row this gate cannot
+                # key is a row it cannot verify, and silently passing it would
+                # be a registered-looking row nothing checked.
+                errors.append(
+                    f"UNCHECKABLE ROW: {row.get('id', '<no id>')!r} has "
+                    "surface_kind='server_action', which this gate cannot "
+                    "attribute to any ops-served surface. Server Actions "
+                    "belong in web's inventory and are checked by web's gate."
+                )
+            continue  # otherwise reported by the full schema validation above
+        if row_key not in discovered_keys:
+            # Before calling it a phantom: is this exact method+path served by
+            # a DIFFERENT app? That is the more specific and more dangerous
+            # defect -- `service` is per DEPLOYED APP, and the same path can be
+            # served by two apps with genuinely different middleware stacks
+            # (the billing-edge pair), so a row on the wrong app silently
+            # invalidates its own reasoning while still describing a real
+            # route. Codex found this by relabelling GET /api/v1/meta to the
+            # also-valid enum value `dev-health-web`; schema validation cannot
+            # catch it, because that IS a real vocabulary member.
+            if row_key[0] == "rest":
+                elsewhere = sorted(
+                    k[1]
+                    for k in discovered_keys
+                    if k[0] == "rest" and k[2:] == row_key[2:]
+                )
+                if elsewhere:
+                    errors.append(
+                        f"SERVICE MISMATCH: row {rid!r} claims service={row_key[1]!r} "
+                        f"for {row_key[2]} {row_key[3]}, but that route is served by "
+                        f"{', '.join(repr(s) for s in elsewhere)} instead "
+                        "(service is per DEPLOYED APP, not per path)"
+                    )
+                    continue
             errors.append(
-                f"PHANTOM ROW: row {rid!r} references {src['file']}:{src['line']} "
-                "which independent discovery did not find there (stale row -- "
-                "re-anchor or remove)"
+                f"PHANTOM ROW: row {rid!r} claims {_describe_key(row_key)}, which the "
+                "served application/schema does not expose (stale row -- "
+                "re-anchor or remove). Two ways this happens: the surface was "
+                "removed, or it never existed and the row was derived from "
+                "something that only looked like one."
             )
             continue
 
-        # --- 5. content/anchor drift: matched row vs discovered surface -
-        surface = surface_map[key]
-        if surface["_surface_type"] == "rest":
-            if row.get("surface_kind") not in ("rest",):
+        # --- 5. anchor drift: matched row vs the live surface -----------
+        # `surface_kind`, `method`, `route` and `service` are the identity the
+        # row was matched ON, so they agree by construction. What still needs
+        # checking is the ANCHOR: the row's file:line must be where the served
+        # endpoint/resolver actually is.
+        surface = surface_map[row_key]
+        live_file, live_line = surface.get("file"), surface.get("line")
+        in_ops_source = surface.get(
+            "endpoint_in_ops_source", surface.get("resolver_in_ops_source")
+        )
+        if in_ops_source:
+            if (src["file"], src["line"]) != (live_file, live_line):
                 errors.append(
-                    f"STALE ANCHOR: row {rid!r} claims surface_kind={row.get('surface_kind')!r} "
-                    f"but {src['file']}:{src['line']} is a REST route (content drift)"
+                    f"STALE ANCHOR: row {rid!r} anchors {_describe_key(row_key)} at "
+                    f"{src['file']}:{src['line']}, but the served "
+                    f"endpoint/resolver is defined at {live_file}:{live_line} "
+                    "(content drift -- re-anchor the row)"
                 )
-            if row.get("method") != surface["method"]:
-                errors.append(
-                    f"STALE ANCHOR: row {rid!r} claims method={row.get('method')!r} "
-                    f"but discovery finds {surface['method']!r} at "
-                    f"{src['file']}:{src['line']} (content drift)"
-                )
-            # --- route/service verification, gated on resolution --------
-            # `service` is per DEPLOYED APP (see _APP_ROOT_SERVICE above),
-            # not a free-text label, and `route` is only meaningful against
-            # a resolved `full_path` -- both need discovery to have actually
-            # resolved this route to a concrete app_root/mount path
-            # (resolution == "OK"). An UNRESOLVED_ROUTER/UNMOUNTED_ROUTER
-            # route (a dotted or otherwise dynamic `include_router`
-            # discovery's static walk cannot follow) carries no app_root or
-            # full_path to check against at all.
-            #
-            # Previously that "nothing to check against" case silently
-            # SKIPPED both the route and service checks -- merge-gate P1: a
-            # row anchored to an unresolved route could claim a false
-            # `route` and a wrong-but-schema-VALID `service` and pass with
-            # zero errors, unverified and indistinguishable from a real,
-            # checked row. This fails closed instead: an unresolved route
-            # is UNVERIFIED ROUTE unless a human has explicitly reviewed
-            # and allowlisted this exact row id with a reason (see
-            # _load_unresolved_route_allowlist above) -- never a silent
-            # pass, and never excusable by pattern or by file.
-            if surface.get("resolution") == "OK":
-                if row.get("route") != surface.get("full_path"):
-                    errors.append(
-                        f"STALE ANCHOR: row {rid!r} claims route={row.get('route')!r} "
-                        f"but discovery resolves {surface.get('full_path')!r} at "
-                        f"{src['file']}:{src['line']} (content drift)"
-                    )
-                app_root = surface.get("app_root")
-                expected_service = (
-                    _APP_ROOT_SERVICE.get(app_root)
-                    if isinstance(app_root, str)
-                    else None
-                )
-                if expected_service is None:
-                    errors.append(
-                        f"UNKNOWN APP ROOT: row {rid!r} is served by app_root "
-                        f"{app_root!r} at {src['file']}:{src['line']}, which is "
-                        "not in _APP_ROOT_SERVICE -- a newly deployed FastAPI() "
-                        "app must be added there before this gate can attribute "
-                        "rows to it"
-                    )
-                elif row.get("service") != expected_service:
-                    errors.append(
-                        f"SERVICE MISMATCH: row {rid!r} claims service="
-                        f"{row.get('service')!r} but {src['file']}:{src['line']} "
-                        f"is served by {expected_service!r} (service is per "
-                        "DEPLOYED APP, not per path -- the same path can be "
-                        "served by two apps with genuinely different "
-                        "middleware, see the billing-edge rows)"
-                    )
-            elif rid not in allowlisted_route_ids:
-                errors.append(
-                    f"UNVERIFIED ROUTE {rid!r}: discovery could not resolve this "
-                    f"route ({surface.get('resolution')}) at {src['file']}:"
-                    f"{src['line']} -- its route and service cannot be verified "
-                    "against a deployed app, so it fails closed. Add a reasoned "
-                    f"entry for this exact row id to "
-                    f"{unresolved_route_allowlist_path.name} once a human has "
-                    "reviewed it, or fix discovery to resolve the include chain."
-                )
-            # else: resolution is not "OK" but this row id is allowlisted --
-            # a human explicitly reviewed and accepted it; route/service
-            # genuinely cannot be verified from here either way (see above).
-        else:  # graphql
-            expected_kind = (
-                "graphql_field" if surface["kind"] == "field" else "graphql_mutation"
+        else:
+            # The endpoint is provided by a third-party package (fastapi's own
+            # /docs and /openapi.json, strawberry's GraphQL router, the
+            # prometheus instrumentator's /metrics), so there is no ops-source
+            # definition to anchor to and the anchor cannot be verified by
+            # equality. The row must instead anchor at an ops-source line that
+            # EXISTS and must NAME the providing module in `gaps`, so a reader
+            # can tell "we registered someone else's handler here" from "we
+            # wrote this" -- rather than the row silently reading like the
+            # latter.
+            # _check_anchor_exists speaks the `anchor` $def's row_key name
+            # ("path"); a row's `source` calls the same thing "file".
+            _check_anchor_exists(
+                root,
+                rid,
+                {"path": src["file"], "line": src["line"]},
+                errors,
+                label="source anchor",
             )
+            module = (surface.get("endpoint_module") or "").split(".")[0]
+            if module and not _gaps_mentions(row, module):
+                errors.append(
+                    f"EXTERNAL SURFACE WITHOUT PROVENANCE: row {rid!r} owns "
+                    f"{_describe_key(row_key)}, whose handler is provided by "
+                    f"{surface.get('endpoint_module')!r} and not by ops source. "
+                    f"Its gaps must name {module!r} so the row is not read as "
+                    "describing code in this repository."
+                )
+        # --- surface_kind must match what the object actually is --------
+        # Not implied by the identity match: a GraphQL row is matched on its
+        # resolver name alone, so a row could call a subscription a plain
+        # field and still match. REST rows are matched on surface_kind
+        # already (see _row_surface_key).
+        if surface["_surface_type"] == "graphql":
+            expected_kind = surface["kind"]
             if row.get("surface_kind") != expected_kind:
                 errors.append(
-                    f"STALE ANCHOR: row {rid!r} claims surface_kind={row.get('surface_kind')!r} "
-                    f"but {src['file']}:{src['line']} is a {expected_kind} resolver (content drift)"
+                    f"STALE ANCHOR: row {rid!r} claims surface_kind="
+                    f"{row.get('surface_kind')!r} but {surface['python_name']!r} "
+                    f"is a {expected_kind} on the served schema (content drift)"
                 )
-            if row.get("graphql_field_name") != surface["name"]:
-                errors.append(
-                    f"STALE ANCHOR: row {rid!r} claims graphql_field_name="
-                    f"{row.get('graphql_field_name')!r} but discovery finds "
-                    f"{surface['name']!r} at {src['file']}:{src['line']} (content drift)"
-                )
-            # --- service must match discovery's app attribution --------
-            # GraphQL resolvers have no app_root from discovery (see
-            # _GRAPHQL_SERVICE above); the whole schema is mounted from one
-            # app, so any GraphQL row not claiming that app is a mismatch.
+            # The whole GraphQL schema is mounted from exactly one app (see
+            # _GRAPHQL_SERVICE), so any GraphQL row not claiming that app is
+            # a mismatch.
             if row.get("service") != _GRAPHQL_SERVICE:
                 errors.append(
                     f"SERVICE MISMATCH: row {rid!r} claims service="
@@ -877,7 +959,8 @@ def _gaps_mentions(row: dict, needle: str) -> bool:
 # check/creation logic. This is a DENYLIST, not a positive "looks like real
 # code" test: an earlier positive-signal design (require a function call or
 # assignment on the line) was tried and rejected -- verified against the
-# real 361-row inventory, it produced 602 false positives, because this
+# real inventory (361 rows at the time; 370 now), it produced 602 false
+# positives, because this
 # dataset's own anchoring convention is to point at a decorator/def
 # DECLARATION line (e.g. "async def require_admin(", "@app.api_route(")
 # rather than a line that itself performs work. A denylist of known-trivial
@@ -1138,11 +1221,6 @@ def main(argv=None) -> int:
         default=DEFAULT_CREDENTIAL_CLASSES_SCHEMA,
         help="credential-classes schema JSON path",
     )
-    parser.add_argument(
-        "--unresolved-route-allowlist",
-        default=DEFAULT_UNRESOLVED_ROUTE_ALLOWLIST,
-        help="unresolved-route allowlist JSON path (guardrail 11, UNVERIFIED ROUTE)",
-    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -1150,7 +1228,6 @@ def main(argv=None) -> int:
     schema_path = root / args.schema
     credential_classes_path = root / args.credential_classes
     credential_classes_schema_path = root / args.credential_classes_schema
-    unresolved_route_allowlist_path = root / args.unresolved_route_allowlist
 
     # DISCLOSURE-HOLD: report only, printed FIRST and unconditionally --
     # before check() runs at all, so it survives every other failure mode
@@ -1198,7 +1275,6 @@ def main(argv=None) -> int:
             schema_path,
             credential_classes_path,
             credential_classes_schema_path,
-            unresolved_route_allowlist_path,
         )
     except RuntimeError as exc:
         # jsonschema unavailable (see check()'s own guard) or another

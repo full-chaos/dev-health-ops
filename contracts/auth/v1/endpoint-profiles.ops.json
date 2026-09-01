@@ -1,7 +1,7 @@
 {
   "schema_version": "endpoint-profile.v1",
-  "generated_at": "2026-09-01T15:01:05Z",
-  "source_commit": "88b6f0378b98a42443445572cc44cd76cabfee13",
+  "generated_at": "2026-09-01T16:40:00Z",
+  "source_commit": "a12b0a7682974ecb71f0406120806d8a94a59056",
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "rows": [
     {
@@ -40,9 +40,9 @@
       "disclosure_behavior": "Signature failure -> 401; this deployment has no OrgIdMiddleware/CORS/CSRF at all (api/billing_edge.py registers no middleware)."
     },
     {
-      "id": "API_ROUTE /health [dev-health-ops-billing-edge]",
+      "id": "GET,HEAD /health [dev-health-ops-billing-edge]",
       "surface_kind": "rest",
-      "method": "API_ROUTE",
+      "method": "GET,HEAD",
       "route": "/health",
       "graphql_field_name": null,
       "service": "dev-health-ops-billing-edge",
@@ -67,9 +67,9 @@
       "disclosure_behavior": "Always 200/503 body, no auth-shaped disclosure."
     },
     {
-      "id": "API_ROUTE /{path:path} [dev-health-ops-billing-edge]",
+      "id": "DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT /{path:path} [dev-health-ops-billing-edge]",
       "surface_kind": "rest",
-      "method": "API_ROUTE",
+      "method": "DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT",
       "route": "/{path:path}",
       "graphql_field_name": null,
       "service": "dev-health-ops-billing-edge",
@@ -11786,10 +11786,10 @@
       "disclosure_behavior": null
     },
     {
-      "id": "GET /api/v1/billing/invoices/ [dev-health-ops-api]",
+      "id": "GET /api/v1/billing/invoices [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
-      "route": "/api/v1/billing/invoices/",
+      "route": "/api/v1/billing/invoices",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
       "source": {
@@ -12394,10 +12394,10 @@
       "disclosure_behavior": null
     },
     {
-      "id": "POST /api/v1/billing/refunds/ [dev-health-ops-api]",
+      "id": "POST /api/v1/billing/refunds [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "POST",
-      "route": "/api/v1/billing/refunds/",
+      "route": "/api/v1/billing/refunds",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
       "source": {
@@ -12455,10 +12455,10 @@
       "disclosure_behavior": null
     },
     {
-      "id": "GET /api/v1/billing/refunds/ [dev-health-ops-api]",
+      "id": "GET /api/v1/billing/refunds [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
-      "route": "/api/v1/billing/refunds/",
+      "route": "/api/v1/billing/refunds",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
       "source": {
@@ -13124,10 +13124,10 @@
       "disclosure_behavior": null
     },
     {
-      "id": "GET /api/v1/billing/subscriptions/ [dev-health-ops-api]",
+      "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
-      "route": "/api/v1/billing/subscriptions/",
+      "route": "/api/v1/billing/subscriptions",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
       "source": {
@@ -16119,9 +16119,9 @@
       "disclosure_behavior": null
     },
     {
-      "id": "API_ROUTE /health [dev-health-ops-api]",
+      "id": "GET,HEAD /health [dev-health-ops-api]",
       "surface_kind": "rest",
-      "method": "API_ROUTE",
+      "method": "GET,HEAD",
       "route": "/health",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
@@ -16169,9 +16169,9 @@
       "disclosure_behavior": null
     },
     {
-      "id": "API_ROUTE /ready [dev-health-ops-api]",
+      "id": "GET,HEAD /ready [dev-health-ops-api]",
       "surface_kind": "rest",
-      "method": "API_ROUTE",
+      "method": "GET,HEAD",
       "route": "/ready",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
@@ -16219,9 +16219,9 @@
       "disclosure_behavior": null
     },
     {
-      "id": "API_ROUTE /health/workers [dev-health-ops-api]",
+      "id": "GET,HEAD /health/workers [dev-health-ops-api]",
       "surface_kind": "rest",
-      "method": "API_ROUTE",
+      "method": "GET,HEAD",
       "route": "/health/workers",
       "graphql_field_name": null,
       "service": "dev-health-ops-api",
@@ -18860,136 +18860,6 @@
       "action": null,
       "resource_resolver": null,
       "tenant_requirement": "none",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:metrics",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "metrics",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/authz.py",
-        "line": 25
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": null
-    },
-    {
-      "id": "graphql:field:update_setting",
-      "surface_kind": "graphql_field",
-      "method": null,
-      "route": null,
-      "graphql_field_name": "update_setting",
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/graphql/authz.py",
-        "line": 30
-      },
-      "gaps": [
-        "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
-      ],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "GraphQLContext.__post_init__ raises AuthorizationError unless org_id is set (or the user is a superuser); org_id is only ever populated from OrgIdMiddleware's validated-JWT+membership contextvar, so an unauthenticated/anonymous request has no path to a usable context.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/graphql/context.py",
-          "line": 74,
-          "line_end": 82
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": null,
-      "tenant_requirement": "org_scoped",
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
@@ -22617,6 +22487,614 @@
         },
         {
           "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "graphql:subscription:metrics_updated",
+      "surface_kind": "graphql_subscription",
+      "method": null,
+      "route": null,
+      "graphql_field_name": "metrics_updated",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/graphql/subscriptions.py",
+        "line": 60
+      },
+      "gaps": [
+        "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",
+        "Takes org_id as its own argument and yields from the pubsub channel for that org; whether the subscribed org_id is re-checked against the connect-time authenticated org per message was not established in this pass."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "Connect-time only. strawberry's GraphQLRouter calls context_getter -> get_context before the websocket is accepted; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). A subscription therefore authenticates ONCE for the life of the socket, not per yielded message.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": "subscribe:metrics_updated",
+      "resource_resolver": "org_id argument, supplied by the subscriber",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "graphql:subscription:task_status",
+      "surface_kind": "graphql_subscription",
+      "method": null,
+      "route": null,
+      "graphql_field_name": "task_status",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/graphql/subscriptions.py",
+        "line": 97
+      },
+      "gaps": [
+        "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",
+        "Keyed on task_id, not org_id, so it carries no org argument for a per-operation org check to key on. Per-operation task-ownership scoping for this subscription is NOT established by this pass and is recorded as undetermined rather than assumed present -- see tenant_requirement: unknown. Do not read this row as evidence that the standard per-operation org check applies to it."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "Connect-time only. strawberry's GraphQLRouter calls context_getter -> get_context before the websocket is accepted; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). A subscription therefore authenticates ONCE for the life of the socket, not per yielded message.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": "subscribe:task_status",
+      "resource_resolver": "task_id argument, supplied by the subscriber",
+      "tenant_requirement": "unknown",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "graphql:subscription:sync_progress",
+      "surface_kind": "graphql_subscription",
+      "method": null,
+      "route": null,
+      "graphql_field_name": "sync_progress",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/graphql/subscriptions.py",
+        "line": 134
+      },
+      "gaps": [
+        "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",
+        "Takes org_id as its own argument and yields from the pubsub channel for that org; whether the subscribed org_id is re-checked against the connect-time authenticated org per message was not established in this pass."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "Connect-time only. strawberry's GraphQLRouter calls context_getter -> get_context before the websocket is accepted; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). A subscription therefore authenticates ONCE for the life of the socket, not per yielded message.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": "subscribe:sync_progress",
+      "resource_resolver": "org_id argument, supplied by the subscriber",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET,HEAD /openapi.json [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET,HEAD",
+      "route": "/openapi.json",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 217
+      },
+      "gaps": [
+        "Handler provided by fastapi (fastapi.applications), not by ops source. The `source` anchor is the ops-source line that registers it -- the FastAPI() constructor call whose docs_url/openapi_url arguments create these routes -- not a definition in this repository.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "public",
+      "public_rationale": "FastAPI's generated OpenAPI document, registered by the openapi_url argument to the FastAPI() constructor. No route dependency is attached to it.",
+      "accepted_credential_classes": [],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET,HEAD /docs [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET,HEAD",
+      "route": "/docs",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 217
+      },
+      "gaps": [
+        "Handler provided by fastapi (fastapi.applications), not by ops source. The `source` anchor is the ops-source line that registers it -- the FastAPI() constructor call whose docs_url/openapi_url arguments create these routes -- not a definition in this repository.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "public",
+      "public_rationale": "FastAPI's Swagger UI page, registered by the docs_url argument to the FastAPI() constructor. No route dependency is attached to it.",
+      "accepted_credential_classes": [],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET,HEAD /docs/oauth2-redirect [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET,HEAD",
+      "route": "/docs/oauth2-redirect",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 217
+      },
+      "gaps": [
+        "Handler provided by fastapi (fastapi.applications), not by ops source. The `source` anchor is the ops-source line that registers it -- the FastAPI() constructor call whose docs_url/openapi_url arguments create these routes -- not a definition in this repository.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "public",
+      "public_rationale": "FastAPI's Swagger UI OAuth2 redirect helper, registered alongside docs_url. No route dependency is attached to it.",
+      "accepted_credential_classes": [],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET,HEAD /redoc [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET,HEAD",
+      "route": "/redoc",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 217
+      },
+      "gaps": [
+        "Handler provided by fastapi (fastapi.applications), not by ops source. The `source` anchor is the ops-source line that registers it -- the FastAPI() constructor call whose docs_url/openapi_url arguments create these routes -- not a definition in this repository.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "public",
+      "public_rationale": "FastAPI's ReDoc page, registered by the default redoc_url. No route dependency is attached to it.",
+      "accepted_credential_classes": [],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /metrics [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/metrics",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/_observability.py",
+        "line": 43
+      },
+      "gaps": [
+        "Handler provided by prometheus_fastapi_instrumentator, not by ops source. The `source` anchor is the ops-source line that registers it.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "public",
+      "public_rationale": "Prometheus scrape endpoint, registered by Instrumentator().instrument(app).expose(app, endpoint='/metrics'). No route dependency is attached to it.",
+      "accepted_credential_classes": [],
+      "primary_validator": null,
+      "token_shape": null,
+      "reachable_validators": [
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "GET /graphql [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/graphql",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 234
+      },
+      "gaps": [
+        "Handler provided by strawberry (strawberry.fastapi.router), not by ops source. The `source` anchor is the ops-source line that mounts it (app.include_router(graphql_app, prefix='/graphql')); the ops-authored authentication for this transport is the context_getter named in primary_validator.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "strawberry's GraphQLRouter calls the ops context_getter -> get_context for every request on this transport; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). This row covers the TRANSPORT; the per-resolver rows cover what executes behind it.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "POST /graphql [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/graphql",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 234
+      },
+      "gaps": [
+        "Handler provided by strawberry (strawberry.fastapi.router), not by ops source. The `source` anchor is the ops-source line that mounts it (app.include_router(graphql_app, prefix='/graphql')); the ops-authored authentication for this transport is the context_getter named in primary_validator.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1)."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "strawberry's GraphQLRouter calls the ops context_getter -> get_context for every request on this transport; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). This row covers the TRANSPORT; the per-resolver rows cover what executes behind it.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/impersonation.py",
+            "line": 108,
+            "line_end": 141,
+            "note": "_may_be_superuser unverified JWT peek, no path exemption"
+          },
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "subject_to_impersonation_override",
+      "entitlement_requirement": null,
+      "disclosure_behavior": null
+    },
+    {
+      "id": "WEBSOCKET /graphql [dev-health-ops-api]",
+      "surface_kind": "rest",
+      "method": "WEBSOCKET",
+      "route": "/graphql",
+      "graphql_field_name": null,
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "src/dev_health_ops/api/main.py",
+        "line": 234
+      },
+      "gaps": [
+        "Handler provided by strawberry (strawberry.fastapi.router), not by ops source. The `source` anchor is the ops-source line that mounts it (app.include_router(graphql_app, prefix='/graphql')); the ops-authored authentication for this transport is the context_getter named in primary_validator.",
+        "exposure is not stated for this row: no repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside the private network cannot be verified here (residual risk C1).",
+        "WEBSOCKET is the subscription transport: the check in primary_validator runs once at connect, not per message."
+      ],
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "primary_validator": {
+        "description": "strawberry's GraphQLRouter calls the ops context_getter -> get_context for every request on this transport; get_context raises HTTPException(401) unless an Authorization bearer authenticates as an ops access token (enforced by default, GRAPHQL_AUTH_REQUIRED). This row covers the TRANSPORT; the per-resolver rows cover what executes behind it.",
+        "anchor": {
+          "path": "src/dev_health_ops/api/graphql/app.py",
+          "line": 84,
+          "line_end": 85,
+          "note": "get_context 401 when no user authenticated"
+        }
+      },
+      "token_shape": {
+        "token_type": "HS256 JWT",
+        "issuer": "JWT_ISSUER env",
+        "audience": "JWT_AUDIENCE env",
+        "algorithm": "HS256"
+      },
+      "reachable_validators": [
+        {
+          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it. For a websocket upgrade the middleware runs on the HTTP handshake request, so the org contextvar it sets is established once at connect and does not re-resolve per yielded message.",
+          "anchor": {
+            "path": "src/dev_health_ops/api/middleware/__init__.py",
+            "line": 36,
+            "line_end": 91,
+            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        },
+        {
+          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment on every request, with no path exemption. A non-JWT opaque token fails the decode and is caught by a broad except, so this is benign but still observes every credential class before its intended validator.",
           "anchor": {
             "path": "src/dev_health_ops/api/middleware/impersonation.py",
             "line": 108,

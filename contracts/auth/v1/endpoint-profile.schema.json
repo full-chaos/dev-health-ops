@@ -231,11 +231,12 @@
           "type": "object"
         },
         "surface_kind": {
-          "description": "server_action covers Next.js Server Actions ('use server'). They ARE auth surfaces and count toward coverage, but they are NOT method+path surfaces: Next.js dispatches them by an opaque per-build action id that changes every build, so a gate can never key on it. Key them on what IS stable in source -- module path + exported function name -- and leave method/route null.",
+          "description": "server_action covers Next.js Server Actions ('use server'). They ARE auth surfaces and count toward coverage, but they are NOT method+path surfaces: Next.js dispatches them by an opaque per-build action id that changes every build, so a gate can never key on it. Key them on what IS stable in source -- module path + exported function name -- and leave method/route null. graphql_subscription is a websocket-lifetime surface: it authenticates once at connect through the shared context_getter, before the socket is accepted, rather than per operation the way a field or mutation does -- so its row's reasoning must describe the CONNECT-time check, and any per-operation check a field would get must be stated as present or absent rather than assumed.",
           "enum": [
             "rest",
             "graphql_field",
             "graphql_mutation",
+            "graphql_subscription",
             "server_action"
           ]
         },

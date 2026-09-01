@@ -1,604 +1,390 @@
 #!/usr/bin/env python3
-"""CHAOS-3273 Wave 0 source-discovery: every ops REST + GraphQL surface.
+"""CHAOS-4761 discovery: every ops REST + GraphQL surface, taken from the
+SERVED application and schema objects rather than from source text.
 
-Modelled on ``ci/check_transitional_inventory.py`` (CUT-01) -- clones its
-shape rather than inventing a new one: independent re-derivation from
-source (never trusts ``contracts/auth/v1/endpoint-profiles.ops.json``
-itself), a ``Surface``-shaped record per discovered thing, and regex-driven
-discovery functions that a later CI gate (L3) can run the same way this
-script is run here.
+Why this file no longer parses source
+-------------------------------------
+The previous implementation found surfaces by matching decorators and
+``include_router(...)`` calls with regexes and then re-deriving mount paths
+by walking the include graph. That set is only ever as wide as the list of
+patterns someone remembered to write down, and the inventory it was
+cross-checked against was built from the same patterns -- so the two shared
+a blind spot and agreeing with each other proved nothing about what neither
+looked at. Three measured consequences on the tree this replaces:
 
-Two surface kinds:
+  * three ``@strawberry.subscription`` resolvers were mounted on the served
+    schema and matched no pattern, so they were neither discovered nor
+    profiled (CHAOS-4761);
+  * a router mounted at more than one prefix collapsed to the first
+    resolvable parent chain, so the second mount was never checked
+    (CHAOS-4760);
+  * two ``@strawberry.field`` examples inside ``require_permission``'s
+    DOCSTRING (``api/graphql/authz.py:25``, ``:30``) were discovered as
+    real GraphQL surfaces and profiled as if they existed.
 
-  * REST routes -- every ``@<router_alias>.<method>(...)`` decorator and every
-    ``<router_alias>.include_router(...)`` mount edge under
-    ``src/dev_health_ops/api``, resolved to a FULL mount path by walking the
-    include graph from each ``FastAPI()`` root (there are two: the main app
-    in ``api/main.py`` and the separately-deployed billing-edge app in
-    ``api/billing_edge.py`` -- see docs/reference/auth/endpoint-profiles.md
-    "Two deployed apps").
-  * GraphQL resolvers -- every ``@strawberry.field`` / ``@strawberry.mutation``
-    under ``src/dev_health_ops/api/graphql``.
+``app.routes`` and ``strawberry.Schema`` are what the frameworks will
+actually serve. A surface cannot be added in a way that escapes them --
+including via a dynamic or computed ``include_router``, which the old
+static walk had to fail closed on (the retired ``UNVERIFIED ROUTE``
+allowlist). The set comes from the object; the ``file:line`` anchor comes
+from ``inspect`` on the object's own endpoint/resolver function, so it is
+still a real source location and not a guess.
 
-Known limitation (documented, not silently swallowed): a router included via
-a fully dynamic expression that isn't a bare name, an attribute access on a
-bare name, or the one hard-coded ``importlib.import_module("<literal>").router``
-shape used by ``billing/router.py`` (see ``_DYNAMIC_IMPORTLIB_INCLUDE_RE``) is
-not resolved and is reported under ``unresolved_includes`` in the JSON output
-instead of silently dropped.
+The trade
+---------
+Introspection has to IMPORT the application, which is heavier than parsing
+(~17s for ``api.main`` on a warm checkout) and can fail for import-time
+reasons. That failure is loud: ``discover()`` raises, and
+``ci/check_endpoint_profiles.py`` turns the raise into a non-zero exit --
+never a skipped check that reports success. Import-time telemetry side
+effects are suppressed via ``OTEL_ENABLED=false`` before the import.
+
+Known limitations (documented, never silently swallowed)
+--------------------------------------------------------
+  * The set is the set THIS PROCESS'S environment produces. A router mounted
+    only under some runtime configuration is discovered only when that
+    configuration is present. On this tree every ``include_router`` reachable
+    from either app root is unconditional, and the optional
+    ``prometheus-fastapi-instrumentator`` ``/metrics`` mount is backed by a
+    hard dependency in ``pyproject.toml`` -- but that is a property of the
+    tree, not a guarantee of the mechanism, so any route whose presence is
+    configuration-dependent must say so in its inventory row's ``gaps``.
+  * A router that is never mounted on either app root is NOT a surface and is
+    deliberately not reported. The old walk reported it as
+    ``UNMOUNTED_ROUTER``; an unmounted route serves no request.
+  * ``strawberry.Schema._schema`` (the underlying ``GraphQLSchema``) is a
+    private attribute; it is the only way to enumerate EVERY type's fields
+    rather than just the three root types. Its absence raises rather than
+    degrading to a narrower set.
 
 Usage:
     python3 ci/discover_ops_routes.py [--root PATH] [--out PATH]
-Prints a JSON report to stdout (or --out) with:
-    {"routes": [...], "graphql": [...], "unresolved_includes": [...],
+Prints a JSON report to stdout (or --out):
+    {"apps": [...], "routes": [...], "graphql": [...],
      "counts": {"routes": N, "graphql": N}}
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
-import re
+import os
 import sys
-from dataclasses import dataclass
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
-API_ROOT = "src/dev_health_ops/api"
-
-_APIROUTER_OR_FASTAPI_RE = re.compile(r"^(\w+)\s*=\s*(FastAPI|APIRouter)\(")
-_BARE_ALIAS_RE = re.compile(r"^(\w+)\s*=\s*(\w+)\s*$")
-_ROUTE_DECORATOR_RE = re.compile(r"^\s*@(\w+)\.(get|post|put|patch|delete|api_route)\(")
-_INCLUDE_ROUTER_RE = re.compile(r"^\s*(\w+)\.include_router\(")
-_DYNAMIC_IMPORTLIB_INCLUDE_RE = re.compile(
-    r'importlib\.import_module\(\s*["\']([\w.]+)["\']\s*\)\.(\w+)'
+# Every deployed FastAPI application whose surfaces this inventory covers, as
+# (module, attribute) of the module-level app object. ``app_root`` in the
+# output is ``"<module>::<attribute>"`` -- the same key shape
+# ci/check_endpoint_profiles.py maps to a `service` enum value via
+# _APP_ROOT_SERVICE, so adding a newly deployed app means adding it in BOTH
+# places and a mapping miss is a hard failure there, never a silent pass.
+DEPLOYED_APPS: tuple[tuple[str, str], ...] = (
+    ("dev_health_ops.api.main", "app"),
+    ("dev_health_ops.api.billing_edge", "app"),
 )
-_STR_LITERAL_RE = re.compile(r"""["']([^"']*)["']""")
-_PREFIX_KW_RE = re.compile(r'prefix\s*=\s*["\']([^"\']*)["\']')
-_STRAWBERRY_DECORATOR_RE = re.compile(r"^\s*@strawberry\.(field|mutation)\b")
-_DEF_NAME_RE = re.compile(r"^\s*(?:async\s+def|def)\s+(\w+)\(")
-_IMPORT_FROM_RE = re.compile(r"^from\s+([.\w]+)\s+import\s+(.+)$")
-# `x = importlib.import_module("dev_health_ops.api.auth.sso")` -- a runtime,
-# not `import`-statement, module binding. Only the static-string-literal
-# form is resolvable; a non-literal argument is a documented known
-# limitation (matches ci/check_transitional_inventory.py's own treatment of
-# the same shape).
-_IMPORTLIB_MODULE_ALIAS_RE = re.compile(
-    r"""^(\w+)\s*=\s*importlib\.import_module\(\s*["\']([\w.]+)["\']\s*\)\s*$"""
-)
-# `maybe_sso_router = getattr(sso_module, "sso_router", None)` -- resolved
-# only when `sso_module` is itself a known importlib module alias from this
-# same file (the one real shape in this codebase: auth/router.py's optional
-# SSO router load).
-_GETATTR_ATTR_RE = re.compile(
-    r"""^(\w+)\s*=\s*getattr\(\s*(\w+)\s*,\s*["\'](\w+)["\']"""
-)
-_MAX_STATEMENT_LINES = 15
+
+# The served GraphQL schema object, as (module, attribute).
+GRAPHQL_SCHEMA = ("dev_health_ops.api.graphql.schema", "schema")
+
+# A websocket route has no HTTP method list. It is still a distinct served
+# surface with its own authentication path, so it gets an explicit pseudo-verb
+# rather than being dropped or silently folded into the GET row for the same
+# path (``/graphql`` is served by all three).
+WEBSOCKET_METHOD = "WEBSOCKET"
 
 
-def _iter_py_files(base: Path):
-    if not base.exists():
-        return
-    for path in sorted(base.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        yield path
+class DiscoveryImportError(RuntimeError):
+    """Raised when a deployed app or the GraphQL schema cannot be imported.
 
-
-def _relpath(root: Path, path: Path) -> str:
-    return str(path.relative_to(root))
-
-
-def _module_dotted(relpath: str) -> str:
-    """``src/dev_health_ops/api/admin/router.py`` -> ``dev_health_ops.api.admin.router``."""
-    parts = Path(relpath).with_suffix("").parts
-    # drop the leading "src"
-    if parts and parts[0] == "src":
-        parts = parts[1:]
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    return ".".join(parts)
-
-
-def _strip_comment(line: str) -> str:
-    """Strip a trailing ``# ...`` comment, quote-aware so a ``#`` inside a
-    string literal (route path, docstring fragment) is left alone. Needed
-    before joining `from X import (...)` bodies: a trailing ``# noqa: F401``
-    on the single-name form (``from .router import router  # noqa: F401``)
-    would otherwise be folded into the imported name."""
-    out = []
-    quote = None
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if quote:
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                out.append(line[i + 1])
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            i += 1
-            continue
-        if ch == "#":
-            break
-        if ch in ("'", '"'):
-            quote = ch
-        out.append(ch)
-        i += 1
-    return "".join(out).rstrip()
-
-
-def _statement_window(lines: list[str], line_no: int) -> str:
-    """Bracket-balanced logical statement starting at 1-indexed line_no."""
-    parts = []
-    depth = 0
-    for i in range(line_no - 1, min(line_no - 1 + _MAX_STATEMENT_LINES, len(lines))):
-        code = lines[i]
-        parts.append(code)
-        depth += code.count("(") + code.count("[") + code.count("{")
-        depth -= code.count(")") + code.count("]") + code.count("}")
-        if depth <= 0 and i > line_no - 1:
-            break
-        if depth <= 0 and "(" in code:
-            break
-    return "\n".join(parts)
-
-
-@dataclass
-class RouterDef:
-    """A local name bound to an ``APIRouter()``/``FastAPI()`` constructor,
-    OR an alias of one, in one file."""
-
-    module: str
-    file: str
-    varname: str
-    line: int
-    kind: str  # "fastapi" | "apirouter" | "alias"
-    own_prefix: str = ""
-    alias_target: str | None = None  # (module, varname) as "module::varname"
-
-
-@dataclass
-class IncludeEdge:
-    parent_module: str
-    parent_var: str
-    child_module: str | None  # None if unresolved
-    child_var: str | None
-    extra_prefix: str
-    file: str
-    line: int
-    raw: str
-
-
-@dataclass
-class RouteSurface:
-    method: str
-    local_path: str
-    module: str
-    file: str
-    line: int
-    router_key: str  # module::varname the decorator was applied to
-
-
-@dataclass
-class ResolverSurface:
-    kind: str  # field | mutation
-    name: str
-    module: str
-    file: str
-    line: int
-
-
-@dataclass
-class ImportBinding:
-    local_name: str
-    src_module: str
-    src_name: str
-
-
-def _resolve_relative_import(current_module: str, dotted: str, is_init: bool) -> str:
-    """Resolve a possibly-relative ``from X import Y`` module spec against
-    the importing module's own dotted path.
-
-    Python's relative-import level counts from the importing module's OWN
-    package: for a plain module ``pkg.sub`` that package is ``pkg`` (one
-    dot = ``pkg``), but for ``pkg/sub/__init__.py`` (module dotted path
-    ``pkg.sub``, since ``_module_dotted`` drops the trailing ``__init__``)
-    the module's own package IS ``pkg.sub`` itself (one dot = ``pkg.sub``,
-    matching CPython's ``__init__.py`` having ``__package__ == __name__``).
-    Getting this wrong silently re-routes every re-export through a
-    package ``__init__.py`` (the common ``from .routers import X`` pattern
-    in this codebase) to the wrong module and breaks mount resolution.
+    Never caught inside this module: a discovery run that cannot see the
+    application must fail loudly, because the alternative -- an empty or
+    partial surface set -- makes every downstream cross-check pass while
+    checking nothing.
     """
-    if not dotted.startswith("."):
-        return dotted
-    level = len(dotted) - len(dotted.lstrip("."))
-    remainder = dotted[level:]
-    own_package = (
-        current_module.split(".") if is_init else current_module.split(".")[:-1]
-    )
-    base = own_package[: len(own_package) - (level - 1)] if level >= 1 else own_package
-    if remainder:
-        base = base + remainder.split(".")
-    return ".".join(base)
 
 
-def _parse_file(root: Path, path: Path):
-    relpath = _relpath(root, path)
-    module = _module_dotted(relpath)
-    is_init = path.name == "__init__.py"
-    lines = path.read_text().splitlines()
+PACKAGE = "dev_health_ops"
 
-    router_defs: dict[str, RouterDef] = {}
-    includes: list[IncludeEdge] = []
-    routes: list[RouteSurface] = []
-    resolvers: list[ResolverSurface] = []
-    imports: dict[str, ImportBinding] = {}
-    module_aliases: dict[str, str] = {}
-    unresolved: list[dict] = []
 
-    for i, raw_line in enumerate(lines, start=1):
-        stripped = _strip_comment(raw_line).strip()
+def _loaded_from(module: Any, src: Path) -> bool:
+    file = getattr(module, "__file__", None)
+    if not file:
+        return False
+    try:
+        return Path(file).resolve().is_relative_to(src)
+    except (OSError, ValueError):
+        return False
 
-        m = _IMPORT_FROM_RE.match(stripped)
-        if m:
-            src_mod = _resolve_relative_import(module, m.group(1), is_init)
-            body = m.group(2).strip()
-            depth = body.count("(") - body.count(")")
-            j = i
-            while depth > 0 and j < len(lines):
-                nxt = _strip_comment(lines[j]).strip()
-                body += " " + nxt
-                depth += nxt.count("(") - nxt.count(")")
-                j += 1
-            body = body.strip()
-            if body.startswith("("):
-                body = body[1:]
-            body = body.rstrip(")").rstrip(",")
-            for part in body.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                original, _, alias = part.partition(" as ")
-                original = original.strip()
-                local = alias.strip() or original
-                imports[local] = ImportBinding(local, src_mod, original)
+
+@contextmanager
+def _import_context(root: Path):
+    """Import ``<root>/src``'s package, and be sure it is THAT root's.
+
+    Two things this has to get right:
+
+    * ``dev_health_ops.api.main`` calls ``init_tracing()`` at module scope,
+      which starts OTLP exporters and retries against ``localhost:4317``.
+      ``OTEL_ENABLED`` is read inside ``init_tracing``, so it has to be set
+      BEFORE the import. Set, not overridden: an environment that has
+      deliberately chosen a value keeps it.
+    * ``import`` returns whatever is already in ``sys.modules``. Without the
+      purge below, a discovery run against one root would silently enumerate
+      an ALREADY-IMPORTED app from a different root and report that set as
+      this root's -- a measurement quietly taken on the wrong input, which is
+      worse than no measurement. Anything cached from elsewhere is dropped on
+      the way in and put back on the way out, so a caller that discovers
+      against several roots in one process (the gate's own contract tests do)
+      gets each root's real set and leaves no cross-contamination behind.
+    """
+    os.environ.setdefault("OTEL_ENABLED", "false")
+    src = (root / "src").resolve()
+    saved_path = list(sys.path)
+    cached = {
+        name: mod
+        for name, mod in sys.modules.items()
+        if name == PACKAGE or name.startswith(PACKAGE + ".")
+    }
+    foreign = {n for n, m in cached.items() if not _loaded_from(m, src)}
+    for name in foreign:
+        del sys.modules[name]
+    sys.path.insert(0, str(src))
+    try:
+        yield
+    finally:
+        sys.path[:] = saved_path
+        if foreign:
+            for name in [
+                n for n in sys.modules if n == PACKAGE or n.startswith(PACKAGE + ".")
+            ]:
+                del sys.modules[name]
+            sys.modules.update(cached)
+
+
+def _import_attr(module: str, attr: str, src: Path) -> Any:
+    try:
+        mod = __import__(module, fromlist=[attr])
+    except Exception as exc:  # noqa: BLE001 -- re-raised as a typed failure
+        raise DiscoveryImportError(
+            f"could not import {module!r} to enumerate its served surfaces: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    # Purging sys.modules is not enough on its own: `<root>/src` is only
+    # PREPENDED to sys.path, so if the requested root does not contain the
+    # package, the import falls through to whatever other checkout is on the
+    # path and returns ITS app. That is a measurement silently taken on the
+    # wrong input, which is worse than no measurement -- a set enumerated from
+    # a different tree would be cross-checked against this tree's inventory
+    # and the mismatch read as inventory drift. Verified, not assumed.
+    if not _loaded_from(mod, src):
+        raise DiscoveryImportError(
+            f"{module!r} resolved to {getattr(mod, '__file__', None)!r}, which "
+            f"is not under {src} -- discovery would be enumerating a different "
+            "checkout's application than the root it was asked about"
+        )
+    try:
+        return getattr(mod, attr)
+    except AttributeError as exc:
+        raise DiscoveryImportError(
+            f"{module!r} has no attribute {attr!r} -- the deployed app/schema "
+            "object this discovery is anchored to has moved or been renamed"
+        ) from exc
+
+
+def _anchor(func: Any, root: Path) -> tuple[str | None, int | None, bool]:
+    """Repo-relative ``(file, line, is_ops_source)`` for a callable.
+
+    ``inspect.getsourcelines`` returns the block STARTING AT THE FIRST
+    DECORATOR for a decorated function, which is exactly the line the
+    checked-in inventory anchors REST routes and GraphQL resolvers to --
+    verified against the whole intersection of the live set and the frozen
+    inventory (294 REST rows, 56 GraphQL rows, zero disagreements) when this
+    replaced the source walk.
+    """
+    if func is None:
+        return None, None, False
+    try:
+        target = inspect.unwrap(func)
+        source_file = inspect.getsourcefile(target)
+        _, line = inspect.getsourcelines(target)
+    except (OSError, TypeError):
+        return None, None, False
+    if not source_file:
+        return None, None, False
+    resolved = Path(source_file).resolve()
+    # "ops source" means the package tree, NOT merely "somewhere under the
+    # repository root": a virtualenv lives under the root too, so a
+    # root-relative test would classify fastapi's own /docs endpoint as ops
+    # source and anchor a row at `.venv/lib/.../fastapi/applications.py` --
+    # a path that is not in git and that no reviewer can check.
+    package_root = (root / "src" / "dev_health_ops").resolve()
+    if resolved.is_relative_to(package_root):
+        return str(resolved.relative_to(root.resolve())), line, True
+    # A framework-provided endpoint (fastapi's own /docs and /openapi.json,
+    # strawberry's GraphQL router, the prometheus instrumentator's /metrics).
+    # Reported as external so the checker can demand explicit provenance for
+    # the row instead of anchoring it somewhere unreviewable.
+    return str(resolved), line, False
+
+
+def _walk_routes(routes: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """Every leaf route under ``routes``, with its FULLY RESOLVED path.
+
+    Recurses through ``Mount`` (a sub-application or a static-files mount),
+    which carries its own child routes whose ``path`` is relative to the mount
+    point. A router mounted twice appears as two distinct leaf entries with two
+    distinct paths, which is what closes CHAOS-4760: the mount multiplicity is
+    a property of the object graph, never of prefix arithmetic done here.
+    """
+    from starlette.routing import Mount  # imported late: needs sys.path set up
+
+    out: list[tuple[str, Any]] = []
+    for route in routes:
+        path = getattr(route, "path", None)
+        if path is None:
+            # fastapi >= 0.137 leaves `_IncludedRouter` marker entries with no
+            # `.path` in app.routes (see the fastapi pin's comment in
+            # pyproject.toml). Reported, never silently skipped.
+            out.append((f"<NO PATH: {type(route).__name__}>", route))
             continue
-
-        m = _IMPORTLIB_MODULE_ALIAS_RE.match(stripped)
-        if m:
-            module_aliases[m.group(1)] = m.group(2)
+        full = prefix + path
+        if isinstance(route, Mount):
+            out.extend(_walk_routes(getattr(route, "routes", []) or [], full))
             continue
-
-        m = _GETATTR_ATTR_RE.match(stripped)
-        if m:
-            target, mod_alias, attr = m.group(1), m.group(2), m.group(3)
-            if mod_alias in module_aliases:
-                imports[target] = ImportBinding(target, module_aliases[mod_alias], attr)
-            continue
-
-        m = _APIROUTER_OR_FASTAPI_RE.match(stripped)
-        if m:
-            varname, ctor = m.group(1), m.group(2)
-            stmt = _statement_window(lines, i)
-            pm = _PREFIX_KW_RE.search(stmt)
-            own_prefix = pm.group(1) if pm else ""
-            router_defs[varname] = RouterDef(
-                module,
-                relpath,
-                varname,
-                i,
-                "fastapi" if ctor == "FastAPI" else "apirouter",
-                own_prefix=own_prefix,
-            )
-            continue
-
-        m = _BARE_ALIAS_RE.match(stripped)
-        if m and m.group(1) not in router_defs:
-            target, source = m.group(1), m.group(2)
-            # Only meaningful once we know `source` is router-ish; resolved
-            # in a second pass below (aliases can precede or follow defs).
-            router_defs.setdefault(
-                target,
-                RouterDef(module, relpath, target, i, "alias", alias_target=source),
-            )
-            continue
-
-        m = _ROUTE_DECORATOR_RE.match(raw_line)
-        if m:
-            alias, http_method = m.group(1), m.group(2)
-            stmt = _statement_window(lines, i)
-            lm = _STR_LITERAL_RE.search(stmt)
-            local_path = lm.group(1) if lm else "<unresolved-path>"
-            if http_method == "api_route":
-                # methods=[...] runtime list -- record as-is, not expanded.
-                http_method = "api_route"
-            routes.append(
-                RouteSurface(
-                    http_method.upper(),
-                    local_path,
-                    module,
-                    relpath,
-                    i,
-                    router_key=f"__LOCAL__::{alias}",
-                )
-            )
-            continue
-
-        m = _INCLUDE_ROUTER_RE.match(stripped)
-        if m:
-            parent_var = m.group(1)
-            stmt = _statement_window(lines, i)
-            pm = _PREFIX_KW_RE.search(stmt.split("include_router(", 1)[-1])
-            extra_prefix = pm.group(1) if pm else ""
-            dyn = _DYNAMIC_IMPORTLIB_INCLUDE_RE.search(stmt)
-            if dyn:
-                includes.append(
-                    IncludeEdge(
-                        module,
-                        parent_var,
-                        dyn.group(1),
-                        dyn.group(2),
-                        extra_prefix,
-                        relpath,
-                        i,
-                        stmt.strip(),
-                    )
-                )
-            else:
-                # First bare-name or dotted-name argument after the open paren.
-                arg_area = stmt.split("include_router(", 1)[-1]
-                nm = re.match(r"\s*([\w.]+)", arg_area)
-                if nm and "." not in nm.group(1):
-                    includes.append(
-                        IncludeEdge(
-                            module,
-                            parent_var,
-                            None,
-                            nm.group(1),
-                            extra_prefix,
-                            relpath,
-                            i,
-                            stmt.strip(),
-                        )
-                    )
-                else:
-                    includes.append(
-                        IncludeEdge(
-                            module,
-                            parent_var,
-                            None,
-                            None,
-                            extra_prefix,
-                            relpath,
-                            i,
-                            stmt.strip(),
-                        )
-                    )
-            continue
-
-        m = _STRAWBERRY_DECORATOR_RE.match(raw_line)
-        if m:
-            kind = m.group(1)
-            name = None
-            for j in range(i, min(i + 25, len(lines) + 1)):
-                dm = _DEF_NAME_RE.match(lines[j - 1])
-                if dm:
-                    name = dm.group(1)
-                    break
-            resolvers.append(
-                ResolverSurface(kind, name or "<unresolved-name>", module, relpath, i)
-            )
-            continue
-
-    return router_defs, includes, routes, resolvers, imports, unresolved
+        out.append((full, route))
+    return out
 
 
-def discover(root: Path) -> dict:
-    api_dir = root / API_ROOT
-    all_router_defs: dict[str, RouterDef] = {}  # key "module::varname"
-    all_includes: list[IncludeEdge] = []
-    all_routes: list[RouteSurface] = []
-    all_resolvers: list[ResolverSurface] = []
-    all_imports: dict[str, dict[str, ImportBinding]] = {}  # module -> {local: binding}
-
-    for path in _iter_py_files(api_dir):
-        router_defs, includes, routes, resolvers, imports, _ = _parse_file(root, path)
-        module = _module_dotted(_relpath(root, path))
-        for varname, d in router_defs.items():
-            all_router_defs[f"{module}::{varname}"] = d
-        all_includes.extend(includes)
-        # Fix up route.router_key from "__LOCAL__::alias" to "module::alias"
-        for r in routes:
-            _, alias = r.router_key.split("::", 1)
-            r.router_key = f"{module}::{alias}"
-        all_routes.extend(routes)
-        all_resolvers.extend(resolvers)
-        all_imports[module] = imports
-
-    def resolve_name(module: str, name: str, _seen: set | None = None) -> str | None:
-        """Resolve a bare local name in `module` to a "module::varname" key
-        of an actual APIRouter/FastAPI constructor, following aliases and
-        cross-file imports to a fixed point. Returns None if undecidable."""
-        _seen = _seen or set()
-        key = f"{module}::{name}"
-        if key in _seen:
-            return None
-        _seen.add(key)
-        if key in all_router_defs:
-            d = all_router_defs[key]
-            if d.kind in ("fastapi", "apirouter"):
-                return key
-            if d.kind == "alias" and d.alias_target:
-                # alias target may itself be a local name or an imported one
-                return resolve_name(
-                    module, d.alias_target, _seen
-                ) or resolve_name_import(module, d.alias_target, _seen)
-        return resolve_name_import(module, name, _seen)
-
-    def resolve_name_import(module: str, name: str, _seen: set) -> str | None:
-        binding = all_imports.get(module, {}).get(name)
-        if binding is None:
-            return None
-        return resolve_name(binding.src_module, binding.src_name, _seen)
-
-    # Resolve every route's router_key to its OWN (module, varname) def --
-    # routes are always decorated directly on a local name in the same file,
-    # so this should always hit `all_router_defs` directly; kept through
-    # resolve_name for aliasing (`r = router; @r.get(...)`).
-    resolved_routes = []
-    for r in all_routes:
-        mod, alias = r.router_key.split("::", 1)
-        resolved = resolve_name(mod, alias)
-        resolved_routes.append((r, resolved))
-
-    # Resolve every include edge's child to a router-def key.
-    resolved_includes = []
-    for e in all_includes:
-        if e.child_module and e.child_var:
-            # dynamic importlib form: child_module is a dotted module path,
-            # child_var is the attribute name on that module.
-            key = f"{e.child_module}::{e.child_var}"
-            resolved_child = key if key in all_router_defs else None
-        elif e.child_var:
-            resolved_child = resolve_name(e.parent_module, e.child_var)
-        else:
-            resolved_child = None
-        parent_key = resolve_name(e.parent_module, e.parent_var)
-        resolved_includes.append((e, parent_key, resolved_child))
-
-    # Build mount graph: child_key -> list[(parent_key, extra_prefix)]
-    mounts: dict[str, list[tuple[str, str]]] = {}
-    unresolved_includes = []
-    for e, parent_key, child_key in resolved_includes:
-        if parent_key is None or child_key is None:
-            unresolved_includes.append({"file": e.file, "line": e.line, "raw": e.raw})
-            continue
-        mounts.setdefault(child_key, []).append((parent_key, e.extra_prefix))
-
-    roots = {k: d for k, d in all_router_defs.items() if d.kind == "fastapi"}
-
-    def full_prefix(key: str, _seen: set | None = None) -> str | None:
-        _seen = _seen or set()
-        if key in _seen:
-            return None
-        _seen.add(key)
-        d = all_router_defs.get(key)
-        if d is None:
-            return None
-        if d.kind == "fastapi":
-            return ""
-        own = d.own_prefix
-        parents = mounts.get(key, [])
-        if not parents:
-            # Never included anywhere reachable from a FastAPI() root --
-            # unmounted router (e.g. a router built but never wired in).
-            return None
-        # A router can legitimately be included from more than one parent
-        # in theory; ops routers are each included exactly once. Use the
-        # first resolvable parent chain, and record if more than one parent
-        # resolves to a DIFFERENT prefix (would be a genuine ambiguity).
-        prefixes = []
-        for parent_key, extra in parents:
-            pf = full_prefix(parent_key, _seen)
-            if pf is not None:
-                prefixes.append(pf + extra + own)
-        if not prefixes:
-            return None
-        return prefixes[0]
-
-    out_routes = []
-    for r, router_key in resolved_routes:
-        if router_key is None:
-            out_routes.append(
+def discover_routes(root: Path, apps=DEPLOYED_APPS) -> list[dict]:
+    """Every REST/websocket surface both deployed apps actually serve."""
+    records: list[dict] = []
+    src = (root / "src").resolve()
+    for module, attr in apps:
+        app = _import_attr(module, attr, src)
+        app_root = f"{module}::{attr}"
+        for path, route in _walk_routes(getattr(app, "routes", []) or []):
+            endpoint = getattr(route, "endpoint", None)
+            file, line, in_ops = _anchor(endpoint, root)
+            methods = sorted(getattr(route, "methods", None) or [])
+            if not methods:
+                methods = [WEBSOCKET_METHOD]
+            records.append(
                 {
-                    "method": r.method,
-                    "local_path": r.local_path,
-                    "full_path": None,
-                    "module": r.module,
-                    "file": r.file,
-                    "line": r.line,
-                    "resolution": "UNRESOLVED_ROUTER",
+                    "app_root": app_root,
+                    # A single string so a row's `method` field can name the
+                    # route object's whole served verb set exactly. The old
+                    # discovery reported the literal "API_ROUTE" for any
+                    # @app.api_route(...) registration, which named a runtime
+                    # method list without saying what was in it.
+                    "method": ",".join(methods),
+                    "methods": methods,
+                    "path": path,
+                    "file": file,
+                    "line": line,
+                    "endpoint_in_ops_source": in_ops,
+                    "endpoint_module": getattr(endpoint, "__module__", None),
+                    "endpoint_name": getattr(endpoint, "__name__", None),
+                    "route_class": type(route).__name__,
                 }
             )
+    return records
+
+
+def _graphql_root_kinds(gql_schema: Any) -> dict[str, str]:
+    kinds = {}
+    for attr, kind in (
+        ("query_type", "graphql_field"),
+        ("mutation_type", "graphql_mutation"),
+        ("subscription_type", "graphql_subscription"),
+    ):
+        root = getattr(gql_schema, attr, None)
+        if root is not None:
+            kinds[root.name] = kind
+    return kinds
+
+
+def discover_graphql(root: Path, graphql_schema=GRAPHQL_SCHEMA) -> list[dict]:
+    """Every field on the served schema that has a resolver.
+
+    Root Query/Mutation/Subscription fields AND field resolvers on nested
+    object types (``DataHealth.metricLineage`` is the one on this tree): a
+    nested resolver executes on a real request and is a real surface, it is
+    simply only reachable through its parent. ``root`` says which is which so
+    a row can be read correctly rather than the distinction being lost.
+
+    Fields with no resolver are plain data attributes read off an already
+    resolved parent object -- no code of ours runs for them, so they are not
+    surfaces.
+    """
+    from graphql import GraphQLObjectType  # late import: needs sys.path
+
+    module, attr = graphql_schema
+    schema = _import_attr(module, attr, (root / "src").resolve())
+    gql_schema = getattr(schema, "_schema", None)
+    if gql_schema is None:
+        raise DiscoveryImportError(
+            f"{module}.{attr} has no `_schema` attribute -- strawberry's "
+            "underlying GraphQLSchema is how every type's fields are "
+            "enumerated; refusing to fall back to a narrower set"
+        )
+
+    root_kinds = _graphql_root_kinds(gql_schema)
+    records: list[dict] = []
+    for type_name, gql_type in gql_schema.type_map.items():
+        if type_name.startswith("__") or not isinstance(gql_type, GraphQLObjectType):
             continue
-        prefix = full_prefix(router_key)
-        if prefix is None:
-            out_routes.append(
+        for field_name, field in gql_type.fields.items():
+            definition = (field.extensions or {}).get("strawberry-definition")
+            resolver = getattr(definition, "base_resolver", None)
+            if resolver is None:
+                continue
+            file, line, in_ops = _anchor(getattr(resolver, "wrapped_func", None), root)
+            records.append(
                 {
-                    "method": r.method,
-                    "local_path": r.local_path,
-                    "full_path": None,
-                    "module": r.module,
-                    "file": r.file,
-                    "line": r.line,
-                    "resolution": "UNMOUNTED_ROUTER",
-                    "router_key": router_key,
+                    "kind": root_kinds.get(type_name, "graphql_field"),
+                    "root": type_name in root_kinds,
+                    "parent_type": type_name,
+                    "name": field_name,
+                    # The inventory keys GraphQL rows on the PYTHON name
+                    # (`graphql_field_name`), not the camelCase wire name.
+                    "python_name": getattr(definition, "python_name", None),
+                    "file": file,
+                    "line": line,
+                    "resolver_in_ops_source": in_ops,
                 }
             )
-            continue
-        full_path = (
-            prefix + r.local_path
-            if r.local_path.startswith("/")
-            else prefix + "/" + r.local_path
-        )
-        # normalize a doubled slash from prefix="" + local_path="/x"
-        full_path = re.sub(r"//+", "/", full_path)
-        out_routes.append(
-            {
-                "method": r.method,
-                "local_path": r.local_path,
-                "full_path": full_path,
-                "module": r.module,
-                "file": r.file,
-                "line": r.line,
-                "router_key": router_key,
-                "app_root": _app_root_for(router_key, mounts, roots),
-                "resolution": "OK",
-            }
-        )
+    return records
 
-    out_resolvers = [
-        {
-            "kind": rr.kind,
-            "name": rr.name,
-            "module": rr.module,
-            "file": rr.file,
-            "line": rr.line,
-        }
-        for rr in all_resolvers
-    ]
 
+def discover(root: Path, apps=DEPLOYED_APPS, graphql_schema=GRAPHQL_SCHEMA) -> dict:
+    """Enumerate every served surface under ``root``.
+
+    ``apps``/``graphql_schema`` default to the real deployed objects and are
+    parameters only so this gate's own contract tests can point discovery at a
+    purpose-built fixture package and exercise the REAL walk rather than a
+    stand-in for it. Nothing in the production path passes them, and
+    ``test_discovery_defaults_are_the_real_deployed_objects`` pins the
+    defaults so an override can never be mistaken for the shipped config.
+    """
+    with _import_context(root):
+        routes = discover_routes(root, apps)
+        graphql = discover_graphql(root, graphql_schema)
     return {
-        "routes": out_routes,
-        "graphql": out_resolvers,
-        "unresolved_includes": unresolved_includes,
+        "apps": [f"{m}::{a}" for m, a in apps],
+        "routes": routes,
+        "graphql": graphql,
         "counts": {
-            "routes": len(out_routes),
-            "routes_resolved": sum(1 for r in out_routes if r["resolution"] == "OK"),
-            "graphql": len(out_resolvers),
+            "routes": len(routes),
+            "graphql": len(graphql),
+            "graphql_root": sum(1 for r in graphql if r["root"]),
         },
     }
 
 
-def _app_root_for(router_key: str, mounts: dict, roots: dict) -> str | None:
-    seen = set()
-    key = router_key
-    while key not in roots:
-        if key in seen:
-            return None
-        seen.add(key)
-        parents = mounts.get(key)
-        if not parents:
-            return None
-        key = parents[0][0]
-    return key
-
-
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Enumerate served ops surfaces")
     parser.add_argument("--root", default=".", help="repository root")
     parser.add_argument("--out", default=None, help="write JSON here instead of stdout")
     args = parser.parse_args(argv)
@@ -609,13 +395,13 @@ def main(argv=None) -> int:
         Path(args.out).write_text(text + "\n")
     else:
         print(text)
-    unresolved = result["counts"]["routes"] - result["counts"]["routes_resolved"]
-    if unresolved:
+    missing = [r for r in result["routes"] if r["path"].startswith("<NO PATH")]
+    if missing:
         print(
-            f"NOTE: {unresolved} route(s) could not be resolved to a full "
-            'mount path (see "resolution" field). This is a report, not a '
-            "failure -- discover_ops_routes.py has no pass/fail exit code; "
-            "the L3 CI gate consumes this output.",
+            f"NOTE: {len(missing)} entry(ies) in app.routes carry no `.path` "
+            "and could not be resolved to a served surface (see the fastapi "
+            "pin comment in pyproject.toml). This is a report, not a failure "
+            "-- ci/check_endpoint_profiles.py is the gate.",
             file=sys.stderr,
         )
     return 0

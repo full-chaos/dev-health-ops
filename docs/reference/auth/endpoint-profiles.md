@@ -35,40 +35,62 @@ argument, which is the point of carrying it in the inventory at all; see
 
 ## Scope and counts
 
-`ci/discover_ops_routes.py` independently re-derives every REST decorator
-(`@router.<method>(...)`, `@app.<method>(...)`, including `api_route` and any
-router-alias name, not just literal `router`/`app`) and every
-`@strawberry.field`/`@strawberry.mutation` resolver under
-`src/dev_health_ops/api`, then resolves each REST route's full mount path by
-walking the `include_router` graph from each `FastAPI()` root.
+`ci/discover_ops_routes.py` enumerates surfaces from the **served objects**,
+not from source text: it imports each deployed `FastAPI()` application and
+walks `app.routes` (recursing through mounts) for REST and websocket
+surfaces, and imports the served `strawberry.Schema` and walks every type's
+resolver-bearing fields for GraphQL. Each surface's `file:line` anchor comes
+from `inspect` on the endpoint/resolver the object actually holds, so the set
+comes from the framework and the location still comes from real source.
 
-**303 REST decorator surfaces + 58 GraphQL resolvers = 361 total.**
+**311 REST surfaces + 59 GraphQL resolvers = 370 total.**
 
-!!! warning "Known gap: GraphQL subscriptions are not covered"
-    Discovery matches `@strawberry.field` and `@strawberry.mutation` only, so
-    the three `@strawberry.subscription` resolvers in
-    `api/graphql/subscriptions.py` (`:60`, `:97`, `:134`) are **neither
-    discovered nor profiled**, even though they are mounted on the served
-    schema (`api/graphql/schema.py:1028`). The 361 above **excludes** them.
-    They *are* authenticated: all three go through the same connect-time
-    context path as every other GraphQL surface (`schema.py`'s
-    `context_getter` → `get_context` → `GraphQLContext.__post_init__`), which
-    runs before the websocket is accepted. So this is a gap in what the
-    inventory covers, not an unauthenticated surface.
-    Tracked as **CHAOS-4761**, which replaces source-text discovery with
-    enumeration from the served application and schema objects — the set a
-    pattern can miss, an object cannot. Until that lands, a green run of this
-    gate says nothing about those three surfaces.
+!!! note "Why the count moved from 361 (CHAOS-4761)"
+    Discovery used to match decorators and `include_router` calls in source
+    text, and the inventory was built from the same patterns — so the two
+    agreed with each other while saying nothing about anything neither looked
+    at. Enumerating the served objects changed the count by nine, and every
+    one of the nine was a defect the old count concealed:
 
-!!! warning "Discrepancy vs. the orchestrator's 279"
-    The lane brief's baseline count (279 `@router|@app.<method>(` matches)
-    undercounts by exactly **24**: two files use router-alias names the
-    baseline's regex doesn't match — `status_router` in
-    `api/external_ingest/status.py` (2 routes) and `sso_router` in
-    `api/auth/sso/router.py` (17 routes) — plus 5
-    `@router.api_route(...)`/`@app.api_route(...)` registrations across the
-    tree (`2 + 17 + 5 = 24`). `303 - 279 = 24`. The GraphQL count (58) matched
-    exactly. **True total is 361 surfaces, not the ~337 estimate.**
+    - **+8 REST.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and
+      `/redoc` (registered by the `FastAPI()` constructor's `docs_url`/
+      `openapi_url` arguments), `/metrics` (registered by
+      `Instrumentator().expose()`), and `GET`/`POST`/`WEBSOCKET /graphql`
+      (registered by mounting strawberry's router). All are served by the
+      main app; none is written in ops source, so no source-text pattern
+      could ever have matched them. Each now has a row anchored at the
+      ops-source line that REGISTERS it, with a `gaps` entry naming the
+      providing package — the gate rejects such a row without one.
+    - **+3 GraphQL.** The three `@strawberry.subscription` resolvers in
+      `api/graphql/subscriptions.py` (`:60`, `:97`, `:134`). They were always
+      authenticated — all three go through the same connect-time
+      `context_getter` → `get_context` path as every other GraphQL surface,
+      before the websocket is accepted — but they matched no pattern, so they
+      were invisible to the gate and excluded from the count it produced.
+    - **−2 GraphQL.** `metrics` and `update_setting` were rows for
+      `@strawberry.field` examples inside `require_permission`'s **docstring**
+      (`api/graphql/authz.py:25`, `:30`). They are not fields on the served
+      schema and never were; the inventory carried two profiles of
+      documentation. A docstring defines no field, so the schema object cannot
+      reproduce them.
+
+    Two further corrections inside the rows that already existed: four rows
+    named a `route` with a trailing slash the app does not serve
+    (`/api/v1/billing/invoices/` and the refunds/subscriptions pair — an
+    artifact of the old walk's `prefix + "/" + ""`), and five rows recorded
+    `method: "API_ROUTE"`, which named the fact that `@app.api_route(...)`
+    takes a runtime method list without saying what was in it. Both now come
+    from the route object: the real path, and the real verb set
+    (`GET,HEAD`, or the billing-edge catch-all's seven).
+
+!!! warning "What a green run still does not tell you"
+    The surface SET is now verified in both directions. The JUDGEMENT in each
+    row — `classification`, `accepted_credential_classes`, which validator is
+    the intended one — is checked for consistency, vocabulary and anchor
+    validity, never for being right about what the code does. And `exposure`
+    remains an asserted boundary: no repository in this gate's read set holds
+    the edge path-map, so nothing here can verify whether a surface the app
+    mounts is reachable from outside.
 
 ### Two deployed apps
 
@@ -97,10 +119,10 @@ main app to be reachable through.
 
 | | Count |
 | --- | --- |
-| Protected | 339 |
-| Public | 22 |
+| Protected | 343 |
+| Public | 27 |
 | Unclassifiable in this pass | 0 |
-| Not discovered (GraphQL subscriptions, CHAOS-4761) | 3 |
+| Served but not discovered | 0 |
 
 Every protected row carries `accepted_credential_classes` drawn from
 [credential-classes.json](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/credential-classes.json)'s
@@ -198,7 +220,7 @@ is set (or the user is a superuser), and `org_id` is only ever populated from
 `OrgIdMiddleware`'s validated-JWT-plus-membership contextvar — there is no
 path to a usable context for an unauthenticated request. Per-field/mutation
 `action`/`resource_resolver`/entitlement scoping was **not** individually
-re-derived for all 58 resolvers in this pass (`gaps` on every GraphQL row
+re-derived for all 59 resolvers in this pass (`gaps` on every GraphQL row
 says so explicitly) — that is a follow-up, not a guess filled in here.
 
 ## What a surface ISSUES: the `issued_credential` field

@@ -47,6 +47,13 @@ dependencies = [
   # semantics (Draft202012Validator) rather than a hand-rolled re-derivation
   # of the schema's own rules.
   "jsonschema>=4.23.0",
+  # CHAOS-4761: jsonschema's FORMAT_CHECKER only registers a "date-time"
+  # checker when a backing implementation is importable. Without this,
+  # passing format_checker= changes nothing and `generated_at: "not-a-date"`
+  # validates cleanly -- a fix that looks applied while checking nothing.
+  # check_endpoint_profiles.py refuses to run if the checker is missing, so
+  # this is a hard dependency of the gate rather than an optional nicety.
+  "rfc3339-validator>=0.1.4",
   "PyYAML>=6.0.3",
   "typing_extensions>=4.15.0",
   "jira>=3.10.5",

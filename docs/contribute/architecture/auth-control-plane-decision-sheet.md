@@ -88,7 +88,7 @@ defined as *all drafts Proposed + this sheet delivered + a ratification pass*.
 |---|---|
 | **Recommend** | **Accept.** Closed, versioned action vocabulary where unknown denies; policy as data, not code; monotonic `policy_revision` bound into every allow-cache key; explicit action names at call sites; vocabulary derived from the inventory where anchored and from source review where not. |
 | **Alternatives** | (a) Adopt an external policy engine now — rejected, consistent with TRD §25: it would fix the representation before the decision contract is stable. (b) An expression language in v1 — rejected by TRD §14 and by G-26; an expression that can be written can be written wrong, and nothing denies by default. |
-| **Risk of accepting** | **Medium.** The action vocabulary is the largest unbounded piece of work in the program and it cannot be generated from the inventory: per-route action/resource/entitlement was **not derivable for all 58 GraphQL resolvers**, and ~17 of billing's ~20 routes were classified by family pattern with a gaps note. Those are hand-review items, and hand review at that scale is where a wrong action name enters and is never noticed. |
+| **Risk of accepting** | **Medium.** The action vocabulary is the largest unbounded piece of work in the program and it cannot be generated from the inventory: per-route action/resource/entitlement was **not derivable for all 59 GraphQL resolvers**, and ~17 of billing's ~20 routes were classified by family pattern with a gaps note. Those are hand-review items, and hand review at that scale is where a wrong action name enters and is never noticed. |
 | **Mitigation** | Treat the action vocabulary as a contract with its own gate — closed, anchored, and re-discovered from source — exactly as the credential vocabulary was. |
 
 ### ACP-ADR-06 — Compose bootstrap and Kubernetes federation
@@ -191,13 +191,13 @@ like it carries information and does not.**
   `disclosure_behavior`, `token_shape` — `null` overwhelmingly means **"not
   applicable"**. A health-check route genuinely has no action.
 
-Measured on the ops inventory: **all 361 rows** carry at least one advisory
-null, and **268** of them carry no `gaps` entry at all — and those 268 are
-**correct**. So the ambiguity is not a corner case; it is the normal state of
+Re-measured on the ops inventory after CHAOS-4761 (370 rows): **all 370
+rows** carry at least one advisory null, and **272** of them carry no `gaps`
+entry at all — and those 272 are **correct**. So the ambiguity is not a corner case; it is the normal state of
 every row in the file.
 
 The gate scoped its unstated-null check to the first group only. That was the
-right call — the alternatives were failing the real tree or inventing 268 gaps
+right call — the alternatives were failing the real tree or inventing 272 gaps
 entries that would say nothing — but the consequence is that **neither the
 contract nor a human reader of the JSON can tell "nothing to say here" from "we
 did not find out"**, and the distinction is exactly the one this whole inventory
@@ -345,7 +345,7 @@ nothing.
 | Close a latent trust path in the impersonation middleware | Latent defect | Tracked in the Auth Control Plane project; detail is held under the fix-first disclosure policy |
 | Establish `query-api`'s single auth seam | Structural | ACP-ADR-12 — 40 unwritten resolvers, each an opportunity to omit a check nothing verifies |
 | Decide remove-vs-retain on the six legacy ingest routes | External contract | C3 — chris's call, not an engineering inference |
-| Disambiguate `null` in the profile schema (B10) | Contract defect | All 361 ops rows carry an advisory null; 268 carry no gaps entry and are correct — the contract cannot express why |
+| Disambiguate `null` in the profile schema (B10) | Contract defect | All 370 ops rows carry an advisory null; 272 carry no gaps entry and are correct — the contract cannot express why |
 | Lift the gaps field-naming rule into the schema description (B11) | Documentation | The real rule lives only in the gate; a reader of the contract cannot find it |
 
 ---

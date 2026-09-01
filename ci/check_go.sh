@@ -466,6 +466,35 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/workgraph/units (frozen work-unit component golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkgraphComponentsGoldenMatchesLivePython$' \
+        ./internal/jobs/workgraph/units
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, per the capacity-forecast reasoning above: this golden has a
+  # different producer (work_graph/investment/components.py + work_unit_id) from
+  # every other pair here, and it guards a CROSS-JOB invariant -- the same
+  # work_unit_id addresses work_unit_investments (Go, once CHAOS-4441 lands) and
+  # work_unit_membership (still Python until CHAOS-4282). A shared marker could
+  # be satisfied by another guard while this one was filtered out of -run.
+  proof_file="${proof_dir}/workgraph-components-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/numerical/cpyrandom (recorded CPython RNG vectors vs the live interpreter)\n'
   if ! (
     cd "${ROOT}"

@@ -1135,8 +1135,8 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277); naming any other family here has no
-    effect.
+    ``file_risk_hotspots`` CHAOS-4277, and ``testops_risk`` CHAOS-4294);
+    naming any other family here has no effect.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -1979,41 +1979,61 @@ async def run_daily_metrics_job(
         # observing inside that loop would double-count).
         record_team_metrics_daily_repo_rows(team_metrics)
 
-        # TestOps risk metrics (release confidence, quality drag, pipeline stability)
-        release_conf = compute_release_confidence(
-            day=d,
-            pipeline_metrics=testops_pipeline_metrics,
-            test_metrics=testops_test_metrics,
-            coverage_metrics=testops_coverage_metrics,
-            computed_at=computed_at,
-        )
-        quality_drag = compute_quality_drag(
-            day=d,
-            pipeline_metrics=testops_pipeline_metrics,
-            test_metrics=testops_test_metrics,
-            computed_at=computed_at,
-        )
-        pipeline_metrics_buffer.extend(testops_pipeline_metrics)
-        # Keep only the last 7 days of pipeline metrics
-        cutoff = d - timedelta(days=6)
-        pipeline_metrics_buffer = [
-            m for m in pipeline_metrics_buffer if m.day >= cutoff
-        ]
-        pipeline_stab = compute_pipeline_stability(
-            day=d,
-            pipeline_metrics_7d=pipeline_metrics_buffer,
-            computed_at=computed_at,
-        )
-        for s in sinks:
-            if release_conf:
-                s.write_release_confidence(release_conf)
-            if quality_drag:
-                s.write_quality_drag(quality_drag)
-            if pipeline_stab:
-                s.write_pipeline_stability(pipeline_stab)
-        _note_family_zero_rows("testops_risk.release_confidence", release_conf, day=d)
-        _note_family_zero_rows("testops_risk.quality_drag", quality_drag, day=d)
-        _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
+        # CHAOS-4294: testops_risk has a native Go executor
+        # (TestopsRiskExecutor). When the Go dispatcher reports it already
+        # computed and wrote this scope, skip BOTH compute and write here --
+        # unlike repo_user_commit's compute-but-don't-write split, nothing
+        # downstream in this function reads release_conf/quality_drag/
+        # pipeline_stab (they exist solely to be written for this family),
+        # so there is no other consumer to preserve. Skipping
+        # pipeline_metrics_buffer maintenance too is safe: it is a
+        # function-local variable that exists only to feed
+        # compute_pipeline_stability a few lines below, itself skipped in
+        # the same branch. _note_family_zero_rows is skipped as well -- a
+        # forced-empty release_conf/quality_drag/pipeline_stab would
+        # otherwise report a false "zero rows" degrade for a family the Go
+        # executor actually populated; CHAOS-4263's ClickHouse-side
+        # SourceDataChecker (zero_row_source_check.go) already covers this
+        # family's zero-row detection independent of which side computed it.
+        if "testops_risk" not in skip_families:
+            release_conf = compute_release_confidence(
+                day=d,
+                pipeline_metrics=testops_pipeline_metrics,
+                test_metrics=testops_test_metrics,
+                coverage_metrics=testops_coverage_metrics,
+                computed_at=computed_at,
+            )
+            quality_drag = compute_quality_drag(
+                day=d,
+                pipeline_metrics=testops_pipeline_metrics,
+                test_metrics=testops_test_metrics,
+                computed_at=computed_at,
+            )
+            pipeline_metrics_buffer.extend(testops_pipeline_metrics)
+            # Keep only the last 7 days of pipeline metrics
+            cutoff = d - timedelta(days=6)
+            pipeline_metrics_buffer = [
+                m for m in pipeline_metrics_buffer if m.day >= cutoff
+            ]
+            pipeline_stab = compute_pipeline_stability(
+                day=d,
+                pipeline_metrics_7d=pipeline_metrics_buffer,
+                computed_at=computed_at,
+            )
+            for s in sinks:
+                if release_conf:
+                    s.write_release_confidence(release_conf)
+                if quality_drag:
+                    s.write_quality_drag(quality_drag)
+                if pipeline_stab:
+                    s.write_pipeline_stability(pipeline_stab)
+            _note_family_zero_rows(
+                "testops_risk.release_confidence", release_conf, day=d
+            )
+            _note_family_zero_rows("testops_risk.quality_drag", quality_drag, day=d)
+            _note_family_zero_rows(
+                "testops_risk.pipeline_stability", pipeline_stab, day=d
+            )
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.

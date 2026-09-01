@@ -586,6 +586,19 @@ func dailyNativeFamilyRegistrations(
 			"error", fileRiskHotspotsErr,
 		)
 	}
+	// CHAOS-4294: testops_risk. Same fail-open construction policy as
+	// every other native family above.
+	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {
+		native["testops_risk"] = testopsRiskExecutor
+	} else {
+		logger.Error(
+			"testops_risk native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsRiskErr,
+		)
+	}
 	// CHAOS-4278: work_item_state reads its team attribution
 	// from work_item_team_attributions.is_primary=1 rather than
 	// recomputing the 9-source cascade -- see

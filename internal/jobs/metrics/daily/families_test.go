@@ -94,6 +94,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byName["incident"]; got != "go" {
 		t.Fatalf("incident must be port=go, got %q", got)
 	}
+	// testops_risk (CHAOS-4294): TestopsRiskExecutor is registered in
+	// cmd/dev-health-worker/daily.go the same way team_wellbeing/
+	// repo_user_commit are above -- catches a families.json edit that
+	// flips this back (or forgets to) without touching the registration.
+	if got := byName["testops_risk"]; got != "go" {
+		t.Fatalf("testops_risk must be port=go, got %q", got)
+	}
 	// work_item_state is CHAOS-4278's cutover: it must be "go", registering
 	// WorkItemStateExecutor exactly as team_wellbeing/repo_user_commit did.
 	if got := byName["work_item_state"]; got != "go" {

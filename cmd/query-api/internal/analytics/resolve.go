@@ -54,15 +54,17 @@ import (
 )
 
 // Resolve is the Go port of resolve_analytics (analytics.py:488-981).
-// NOTE: `SankeyResult.Coverage` is NOT YET PORTED -- always nil. The
-// Python coverage computation (analytics.py:658-907) is a large,
-// separately-complex sub-feature (~250 lines) with its own investment/
-// non-investment branching, its own filter construction, and its own
-// try/except; scoped out of this increment deliberately, flagged here
-// rather than silently omitted. `SankeyCoverage` is nullable in the
-// schema (`coverage: SankeyCoverage`, no `!`), so nil is a valid,
-// honestly-degraded value, not a type violation -- but it IS a real gap
-// versus Python for any caller requesting coverage, tracked as follow-up.
+//
+// `SankeyResult.Coverage` IS NOW PORTED -- see sankeycoverage.go, which
+// ports the Python coverage computation (analytics.py:658-907) including
+// its investment/non-investment branching, its own filter construction
+// and its degrade-to-nil try/except. It previously returned an
+// unconditional nil, which reached users as "Not reported" on the
+// Allocation coverage tiles while Python showed real values.
+// `SankeyCoverage` is still nullable in the schema
+// (`coverage: SankeyCoverage`, no `!`), so nil remains a valid
+// honestly-degraded value for a genuine query failure -- it is no longer
+// the only value this port can produce.
 //
 // Breakdown item LABEL RESOLUTION (the A7/A8 display-name framework) is
 // likewise not yet ported -- see breakdown.go's ExecuteBreakdown doc
@@ -348,17 +350,24 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	// _execute_timeseries_query (:359-360) and _execute_breakdown_query
 	// (:462-463) do. The ONE sankey-adjacent call site that exists
 	// (analytics.py:867, inside the coverage computation) is inside
-	// SankeyResult.Coverage, which this port does not compute at all
-	// (see this file's package doc comment -- Coverage is always nil),
-	// so porting that call site would fire telemetry for a computation
-	// this port never runs. If/when coverage is ported, its telemetry
-	// call must be added THERE, not here.
+	// SankeyResult.Coverage -- and now that coverage IS ported, that call
+	// site is ported WITH it, inside resolveSankeyCoverage
+	// (sankeycoverage.go), gated on useInvestment exactly as Python gates
+	// it. It stays out of THIS function: firing it here as well would
+	// double-report for one request.
 	nodes, edges, execErr := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
 	if execErr != nil {
 		// Swallow: analytics.py:654-656 logs and degrades to empty.
 		recordDegradation(ctx, "sankey", execErr)
 		nodes, edges = nil, nil
 	}
+
+	// analytics.py:658-660 -- coverage is computed AFTER nodes/edges, and
+	// unconditionally whenever a sankey was requested (`if batch.sankey is
+	// not None`, which is exactly the condition under which this function
+	// runs at all). It degrades to nil on any failure rather than
+	// propagating an error; see sankeycoverage.go.
+	coverage := resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, useInvestment, filters)
 
 	unit := model.SankeyValueUnitWorkUnits
 	if req.Measure == MeasureChurnLOC {
@@ -368,7 +377,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	return &model.SankeyResult{
 		Nodes:    nodes,
 		Edges:    edges,
-		Coverage: nil, // not yet ported, see Resolve's doc comment
+		Coverage: coverage,
 		Unit:     unit,
 	}, nil
 }

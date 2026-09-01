@@ -704,17 +704,18 @@ func recordFieldSite(oracle *populatabilityOracle, typeName, fieldName string, v
 // same discipline as sdl_nullability_gate_test.go's expectedDivergences:
 // an entry needs a written reason and must actually match a real
 // violation found this run (checked below), or it is stale and fails the
-// gate itself. Kept to ONE entry -- SankeyResult.Coverage is a
-// pre-existing, already-documented gap (resolve.go's Resolve doc
-// comment: "SankeyResult.Coverage is NOT YET PORTED -- always nil...
-// scoped out of this increment deliberately, flagged here rather than
-// silently omitted"; registeredInvestmentFullDocument's own doc comment:
-// "a caller enabling this operation later must know coverage resolves to
-// null on the Go plane until that follow-up lands") -- separate from and
-// predating CHAOS-4723, not something this PR's scope extends to fixing.
-var expectedUnpopulatedFields = map[string]string{
-	"SankeyResult.coverage": "resolve.go's Resolve doc comment + registeredInvestmentFullDocument's doc comment: SankeyResult.Coverage is a deliberately-scoped-out, already-documented follow-up (the ~250-line coverage computation, analytics.py:658-907), predating and out of scope for CHAOS-4723. Registering investmentFull with this known gap was itself a deliberate, documented choice (\"registration gates reachability, not response completeness\").",
-}
+// gate itself.
+//
+// EMPTY, and that is the point. Its one entry was
+// "SankeyResult.coverage", the pre-existing gap resolve.go documented as
+// "NOT YET PORTED -- always nil". Coverage is now computed
+// (internal/analytics/sankeycoverage.go), so the exception was removed
+// with the fix rather than left behind -- a stale entry matching nothing
+// fails this gate by design, which is what forces the two to move
+// together. Adding a new entry here means shipping a registered document
+// with a field the resolver cannot populate; that needs a ticket and a
+// written reason, not a quiet append.
+var expectedUnpopulatedFields = map[string]string{}
 
 // TestRegisteredDocumentFieldsArePopulatable is CHAOS-4723's
 // class-closing gate. See this file's package doc comment for the full

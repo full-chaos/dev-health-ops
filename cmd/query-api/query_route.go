@@ -14,8 +14,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +32,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -77,8 +76,41 @@ import (
 // used the wrong name on both sides) stayed green. Copied verbatim from
 // the real client source so the digest this route checks is the digest a
 // real request actually produces.
+//
+// CHAOS-4696 correction, 2026-08-31: "copied verbatim from the real
+// client source" above was correct but insufficient -- urql never sends
+// the web SOURCE text over the wire. `client.query(...)` (web's
+// graphqlFetch, server.ts) hands urql a string; urql parses it and sends
+// graphql-js-family `print()` output (@urql/core's stringifyDocument,
+// via @0no-co/graphql.web), which reflows an argument list once it
+// exceeds 80 characters. This operation's field line is 122 characters
+// in the web source's single-line form, so a real request's digest never
+// matched this const's old single-line text -- every real featureFlags
+// request 404'd and silently fell back to Python, invisibly, because
+// plan §5 defines "digest miss" as "stay on Python". The text below is
+// now the WIRE form (urql's actual print() output for this operation,
+// captured via scripts/graphql-wire-parity.ts in the web repo, which
+// calls @urql/core's real createRequest+stringifyDocument -- not a
+// hand-reflowed guess), and CI's graphql-wire-parity gate
+// (web repo's .github/workflows/tests.yml `graphql-wire-parity` job,
+// ops repo's `go.yml` `graphql-wire-parity` job) keeps it that way: it
+// fails the moment this text and the web repo's pinned urql wire form
+// disagree, for this or any of the other 11 registered documents. See
+// cmd/query-api/testdata/wire_capture/featureflags_captured.graphql and
+// its README for a byte-for-byte fixture captured off a real HTTP
+// request against the live local stack, not reconstructed from source or
+// from urql invoked in a test harness -- and
+// query_route_wire_capture_test.go, which asserts this const's digest
+// against that captured fixture's digest independently of this file's
+// own doc comment claims.
 const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
-  featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
+  featureFlags(
+    orgId: $orgId
+    provider: $provider
+    project: $project
+    includeArchived: $includeArchived
+    limit: $limit
+  ) {
     flags {
       flagId
       flagKey
@@ -442,16 +474,18 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
   }
 }`
 
-// digestHex is this wave's own document/schema digest convention: no
-// canonical algorithm has landed in this repo yet (go_api_registry.py's
-// schema_digest/document_digest are opaque caller-supplied strings; no
-// compute_document_digest exists to match against). sha256 hex of the
-// trimmed document text is documented here so a later wave that DOES
-// land a canonical algorithm can see exactly what this wave used and
-// migrate deliberately, rather than silently drifting.
+// digestHex is a thin wrapper over the ONE canonical document-digest
+// algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
+// now shared code in cmd/query-api/internal/digest so
+// cmd/query-api/tools/registrydump computes the EXACT SAME digest this
+// running process does -- not a second hand-typed copy of a two-line
+// function that could silently drift from this one. (The schema-digest
+// half of what this comment used to call "no canonical algorithm has
+// landed" is a separate follow-up PR's concern -- see this file's
+// GO_API_SCHEMA_DIGEST verification for that half; this function is
+// document digest only.)
 func digestHex(document string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(document)))
-	return hex.EncodeToString(sum[:])
+	return digest.Document(document)
 }
 
 // queryRouteConfig is env-sourced configuration for the live /query

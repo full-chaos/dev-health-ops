@@ -64,7 +64,7 @@ var validScopeModes = map[string]bool{
 // SAME normalization extract_scope_state_from_rows applies at :144-155
 // for a caller that already has rows in hand).
 func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (InvestmentMembershipScopeState, error) {
-	rows, err := client.Query(ctx, membershipScopeStateQuery(), bindingsForOrgAndTimeout(orgID, timeoutSeconds))
+	rows, err := client.Query(ctx, membershipScopeStateQuery(timeoutSeconds), bindingsForOrg(orgID))
 	if err != nil {
 		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("query: %w", err)
 	}

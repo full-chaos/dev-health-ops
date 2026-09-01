@@ -36,14 +36,18 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// bindingsForOrgAndTimeout is the common {org_id:String}/{timeout:UInt64}
-// binding pair every membership-scope-only query in this file needs --
-// factored out so FetchInvestmentMembershipScopeState (this package's
-// investmentmembershiptelemetry.go) does not hand-roll it.
-func bindingsForOrgAndTimeout(orgID string, timeoutSeconds int) []clickhouse.Binding {
+// bindingsForOrg is the common {org_id:String} binding every
+// membership-scope-only query in this file needs -- factored out so
+// FetchInvestmentMembershipScopeState (this package's
+// investmentmembershiptelemetry.go) does not hand-roll it. Used to also
+// carry a "timeout" UInt64 named-parameter binding alongside org_id;
+// CHAOS-4730 moved the timeout to a literal rendered directly into
+// membershipScopeStateQuery's SQL text (see settingsMaxExecutionTime's
+// doc comment, cost.go), so it no longer belongs in a bindings list at
+// all.
+func bindingsForOrg(orgID string) []clickhouse.Binding {
 	return []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 }
 
@@ -199,10 +203,10 @@ func investmentMembershipScopeFilter() string {
 // `WITH {STATE_CTES} SELECT scope_mode, lag_seconds FROM
 // investment_membership_scope_state`, inlined to a bare SELECT FROM the
 // derived table directly (no WITH, no intermediate name).
-func membershipScopeStateQuery() string {
+func membershipScopeStateQuery(timeoutSeconds int) string {
 	return fmt.Sprintf(`
 SELECT scope_mode, lag_seconds
 FROM %s
-SETTINGS max_execution_time = {timeout:UInt64}
-`, investmentMembershipScopeStateSource())
+%s
+`, investmentMembershipScopeStateSource(), settingsMaxExecutionTime(timeoutSeconds))
 }

@@ -247,14 +247,13 @@ WHERE %s
 %s
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC, dimension_value ASC
-SETTINGS max_execution_time = {timeout:UInt64}
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
+%s
+`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 	bindings = append(bindings, fc.bindings...)
 

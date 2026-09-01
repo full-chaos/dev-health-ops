@@ -246,6 +246,24 @@ async def test_document_not_in_catalog_returns_none(
     assert result is None
 
 
+async def test_query_text_with_unpaired_surrogate_falls_back_instead_of_raising(
+    router: GoApiDispatchRouter,
+):
+    """Codex round 1 (P2, EXECUTED): a client-supplied `\\uD800`-shaped JSON
+    escape decodes to a valid Python str containing a lone surrogate --
+    json.loads accepts it, but str.encode("utf-8") (inside document_digest)
+    raises UnicodeEncodeError. That must never escape as an unhandled
+    exception (turning an otherwise-fine request into a 500 instead of
+    Python's normal response, uncounted) -- it must fall back cleanly."""
+    body = json.dumps({"query": "\ud800"}).encode("utf-8")
+    request = _make_request("POST", body=body)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(request, context)
+
+    assert result is None
+
+
 async def test_registry_lookup_raises_falls_back_to_python(
     router: GoApiDispatchRouter, monkeypatch: pytest.MonkeyPatch
 ):

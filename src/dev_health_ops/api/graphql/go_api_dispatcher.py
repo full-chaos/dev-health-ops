@@ -268,7 +268,27 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             return None
         query_text, variables, operation_name = extracted
 
-        doc_digest = document_digest(query_text)
+        try:
+            doc_digest = document_digest(query_text)
+        except Exception:
+            # A client-supplied query text can contain bytes that decode to
+            # a valid Python str but do not re-encode to UTF-8 (e.g. a lone
+            # surrogate from a `\uD800`-shaped JSON escape) -- json.loads
+            # accepts it, but document_digest's .encode("utf-8") raises.
+            # This must never escape as an unhandled exception (that would
+            # turn an authenticated request into a 500 instead of a normal
+            # Python-served response, AND go uncounted) -- fall back to
+            # Python's own execution, which parses/validates the query
+            # itself and will reject it the same way it always has.
+            logger.exception(
+                "go_api_dispatch.digest_computation_failed",
+                extra={"query_length": len(query_text)},
+            )
+            GO_API_DISPATCH_FALLBACK_TOTAL.labels(
+                operation="unknown", reason="digest_computation_error"
+            ).inc()
+            return None
+
         selected_operation = operation_for_digest(doc_digest)
         if selected_operation is None:
             # Not a document this edge's catalog recognizes -- the

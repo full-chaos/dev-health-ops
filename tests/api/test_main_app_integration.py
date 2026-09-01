@@ -313,6 +313,9 @@ def test_readiness_route_reports_webhook_health_shape(monkeypatch):
 
 
 def test_ingest_commits_route_is_wired_through_main_app(monkeypatch):
+    # ENVIRONMENT=development: this test checks routing/wiring, not auth
+    # (CHAOS-4720 fail-closed when unset outside a development environment).
+    monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.delenv("INGEST_API_KEYS", raising=False)
     monkeypatch.delenv("INGEST_SIGNING_SECRET", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)

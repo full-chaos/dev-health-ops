@@ -15,6 +15,16 @@ importlib.import_module("dev_health_ops.api.ingest.router")
 _router_mod = sys.modules["dev_health_ops.api.ingest.router"]
 
 
+@pytest.fixture(autouse=True)
+def _ingest_auth_dev_opt_in(monkeypatch):
+    """These tests exercise route/schema behavior, not auth. Opt into the
+    CHAOS-4720 development carve-out so INGEST_API_KEYS/INGEST_SIGNING_SECRET
+    stay unset without every request being fail-closed 401'd; the fail-closed
+    behavior itself is covered by tests/test_ingest_auth.py.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)

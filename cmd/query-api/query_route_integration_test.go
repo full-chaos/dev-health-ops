@@ -966,7 +966,7 @@ func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
 		SchemaDigest:        "sha256:unused",
 	}
 
-	_, _, err := buildQueryRoute(cfg)
+	_, _, _, err := buildQueryRoute(cfg)
 	if err == nil {
 		t.Fatal("buildQueryRoute succeeded against a non-ClickHouse endpoint, want a readiness-check error")
 	}

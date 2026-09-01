@@ -275,6 +275,9 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	// telemetry call must be added THERE, not here" -- this is there.
 	if useInvestment {
 		RecordStaleInvestmentMembershipScope(ctx, client, orgID, timeoutSeconds)
+		// CHAOS-4759 transition guard: bounded-cooldown check, see
+		// RecordArgMaxNullTransitionGuard's doc comment.
+		RecordArgMaxNullTransitionGuard(ctx, client, orgID, timeoutSeconds)
 	}
 
 	rows, err := client.Query(ctx, query.sql, query.bindings)

@@ -187,6 +187,23 @@ func buildUnitTeamSubquery(opts unitTeamSubqueryOptions) string {
 // tuple itself is never NULL. The other twelve projected columns are
 // non-nullable String/Float64/Map per DDL (Map cannot be Nullable in
 // ClickHouse at all) and are left as plain argMax, matching Python.
+//
+// CHAOS-4759 DECISION (chris, 2026-09-01 15:56 PT, "Go is the route"):
+// this fix means Go and Python's argMax READS deliberately diverge --
+// Go returns the true latest generation (possibly NULL); Python still
+// null-skips to a stale non-null value from an earlier generation. That
+// is a KNOWN, RULED-ON divergence, not a parity bug to "fix" by matching
+// Python: Python's null-skip is the thing CHAOS-4547 exists to fix, and
+// Python is not being touched (chris's standing no-Python-graphql-work
+// rule). The two planes read identically as long as no work unit's
+// newest generation ever clears one of these four columns relative to an
+// earlier generation -- true for all 203 multi-generation work units on
+// org 70d529e0 as of the ruling, but a snapshot, not a property.
+// RecordArgMaxNullTransitionGuard (investmentargmaxtransitionguard.go)
+// is the guard: it detects, per org and per column, the moment that
+// snapshot stops holding, so the day the two planes start silently
+// disagreeing is observed via telemetry rather than rediscovered by a
+// future adversarial review with nothing to point at.
 func latestWorkUnitInvestmentsSource() string {
 	return fmt.Sprintf(`(
         SELECT

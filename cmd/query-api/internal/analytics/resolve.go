@@ -254,6 +254,9 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 		// internally on its own fetch error -- see
 		// RecordStaleInvestmentMembershipScope's doc comment.
 		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+		// CHAOS-4759 transition guard: bounded-cooldown check, see
+		// RecordArgMaxNullTransitionGuard's doc comment.
+		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
 	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
@@ -270,6 +273,7 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	if useInvestment {
 		// See resolveOneTimeseries's identical call for the reasoning.
 		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
 	return ExecuteBreakdown(ctx, client, q, string(input.Dimension), string(input.Measure))
 }

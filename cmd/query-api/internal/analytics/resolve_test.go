@@ -2,7 +2,9 @@ package analytics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -136,6 +138,17 @@ func TestResolve_Investment_ResolvesEndToEnd(t *testing.T) {
 		rows: [][]any{
 			{mustTime("2026-01-01"), "repo-a", 3.0},
 		},
+	})
+	// CHAOS-4723: Phase 4 now genuinely queries evidence-quality stats
+	// whenever useInvestment=true and a window is available (this
+	// batch's timeseries request supplies one via
+	// analyticsQualityWindow's fallback) -- and, unlike the
+	// membership-scope telemetry query, an unmatched Phase 4 query is
+	// FATAL, not swallowed (see TestResolveEvidenceQualityStats_QueryError_IsFatal).
+	// A minimal fixture keeps this test's own focus (the timeseries
+	// path) from being broken by the new, correct Phase 4 call.
+	client.on("quality_known_count", &fakeRowScanner{
+		rows: [][]any{{uint64(0), uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}},
 	})
 	batch := model.AnalyticsRequestInput{
 		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
@@ -665,5 +678,108 @@ func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.
 	}
 	if result.Sankey == nil {
 		t.Fatal("expected a sankey result")
+	}
+}
+
+// TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue
+// is CHAOS-4723's RED-FIRST proof: on the parent commit, resolve.go
+// hardcoded EvidenceQualityDistribution/EvidenceQualityStats to nil
+// UNCONDITIONALLY (never gated on useInvestment at all), citing a
+// misreading of _resolve_evidence_quality_stats's own gate
+// (analytics.py:217-218, `if not bool(batch.use_investment): return
+// None`) -- that gate returns None only when use_investment is FALSE,
+// and this test's batch sends useInvestment=true (the web client's
+// investmentBreakdown/investmentFull documents' actual default), so on
+// Python the gate PASSES and returns real data. This test compiles
+// unchanged against the parent commit (it only calls the public
+// Resolve() entry point and asserts on AnalyticsResult's existing
+// fields) and FAILS there because both fields come back nil regardless
+// of the fake client's fixture; it PASSES once resolve.go's Phase 4
+// actually queries and populates them.
+//
+// Fixture values are the exact CHAOS-4723 acceptance numbers recorded
+// from a real Python-served response for org
+// 70d529e0-3c06-4597-8480-794fd02328b6 at 07:19 PDT 2026-09-01, BEFORE
+// the widen that exposed this divergence:
+//
+//	evidenceQualityDistribution { high: 0, moderate: 82, low: 27, very_low: 307, unknown: 0 }
+//	evidenceQualityStats { mean: 0.36605981413217176, stddev: 0.18077765180388625, total: 416,
+//	                        bandCounts: { high: 0, moderate: 82, low: 27, very_low: 307, unknown: 0 } }
+//
+// This test proves the WIRING (Resolve calls the real query and carries
+// its result through, unconditionally-nil is gone) using a fake client;
+// investmentquality_test.go's TestResolveEvidenceQualityStats_* cover
+// resolveEvidenceQualityStats's own gate/window/filter logic in
+// isolation, and the live-ClickHouse proof (nan_class_live.go-style,
+// //go:build integration) is the separate parity proof against the real
+// org-70d529e0 data these numbers were recorded from.
+func TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("date_trunc('day', work_unit_investments.from_ts) AS bucket", &fakeRowScanner{
+		rows: [][]any{{mustTime("2026-01-01"), "repo-a", 3.0}},
+	})
+	// "quality_known_count" is a SELECT alias unique to
+	// compileInvestmentQualityStats's query text (investmentquality.go)
+	// -- it cannot collide with the timeseries rule above or with the
+	// membership-scope telemetry query, which this fake has no rule for
+	// and which fails-and-swallows internally (see
+	// TestResolve_Investment_ResolvesEndToEnd's doc comment for that
+	// same, already-proven property).
+	client.on("quality_known_count", &fakeRowScanner{
+		rows: [][]any{
+			{uint64(416), uint64(416), 0.36605981413217176, 0.18077765180388625, uint64(0), uint64(82), uint64(27), uint64(307), uint64(0)},
+		},
+	})
+
+	batch := model.AnalyticsRequestInput{
+		Timeseries:    []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)},
+		UseInvestment: boolPtr(true),
+	}
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve error = %v", err)
+	}
+
+	if result.EvidenceQualityStats == nil {
+		t.Fatal("CHAOS-4723: expected EvidenceQualityStats to be populated when useInvestment=true, got nil")
+	}
+	stats := result.EvidenceQualityStats
+	if stats.Total != 416 {
+		t.Errorf("stats.Total = %d, want 416", stats.Total)
+	}
+	if stats.Mean == nil || *stats.Mean != 0.36605981413217176 {
+		t.Errorf("stats.Mean = %v, want 0.36605981413217176", stats.Mean)
+	}
+	if stats.Stddev == nil || *stats.Stddev != 0.18077765180388625 {
+		t.Errorf("stats.Stddev = %v, want 0.18077765180388625", stats.Stddev)
+	}
+	if stats.BandCounts.IsNull() {
+		t.Fatal("stats.BandCounts must not be null")
+	}
+	var bandCounts map[string]int
+	if err := json.Unmarshal(stats.BandCounts, &bandCounts); err != nil {
+		t.Fatalf("stats.BandCounts did not unmarshal as an object: %v (%s)", err, stats.BandCounts)
+	}
+	wantBands := map[string]int{"high": 0, "moderate": 82, "low": 27, "very_low": 307, "unknown": 0}
+	if !reflect.DeepEqual(bandCounts, wantBands) {
+		t.Errorf("stats.BandCounts = %v, want %v", bandCounts, wantBands)
+	}
+
+	if result.EvidenceQualityDistribution.IsNull() {
+		t.Fatal("CHAOS-4723: expected EvidenceQualityDistribution to be populated when useInvestment=true, got null")
+	}
+	var distribution map[string]int
+	if err := json.Unmarshal(result.EvidenceQualityDistribution, &distribution); err != nil {
+		t.Fatalf("EvidenceQualityDistribution did not unmarshal as an object: %v (%s)", err, result.EvidenceQualityDistribution)
+	}
+	if !reflect.DeepEqual(distribution, wantBands) {
+		t.Errorf("EvidenceQualityDistribution = %v, want %v", distribution, wantBands)
+	}
+	// analytics.py:970-973: evidenceQualityDistribution IS
+	// evidenceQualityStats.bandCounts, the same value reused, never
+	// independently recomputed.
+	if string(result.EvidenceQualityDistribution) != string(stats.BandCounts) {
+		t.Errorf("EvidenceQualityDistribution (%s) must be the SAME bytes as stats.BandCounts (%s)",
+			result.EvidenceQualityDistribution, stats.BandCounts)
 	}
 }

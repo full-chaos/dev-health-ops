@@ -26,12 +26,22 @@
 //	  an empty SankeyResult.
 //	Phase 3 (flowMatrix, analytics.py:935-963, if requested): sequential
 //	  AFTER phase 2, same fatal-compile/swallow-execute split.
-//	Phase 4 (evidence quality stats, analytics.py:965-967): entirely
-//	  investment-path (CHAOS-4538) -- always nil on this port's scope,
-//	  confirmed by reading fetch_investment_quality_stats
-//	  (investment.py:1008-1079, `FROM latest_work_unit_investments`) and
-//	  _resolve_evidence_quality_stats's own gate (analytics.py:217-218,
-//	  `if not bool(batch.use_investment): return None`).
+//	Phase 4 (evidence quality stats, analytics.py:965-981): entirely
+//	  investment-path (CHAOS-4538/CHAOS-4723). PORTED as of CHAOS-4723 --
+//	  gated on useInvestment via resolveEvidenceQualityStats
+//	  (investmentquality.go), mirroring _resolve_evidence_quality_stats's
+//	  own gate (analytics.py:217-218, `if not bool(batch.use_investment):
+//	  return None`) EXACTLY: that gate returns None when use_investment is
+//	  FALSE, i.e. it PASSES (populates real data) when useInvestment is
+//	  true -- the web client's default. CHAOS-4723's root cause was this
+//	  file's OWN prior doc comment misreading that gate as "always nil on
+//	  this port's scope" and hardcoding both fields to nil unconditionally
+//	  regardless of useInvestment; see investmentquality.go for the real
+//	  port of fetch_investment_quality_stats (investment.py:1008-1079,
+//	  `FROM latest_work_unit_investments`). NOT wrapped in a try/except on
+//	  the Python side (analytics.py:965-967, unlike sankey/flowMatrix's
+//	  swallow-to-empty) -- a query failure here is FATAL, matching this
+//	  port's existing fatal-by-default error handling.
 package analytics
 
 import (
@@ -40,6 +50,7 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson"
 )
 
 // Resolve is the Go port of resolve_analytics (analytics.py:488-981).
@@ -198,15 +209,28 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	}
 
 	// Phase 4: evidence quality stats -- entirely investment-path
-	// (CHAOS-4538), always nil here. See this file's package doc comment.
+	// (CHAOS-4538/CHAOS-4723), gated on useInvestment. FATAL on error,
+	// no swallow (see this file's package doc comment).
+	evidenceQualityStats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, useInvestment, resolvedFilters)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+	}
+	// analytics.py:970-973: evidence_quality_distribution is literally
+	// evidence_quality_stats.band_counts, reused, never recomputed --
+	// preserve that aliasing here (same JSON bytes on both fields) rather
+	// than deriving it independently.
+	var evidenceQualityDistribution graphqljson.JSON
+	if evidenceQualityStats != nil {
+		evidenceQualityDistribution = evidenceQualityStats.BandCounts
+	}
 
 	return &model.AnalyticsResult{
 		Timeseries:                  timeseriesResults,
 		Breakdowns:                  breakdownResults,
 		Sankey:                      sankeyResult,
 		FlowMatrix:                  flowMatrixResult,
-		EvidenceQualityDistribution: nil,
-		EvidenceQualityStats:        nil,
+		EvidenceQualityDistribution: evidenceQualityDistribution,
+		EvidenceQualityStats:        evidenceQualityStats,
 	}, nil
 }
 

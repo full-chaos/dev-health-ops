@@ -1862,16 +1862,17 @@ type ThroughputStaleWip struct {
 
 // TimeseriesBucket.Value is *float64, not float64 -- CHAOS-4657, same
 // shape as CHAOS-4650's BreakdownItem.Value (chris 2026-08-31 04:18,
-// Option B). Hand-edited, NOT regenerated from
-// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
-// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+// Option B). The Go type did not need to change for CHAOS-4703: it was
+// already *float64. CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend
+// to class" ruling) widened contracts/graphql/v1/schema.graphql to match
+// (`value: Float`, was `Float!`), atomically with Python's Strawberry
+// export -- the SDL/Go divergence this comment used to document is
+// closed.
 // POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
 // overwritten wholesale by the next `gqlgen generate` -- the durable
-// copy of why this diverges from the schema, the reachability
-// mechanism, and the CHAOS-4658 hazard this creates lives in
-// timeseries.go's ExecuteTimeseries doc comment (and, for the sibling
-// field, breakdown.go's breakdownRow.Value doc comment). Read those,
-// not this.
+// copy of why lives in timeseries.go's ExecuteTimeseries doc comment
+// (and, for the sibling field, breakdown.go's breakdownRow.Value doc
+// comment). Read those, not this.
 type TimeseriesBucket struct {
 	Date  graphqldate.Date `json:"date"`
 	Value *float64         `json:"value"`

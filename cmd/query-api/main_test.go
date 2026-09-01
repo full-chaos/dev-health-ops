@@ -202,15 +202,25 @@ func TestReadyzDependencyClass_PinsAllThreeClassesAndFallback(t *testing.T) {
 }
 
 // TestReadyzHandler_PinnedResponseBodies asserts the EXACT body bytes for
-// all three /readyz outcomes, per the runbook's constraint
+// every /readyz outcome, per the runbook's constraint
 // (.remember/go-api-enablement-runbook.md §5b: "the enablement runbook's
 // §5b readiness check asserts the exact body bytes -- `ready`,
 // `ready: /query not configured`, and the `not ready: ...` prefix are
 // load-bearing"). CHAOS-4724 narrowed the unhealthy shape from an
-// unbounded error string to a closed set of dependency-class suffixes;
-// this test pins that closed set so a future change to any of the three
-// class constants (or to readyzDependencyClass's fallback) is a visible,
-// deliberate decision here and in the runbook, not a silent drift.
+// unbounded error string to a closed set of FOUR dependency-class
+// suffixes -- the three real classes PLUS readyzDependencyClass's
+// fallback literal "dependency" (codex round 1, P3: an earlier version
+// of this test and the runbook table both said "exactly three", omitting
+// the fallback case main_test.go's own
+// TestReadyzDependencyClass_PinsAllThreeClassesAndFallback already
+// covers at the class-extraction level -- this test now pins it at the
+// full HTTP-handler level too, closing the same gap for the closed-set
+// claim). Not currently reachable through the one real `ready` this
+// binary wires up (readinessCheck always wraps in one of the three named
+// classes), but it is still part of readyzHandler's OWN observable
+// contract -- a future `ready` implementation that forgets to wrap its
+// error hits this path, and the runbook table documents it as the
+// fourth possible unhealthy body rather than leaving it undocumented.
 func TestReadyzHandler_PinnedResponseBodies(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -228,6 +238,9 @@ func TestReadyzHandler_PinnedResponseBodies(t *testing.T) {
 		{"unhealthy jwks", func(ctx context.Context) error {
 			return &readyzDependencyError{Class: readyzClassJWKS, Cause: errors.New("boom")}
 		}, "not ready: jwks"},
+		{"unhealthy fallback (unwrapped error, not a *readyzDependencyError)", func(ctx context.Context) error {
+			return errors.New("boom")
+		}, "not ready: dependency"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

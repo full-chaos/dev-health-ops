@@ -223,6 +223,29 @@ async def test_build_outbound_body_get_constructs_post_body():
     assert decoded["operationName"] == "Test"
 
 
+@pytest.mark.parametrize("raw", ["inf", "Infinity", "nan", "-inf"])
+async def test_dispatch_timeout_seconds_rejects_non_finite_values(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+):
+    """Codex round 2 (P2, EXECUTED): float("inf") does not raise
+    ValueError and `inf > 0` is True, so GO_API_DISPATCH_TIMEOUT_SECONDS=inf
+    used to disable the fallback timeout entirely -- a stalled query-api
+    would then hang every dispatched request forever, uncounted. Only a
+    genuinely finite, positive value may be used."""
+    monkeypatch.setenv("GO_API_DISPATCH_TIMEOUT_SECONDS", raw)
+    assert (
+        go_api_dispatcher._dispatch_timeout_seconds()
+        == go_api_dispatcher._DEFAULT_DISPATCH_TIMEOUT_SECONDS
+    )
+
+
+async def test_dispatch_timeout_seconds_accepts_finite_positive_value(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("GO_API_DISPATCH_TIMEOUT_SECONDS", "2.5")
+    assert go_api_dispatcher._dispatch_timeout_seconds() == 2.5
+
+
 # ---------------------------------------------------------------------------
 # The fail-closed table (CHAOS-4697 brief), branch by branch
 # ---------------------------------------------------------------------------

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from typing import TYPE_CHECKING, Any
@@ -110,7 +111,16 @@ def _dispatch_timeout_seconds() -> float:
         value = float(raw)
     except ValueError:
         return _DEFAULT_DISPATCH_TIMEOUT_SECONDS
-    return value if value > 0 else _DEFAULT_DISPATCH_TIMEOUT_SECONDS
+    # codex round 2 (P2, EXECUTED): float("inf") does not raise ValueError
+    # and `inf > 0` is True, so a misconfigured (or "helpfully" set to
+    # "unlimited") env var used to disable the fallback timeout entirely --
+    # a Go service that accepts the connection but never responds would
+    # hang every dispatched request forever, uncounted, defeating the
+    # entire fail-closed contract this module exists to provide. Require a
+    # genuinely finite, positive value.
+    if not math.isfinite(value) or value <= 0:
+        return _DEFAULT_DISPATCH_TIMEOUT_SECONDS
+    return value
 
 
 async def _extract_operation(

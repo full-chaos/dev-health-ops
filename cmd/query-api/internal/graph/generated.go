@@ -12407,14 +12407,14 @@ type SankeyCoverage {
 type SankeyEdge {
   source: String!
   target: String!
-  value: Float!
+  value: Float
 }
 
 type SankeyNode {
   id: String!
   label: String!
   dimension: String!
-  value: Float!
+  value: Float
 }
 
 input SankeyRequestInput {
@@ -61719,6 +61719,13 @@ func (ec *executionContext) _SankeyEdge_value(ctx context.Context, field graphql
 			ret = graphql.Null
 		}
 	}()
+	// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to class"
+	// ruling; same shape as CHAOS-4657's TimeseriesBucket.value): hand-edited
+	// to a nullable marshal, matching model.SankeyEdge.Value's *float64 type.
+	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+	// gets overwritten wholesale by the next `gqlgen generate`; the
+	// durable copy of why lives in flowmatrix.go's queryNodes doc
+	// comment. Read that, not this.
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil
@@ -61728,14 +61735,11 @@ func (ec *executionContext) _SankeyEdge_value(ctx context.Context, field graphql
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SankeyEdge_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -61895,6 +61899,13 @@ func (ec *executionContext) _SankeyNode_value(ctx context.Context, field graphql
 			ret = graphql.Null
 		}
 	}()
+	// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to class"
+	// ruling; same shape as CHAOS-4657's TimeseriesBucket.value): hand-edited
+	// to a nullable marshal, matching model.SankeyNode.Value's *float64 type.
+	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+	// gets overwritten wholesale by the next `gqlgen generate`; the
+	// durable copy of why lives in flowmatrix.go's queryNodes doc
+	// comment. Read that, not this.
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
 		return obj.Value, nil
@@ -61904,14 +61915,11 @@ func (ec *executionContext) _SankeyNode_value(ctx context.Context, field graphql
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_SankeyNode_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -85264,10 +85272,18 @@ func (ec *executionContext) _SankeyEdge(ctx context.Context, sel ast.SelectionSe
 				out.Invalids++
 			}
 		case "value":
+			// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to
+			// class" ruling; same shape as CHAOS-4658's BreakdownItem
+			// fix): hand-edited to drop the Invalids++ this case carried
+			// when SankeyEdge.value was Float! (non-null). model.SankeyEdge.Value
+			// is *float64 (CHAOS-4701) and the SDL now says `value: Float`
+			// (nullable, this commit) -- a nil value is a VALID response, not an
+			// error, so it must NOT collapse the whole SankeyEdge to
+			// graphql.Null the way a genuinely-invalid non-null field would.
+			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+			// on the next `gqlgen generate`; the durable copy of why lives in
+			// flowmatrix.go's queryNodes doc comment. Read that, not this.
 			out.Values[i] = ec._SankeyEdge_value(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -85318,10 +85334,18 @@ func (ec *executionContext) _SankeyNode(ctx context.Context, sel ast.SelectionSe
 				out.Invalids++
 			}
 		case "value":
+			// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to
+			// class" ruling; same shape as CHAOS-4658's BreakdownItem
+			// fix): hand-edited to drop the Invalids++ this case carried
+			// when SankeyNode.value was Float! (non-null). model.SankeyNode.Value
+			// is *float64 (CHAOS-4701) and the SDL now says `value: Float`
+			// (nullable, this commit) -- a nil value is a VALID response, not an
+			// error, so it must NOT collapse the whole SankeyNode to
+			// graphql.Null the way a genuinely-invalid non-null field would.
+			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+			// on the next `gqlgen generate`; the durable copy of why lives in
+			// flowmatrix.go's queryNodes doc comment. Read that, not this.
 			out.Values[i] = ec._SankeyNode_value(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

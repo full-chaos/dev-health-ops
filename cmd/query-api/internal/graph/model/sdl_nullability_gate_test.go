@@ -37,9 +37,16 @@
 //     already marshals as GraphQL null -- see that package's doc comment.
 //     gqlgen does not need a pointer to represent "no value" for a type
 //     that natively has one.
-//   - 1 is TimeseriesBucket.value: Go `*float64`, SDL `Float!`. This is
-//     CHAOS-4703, still open, the standing proof this gate detects the
-//     class (see expectedDivergences below).
+//   - 1 was TimeseriesBucket.value: Go `*float64`, SDL `Float!`. This was
+//     CHAOS-4703 (closed: SDL widened to `value: Float`, atomically with
+//     Python's Strawberry export, plus generated.go's stale Invalids++
+//     dropped) -- at the time this gate was written it was the standing
+//     proof the raw comparator detects the class (see
+//     TestCHAOS4703IsDetectedByTheRawComparator's history in this file's
+//     git log for that proof; the subtest itself and the matching
+//     expectedDivergences entry were deleted in the same PR that closed
+//     CHAOS-4703, per both's own embedded instructions). The gate's
+//     continuing teeth are documented at expectedDivergences below.
 //
 // Separately, object/input-object-typed fields (e.g. `aiSide:
 // AIComparisonSide!` -> Go `*AIComparisonSide`) are gqlgen's own
@@ -512,17 +519,40 @@ func compareNullability(
 // exclusion is: if it stops matching an actual violation (because the
 // field was fixed), the gate FAILS, loudly, telling you to remove the
 // entry -- so this ledger cannot quietly outlive the bug it documents.
-var expectedDivergences = map[string]string{
-	"TimeseriesBucket.value": "CHAOS-4703 (open, intentionally not fixed by CHAOS-4702's lane): Go is " +
-		"*float64, SDL still says Float!. Safe today because TimeseriesBucket is not reachable from any " +
-		"registered document (verified against origin/main:cmd/query-api/query_route.go's " +
-		"digestByOperation -- neither registeredInvestmentBreakdownDocument nor " +
-		"registeredInvestmentFullDocument selects timeseries.buckets.value). This is CHAOS-4702's " +
-		"acceptance evidence: this gate finding it IS the proof the gate detects the class. Remove this " +
-		"entry in the same PR that closes CHAOS-4703 (SDL widened to `value: Float`, Go regenerated + " +
-		"generated.go's stale Invalids++ check corrected) -- once fixed, this entry will stop matching " +
-		"anything and the gate will fail until it is deleted.",
-}
+//
+// CHAOS-4703 closed this ledger's only entry (TimeseriesBucket.value),
+// which leaves it empty. That is NOT this gate going vacuous -- read
+// TestGoModelNullabilityMatchesPublishedSDL's body before assuming so:
+//   - It still derives the comparison from the LIVE SDL and the LIVE
+//     generated Go model on every run (currently ~1025 scalar/enum
+//     fields), not from this map. An empty ledger changes which
+//     divergences are pre-excused (none, right now); it does not change
+//     what gets compared.
+//   - exclusionIntegrityFailures (below) independently asserts the three
+//     idiom exclusions (object, JSON scalar, list) each still matched at
+//     least one real field this run, AND that CheckedFields > 0 -- so a
+//     gqlgen.yml change or a schema restructure that silently excluded
+//     everything would fail this gate on its own, with no ledger entry
+//     involved at all.
+//   - The comparator's correctness in BOTH mismatch directions
+//     (sdl-non-null-but-go-pointer and sdl-nullable-but-go-non-pointer)
+//     is pinned independently by the synthetic mutation tests below
+//     (TestCompareNullabilityCatchesDirectionOne and
+//     TestCompareNullabilityCatchesDirectionTwo), which build
+//     hand-crafted schemas and do not touch expectedDivergences or the
+//     real repo SDL/models_gen.go at all -- so this gate's detection
+//     logic stays proven even in a run where the real schema has zero
+//     live divergences.
+//
+// In short: the ledger was always a WAIVER list layered on top of a
+// comparison that runs regardless of its contents. A future genuine
+// divergence (a 5th hand-found instance, or a new field) is still
+// caught by TestGoModelNullabilityMatchesPublishedSDL failing with an
+// "unticketed" divergence -- exactly the failure mode this map exists to
+// let a KNOWN, ticketed one skip. Add an entry here only when a new
+// divergence is deliberately deferred with its own ticket, per this
+// file's header doc comment.
+var expectedDivergences = map[string]string{}
 
 // exclusionIntegrityFailures applies oraclecompare's
 // CheckExclusionIntegrity discipline to this gate's OWN exclusion rules:
@@ -652,60 +682,6 @@ func TestGoModelNullabilityMatchesPublishedSDL(t *testing.T) {
 			"an expectedDivergences entry in this file naming that ticket.")
 		t.Fatal(b.String())
 	}
-}
-
-// TestCHAOS4703IsDetectedByTheRawComparator is the literal acceptance
-// evidence CHAOS-4702 was scoped around: with CHAOS-4703 still open, the
-// comparator -- BEFORE the expected-divergence ledger filters anything --
-// must flag TimeseriesBucket.value and nothing else. This subtest does not
-// consult expectedDivergences at all, so it keeps proving raw detection
-// works even though TestGoModelNullabilityMatchesPublishedSDL itself stays
-// green (via the ledger) so CI is not blocked on an already-ticketed,
-// already-deferred issue.
-//
-// When CHAOS-4703 is fixed, this test starts failing (0 violations where 1
-// is asserted) -- which is the correct, loud signal to delete this test
-// and the matching expectedDivergences entry in the same PR.
-func TestCHAOS4703IsDetectedByTheRawComparator(t *testing.T) {
-	repoRoot := repoRootForSDLGate(t)
-
-	sdlBytes, err := os.ReadFile(filepath.Join(repoRoot, "contracts", "graphql", "v1", "schema.graphql"))
-	if err != nil {
-		t.Fatalf("read SDL pin: %v", err)
-	}
-	schema, gqlErr := gqlparser.LoadSchema(&gqlast.Source{Name: "schema.graphql", Input: string(sdlBytes)})
-	if gqlErr != nil {
-		t.Fatalf("parse SDL pin: %v", gqlErr)
-	}
-
-	goStructs, parseErrs := parseGoModelFields(t, filepath.Join(
-		repoRoot, "cmd", "query-api", "internal", "graph", "model", "models_gen.go"))
-	if len(parseErrs) > 0 {
-		t.Fatalf("models_gen.go parse issues: %v", parseErrs)
-	}
-
-	violations, _, structuralErrors := compareNullability(schema, goStructs)
-	if len(structuralErrors) > 0 {
-		t.Fatalf("structural errors before this subtest can assert anything: %v", structuralErrors)
-	}
-
-	if len(violations) != 1 {
-		t.Fatalf("expected exactly 1 raw divergence (CHAOS-4703, TimeseriesBucket.value) with CHAOS-4703 "+
-			"still open; got %d: %v\n(if this is 0, CHAOS-4703 was fixed -- delete this test and its "+
-			"expectedDivergences entry in the same PR; if this is >1, a NEW divergence exists and needs "+
-			"its own ticket)", len(violations), violations)
-	}
-	got := violations[0]
-	want := Divergence{
-		TypeName: "TimeseriesBucket", FieldName: "value",
-		SDLType: "Float!", GoType: "*float64",
-		Direction: "sdl-non-null-but-go-pointer",
-	}
-	if got != want {
-		t.Fatalf("the one raw divergence found does not match CHAOS-4703's known shape.\n got:  %+v\n want: %+v",
-			got, want)
-	}
-	t.Logf("CONFIRMED RED: raw comparator (no ledger applied) detects exactly CHAOS-4703: %s", got.String())
 }
 
 // --- synthetic mutation tests --------------------------------------------

@@ -2289,7 +2289,7 @@ enum TimeGranularity {
 
 type TimeseriesBucket {
   date: Date!
-  value: Float!
+  value: Float
 }
 
 input TimeseriesRequestInput {

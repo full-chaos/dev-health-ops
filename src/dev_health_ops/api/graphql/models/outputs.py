@@ -10,10 +10,27 @@ import strawberry
 
 @strawberry.type
 class TimeseriesBucket:
-    """A single bucket in a timeseries result."""
+    """A single bucket in a timeseries result.
+
+    ``value`` is ``float | None``, not ``float`` -- CHAOS-4703 (chris via
+    team-lead, 2026-08-31, "Extend to class" ruling extending CHAOS-4658's
+    exemption -- "4701 now, 4703 when scheduled; atomic SDL+pin PRs each"
+    -- to this field): the published SDL contract is widened to match the
+    Go plane's `*float64` (timeseries.go's ExecuteTimeseries, CHAOS-4657),
+    which preserves an all-NULL aggregate group as SQL NULL / JSON null
+    instead of collapsing it to 0.0. This is a TYPE-CONTRACT change only,
+    not a behavior change on this (Python) side: the timeseries builder in
+    resolvers/analytics.py is unchanged -- Python continues to collapse
+    the all-NULL case to 0.0, its own deliberate divergence from the Go
+    plane (see timeseries.go's ExecuteTimeseries doc comment on the Go
+    side). A nullable GraphQL field is free to never actually emit null;
+    only the CONTRACT (what a client is allowed to assume) changes here,
+    so the Go plane's genuine nulls stop violating a schema promise it
+    never agreed to keep.
+    """
 
     date: date
-    value: float
+    value: float | None
 
 
 @strawberry.type

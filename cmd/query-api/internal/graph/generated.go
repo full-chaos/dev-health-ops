@@ -12728,7 +12728,7 @@ enum TimeGranularity {
 
 type TimeseriesBucket {
   date: Date!
-  value: Float!
+  value: Float
 }
 
 input TimeseriesRequestInput {
@@ -67755,6 +67755,11 @@ func (ec *executionContext) _TimeseriesBucket_value(ctx context.Context, field g
 	// CHAOS-4657 (chris 2026-08-31 04:18, Option B; same shape as
 	// CHAOS-4650's BreakdownItem.Value): hand-edited to a nullable
 	// marshal, matching model.TimeseriesBucket.Value's *float64 type.
+	// CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend to class"
+	// ruling) widened the SDL to `value: Float` to match -- this
+	// per-field marshal did not need to change, it was already correct;
+	// only the parent _TimeseriesBucket object marshaler below (its
+	// stale Invalids++) and the SDL needed correcting.
 	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
 	// gets overwritten wholesale by the next `gqlgen generate`; the
 	// durable copy of why lives in timeseries.go's ExecuteTimeseries
@@ -86654,10 +86659,22 @@ func (ec *executionContext) _TimeseriesBucket(ctx context.Context, sel ast.Selec
 				out.Invalids++
 			}
 		case "value":
+			// CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend to
+			// class" ruling; same shape as CHAOS-4658's BreakdownItem fix
+			// and CHAOS-4701's SankeyNode/SankeyEdge fix): hand-edited to
+			// drop the Invalids++ this case carried when
+			// TimeseriesBucket.value was Float! (non-null).
+			// model.TimeseriesBucket.Value is *float64 (CHAOS-4657) and
+			// the SDL now says `value: Float` (nullable, this commit) --
+			// a nil value is a VALID response, not an error, so it must
+			// NOT collapse the whole TimeseriesBucket to graphql.Null the
+			// way a genuinely-invalid non-null field would (which would
+			// then also collapse the enclosing non-null `buckets` list).
+			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file
+			// wholesale on the next `gqlgen generate`; the durable copy
+			// of why lives in timeseries.go's ExecuteTimeseries doc
+			// comment. Read that, not this.
 			out.Values[i] = ec._TimeseriesBucket_value(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

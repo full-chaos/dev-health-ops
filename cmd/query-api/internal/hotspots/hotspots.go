@@ -4,9 +4,34 @@
 // plan §6 Wave 3's second operation, ported after complexityTimeseries
 // (CHAOS-4369, PR #1992).
 //
-// Ported deliberately verbatim: same argMax(<col>, computed_at) latest-
-// compute-pass selection over the append-only file_hotspot_daily table,
-// same optional repo_ids filter resolved through the org-scoped repos
+// Ported deliberately verbatim, with ONE deliberate Go-only divergence
+// (CHAOS-4684): the six value columns are selected from a SINGLE
+// argMax over a tuple of all six, ordered by (day, computed_at), not
+// Python's six independent argMax(<col>, computed_at) calls.
+// computed_at is stamped once per compute RUN, not per row, so a single
+// run can write the identical computed_at across dozens of different
+// days; the bare-computed_at form's GROUP BY (repo_id, file_path) then
+// ties every one of those days together and argMax picks an arbitrary
+// row among them -- measured on real data: 686/11,953 groups ambiguous,
+// 5 in the returned top-50, risk_score spread up to 31.096 on the ORDER
+// BY key (CHAOS-4684). ClickHouse compares the tuple lexicographically,
+// so this reads latest DAY first, then latest computed_at within that
+// day -- the "latest-compute read" this doc comment already claimed but
+// the bare form did not deliver. The tuple-of-all-six aggregation (not
+// six independent argMax calls, which was this fix's own first attempt)
+// is required for the row selection to be atomic: ClickHouse's argMax
+// skips a NULL-valued Nullable argument when picking that column's own
+// winning row, so six independent argMax calls can still return
+// blame_concentration from an EARLIER day than every other column when
+// the true latest day's blame_concentration is NULL (codex review round
+// 1, EXECUTED against real ClickHouse). See fetchHotspotRows's own doc
+// comment. Go-only per the standing ruling (no further Python
+// graphql/metrics work); Python keeps the defect as expected divergence.
+// This does not reduce the scan -- it costs more (~2x duration, ~3.5x
+// memory on the measured dataset) because tuple comparison is pricier
+// per row; correctness is the entire justification, not performance.
+//
+// Same optional repo_ids filter resolved through the org-scoped repos
 // catalog (bounded to MAX_ROWS=1000 -- NOT the row limit -- before it
 // becomes a bind parameter, exactly mirroring Python's
 // `list(repo_ids)[:MAX_ROWS]`), same `ORDER BY risk_score DESC NULLS
@@ -144,22 +169,48 @@ type hotspotRow struct {
 	riskScore          float64
 }
 
-// fetchHotspotRows ports _fetch_hotspot_rows verbatim.
+// fetchHotspotRows ports _fetch_hotspot_rows, EXCEPT it selects all six
+// value columns from a SINGLE argMax over a tuple of all six, ordered by
+// (day, computed_at), rather than Python's six independent
+// argMax(<col>, computed_at) calls (CHAOS-4684) -- see the package doc
+// comment for why the ordering key changed.
+//
+// The tuple-of-all-six form is required, not a style choice: codex review
+// (round 1) found and this package's own EXECUTED probe confirmed that six
+// INDEPENDENT argMax(<col>, (day, computed_at)) calls still mix days when
+// the winning day's blame_concentration is NULL. ClickHouse's argMax skips
+// a NULL-valued Nullable argument when picking the row to return FOR THAT
+// COLUMN ALONE -- so an independent argMax(blame_concentration, (day,
+// computed_at)) can fall back to a strictly EARLIER day's non-null value
+// even though every other column correctly resolves to the true latest
+// day, silently reintroducing a mixed-day row through the one nullable
+// column. Aggregating one tuple containing all six columns and extracting
+// each field with tupleElement makes the row selection atomic: whichever
+// row wins (day, computed_at) is the row every field comes from, NULLs
+// included, because there is only one argMax call, not six.
 func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
 	query := `
         SELECT
-            toString(repo_id) AS repo_id,
+            repo_id,
             file_path,
-            argMax(churn_loc_30d,       computed_at) AS churn_loc_30d,
-            argMax(churn_commits_30d,   computed_at) AS churn_commits_30d,
-            argMax(cyclomatic_total,    computed_at) AS cyclomatic_total,
-            argMax(cyclomatic_avg,      computed_at) AS cyclomatic_avg,
-            argMax(blame_concentration, computed_at) AS blame_concentration,
-            argMax(risk_score,          computed_at) AS risk_score
-        FROM file_hotspot_daily
-        WHERE org_id = {org_id:String}
-          AND day >= {since_day:Date}
-          AND day <= {until_day:Date}`
+            tupleElement(agg, 1) AS churn_loc_30d,
+            tupleElement(agg, 2) AS churn_commits_30d,
+            tupleElement(agg, 3) AS cyclomatic_total,
+            tupleElement(agg, 4) AS cyclomatic_avg,
+            tupleElement(agg, 5) AS blame_concentration,
+            tupleElement(agg, 6) AS risk_score
+        FROM (
+            SELECT
+                toString(repo_id) AS repo_id,
+                file_path,
+                argMax(
+                    tuple(churn_loc_30d, churn_commits_30d, cyclomatic_total, cyclomatic_avg, blame_concentration, risk_score),
+                    (day, computed_at)
+                ) AS agg
+            FROM file_hotspot_daily
+            WHERE org_id = {org_id:String}
+              AND day >= {since_day:Date}
+              AND day <= {until_day:Date}`
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -170,15 +221,16 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
 	if len(repoIDs) > 0 {
 		bounded := boundRepoIDs(repoIDs)
 		query += `
-          AND repo_id IN (
-              SELECT id FROM repos
-              WHERE org_id = {org_id:String}
-                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
-          )`
+              AND repo_id IN (
+                  SELECT id FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+              )`
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: bounded})
 	}
 
-	query += fmt.Sprintf("\nGROUP BY repo_id, file_path\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit)
+	query += "\n            GROUP BY repo_id, file_path\n        )"
+	query += fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

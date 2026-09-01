@@ -151,6 +151,16 @@ def _seed_shared_fixtures(root: Path) -> None:
         root / "contracts" / "auth" / "v1" / "credential-classes.schema.json",
         _CREDENTIAL_CLASSES_SCHEMA_PATH.read_text(),
     )
+    # Empty on purpose, matching the real committed allowlist -- every
+    # fixture route below resolves cleanly (resolution == "OK"), so this is
+    # never actually consulted by those tests; it exists purely so check()
+    # (which always loads it) has a valid, empty file to find at its
+    # default sibling path rather than reporting ALLOWLIST MALFORMED/
+    # UNREADABLE against every other test in this file.
+    _write(
+        root / "contracts" / "auth" / "v1" / "unresolved-route-allowlist.json",
+        json.dumps({"schema_version": "unresolved-route-allowlist.v1", "entries": []}),
+    )
 
 
 _ROUTER_FILE = "src/dev_health_ops/api/routers/example.py"
@@ -1255,3 +1265,216 @@ def test_cli_does_not_crash_on_a_malformed_row_inside_the_list(tmp_path, capsys)
     assert "FAIL" in captured.err
     assert "JSON SCHEMA VIOLATION" in captured.err
     assert "rows/0" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Second merge-gate review (2026-09-01): three new findings, closed here.
+#
+# 1. DUPLICATE class_id -- JSON Schema cannot express cross-array id
+#    uniqueness, so credential_class_vocabulary()'s collapse to a set
+#    silently absorbed a duplicate/conflicting class_id.
+# 2. Two crash-before-report cases: a scalar/list top-level inventory
+#    document, and a malformed top-level credential-classes document, each
+#    raised before the computed schema violation ever printed.
+# 3. UNVERIFIED ROUTE (the important one): a row anchored to a route
+#    discovery could not resolve (UNRESOLVED_ROUTER/UNMOUNTED_ROUTER)
+#    previously skipped its route/service comparison entirely -- a false
+#    route + a wrong-but-valid service passed unchecked. Now fails closed
+#    unless the row id has a reasoned entry in the narrow
+#    unresolved-route-allowlist.json.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_catches_a_duplicate_class_id(tmp_path):
+    """Merge-gate P1, EXECUTED repro: duplicating a REAL class (same
+    class_id, conflicting display_name) in credential-classes.json
+    previously passed with errors == [] -- credential_class_vocabulary()
+    collapses the classes array into a set[str] of ids, which cannot tell
+    two conflicting definitions apart from one. The duplicate check runs on
+    the raw array, before that collapse."""
+    root = _minimal_valid_root(tmp_path)
+    cc = json.loads(_CREDENTIAL_CLASSES_PATH.read_text())
+    real_class_id = cc["classes"][0]["class_id"]
+    duplicate = json.loads(json.dumps(cc["classes"][0]))
+    duplicate["display_name"] = "CONFLICTING DUPLICATE " + duplicate["display_name"]
+    cc["classes"] = cc["classes"] + [duplicate]
+    _write(
+        root / "contracts" / "auth" / "v1" / "credential-classes.json", json.dumps(cc)
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("DUPLICATE class_id" in e and real_class_id in e for e in errors), errors
+
+
+def test_check_does_not_crash_on_a_scalar_top_level_inventory(tmp_path):
+    """Merge-gate P2, EXECUTED repro: a top-level inventory document that
+    is a JSON array (not an object at all -- a step further than the
+    already-fixed `rows: 17` / `rows: [17]` cases) raised
+    `AttributeError: 'list' object has no attribute 'get'` on
+    `inventory.get("rows", [])` inside check() itself, discarding the JSON
+    SCHEMA VIOLATION errors already computed a few lines above."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write(inventory_path, json.dumps([]))
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("JSON SCHEMA VIOLATION" in e for e in errors), errors
+
+
+def test_cli_does_not_crash_on_a_scalar_top_level_inventory(tmp_path, capsys):
+    """Same case as above, driven through main()'s CLI entrypoint --
+    EXECUTED repro: `raw_inventory.get("rows", [])` in main()'s
+    DISCLOSURE-HOLD preamble crashed with the same AttributeError BEFORE
+    check() was ever even called, so no DISCLOSURE-HOLD line and no
+    JSON SCHEMA VIOLATION printed at all -- just a traceback."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, _, _ = _paths(root)
+    _write(inventory_path, json.dumps([]))
+    exit_code = checker.main(["--root", str(root)])
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "DISCLOSURE-HOLD" in captured.out
+    assert "FAIL" in captured.err
+    assert "JSON SCHEMA VIOLATION" in captured.err
+
+
+def test_check_does_not_crash_on_a_malformed_top_level_credential_classes(tmp_path):
+    """Merge-gate P2, EXECUTED repro: a top-level credential-classes.json
+    that is a JSON array (not an object) raised
+    `TypeError: list indices must be integers or slices, not str` on
+    `credential_classes["classes"]` inside credential_class_vocabulary(),
+    BEFORE the CREDENTIAL CLASS SCHEMA VIOLATION (top level must be an
+    object) that check() computes a few lines later ever printed."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write(cc_path, json.dumps([]))
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("CREDENTIAL CLASS SCHEMA VIOLATION" in e for e in errors), errors
+
+
+_UNMOUNTED_ROUTER_FILE = "src/dev_health_ops/api/routers/unmounted.py"
+
+
+def _seed_unmounted_router(root: Path) -> None:
+    """A router with a real decorated route that is never
+    ``include_router``'d anywhere reachable from a FastAPI() root --
+    discovery still finds the route (routes are collected independently of
+    mount status) but reports it with resolution == UNMOUNTED_ROUTER,
+    full_path=None, no app_root. Stands in for the dotted/dynamic
+    `include_router` case this fix targets -- same "discovery cannot
+    resolve this to a deployed app" shape, easier to construct in a
+    fixture than a genuinely dynamic include expression."""
+    _write(
+        root / _UNMOUNTED_ROUTER_FILE,
+        "from fastapi import APIRouter\n"
+        "\n"
+        "router = APIRouter()\n"
+        "\n"
+        "\n"
+        '@router.get("/dynamic")\n'
+        "async def get_dynamic():\n"
+        "    return {}\n",
+    )
+
+
+_UNVERIFIABLE_ROW_ID = "GET /dynamic [dev-health-ops-api]"
+
+
+def _unverifiable_row(**overrides) -> dict:
+    row = _minimal_valid_row(
+        id=_UNVERIFIABLE_ROW_ID,
+        # Both of these are false/wrong-but-schema-valid -- the whole
+        # point is that discovery cannot resolve this route, so neither
+        # can be checked against anything real unless this fails closed.
+        route="/totally-fabricated-path",
+        service="dev-health-ops-billing-edge",
+        source={"file": _UNMOUNTED_ROUTER_FILE, "line": 6},
+    )
+    row.update(overrides)
+    return row
+
+
+def _write_allowlist(root: Path, entries: list[dict]) -> None:
+    _write(
+        root / "contracts" / "auth" / "v1" / "unresolved-route-allowlist.json",
+        json.dumps(
+            {"schema_version": "unresolved-route-allowlist.v1", "entries": entries}
+        ),
+    )
+
+
+def test_gate_catches_an_unresolved_route_as_unverified(tmp_path):
+    """Merge-gate P1, the important one, EXECUTED repro: a row anchored to
+    a route discovery cannot resolve to a deployed app previously skipped
+    its route/service comparison entirely -- a false `route` and a
+    wrong-but-schema-valid `service` (both set in _unverifiable_row above)
+    passed with zero errors. This is the fail-closed fix."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_unmounted_router(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
+        errors
+    )
+    # And neither the false route nor the wrong service is what's reported
+    # -- this is "cannot verify", not a (misleading) STALE ANCHOR/SERVICE
+    # MISMATCH claim about a route discovery never actually resolved.
+    assert not any("STALE ANCHOR" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
+        errors
+    )
+    assert not any(
+        "SERVICE MISMATCH" in e and _UNVERIFIABLE_ROW_ID in e for e in errors
+    ), errors
+
+
+def test_gate_accepts_an_unresolved_route_once_allowlisted_with_a_reason(tmp_path):
+    """The escape hatch: a human-reviewed, reasoned allowlist entry for
+    this EXACT row id makes the same fixture pass cleanly."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_unmounted_router(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
+    _write_allowlist(
+        root,
+        [
+            {
+                "id": _UNVERIFIABLE_ROW_ID,
+                "reason": "reviewed manually 2026-09-01 -- dynamic include verified safe",
+            }
+        ],
+    )
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert errors == [], errors
+
+
+def test_gate_catches_an_allowlist_entry_with_no_reason(tmp_path):
+    """An allowlist entry with an empty reason does not excuse its row
+    (fails closed) AND is itself reported -- the file can never be turned
+    into a blanket suppression by leaving `reason` off."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_unmounted_router(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
+    _write_allowlist(root, [{"id": _UNVERIFIABLE_ROW_ID, "reason": ""}])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("ALLOWLIST ENTRY MISSING REASON" in e for e in errors), errors
+    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
+        errors
+    )
+
+
+def test_gate_allowlist_entry_is_narrow_to_one_row_id(tmp_path):
+    """An allowlist entry excuses exactly the row id it names -- never a
+    pattern, never the whole file. A reasoned entry for a DIFFERENT id
+    must not excuse this row."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_unmounted_router(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
+    _write_allowlist(
+        root, [{"id": "GET /some-other-route [dev-health-ops-api]", "reason": "n/a"}]
+    )
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
+        errors
+    )

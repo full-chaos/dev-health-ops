@@ -108,6 +108,37 @@ Fails (exit 1, with a human-readable report) when:
      each class (issuer, validators, backing_store, lifecycle, ...) were
      never validated, so an under-specified class could be added and this
      gate would bless it.
+  10. DUPLICATE class_id -- two entries in ``credential-classes.json``'s
+      ``classes`` array share the same ``class_id`` with possibly
+      CONFLICTING definitions. Draft 2020-12 JSON Schema has no constraint
+      for "these array objects must have distinct <field>" (only
+      ``uniqueItems``, which compares whole-object equality, not one key),
+      so this file checks it directly, before
+      ``credential_class_vocabulary()`` collapses the array into a
+      ``set[str]`` of ids -- a collapse that silently absorbs a duplicate
+      id and keeps whichever definition Python's set construction happened
+      to keep. Merge-gate-verified gap: duplicating a real class (same
+      ``class_id``, different ``display_name``) previously passed with
+      ``errors == []``.
+  11. UNVERIFIED ROUTE -- a row's REST ``source`` anchor resolves (via
+      discovery's own ``(file, line)`` key) to a route discovery could NOT
+      attribute to a mount path (``resolution`` is ``UNRESOLVED_ROUTER`` or
+      ``UNMOUNTED_ROUTER`` -- a dotted or otherwise dynamic
+      ``include_router`` discovery's static AST walk cannot follow, see
+      ``ci/discover_ops_routes.py``). Without a resolved ``full_path``/
+      ``app_root``, this file cannot check the row's claimed ``route`` or
+      ``service`` against anything real -- previously it silently skipped
+      both checks (merge-gate P1: a row with a false ``route`` and a
+      wrong-but-VALID ``service`` passed unchecked, the exact "looks
+      registered, isn't actually verified" defect class this whole gate
+      exists to close). Now it FAILS CLOSED: exits non-zero naming the row,
+      unless that row's id has an entry with a non-empty ``reason`` in
+      ``contracts/auth/v1/unresolved-route-allowlist.json`` (a human
+      reviewed it and is vouching for the row some other way -- code
+      review, manual route verification, ...). An allowlist entry excuses
+      exactly ONE row id, never a pattern or a whole file; an entry with no
+      ``reason`` is itself an error (ALLOWLIST ENTRY MISSING REASON) so the
+      file can never be used to blanket-suppress this check.
 
 ``issued_credential`` is deliberately kept three/four-valued, never
 collapsed: non-empty array (mints these -- every class_id validated, every
@@ -123,10 +154,28 @@ cross-repo citation (e.g. ``acr:internal/auth/web_assertion.go:90``) and is
 deliberately NOT resolved as a local path here -- only its shape (a
 non-empty string) is checked.
 
+What this gate does NOT guarantee (read before trusting a green run for
+anything this list doesn't cover):
+  * It does not model a route mounted more than once. Discovery's mount
+    walk (``ci/discover_ops_routes.py``) collapses a router included from
+    multiple FastAPI parents to the FIRST resolvable parent chain's prefix
+    only (``full_prefix()``'s ``prefixes[0]``) -- a second, different mount
+    of the same router is never checked against, so this gate cannot notice
+    a row that is only correct for the collapsed-away mount. Known gap,
+    tracked separately as CHAOS-4760, not fixed here.
+  * A row whose surface discovery cannot resolve (see failure 11,
+    UNVERIFIED ROUTE, above) fails closed pending a reasoned entry in the
+    unresolved-route allowlist -- it is not verified, only explicitly
+    accepted by a human reviewer.
+This file makes no claim of complete or exhaustive coverage anywhere else
+either: every check above is scoped to what it can independently verify
+from discovery and the schemas, nothing more.
+
 Usage:
     python3 ci/check_endpoint_profiles.py [--root PATH] [--inventory PATH]
         [--schema PATH] [--credential-classes PATH]
         [--credential-classes-schema PATH]
+        [--unresolved-route-allowlist PATH]
 """
 
 from __future__ import annotations
@@ -169,6 +218,7 @@ DEFAULT_INVENTORY = "contracts/auth/v1/endpoint-profiles.ops.json"
 DEFAULT_SCHEMA = "contracts/auth/v1/endpoint-profile.schema.json"
 DEFAULT_CREDENTIAL_CLASSES = "contracts/auth/v1/credential-classes.json"
 DEFAULT_CREDENTIAL_CLASSES_SCHEMA = "contracts/auth/v1/credential-classes.schema.json"
+DEFAULT_UNRESOLVED_ROUTE_ALLOWLIST = "contracts/auth/v1/unresolved-route-allowlist.json"
 DEFAULT_DISCOVERER = "ci/discover_ops_routes.py"
 
 # Deployed FastAPI() app roots discover_ops_routes.py resolves ops REST
@@ -242,7 +292,127 @@ def _schema_enum(schema: dict, prop: str) -> set[str] | None:
 
 
 def credential_class_vocabulary(credential_classes: dict) -> set[str]:
-    return {c["class_id"] for c in credential_classes["classes"]}
+    # Guarded rather than a bare `credential_classes["classes"]`: a
+    # malformed top-level credential-classes document (e.g. the whole file
+    # is a JSON array or a scalar, not an object) previously raised a raw
+    # TypeError here -- BEFORE the CREDENTIAL CLASS SCHEMA VIOLATION that
+    # check() computes a few lines later ever printed. Merge-gate-verified
+    # repro: a top-level `[]` document raised `TypeError: list indices must
+    # be integers or slices, not str`. Falling back to an empty vocabulary
+    # lets the real Draft 2020-12 validator (which handles any JSON shape)
+    # report the actual, located error instead of a traceback -- this
+    # function's job is only "what ids exist", not "is this well-formed".
+    if not isinstance(credential_classes, dict):
+        return set()
+    classes = credential_classes.get("classes")
+    if not isinstance(classes, list):
+        return set()
+    return {
+        c["class_id"]
+        for c in classes
+        if isinstance(c, dict) and isinstance(c.get("class_id"), str)
+    }
+
+
+def _check_duplicate_class_ids(credential_classes: dict) -> list[str]:
+    """JSON Schema (even Draft 2020-12) has no constraint for "these array
+    objects must have distinct <field>" -- `uniqueItems` compares whole-item
+    equality, not one key -- so `credential-classes.schema.json` cannot
+    itself reject two classes sharing a `class_id`. Worse,
+    `credential_class_vocabulary()` above collapses the `classes` array into
+    a `set[str]` of ids, which silently absorbs a duplicate and keeps
+    whichever definition Python's set construction happens to retain --
+    the closed-vocabulary check (4) and CREDENTIAL CLASS SCHEMA VIOLATION
+    check (9) both operate downstream of that collapse and never see the
+    conflict. Must run on the raw `classes` array, before any collapse.
+    Merge-gate-verified repro: duplicating a real class (same class_id,
+    different display_name) previously passed with errors == []."""
+    errors: list[str] = []
+    if not isinstance(credential_classes, dict):
+        return errors  # reported by the credential-classes schema validation
+    classes = credential_classes.get("classes")
+    if not isinstance(classes, list):
+        return errors  # reported by the credential-classes schema validation
+    seen: dict[str, int] = {}
+    for idx, c in enumerate(classes):
+        if not isinstance(c, dict):
+            continue  # reported by the credential-classes schema validation
+        cid = c.get("class_id")
+        if not isinstance(cid, str):
+            continue  # reported by the credential-classes schema validation
+        if cid in seen:
+            errors.append(
+                f"DUPLICATE class_id: {cid!r} is used by more than one class "
+                f"in credential-classes.json (first seen at classes[{seen[cid]}], "
+                f"again at classes[{idx}]) -- JSON Schema cannot express "
+                "cross-array id uniqueness, so two conflicting definitions for "
+                "the same class_id would otherwise collapse into a single "
+                "vocabulary entry and pass silently"
+            )
+        else:
+            seen[cid] = idx
+    return errors
+
+
+def _load_unresolved_route_allowlist(path: Path) -> tuple[set[str], list[str]]:
+    """Loads the unresolved-route allowlist -- a narrow, human-reviewed
+    escape hatch for guardrail 11 (UNVERIFIED ROUTE, see module docstring).
+    Format::
+
+        {
+          "schema_version": "unresolved-route-allowlist.v1",
+          "entries": [
+            {"id": "<exact row id>", "reason": "<why this was reviewed>"}
+          ]
+        }
+
+    Returns (row ids excused with a valid non-empty reason, format errors).
+    An entry excuses EXACTLY the one row id it names -- there is no pattern
+    or wildcard form. An entry with a missing/empty `reason` does NOT
+    excuse its row (fails closed) and is itself reported as
+    ALLOWLIST ENTRY MISSING REASON, so this file can never be turned into a
+    blanket suppression by leaving `reason` off. Malformed shapes (not an
+    object, `entries` not a list, an unreadable/non-JSON file) degrade to
+    an empty allowlist plus a reported error, rather than crashing -- same
+    fail-closed-and-say-why posture as the rest of this file."""
+    try:
+        data = load_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return set(), [
+            f"ALLOWLIST UNREADABLE: {path} could not be read as JSON ({exc})"
+        ]
+    if not isinstance(data, dict):
+        return set(), [f"ALLOWLIST MALFORMED: {path} top level must be an object"]
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        return set(), [f"ALLOWLIST MALFORMED: {path} 'entries' must be an array"]
+
+    allowlisted: set[str] = set()
+    errors: list[str] = []
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(
+                f"ALLOWLIST MALFORMED: entries[{idx}] in {path.name} must be an object"
+            )
+            continue
+        rid = entry.get("id")
+        if not isinstance(rid, str) or not rid:
+            errors.append(
+                f"ALLOWLIST MALFORMED: entries[{idx}] in {path.name} is missing "
+                "a non-empty string 'id'"
+            )
+            continue
+        reason = entry.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(
+                f"ALLOWLIST ENTRY MISSING REASON: {rid!r} (entries[{idx}] in "
+                f"{path.name}) has no non-empty 'reason' -- every allowlist "
+                "entry must explain why this specific row was reviewed and "
+                "accepted despite an unresolved route"
+            )
+            continue
+        allowlisted.add(rid)
+    return allowlisted, errors
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +440,7 @@ def check(
     schema_path: Path,
     credential_classes_path: Path,
     credential_classes_schema_path: Path | None = None,
+    unresolved_route_allowlist_path: Path | None = None,
 ) -> list[str]:
     if jsonschema is None:
         raise RuntimeError(
@@ -288,12 +459,22 @@ def check(
     schema = load_json(schema_path)
     credential_classes = load_json(credential_classes_path)
     class_vocab = credential_class_vocabulary(credential_classes)
+    errors.extend(_check_duplicate_class_ids(credential_classes))
 
     if credential_classes_schema_path is None:
         credential_classes_schema_path = credential_classes_path.with_name(
             "credential-classes.schema.json"
         )
     credential_classes_schema = load_json(credential_classes_schema_path)
+
+    if unresolved_route_allowlist_path is None:
+        unresolved_route_allowlist_path = inventory_path.with_name(
+            "unresolved-route-allowlist.json"
+        )
+    allowlisted_route_ids, allowlist_errors = _load_unresolved_route_allowlist(
+        unresolved_route_allowlist_path
+    )
+    errors.extend(allowlist_errors)
 
     discoverer = _load_module(root / DEFAULT_DISCOVERER, "discover_ops_routes")
     discovered = discoverer.discover(root)
@@ -341,7 +522,16 @@ def check(
         loc = "/".join(str(p) for p in err.path) or "<root>"
         errors.append(f"CREDENTIAL CLASS SCHEMA VIOLATION at {loc}: {err.message}")
 
-    rows = inventory.get("rows", [])
+    # Guarded rather than a bare `inventory.get(...)`: a scalar/list
+    # top-level inventory document (not an object at all) previously raised
+    # a raw AttributeError here -- AFTER the JSON SCHEMA VIOLATION above was
+    # already appended to `errors`, but that list was then lost to the
+    # traceback instead of ever being returned/printed. Merge-gate-verified
+    # repro: a top-level `[]` document raised `AttributeError: 'list'
+    # object has no attribute 'get'` before main() ever got to print
+    # anything but the (also crashing, see main()'s own guard)
+    # DISCLOSURE-HOLD line.
+    rows = inventory.get("rows", []) if isinstance(inventory, dict) else []
     if not isinstance(rows, list):
         return errors
 
@@ -566,23 +756,33 @@ def check(
                     f"but discovery finds {surface['method']!r} at "
                     f"{src['file']}:{src['line']} (content drift)"
                 )
-            if surface.get("resolution") == "OK" and row.get("route") != surface.get(
-                "full_path"
-            ):
-                errors.append(
-                    f"STALE ANCHOR: row {rid!r} claims route={row.get('route')!r} "
-                    f"but discovery resolves {surface.get('full_path')!r} at "
-                    f"{src['file']}:{src['line']} (content drift)"
-                )
-            # --- service must match discovery's app attribution --------
+            # --- route/service verification, gated on resolution --------
             # `service` is per DEPLOYED APP (see _APP_ROOT_SERVICE above),
-            # not a free-text label -- only checkable once the route is
-            # resolved to a concrete app_root (resolution == "OK"; an
-            # UNRESOLVED_ROUTER/UNMOUNTED_ROUTER route carries no app_root
-            # to attribute against, and is already reported some other way
-            # via full-schema/route validation if that ever ships a real
-            # row).
+            # not a free-text label, and `route` is only meaningful against
+            # a resolved `full_path` -- both need discovery to have actually
+            # resolved this route to a concrete app_root/mount path
+            # (resolution == "OK"). An UNRESOLVED_ROUTER/UNMOUNTED_ROUTER
+            # route (a dotted or otherwise dynamic `include_router`
+            # discovery's static walk cannot follow) carries no app_root or
+            # full_path to check against at all.
+            #
+            # Previously that "nothing to check against" case silently
+            # SKIPPED both the route and service checks -- merge-gate P1: a
+            # row anchored to an unresolved route could claim a false
+            # `route` and a wrong-but-schema-VALID `service` and pass with
+            # zero errors, unverified and indistinguishable from a real,
+            # checked row. This fails closed instead: an unresolved route
+            # is UNVERIFIED ROUTE unless a human has explicitly reviewed
+            # and allowlisted this exact row id with a reason (see
+            # _load_unresolved_route_allowlist above) -- never a silent
+            # pass, and never excusable by pattern or by file.
             if surface.get("resolution") == "OK":
+                if row.get("route") != surface.get("full_path"):
+                    errors.append(
+                        f"STALE ANCHOR: row {rid!r} claims route={row.get('route')!r} "
+                        f"but discovery resolves {surface.get('full_path')!r} at "
+                        f"{src['file']}:{src['line']} (content drift)"
+                    )
                 app_root = surface.get("app_root")
                 expected_service = (
                     _APP_ROOT_SERVICE.get(app_root)
@@ -606,6 +806,19 @@ def check(
                         "served by two apps with genuinely different "
                         "middleware, see the billing-edge rows)"
                     )
+            elif rid not in allowlisted_route_ids:
+                errors.append(
+                    f"UNVERIFIED ROUTE {rid!r}: discovery could not resolve this "
+                    f"route ({surface.get('resolution')}) at {src['file']}:"
+                    f"{src['line']} -- its route and service cannot be verified "
+                    "against a deployed app, so it fails closed. Add a reasoned "
+                    f"entry for this exact row id to "
+                    f"{unresolved_route_allowlist_path.name} once a human has "
+                    "reviewed it, or fix discovery to resolve the include chain."
+                )
+            # else: resolution is not "OK" but this row id is allowlisted --
+            # a human explicitly reviewed and accepted it; route/service
+            # genuinely cannot be verified from here either way (see above).
         else:  # graphql
             expected_kind = (
                 "graphql_field" if surface["kind"] == "field" else "graphql_mutation"
@@ -908,6 +1121,11 @@ def main(argv=None) -> int:
         default=DEFAULT_CREDENTIAL_CLASSES_SCHEMA,
         help="credential-classes schema JSON path",
     )
+    parser.add_argument(
+        "--unresolved-route-allowlist",
+        default=DEFAULT_UNRESOLVED_ROUTE_ALLOWLIST,
+        help="unresolved-route allowlist JSON path (guardrail 11, UNVERIFIED ROUTE)",
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -915,6 +1133,7 @@ def main(argv=None) -> int:
     schema_path = root / args.schema
     credential_classes_path = root / args.credential_classes
     credential_classes_schema_path = root / args.credential_classes_schema
+    unresolved_route_allowlist_path = root / args.unresolved_route_allowlist
 
     # DISCLOSURE-HOLD: report only, printed FIRST and unconditionally --
     # before check() runs at all, so it survives every other failure mode
@@ -930,9 +1149,19 @@ def main(argv=None) -> int:
     # raise) and tolerating a non-list `rows` (schema validation reports
     # that as its own, real error; this line only decides whether to also
     # print a DISCLOSURE-HOLD count, never suppresses or duplicates that).
+    # (2026-09-01 merge-gate: a scalar/list top-level inventory document --
+    # not even an object -- raised a raw AttributeError on
+    # `raw_inventory.get(...)` right here, before check() was ever called
+    # and before this DISCLOSURE-HOLD line printed at all. Guarded the same
+    # way as the non-list `rows` case just below: an inventory that isn't a
+    # dict simply has no rows to scan for the marker; the real JSON SCHEMA
+    # VIOLATION for "top level must be an object" is still reported by
+    # check() a few lines down.)
     try:
         raw_inventory = load_json(inventory_path)
-        raw_rows = raw_inventory.get("rows", [])
+        raw_rows = (
+            raw_inventory.get("rows", []) if isinstance(raw_inventory, dict) else []
+        )
         if not isinstance(raw_rows, list):
             raw_rows = []
         held_rows = find_disclosure_hold_rows(raw_rows)
@@ -952,6 +1181,7 @@ def main(argv=None) -> int:
             schema_path,
             credential_classes_path,
             credential_classes_schema_path,
+            unresolved_route_allowlist_path,
         )
     except RuntimeError as exc:
         # jsonschema unavailable (see check()'s own guard) or another

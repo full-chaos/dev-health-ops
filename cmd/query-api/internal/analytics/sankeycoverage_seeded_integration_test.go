@@ -47,11 +47,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// Column types mirror the live schema exactly (verified against the
-// running dev stack's DESCRIBE TABLE, not guessed): repo_id is
-// Nullable(UUID) on work_unit_repo_effort but a non-nullable UUID on
-// work_item_team_attributions, and that table's source/confidence are
-// Enum8 -- a String there silently fails to insert.
+// Column types AND sorting keys mirror the live schema exactly (verified
+// against the running dev stack's DESCRIBE TABLE / SHOW CREATE TABLE, not
+// guessed). Three traps this fixture has to reproduce rather than
+// simplify:
+//
+//   - repo_id is Nullable(UUID) on work_unit_repo_effort, and a MergeTree
+//     rejects a nullable column in the sorting key outright ("Sorting key
+//     contains nullable columns, but merge tree setting
+//     `allow_nullable_key` is disabled", code 44). Production does NOT
+//     enable that setting -- it wraps the column,
+//     `ifNull(toString(repo_id), ”)` -- so this fixture wraps it the same
+//     way. Enabling allow_nullable_key here would make the fixture pass
+//     under a schema production does not have.
+//   - work_item_team_attributions wraps its Nullable team_id in the key
+//     for the same reason, and its repo_id is a NON-nullable UUID there.
+//   - that table's source/confidence are Enum8, not String.
 const seededCoverageExtraDDL = `
 CREATE TABLE work_unit_repo_effort (
     work_unit_id String,
@@ -64,7 +75,7 @@ CREATE TABLE work_unit_repo_effort (
     computed_at DateTime64(3, 'UTC'),
     org_id String
 ) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, work_unit_id, repo_id);
+ORDER BY (org_id, work_unit_id, ifNull(toString(repo_id), ''));
 
 CREATE TABLE work_item_team_attributions (
     org_id String,
@@ -79,7 +90,7 @@ CREATE TABLE work_item_team_attributions (
     evidence String,
     computed_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, work_item_id, repo_id);
+ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source);
 
 CREATE TABLE repos (
     id UUID,

@@ -1627,8 +1627,19 @@ async def run_daily_metrics_job(
         deploy_metrics = compute_deploy_metrics_daily(
             day=d, deployments=deployment_rows, computed_at=computed_at
         )
-        incident_metrics = compute_incident_metrics_daily(
-            day=d, incidents=incident_rows, computed_at=computed_at
+        # CHAOS-4269/CHAOS-4295: incident has a native Go executor, WITH the
+        # CHAOS-4269 NULL-guard fix (this Python path stays permanently
+        # zero-yield for repository-derived incident mappings -- port-with-fix
+        # standing order means the fix lands only in Go, never patched here).
+        # Same skip_families gate shape as team_wellbeing above: nothing else
+        # in this function reads `incident_metrics` besides the write and the
+        # zero-rows note just below, so both are skipped together.
+        incident_metrics = (
+            []
+            if "incident" in skip_families
+            else compute_incident_metrics_daily(
+                day=d, incidents=incident_rows, computed_at=computed_at
+            )
         )
         ai_policy_events, ai_governance_coverage = build_governance_rows_for_day(
             primary_sink, org_id=org_id, day=d
@@ -1869,9 +1880,22 @@ async def run_daily_metrics_job(
         # CHAOS-4246: cicd/deploy/incident are written unconditionally above
         # (write_*_metrics no-ops on an empty list) -- note it here so a run
         # of zero rows is visible instead of indistinguishable from success.
+        # incident's note is skipped when "incident" in skip_families
+        # (CHAOS-4269/CHAOS-4295): in that case incident_metrics is
+        # unconditionally [] because Go already computed and wrote this
+        # family, not because of a genuinely quiet day -- an unconditional
+        # note here would log a spurious "zero rows" warning on every such
+        # partition. When the native executor is unavailable and Python is
+        # still the live compute path for this family (skip_families empty),
+        # the note stays exactly as before -- team_wellbeing/repo_user_commit
+        # went further and dropped their note unconditionally because
+        # nothing else in this function reads their skip_families=false
+        # case's zero-row signal the way CHAOS-4263's stale-family RCA
+        # already covers cicd/deploy/incident/testops_risk specifically.
         _note_family_zero_rows("cicd", cicd_metrics, day=d)
         _note_family_zero_rows("deploy", deploy_metrics, day=d)
-        _note_family_zero_rows("incident", incident_metrics, day=d)
+        if "incident" not in skip_families:
+            _note_family_zero_rows("incident", incident_metrics, day=d)
 
         _write_compounding_risk_for_day(
             sinks=sinks,

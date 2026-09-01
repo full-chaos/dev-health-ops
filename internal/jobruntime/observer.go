@@ -309,6 +309,25 @@ type DailyMetricsNativeFamilyObserver interface {
 	) error
 }
 
+// IncidentValidFromGuardObserver is the narrow capability IncidentExecutor
+// depends on after every operational_service_repository_mappings join
+// (CHAOS-4269/CHAOS-4295). The Python `active_incidents_query` predicate
+// (`valid_from <= as_of`, no NULL-OK guard) silently drops every
+// mapping_kind="repository_derived" row -- map_issue_incidents never sets
+// valid_from -- making the whole `incident` family permanently zero-yield.
+// IncidentExecutor's loader adds the NULL-OK guard `valid_from IS NULL OR
+// valid_from <= as_of` (mirroring the symmetric valid_to clause that already
+// existed) and reports, per matched mapping row, whether it would have
+// survived the OLD Python predicate ("valid_from_set") or was only kept
+// alive by the fix ("valid_from_null_recovered"). Without this counter, a
+// deploy that silently regressed the guard (or a source that started setting
+// valid_from, making the fix moot) would be indistinguishable from healthy
+// steady state -- only this observer makes the fix's ongoing impact, and its
+// continued necessity, visible.
+type IncidentValidFromGuardObserver interface {
+	ObserveIncidentValidFromGuardRows(reason IncidentValidFromGuardReason, count int) error
+}
+
 // DailyMetricsCompatRetryObserver is the narrow capability PartitionHandler
 // depends on when a metrics.daily compatibility-bridge execution ends up
 // stuck at "ambiguous" (CHAOS-4319: an ambiguous_refused response whose

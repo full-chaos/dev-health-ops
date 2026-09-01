@@ -67,4 +67,12 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byName["repo_user_commit"]; got != "go" {
 		t.Fatalf("repo_user_commit must be port=go, got %q", got)
 	}
+	// incident (CHAOS-4269/CHAOS-4295): registers IncidentExecutor, WITH the
+	// NULL-OK valid_from guard fix -- Python's compute path for this family
+	// was always zero-yield (CHAOS-4269), so this flag flipping back without
+	// the Go registration would silently resurrect a permanently-broken
+	// family, not just a working-but-slower one.
+	if got := byName["incident"]; got != "go" {
+		t.Fatalf("incident must be port=go, got %q", got)
+	}
 }

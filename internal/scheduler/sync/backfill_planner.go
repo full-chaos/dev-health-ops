@@ -106,6 +106,15 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 				continue
 			}
 			descriptor, known := providersync.Descriptor(provider, dataset.Key)
+			// CHAOS-4731: same visibility as the scheduled planner's gate.
+			switch {
+			case !known:
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeUnknownPair)
+			case !descriptor.RouteReady || !descriptor.Plannable:
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
+			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
+			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				!descriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 				continue
@@ -113,6 +122,9 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 			windows, err := resolveBackfillWindows(since, before, provider, dataset.Key)
 			if err != nil {
 				return nil, err
+			}
+			if len(windows) > 0 {
+				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomePlanned)
 			}
 			for _, window := range windows {
 				start := window.Since
@@ -316,6 +328,15 @@ func buildBackfillWorkItemFamilyUnits(
 		return nil, nil
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalWorkItemsDataset)
+	// CHAOS-4731: same visibility as the scheduled planner's family gate.
+	switch {
+	case !known:
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeUnknownPair)
+	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
+	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 		return nil, nil
@@ -349,6 +370,7 @@ func buildBackfillWorkItemFamilyUnits(
 		unit.ProcessorFlags = cloneFlags(flags)
 		units = append(units, unit)
 	}
+	globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomePlanned)
 	return units, nil
 }
 
@@ -367,6 +389,15 @@ func buildBackfillFoldFamilyUnits(
 		return nil, nil
 	}
 	canonicalDescriptor, known := providersync.Descriptor(provider, canonicalDataset)
+	// CHAOS-4731: same visibility as the scheduled planner's fold gate.
+	switch {
+	case !known:
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeUnknownPair)
+	case !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable:
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
+	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
+		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
+	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
 		return nil, nil
@@ -411,5 +442,6 @@ func buildBackfillFoldFamilyUnits(
 		unit.ProcessorFlags = cloneFlags(flags)
 		units = append(units, unit)
 	}
+	globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomePlanned)
 	return units, nil
 }

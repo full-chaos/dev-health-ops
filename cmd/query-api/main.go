@@ -118,6 +118,18 @@ const readyzTimeout = 3 * time.Second
 // The full error -- everything Class deliberately leaves out -- still
 // goes to the log line below, unredacted, so an operator can diagnose
 // without shell access; that log line IS this fix's telemetry.
+//
+// The unhealthy branch's write carries a `nosemgrep` suppression for
+// go.lang.security.audit.xss.no-direct-write-to-responsewriter: this is
+// server-side plain-text (Content-Type set above), never HTML, and the
+// concatenated value is now one of readyzDependencyClass's own closed-set
+// literals -- not attacker-controlled input, and (after this CHAOS-4724
+// fix) not even the underlying dependency error text anymore. Triaged and
+// confirmed a false positive against the pre-fix code (Semgrep alert
+// 2197) and re-confirmed against this fix's narrower body (alert 2199) --
+// see the PR thread. Do not "fix" this by routing through html/template;
+// that cargo-cults a scanner rule into a worse design for a plain-text
+// health endpoint.
 func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -135,6 +147,7 @@ func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
 			log.Printf("query-api: /readyz dependency check failed: %v", err)
 			recordReadyzOutcome("unhealthy")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
 			_, _ = w.Write([]byte("not ready: " + readyzDependencyClass(err)))
 			return
 		}

@@ -1968,14 +1968,14 @@ type SankeyCoverage {
 type SankeyEdge {
   source: String!
   target: String!
-  value: Float!
+  value: Float
 }
 
 type SankeyNode {
   id: String!
   label: String!
   dimension: String!
-  value: Float!
+  value: Float
 }
 
 input SankeyRequestInput {

@@ -670,6 +670,63 @@ func ExecuteFlowMatrix(ctx context.Context, client QueryClient, nodesQuery, edge
 	return nodes, edges, nil
 }
 
+// queryNodes and queryEdges (below) both scan the measure column into a
+// *float64, not a bare float64 -- CHAOS-4701, the SAME shape and SAME
+// product ruling CHAOS-4650/CHAOS-4657 applied to breakdown.go's
+// breakdownRow.Value / timeseries.go's ExecuteTimeseries; see
+// breakdown.go's doc comment for the full mechanism writeup (verified
+// against pinned clickhouse-go v2.47.0: Nullable.ScanRow only
+// recognises **T for its NULL branch -- a bare *float64 destination
+// never observes the NULL at all and silently keeps its
+// zero-initialised 0.0).
+//
+// REACHABILITY, verified by reading the call graph, not assumed from
+// CHAOS-4650/4657's precedent: these two functions are shared by TWO
+// callers with DIFFERENT nullability exposure.
+//
+//  1. sankey.go's CompileSankey, for a request with useInvestment=false
+//     (a genuine, client-reachable state -- SankeyRequest.UseInvestment
+//     is a real three-state override, resolve.go's resolveSankey), routes
+//     through dbExpression(measure, false, false), which is validate.go's
+//     non-investment switch -- the same "AT RISK: Nullable(Float64)
+//     (category 2)" measures (COVERAGE_LINE_PCT, PIPELINE_DURATION_P95,
+//     PIPELINE_QUEUE_TIME, TEST_SUITE_DURATION_P95, FLAG_FRICTION_DELTA,
+//     FLAG_ERROR_RATE_DELTA, FLAG_ACTIVATION_RATE, etc.) breakdown.go and
+//     timeseries.go already proved reach SQL NULL for an all-NULL group.
+//     `investmentFull` (query_route.go's registeredInvestmentFullDocument)
+//     selects `sankey { nodes { value } edges { value } }`, so this path
+//     is registered and reachable today.
+//  2. flowmatrix.go's own compileFlowMatrixInvestmentDimension (the
+//     AUTHOR/THEME/SUBCATEGORY branch of CompileFlowMatrix) calls the
+//     IDENTICAL dbExpression(measure, false, false) when useInvestment
+//     resolves false for that request -- reachable via the registered
+//     `flowMatrix` document's own $batch.flowMatrix.dimension /
+//     .useInvestment input variables, independent of what
+//     web/src/lib/graphql/hooks/useChordFlow.ts's current TEAM/REPO/
+//     WORK_TYPE-only caller happens to send; the document's persisted
+//     text does not fix the dimension.
+//
+// The other flowMatrix path -- CompileFlowMatrix's TEAM/REPO/WORK_TYPE
+// fixed hand-written templates (flowMatrixTeamNodesTemplate and its
+// REPO/WORK_TYPE siblings) -- uses uniqExact(...), which is NEVER NULL
+// (an empty group returns 0, not NULL), so that specific fixed shape
+// does not itself manufacture the NULL. It shares this scan regardless:
+// the fix must be safe for both nullable and non-nullable sources, which
+// *float64 is (a non-NULL Float64 column scans into a non-nil pointer
+// exactly as before).
+//
+// EXPECTED DIVERGENCE, class = product-decision (CHAOS-4650 ruling,
+// applied here per the "Extend to class" ruling, CHAOS-4701 ticket
+// comment, chris via team-lead, 2026-08-31): Python's sankey/flow-matrix
+// builders (analytics.py) still collapse the same all-NULL case to 0.0
+// -- deliberately left unchanged (root AGENTS.md GO-ONLY rule bars
+// further behavior changes in the Python GraphQL layer; only the type
+// CONTRACT widened, see src/dev_health_ops/api/graphql/models/outputs.py's
+// SankeyNode/SankeyEdge doc comments). This is a two-field divergence,
+// named precisely -- SankeyNode.Value and SankeyEdge.Value on this
+// shared scan path -- and not a prefix that swallows
+// BreakdownItem.Value/TimeseriesBucket.Value's own, separately-ledgered
+// entries. Do not resolve it by reverting Go to Python's 0.0 collapse.
 func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]model.SankeyNode, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {
@@ -680,12 +737,16 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 	var out []model.SankeyNode
 	for rows.Next() {
 		var dimension, nodeID string
-		// float64, not uint64: every value expression is now coerced to
+		// *float64, not float64 -- see this function's doc comment
+		// (CHAOS-4701). Every value expression is still coerced to
 		// Float64 in SQL (toFloat64) so ONE scan type serves both the
 		// uniqExact-based flowMatrix templates and sankey's AVG/ratio
-		// measures, which share this function. The native driver errors
-		// rather than converting between UInt64 and Float64.
-		var value float64
+		// measures, which share this function; toFloat64 does NOT
+		// collapse a Nullable(Float64) source, so the nullable
+		// destination is required regardless of which caller compiled
+		// this query. The native driver errors rather than converting
+		// between UInt64 and Float64.
+		var value *float64
 		if scanErr := rows.Scan(&dimension, &nodeID, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}
@@ -717,7 +778,7 @@ func queryEdges(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 	var out []model.SankeyEdge
 	for rows.Next() {
 		var sourceDim, targetDim, source, target string
-		var value float64 // see queryNodes
+		var value *float64 // *float64, not float64 -- see queryNodes's doc comment (CHAOS-4701)
 		if scanErr := rows.Scan(&sourceDim, &targetDim, &source, &target, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}

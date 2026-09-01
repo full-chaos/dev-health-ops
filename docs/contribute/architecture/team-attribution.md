@@ -1308,15 +1308,24 @@ boundary).
 **This tier table is a per-provider PRIMARY/FALLBACK rule, not a Linear-only rule** (chris,
 CHAOS-4752 investigation, 2026-09-01): the intended design for *every* PM provider is PRIMARY =
 the provider's own attached-PR mapping (Linear's issue-attachment integration, Jira's
-dev-status/GitHub-for-Jira panel, GitHub's own linked-PR/closing-reference tracking); FALLBACK =
-text parsing (magic-word/branch-convention, the Secondary/Tertiary rows above) only when no
-provider mapping exists. Today:
+dev-status/GitHub-for-Jira panel, GitHub's own linked-PR/closing-reference tracking), preferred at
+*resolution* time whenever it is present — FALLBACK = text parsing (magic-word/branch-convention).
+This is a precedence rule, not a capture-time gate: the Secondary/Tertiary rows above are captured
+unconditionally alongside Primary (neither is gated on the other's presence — `providers/github/
+normalize.py:954,1023` emit `extkey` dependencies regardless of whether an attachment link already
+exists for the same PR); it is the *resolver* that prefers the higher tier when more than one edge
+reaches the same PR.
 
-| Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Fallback (text-parse) |
+**The table below is about a DIFFERENT, Path-B-specific fallback** — `work_graph/builder.py`'s
+`ns()`/`jira_key_lookup`/`gh_issue_lookup` text-parse (used by the investment work-graph consumer
+this section covers), not the §2 Secondary/Tertiary mechanism above (which serves Path A, the
+cycle-time consumer, and DOES apply to Linear). Today:
+
+| Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
 |---|---|---|---|
-| Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **byte-for-byte ported, no loss** | Not used for Linear by design (edges arrive as attachments, never needed) |
+| Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **byte-for-byte ported, no loss** | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
 | Jira | **Not built** — `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) covers issue↔issue `issuelinks` only, no dev-status/PR ingestion | N/A (nothing to port) | Only mechanism today (`jira_key_lookup`, `work_graph/builder.py`) |
-| GitHub Issues | **Not built** — both planes fetch `timelineItems` (`internal/providersync/github_work_items_social_fetch.go`, `providers/github/client.py`) for social/review signals, but neither parses them for `closingIssuesReferences`/closing-reference links, so there is no *link-bearing* timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); moot while the GitHub `work-items` dataset stays disabled (no native `work_items` rows to look up against) |
+| GitHub Issues | **Not built** — both planes fetch `timelineItems` (`internal/providersync/github_work_items_social_fetch.go`, `providers/github/client.py`) for social/review signals, but neither parses them for `closingIssuesReferences`/closing-reference links, so there is no *link-bearing* timeline ingestion | N/A | Only mechanism today (`gh_issue_lookup`, `work_graph/builder.py`); the GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
 
 A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
 setup to attach github ↔ project management that's the user's problem"*) legitimately falls
@@ -1330,7 +1339,9 @@ exactly this failure mode (CHAOS-4752).
 `build_linked_issue_team_resolver` → `work_item_cycle_times` (rank-5 `linked_issue`, per-metric
 attribution). A **second, independent consumer** reads the same captured edges into the
 *investment* work-graph — the path that feeds `work_unit_investments.structural_evidence_json`
-and, through it, `native_team` (rank 0) via `build_unit_team_subquery`. The two paths share only
+and, through it, the work item's highest-precedence primary attribution via `build_unit_team_subquery`
+(often `native_team`, rank 0, for a Linear-primary org like this ticket's — but not the only reachable
+outcome; see the diagram). The two paths share only
 `work_item_dependencies`; everything downstream of it is separate code, separate tables, and (per
 CHAOS-4752) a separate defect the §2 diagram does not cover:
 
@@ -1351,7 +1362,7 @@ flowchart TD
         WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
         FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
-        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ SNAPSHOT — writes structural_evidence_json ONCE<br/>per work_unit_id, never refreshed on a later edge<br/>(CHAOS-4752, confirmed root cause)"]
+        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ SNAPSHOT — writes structural_evidence_json ONCE<br/>per work_unit_id, not refreshed on a later edge<br/>(CHAOS-4752, confirmed root cause — a native-Go<br/>re-link job is in progress to close this gap)"]
         SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
         UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · cmd/query-api/internal/analytics/investment.go"]
         Resolved(["highest-precedence PRIMARY attribution row<br/>(work_item_team_attributions, is_primary = 1 —<br/>NOT filtered to native_team; whichever source ranked<br/>highest wins. native_team (rank 0) is this section's<br/>worked example outcome, not the only reachable one)"])
@@ -1373,8 +1384,10 @@ is a content hash of the connected
 component's node membership, so a `work_graph_edges` row that arrives *after* a unit is
 materialized is never picked up — nothing re-triggers recomputation, and the stale row is never
 tombstoned even once a later run produces a correct, merged replacement under a different
-`work_unit_id`. A proposed fix (re-link/refresh pass, modeled on the existing
-`run_membership_backfill` no-LLM-recompute precedent) is scoped on the ticket, not yet built.
+`work_unit_id`. Fix in progress: chris ruled the fix lands as a **native-Go re-link job**
+(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see
+CHAOS-4752 for the fix-shape writeup (kept there as the reference the Go port implements against)
+and its scoping comment for the package/wiring plan.
 
 ---
 

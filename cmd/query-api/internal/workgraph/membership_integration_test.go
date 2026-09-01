@@ -27,12 +27,11 @@ import (
 // 200k ids / 3 node types -> ClickHouse Code 396, max_result_rows
 // exceeded).
 //
-// The pair-exactness `concat(hex(node_type),':',hex(node_id)) IN
-// {node_pairs:...}` filter this fix adds must exclude both phantoms even
-// though the kept node_type-only IN prefilter (retained for primary-key
-// index pruning -- see batchResolveMembership's doc comment) still matches
-// them; the independent-IN-ONLY shape this query had before CHAOS-4655
-// matches them all the way through to the result.
+// The tuple-IN-subquery match this fix adds (node_pairs decoded
+// server-side, matched against the RAW (node_type, node_id) columns --
+// see batchResolveMembership's doc comment) must exclude both phantoms;
+// the independent-IN-ONLY shape this query had before CHAOS-4655 matches
+// them all the way through to the result.
 //
 // RED ON ORIGIN/MAIN (512c4e77b): with membership.go and membership_test.go
 // reverted to that commit (this file left in place -- membershipKey,
@@ -195,15 +194,17 @@ func TestBatchResolveMembership_TupledMatchExcludesCrossProductRows(t *testing.T
 // hand-rolled probe query) against a real ClickHouse container seeded via
 // chschema's real migration chain, with adversarial node_id content: single
 // quote, backslash, comma, parentheses, non-ASCII (incl. a 4-byte emoji),
-// and backslash directly adjacent to a quote -- node_type stays a real
-// valid value (issue/pr) throughout, since an invalid one is now rejected
-// before the query ever runs (TestBatchResolveMembership_RejectsUnknownNodeType,
-// membership_test.go). Alongside each hostile pair, a DECOY row differing
-// by exactly one character is seeded too (e.g. missing byte, swapped
-// quote/backslash) -- if hex+concat matching were ambiguous (e.g. the ':'
-// separator were reachable inside a hex block, or encode/decode
-// disagreed), a decoy would leak into the result for a hostile key it does
-// not belong to, or a hostile key would resolve to the wrong category.
+// and backslash directly adjacent to a quote -- node_type stays a
+// plausible real value (issue/pr) throughout since this shape needs no
+// per-field distinction to be safe (both columns go through the identical
+// hex-encode/server-side-decode path; the fix does not special-case
+// node_type as more or less trustworthy than node_id). Alongside each
+// hostile pair, a DECOY row differing by exactly one character is seeded
+// too (e.g. missing byte, swapped quote/backslash) -- if the decode/match
+// were ambiguous (e.g. the ':' separator were reachable inside a hex
+// block, or encode/decode disagreed), a decoy would leak into the result
+// for a hostile key it does not belong to, or a hostile key would resolve
+// to the wrong category.
 func TestBatchResolveMembership_RoundTripsHostileStringsThroughTheRealEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

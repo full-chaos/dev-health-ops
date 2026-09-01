@@ -42,19 +42,22 @@ func TestMembershipPairsLiteral_Empty(t *testing.T) {
 }
 
 // TestBatchResolveMembership_QueriesAPairBoundMatch is CHAOS-4655's
-// structural regression guard: it locks the WHERE clause shape -- BOTH the
-// sargable node_type-only IN prefilter (kept for primary-key index
-// pruning; team-lead review, CHAOS-4655, 2026-09-01 -- see
-// batchResolveMembership's doc comment) AND the hex+concat pair-exactness
-// filter that removes the prefilter's cross-product over-fetch -- and the
-// full binding set, so a future edit cannot silently drop either half
-// while every other test (which only exercises small fixtures where the
-// shapes agree on final RESULT rows) stays green. The seeded-data
-// red/green proof against a REAL ClickHouse engine -- where the shapes
-// actually DISAGREE on rows returned -- lives in the `integration`-tagged
-// tests in this package, which this fake-client test cannot substitute for
-// (a fake only proves SQL TEXT changed, never that it executes correctly,
-// or efficiently, against the engine).
+// structural regression guard: it locks the WHERE clause shape -- a tuple
+// IN subquery that decodes node_pairs server-side and matches the RAW
+// (node_type, node_id) columns against it, NOT independent IN lists and
+// NOT a computed hex()/concat() match on the columns either (see
+// batchResolveMembership's doc comment for why: the tuple-IN-subquery form
+// is the only one that lets ClickHouse's primary-key index analysis use
+// BOTH columns, confirmed via `EXPLAIN indexes=1`) -- so a future edit
+// cannot silently reintroduce the cross-product shape, or regress back to
+// an index-opaque column expression, while every other test (which only
+// exercises small fixtures where the shapes agree on final RESULT rows)
+// stays green. The seeded-data red/green proof against a REAL ClickHouse
+// engine -- where the shapes actually DISAGREE on rows returned -- lives
+// in the `integration`-tagged tests in this package, which this
+// fake-client test cannot substitute for (a fake only proves SQL TEXT
+// changed, never that it executes correctly, or efficiently, against the
+// engine).
 func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
 		{"issue", "ep-1", "theme", "reliability"},
@@ -76,32 +79,24 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 		t.Fatalf("got %d Query calls, want 1", len(client.statements))
 	}
 	stmt := client.statements[0]
-	if !strings.Contains(stmt, "m.node_type IN {node_types:Array(String)}") {
-		t.Fatalf("query is missing the sargable node_type prefilter: %s", stmt)
+	if !strings.Contains(stmt, "(m.node_type, m.node_id) IN (") {
+		t.Fatalf("query is missing the tuple-IN-subquery pair match: %s", stmt)
 	}
-	if strings.Contains(stmt, "node_ids") {
-		t.Fatalf("query still references a node_id prefilter -- node_id must be matched ONLY by node_pairs (see membership.go's doc comment: no hand-rolled Array(String) escaping survives arbitrary node_id content): %s", stmt)
+	if !strings.Contains(stmt, "unhex(splitByChar(':', p)[1]), unhex(splitByChar(':', p)[2])") {
+		t.Fatalf("query is missing the server-side hex decode of node_pairs: %s", stmt)
 	}
-	if !strings.Contains(stmt, "concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}") {
-		t.Fatalf("query is missing the pair-exactness hex+concat filter: %s", stmt)
+	if !strings.Contains(stmt, "arrayJoin({node_pairs:Array(String)})") {
+		t.Fatalf("query does not arrayJoin the node_pairs parameter: %s", stmt)
 	}
-	if strings.Contains(stmt, "Tuple") {
-		t.Fatalf("query references a Tuple type (proven broken against a real engine, see membership.go's comment): %s", stmt)
+	if strings.Contains(stmt, "node_types") || strings.Contains(stmt, "node_ids") || strings.Contains(stmt, "Tuple") || strings.Contains(stmt, "concat(") {
+		t.Fatalf("query references a removed binding name, a Tuple-typed parameter, or the abandoned concat()-column form: %s", stmt)
 	}
 
-	// node_types is bound as a plain []string value (routes through
-	// dev-health-go's clickHouseStringArray, CHAOS-4745) -- safe ONLY
-	// because batchResolveMembership validates every value against the
-	// closed node-type enum before it ever reaches this binding, so a
-	// quote/backslash (the characters that trip CHAOS-4745) can never
-	// appear here. node_id gets no such binding at all -- see above.
-	typesVal, ok := bindingValue(client.bindings[0], "node_types")
-	if !ok {
-		t.Fatalf("no node_types binding")
-	}
-	if want := []string{"issue", "pr"}; !equalStringSlices(typesVal.([]string), want) {
-		t.Fatalf("node_types binding = %v, want %v", typesVal, want)
-	}
+	// node_pairs is the ONLY node_type/node_id-related binding -- no plain
+	// []string binding for either column exists anymore (that binding
+	// shape is CHAOS-4745's exposure; see batchResolveMembership's doc
+	// comment for the three escaping schemes that all failed for arbitrary
+	// node_id content).
 	pairsVal, ok := bindingValue(client.bindings[0], "node_pairs")
 	if !ok {
 		t.Fatalf("no node_pairs binding")
@@ -116,25 +111,6 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	}
 	if len(recorded) != 1 || recorded[0].rows != 1 || recorded[0].endpoints != 2 {
 		t.Fatalf("telemetry not recorded correctly: %+v", recorded)
-	}
-}
-
-// TestBatchResolveMembership_RejectsUnknownNodeType is team-lead's binding
-// requirement (CHAOS-4655 review, 2026-09-01): node_type is only safe to
-// bind as a plain Array(String) IN list because it is validated against the
-// closed enum before binding -- an unvalidated node_type would reopen
-// CHAOS-4745 on this field. Asserts the error fires AND that the query
-// never runs (client.statements stays empty), not just that some error is
-// eventually surfaced from a query that already executed.
-func TestBatchResolveMembership_RejectsUnknownNodeType(t *testing.T) {
-	client := &fakeClient{}
-	rows := []edgeEndpoint{{sourceType: "not-a-real-node-type", sourceID: "ep-1", targetType: "pr", targetID: "ep-2"}}
-	_, err := batchResolveMembership(context.Background(), client, "org1", rows, newFilterScope(nil, nil))
-	if err == nil {
-		t.Fatalf("expected an error for an unrecognized node_type, got nil")
-	}
-	if len(client.statements) != 0 {
-		t.Fatalf("query must not run when node_type validation fails, got %d Query call(s)", len(client.statements))
 	}
 }
 

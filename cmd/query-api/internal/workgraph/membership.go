@@ -130,67 +130,59 @@ type membershipEntry struct {
 // 100k-edge page with 200k ids across three node types produced ClickHouse
 // Code 396 (max_result_rows exceeded) at 588.68k rows returned.
 //
-// The fix keeps a sargable node_type prefilter (nodeTypes below) AND adds a
-// pair-exactness filter for node_id -- it does not rely on the exactness
-// filter alone. Team-lead review (CHAOS-4655, 2026-09-01): an IN list is
-// the only sargable predicate against this table's primary key (ORDER BY
-// (org_id, node_type, node_id, category_kind, category) --
-// 046_work_unit_membership.sql), so dropping node_type filtering for a
-// hex+concat-only match would trade the cross-product over-fetch for a
-// full-column-scan regression the moment a per-org table grows past a
-// handful of primary-key granules. Measured directly against org
-// 70d529e0's real data (2026-09-01, `EXPLAIN indexes=1`): an independent
-// node_type+node_id IN prefilter prunes to Granules: 2/4 via the
-// PrimaryKey index; a hex+concat-only match against the SAME data reads
-// Granules: 4/4 (org_id is the only index key it can use -- hex()/concat()
-// are opaque to primary-key range analysis).
+// The fix matches (m.node_type, m.node_id) as a TUPLE against a
+// server-side-decoded set, not two independent IN lists and not a
+// computed-expression match either. History (team-lead review, CHAOS-4655,
+// 2026-09-01 -- three iterations, each driven by a real finding against a
+// real engine):
 //
-// node_id is deliberately EXCLUDED from the prefilter, unlike node_type:
-// building the required adversarial round-trip test found that NO
-// hand-rolled escaping scheme survives ClickHouse's native-protocol
-// Array(String)/Array(Tuple) PARAMETER grammar for arbitrary byte content
-// -- three attempts, three distinct failure modes (see the node_types
-// binding comment below and CHAOS-4745's updated description). node_type
-// is safe to bind as a plain IN list because it is drawn from a CLOSED,
-// VALIDATED set (mapNodeType, workgraph.go -- issue/pr/commit/file per
-// work_graph_edges' own column comment) that structurally never contains a
-// quote or backslash; node_id is genuine external-provider free text
-// (issue keys, commit SHAs, file paths) with no such guarantee, so it gets
-// ZERO prefilter and is matched ONLY by the hex-safe exactness filter.
-// batchResolveMembership therefore validates every distinct node_type
-// against that closed set BEFORE binding anything -- an unknown value
-// errors out rather than silently being included in (or excluded from) the
-// prefilter, which is what keeps this narrower escaping surface actually
-// closed rather than merely assumed closed.
+//  1. A quoted `Array(Tuple(String,String))` PARAMETER literal, escaped
+//     like dev-health-go's clickHouseStringArray (`\'`) -- REJECTED
+//     outright (`Cannot parse escape sequence`). This is CHAOS-4745: a
+//     LIVE bug in clickHouseStringArray itself, not specific to this
+//     query.
+//  2. `concat(hex(node_type),':',hex(node_id)) IN {node_pairs:Array(String)}`
+//     -- sidesteps escaping (hex digits/`:` are never special to
+//     ClickHouse's literal grammar) but wraps the COLUMN in `concat`/`hex`,
+//     which is opaque to ClickHouse's primary-key range analysis: an
+//     EXPLAIN comparison first suggested keeping a plain node_type/node_id
+//     IN prefilter alongside it for index pruning, but re-adding a plain
+//     `[]string` Binding for node_id reopened CHAOS-4745 there (node_id is
+//     genuine external-provider free text with no quote/backslash
+//     guarantee, unlike node_type). Two further hand-rolled escaping
+//     schemes for that prefilter's literal (SQL doubled-quote, ClickHouse
+//     `\x`-hex-byte escapes) were tried and each broke differently against
+//     the real native-driver protocol -- see CHAOS-4745's updated
+//     description (one silently drops a byte rather than erroring).
+//  3. **This shape**: decode node_pairs SERVER-SIDE into (node_type,
+//     node_id) tuples via a subquery, and match the RAW columns against
+//     that subquery with a tuple IN. `EXPLAIN indexes=1` confirms
+//     ClickHouse's PrimaryKey analysis treats this identically to two
+//     literal IN lists -- `Condition: and(((node_type, node_id) in
+//     N-element set), (org_id in [...]))`, i.e. BOTH node_type and node_id
+//     participate in index range analysis, not just node_type. This
+//     reuses the SAME node_pairs binding as (2) unchanged (still pure hex
+//     digits and `:`, still no escaping needed for arbitrary node_id
+//     content) -- only the WHERE clause changed, so there is no new
+//     escaping surface and no separate node_type/node_id prefilter
+//     binding to keep safe.
 //
-// `system.query_log` read_rows (via a materialized real-endpoint-set temp
-// table, to avoid re-scanning the source edges per IN-subquery reference)
-// on the SAME 1000-edge real page: 33,955 for the original
-// node_type+node_id independent-IN shape, 32,664 for a hex+concat-only
-// match, 35,246 for node_type+node_id-prefilter+hex, and the node-type-only
-// prefilter kept here reads within the same order of magnitude -- see the
-// PR body for the full four-row table. All four variants read effectively
-// the whole ~31k-row table at this org's CURRENT data size (the granule
-// pruning difference is real per EXPLAIN but not yet visible here --
-// future-proofing, not premature optimization).
-//
-// Matching node_id as an exactness filter -- the node_type prefilter
-// narrows candidates via the index, node_pairs then removes the
-// cross-product rows the prefilter alone cannot -- bounds the FINAL row
-// count by the endpoints actually requested, which is what every one of
-// CHAOS-4647's three row-budget derivation rounds assumed was already
-// true.
-//
-// The exactness filter is expressed as `concat(hex(node_type),':',
-// hex(node_id)) IN {node_pairs:Array(String)}`, not a SQL `(node_type,
-// node_id) IN {pairs:Array(Tuple(...))}` -- see the node_pairs binding
-// comment below for why a literal Tuple-typed parameter was tried first
-// and abandoned.
+// Measured directly against org 70d529e0's real data (2026-09-01,
+// `EXPLAIN indexes=1` + `system.query_log`, all four/five variants against
+// the SAME real 1000-edge page -- see the PR body for the full table):
+// correcting an earlier claim in this history, the pre-fix independent-IN
+// shape does NOT prune below Granules 4/4 on this REAL page either (a
+// smaller synthetic example used earlier misleadingly suggested 2/4) --
+// this table currently has only 4 total granules for the whole org, too
+// small for node_type/node_id-level pruning to show up in read_rows at
+// all today, regardless of shape. The tuple-IN-subquery form is still the
+// right one: it is the ONLY shape that lets BOTH index columns
+// participate in principle (verified via the EXPLAIN condition above),
+// matching what the pre-fix code's BEST case could ever do, without the
+// escaping risk of binding node_id (or node_type) as a raw string.
 func batchResolveMembership(ctx context.Context, client QueryClient, orgID string, rows []edgeEndpoint, scope *filterScope) (map[membershipKey]membershipEntry, error) {
 	endpointSeen := map[membershipKey]struct{}{}
-	typeSeen := map[string]struct{}{}
 	var pairs []membershipKey
-	var nodeTypes []string
 	add := func(nodeType, nodeID string) {
 		nodeID = strings.TrimSpace(nodeID)
 		nodeType = strings.TrimSpace(nodeType)
@@ -203,10 +195,6 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 		}
 		endpointSeen[k] = struct{}{}
 		pairs = append(pairs, k)
-		if _, ok := typeSeen[nodeType]; !ok {
-			typeSeen[nodeType] = struct{}{}
-			nodeTypes = append(nodeTypes, nodeType)
-		}
 	}
 	for _, row := range rows {
 		add(row.sourceType, row.sourceID)
@@ -214,17 +202,6 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	}
 	if len(endpointSeen) == 0 {
 		return map[membershipKey]membershipEntry{}, nil
-	}
-	// Validate every distinct node_type against the closed enum BEFORE
-	// binding anything -- team-lead review, CHAOS-4655: this is what keeps
-	// node_type safe to bind as a plain Array(String) IN list (no
-	// hand-rolled escaping needed, unlike node_id below) an actual
-	// guarantee rather than an assumption. mapNodeType is the SAME
-	// validation rowToEdge already trusts for this exact column's values.
-	for _, nodeType := range nodeTypes {
-		if _, err := mapNodeType(nodeType); err != nil {
-			return nil, fmt.Errorf("workgraph: batch resolve membership: node_type prefilter: %w", err)
-		}
 	}
 	// Sorted for determinism only (the WHERE clause is an unordered set
 	// membership test) -- matches this package's existing convention of
@@ -235,74 +212,36 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 		}
 		return pairs[i].nodeID < pairs[j].nodeID
 	})
-	sort.Strings(nodeTypes)
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		// The sargable prefilter -- node_type ONLY, not node_id. See this
-		// function's doc comment for the full reasoning; short version:
-		// node_type is validated (above) against a closed, quote/backslash
-		// -free enum, so a plain []string Binding is safe here -- it goes
-		// through dev-health-go@v0.6.1's clickHouseStringArray
-		// (clickhouse/bindings.go), which is CHAOS-4745 (escapes a quote
-		// as `\'`, which ClickHouse's real parameter parser rejects
-		// outright), but that defect can only ever trigger on a value
-		// containing a quote or backslash, and validated node_type values
-		// structurally never do. node_id gets NO prefilter and NO
-		// hand-rolled Array(String) literal: three independent escaping
-		// schemes (dev-health-go's `\'`, SQL-standard `''`, ClickHouse
-		// `\x`-hex-byte escapes) were tried and each broke differently
-		// against the real native-protocol parameter parser for arbitrary
-		// byte content -- see CHAOS-4745's updated description for the
-		// full set of reproduced failures. node_id is matched ONLY by the
-		// node_pairs exactness filter below, which sidesteps the whole
-		// class via hex encoding instead of trying to escape into
-		// ClickHouse's array-literal grammar.
-		{Name: "node_types", Value: nodeTypes},
 		// dev-health-go@v0.6.1's clickhouse.Binding wire format has no
 		// tuple-array encoding (clickhouse/bindings.go's clickHouseParameter
 		// handles only string/[]string/time.Time/ints -- scope.go's
 		// themeFilter doc comment already notes this for a different call
-		// site), so a typed Binding cannot carry a set of pairs directly.
+		// site), so a typed Binding cannot carry a set of pairs directly,
+		// and no hand-rolled Array(String)/Array(Tuple) literal survives
+		// arbitrary node_id content either -- see this function's doc
+		// comment for the three reproduced failure modes (CHAOS-4745).
 		//
-		// The first attempt at this fix pre-rendered a ClickHouse
-		// `Array(Tuple(String, String))` parameter literal
-		// (`('a','b')`-style tuples with quote-escaped strings) and bound
-		// it as plain text under a `{node_pairs:Array(Tuple(String,
-		// String))}` placeholder -- the same "pre-render the literal"
-		// technique `clickHouseStringArray` already uses for
-		// `Array(String)`. Proven WRONG against a real engine while
-		// building this fix's round-trip test (team-lead review,
-		// CHAOS-4655, 2026-09-01): ClickHouse's native-protocol
-		// query-parameter parser rejects backslash-escaped quotes
-		// outright (`Cannot parse escape sequence`) for String,
-		// Array(String), AND Array(Tuple(...)) alike -- the SAME defect
-		// dev-health-go's clickHouseStringArray already carries live,
-		// today, for every Array(String) binding with a quote in it, not
-		// just this one (filed as CHAOS-4745). Switching quote-escaping to
-		// SQL's doubled-quote form (`''`) fixes the simple cases, but a
-		// literal backslash directly adjacent to a doubled quote INSIDE a
-		// Tuple element still breaks the parser (`Cannot parse input:
-		// expected ')' before...`) -- reproduced directly, isolated down
-		// to a 1-tuple repro, ad hoc against local ClickHouse 26.7.5.10.
-		// ClickHouse's parameter-value grammar for nested Tuple string
-		// escaping is not simply "the same as top-level String" and this
-		// lane could not fully characterize it from outside within the
-		// granted review window.
-		//
-		// So node_pairs SIDESTEPS string escaping entirely instead of
-		// chasing further edge cases in an undocumented parser: each
+		// node_pairs SIDESTEPS string escaping entirely instead: each
 		// endpoint is rendered as `hex(nodeType) + ":" + hex(nodeID)`
 		// (membershipPairsLiteral, below) -- hex digits and `:` can never
 		// require escaping, for ANY input byte sequence (quotes,
 		// backslashes, unicode, control bytes, empty strings), because the
-		// character set hex encoding produces has no meaning to ClickHouse's
-		// string-literal grammar at all. The WHERE clause decodes the
-		// SAME way on the table side (concat(lower(hex(m.node_type)),
-		// ':', lower(hex(m.node_id)))) so the match is exact and
-		// collision-free: hex output never contains ':', so the first ':'
-		// in the concatenation is always the unambiguous type/id boundary.
-		// See TestMembershipPairsLiteral_RoundTripsHostileStringsThroughTheRealEngine
+		// character set hex encoding produces has no meaning to
+		// ClickHouse's string-literal grammar at all. The WHERE clause
+		// decodes it server-side (unhex(splitByChar(':', p)[1]),
+		// unhex(splitByChar(':', p)[2])) and matches the RAW (node_type,
+		// node_id) columns against that decoded set via a tuple IN
+		// subquery -- exact, collision-free (hex output never contains
+		// ':', so the first ':' is always the unambiguous type/id
+		// boundary), AND index-eligible (confirmed via `EXPLAIN
+		// indexes=1`: ClickHouse's PrimaryKey analysis uses BOTH node_type
+		// and node_id from this subquery-materialized set, unlike a
+		// computed hex()/concat() match on the column, which is opaque to
+		// it). See
+		// TestMembershipPairsLiteral_RoundTripsHostileStringsThroughTheRealEngine
 		// (membership_integration_test.go) for the adversarial proof.
 		{Name: "node_pairs", Value: membershipPairsLiteral(pairs)},
 	}
@@ -330,8 +269,10 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
             INNER JOIN (%s) AS latest_run ON 1 = 1
             %s
             WHERE m.org_id = {org_id:String}
-              AND m.node_type IN {node_types:Array(String)}
-              AND concat(lower(hex(m.node_type)), ':', lower(hex(m.node_id))) IN {node_pairs:Array(String)}
+              AND (m.node_type, m.node_id) IN (
+                  SELECT unhex(splitByChar(':', p)[1]), unhex(splitByChar(':', p)[2])
+                  FROM (SELECT arrayJoin({node_pairs:Array(String)}) AS p)
+              )
               AND m.is_dominant = 1
               AND latest_run.latest_run_id != ''
               AND (%s)

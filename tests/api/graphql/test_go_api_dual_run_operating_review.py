@@ -146,6 +146,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -205,38 +207,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # direct string comparison against the .ts source when this port's Go
 # document constant was written; kept identical here by construction
 # (copy-pasted from the same source, not retyped).
-OPERATING_REVIEW_DOCUMENT = """query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
-  operatingReview(orgId: $orgId, input: $input) {
-    orgId
-    teamId
-    weekStart
-    priorWeekStart
-    sections {
-      key
-      title
-      changed
-      improved
-      worsened
-      metrics {
-        key
-        label
-        value
-        unit
-        delta {
-          value
-          priorValue
-          absolute
-          percent
-          status
-        }
-      }
-    }
-    recommendations
-    recommendationsEmptyState
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:wave4-operating-review-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "wave4-operating-review-dual-run-test-build"
 
 # computeReview's FIXED section/metric order
@@ -375,7 +346,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="operatingReview",
                 candidate_build=CANDIDATE_BUILD,
@@ -383,7 +354,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation="operatingReview",
                     current_candidate_build=CANDIDATE_BUILD,
@@ -418,7 +389,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="operatingReview",
                 candidate_build=CANDIDATE_BUILD,
@@ -496,7 +467,7 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
     body = json.dumps(
-        {"query": OPERATING_REVIEW_DOCUMENT, "variables": variables}
+        {"query": registered_document("operatingReview"), "variables": variables}
     ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
@@ -551,7 +522,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -854,6 +825,14 @@ def _python_response_snapshot(review) -> go_api_comparator.ResponseSnapshot:
     mirrors resolvers/operating_review.py's _to_graphql_review/
     _to_graphql_section/_to_graphql_metric field mapping exactly
     (resolvers/operating_review.py:99-137).
+
+    __typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("operatingReview") now selects __typename on every non-root
+    selection set, at all four nesting levels this response has. Type
+    names from contracts/graphql/v1/schema.graphql (OperatingReview,
+    OperatingReviewSection, OperatingReviewMetric, OperatingReviewDelta).
     """
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -881,15 +860,19 @@ def _python_response_snapshot(review) -> go_api_comparator.ResponseSnapshot:
                                     "absolute": metric.delta.absolute,
                                     "percent": metric.delta.percent,
                                     "status": metric.delta.status,
+                                    "__typename": "OperatingReviewDelta",
                                 },
+                                "__typename": "OperatingReviewMetric",
                             }
                             for metric in section.metrics
                         ],
+                        "__typename": "OperatingReviewSection",
                     }
                     for section in review.sections
                 ],
                 "recommendations": review.recommendations,
                 "recommendationsEmptyState": review.recommendations_empty_state,
+                "__typename": "OperatingReview",
             }
         },
         data_present=True,
@@ -956,7 +939,7 @@ async def test_dual_run_clean_match_both_periods_populated(
     jwks_file = jwks_path / "jwks-operating-review-clean-match.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(OPERATING_REVIEW_DOCUMENT)
+    document_digest = _document_digest(registered_document("operatingReview"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1075,7 +1058,7 @@ async def test_dual_run_ai_governance_fix_is_a_declared_divergence(
     jwks_file = jwks_path / "jwks-operating-review-divergence.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(OPERATING_REVIEW_DOCUMENT)
+    document_digest = _document_digest(registered_document("operatingReview"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1338,6 +1321,14 @@ def _expected_guarded_delta(value: float) -> dict:
         "absolute": delta_value,
         "percent": percent,
         "status": status,
+        # CHAOS-4696 PR2: registered_document("operatingReview") now
+        # selects __typename on every non-root selection set (including
+        # this one, OperatingReviewDelta) -- see
+        # _python_response_snapshot's doc comment above for the full
+        # explanation. This is a SECOND, independent hand-built
+        # expectation dict in this file (the guarded-delta assertion
+        # bypasses the shared snapshot builder), so it needed its own fix.
+        "__typename": "OperatingReviewDelta",
     }
 
 
@@ -1429,7 +1420,7 @@ async def test_dual_run_zero_row_average_nan_is_a_declared_divergence(
     jwks_file = jwks_path / "jwks-operating-review-nan-divergence.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(OPERATING_REVIEW_DOCUMENT)
+    document_digest = _document_digest(registered_document("operatingReview"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(

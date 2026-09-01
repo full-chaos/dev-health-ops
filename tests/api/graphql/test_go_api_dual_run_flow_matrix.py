@@ -106,6 +106,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 
 # Plain module import, not `from . import ...` -- this directory has no
 # __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
@@ -161,25 +163,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # registeredFlowMatrixDocument, itself byte-identical to the REAL
 # production query (web/src/lib/graphql/queries.ts:56-74's
 # FLOW_MATRIX_QUERY, operation name "FlowMatrix").
-FLOW_MATRIX_DOCUMENT = """query FlowMatrix($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    flowMatrix {
-      nodes {
-        id
-        label
-        dimension
-        value
-      }
-      edges {
-        source
-        target
-        value
-      }
-    }
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:wave4-flowmatrix-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "wave4-flowmatrix-dual-run-test-build"
 
 
@@ -283,7 +267,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="flowMatrix",
                 candidate_build=CANDIDATE_BUILD,
@@ -291,7 +275,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation="flowMatrix",
                     current_candidate_build=CANDIDATE_BUILD,
@@ -322,7 +306,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="flowMatrix",
                 candidate_build=CANDIDATE_BUILD,
@@ -399,7 +383,9 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
-    body = json.dumps({"query": FLOW_MATRIX_DOCUMENT, "variables": variables}).encode()
+    body = json.dumps(
+        {"query": registered_document("flowMatrix"), "variables": variables}
+    ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
         data=body,
@@ -453,7 +439,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
@@ -486,31 +472,50 @@ def _go_response_snapshot(payload: dict) -> go_api_comparator.ResponseSnapshot:
 
 def _python_response_snapshot(result) -> go_api_comparator.ResponseSnapshot:
     """Serializes resolve_analytics's AnalyticsResult.flow_matrix into the
-    same on-the-wire GraphQL response envelope FLOW_MATRIX_DOCUMENT's
+    same on-the-wire GraphQL response envelope registered_document("flowMatrix")'s
     selection set produces -- ONLY the flowMatrix sub-object, matching
     the document (it selects nothing else on `analytics`).
+
+    __typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("flowMatrix") now selects __typename on every non-root selection
+    set (verified against the ACTUAL generated wire text: analytics,
+    flowMatrix, each node, and each edge all carry it). Type names from
+    contracts/graphql/v1/schema.graphql (AnalyticsResult,
+    FlowMatrixResult, SankeyNode, SankeyEdge).
     """
     fm = result.flow_matrix
     return go_api_comparator.ResponseSnapshot(
         data={
             "analytics": {
-                "flowMatrix": {
-                    "nodes": [
-                        {
-                            "id": n.id,
-                            "label": n.label,
-                            "dimension": n.dimension,
-                            "value": n.value,
-                        }
-                        for n in (fm.nodes if fm else [])
-                    ],
-                    "edges": [
-                        {"source": e.source, "target": e.target, "value": e.value}
-                        for e in (fm.edges if fm else [])
-                    ],
-                }
-                if fm is not None
-                else None
+                "flowMatrix": (
+                    {
+                        "nodes": [
+                            {
+                                "id": n.id,
+                                "label": n.label,
+                                "dimension": n.dimension,
+                                "value": n.value,
+                                "__typename": "SankeyNode",
+                            }
+                            for n in (fm.nodes if fm else [])
+                        ],
+                        "edges": [
+                            {
+                                "source": e.source,
+                                "target": e.target,
+                                "value": e.value,
+                                "__typename": "SankeyEdge",
+                            }
+                            for e in (fm.edges if fm else [])
+                        ],
+                        "__typename": "FlowMatrixResult",
+                    }
+                    if fm is not None
+                    else None
+                ),
+                "__typename": "AnalyticsResult",
             }
         },
         data_present=True,
@@ -813,7 +818,7 @@ async def test_dual_run_team_dimension_matches(
     jwks_file = jwks_path / "jwks-flowmatrix-team.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(FLOW_MATRIX_DOCUMENT)
+    document_digest = _document_digest(registered_document("flowMatrix"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -929,7 +934,7 @@ async def test_dual_run_team_dimension_tied_nodes_at_limit_boundary_matches(
     jwks_file = jwks_path / "jwks-flowmatrix-team-tie.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(FLOW_MATRIX_DOCUMENT)
+    document_digest = _document_digest(registered_document("flowMatrix"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1128,7 +1133,7 @@ async def test_dual_run_repo_dimension_diverges_on_unmerged_duplicate(
     jwks_file = jwks_path / "jwks-flowmatrix-repo-divergence.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(FLOW_MATRIX_DOCUMENT)
+    document_digest = _document_digest(registered_document("flowMatrix"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1279,7 +1284,7 @@ async def test_dual_run_work_type_filtered_rejection_matches(
     jwks_file = jwks_path / "jwks-flowmatrix-worktype-filtered.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(FLOW_MATRIX_DOCUMENT)
+    document_digest = _document_digest(registered_document("flowMatrix"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(

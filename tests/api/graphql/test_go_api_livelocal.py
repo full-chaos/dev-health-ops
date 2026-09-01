@@ -89,6 +89,7 @@ from typing import Any, cast
 
 import pytest
 import sqlalchemy as sa
+from _go_schema_digest import producer_schema_digest
 from graphql import (
     GraphQLList,
     GraphQLNonNull,
@@ -136,7 +137,6 @@ REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
 # generated, never a fixtures-seeded org.
 ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
 
-SCHEMA_DIGEST = "sha256:lane-go-api-livelocal-schema-digest"
 CANDIDATE_BUILD = "lane-go-api-livelocal-candidate-build"
 
 
@@ -516,6 +516,37 @@ def _shape_check(document: str, data: Any) -> _ShapeCheck:
                     "registered document)"
                 )
                 continue
+            # CHAOS-4696 PR2 (EXECUTED, found running this check against
+            # real local data post-PR1-merge): __typename is a GraphQL
+            # SPEC meta-field, valid on every object/interface/union
+            # selection set without being declared in that type's OWN
+            # `fields` map -- graphql-core's GraphQLObjectType.fields
+            # deliberately excludes it (the execution engine resolves it
+            # specially), so `fields.get("__typename")` is None for every
+            # type, always, correctly, by design. Before this fix, every
+            # one of the 12 registered documents -- which PR1 regenerated
+            # to the TRUE wire form, and which ALL now select __typename
+            # on every non-root selection set -- tripped a spurious
+            # "field not found on schema type ... -- schema/document
+            # drift" violation here, for a field that was never actually
+            # drifted; it was this checker treating a spec-guaranteed
+            # meta-field as if it needed a schema declaration. Confirmed
+            # by running this file against real local data: EVERY
+            # operation reported exactly this violation, once per
+            # non-root selection set, before this fix.
+            if selection.name.value == "__typename":
+                value = node[key]
+                type_name = getattr(inner, "name", None)
+                if not isinstance(value, str):
+                    result.violations.append(
+                        f"{path}.{key}: __typename value is not a string: {value!r}"
+                    )
+                elif type_name is not None and value != type_name:
+                    result.violations.append(
+                        f"{path}.{key}: __typename={value!r} does not match "
+                        f"the schema type actually walked here ({type_name!r})"
+                    )
+                continue
             field_def = fields.get(selection.name.value)
             if field_def is None:
                 result.violations.append(
@@ -859,7 +890,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation=operation,
                 candidate_build=CANDIDATE_BUILD,
@@ -867,7 +898,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation=operation,
                     current_candidate_build=CANDIDATE_BUILD,
@@ -1010,7 +1041,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],

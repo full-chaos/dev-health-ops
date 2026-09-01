@@ -57,6 +57,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -109,24 +111,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # 3): source this from the real client file, not from the SDL or an
 # inventory doc, or a wrong-name digest can match on BOTH sides here
 # while a real web request 404s against the route.
-COMPLEXITY_TIMESERIES_DOCUMENT = """query ComplexityTimeseries($input: ComplexityTimeseriesInput!) {
-  complexityTimeseries(input: $input) {
-    points {
-      date
-      scopeId
-      scopeName
-      locTotal
-      cyclomaticPerKloc
-      cyclomaticTotal
-      cyclomaticAvg
-      highComplexityFunctions
-      veryHighComplexityFunctions
-    }
-    totalScope
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:wave3-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "wave3-dual-run-test-build"
 
 
@@ -239,7 +224,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="complexityTimeseries",
                 candidate_build=CANDIDATE_BUILD,
@@ -247,7 +232,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation="complexityTimeseries",
                     current_candidate_build=CANDIDATE_BUILD,
@@ -282,7 +267,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="complexityTimeseries",
                 candidate_build=CANDIDATE_BUILD,
@@ -360,7 +345,7 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
     body = json.dumps(
-        {"query": COMPLEXITY_TIMESERIES_DOCUMENT, "variables": variables}
+        {"query": registered_document("complexityTimeseries"), "variables": variables}
     ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
@@ -418,7 +403,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -454,6 +439,13 @@ def _complexity_timeseries_python_response_snapshot(
     same on-the-wire GraphQL response envelope the Go HTTP endpoint
     produces -- the comparator compares RESPONSES, not Python dataclasses
     vs Go structs.
+
+    __typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("complexityTimeseries") now selects __typename on every non-root
+    selection set. Type names from contracts/graphql/v1/schema.graphql
+    (ComplexityTimeseriesResult, ComplexityPoint).
     """
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -469,10 +461,12 @@ def _complexity_timeseries_python_response_snapshot(
                         "cyclomaticAvg": p.cyclomatic_avg,
                         "highComplexityFunctions": p.high_complexity_functions,
                         "veryHighComplexityFunctions": p.very_high_complexity_functions,
+                        "__typename": "ComplexityPoint",
                     }
                     for p in result.points
                 ],
                 "totalScope": result.total_scope,
+                "__typename": "ComplexityTimeseriesResult",
             }
         },
         data_present=True,
@@ -547,7 +541,7 @@ async def test_dual_run_happy_path_repo_scope_matches(
     jwks_file = jwks_path / "jwks.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COMPLEXITY_TIMESERIES_DOCUMENT)
+    document_digest = _document_digest(registered_document("complexityTimeseries"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -679,7 +673,7 @@ async def test_dual_run_missing_table_errors_on_both_sides_no_degraded_path(
     jwks_file = jwks_path / "jwks-missing-table.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COMPLEXITY_TIMESERIES_DOCUMENT)
+    document_digest = _document_digest(registered_document("complexityTimeseries"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(

@@ -50,6 +50,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -97,60 +99,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Byte-identical to cmd/query-api/query_route.go's
 # registeredInvestmentBreakdownDocument (:372-388).
-INVESTMENT_BREAKDOWN_DOCUMENT = """query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-      }
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-    }
-  }
-}"""
 
 # Byte-identical to cmd/query-api/query_route.go's
 # registeredInvestmentFullDocument (:409-431).
-INVESTMENT_FULL_DOCUMENT = """query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-      }
-    }
-    sankey {
-      nodes {
-        id
-        label
-        dimension
-        value
-      }
-      edges {
-        source
-        target
-        value
-      }
-      coverage {
-        teamCoverage
-        repoCoverage
-      }
-      unit
-    }
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:chaos-4538-investment-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "chaos-4538-investment-dual-run-test-build"
 
 
@@ -254,7 +206,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation=operation,
                 candidate_build=CANDIDATE_BUILD,
@@ -262,7 +214,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation=operation,
                     current_candidate_build=CANDIDATE_BUILD,
@@ -298,7 +250,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation=operation,
                 candidate_build=CANDIDATE_BUILD,
@@ -429,7 +381,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -454,6 +406,15 @@ def jwks_path(tmp_path_factory: pytest.TempPathFactory):
 
 
 def _breakdown_python_snapshot(result) -> go_api_comparator.ResponseSnapshot:
+    """__typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("investmentBreakdown") now selects __typename on every non-root
+    selection set (verified against the ACTUAL generated wire text).
+    Type names from contracts/graphql/v1/schema.graphql (AnalyticsResult,
+    BreakdownResult, BreakdownItem). evidenceQualityStats stays None --
+    a null field carries no __typename.
+    """
     return go_api_comparator.ResponseSnapshot(
         data={
             "analytics": {
@@ -461,12 +422,21 @@ def _breakdown_python_snapshot(result) -> go_api_comparator.ResponseSnapshot:
                     {
                         "dimension": bd.dimension,
                         "measure": bd.measure,
-                        "items": [{"key": i.key, "value": i.value} for i in bd.items],
+                        "items": [
+                            {
+                                "key": i.key,
+                                "value": i.value,
+                                "__typename": "BreakdownItem",
+                            }
+                            for i in bd.items
+                        ],
+                        "__typename": "BreakdownResult",
                     }
                     for bd in result.breakdowns
                 ],
                 "evidenceQualityDistribution": result.evidence_quality_distribution,
                 "evidenceQualityStats": None,
+                "__typename": "AnalyticsResult",
             }
         },
         data_present=True,
@@ -475,6 +445,14 @@ def _breakdown_python_snapshot(result) -> go_api_comparator.ResponseSnapshot:
 
 
 def _sankey_python_snapshot(result) -> go_api_comparator.ResponseSnapshot:
+    """__typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("investmentFull") now selects __typename on every non-root selection
+    set. Type names from contracts/graphql/v1/schema.graphql
+    (AnalyticsResult, SankeyResult, SankeyNode, SankeyEdge). coverage
+    stays None -- a null field carries no __typename.
+    """
     sankey = result.sankey
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -489,18 +467,26 @@ def _sankey_python_snapshot(result) -> go_api_comparator.ResponseSnapshot:
                             "label": n.label,
                             "dimension": n.dimension,
                             "value": n.value,
+                            "__typename": "SankeyNode",
                         }
                         for n in sankey.nodes
                     ],
                     "edges": [
-                        {"source": e.source, "target": e.target, "value": e.value}
+                        {
+                            "source": e.source,
+                            "target": e.target,
+                            "value": e.value,
+                            "__typename": "SankeyEdge",
+                        }
                         for e in sankey.edges
                     ],
                     "coverage": None,
                     "unit": sankey.unit.value.upper()
                     if hasattr(sankey.unit, "value")
                     else str(sankey.unit).upper(),
+                    "__typename": "SankeyResult",
                 },
+                "__typename": "AnalyticsResult",
             }
         },
         data_present=True,
@@ -613,7 +599,7 @@ async def test_dual_run_investment_breakdown_worktype_argmax_null_skip_diverges(
     jwks_file = jwks_path / "jwks-investment-null-skip.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(INVESTMENT_BREAKDOWN_DOCUMENT)
+    document_digest = _document_digest(registered_document("investmentBreakdown"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], document_digest, operation="investmentBreakdown"
     )
@@ -663,7 +649,7 @@ async def test_dual_run_investment_breakdown_worktype_argmax_null_skip_diverges(
         go_payload = _post_graphql(
             server.base_url,
             token,
-            INVESTMENT_BREAKDOWN_DOCUMENT,
+            registered_document("investmentBreakdown"),
             {
                 "orgId": org_id,
                 "batch": {
@@ -782,7 +768,7 @@ async def test_dual_run_investment_full_sankey_control_case_matches(
     jwks_file = jwks_path / "jwks-investment-full-control.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(INVESTMENT_FULL_DOCUMENT)
+    document_digest = _document_digest(registered_document("investmentFull"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], document_digest, operation="investmentFull"
     )
@@ -844,7 +830,7 @@ async def test_dual_run_investment_full_sankey_control_case_matches(
         go_payload = _post_graphql(
             server.base_url,
             token,
-            INVESTMENT_FULL_DOCUMENT,
+            registered_document("investmentFull"),
             {
                 "orgId": org_id,
                 "batch": {

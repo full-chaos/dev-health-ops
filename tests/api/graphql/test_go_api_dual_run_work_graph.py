@@ -75,6 +75,8 @@ from typing import Any, cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 
 # Plain module import, not `from . import ...` -- this directory has no
 # __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
@@ -130,61 +132,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # to the REAL production queries (web/src/lib/graphql/queries.ts:427,462,477).
 # Verified by diff against the client file when this test was written, not
 # reconstructed from the SDL (CHAOS-4367's codex-round-3 lesson).
-WORK_GRAPH_EDGES_DOCUMENT = """query WorkGraphEdges($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
-  workGraphEdges(orgId: $orgId, filters: $filters) {
-    edges {
-      edgeId
-      sourceType
-      sourceId
-      sourceDisplayName
-      targetType
-      targetId
-      targetDisplayName
-      edgeType
-      provenance
-      confidence
-      evidence
-      repoId
-      provider
-      theme
-      subcategory
-    }
-    totalCount
-    pageInfo {
-      hasNextPage
-      hasPreviousPage
-      startCursor
-      endCursor
-    }
-    degradedReason
-  }
-}"""
 
-WORK_GRAPH_FLOW_DOCUMENT = """query WorkGraphFlow($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
-  workGraphFlow(orgId: $orgId, filters: $filters) {
-    rows {
-      nodeType
-      inflow
-      outflow
-    }
-    degradedReason
-  }
-}"""
 
-WORK_GRAPH_ARTIFACTS_DOCUMENT = """query WorkGraphArtifacts($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
-  workGraphArtifacts(orgId: $orgId, filters: $filters) {
-    rows {
-      nodeType
-      nodeId
-      displayName
-      degree
-      evidence
-    }
-    degradedReason
-  }
-}"""
-
-SCHEMA_DIGEST = "sha256:wave4-lane-a-workgraph-dual-run-schema-digest"
 CANDIDATE_BUILD = "wave4-lane-a-workgraph-dual-run-build"
 
 
@@ -301,7 +250,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation=selected_operation,
                 candidate_build=CANDIDATE_BUILD,
@@ -309,7 +258,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation=selected_operation,
                     current_candidate_build=CANDIDATE_BUILD,
@@ -345,7 +294,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation=selected_operation,
                 candidate_build=CANDIDATE_BUILD,
@@ -476,7 +425,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -512,6 +461,13 @@ def _edges_go_snapshot(payload: dict) -> go_api_comparator.ResponseSnapshot:
 
 
 def _edges_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
+    """__typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("workGraphEdges") now selects __typename on every non-root selection
+    set. Type names from contracts/graphql/v1/schema.graphql
+    (WorkGraphEdgesResult, WorkGraphEdgeResult, PageInfo).
+    """
     return go_api_comparator.ResponseSnapshot(
         data={
             "workGraphEdges": {
@@ -532,6 +488,7 @@ def _edges_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
                         "provider": e.provider,
                         "theme": e.theme,
                         "subcategory": e.subcategory,
+                        "__typename": "WorkGraphEdgeResult",
                     }
                     for e in result.edges
                 ],
@@ -541,8 +498,10 @@ def _edges_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
                     "hasPreviousPage": result.page_info.has_previous_page,
                     "startCursor": result.page_info.start_cursor,
                     "endCursor": result.page_info.end_cursor,
+                    "__typename": "PageInfo",
                 },
                 "degradedReason": result.degraded_reason,
+                "__typename": "WorkGraphEdgesResult",
             }
         },
         data_present=True,
@@ -559,6 +518,13 @@ def _flow_go_snapshot(payload: dict) -> go_api_comparator.ResponseSnapshot:
 
 
 def _flow_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
+    """__typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("workGraphFlow") now selects __typename on every non-root selection
+    set. Type names from contracts/graphql/v1/schema.graphql
+    (WorkGraphFlowResult, WorkGraphFlowRow).
+    """
     return go_api_comparator.ResponseSnapshot(
         data={
             "workGraphFlow": {
@@ -567,10 +533,12 @@ def _flow_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
                         "nodeType": r.node_type.value.upper(),
                         "inflow": r.inflow,
                         "outflow": r.outflow,
+                        "__typename": "WorkGraphFlowRow",
                     }
                     for r in result.rows
                 ],
                 "degradedReason": result.degraded_reason,
+                "__typename": "WorkGraphFlowResult",
             }
         },
         data_present=True,
@@ -587,6 +555,13 @@ def _artifacts_go_snapshot(payload: dict) -> go_api_comparator.ResponseSnapshot:
 
 
 def _artifacts_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapshot:
+    """__typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("workGraphArtifacts") now selects __typename on every non-root
+    selection set. Type names from contracts/graphql/v1/schema.graphql
+    (WorkGraphArtifactsResult, WorkGraphArtifactRow).
+    """
     return go_api_comparator.ResponseSnapshot(
         data={
             "workGraphArtifacts": {
@@ -597,10 +572,12 @@ def _artifacts_python_snapshot(result: Any) -> go_api_comparator.ResponseSnapsho
                         "displayName": r.display_name,
                         "degree": r.degree,
                         "evidence": r.evidence,
+                        "__typename": "WorkGraphArtifactRow",
                     }
                     for r in result.rows
                 ],
                 "degradedReason": result.degraded_reason,
+                "__typename": "WorkGraphArtifactsResult",
             }
         },
         data_present=True,
@@ -726,9 +703,9 @@ async def test_dual_run_flow_artifacts_and_clean_edges_match(
     jwks_file = jwks_path / "jwks-clean.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    edges_digest = _document_digest(WORK_GRAPH_EDGES_DOCUMENT)
-    flow_digest = _document_digest(WORK_GRAPH_FLOW_DOCUMENT)
-    artifacts_digest = _document_digest(WORK_GRAPH_ARTIFACTS_DOCUMENT)
+    edges_digest = _document_digest(registered_document("workGraphEdges"))
+    flow_digest = _document_digest(registered_document("workGraphFlow"))
+    artifacts_digest = _document_digest(registered_document("workGraphArtifacts"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], edges_digest, "workGraphEdges"
     )
@@ -759,19 +736,19 @@ async def test_dual_run_flow_artifacts_and_clean_edges_match(
         go_edges = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_EDGES_DOCUMENT,
+            registered_document("workGraphEdges"),
             {"orgId": org_id, "filters": None},
         )
         go_flow = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_FLOW_DOCUMENT,
+            registered_document("workGraphFlow"),
             {"orgId": org_id, "filters": None},
         )
         go_artifacts = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_ARTIFACTS_DOCUMENT,
+            registered_document("workGraphArtifacts"),
             {"orgId": org_id, "filters": None},
         )
     finally:
@@ -881,7 +858,7 @@ async def test_dual_run_edges_dedup_is_expected_divergence(
     jwks_file = jwks_path / "jwks-dedup.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    edges_digest = _document_digest(WORK_GRAPH_EDGES_DOCUMENT)
+    edges_digest = _document_digest(registered_document("workGraphEdges"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], edges_digest, "workGraphEdges"
     )
@@ -952,7 +929,7 @@ async def test_dual_run_edges_dedup_is_expected_divergence(
         go_edges = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_EDGES_DOCUMENT,
+            registered_document("workGraphEdges"),
             {"orgId": org_id, "filters": None},
         )
     finally:
@@ -1067,7 +1044,7 @@ async def test_dual_run_edges_tied_confidence_at_limit_boundary_matches(
     jwks_file = jwks_path / "jwks-edges-tie-boundary.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    edges_digest = _document_digest(WORK_GRAPH_EDGES_DOCUMENT)
+    edges_digest = _document_digest(registered_document("workGraphEdges"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], edges_digest, "workGraphEdges"
     )
@@ -1095,7 +1072,7 @@ async def test_dual_run_edges_tied_confidence_at_limit_boundary_matches(
         go_edges = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_EDGES_DOCUMENT,
+            registered_document("workGraphEdges"),
             {"orgId": org_id, "filters": {"limit": limit}},
         )
     finally:
@@ -1241,7 +1218,7 @@ async def test_dual_run_edges_edge_type_filtered_splice_matches(
     jwks_file = jwks_path / "jwks-splice.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    edges_digest = _document_digest(WORK_GRAPH_EDGES_DOCUMENT)
+    edges_digest = _document_digest(registered_document("workGraphEdges"))
     await _seed_candidate_and_enable_canary(
         registry_postgres["async"], edges_digest, "workGraphEdges"
     )
@@ -1267,7 +1244,7 @@ async def test_dual_run_edges_edge_type_filtered_splice_matches(
         go_edges = _post_graphql(
             server.base_url,
             token,
-            WORK_GRAPH_EDGES_DOCUMENT,
+            registered_document("workGraphEdges"),
             {"orgId": org_id, "filters": {"edgeType": "BLOCKS", "limit": 10}},
         )
     finally:

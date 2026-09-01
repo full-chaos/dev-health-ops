@@ -86,6 +86,28 @@ Fails (exit 1, with a human-readable report) when:
      guessing, and guessing is the exact failure mode this inventory exists
      to prevent. Scoping to the schema's own explicit MUST spots is the
      verifiable half of that rule.
+  8. SERVICE MISMATCH -- a row's ``service`` does not match the deployed
+     app discovery attributes the surface to (REST: discovery's own
+     ``app_root``, mapped via ``_APP_ROOT_SERVICE``; GraphQL: the single app
+     that mounts the schema, ``_GRAPHQL_SERVICE``); or UNKNOWN APP ROOT --
+     discovery resolved a REST route to an ``app_root`` this file has no
+     service mapping for (a newly deployed app not yet added to
+     ``_APP_ROOT_SERVICE``). ``service`` is per DEPLOYED APP, not per path
+     -- the same path can be served by two apps with genuinely different
+     middleware stacks (see the billing-edge rows), so a row attributed to
+     the wrong app silently invalidates its own reasoning. This was
+     previously never cross-checked at all: only the closed-vocabulary
+     enum was validated (see 6 above), so relabelling a row to any OTHER
+     valid ``service`` enum value passed silently.
+  9. CREDENTIAL CLASS SCHEMA VIOLATION -- ``credential-classes.json`` does
+     not validate against ``credential-classes.schema.json`` under Draft
+     2020-12, the same way the inventory is validated against its own
+     schema (see 6). Previously this file only ever read
+     ``credential-classes.json`` to extract ``class_id``s for the closed
+     vocabulary (see 4) -- the vocabulary was closed, but the CONTENTS of
+     each class (issuer, validators, backing_store, lifecycle, ...) were
+     never validated, so an under-specified class could be added and this
+     gate would bless it.
 
 ``issued_credential`` is deliberately kept three/four-valued, never
 collapsed: non-empty array (mints these -- every class_id validated, every
@@ -104,6 +126,7 @@ non-empty string) is checked.
 Usage:
     python3 ci/check_endpoint_profiles.py [--root PATH] [--inventory PATH]
         [--schema PATH] [--credential-classes PATH]
+        [--credential-classes-schema PATH]
 """
 
 from __future__ import annotations
@@ -145,7 +168,41 @@ else:
 DEFAULT_INVENTORY = "contracts/auth/v1/endpoint-profiles.ops.json"
 DEFAULT_SCHEMA = "contracts/auth/v1/endpoint-profile.schema.json"
 DEFAULT_CREDENTIAL_CLASSES = "contracts/auth/v1/credential-classes.json"
+DEFAULT_CREDENTIAL_CLASSES_SCHEMA = "contracts/auth/v1/credential-classes.schema.json"
 DEFAULT_DISCOVERER = "ci/discover_ops_routes.py"
+
+# Deployed FastAPI() app roots discover_ops_routes.py resolves ops REST
+# routes to (its `app_root` field, a "module::varname" router-def key --
+# see discover_ops_routes.py:558 / _app_root_for), mapped to the `service`
+# enum value each one corresponds to (docs/reference/auth/endpoint-profiles.md
+# "Two deployed apps"; the schema's own `service` description). `service` is
+# per DEPLOYED APP, not per path -- reachable_validators is `[]` for
+# billing-edge rows precisely because that app shares no middleware with the
+# main app, so a row attributed to the wrong app silently invalidates its
+# own reasoning. Never previously checked at all: Codex relabelled
+# `GET /api/v1/meta` from `dev-health-ops-api` to the ALSO-VALID enum value
+# `dev-health-web` (schema validation alone can't catch this -- dev-health-web
+# is a real vocabulary member, just not one this discoverer's app_root ever
+# resolves to) and the gate returned zero errors. Adding a third deployed
+# ops app means adding it here first -- an app_root this dict doesn't know
+# is a hard failure below (UNKNOWN APP ROOT), never a silent pass.
+_APP_ROOT_SERVICE: dict[str, str] = {
+    "dev_health_ops.api.main::app": "dev-health-ops-api",
+    "dev_health_ops.api.billing_edge::app": "dev-health-ops-billing-edge",
+}
+
+# The GraphQL schema is mounted from exactly one deployed app -- main.py's
+# `app.include_router(graphql_app, prefix="/graphql")`; billing_edge.py
+# never imports or mounts it (verified: `rg "include_router\(graphql_app"
+# src/dev_health_ops/api` -- one hit, main.py). discover_ops_routes.py has
+# no app_root concept for GraphQL resolvers at all (they are bare decorated
+# functions, never reached via an include_router edge, so there is no mount
+# graph to walk the way REST routes' app_root is derived) -- a constant
+# rather than a discovery-derived value. Documented limitation, same
+# posture as this file's other known-narrow checks (anchor denylist,
+# verified_by): true as long as ops has exactly one GraphQL-mounting app,
+# which is the whole of ops's current architecture.
+_GRAPHQL_SERVICE = "dev-health-ops-api"
 
 # Required-field / top-level-shape / enum vocabulary rules formerly lived
 # here as hand-rolled constants (TOP_LEVEL_REQUIRED, ROW_REQUIRED). They are
@@ -212,6 +269,7 @@ def check(
     inventory_path: Path,
     schema_path: Path,
     credential_classes_path: Path,
+    credential_classes_schema_path: Path | None = None,
 ) -> list[str]:
     if jsonschema is None:
         raise RuntimeError(
@@ -230,6 +288,12 @@ def check(
     schema = load_json(schema_path)
     credential_classes = load_json(credential_classes_path)
     class_vocab = credential_class_vocabulary(credential_classes)
+
+    if credential_classes_schema_path is None:
+        credential_classes_schema_path = credential_classes_path.with_name(
+            "credential-classes.schema.json"
+        )
+    credential_classes_schema = load_json(credential_classes_schema_path)
 
     discoverer = _load_module(root / DEFAULT_DISCOVERER, "discover_ops_routes")
     discovered = discoverer.discover(root)
@@ -255,6 +319,27 @@ def check(
     ):
         loc = "/".join(str(p) for p in err.path) or "<root>"
         errors.append(f"JSON SCHEMA VIOLATION at {loc}: {err.message}")
+
+    # --- credential-classes.json validated against ITS OWN schema --------
+    # Previously this file only ever read credential-classes.json to pull
+    # out class_ids (credential_class_vocabulary() above) -- the vocabulary
+    # was closed, but nothing validated that each class in it actually has
+    # the shape credential-classes.schema.json requires (issuer, validators,
+    # backing_store, lifecycle, ... -- see that schema's `required` list).
+    # Codex-verified gap: reducing every class down to just `class_id` still
+    # returned zero errors, so a new class could be added under-specified
+    # and the gate would bless it -- defeating the "every class has an
+    # issuer, validator, lifecycle authority and allowed route set"
+    # guarantee this vocabulary exists to enforce. Validated the same way
+    # the inventory is validated above: real Draft 2020-12 structural
+    # validation, not a hand-rolled re-derivation of the schema's rules.
+    cc_validator = jsonschema.Draft202012Validator(credential_classes_schema)
+    for err in sorted(
+        cc_validator.iter_errors(credential_classes),
+        key=lambda e: list(map(str, e.path)),
+    ):
+        loc = "/".join(str(p) for p in err.path) or "<root>"
+        errors.append(f"CREDENTIAL CLASS SCHEMA VIOLATION at {loc}: {err.message}")
 
     rows = inventory.get("rows", [])
     if not isinstance(rows, list):
@@ -489,6 +574,38 @@ def check(
                     f"but discovery resolves {surface.get('full_path')!r} at "
                     f"{src['file']}:{src['line']} (content drift)"
                 )
+            # --- service must match discovery's app attribution --------
+            # `service` is per DEPLOYED APP (see _APP_ROOT_SERVICE above),
+            # not a free-text label -- only checkable once the route is
+            # resolved to a concrete app_root (resolution == "OK"; an
+            # UNRESOLVED_ROUTER/UNMOUNTED_ROUTER route carries no app_root
+            # to attribute against, and is already reported some other way
+            # via full-schema/route validation if that ever ships a real
+            # row).
+            if surface.get("resolution") == "OK":
+                app_root = surface.get("app_root")
+                expected_service = (
+                    _APP_ROOT_SERVICE.get(app_root)
+                    if isinstance(app_root, str)
+                    else None
+                )
+                if expected_service is None:
+                    errors.append(
+                        f"UNKNOWN APP ROOT: row {rid!r} is served by app_root "
+                        f"{app_root!r} at {src['file']}:{src['line']}, which is "
+                        "not in _APP_ROOT_SERVICE -- a newly deployed FastAPI() "
+                        "app must be added there before this gate can attribute "
+                        "rows to it"
+                    )
+                elif row.get("service") != expected_service:
+                    errors.append(
+                        f"SERVICE MISMATCH: row {rid!r} claims service="
+                        f"{row.get('service')!r} but {src['file']}:{src['line']} "
+                        f"is served by {expected_service!r} (service is per "
+                        "DEPLOYED APP, not per path -- the same path can be "
+                        "served by two apps with genuinely different "
+                        "middleware, see the billing-edge rows)"
+                    )
         else:  # graphql
             expected_kind = (
                 "graphql_field" if surface["kind"] == "field" else "graphql_mutation"
@@ -503,6 +620,17 @@ def check(
                     f"STALE ANCHOR: row {rid!r} claims graphql_field_name="
                     f"{row.get('graphql_field_name')!r} but discovery finds "
                     f"{surface['name']!r} at {src['file']}:{src['line']} (content drift)"
+                )
+            # --- service must match discovery's app attribution --------
+            # GraphQL resolvers have no app_root from discovery (see
+            # _GRAPHQL_SERVICE above); the whole schema is mounted from one
+            # app, so any GraphQL row not claiming that app is a mismatch.
+            if row.get("service") != _GRAPHQL_SERVICE:
+                errors.append(
+                    f"SERVICE MISMATCH: row {rid!r} claims service="
+                    f"{row.get('service')!r} but GraphQL resolvers are only "
+                    f"ever served by {_GRAPHQL_SERVICE!r} (the only ops app "
+                    "that mounts the GraphQL schema)"
                 )
 
     return errors
@@ -775,12 +903,18 @@ def main(argv=None) -> int:
         default=DEFAULT_CREDENTIAL_CLASSES,
         help="credential-classes JSON path",
     )
+    parser.add_argument(
+        "--credential-classes-schema",
+        default=DEFAULT_CREDENTIAL_CLASSES_SCHEMA,
+        help="credential-classes schema JSON path",
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
     inventory_path = root / args.inventory
     schema_path = root / args.schema
     credential_classes_path = root / args.credential_classes
+    credential_classes_schema_path = root / args.credential_classes_schema
 
     # DISCLOSURE-HOLD: report only, printed FIRST and unconditionally --
     # before check() runs at all, so it survives every other failure mode
@@ -812,7 +946,13 @@ def main(argv=None) -> int:
         print("DISCLOSURE-HOLD: 0 rows marked")
 
     try:
-        errors = check(root, inventory_path, schema_path, credential_classes_path)
+        errors = check(
+            root,
+            inventory_path,
+            schema_path,
+            credential_classes_path,
+            credential_classes_schema_path,
+        )
     except RuntimeError as exc:
         # jsonschema unavailable (see check()'s own guard) or another
         # infra-level failure -- fail loudly with a clean message, never a

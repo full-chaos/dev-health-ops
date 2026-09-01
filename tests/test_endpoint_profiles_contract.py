@@ -36,6 +36,9 @@ _SCHEMA_PATH = _REPO_ROOT / "contracts" / "auth" / "v1" / "endpoint-profile.sche
 _CREDENTIAL_CLASSES_PATH = (
     _REPO_ROOT / "contracts" / "auth" / "v1" / "credential-classes.json"
 )
+_CREDENTIAL_CLASSES_SCHEMA_PATH = (
+    _REPO_ROOT / "contracts" / "auth" / "v1" / "credential-classes.schema.json"
+)
 
 
 def _load_module(path: Path, name: str):
@@ -143,6 +146,10 @@ def _seed_shared_fixtures(root: Path) -> None:
     _write(
         root / "contracts" / "auth" / "v1" / "credential-classes.json",
         _CREDENTIAL_CLASSES_PATH.read_text(),
+    )
+    _write(
+        root / "contracts" / "auth" / "v1" / "credential-classes.schema.json",
+        _CREDENTIAL_CLASSES_SCHEMA_PATH.read_text(),
     )
 
 
@@ -916,6 +923,190 @@ def test_ops_owned_contract_files_are_jq_dash_S_stable():
             f"`jq -S . {path} > /tmp/x && mv /tmp/x {path}` before committing "
             "(guards acr's pin from formatting-only churn)"
         )
+
+
+# ---------------------------------------------------------------------------
+# `service` must match discovery's per-deployed-app attribution (merge-gate
+# finding 1). `service` is a real schema enum with 5 legal values -- the
+# schema validator alone accepts ANY of them, so relabelling a row to a
+# DIFFERENT but still-legal value (e.g. dev-health-ops-api -> dev-health-web)
+# previously passed with zero errors. The billing-edge fixture below is the
+# interesting/adversarial direction: two rows genuinely share a path but are
+# served by two different apps, and that must keep passing.
+# ---------------------------------------------------------------------------
+
+_BILLING_EDGE_FILE = "src/dev_health_ops/api/billing_edge.py"
+
+
+def _seed_billing_edge_app(root: Path) -> None:
+    """A second, separately-deployed FastAPI() root decorated directly on
+    the `app` instance (never an APIRouter) -- mirrors the real
+    src/dev_health_ops/api/billing_edge.py shape exactly, including a route
+    at the SAME local path `/shared` that main.py's example router also
+    serves, the real billing-edge scenario (POST /api/v1/billing/webhooks/
+    stripe, served by both apps as two independent rows)."""
+    _write(
+        root / _BILLING_EDGE_FILE,
+        "from fastapi import FastAPI\n"
+        "\n"
+        "app = FastAPI()\n"
+        "\n"
+        "\n"
+        '@app.post("/shared")\n'
+        "async def shared_webhook():\n"
+        "    return {}\n",
+    )
+
+
+def test_gate_catches_a_service_relabelled_to_a_different_deployed_app(tmp_path):
+    """Codex's exact merge-gate repro: GET /example (served by main.py,
+    app_root dev_health_ops.api.main::app) relabelled to the ALSO-VALID
+    enum value dev-health-web, which nothing but discovery attribution can
+    catch -- the schema's own enum check happily accepts dev-health-web,
+    since it's a real vocabulary member, just not the app that serves this
+    route."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    row = _minimal_valid_row(service="dev-health-web")
+    _write_inventory(root, [row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any(
+        "SERVICE MISMATCH" in e and "dev-health-web" in e and "dev-health-ops-api" in e
+        for e in errors
+    ), errors
+
+
+def test_gate_passes_two_rows_sharing_a_path_served_by_different_apps(tmp_path):
+    """The billing-edge false-positive guard: /shared is a real route on
+    BOTH the main app and the billing-edge app, each correctly attributing
+    its own row to its own service. Two rows, two different (file, line)
+    anchors, two different services -- must pass cleanly."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_billing_edge_app(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    rows = [
+        _minimal_valid_row(),
+        _minimal_valid_row(
+            id="POST /shared [dev-health-ops-billing-edge]",
+            method="POST",
+            route="/shared",
+            service="dev-health-ops-billing-edge",
+            source={"file": _BILLING_EDGE_FILE, "line": 6},
+        ),
+    ]
+    _write_inventory(root, rows)
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert errors == [], errors
+
+
+def test_gate_catches_a_billing_edge_row_mislabelled_as_the_main_app(tmp_path):
+    """The inverse of the pass-case above: the billing-edge row claims
+    dev-health-ops-api instead of dev-health-ops-billing-edge. This matters
+    specifically because reachable_validators is [] for billing-edge rows
+    (that app shares no middleware with the main app) -- a row attributed
+    to the wrong app silently invalidates that whole line of reasoning."""
+    root = _minimal_valid_root(tmp_path)
+    _seed_billing_edge_app(root)
+    inventory_path, schema_path, cc_path = _paths(root)
+    rows = [
+        _minimal_valid_row(),
+        _minimal_valid_row(
+            id="POST /shared [dev-health-ops-billing-edge]",
+            method="POST",
+            route="/shared",
+            service="dev-health-ops-api",  # wrong -- this route is billing-edge
+            source={"file": _BILLING_EDGE_FILE, "line": 6},
+        ),
+    ]
+    _write_inventory(root, rows)
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any(
+        "SERVICE MISMATCH" in e
+        and "dev-health-ops-billing-edge" in e
+        and _BILLING_EDGE_FILE in e
+        for e in errors
+    ), errors
+
+
+# ---------------------------------------------------------------------------
+# credential-classes.json validated against its own schema (merge-gate
+# finding 2). Closing the vocabulary (test_every_accepted_credential_class_
+# is_real, above) says nothing about whether each class in it is actually
+# well-formed -- previously nothing did.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_catches_an_under_specified_credential_class(tmp_path):
+    """credential-classes.schema.json requires display_name/status/
+    transport/issuer/validators/backing_store/principal_type/
+    audience_and_scope/lifecycle/consumers/bootstrap/gaps on every class
+    (contracts/auth/v1/credential-classes.schema.json:53-68) -- a class
+    reduced to just class_id must fail, even though the CLOSED VOCABULARY
+    check (class_id membership) never would, since class_id is the one
+    field that IS present."""
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / "contracts" / "auth" / "v1" / "credential-classes.json",
+        json.dumps(
+            {
+                "schema_version": "credential-classes.v1",
+                "generated_at": "2026-09-01T00:00:00Z",
+                "source_commits": {"ops": "0" * 40, "web": "0" * 40, "acr": "0" * 40},
+                "classes": [{"class_id": "under_specified_class"}],
+            }
+        ),
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any(
+        "CREDENTIAL CLASS SCHEMA VIOLATION" in e and "required" in e for e in errors
+    ), errors
+
+
+# ---------------------------------------------------------------------------
+# surface_kind is read live from the schema, never hardcoded (merge-gate
+# finding 3). test_schema_accepts_server_action_surface_kind_dynamically
+# (above) only unit-tests _schema_enum -- it never drives a server_action
+# row through checker.check() itself, so a regression that reintroduced a
+# hand-rolled surface_kind allowlist (e.g. `if kind not in {"rest",
+# "graphql_field", "graphql_mutation"}: reject`) would leave that test
+# green while check() wrongly rejected every legitimate server_action row
+# with an "unknown/invalid surface_kind" complaint.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_accepts_server_action_surface_kind_through_check_end_to_end(tmp_path):
+    """Drive a schema-valid server_action row through check() end to end.
+    ops's own discover_ops_routes.py has no server_action discovery at all
+    (ops is a Python FastAPI backend, not Next.js -- server_action is in
+    the shared schema for the WEB lane's checker) -- so this row can only
+    ever fail here as a PHANTOM ROW (no discovered counterpart), the
+    correct, discovery-based reason, and that must be the ONLY complaint:
+    never one naming surface_kind/enum/vocabulary, which is what a
+    reintroduced hardcoded allowlist would add."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    row = _minimal_valid_row(
+        id="server_action:src/app/actions.ts#doThing [dev-health-ops-api]",
+        surface_kind="server_action",
+        method=None,
+        route=None,
+        source={"file": "src/app/actions.ts", "line": 3},
+    )
+    _write_inventory(root, [_minimal_valid_row(), row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("PHANTOM ROW" in e and "src/app/actions.ts:3" in e for e in errors), (
+        errors
+    )
+    assert not any(
+        (
+            "surface_kind" in e.lower()
+            or "enum" in e.lower()
+            or "vocabulary" in e.lower()
+        )
+        and "PHANTOM ROW" not in e
+        for e in errors
+    ), errors
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 )
 
 // writeFixture writes src to a temp .go file and returns its path.
@@ -64,6 +66,37 @@ func newQueryHandler() {
 	}
 	if bar.Document != "query Bar { bar }" || bar.ConstName != "registeredBarDocument" {
 		t.Errorf("enumerate: Bar row = %+v, want document/const_name matched", bar)
+	}
+}
+
+// TestEnumerate_DigestField pins CHAOS-4696's addition: each row's Digest
+// is computed by importing internal/digest (the SAME function
+// query_route.go's digestHex wraps), not a second hand-typed
+// sha256(TrimSpace(...)) in this tool -- so a caller consuming
+// registrydump's JSON (scripts/graphql-wire-parity.ts in the web repo)
+// compares against the exact digest the real running route computes.
+func TestEnumerate_DigestField(t *testing.T) {
+	src := `package main
+
+const registeredFooDocument = "query Foo { foo }"
+
+func newQueryHandler() {
+	digestByOperation := map[string]string{
+		"Foo": digestHex(registeredFooDocument),
+	}
+	_ = digestByOperation
+}
+`
+	docs, err := enumerate(writeFixture(t, src))
+	if err != nil {
+		t.Fatalf("enumerate: unexpected error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("enumerate: got %d docs, want 1: %+v", len(docs), docs)
+	}
+	want := digest.Document("query Foo { foo }")
+	if docs[0].Digest != want {
+		t.Fatalf("enumerate: Digest = %s, want %s (digest.Document of the literal document text)", docs[0].Digest, want)
 	}
 }
 

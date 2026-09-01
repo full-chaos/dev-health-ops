@@ -1,0 +1,23 @@
+query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
+  featureFlags(
+    orgId: $orgId
+    provider: $provider
+    project: $project
+    includeArchived: $includeArchived
+    limit: $limit
+  ) {
+    flags {
+      flagId
+      flagKey
+      provider
+      projectKey
+      flagType
+      createdAt
+      archivedAt
+      __typename
+    }
+    totalCount
+    degradedReason
+    __typename
+  }
+}

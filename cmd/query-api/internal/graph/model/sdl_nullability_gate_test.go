@@ -56,19 +56,26 @@
 // marshals as a populated object, never null) -- that combination is still
 // reported, as a Divergence, not silently excluded.
 //
-// The `JSON` custom scalar has its own, different precondition: it is
-// documented (internal/graphqljson.JSON's own comment) to never be
-// pointer-wrapped in EITHER nullability direction, because the bound Go
-// type's own zero value already represents null. If a `*JSON` field ever
-// appeared, that would mean the documented binding broke -- caught as a
-// structural anomaly, not silently trusted.
+// The `JSON` custom scalar has its own, different precondition, checked
+// against the ACTUAL bound Go type name (`graphqljson.JSON`), not merely
+// pointer-ness (round 3 found round 2's pointer-only check would still
+// accept a binding regression to a plain `string`, which cannot represent
+// null at all): a pointer-wrapped `graphqljson.JSON` is a documented-premise
+// anomaly (the pointer still works, just deviates from convention); any
+// OTHER Go type for a nullable JSON field is this gate's core defect class
+// (a non-null-capable value standing in for a nullable one) and IS reported
+// as a Divergence.
 //
-// List-typed fields (`[Foo!]!`) are excluded at every level (outer list AND
-// element) because gqlgen.yml sets `omit_slice_element_pointers: true` for
-// this repo -- a deliberate, repo-wide config choice, not something this
-// defect class can manifest through: Go slices are natively nil-able, so
-// "the list is null" is carried by a nil slice, never a missing pointer
-// wrapper on a scalar leaf.
+// List-typed fields (`[Foo!]!`) are excluded at the outer level because
+// gqlgen.yml sets `omit_slice_element_pointers: true` for this repo -- Go
+// slices are natively nil-able, so "the list is null" is carried by a nil
+// slice, never a missing pointer wrapper. But that config setting is itself
+// a checked precondition, not an assumption: if an element ever IS
+// pointer-wrapped, the premise broke, and this gate flags it as a
+// structural anomaly (it does not attempt to interpret per-element
+// nullability from that pointer -- a larger feature than this ticket
+// scoped) rather than silently excluding a field whose exclusion basis no
+// longer holds.
 //
 // # Vocabulary reuse
 //
@@ -121,9 +128,10 @@ import (
 // is a list (slice/array) -- both derived from the field's AST type
 // expression, never asserted by name.
 type goFieldInfo struct {
-	IsPointer bool
-	IsList    bool
-	GoType    string // rendered source text, for diagnostics only
+	IsPointer     bool
+	IsList        bool
+	ElemIsPointer bool // only meaningful when IsList is true.
+	GoType        string
 }
 
 // parseGoModelFields walks EVERY top-level `type X struct { ... }`
@@ -190,14 +198,19 @@ func parseGoModelFields(t *testing.T, path string) (map[string]map[string]goFiel
 					expr = star.X
 				}
 				isList := false
-				if _, ok := expr.(*goast.ArrayType); ok {
+				elemIsPointer := false
+				if arrayType, ok := expr.(*goast.ArrayType); ok {
 					isList = true
+					if _, ok := arrayType.Elt.(*goast.StarExpr); ok {
+						elemIsPointer = true
+					}
 				}
 
 				fields[jsonName] = goFieldInfo{
-					IsPointer: isPointer,
-					IsList:    isList,
-					GoType:    exprString(f.Type),
+					IsPointer:     isPointer,
+					IsList:        isList,
+					ElemIsPointer: elemIsPointer,
+					GoType:        exprString(f.Type),
 				}
 			}
 			structs[typeSpec.Name.Name] = fields
@@ -370,6 +383,23 @@ func compareNullability(
 			}
 
 			if isListField {
+				// codex review round 3 (2026-08-31, chaos-4702-round3, EXECUTED): this exclusion's
+				// premise is specifically gqlgen.yml's `omit_slice_element_pointers: true` --
+				// elements are NEVER pointer-wrapped, in this repo, regardless of the SDL
+				// element's own nullability. Verify that premise before trusting it: if an
+				// element ever IS a pointer, the config assumption broke, and per-element
+				// nullability would then be a real, uncompared signal (this gate does not attempt
+				// to compare it -- flagging it as a structural anomaly for a human to re-evaluate
+				// is the honest response, not silently excluding it as if nothing changed).
+				if goField.ElemIsPointer {
+					structuralErrors = append(structuralErrors, fmt.Sprintf(
+						"SDL field %s.%s is a list type (%s) whose Go elements ARE pointer-wrapped "+
+							"(%s) -- this breaks gqlgen.yml's `omit_slice_element_pointers: true` "+
+							"premise this exclusion relies on; per-element nullability is not compared "+
+							"by this gate at all and may need to be, now that the premise excluding it "+
+							"no longer holds", typeName, field.Name, fieldType.String(), goField.GoType))
+					continue
+				}
 				stats.ListExcluded++
 				continue
 			}
@@ -403,23 +433,45 @@ func compareNullability(
 				continue
 			}
 			if fieldType.NamedType == "JSON" {
-				// codex review round 2: the JSON exclusion's premise (graphqljson.JSON's own
-				// zero value represents null, so it is NEVER pointer-wrapped, verified true for
-				// both nullable AND non-null JSON fields in the real schema) is a documented
-				// binding convention this gate depends on but never checked. If it ever breaks
-				// (a `*JSON` field appears), surface it instead of silently trusting the
-				// exclusion's premise -- as a structural anomaly, not a Divergence, because
-				// pointer-ness is not JSON's null-signal the way it is for a plain scalar.
-				if goField.IsPointer {
+				// codex review round 2 AND round 3 (both EXECUTED): the JSON exclusion's premise
+				// is not merely "not a pointer" -- it is specifically that gqlgen.yml binds the
+				// JSON scalar to internal/graphqljson.JSON, whose own zero value represents null.
+				// Round 2 found the exclusion never checked pointer-ness at all; round 3 found the
+				// fix for that still accepted ANY non-pointer type, not the specific bound type --
+				// so a binding regression to, say, a plain `string` (whose zero value is "", not
+				// null-capable at all) would still pass. `string` for a nullable field is exactly
+				// this gate's core defect class (a value that cannot represent null standing in
+				// for one that must), so it is reported as a Divergence, not merely a structural
+				// anomaly, when that specific case applies.
+				const jsonBoundGoType = "graphqljson.JSON"
+				switch {
+				case goField.GoType == jsonBoundGoType:
+					stats.JSONScalarExcluded++
+				case goField.IsPointer && strings.TrimPrefix(goField.GoType, "*") == jsonBoundGoType:
+					// Pointer-wrapped graphqljson.JSON: breaks the "never pointer" premise, but a
+					// pointer can still represent null just fine -- a binding-convention anomaly,
+					// not a null-representation bug.
 					structuralErrors = append(structuralErrors, fmt.Sprintf(
-						"SDL field %s.%s is the JSON custom scalar, excluded from the nullability "+
-							"check because internal/graphqljson.JSON is documented to NEVER be "+
-							"pointer-wrapped (its own zero value represents null) -- but the Go field "+
-							"IS a pointer (%s), breaking that documented premise; re-verify before "+
-							"trusting this exclusion for this field", typeName, field.Name, goField.GoType))
-					continue
+						"SDL field %s.%s is the JSON custom scalar, bound to %s (documented to NEVER "+
+							"be pointer-wrapped, its own zero value already represents null) -- but "+
+							"the Go field IS a pointer (%s), breaking that documented premise",
+						typeName, field.Name, jsonBoundGoType, goField.GoType))
+				case !fieldType.NonNull && !goField.IsPointer:
+					// Some Go type OTHER than the bound graphqljson.JSON, non-pointer, for a
+					// nullable field -- e.g. a plain `string`. Cannot represent null: this IS the
+					// defect class.
+					violations = append(violations, Divergence{
+						TypeName: typeName, FieldName: field.Name,
+						SDLType: fieldType.String(), GoType: goField.GoType,
+						Direction: "sdl-nullable-but-go-non-pointer",
+					})
+				default:
+					structuralErrors = append(structuralErrors, fmt.Sprintf(
+						"SDL field %s.%s is the JSON custom scalar but its Go type is %q, not the "+
+							"documented binding %q (gqlgen.yml) -- re-verify this field's null-safety "+
+							"before trusting any exclusion for it", typeName, field.Name, goField.GoType,
+						jsonBoundGoType))
 				}
-				stats.JSONScalarExcluded++
 				continue
 			}
 
@@ -713,7 +765,7 @@ func syntheticGoodGoStructs() map[string]map[string]goFieldInfo {
 			"tags":   {IsList: true, GoType: "[]string"},
 			"detail": {IsPointer: true, GoType: "*WidgetDetail"}, // object idiom: pointer regardless of `!`
 			"meta":   {IsPointer: true, GoType: "*WidgetDetail"},
-			"blob":   {IsPointer: false, GoType: "JSON"}, // JSON idiom: never pointer-wrapped
+			"blob":   {IsPointer: false, GoType: "graphqljson.JSON"}, // JSON idiom: never pointer-wrapped, exact bound type
 		},
 		"WidgetDetail": {
 			"note": {IsPointer: false, GoType: "string"},
@@ -872,16 +924,17 @@ func TestCompareNullabilityCatchesNullableObjectFieldThatCannotRepresentNull(t *
 // is codex review round 2's second EXECUTED finding: the JSON exclusion
 // trusted, unconditionally, that internal/graphqljson.JSON is never
 // pointer-wrapped (true for all 10 real instances, both nullable and
-// non-null, per gqlgen.yml's binding). If a `*JSON` field ever appeared,
-// the original code silently excluded it anyway instead of noticing the
-// exclusion's own premise had broken.
+// non-null, per gqlgen.yml's binding). If a `*graphqljson.JSON` field ever
+// appeared, the original code silently excluded it anyway instead of
+// noticing the exclusion's own premise had broken. A pointer can still
+// represent null, so this is a structural anomaly, not a Divergence.
 func TestCompareNullabilityFlagsJSONFieldThatBreaksItsDocumentedNonPointerBinding(t *testing.T) {
 	schema := mustLoadSyntheticSchema(t, syntheticGoodSchema)
 	goStructs := syntheticGoodGoStructs()
 
 	blob := goStructs["Widget"]["blob"]
 	blob.IsPointer = true
-	blob.GoType = "*JSON"
+	blob.GoType = "*graphqljson.JSON"
 	goStructs["Widget"]["blob"] = blob
 
 	violations, stats, structuralErrors := compareNullability(schema, goStructs)
@@ -894,6 +947,69 @@ func TestCompareNullabilityFlagsJSONFieldThatBreaksItsDocumentedNonPointerBindin
 	if stats.JSONScalarExcluded != 0 {
 		t.Fatalf("the premise-breaking field must not also be counted as a clean exclusion, "+
 			"got JSONScalarExcluded=%d", stats.JSONScalarExcluded)
+	}
+}
+
+// TestCompareNullabilityCatchesJSONFieldRegressedToAPlainNonNullableType is
+// codex review round 3's first EXECUTED finding: round 2's fix only
+// checked pointer-ness, so ANY non-pointer Go type -- not specifically the
+// documented graphqljson.JSON binding -- satisfied the exclusion. A
+// nullable JSON field whose binding regressed to a plain `string` (zero
+// value `""`, not null-capable at all) would still be silently excluded.
+// That is exactly this gate's core defect class -- a value type standing
+// in for one that must express null -- so it is now a Divergence, not
+// merely a structural anomaly.
+func TestCompareNullabilityCatchesJSONFieldRegressedToAPlainNonNullableType(t *testing.T) {
+	schema := mustLoadSyntheticSchema(t, syntheticGoodSchema)
+	goStructs := syntheticGoodGoStructs()
+
+	blob := goStructs["Widget"]["blob"] // `blob: JSON` is nullable in the fixture SDL.
+	blob.IsPointer = false
+	blob.GoType = "string"
+	goStructs["Widget"]["blob"] = blob
+
+	violations, _, structuralErrors := compareNullability(schema, goStructs)
+	if len(structuralErrors) > 0 {
+		t.Fatalf("unexpected structural errors: %v", structuralErrors)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly 1 violation, got %d: %v", len(violations), violations)
+	}
+	got := violations[0]
+	if got.Key() != "Widget.blob" || got.Direction != "sdl-nullable-but-go-non-pointer" {
+		t.Fatalf("wrong violation reported: %+v", got)
+	}
+}
+
+// TestCompareNullabilityFlagsListElementPointerBreakingOmitElementPointersConfig
+// is codex review round 3's second EXECUTED finding: the list exclusion
+// checked only outer list-ness, never whether gqlgen.yml's
+// `omit_slice_element_pointers: true` premise (elements are NEVER
+// pointer-wrapped in this repo) actually held for that field's elements.
+// If an element ever WAS a pointer, the config premise broke silently.
+// This gate does not attempt to interpret per-element nullability from
+// that pointer (a bigger feature than this ticket scoped), so the honest
+// response is a structural anomaly flagging that the premise needs
+// re-evaluation, not a silent pass.
+func TestCompareNullabilityFlagsListElementPointerBreakingOmitElementPointersConfig(t *testing.T) {
+	schema := mustLoadSyntheticSchema(t, syntheticGoodSchema)
+	goStructs := syntheticGoodGoStructs()
+
+	tags := goStructs["Widget"]["tags"]
+	tags.ElemIsPointer = true // `omit_slice_element_pointers: true` broke for this field.
+	tags.GoType = "[]*string"
+	goStructs["Widget"]["tags"] = tags
+
+	violations, stats, structuralErrors := compareNullability(schema, goStructs)
+	if len(violations) != 0 {
+		t.Fatalf("a list-element-pointer premise break is a structural anomaly, not a Divergence: %v", violations)
+	}
+	if len(structuralErrors) != 1 || !strings.Contains(structuralErrors[0], "Widget.tags") {
+		t.Fatalf("expected exactly 1 structural error naming Widget.tags, got: %v", structuralErrors)
+	}
+	if stats.ListExcluded != 0 {
+		t.Fatalf("the premise-breaking field must not also be counted as a clean list exclusion, "+
+			"got ListExcluded=%d", stats.ListExcluded)
 	}
 }
 

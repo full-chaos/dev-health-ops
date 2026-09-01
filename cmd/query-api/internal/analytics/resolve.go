@@ -367,7 +367,31 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	// not None`, which is exactly the condition under which this function
 	// runs at all). It degrades to nil on any failure rather than
 	// propagating an error; see sankeycoverage.go.
-	coverage := resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, useInvestment, filters)
+	// COVERAGE USES THE RAW THREE-STATE FLAG, NOT THE AUTO-ROUTED ONE.
+	// This asymmetry is Python's, and reproducing it is the whole point:
+	// nodes/edges go through compile_sankey -> _get_context_params, which
+	// AUTO-ROUTES a nil use_investment to the investment path for any of
+	// {THEME, SUBCATEGORY, WORK_TYPE}. Coverage does not. It reads
+	// `request.use_investment` DIRECTLY (analytics.py:665-677:
+	// `bool(request.use_investment)` for the columns, and
+	// `if request.use_investment` for the table), and `bool(None)` is
+	// False -- so an auto-routed sankey with the flag OMITTED computes its
+	// nodes/edges from latest_work_unit_investments while computing its
+	// coverage from investment_metrics_daily.
+	//
+	// Passing the auto-routed `useInvestment` here instead was a real
+	// divergence found by review: for `TEAM -> THEME` with both
+	// sankey.useInvestment and batch.useInvestment omitted, Python reads
+	// the daily table and Go read latest_work_unit_investments, so a daily
+	// row with no overlapping current work-unit row gave Python a real
+	// coverage value and Go 0/0.
+	//
+	// Whether Python's asymmetry is itself desirable is NOT this port's
+	// call (root AGENTS.md: a port copied from a buggy tip is a defect only
+	// when the bug is already fixed on the source tip -- this one is not).
+	// If it is ever changed, change it in Python first.
+	coverageUseInvestment := effective != nil && *effective
+	coverage := resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, coverageUseInvestment, filters)
 
 	unit := model.SankeyValueUnitWorkUnits
 	if req.Measure == MeasureChurnLOC {

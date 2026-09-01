@@ -24,8 +24,11 @@ package analytics
 //     Testing the display expression (`ifNull(nullIf(r.repo, ''), ...)`,
 //     which is never SQL NULL) makes repo_coverage 1.0, not 0.75.
 //   - the effort_value <= 0 arm (CHAOS-4241 codex round 2):
-//     wu-zeroeffort-1repo would divide to 0 and vanish from the
-//     denominator, making total 3.0, not 4.0.
+//     wu-zeroeffort-2repos would divide to 0 and vanish from the
+//     denominator, making total 3.0, not 4.0. It deliberately carries TWO
+//     repo rows so the arm's 1/N shape is actually pinned: with one row
+//     1.0/1 == 1.0, so a regression to a constant 1.0 would pass; with
+//     two, a constant 1.0 sums to 2.0 and the total becomes 5.0.
 //
 // Membership-scope tables are created but left EMPTY, so marker_count = 0,
 // scope_enabled = 0 and the scope filter is a no-op -- this test isolates
@@ -185,8 +188,12 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
 		// No repo-effort row and a NULL scalar repo_id: weight 1.0 via
 		// the LEFT JOIN fallback, and repo-UNassigned.
 		{workUnitID: "wu-team-norepo", effortValue: 25, repoID: "", issueRef: "linear:ALPHA-1"},
-		// effort_value = 0 exercises the 1.0/repo_row_count arm.
-		{workUnitID: "wu-zeroeffort-1repo", effortValue: 0, repoID: seededCoverageRepo1, issueRef: "linear:NOTEAM-1"},
+		// effort_value = 0 exercises the 1.0/repo_row_count arm, and it
+		// carries TWO repo rows on purpose: with only one, 1.0/1 == 1.0 and
+		// a regression to a constant 1.0 would still satisfy the oracle.
+		// With two, the arm must produce 0.5 + 0.5; a constant 1.0 yields
+		// 2.0 and pushes the total to 5.0.
+		{workUnitID: "wu-zeroeffort-2repos", effortValue: 0, repoID: seededCoverageRepo1, issueRef: "linear:NOTEAM-1"},
 	})
 
 	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_repo_effort
@@ -194,7 +201,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
         ('wu-team-2repos',      toUUID('%[1]s'), 'churn_loc', 60, 0.6, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s'),
         ('wu-team-2repos',      toUUID('%[2]s'), 'churn_loc', 40, 0.4, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s'),
         ('wu-noteam-1repo',     toUUID('%[1]s'), 'churn_loc', 50, 1.0, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s'),
-        ('wu-zeroeffort-1repo', toUUID('%[1]s'), 'churn_loc',  0, 1.0, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s')`,
+        ('wu-zeroeffort-2repos', toUUID('%[1]s'), 'churn_loc',  0, 1.0, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s'),
+        ('wu-zeroeffort-2repos', toUUID('%[2]s'), 'churn_loc',  0, 1.0, 'evidence', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s')`,
 		seededCoverageRepo1, seededCoverageRepo2, seededCoverageTS, orgID)); err != nil {
 		t.Fatalf("seed work_unit_repo_effort: %v", err)
 	}

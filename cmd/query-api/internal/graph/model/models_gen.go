@@ -1847,9 +1847,21 @@ type ThroughputStaleWip struct {
 	P90AgeHours *float64 `json:"p90AgeHours,omitempty"`
 }
 
+// TimeseriesBucket.Value is *float64, not float64 -- CHAOS-4657, same
+// shape as CHAOS-4650's BreakdownItem.Value (chris 2026-08-31 04:18,
+// Option B). Hand-edited, NOT regenerated from
+// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
+// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+// overwritten wholesale by the next `gqlgen generate` -- the durable
+// copy of why this diverges from the schema, the reachability
+// mechanism, and the CHAOS-4658 hazard this creates lives in
+// timeseries.go's ExecuteTimeseries doc comment (and, for the sibling
+// field, breakdown.go's breakdownRow.Value doc comment). Read those,
+// not this.
 type TimeseriesBucket struct {
 	Date  graphqldate.Date `json:"date"`
-	Value float64          `json:"value"`
+	Value *float64         `json:"value"`
 }
 
 type TimeseriesRequestInput struct {

@@ -148,7 +148,10 @@ func TestResolve_Investment_ResolvesEndToEnd(t *testing.T) {
 	if len(result.Timeseries) != 1 || result.Timeseries[0].DimensionValue != "repo-a" {
 		t.Fatalf("unexpected timeseries result: %+v", result.Timeseries)
 	}
-	if len(result.Timeseries[0].Buckets) != 1 || result.Timeseries[0].Buckets[0].Value != 3.0 {
+	// CHAOS-4657: TimeseriesBucket.Value is *float64, not float64 --
+	// dereference for the populated-value comparison.
+	bucketValue := result.Timeseries[0].Buckets[0].Value
+	if len(result.Timeseries[0].Buckets) != 1 || bucketValue == nil || *bucketValue != 3.0 {
 		t.Fatalf("unexpected bucket: %+v", result.Timeseries[0].Buckets)
 	}
 }

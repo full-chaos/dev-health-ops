@@ -268,6 +268,59 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // buckets appended in row-arrival order (the SQL's own `ORDER BY bucket
 // ASC` already sorts them; Python does not re-sort after grouping,
 // neither does this).
+//
+// The value column is scanned into *float64, not float64 -- CHAOS-4657
+// (chris 2026-08-31 04:18, Option B), the SAME shape and SAME product
+// ruling CHAOS-4650 applied to breakdown.go's breakdownRow.Value; see
+// that doc comment for the full mechanism writeup (verified against
+// pinned clickhouse-go v2.47.0: Nullable.ScanRow only recognises **T
+// for its NULL branch -- a bare *float64 destination never observes the
+// NULL at all and silently keeps its zero-initialised 0.0). CompileTimeseries
+// wraps every measure expression in toFloat64(...), which does NOT
+// collapse a Nullable(Float64) source -- an all-NULL bucket (a
+// dimension_value whose category-2 AT-RISK measure has no rows, or
+// whose rows are all NULL, in that date bucket) still reaches the scan
+// as SQL NULL. Scanning into *float64 preserves that as a nil pointer,
+// and TimeseriesBucket.Value (models_gen.go, hand-edited to *float64
+// the same way) carries it through so a nil marshals as a genuine JSON
+// null the UI's empty state can render, instead of the literal 0 an
+// "avg() over nothing" cannot be told apart from.
+//
+// EXPECTED DIVERGENCE, class = product-decision (CHAOS-4650 ruling,
+// applied here verbatim): Python's timeseries builder collapses the
+// same all-NULL case to 0.0 unchanged (root AGENTS.md GO-ONLY rule bars
+// touching the Python GraphQL layer for this). Do not resolve this by
+// reverting Go to Python's 0.0 collapse.
+//
+// REACHABILITY / CHAOS-4658 hazard, checked by mechanism, NOT assumed
+// identical to breakdown.go's (2026-08-31 lane-4657 sweep): the batch
+// `analytics.timeseries` field this function serves is NOT selected by
+// EITHER investmentBreakdown or investmentFull (query_route.go's
+// registeredInvestmentBreakdownDocument/registeredInvestmentFullDocument
+// select only breakdowns/evidenceQuality*/sankey -- confirmed by
+// reading both document literals). Its REAL web consumers are four
+// DIFFERENT operations -- FeatureFlagTimeseries
+// (web/src/lib/feature-flags/queries.ts) and TestOpsPipeline/
+// TestOpsTest/TestOpsCoverage (web/src/lib/testops/queries.ts), all of
+// which select `analytics.timeseries.buckets.value` and feed it straight
+// into unguarded arithmetic (web/src/lib/feature-flags/fetchers.ts's
+// mergeToSpark: `values.reduce((s, v) => s + v, 0) / values.length)` --
+// no empty-state branch for a null bucket; JS's `+` coerces a null
+// operand to 0, so a null would be silently averaged in as a measured
+// zero, reproducing THIS SAME defect one layer up in the web client
+// were it ever null on the wire). NONE of these four operations appear
+// in query_route.go's digestByOperation map at all -- confirmed by grep
+// -- so they are not merely gated OFF by a missing go_api_routing_state
+// row (breakdown's situation): they have no registered document AT
+// ALL, which is a SEPARATE, EARLIER gate than PostgresSwitch.Enabled().
+// Registering one of these four documents is therefore its own
+// deliberate future step, prior to and independent of any routing-state
+// row -- timeseries's blast radius today is narrower than breakdown's,
+// not identical to it. Whoever takes that registration step MUST widen
+// the SDL's TimeseriesBucket.value (and BreakdownItem.value) to `Float`
+// in the SAME change, together with the Python Strawberry counterparts,
+// AND give the web client's mergeToSpark (or equivalent) a real
+// null-handling branch first -- see CHAOS-4658.
 func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string) ([]model.TimeseriesResult, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {
@@ -284,7 +337,7 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 		// failed. Precedent: reviewedges.go:152.
 		var bucketDay time.Time
 		var dimValue string
-		var value float64
+		var value *float64 // nullable scan destination -- see this func's doc comment (CHAOS-4657)
 		if scanErr := rows.Scan(&bucketDay, &dimValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
 		}

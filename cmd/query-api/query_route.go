@@ -879,17 +879,54 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if err := chClient.Ping(ctx); err != nil {
-			return fmt.Errorf("clickhouse: %w", err)
+			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
 		}
 		if err := pgPool.Ping(ctx); err != nil {
-			return fmt.Errorf("registry postgres: %w", err)
+			return &readyzDependencyError{Class: readyzClassPostgres, Cause: err}
 		}
 		if err := verifier.CheckJWKS(); err != nil {
-			return fmt.Errorf("jwks: %w", err)
+			return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
 		}
 		return nil
 	}
 }
+
+// The three dependency classes readinessCheck can fail on. These are the
+// ONLY strings readyzHandler (main.go) is ever allowed to put in a
+// /readyz response body for an unhealthy check -- see
+// readyzDependencyError's doc comment for why.
+const (
+	readyzClassClickHouse = "clickhouse"
+	readyzClassPostgres   = "postgres"
+	readyzClassJWKS       = "jwks"
+)
+
+// readyzDependencyError names WHICH of /query's three live dependencies
+// (ClickHouse, the registry Postgres pool, or the envelope JWKS) failed a
+// readiness check, while keeping the underlying error -- which can carry
+// a ClickHouse/Postgres host:port (pgx and clickhouse-go dial errors) or
+// a filesystem path (principal.Verifier.CheckJWKS's errors name
+// GO_API_ENVELOPE_JWKS_PATH directly) -- separate from that class name.
+//
+// CHAOS-4724: /readyz is UNAUTHENTICATED. Before this type existed,
+// readyzHandler wrote err.Error() straight into the response body, so
+// whatever the wrapped dependency error rendered (a Postgres host:port, a
+// JWKS file path) reached any unauthenticated caller. Cause is for the
+// log line readyzHandler emits on every failure (the operator-diagnosable
+// detail); Class is the only part of this error that is safe to also put
+// in the response body a caller outside the trust boundary receives.
+// Error() still renders the full "<class>: <cause>" text some other
+// caller might reasonably want (e.g. a future internal-only diagnostic
+// surface) -- it is readyzHandler's choice to use Class alone for the
+// body, not a property of this type -- and Unwrap exposes Cause so
+// errors.Is/As still see through to it.
+type readyzDependencyError struct {
+	Class string
+	Cause error
+}
+
+func (e *readyzDependencyError) Error() string { return e.Class + ": " + e.Cause.Error() }
+func (e *readyzDependencyError) Unwrap() error { return e.Cause }
 
 // newQueryHandler wires the routeswitch.Mux + registry-backed
 // PostgresSwitch + gqlgen handler pipeline over ALREADY-CONSTRUCTED

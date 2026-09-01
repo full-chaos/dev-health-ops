@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -74,8 +73,14 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz = %d, want 503 -- the registry Postgres this instance depends on was never reachable (body %q)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "registry postgres") {
-		t.Fatalf("/readyz 503 body %q does not name the registry postgres dependency", rec.Body.String())
+	// CHAOS-4724: the body now names only the dependency CLASS
+	// ("postgres"), not the full "registry postgres: dial tcp ..." error
+	// text readinessCheck's wrapped error carries -- that detail (a real
+	// host:port here) goes to the log line only. See
+	// TestReadyzHandler_PinnedResponseBodies (main_test.go) for the exact
+	// body this pins at the handler-logic level.
+	if got := rec.Body.String(); got != "not ready: postgres" {
+		t.Fatalf("/readyz 503 body = %q, want exactly %q", got, "not ready: postgres")
 	}
 }
 
@@ -160,8 +165,10 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("/readyz = %d, want 503 once ClickHouse is unreachable (body %q)", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), "clickhouse") {
-			t.Fatalf("/readyz 503 body %q does not name the clickhouse dependency", rec.Body.String())
+		// CHAOS-4724: exact class-only body, same reasoning as the
+		// Postgres case above.
+		if got := rec.Body.String(); got != "not ready: clickhouse" {
+			t.Fatalf("/readyz 503 body = %q, want exactly %q", got, "not ready: clickhouse")
 		}
 	})
 }

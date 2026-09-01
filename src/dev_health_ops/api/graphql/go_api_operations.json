@@ -1,0 +1,50 @@
+[
+  {
+    "operation": "cognitiveLoad",
+    "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d"
+  },
+  {
+    "operation": "complexityTimeseries",
+    "digest": "c74c904d99fe75a770cdacd5371112b46d9c2dcc0d8aef3dd2da108415c4aaf7"
+  },
+  {
+    "operation": "featureFlags",
+    "digest": "06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208"
+  },
+  {
+    "operation": "flowMatrix",
+    "digest": "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2"
+  },
+  {
+    "operation": "hotspots",
+    "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781"
+  },
+  {
+    "operation": "investmentBreakdown",
+    "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501"
+  },
+  {
+    "operation": "investmentFull",
+    "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e"
+  },
+  {
+    "operation": "reviewEdges",
+    "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+  },
+  {
+    "operation": "workGraphArtifacts",
+    "digest": "43bec17bb952ded61589e1a271a63030cb66577911047afed8d6d58be97131b0"
+  },
+  {
+    "operation": "workGraphEdges",
+    "digest": "42839ae99e07329399e3522607463e12e5e8a53267578ea80a1d6c6c518a43e0"
+  },
+  {
+    "operation": "workGraphFlow",
+    "digest": "99b921280c0e40d6fe3484ee522c13bc025e7bc64604c2e9d615160e80ae1b3d"
+  }
+]

@@ -8,9 +8,9 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
-from strawberry.fastapi import GraphQLRouter
 
 from .context import GraphQLContext, build_context
+from .go_api_dispatcher import GoApiDispatchRouter
 from .persisted import get_schema_version
 from .schema import schema
 from .security import is_graphql_ide_enabled
@@ -159,7 +159,7 @@ async def get_context(request: Request) -> GraphQLContext:
 
 def create_graphql_app(
     db_url: str | None = None,
-) -> GraphQLRouter[GraphQLContext, None]:
+) -> GoApiDispatchRouter[GraphQLContext, None]:
     """
     Create the GraphQL router for the analytics API.
 
@@ -167,7 +167,12 @@ def create_graphql_app(
         db_url: Optional database URL override.
 
     Returns:
-        Strawberry GraphQL router to mount in FastAPI.
+        A :class:`GoApiDispatchRouter` (CHAOS-4697) mounted in FastAPI --
+        a :class:`~strawberry.fastapi.GraphQLRouter` subclass that
+        dispatches Go-eligible, Go-enabled operations to query-api before
+        falling back to strawberry's own execution. Unconfigured
+        (``GO_API_QUERY_API_URL``/``GO_API_SCHEMA_DIGEST`` unset), it
+        behaves identically to the plain ``GraphQLRouter`` it replaces.
     """
 
     async def context_getter(request: Request) -> GraphQLContext:
@@ -177,7 +182,7 @@ def create_graphql_app(
             context.db_url = db_url
         return context
 
-    router = GraphQLRouter[GraphQLContext, None](
+    router = GoApiDispatchRouter[GraphQLContext, None](
         schema=schema,
         context_getter=context_getter,
         path="",

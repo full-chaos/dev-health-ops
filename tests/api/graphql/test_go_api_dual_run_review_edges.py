@@ -62,6 +62,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 
 # Plain module import, not `from . import ...` -- this directory has no
 # __init__.py; see test_go_api_dual_run_feature_flags.py's identical import.
@@ -113,20 +115,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # from the real client file, not from the SDL or an inventory doc, or a
 # wrong-name digest can match on BOTH sides here while a real web request
 # 404s against the route.
-REVIEW_EDGES_DOCUMENT = """query ReviewEdges($input: ReviewEdgesInput!) {
-  reviewEdges(input: $input) {
-    edges {
-      reviewer
-      author
-      reviewsCount
-      day
-      repoId
-    }
-    totalCount
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:wave2-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "wave2-dual-run-test-build"
 
 
@@ -263,7 +252,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="reviewEdges",
                 candidate_build=CANDIDATE_BUILD,
@@ -271,7 +260,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation="reviewEdges",
                     current_candidate_build=CANDIDATE_BUILD,
@@ -310,7 +299,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="reviewEdges",
                 candidate_build=CANDIDATE_BUILD,
@@ -391,7 +380,9 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
-    body = json.dumps({"query": REVIEW_EDGES_DOCUMENT, "variables": variables}).encode()
+    body = json.dumps(
+        {"query": registered_document("reviewEdges"), "variables": variables}
+    ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
         data=body,
@@ -449,7 +440,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -485,6 +476,13 @@ def _review_edges_python_response_snapshot(
     on-the-wire GraphQL response envelope the Go HTTP endpoint produces --
     the comparator compares RESPONSES, not Python dataclasses vs Go
     structs.
+
+    __typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("reviewEdges") now selects __typename on every non-root selection
+    set. Type names from contracts/graphql/v1/schema.graphql
+    (ReviewEdgesResult, ReviewEdgeRow).
     """
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -496,10 +494,12 @@ def _review_edges_python_response_snapshot(
                         "reviewsCount": e.reviews_count,
                         "day": e.day.isoformat(),
                         "repoId": e.repo_id,
+                        "__typename": "ReviewEdgeRow",
                     }
                     for e in result.edges
                 ],
                 "totalCount": result.total_count,
+                "__typename": "ReviewEdgesResult",
             }
         },
         data_present=True,
@@ -588,7 +588,7 @@ async def test_dual_run_happy_path_matches_directed_edges(
     jwks_file = jwks_path / "jwks.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(REVIEW_EDGES_DOCUMENT)
+    document_digest = _document_digest(registered_document("reviewEdges"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -744,7 +744,7 @@ async def test_dual_run_tied_reviews_count_at_limit_boundary_matches(
     jwks_file = jwks_path / "jwks-tie-boundary.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(REVIEW_EDGES_DOCUMENT)
+    document_digest = _document_digest(registered_document("reviewEdges"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -887,7 +887,7 @@ async def test_dual_run_missing_table_errors_on_both_sides_no_degraded_path(
     jwks_file = jwks_path / "jwks-missing-table.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(REVIEW_EDGES_DOCUMENT)
+    document_digest = _document_digest(registered_document("reviewEdges"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(

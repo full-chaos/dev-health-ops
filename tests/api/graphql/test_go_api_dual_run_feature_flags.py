@@ -48,6 +48,8 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 
 # Plain module import, not `from . import ...` -- this directory has no
 # __init__.py, so pytest's rootdir-relative sys.path insertion is how
@@ -94,23 +96,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # would have 404'd -- matching digests on two WRONG copies proves nothing
 # about matching a real one. Keep this constant's text sourced from the
 # real client file, not just consistent with the Go constant.
-FEATURE_FLAGS_DOCUMENT = """query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
-  featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
-    flags {
-      flagId
-      flagKey
-      provider
-      projectKey
-      flagType
-      createdAt
-      archivedAt
-    }
-    totalCount
-    degradedReason
-  }
-}"""
-
-SCHEMA_DIGEST = "sha256:wave1-dual-run-test-schema-digest"
 
 
 def _free_port() -> int:
@@ -267,7 +252,11 @@ def _set_routing_mode(dsn: str, mode: str) -> None:
                 ON CONFLICT (schema_digest, document_digest, selected_operation)
                 DO UPDATE SET mode = EXCLUDED.mode
                 """,
-                (SCHEMA_DIGEST, _document_digest(FEATURE_FLAGS_DOCUMENT), mode),
+                (
+                    producer_schema_digest(),
+                    _document_digest(registered_document("featureFlags")),
+                    mode,
+                ),
             )
     finally:
         engine.dispose()
@@ -332,7 +321,7 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
     body = json.dumps(
-        {"query": FEATURE_FLAGS_DOCUMENT, "variables": variables}
+        {"query": registered_document("featureFlags"), "variables": variables}
     ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
@@ -400,7 +389,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -436,6 +425,18 @@ def _feature_flags_python_response_snapshot(
     on-the-wire GraphQL response envelope the Go HTTP endpoint produces --
     the comparator compares RESPONSES, not Python dataclasses vs Go
     structs.
+
+    __typename fields (CHAOS-4696 PR2, EXECUTED regression found running
+    this test against a real spawned query-api post-PR1-merge): PR1
+    regenerated registered_document("featureFlags") to the TRUE wire form,
+    which -- like every real urql request -- SELECTS __typename on every
+    non-root selection set (cacheExchange's real behavior). Go's gqlgen
+    server correctly resolves and returns it; this hand-built baseline
+    previously did not include it at all, so the comparator reported a
+    permanent, spurious mismatch on every run regardless of whether the
+    underlying data actually agreed. Type names taken verbatim from
+    contracts/graphql/v1/schema.graphql (FeatureFlagRegistryResult,
+    FeatureFlagItem).
     """
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -449,11 +450,13 @@ def _feature_flags_python_response_snapshot(
                         "flagType": f.flag_type,
                         "createdAt": f.created_at,
                         "archivedAt": f.archived_at,
+                        "__typename": "FeatureFlagItem",
                     }
                     for f in result.flags
                 ],
                 "totalCount": result.total_count,
                 "degradedReason": result.degraded_reason,
+                "__typename": "FeatureFlagRegistryResult",
             }
         },
         data_present=True,

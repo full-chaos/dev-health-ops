@@ -67,6 +67,8 @@ from typing import cast
 
 import pytest
 import sqlalchemy as sa
+from _go_registered_documents import registered_document
+from _go_schema_digest import producer_schema_digest
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine, make_url
@@ -116,23 +118,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # COGNITIVE_LOAD_QUERY, operation name "CognitiveLoad"). Sourced from the
 # real client file directly (Wave-1 codex-round-3 lesson), not
 # reconstructed from the SDL or an inventory doc.
-COGNITIVE_LOAD_DOCUMENT = """query CognitiveLoad($input: CognitiveLoadInput!) {
-  cognitiveLoad(input: $input) {
-    orgId
-    teamId
-    totalDays
-    signals {
-      day
-      prInterruptionLoad
-      contextSpreadCount
-      reviewRequestLoad
-      afterHoursCommitRatio
-      weekendCommitRatio
-    }
-  }
-}"""
 
-SCHEMA_DIGEST = "sha256:wave3-cognitive-load-dual-run-test-schema-digest"
 CANDIDATE_BUILD = "wave3-cognitive-load-dual-run-test-build"
 
 
@@ -246,7 +232,7 @@ async def _seed_candidate_and_enable_canary(
         async with factory() as session:
             await register_candidate_build(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="cognitiveLoad",
                 candidate_build=CANDIDATE_BUILD,
@@ -254,7 +240,7 @@ async def _seed_candidate_and_enable_canary(
             await session.execute(
                 pg_insert(RoutingState)
                 .values(
-                    schema_digest=SCHEMA_DIGEST,
+                    schema_digest=producer_schema_digest(),
                     document_digest=document_digest,
                     selected_operation="cognitiveLoad",
                     current_candidate_build=CANDIDATE_BUILD,
@@ -289,7 +275,7 @@ async def _record_dual_run_proof(
         async with factory() as session:
             await record_proof_run(
                 session,
-                schema_digest=SCHEMA_DIGEST,
+                schema_digest=producer_schema_digest(),
                 document_digest=document_digest,
                 selected_operation="cognitiveLoad",
                 candidate_build=CANDIDATE_BUILD,
@@ -367,7 +353,7 @@ def _wait_for_ready(base_url: str, timeout_s: float = 10.0) -> None:
 
 def _post_graphql(base_url: str, token: str, variables: dict) -> dict:
     body = json.dumps(
-        {"query": COGNITIVE_LOAD_DOCUMENT, "variables": variables}
+        {"query": registered_document("cognitiveLoad"), "variables": variables}
     ).encode()
     req = urllib.request.Request(
         f"{base_url}/query",
@@ -424,7 +410,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": SCHEMA_DIGEST,
+        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],
@@ -460,6 +446,13 @@ def _cognitive_load_python_response_snapshot(
     on-the-wire GraphQL response envelope the Go HTTP endpoint produces --
     the comparator compares RESPONSES, not Python dataclasses vs Go
     structs.
+
+    __typename fields (CHAOS-4696 PR2, same fix as
+    test_go_api_dual_run_feature_flags.py's snapshot builder -- see that
+    file's comment for the full explanation): registered_document
+    ("cognitiveLoad") now selects __typename on every non-root selection
+    set. Type names from contracts/graphql/v1/schema.graphql
+    (CognitiveLoadResult, CognitiveLoadSignal).
     """
     return go_api_comparator.ResponseSnapshot(
         data={
@@ -475,9 +468,11 @@ def _cognitive_load_python_response_snapshot(
                         "reviewRequestLoad": s.review_request_load,
                         "afterHoursCommitRatio": s.after_hours_commit_ratio,
                         "weekendCommitRatio": s.weekend_commit_ratio,
+                        "__typename": "CognitiveLoadSignal",
                     }
                     for s in result.signals
                 ],
+                "__typename": "CognitiveLoadResult",
             }
         },
         data_present=True,
@@ -623,7 +618,7 @@ async def test_dual_run_org_wide_merges_user_and_team_metrics(
     jwks_file = jwks_path / "jwks-orgwide.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    document_digest = _document_digest(registered_document("cognitiveLoad"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -732,7 +727,7 @@ async def test_dual_run_single_team_reads_team_cognitive_load_daily(
     jwks_file = jwks_path / "jwks-singleteam.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    document_digest = _document_digest(registered_document("cognitiveLoad"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -900,7 +895,7 @@ async def test_dual_run_team_repo_combined_ownership_gated_path(
     jwks_file = jwks_path / "jwks-combined.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    document_digest = _document_digest(registered_document("cognitiveLoad"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1013,7 +1008,7 @@ async def test_dual_run_team_repo_combined_not_owned_returns_empty(
     jwks_file = jwks_path / "jwks-notowned.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    document_digest = _document_digest(registered_document("cognitiveLoad"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(
@@ -1116,7 +1111,7 @@ async def test_dual_run_missing_table_errors_on_both_sides_no_degraded_path(
     jwks_file = jwks_path / "jwks-missing-table.json"
     jwks_file.write_text(json.dumps(jwks))
 
-    document_digest = _document_digest(COGNITIVE_LOAD_DOCUMENT)
+    document_digest = _document_digest(registered_document("cognitiveLoad"))
     await _seed_candidate_and_enable_canary(registry_postgres["async"], document_digest)
 
     server = _start_go_server(

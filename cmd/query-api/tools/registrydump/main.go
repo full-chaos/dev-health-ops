@@ -43,6 +43,7 @@ import (
 	"strconv"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 )
 
 // registeredDocument is one row of the enumeration this tool emits: the
@@ -70,10 +71,25 @@ type registeredDocument struct {
 var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
 
 func main() {
-	filePath := flag.String("file", "", "path to cmd/query-api/query_route.go (required)")
+	filePath := flag.String("file", "", "path to cmd/query-api/query_route.go (required unless -schema-digest)")
+	schemaDigest := flag.Bool("schema-digest", false, "print the canonical GO_API_SCHEMA_DIGEST value and exit (does not need -file)")
 	flag.Parse()
+
+	// CHAOS-4696 PR2: -schema-digest is the ONE producer of
+	// GO_API_SCHEMA_DIGEST -- ops CI, the harnesses, and an operator
+	// setting this env var by hand should all run THIS, never hand-type
+	// or copy a value from somewhere else. It calls the exact same
+	// digest.Schema(schemav1.SDL) a running query-api process verifies
+	// against at startup (query_route.go's verifySchemaDigest), so a
+	// value this prints can never disagree with what the binary actually
+	// requires.
+	if *schemaDigest {
+		fmt.Println(digest.Schema(schemav1.SDL))
+		return
+	}
+
 	if *filePath == "" {
-		fmt.Fprintln(os.Stderr, "registrydump: -file is required")
+		fmt.Fprintln(os.Stderr, "registrydump: -file is required (or pass -schema-digest)")
 		os.Exit(2)
 	}
 

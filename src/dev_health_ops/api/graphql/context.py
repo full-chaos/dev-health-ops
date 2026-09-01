@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from dev_health_ops.api.dev.metrics.service import MetricRequestCache
     from dev_health_ops.api.dev.scope_service import ScopeRequestCache
     from dev_health_ops.api.services.auth import AuthenticatedUser
+    from dev_health_ops.licensing.types import LicenseTier
 
     from .loaders import (
         DataLoaders,
@@ -42,6 +43,15 @@ class GraphQLContext(BaseContext):
         user: Authenticated user from JWT (None if unauthenticated).
         dev_scope_cache: Bounded request-local Ask Dev scope cache.
         dev_metric_cache: Bounded request-local Ask Dev metric cache.
+        tier: Resolved license tier for org_id (CHAOS-4697 prerequisite --
+            an effective-principal-envelope input; unused by any resolver
+            today, populated for the future edge dispatcher to read). None
+            when it was not resolved this request (unauthenticated, org-less
+            superuser context, or a best-effort lookup that failed).
+        licensed_features: Feature keys org_id currently has access to
+            (CHAOS-4697 prerequisite, same status as ``tier``). None means
+            "not resolved this request" -- NEVER conflate with an empty list,
+            which means "resolved: this org has no licensed features".
     """
 
     org_id: str
@@ -58,6 +68,8 @@ class GraphQLContext(BaseContext):
     user: AuthenticatedUser | None = None
     dev_scope_cache: ScopeRequestCache | None = None
     dev_metric_cache: MetricRequestCache | None = None
+    tier: LicenseTier | None = None
+    licensed_features: list[str] | None = None
 
     def __post_init__(self) -> None:
         # Platform/super admins can reach cross-org admin queries without
@@ -76,6 +88,12 @@ class GraphQLContext(BaseContext):
         # Never retain tenant- or permission-keyed request-local results.
         self.dev_scope_cache = None
         self.dev_metric_cache = None
+        # tier/licensed_features were resolved for the ORIGINAL org_id;
+        # after a rebind they would silently describe the wrong tenant.
+        # Unused today (CHAOS-4697 prerequisite), but a future consumer
+        # must never read a cross-org value here.
+        self.tier = None
+        self.licensed_features = None
         if self.client is None:
             return
         from .loaders import (
@@ -102,6 +120,8 @@ def build_context(
     client: Any = None,
     cache: Any = None,
     user: AuthenticatedUser | None = None,
+    tier: LicenseTier | None = None,
+    licensed_features: list[str] | None = None,
 ) -> GraphQLContext:
     """
     Factory function to build a GraphQL context with DataLoaders.
@@ -113,6 +133,11 @@ def build_context(
         client: Optional pre-initialized DB client.
         cache: Optional cache backend for cross-request caching.
         user: Optional authenticated user from JWT.
+        tier: Optional pre-resolved license tier (CHAOS-4697 prerequisite;
+            see ``services.licensing.resolve_org_tier_async``).
+        licensed_features: Optional pre-resolved licensed feature keys
+            (CHAOS-4697 prerequisite; see
+            ``services.licensing.resolve_licensed_features_async``).
 
     Returns:
         GraphQLContext instance with initialized DataLoaders.
@@ -127,6 +152,8 @@ def build_context(
         client=client,
         cache=cache,
         user=user,
+        tier=tier,
+        licensed_features=licensed_features,
     )
 
     # Initialize DataLoaders if client is available

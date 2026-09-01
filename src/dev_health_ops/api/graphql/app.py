@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+import uuid
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 from strawberry.fastapi import GraphQLRouter
@@ -13,6 +14,9 @@ from .context import GraphQLContext, build_context
 from .persisted import get_schema_version
 from .schema import schema
 from .security import is_graphql_ide_enabled
+
+if TYPE_CHECKING:
+    from dev_health_ops.licensing.types import LicenseTier
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +96,42 @@ async def get_context(request: Request) -> GraphQLContext:
     if not org_id:
         org_id = request.query_params.get("org_id", "") or ""
 
+    # --- Resolve envelope inputs (CHAOS-4697 prerequisite) --------------------
+    # tier and licensed_features are the two inputs
+    # `issue_effective_principal_envelope` needs that nothing at this seam
+    # produces today. Nothing reads them yet -- no dispatcher exists (that is
+    # CHAOS-4697 itself) -- so a failure here MUST stay best-effort and never
+    # break an otherwise-healthy GraphQL request. Distinguishing "resolved
+    # empty" from "not resolved" is still preserved: both fields stay None on
+    # any failure, they are never coerced to `[]`/community.
+    tier: LicenseTier | None = None
+    licensed_features: list[str] | None = None
+    if user is not None and org_id:
+        try:
+            org_uuid = uuid.UUID(org_id)
+        except ValueError:
+            org_uuid = None
+        if org_uuid is not None:
+            try:
+                from dev_health_ops.api.services.licensing import (
+                    resolve_licensed_features_async,
+                    resolve_org_tier_async,
+                )
+
+                async with get_postgres_session() as envelope_db:
+                    tier = await resolve_org_tier_async(envelope_db, org_uuid)
+                    licensed_features = await resolve_licensed_features_async(
+                        envelope_db, org_uuid
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to resolve tier/licensed_features for org_id=%s: %s",
+                    org_id,
+                    e,
+                )
+                tier = None
+                licensed_features = None
+
     # --- Build context -------------------------------------------------------
     client = None
     try:
@@ -111,6 +151,8 @@ async def get_context(request: Request) -> GraphQLContext:
         client=client,
         cache=cache,
         user=user,
+        tier=tier,
+        licensed_features=licensed_features,
     )
     return context
 

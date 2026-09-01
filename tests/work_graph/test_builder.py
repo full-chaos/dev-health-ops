@@ -1460,3 +1460,261 @@ class TestFlagGuardsEdges:
         count, sink = self._run(flag_rows, wi_rows)
         assert count == 0
         sink.write_work_graph_edges.assert_not_called()
+
+
+class TestDependencyEdgeConfidence:
+    """CHAOS-4752/CHAOS-4758 — associative dependency edges rank BELOW delivery.
+
+    Every ``work_item_dependencies``-derived edge used to be written at 1.0, the
+    same tier as a PR's ``implements`` edge. The CHAOS-2775 oversized-component
+    split only drops edges strictly below a component's max confidence, so a
+    graph of all-1.0 edges left it nothing to drop and it fell through to
+    ``_remove_hubs``, which DELETES nodes from every output work unit.
+    """
+
+    @staticmethod
+    def _build_one(relationship_type: str, *, raw: str | None = None):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_projection_runs = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "linear:CHAOS-2400",
+                "target_work_item_id": "linear:CHAOS-2401",
+                "relationship_type": relationship_type,
+                "relationship_type_raw": raw or relationship_type,
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder._build_issue_issue_edges()
+            builder.close()
+        fake_sink.write_work_graph_edges.assert_called_once()
+        return fake_sink.write_work_graph_edges.call_args[0][0][0]
+
+    @pytest.mark.parametrize(
+        "relationship_type",
+        ["relates", "is_related_to", "blocks", "is_blocked_by", "duplicates"],
+    )
+    def test_associative_dependency_edges_rank_below_delivery(self, relationship_type):
+        edge = self._build_one(relationship_type)
+        # Literals, not the module constants: this exact file must run against
+        # origin/main to show the red, and the property the split depends on is
+        # "strictly below the delivery tier", not any particular value.
+        assert edge.confidence == pytest.approx(0.9)
+        assert edge.confidence < 1.0
+
+    @pytest.mark.parametrize("relationship_type", ["parent", "child"])
+    def test_hierarchy_dependency_edges_keep_the_delivery_tier(self, relationship_type):
+        # A sub-issue hierarchy is structural containment, not an associative
+        # link: grouping a parent with its children is the intended behaviour.
+        edge = self._build_one(relationship_type)
+        assert edge.confidence == pytest.approx(1.0)
+
+    def test_split_drops_associative_edges_instead_of_deleting_nodes(self):
+        """End-to-end: builder output -> build_components, no node destroyed.
+
+        A hub issue ``relates``-linked to nine issues, each implemented by its
+        own PR: 19 nodes against a cap of 5. With every edge at 1.0 the split
+        has nothing to drop and deletes the hub -- and with it the hub issue's
+        membership of any work unit. With the associative tier the split drops
+        the nine ``relates`` edges instead and every node survives.
+        """
+        from dev_health_ops.work_graph.investment.components import (
+            ComponentBuildStats,
+            build_components,
+        )
+
+        spokes = [f"linear:CHAOS-{4300 + i}" for i in range(9)]
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_projection_runs = MagicMock()
+        fake_sink.query_dicts.return_value = [
+            {
+                "source_work_item_id": "linear:CHAOS-HUB",
+                "target_work_item_id": spoke,
+                "relationship_type": "relates",
+                "relationship_type_raw": "relates",
+                "last_synced": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+            for spoke in spokes
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder._build_issue_issue_edges()
+            builder.close()
+
+        written = fake_sink.write_work_graph_edges.call_args[0][0]
+        edges: list[dict[str, object]] = [
+            {
+                "edge_id": edge.edge_id,
+                "source_type": "issue",
+                "source_id": edge.source_id,
+                "target_type": "issue",
+                "target_id": edge.target_id,
+                "edge_type": edge.edge_type,
+                "confidence": edge.confidence,
+            }
+            for edge in written
+        ]
+        # One PR implementing each spoke, at the delivery tier -- this is what
+        # keeps the component's max confidence at 1.0 in the real graph.
+        edges += [
+            {
+                "edge_id": f"pr-edge-{i}",
+                "source_type": "pr",
+                "source_id": f"repo#pr{i}",
+                "target_type": "issue",
+                "target_id": spoke,
+                "edge_type": "implements",
+                "confidence": 1.0,
+            }
+            for i, spoke in enumerate(spokes)
+        ]
+
+        stats = ComponentBuildStats()
+        components = build_components(edges, max_component_nodes=5, stats=stats)
+
+        assert stats.oversized_components == 1
+        assert stats.dropped_nodes == 0
+        # The split binary-searches the SMALLEST droppable prefix, so the exact
+        # count is a property of the graph, not a constant -- what matters is
+        # that the edge phase did the work and the node phase never ran.
+        assert 0 < stats.dropped_edges <= len(spokes)
+        grouped = {node for nodes, _ in components for node in nodes}
+        assert ("issue", "linear:CHAOS-HUB") in grouped
+        assert len(grouped) == 1 + len(spokes) * 2
+        assert max(len(nodes) for nodes, _ in components) <= 5
+
+
+class TestDependencyConfidenceConstants:
+    """The invariant the CHAOS-2775 split relies on, pinned at the source."""
+
+    def test_associative_tier_is_strictly_below_the_delivery_tier(self):
+        from dev_health_ops.work_graph.builder import (
+            ASSOCIATIVE_DEPENDENCY_CONFIDENCE,
+            ASSOCIATIVE_DEPENDENCY_EDGE_TYPES,
+            DEPENDENCY_EDGE_DEFAULT_CONFIDENCE,
+            dependency_edge_confidence,
+        )
+        from dev_health_ops.work_graph.models import EdgeType
+
+        assert ASSOCIATIVE_DEPENDENCY_CONFIDENCE < DEPENDENCY_EDGE_DEFAULT_CONFIDENCE
+        for edge_type in ASSOCIATIVE_DEPENDENCY_EDGE_TYPES:
+            assert dependency_edge_confidence(edge_type) == pytest.approx(
+                ASSOCIATIVE_DEPENDENCY_CONFIDENCE
+            )
+        for edge_type in (EdgeType.PARENT_OF, EdgeType.CHILD_OF, EdgeType.IMPLEMENTS):
+            assert dependency_edge_confidence(edge_type) == pytest.approx(
+                DEPENDENCY_EDGE_DEFAULT_CONFIDENCE
+            )
+
+
+class TestDependencyConfidenceBackfill:
+    """CHAOS-4752 — the stored-row half of the confidence policy."""
+
+    @staticmethod
+    def _builder(fake_sink, *, org_id: str):
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id=org_id)
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            return WorkGraphBuilder(config)
+
+    def test_refuses_without_an_org_scope(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        builder = self._builder(fake_sink, org_id="")
+        with pytest.raises(RuntimeError, match="org scope"):
+            builder.backfill_dependency_edge_confidence()
+        fake_sink.client.command.assert_not_called()
+
+    def test_applies_a_bounded_monotone_mutation(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.return_value = [
+            {"edge_type": "blocks", "rows": 632},
+            {"edge_type": "relates", "rows": 2750},
+        ]
+        builder = self._builder(fake_sink, org_id="org-a")
+
+        stats = builder.backfill_dependency_edge_confidence()
+
+        assert stats["outcome"] == "applied"
+        assert stats["rows"] == 3382
+        assert stats["rows_by_edge_type"] == {"blocks": 632, "relates": 2750}
+        fake_sink.client.command.assert_called_once()
+        sql = fake_sink.client.command.call_args[0][0]
+        parameters = fake_sink.client.command.call_args.kwargs["parameters"]
+        assert "ALTER TABLE work_graph_edges" in sql
+        assert "UPDATE confidence = {target:Float32}" in sql
+        # Monotone: only rows ABOVE the target are touched, so a second run is
+        # a no-op and the value is never raised.
+        assert "confidence > {target:Float32}" in sql
+        # Org-scoped, and restricted to the rows the builder itself writes.
+        assert "org_id = {org_id:String}" in sql
+        assert "provenance = 'native'" in sql
+        assert "source_type = 'issue'" in sql
+        assert "target_type = 'issue'" in sql
+        assert "mutations_sync=2" in sql
+        assert parameters["org_id"] == "org-a"
+        assert parameters["target"] == 0.9
+        assert set(parameters["edge_types"]) == {
+            "relates",
+            "is_related_to",
+            "blocks",
+            "is_blocked_by",
+            "duplicates",
+            "is_duplicate_of",
+        }
+
+    def test_is_idempotent_when_nothing_is_left_to_lower(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.return_value = []
+        builder = self._builder(fake_sink, org_id="org-a")
+
+        stats = builder.backfill_dependency_edge_confidence()
+
+        assert stats["outcome"] == "noop"
+        assert stats["rows"] == 0
+        fake_sink.client.command.assert_not_called()
+
+    def test_dry_run_reports_without_mutating(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.return_value = [{"edge_type": "relates", "rows": 7}]
+        builder = self._builder(fake_sink, org_id="org-a")
+
+        stats = builder.backfill_dependency_edge_confidence(dry_run=True)
+
+        assert stats["outcome"] == "dry_run"
+        assert stats["rows"] == 7
+        fake_sink.client.command.assert_not_called()
+
+    def test_counts_rows_and_runs_in_telemetry(self):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.query_dicts.return_value = [{"edge_type": "relates", "rows": 3}]
+        builder = self._builder(fake_sink, org_id="org-a")
+
+        with patch(
+            "dev_health_ops.work_graph.builder."
+            "record_work_graph_dependency_confidence_backfill"
+        ) as record:
+            builder.backfill_dependency_edge_confidence()
+
+        record.assert_called_once_with(
+            rows_by_edge_type={"relates": 3}, outcome="applied"
+        )

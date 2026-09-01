@@ -53,6 +53,47 @@ def _llm_concurrency(value: object | None = None) -> int:
     return max(1, concurrency)
 
 
+def run_work_graph_backfill_edge_confidence(ns: argparse.Namespace) -> int:
+    """Lower already-stored associative dependency edges to their new tier.
+
+    CHAOS-4752/CHAOS-4758. The confidence policy in ``builder.py`` governs edges
+    the builder WRITES; this rewrites the rows already in ``work_graph_edges``
+    so the oversized-component split stops falling through to node deletion on
+    historical data. Idempotent -- rerunning reports ``noop``.
+
+    ORDERING IS LOAD-BEARING: run this BEFORE any work-unit recompute
+    (``dev-hops investment materialize``), or the recompute reproduces the same
+    truncated components from the same 1.0-confidence wall.
+    """
+    org_raw = getattr(ns, "org", None)
+    org_id = (str(org_raw).strip() if org_raw is not None else "") or ""
+    if not org_id:
+        logging.error(
+            "FAIL: --org is required for the dependency-confidence backfill; "
+            "refusing to mutate every tenant's edges at once."
+        )
+        return 2
+
+    config = BuildConfig(dsn=ns.db, org_id=org_id)
+    try:
+        builder = WorkGraphBuilder(config)
+    except ValueError as exc:
+        parser = getattr(ns, "_leaf_parser", None)
+        if parser is not None:
+            parser.error(str(exc))
+        logging.error("Dependency-confidence backfill failed: %s", exc)
+        return 2
+    try:
+        stats = builder.backfill_dependency_edge_confidence(
+            dry_run=bool(getattr(ns, "dry_run", False))
+        )
+    except Exception as exc:  # pragma: no cover - surfaced to the operator
+        logging.error("Dependency-confidence backfill failed: %s", exc)
+        return 1
+    logging.info("Dependency-confidence backfill result: %s", stats)
+    return 0
+
+
 def run_work_graph_build(ns: argparse.Namespace) -> int:
     # Parse dates
     from_date = None
@@ -115,6 +156,29 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
         return 2
     try:
         result = builder.build()
+
+        # CHAOS-4752/CHAOS-4758 — ORDERING IS LOAD-BEARING, so it is structural
+        # here rather than a runbook note. The build has just rewritten every
+        # edge that still has a live ``work_item_dependencies`` row at the new
+        # confidence tier; this converges the rest (rows whose dependency has
+        # since been deleted, and everything written before this policy landed).
+        # It must happen BEFORE any work-unit recompute -- post-sync fans out
+        # ``workgraph.build`` and only then ``investment.materialize``, so
+        # running it here puts it on the right side of that edge. Idempotent:
+        # once converged this is a single count() that reports ``noop``. Skipped
+        # for an unscoped rebuild, which has no tenant to mutate safely.
+        if org_id:
+            try:
+                builder.backfill_dependency_edge_confidence()
+            except Exception as exc:
+                # Advisory, not fatal: the build itself succeeded and its edges
+                # already carry the new tier. Loud, never silent.
+                logging.warning(
+                    "Dependency-confidence backfill did not run after the build "
+                    "(org_id=%s): %s",
+                    org_id,
+                    exc,
+                )
 
         total_edges = sum(result.values())
         logging.info("Work graph build complete. Total edges: %d", total_edges)
@@ -430,6 +494,26 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Perform component analysis (enabled by default).",
     )
     wg_build.set_defaults(func=run_work_graph_build)
+
+    wg_backfill = wg_sub.add_parser(
+        "backfill-edge-confidence",
+        help=(
+            "Lower stored associative dependency edges (relates/blocks/"
+            "duplicates) to their confidence tier (CHAOS-4752). Idempotent. "
+            "Run BEFORE any work-unit recompute."
+        ),
+    )
+    wg_backfill.add_argument(
+        "--db",
+        required=True,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
+    )
+    wg_backfill.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the rows that WOULD be lowered without mutating anything.",
+    )
+    wg_backfill.set_defaults(func=run_work_graph_backfill_edge_confidence)
 
     # ---- investment ----
     investment = subparsers.add_parser(

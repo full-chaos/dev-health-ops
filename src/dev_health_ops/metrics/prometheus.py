@@ -318,6 +318,26 @@ if _PROMETHEUS_AVAILABLE:
         ["scope_mode"],
     )
 
+    WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_RUNS_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_work_graph_dependency_confidence_backfill_runs_total",
+            "Runs of the associative-dependency confidence backfill (CHAOS-4752), "
+            "by outcome: applied | noop | dry_run",
+            ["outcome"],
+        )
+    )
+
+    WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_ROWS_TOTAL = (
+        _prometheus_client_module.Counter(
+            "devhealth_work_graph_dependency_confidence_backfill_rows_total",
+            "work_graph_edges rows lowered to the associative-dependency "
+            "confidence tier (CHAOS-4752), by edge_type. Counted for dry runs "
+            "too -- the label set is the same, the runs counter says whether "
+            "the mutation was executed",
+            ["edge_type", "outcome"],
+        )
+    )
+
     # ---------------------------------------------------------------------------
     # Ask Dev metrics
     # ---------------------------------------------------------------------------
@@ -872,6 +892,8 @@ else:
     GITHUB_RATE_LIMIT_REMAINING = _noop_gauge()
     INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL = _noop_counter()
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS = _noop_gauge()
+    WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_RUNS_TOTAL = _noop_counter()
+    WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_ROWS_TOTAL = _noop_counter()
     ASK_DEV_UNREGISTERED_TERMINAL_CODE_TOTAL = _noop_counter()
     ASK_DEV_TOOL_EXECUTOR_FAULT_TOTAL = _noop_counter()
     ASK_DEV_UNHANDLED_RUN_FAULT_TOTAL = _noop_counter()
@@ -1115,6 +1137,25 @@ def record_investment_membership_scope_stale(
     INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS.labels(scope_mode=scope_mode).set(
         lag_seconds
     )
+
+
+def record_work_graph_dependency_confidence_backfill(
+    *, rows_by_edge_type: dict[str, int], outcome: str
+) -> None:
+    """Observe one associative-dependency confidence backfill (CHAOS-4752).
+
+    ``outcome`` is ``applied`` (mutation executed), ``noop`` (nothing left to
+    lower -- the steady state once the backfill has run) or ``dry_run``. A
+    ``noop`` run still increments the runs counter so the backfill's absence is
+    distinguishable from its having nothing to do.
+    """
+    WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_RUNS_TOTAL.labels(outcome=outcome).inc()
+    for edge_type, rows in rows_by_edge_type.items():
+        if rows <= 0:
+            continue
+        WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_ROWS_TOTAL.labels(
+            edge_type=edge_type, outcome=outcome
+        ).inc(rows)
 
 
 def record_team_metrics_daily_repo_rows(rows: list[Any]) -> None:

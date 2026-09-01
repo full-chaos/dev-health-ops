@@ -16,6 +16,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from dev_health_ops.metrics.prometheus import (
+    record_work_graph_dependency_confidence_backfill,
+)
 from dev_health_ops.metrics.schemas import (
     FeatureFlagLinkRecord,
     WorkGraphEdgeRecord,
@@ -81,6 +84,66 @@ DEPENDENCY_TYPE_MAP: dict[str, EdgeType] = {
 FLAG_TEXT_REF_CONFIDENCE = 0.6
 BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
 _BLOCKER_TYPES = {"blocks", "blocked_by", "is_blocked_by"}
+
+# CHAOS-4752 / CHAOS-4758: per-kind confidence for the issue<->issue edges derived
+# from ``work_item_dependencies``.
+#
+# Every dependency edge used to be written at ``confidence=1.0`` -- the same value
+# a PR's ``implements`` edge carries. That made an ASSOCIATIVE tracker link
+# (``relates`` / ``blocks`` / ``duplicates``) indistinguishable from a
+# CAUSAL delivery link, and the oversized-component split in
+# ``work_graph/investment/components.py`` (CHAOS-2775) is confidence-ordered: its
+# edge-drop phase only drops edges strictly BELOW the component's max confidence.
+# With every edge tied at 1.0 that phase is near-vacuous, so the split fell
+# through to ``_remove_hubs``, which DELETES the highest-degree node outright --
+# excluding it, and its incident edges, from every output work unit. On the local
+# proof org that destroyed 242 of 4859 nodes (240 issues, 2 PRs, ~10% of the
+# graph); the PRs whose issue was deleted became one-node "PR-only" work units
+# with an empty ``issues`` evidence array and therefore no team bridge.
+#
+# Ranking associative links strictly below ``implements`` restores the edge-drop
+# phase: the split now drops the weak links that fused the component and keeps
+# every node. Measured on the local proof org (see the PR's TEST-EVIDENCE):
+# 242 -> 0 dropped nodes, 4859/4859 nodes present in the output, max component
+# 147 (cap 150 still enforced), 199/199 previously-orphaned PR units reunited
+# with their issue.
+#
+# This is a GROUPING-only downgrade: dropped edges stay in ``work_graph_edges``
+# for display and every other consumer -- the same contract as the existing
+# heuristic-provenance exclusion in ``investment/queries.py``. Node removal, by
+# contrast, is global and silent.
+#
+# NOT a fix for CHAOS-4758: any future graph whose max-confidence edges alone
+# exceed the cap still reaches ``_remove_hubs`` and still destroys nodes. This
+# removes today's trigger; the partition fix removes the mechanism.
+#
+# ``parent_of`` / ``child_of`` deliberately stay at 1.0: a sub-issue hierarchy is
+# a structural containment link, not an associative one, and grouping a parent
+# with its children is the intended behaviour.
+DEPENDENCY_EDGE_DEFAULT_CONFIDENCE = 1.0
+ASSOCIATIVE_DEPENDENCY_CONFIDENCE = 0.9
+ASSOCIATIVE_DEPENDENCY_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {
+        EdgeType.RELATES,
+        EdgeType.IS_RELATED_TO,
+        EdgeType.BLOCKS,
+        EdgeType.IS_BLOCKED_BY,
+        EdgeType.DUPLICATES,
+        EdgeType.IS_DUPLICATE_OF,
+    }
+)
+
+
+def dependency_edge_confidence(edge_type: EdgeType) -> float:
+    """Confidence for a dependency-derived issue<->issue edge.
+
+    Associative tracker links rank strictly below the delivery links
+    (``implements``/``fixes``, 1.0) so the CHAOS-2775 oversized-component split
+    can drop THEM instead of deleting nodes. See the module note above.
+    """
+    if edge_type in ASSOCIATIVE_DEPENDENCY_EDGE_TYPES:
+        return ASSOCIATIVE_DEPENDENCY_CONFIDENCE
+    return DEPENDENCY_EDGE_DEFAULT_CONFIDENCE
 
 
 def _canonical_dependency(
@@ -825,6 +888,90 @@ class WorkGraphBuilder:
             parameters=params or None,
         )
 
+    def backfill_dependency_edge_confidence(
+        self, *, dry_run: bool = False
+    ) -> dict[str, object]:
+        """Lower already-stored associative dependency edges to their new tier.
+
+        The confidence policy above only governs edges the builder WRITES. Rows
+        already in ``work_graph_edges`` keep whatever confidence they were
+        written with, and a row whose ``work_item_dependencies`` source has since
+        been deleted is never rewritten by a build at all -- so without this
+        backfill the split keeps seeing a wall of 1.0 edges and keeps deleting
+        nodes. Ordering is load-bearing: any recompute of work units must run
+        AFTER this, or it recomputes to the same wrong answer.
+
+        Idempotent and monotone: the predicate is ``confidence >
+        ASSOCIATIVE_DEPENDENCY_CONFIDENCE``, so a second run matches zero rows
+        and the value is only ever LOWERED, never raised. Org-scoped: refuses to
+        run without ``BuildConfig.org_id`` rather than mutating every tenant.
+        Restricted to ``provenance='native'`` issue<->issue rows -- exactly the
+        set ``_build_issue_issue_edges`` writes; ``explicit_text`` and
+        ``heuristic`` edges carry their own calibrated confidences and are left
+        alone.
+        """
+        if not self.config.org_id:
+            raise RuntimeError("dependency-confidence backfill requires an org scope")
+
+        edge_types = sorted(
+            edge_type.value for edge_type in ASSOCIATIVE_DEPENDENCY_EDGE_TYPES
+        )
+        parameters: dict[str, object] = {
+            "org_id": self.config.org_id,
+            "edge_types": edge_types,
+            "target": ASSOCIATIVE_DEPENDENCY_CONFIDENCE,
+        }
+        predicate = (
+            "org_id = {org_id:String} "
+            "AND source_type = 'issue' "
+            "AND target_type = 'issue' "
+            "AND provenance = 'native' "
+            "AND edge_type IN {edge_types:Array(String)} "
+            "AND confidence > {target:Float32}"
+        )
+
+        rows = self.sink.query_dicts(
+            "SELECT edge_type, count() AS rows FROM work_graph_edges "
+            f"WHERE {predicate} GROUP BY edge_type ORDER BY edge_type",
+            parameters,
+        )
+        rows_by_edge_type = {
+            str(row["edge_type"]): int(row["rows"] or 0) for row in rows
+        }
+        candidates = sum(rows_by_edge_type.values())
+
+        if dry_run:
+            outcome = "dry_run"
+        elif not candidates:
+            outcome = "noop"
+        else:
+            command = getattr(getattr(self.sink, "client", None), "command", None)
+            if not callable(command):
+                raise RuntimeError(
+                    "dependency-confidence backfill is unavailable for this sink"
+                )
+            command(
+                "ALTER TABLE work_graph_edges "
+                "UPDATE confidence = {target:Float32} "
+                f"WHERE {predicate} "
+                "SETTINGS mutations_sync=2",
+                parameters=parameters,
+            )
+            outcome = "applied"
+
+        record_work_graph_dependency_confidence_backfill(
+            rows_by_edge_type=rows_by_edge_type, outcome=outcome
+        )
+        stats: dict[str, object] = {
+            "outcome": outcome,
+            "rows": candidates,
+            "rows_by_edge_type": rows_by_edge_type,
+            "target_confidence": ASSOCIATIVE_DEPENDENCY_CONFIDENCE,
+            "org_id": self.config.org_id,
+        }
+        logger.info("Dependency-confidence backfill: %s", stats)
+        return stats
+
     def _build_issue_issue_edges(self) -> int:
         """
         Build edges from work_item_dependencies.
@@ -902,7 +1049,7 @@ class WorkGraphBuilder:
                 target_id=target_id,
                 edge_type=edge_type,
                 provenance=Provenance.NATIVE,
-                confidence=1.0,
+                confidence=dependency_edge_confidence(edge_type),
                 evidence=rel_type_raw or rel_type or "dependency",
                 discovered_at=self._now,
                 last_synced=self._now,

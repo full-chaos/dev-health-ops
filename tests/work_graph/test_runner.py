@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.work_graph.runner import (
     run_investment_materialization,
+    run_work_graph_backfill_edge_confidence,
     run_work_graph_build,
 )
 
@@ -443,3 +444,96 @@ def test_cli_materialize_failure_skips_projection():
 
     assert rc == 1
     backfill_mock.assert_not_called()
+
+
+class TestDependencyConfidenceBackfillWiring:
+    """CHAOS-4752 — the ordering invariant, made structural.
+
+    Post-sync fans out ``workgraph.build`` and only then
+    ``investment.materialize``. Running the backfill at the end of the build
+    puts it on the correct side of that edge, so a recompute can never see the
+    pre-policy 1.0 wall it was supposed to be fixed for.
+    """
+
+    def test_build_converges_stored_confidences_when_org_scoped(self):
+        fake_builder = _patched_builder()
+        with patch(
+            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
+            return_value=fake_builder,
+        ):
+            rc = run_work_graph_build(_ns(org="org-abc"))
+
+        assert rc == 0
+        fake_builder.backfill_dependency_edge_confidence.assert_called_once_with()
+
+    def test_unscoped_rebuild_does_not_mutate_any_tenant(self):
+        fake_builder = _patched_builder()
+        with patch(
+            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
+            return_value=fake_builder,
+        ):
+            rc = run_work_graph_build(_ns(org=None))
+
+        assert rc == 0
+        fake_builder.backfill_dependency_edge_confidence.assert_not_called()
+
+    def test_backfill_failure_is_advisory_and_logged(self, caplog):
+        fake_builder = _patched_builder()
+        fake_builder.backfill_dependency_edge_confidence.side_effect = RuntimeError(
+            "mutation refused"
+        )
+        with patch(
+            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
+            return_value=fake_builder,
+        ):
+            with caplog.at_level("WARNING"):
+                rc = run_work_graph_build(_ns(org="org-abc"))
+
+        # The build itself succeeded and its own edges already carry the new
+        # tier, so this must not fail the build -- but it must be loud.
+        assert rc == 0
+        assert "Dependency-confidence backfill did not run" in caplog.text
+
+
+class TestDependencyConfidenceBackfillCommand:
+    """``dev-hops work-graph backfill-edge-confidence``."""
+
+    def test_requires_an_org(self):
+        with patch("dev_health_ops.work_graph.runner.WorkGraphBuilder") as builder_cls:
+            rc = run_work_graph_backfill_edge_confidence(
+                argparse.Namespace(
+                    db="clickhouse://localhost:9000/default", org=None, dry_run=False
+                )
+            )
+
+        assert rc == 2
+        builder_cls.assert_not_called()
+
+    def test_passes_dry_run_through_and_scopes_to_the_org(self):
+        captured = {}
+        fake_builder = MagicMock()
+        fake_builder.backfill_dependency_edge_confidence.return_value = {
+            "outcome": "dry_run",
+            "rows": 3,
+        }
+
+        def _capture(config):
+            captured["config"] = config
+            return fake_builder
+
+        with patch(
+            "dev_health_ops.work_graph.runner.WorkGraphBuilder", side_effect=_capture
+        ):
+            rc = run_work_graph_backfill_edge_confidence(
+                argparse.Namespace(
+                    db="clickhouse://localhost:9000/default",
+                    org="org-abc",
+                    dry_run=True,
+                )
+            )
+
+        assert rc == 0
+        assert captured["config"].org_id == "org-abc"
+        fake_builder.backfill_dependency_edge_confidence.assert_called_once_with(
+            dry_run=True
+        )

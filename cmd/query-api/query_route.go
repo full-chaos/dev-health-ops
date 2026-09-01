@@ -910,37 +910,81 @@ func truncateForLog(s string, max int) string {
 	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
 }
 
-// queryRouteDigestByOperation is this route's registered-document
-// inventory: operation name -> the sha256 digest of that operation's
-// registered document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2
-// hardcoded as two named locals (featureFlagsDigest, reviewEdgesDigest)
-// into a map keyed by operation name, so a later wave adding a further
-// operation extends this map rather than threading another positional
-// parameter through newQueryHandler/operationForDocument.
-// NOTE (CHAOS-4538): "investmentBreakdown"/"investmentFull" below are
-// this route's OWN internal Mux/PostgresSwitch operation keys, chosen
-// to disambiguate the TWO distinct registered documents that both
-// invoke the SAME GraphQL root field (`analytics`) -- unlike every
-// other row in this map, where the key already matches the GraphQL
-// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
-// never by GraphQL operation/field name, so this key only has to be
-// internally consistent across this map, digestByOperation's reverse
-// index, and each go_api_routing_state row PostgresSwitch looks up by
-// this same string -- it is never compared against request text.
+// sortedOperationNames returns m's keys sorted -- a deterministic
+// ordering for a log line (map iteration order is intentionally
+// randomized by the Go runtime, so printing a map's keys directly would
+// make the mounted-route log line non-reproducible between restarts).
+func sortedOperationNames(m map[string]string) []string {
+	names := make([]string, 0, len(m))
+	for operation := range m {
+		names = append(names, operation)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// mountedRouteLogMessage is the CHAOS-4710 deliverable-3 replacement for
+// main.go's former hardcoded, stale literal ("featureFlags, reviewEdges,
+// cognitiveLoad, complexityTimeseries, hotspots, operatingReview" -- six
+// of the twelve operations digestByOperation below actually registers,
+// unmaintained since Wave 3). Following CHAOS-4512's precedent explicitly
+// ("remove the false claim rather than correcting the list, so it cannot
+// go stale again"): newQueryHandler calls this with the SAME
+// digestByOperation map it registers against (see the call site below),
+// so the printed set is always exactly the registered set, by
+// construction -- a thirteenth operation added to that map appears here
+// with no separate edit required, and query_route_mounted_log_test.go's
+// TestMountedRouteLogMessage_ListsExactlyRegisteredOperations parses the
+// actual produced message and asserts its operation set equals the map
+// passed in, independent of any hand-typed expectation.
 //
-// CHAOS-4710 deliverable 3: pulled out to a package-level pure function
-// (previously a local var inside newQueryHandler) so main.go's
-// mount-confirmation log line can be DERIVED from this exact map instead
-// of the hand-typed, six-of-twelve literal it used to carry -- see
-// sortedOperationNames and mountedRouteLogMessage below, and
-// query_route_mounted_log_test.go's
-// TestMountedRouteLogMessage_ListsExactlyRegisteredOperations, which
-// parses the actual produced message and asserts its operation set
-// equals this map's key set. A list derived from this map cannot drift
-// the way CHAOS-4512's stale readyz comment, and this route's own
-// previous mount log line, both did.
-func queryRouteDigestByOperation() map[string]string {
-	return map[string]string{
+// Deliberately a free function taking the map as a parameter, NOT a
+// package-level "build the map" function of its own: digestByOperation's
+// composite literal below is cmd/query-api/tools/registrydump's parse
+// target (see that tool's doc comment -- it asserts EXACTLY ONE
+// `digestByOperation := map[string]string{...}` assignment exists in
+// this file and reads the map from that literal via go/ast, not via
+// import). An earlier version of this fix moved the literal itself into
+// a separate function returning it, which silently broke registrydump
+// (its walk only matches a composite-literal RHS, not a function-call
+// RHS) and, with it, every test that cross-checks against registrydump's
+// output (test_go_api_operation_catalog.py,
+// test_go_api_document_digest.py) -- caught by the ops pre-push gate's
+// full unit suite, not by `go build`/`go vet`/`go test ./cmd/query-api/...`,
+// none of which import or run registrydump against this file. The map
+// literal below is therefore untouched from its pre-CHAOS-4710 shape;
+// only the log line next to it is new.
+func mountedRouteLogMessage(digestByOperation map[string]string) string {
+	return fmt.Sprintf(
+		"query-api: /query route mounted (%s)",
+		strings.Join(sortedOperationNames(digestByOperation), ", "),
+	)
+}
+
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
+	// digestByOperation is this route's registered-document inventory:
+	// operation name -> the sha256 digest of that operation's registered
+	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
+	// as two named locals (featureFlagsDigest, reviewEdgesDigest) into a
+	// map keyed by operation name, so a later wave adding a further
+	// operation extends this map rather than threading another positional
+	// parameter through newQueryHandler/operationForDocument.
+	// NOTE (CHAOS-4538): "investmentBreakdown"/"investmentFull" below are
+	// this route's OWN internal Mux/PostgresSwitch operation keys, chosen
+	// to disambiguate the TWO distinct registered documents that both
+	// invoke the SAME GraphQL root field (`analytics`) -- unlike every
+	// other row in this map, where the key already matches the GraphQL
+	// field name 1:1. operationForDocument resolves by DOCUMENT DIGEST,
+	// never by GraphQL operation/field name, so this key only has to be
+	// internally consistent across this map, digestByOperation's reverse
+	// index, and each go_api_routing_state row PostgresSwitch looks up by
+	// this same string -- it is never compared against request text.
+	//
+	// This is cmd/query-api/tools/registrydump's parse target -- see
+	// mountedRouteLogMessage's doc comment above for why this literal's
+	// exact shape (a single `digestByOperation := map[string]string{...}`
+	// assignment) must stay untouched.
+	digestByOperation := map[string]string{
 		"featureFlags":         digestHex(registeredFeatureFlagsDocument),
 		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
 		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
@@ -954,42 +998,12 @@ func queryRouteDigestByOperation() map[string]string {
 		"investmentBreakdown":  digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":       digestHex(registeredInvestmentFullDocument),
 	}
-}
-
-// sortedOperationNames returns digestByOperation's keys sorted -- a
-// deterministic ordering for a log line (map iteration order is
-// intentionally randomized by the Go runtime, so printing a map's keys
-// directly would make the mounted-route log line non-reproducible
-// between restarts).
-func sortedOperationNames(digestByOperation map[string]string) []string {
-	names := make([]string, 0, len(digestByOperation))
-	for operation := range digestByOperation {
-		names = append(names, operation)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// mountedRouteLogMessage is the CHAOS-4710 deliverable-3 replacement for
-// main.go's former hardcoded, stale literal ("featureFlags, reviewEdges,
-// cognitiveLoad, complexityTimeseries, hotspots, operatingReview" -- six
-// of the twelve operations actually registered by
-// queryRouteDigestByOperation, unmaintained since Wave 3). Following
-// CHAOS-4512's precedent explicitly ("remove the false claim rather than
-// correcting the list, so it cannot go stale again"): this function takes
-// the SAME map newQueryHandler registers against, so the printed set is
-// always exactly the registered set, by construction, and a thirteenth
-// operation added to queryRouteDigestByOperation appears here with no
-// separate edit required.
-func mountedRouteLogMessage(digestByOperation map[string]string) string {
-	return fmt.Sprintf(
-		"query-api: /query route mounted (%s)",
-		strings.Join(sortedOperationNames(digestByOperation), ", "),
-	)
-}
-
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
-	digestByOperation := queryRouteDigestByOperation()
+	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
+	// digestByOperation actually lives, rather than handing main.go a
+	// hand-typed guess of what this function registers -- see
+	// mountedRouteLogMessage's doc comment for why this is not a
+	// package-level function main.go can call directly.
+	log.Print(mountedRouteLogMessage(digestByOperation))
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 

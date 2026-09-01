@@ -484,13 +484,13 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
 // (queries.ts:32) -- it is dead and is being deleted in parallel under
 // CHAOS-4496; a dead document must not be registered as if it carried
 // traffic. This document's own `sankey { ... coverage { ... } }`
-// selection includes SankeyResult.Coverage, which this port's
-// analytics.Resolve does NOT compute (always nil -- resolve.go's
-// package doc comment); registering the document is still correct
-// (registration gates reachability, not response completeness, and
-// nothing is enabled regardless), but a caller enabling this operation
-// later must know `coverage` resolves to null on the Go plane until
-// that follow-up lands.
+// selection includes SankeyResult.Coverage. That field was hardcoded
+// nil when this document was first registered -- and once the routing
+// row was enabled, that reached users as "Not reported" on the
+// Allocation coverage tiles. It is now computed
+// (internal/analytics/sankeycoverage.go), so every field this document
+// selects is populatable and the registered-document field gate needs
+// no exception for it.
 const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
     breakdowns {

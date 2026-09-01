@@ -104,8 +104,36 @@ const readyzTimeout = 3 * time.Second
 // this fix -- the process stayed up, /readyz kept answering 200
 // unconditionally, and every real /query request then failed or 404'd
 // against a rollout gate that believed the instance was healthy.
+//
+// CHAOS-4724: /readyz is UNAUTHENTICATED and this handler previously set
+// no Content-Type (Go content-sniffed every response) and wrote the raw
+// ready(ctx) error into the 503 body -- pgx/clickhouse-go dial errors
+// render a host:port, and CheckJWKS's errors name
+// GO_API_ENVELOPE_JWKS_PATH's filesystem path directly, so an
+// unauthenticated caller could read either straight off the wire. Every
+// response now sets an explicit text/plain Content-Type, and the
+// unhealthy body carries only the failing dependency's CLASS
+// ("clickhouse" / "postgres" / "jwks", see readyzDependencyError in
+// query_route.go) -- fail-closed (503 stays 503) but not a detail leak.
+// The full error -- everything Class deliberately leaves out -- still
+// goes to the log line below, unredacted, so an operator can diagnose
+// without shell access; that log line IS this fix's telemetry.
+//
+// The unhealthy branch's write carries a `nosemgrep` suppression for
+// go.lang.security.audit.xss.no-direct-write-to-responsewriter: this is
+// server-side plain-text (Content-Type set above), never HTML, and the
+// concatenated value is now one of readyzDependencyClass's own closed-set
+// literals -- not attacker-controlled input, and (after this CHAOS-4724
+// fix) not even the underlying dependency error text anymore. Triaged and
+// confirmed a false positive against the pre-fix code (Semgrep alert
+// 2197) and re-confirmed against this fix's narrower body (alert 2199) --
+// see the PR thread. Do not "fix" this by routing through html/template;
+// that cargo-cults a scanner rule into a worse design for a plain-text
+// health endpoint.
 func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
 		if ready == nil {
 			recordReadyzOutcome("not_configured")
 			w.WriteHeader(http.StatusOK)
@@ -119,13 +147,31 @@ func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
 			log.Printf("query-api: /readyz dependency check failed: %v", err)
 			recordReadyzOutcome("unhealthy")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("not ready: " + err.Error()))
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
+			_, _ = w.Write([]byte("not ready: " + readyzDependencyClass(err)))
 			return
 		}
 		recordReadyzOutcome("healthy")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready"))
 	}
+}
+
+// readyzDependencyClass extracts the safe-to-disclose dependency class
+// from a readinessCheck error -- see readyzDependencyError's doc comment
+// in query_route.go for what it deliberately does not disclose. Falls
+// back to a generic, still-detail-free "dependency" label for any error
+// that is not a *readyzDependencyError: readyzHandler must NEVER fall
+// back to err.Error() here, because that is exactly the leak CHAOS-4724
+// closes -- a future caller of readinessCheck that forgets to wrap its
+// error in *readyzDependencyError fails safe (a less specific body), not
+// open (a raw error string reaching an unauthenticated caller).
+func readyzDependencyClass(err error) string {
+	var depErr *readyzDependencyError
+	if errors.As(err, &depErr) {
+		return depErr.Class
+	}
+	return "dependency"
 }
 
 func main() {

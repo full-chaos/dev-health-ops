@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,16 +76,180 @@ func TestReadyzHandler_DependenciesHealthy_ReturnsOK(t *testing.T) {
 // even compile against that shape, let alone pass; see the PR's red-run
 // evidence (a deliberate mutation reverting readyzHandler to ignore
 // `ready`) for the executed proof.
+//
+// CHAOS-4724 changed WHAT the 503 body contains: it used to be
+// wantErr.Error() verbatim (a real Postgres dial error renders a
+// host:port); it is now only the failing dependency's class. This test
+// now pins both halves of that: the body names the class ("postgres")
+// AND does not contain the underlying host:port the wrapped error
+// carries -- see TestReadyzHandler_UnhealthyBodyNeverLeaksDependencyDetail
+// below for the same claim proved without depending on
+// *readyzDependencyError at all.
 func TestReadyzHandler_DependencyUnreachable_Returns503(t *testing.T) {
-	wantErr := errors.New("registry postgres: dial tcp 127.0.0.1:1: connect: connection refused")
+	underlying := "dial tcp 127.0.0.1:1: connect: connection refused"
+	wantErr := &readyzDependencyError{Class: readyzClassPostgres, Cause: errors.New(underlying)}
 	ready := func(ctx context.Context) error { return wantErr }
 	rec := httptest.NewRecorder()
 	readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz (unreachable dependency): got status %d, want 503 (body %q)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), wantErr.Error()) {
-		t.Fatalf("readyz 503 body %q does not surface the dependency error %q", rec.Body.String(), wantErr.Error())
+	if got := rec.Body.String(); got != "not ready: postgres" {
+		t.Fatalf("readyz 503 body = %q, want exactly %q (runbook .remember/go-api-enablement-runbook.md §5b pins this)", got, "not ready: postgres")
+	}
+	if strings.Contains(rec.Body.String(), underlying) {
+		t.Fatalf("readyz 503 body %q leaks the underlying dependency error %q to an unauthenticated caller", rec.Body.String(), underlying)
+	}
+}
+
+// TestReadyzHandler_ContentTypeSetOnEveryBranch is CHAOS-4724 finding 1:
+// readyzHandler previously set no Content-Type on any of its three
+// branches, so Go content-sniffed every /readyz response. This test
+// exercises readyzHandler only through its existing, pre-CHAOS-4724
+// signature (no *readyzDependencyError involved) so it is a clean
+// red-on-parent proof: on parent 512c4e77b, rec.Header().Get("Content-Type")
+// is "" for all three branches; this fails there and passes once the
+// handler sets it explicitly.
+func TestReadyzHandler_ContentTypeSetOnEveryBranch(t *testing.T) {
+	const wantContentType = "text/plain; charset=utf-8"
+
+	cases := []struct {
+		name  string
+		ready func(context.Context) error
+	}{
+		{"not configured", nil},
+		{"healthy", func(ctx context.Context) error { return nil }},
+		{"unhealthy", func(ctx context.Context) error { return errors.New("boom") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			readyzHandler(tc.ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if got := rec.Header().Get("Content-Type"); got != wantContentType {
+				t.Fatalf("readyz (%s) Content-Type = %q, want %q", tc.name, got, wantContentType)
+			}
+		})
+	}
+}
+
+// TestReadyzHandler_UnhealthyBodyNeverLeaksDependencyDetail is CHAOS-4724
+// finding 2, proved WITHOUT referencing *readyzDependencyError -- a
+// caller of readinessCheck's `ready` func is only obligated to return an
+// error, and this proves the handler never re-exposes whatever that
+// error renders, regardless of how it got wrapped. It is deliberately
+// the same shape a real pgx/clickhouse-go dial error or
+// principal.Verifier.CheckJWKS error would take (a host:port, a
+// filesystem path) -- both are exactly what an operator can already get
+// from the log line this handler emits, and exactly what an
+// unauthenticated caller must not get from the response body. Red on
+// parent 512c4e77b: readyzHandler wrote err.Error() straight into the
+// body there, so both substrings below were present in the 503 response.
+func TestReadyzHandler_UnhealthyBodyNeverLeaksDependencyDetail(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantNone string // a substring that must NOT appear in the response body
+	}{
+		{"postgres dial error renders host:port", errors.New("dial tcp 10.20.30.40:5432: connect: connection refused"), "10.20.30.40:5432"},
+		{"clickhouse dial error renders host:port", errors.New("clickhouse: dial tcp 10.20.30.40:9000: i/o timeout"), "10.20.30.40:9000"},
+		{"jwks error renders a filesystem path", errors.New("jwks document at /etc/query-api/secrets/jwks.json is not a single well-formed JSON value"), "/etc/query-api/secrets/jwks.json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ready := func(ctx context.Context) error { return tc.err }
+			rec := httptest.NewRecorder()
+			readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("readyz: got status %d, want 503 (body %q)", rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), tc.wantNone) {
+				t.Fatalf("readyz 503 body %q leaks %q to an unauthenticated caller", rec.Body.String(), tc.wantNone)
+			}
+			if !strings.HasPrefix(rec.Body.String(), "not ready: ") {
+				t.Fatalf("readyz 503 body %q does not keep the load-bearing %q prefix (.remember/go-api-enablement-runbook.md §5b)", rec.Body.String(), "not ready: ")
+			}
+		})
+	}
+}
+
+// TestReadyzDependencyClass_PinsAllThreeClassesAndFallback pins
+// readyzDependencyClass's full contract: each of readinessCheck's three
+// wrapped classes maps to exactly that class name, an error wrapped
+// further (e.g. by a future caller's own fmt.Errorf("...: %w", depErr))
+// still resolves via errors.As, and anything that is not a
+// *readyzDependencyError at all -- a caller that forgot to wrap --
+// degrades to the generic "dependency" label rather than ever falling
+// through to that error's own, potentially detailed, Error() text.
+func TestReadyzDependencyClass_PinsAllThreeClassesAndFallback(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"clickhouse", &readyzDependencyError{Class: readyzClassClickHouse, Cause: errors.New("dial tcp 10.0.0.1:9000: i/o timeout")}, "clickhouse"},
+		{"postgres", &readyzDependencyError{Class: readyzClassPostgres, Cause: errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")}, "postgres"},
+		{"jwks", &readyzDependencyError{Class: readyzClassJWKS, Cause: errors.New("jwks document at /var/run/secrets/jwks.json is empty")}, "jwks"},
+		{"further-wrapped still resolves via errors.As", fmt.Errorf("readinessCheck: %w", &readyzDependencyError{Class: readyzClassJWKS, Cause: errors.New("boom")}), "jwks"},
+		{"unwrapped error falls back safely", errors.New("dial tcp 10.0.0.1:5432: connect: connection refused"), "dependency"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := readyzDependencyClass(tc.err); got != tc.want {
+				t.Fatalf("readyzDependencyClass(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReadyzHandler_PinnedResponseBodies asserts the EXACT body bytes for
+// every /readyz outcome, per the runbook's constraint
+// (.remember/go-api-enablement-runbook.md §5b: "the enablement runbook's
+// §5b readiness check asserts the exact body bytes -- `ready`,
+// `ready: /query not configured`, and the `not ready: ...` prefix are
+// load-bearing"). CHAOS-4724 narrowed the unhealthy shape from an
+// unbounded error string to a closed set of FOUR dependency-class
+// suffixes -- the three real classes PLUS readyzDependencyClass's
+// fallback literal "dependency" (codex round 1, P3: an earlier version
+// of this test and the runbook table both said "exactly three", omitting
+// the fallback case main_test.go's own
+// TestReadyzDependencyClass_PinsAllThreeClassesAndFallback already
+// covers at the class-extraction level -- this test now pins it at the
+// full HTTP-handler level too, closing the same gap for the closed-set
+// claim). Not currently reachable through the one real `ready` this
+// binary wires up (readinessCheck always wraps in one of the three named
+// classes), but it is still part of readyzHandler's OWN observable
+// contract -- a future `ready` implementation that forgets to wrap its
+// error hits this path, and the runbook table documents it as the
+// fourth possible unhealthy body rather than leaving it undocumented.
+func TestReadyzHandler_PinnedResponseBodies(t *testing.T) {
+	cases := []struct {
+		name  string
+		ready func(context.Context) error
+		want  string
+	}{
+		{"not configured", nil, "ready: /query not configured"},
+		{"healthy", func(ctx context.Context) error { return nil }, "ready"},
+		{"unhealthy clickhouse", func(ctx context.Context) error {
+			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: errors.New("boom")}
+		}, "not ready: clickhouse"},
+		{"unhealthy postgres", func(ctx context.Context) error {
+			return &readyzDependencyError{Class: readyzClassPostgres, Cause: errors.New("boom")}
+		}, "not ready: postgres"},
+		{"unhealthy jwks", func(ctx context.Context) error {
+			return &readyzDependencyError{Class: readyzClassJWKS, Cause: errors.New("boom")}
+		}, "not ready: jwks"},
+		{"unhealthy fallback (unwrapped error, not a *readyzDependencyError)", func(ctx context.Context) error {
+			return errors.New("boom")
+		}, "not ready: dependency"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			readyzHandler(tc.ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if got := rec.Body.String(); got != tc.want {
+				t.Fatalf("readyz body = %q, want exactly %q", got, tc.want)
+			}
+		})
 	}
 }
 

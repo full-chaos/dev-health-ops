@@ -21,6 +21,8 @@ Usage:
         record_github_rate_limit,
         INGEST_LEGACY_AUTH_REJECTED_TOTAL,
         record_ingest_legacy_auth_rejected,
+        TELEMETRY_ORG_ID_REJECTED_TOTAL,
+        record_telemetry_org_id_rejected,
     )
 """
 
@@ -822,6 +824,27 @@ if _PROMETHEUS_AVAILABLE:
         ["reason"],
     )
 
+    # ---------------------------------------------------------------------------
+    # /api/v1/telemetry/* authenticated org-identity rejections (CHAOS-4722, G-4/G-25)
+    # ---------------------------------------------------------------------------
+    TELEMETRY_ORG_ID_REJECTED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_telemetry_org_id_rejected_total",
+        "get_org_id rejections on the /api/v1/telemetry/* routes, by reason. "
+        "Before CHAOS-4722 these routes trusted a raw, unverified X-Org-Id "
+        "header as identity; org_id is now resolved from the authenticated "
+        "caller and verified (own org, an existing Membership row, or "
+        "superuser) before any telemetry state is read or mutated. "
+        "reason=not_a_member is the CHAOS-4722 IDOR rejection (authenticated "
+        "but the caller is not a member of the requested org); "
+        "reason=no_org_context is an authenticated caller with neither a "
+        "header nor a JWT org_id; reason=report_not_platform_role is the "
+        "/report platform-role gate (G-32: instance-wide aggregates are not "
+        "an org-level capability). A 401 (no/invalid credential at all) "
+        "never reaches this counter -- that is FastAPI's own dependency "
+        "rejection, before get_org_id runs.",
+        ["reason"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -874,6 +897,7 @@ else:
     SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _noop_counter()
     SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _noop_histogram()
     INGEST_LEGACY_AUTH_REJECTED_TOTAL = _noop_counter()
+    TELEMETRY_ORG_ID_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
@@ -1151,6 +1175,20 @@ def record_ingest_legacy_auth_rejected(*, reason: str) -> None:
     wrong-credential rejection.
     """
     INGEST_LEGACY_AUTH_REJECTED_TOTAL.labels(reason=reason).inc()
+
+
+def record_telemetry_org_id_rejected(*, reason: str) -> None:
+    """Record a /api/v1/telemetry/* org-identity rejection (CHAOS-4722, G-4/G-25).
+
+    Called from ``api.telemetry.router.get_org_id`` /
+    ``require_platform_role`` for every 403 they raise (never for the 401 an
+    unauthenticated caller gets from ``get_current_user`` -- that is a
+    different, already-instrumented dependency). ``reason`` is drawn from a
+    fixed vocabulary: "not_a_member" (authenticated caller has no Membership
+    row for the requested org), "no_org_context" (no header and no JWT
+    org_id), "report_not_platform_role" (the /report platform-role gate).
+    """
+    TELEMETRY_ORG_ID_REJECTED_TOTAL.labels(reason=reason).inc()
 
 
 @contextmanager

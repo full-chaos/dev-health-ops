@@ -464,21 +464,26 @@ func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(
 	// applied to the family-collapse gate: the canonical work-items claim
 	// must not plan against non-nil evidence recording it as attempted but
 	// never proven.
+	//
+	// CHAOS-4731: this used github/work-items until that pair got an
+	// ExecutedProofWaiver (execution_registry.go) -- switched to gitlab/
+	// work-items, which carries RouteReady/Plannable=true and no waiver, so
+	// the negative control still exercises a genuinely unwaived pair.
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	units, err := BuildScheduledPlan(PlannerInput{
 		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
+		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "gitlab", FullName: "owner/repo"}},
 		Datasets: []PlanDataset{{Key: "work-items"}},
 		ExecutedProof: &providersync.ExecutedProofEvidence{
-			Proven:    map[string]bool{"github/commits": true},
-			Attempted: map[string]bool{"github/commits": true, "github/work-items": true},
+			Proven:    map[string]bool{"gitlab/commits": true},
+			Attempted: map[string]bool{"gitlab/commits": true, "gitlab/work-items": true},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero: github/work-items was attempted and never proven, and has no waiver", units)
+		t.Fatalf("units=%+v, want zero: gitlab/work-items was attempted and never proven, and has no waiver", units)
 	}
 }
 

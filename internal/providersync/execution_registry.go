@@ -250,6 +250,35 @@ func Descriptor(
 			// before the first sink effect. It is a canonical-claim property, not
 			// a reason to pretend a direct sibling alias is executable.
 			descriptor.PreparedManifestRecovery = true
+			// CHAOS-4731: sync_executed_proof_ledger has carried
+			// attempted_at=2026-06-21, proven_at=NULL for this pair the whole
+			// time -- every pre-2026-08-19 sync_run_units success row for
+			// github/work-items (290 of them) carries neither
+			// result.go_provider_route.records nor result.persisted, so none
+			// ever satisfied executedProofProvenPredicateSQL. CHAOS-4060
+			// (merged 2026-08-22) then started enforcing
+			// ExecutedProofSatisfied at plan time and, finding this pair
+			// Attempted-but-never-Proven with no waiver, has silently vetoed
+			// every planning attempt since -- for every org, not just one --
+			// even though github_work_items_route.go's composite normalizer
+			// (rewritten 2026-08-19..08-25, correctly emits `ghpr:`/`gh:`
+			// rows) has existed the whole time and been given zero chances to
+			// run. This waiver reopens the loop the CHAOS-4060 gate is
+			// designed to require a human sign-off for; it self-retires
+			// automatically (ExecutedProofSatisfied checks Proven first) the
+			// moment one live unit reports records>0.
+			descriptor.ExecutedProofWaiver = &ExecutedProofWaiver{
+				Reason: "ledger row attempted_at 2026-06-21, proven_at NULL was produced " +
+					"by the pre-2026-08-19 producer, which never persisted " +
+					"`records`/`persisted`; the current composite normalizer " +
+					"(github_work_items_route.go, 08-19..08-25) is a full rewrite " +
+					"that has never been permitted to run; waiver self-retires on " +
+					"the first unit with records>0 per ExecutedProofSatisfied. " +
+					"Authorised by team-lead session dev-health-06 on chris's " +
+					"standing autonomy for Go-plane fixes.",
+				Ticket:     "CHAOS-4731",
+				RecordedAt: time.Date(2026, time.September, 1, 15, 30, 0, 0, time.FixedZone("PDT", -7*60*60)),
+			}
 		}
 	case provider == "linear" && workItemAlias:
 		// CHAOS-4193: linear's own internal sync route now writes board

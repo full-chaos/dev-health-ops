@@ -309,6 +309,11 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
 			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
+				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+					slog.String("provider", provider),
+					slog.String("dataset", dataset.Key),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID))
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				// CHAOS-4060: fixture/golden proof no longer licenses new work
@@ -404,6 +409,11 @@ func buildWorkItemFamilyUnit(
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
 	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalWorkItemsDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		// CHAOS-4060: same executed-proof requirement as the non-family gate
@@ -508,6 +518,11 @@ func foldContributingFamilyUnit(
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
 	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {

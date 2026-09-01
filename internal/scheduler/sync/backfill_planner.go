@@ -114,6 +114,11 @@ func BuildBackfillPlan(input PlannerInput) ([]PlannedUnit, error) {
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeRouteNotReady)
 			case !descriptor.ExecutedProofSatisfied(input.ExecutedProof):
 				globalPlanGateTelemetry.observe(provider, dataset.Key, planGateOutcomeExecutedProofUnsatisfied)
+				slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+					slog.String("provider", provider),
+					slog.String("dataset", dataset.Key),
+					slog.String("org_id", input.OrgID),
+					slog.String("source_id", source.ID))
 			}
 			if !known || !descriptor.RouteReady || !descriptor.Plannable ||
 				!descriptor.ExecutedProofSatisfied(input.ExecutedProof) {
@@ -336,6 +341,11 @@ func buildBackfillWorkItemFamilyUnits(
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeRouteNotReady)
 	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
 		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalWorkItemsDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {
@@ -397,6 +407,11 @@ func buildBackfillFoldFamilyUnits(
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeRouteNotReady)
 	case !canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof):
 		globalPlanGateTelemetry.observe(provider, canonicalDataset, planGateOutcomeExecutedProofUnsatisfied)
+		slog.Default().Warn("sync.plan.executed_proof_unsatisfied",
+			slog.String("provider", provider),
+			slog.String("dataset", canonicalDataset),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID))
 	}
 	if !known || !canonicalDescriptor.RouteReady || !canonicalDescriptor.Plannable ||
 		!canonicalDescriptor.ExecutedProofSatisfied(input.ExecutedProof) {

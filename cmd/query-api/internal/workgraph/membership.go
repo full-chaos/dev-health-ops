@@ -281,6 +281,15 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	rowsResult, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		if isMissingMembershipTableError(err) {
+			// codex round 5 (CHAOS-4655, gpt-5.6-terra xhigh): this early
+			// return bypassed the telemetry recording below entirely, so a
+			// rolling-deploy/pre-migration window (the only case this
+			// branch exists for) would silently produce NO histogram
+			// sample instead of an honest 0-rows-per-endpoint one -- the
+			// same "no signal" gap CHAOS-4647's own membership annotation
+			// handling already guards against for a different reason (see
+			// this function's top doc comment).
+			recordMembershipRowsPerEndpoint(ctx, 0, len(pairs))
 			return map[membershipKey]membershipEntry{}, nil
 		}
 		return nil, fmt.Errorf("workgraph: batch resolve membership: %w", err)

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 )
 
 // --- CHAOS-4655: pair-bound (node_type, node_id) match ------------------
@@ -111,6 +113,38 @@ func TestBatchResolveMembership_QueriesAPairBoundMatch(t *testing.T) {
 	}
 	if len(recorded) != 1 || recorded[0].rows != 1 || recorded[0].endpoints != 2 {
 		t.Fatalf("telemetry not recorded correctly: %+v", recorded)
+	}
+}
+
+// TestBatchResolveMembership_RecordsTelemetryOnMissingMembershipTable is
+// codex round 5's finding (CHAOS-4655, gpt-5.6-terra xhigh, P3): the
+// rolling-deploy/pre-migration early return (work_unit_membership does not
+// exist yet) bypassed recordMembershipRowsPerEndpoint entirely, so that
+// window would silently produce NO histogram sample instead of an honest
+// 0-rows-per-endpoint one. Confirmed RED before the fix (this early return
+// skipped straight past the recording call); GREEN after.
+func TestBatchResolveMembership_RecordsTelemetryOnMissingMembershipTable(t *testing.T) {
+	client := &fakeClient{
+		errs: []error{&chproto.Exception{Code: 60, Message: "Unknown table expression identifier 'work_unit_membership' in scope SELECT ..."}},
+	}
+
+	var recorded []struct{ rows, endpoints int }
+	previous := recordMembershipRowsPerEndpoint
+	recordMembershipRowsPerEndpoint = func(_ context.Context, rowsReturned, endpointsRequested int) {
+		recorded = append(recorded, struct{ rows, endpoints int }{rowsReturned, endpointsRequested})
+	}
+	t.Cleanup(func() { recordMembershipRowsPerEndpoint = previous })
+
+	rows := []edgeEndpoint{{sourceType: "issue", sourceID: "ep-1", targetType: "pr", targetID: "ep-2"}}
+	result, err := batchResolveMembership(context.Background(), client, "org1", rows, newFilterScope(nil, nil))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected an empty result on a missing membership table, got: %+v", result)
+	}
+	if len(recorded) != 1 || recorded[0].rows != 0 || recorded[0].endpoints != 2 {
+		t.Fatalf("expected one telemetry sample (0 rows / 2 endpoints), got: %+v", recorded)
 	}
 }
 

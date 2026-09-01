@@ -250,6 +250,21 @@ func buildDailyWorker(
 						"error", incidentErr,
 					)
 				}
+				// CHAOS-4293: deploy is the daily bridge's fourth native
+				// family. Same fail-open construction policy as the others
+				// above -- a refusal here leaves ONLY `deploy` on the
+				// Python compatibility bridge.
+				if deployExecutor, deployErr := daily.NewDeployExecutor(clickhouseConnection); deployErr == nil {
+					nativeFamilies["deploy"] = deployExecutor
+				} else {
+					logger.Error(
+						"deploy native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", deployErr,
+					)
+				}
 				if len(nativeFamilies) > 0 {
 					handler.SetNativeFamilies(nativeFamilies)
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {

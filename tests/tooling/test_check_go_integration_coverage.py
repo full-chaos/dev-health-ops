@@ -74,7 +74,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # pattern is not what CHAOS-4643 objected to; its complaint was a
     # package whose ENTIRE integration coverage was a permanent, silent
     # skip.
-    assert "34 package(s) discovered, 0 denylisted, 34 will run" in result.stdout
+    # CHAOS-4655 added cmd/query-api/internal/workgraph (34 -> 35
+    # discovered, 34 -> 35 will run): the batch-membership pair-bound-match
+    # fix needed a real-engine red/green proof against a real ClickHouse
+    # container.
+    assert "35 package(s) discovered, 0 denylisted, 35 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

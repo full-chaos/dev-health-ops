@@ -1322,7 +1322,7 @@ therefore outrank an attachment edge to the intended one. In practice Primary us
 it is the only edge for a well-configured PR, not because the resolver privileges it structurally.
 
 **The table below is about a DIFFERENT, Path-B-specific fallback** — `work_graph/builder.py`'s
-`ns()`/`jira_key_lookup`/`gh_issue_lookup` text-parse (used by the investment work-graph consumer
+`extract_jira_keys`/`extract_github_issue_refs`/`jira_key_lookup`/`gh_issue_lookup` text-parse (used by the investment work-graph consumer
 this section covers), not the §2 Secondary/Tertiary mechanism above (which serves Path A, the
 cycle-time consumer, and DOES apply to Linear). Today:
 

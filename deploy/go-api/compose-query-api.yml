@@ -1,5 +1,5 @@
-# query-api compose overlay (CHAOS-4366 Wave 0). Default OFF — a bare
-# `docker compose up -d` does not create this service.
+# query-api compose overlay. Default OFF — a bare `docker compose up -d`
+# does not create this service.
 #
 # Same pattern as deploy/go-workers/compose-go-workers.yml: the canonical
 # local stack is the repo-root /dev-health/compose.yml (outside any git
@@ -13,18 +13,34 @@
 #     --profile go-api up -d --build
 #
 # The root compose.yml MUST be the first -f (compose resolves every
-# relative path against the first file's directory).
+# relative path — including the volume mount below — against the first
+# file's directory, i.e. the dev-health root).
 #
-# Wave 0 scope: this service has NO resolver logic (every GraphQL field
-# panics "not implemented" — see cmd/query-api/main.go's package doc) and
-# depends on nothing but process liveness. It is not wired to Postgres,
-# ClickHouse, or the operation registry yet — those arrive with the Go
-# verifier / real resolvers in later waves, once dev-health-go (CHAOS-4377)
-# lands. Bringing this service up therefore proves only that the binary
-# starts and answers /healthz and /readyz — never start it as part of an
-# assumed-working stack; per this lane's standing orders, it and the other
-# go-* services stay down unless explicitly brought up for verification.
-
+# LANE-4460-L3 (CHAOS-4460 precondition 6 / CHAOS-4654): this is no longer
+# Wave-0 shape. cmd/query-api/query_route.go's loadQueryRouteConfig()
+# requires ALL SIX of the env vars below together; if any one is unset,
+# /query is never mounted (main.go's documented "stay Wave-0 empty"
+# fallback) -- see that file's doc comment. Getting six-of-six set is a
+# NECESSARY but not SUFFICIENT condition for traffic: routing rows in
+# go_api_routing_state are a separate, deliberately NOT-this-lane's step
+# (see .remember/go-api-enablement-runbook.md).
+#
+# Key material and the schema digest are environment-specific and are
+# NEVER committed here:
+#   - GO_API_ENVELOPE_JWKS_PATH points at a JWKS file (public key only)
+#     produced by principal_envelope.build_envelope_jwks() and mounted
+#     read-only below. The matching PRIVATE key lives only on the Python
+#     edge (api service's GO_API_ENVELOPE_PRIVATE_KEY) -- query-api must
+#     never hold a key capable of forging a user session.
+#   - GO_API_SCHEMA_DIGEST is produced by
+#     `go run ./cmd/query-api/tools/registrydump -schema-digest` at the
+#     deployed SHA and exported as an environment variable (e.g. via the
+#     root .env, next to compose.yml) -- never hand-typed. query-api
+#     VERIFIES this value against its own go:embed'ed SDL bytes at startup
+#     and log.Fatalf's on mismatch (query_route.go's verifySchemaDigest),
+#     so a stale/wrong value is a loud crash, not a silent miss. The
+#     Python edge (api service) must carry the SAME value or every
+#     dispatch attempt 404s as a digest miss and falls back to Python.
 services:
   query-api:
     build:
@@ -38,7 +54,78 @@ services:
       logging.service.namespace: dev-health
     environment:
       QUERY_API_ADDR: ":8090"
+      # Native ClickHouse wire protocol port (9000), NOT the HTTP port
+      # (8123) every Python service in this stack uses -- dev-health-go's
+      # client speaks the native protocol and Pings eagerly at
+      # construction; pointed at 8123 it fails startup immediately with
+      # "ClickHouse readiness check failed" (see deploy/go-workers's
+      # go-worker service for the identical, already-documented gotcha).
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      # Registry tables (go_api_candidate_build / go_api_routing_state /
+      # go_api_proof_run, alembic 0114) live in the same devhealth Postgres
+      # database the api service uses, reached the same way every other Go
+      # service in this stack reaches it -- pgbouncer:6432 in transaction
+      # mode, plain `postgresql://` scheme (pgx, not SQLAlchemy, so no
+      # `+asyncpg` driver suffix). Read-only access; the default
+      # devhealth role owns these tables (no dedicated grant exists, same
+      # as every other alembic-created table).
+      GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      # Public-key JWKS document, mounted read-only below. Must agree with
+      # the api service's GO_API_ENVELOPE_PRIVATE_KEY (same key pair) and
+      # its GO_API_ENVELOPE_ISSUER/AUDIENCE (same issuer/audience strings)
+      # or every envelope this route verifies is rejected.
+      GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      # No hardcoded fallback: an unset value here must fail loudly (via
+      # verifySchemaDigest's log.Fatalf on the empty-string mismatch) or
+      # `docker compose up`'s own missing-env-var warning, not silently
+      # mount with a stale digest. Export it from the root .env (next to
+      # compose.yml) -- see this file's header comment for the producer.
+      GO_API_SCHEMA_DIGEST: "${GO_API_SCHEMA_DIGEST:?set GO_API_SCHEMA_DIGEST -- run 'go run ./cmd/query-api/tools/registrydump -schema-digest'}"
+    # CHAOS-4654: query-api had no declared container memory budget --
+    # queryRouteMaxResultRows (500,000, query_route.go) is a WORKLOAD
+    # derivation that this ticket's own comment says is "still
+    # PROVISIONAL" until a real budget exists to re-derive it from. Stated,
+    # not measured (same honesty as ops/compose.yml's metrics-api mem_limit
+    # comment, CHAOS-4351 team-lead ruling -- "2g is a stated, not
+    # measured, ceiling"): a single worst-case request buffers up to
+    # 500,000 rows in memory before the HTTP response is written
+    # (newQueryHandler's resolvers, via gqlgen); at a conservative ~500
+    # bytes/row for the wider row shapes (workGraphEdges/hotspots have
+    # ~10-15 string/scalar fields each) that is ~250 MiB per worst-case
+    # request. dev-health-go's ClickHouse client pools up to 8 connections
+    # by default, so several such requests can be in flight at once; at 4
+    # concurrent worst-case requests that is ~1 GiB of row buffers alone,
+    # plus gqlgen's in-memory schema, pgxpool, the JWKS verifier, and GC
+    # headroom (Go's collector routinely runs 1.5-2x live heap before a
+    # collection). 2g is chosen to cover that with headroom without being
+    # a small-batch-endpoint number -- the CHAOS-4647 root defect this
+    # ticket explicitly warns against repeating. Re-derive once real
+    # request-size telemetry exists (successor to CHAOS-4654, per
+    # query_route.go's own comment on queryRouteMaxResultRows).
+    mem_limit: 2g
     ports:
       - "${QUERY_API_PORT:-8091}:8090"
+    volumes:
+      - ./.go-api-dev/envelope-jwks.json:/secrets/envelope-jwks.json:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # No container healthcheck: the runtime image
+    # (gcr.io/distroless/static-debian12:nonroot, docker/query-api.Dockerfile)
+    # has no shell and no wget/curl -- a CMD-SHELL test cannot run here
+    # (see deploy/go-workers/compose-go-workers.yml's go-reconciler service
+    # for the same constraint, solved there by a binary-native `healthcheck`
+    # subcommand this binary does not have). Also would not be sufficient by
+    # itself: `/readyz` returns HTTP 200 for BOTH "ready" and "ready: /query
+    # not configured" (CHAOS-4512), so a status-code-only probe cannot tell
+    # "container process is up" from "this lane's six env vars are all
+    # correctly set" -- verify with `curl -sS .../readyz` and assert the
+    # exact body, per .remember/go-api-enablement-runbook.md §5b.
     networks:
       - dev-health

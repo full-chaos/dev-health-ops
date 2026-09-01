@@ -33,13 +33,27 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY cmd/query-api ./cmd/query-api
-# NOT `COPY contracts/graphql`: gqlgen bakes the schema into generated Go
-# source at codegen time (cmd/query-api/internal/graph/generated.go), not
-# read at runtime -- confirmed no go:embed/ReadFile of the SDL exists there.
-# NOT `COPY internal ./internal`: query-api imports nothing from the shared
-# internal/ tree yet (no resolver exists to need a store reader -- see
-# main.go's package doc). Add both back once a resolver actually imports
-# from internal/ or from the dev-health-go module (CHAOS-4377).
+# LANE-4460-L3: `COPY contracts/graphql` IS now required -- this comment
+# used to say the opposite ("gqlgen bakes the schema into generated Go
+# source ... no go:embed/ReadFile of the SDL exists there") and that build
+# broke the moment it stopped being true. CHAOS-4696 PR2 added
+# contracts/graphql/v1/sdl.go, a go:embed of schema.graphql that
+# query_route.go's verifySchemaDigest imports as `schemav1.SDL` to check
+# GO_API_SCHEMA_DIGEST against the SDL this binary was actually built with
+# (see that file's doc comment) -- a real, verified runtime import this
+# Dockerfile's build context did not carry, so `go build` failed closed
+# with "cannot find module providing package
+# .../contracts/graphql/v1: import lookup disabled by -mod=readonly"
+# (confirmed by running this exact build). Copy only contracts/graphql/v1,
+# not the whole tree: it is the one subpackage query-api's import graph
+# reaches (verified: `grep -rn "dev-health-ops/internal\|dev-health-ops/contracts"
+# cmd/query-api` finds no other cross-tree import).
+COPY contracts/graphql/v1 ./contracts/graphql/v1
+# Still NOT `COPY internal ./internal`: query-api imports nothing from the
+# shared repo-root internal/ tree (distinct from cmd/query-api/internal/,
+# which is already copied above with the rest of cmd/query-api) -- add it
+# back only once a resolver actually imports from there or from the
+# dev-health-go module.
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

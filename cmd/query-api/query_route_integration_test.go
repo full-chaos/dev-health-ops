@@ -24,17 +24,31 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
+	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 const (
+	// itTestSchemaDigest is an ARBITRARY test value -- safe here because
+	// every call site below passes it straight to newQueryHandler
+	// (routing-key plumbing only), never to buildQueryRoute, which is
+	// the ONLY thing that calls CHAOS-4696 PR2's verifySchemaDigest.
 	itTestSchemaDigest = "sha256:test-schema-digest"
 	itTestIssuer       = "dev-health-ops-edge"
 	itTestAudience     = "query-api"
 	itTestKID          = "test-key-2026-08"
 )
+
+// itRealSchemaDigest is the CORRECT, verifiable digest -- required at
+// every call site that goes through buildQueryRoute (CHAOS-4696 PR2:
+// verifySchemaDigest now runs first and rejects anything else, including
+// itTestSchemaDigest above). A `var`, not a `const`: digest.Schema is a
+// function call (sha256 over the embedded SDL), not a compile-time
+// constant expression.
+var itRealSchemaDigest = digest.Schema(schemav1.SDL)
 
 // fakeCHClient is a minimal featureflags.QueryClient double: it always
 // returns one row from the FIRST query it sees (the row query) and a
@@ -963,7 +977,10 @@ func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
 		EnvelopeJWKSPath:    "/dev/null",
 		EnvelopeIssuer:      "issuer",
 		EnvelopeAudience:    "audience",
-		SchemaDigest:        "sha256:unused",
+		// CHAOS-4696 PR2: must be the REAL digest -- verifySchemaDigest
+		// now runs BEFORE the ClickHouse readiness check this test
+		// exists to prove, so a placeholder value never reaches it.
+		SchemaDigest: itRealSchemaDigest,
 	}
 
 	_, _, _, err := buildQueryRoute(cfg)

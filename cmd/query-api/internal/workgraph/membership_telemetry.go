@@ -15,6 +15,16 @@ package workgraph
 // analytics/investmentmembershiptelemetry.go) rather than Prometheus
 // directly -- there is no Python precedent to port here (this query path,
 // and its cross-product defect, predates any Python equivalent instrument).
+//
+// Same caveat schema_digest_telemetry.go's recordSchemaDigestMismatch
+// already documents for this whole binary (codex review, CHAOS-4655,
+// 2026-09-01): query-api does not currently call otel.SetMeterProvider
+// anywhere (internal/platform/tracing.Init wires a TRACER provider only),
+// so today this Record is a no-op against the global default meter
+// provider until a real one is wired up. This is the SAME structural
+// placeholder every other instrument in this binary already is, not a
+// regression this PR introduces or a claim that the histogram is exported
+// today.
 
 import (
 	"context"

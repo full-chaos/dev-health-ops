@@ -113,11 +113,26 @@ type membershipEntry struct {
 // not exist yet (rolling deploy / pre-migration, same narrow code-60 check
 // as isMissingMembershipTableError) -- every OTHER error propagates so real
 // failures surface loudly instead of a silent empty annotation.
+//
+// CHAOS-4655: the WHERE clause matches on the TUPLE (m.node_type, m.node_id),
+// not two independent IN lists. Filtering node_type and node_id as separate
+// Array(String) IN predicates (the shape this query had before this fix, and
+// the shape work_graph.py:588-590 still has -- confirmed a shared
+// pre-existing characteristic, not a Go-side port divergence, so Python is
+// deliberately left untouched here per the Go-only rule) matches every row
+// whose type is ANYWHERE in the type-set AND whose id is ANYWHERE in the
+// id-set, independently -- a cross-product over the org's real data shape
+// rather than a set bounded by the endpoints actually requested. With N
+// distinct node types and M distinct ids across the request's endpoints,
+// that is up to N*M matching rows for as few as max(N,M) real endpoints.
+// codex's engine-level repro (CHAOS-4655): a 100k-edge page with 200k ids
+// across three node types produced ClickHouse Code 396 (max_result_rows
+// exceeded) at 588.68k rows returned. A tupled match bounds the row count by
+// the endpoints actually requested, which is what every one of CHAOS-4647's
+// three row-budget derivation rounds assumed was already true.
 func batchResolveMembership(ctx context.Context, client QueryClient, orgID string, rows []edgeEndpoint, scope *filterScope) (map[membershipKey]membershipEntry, error) {
 	endpointSeen := map[membershipKey]struct{}{}
-	typeSeen := map[string]struct{}{}
-	idSeen := map[string]struct{}{}
-	var nodeTypes, nodeIDs []string
+	var pairs []membershipKey
 	add := func(nodeType, nodeID string) {
 		nodeID = strings.TrimSpace(nodeID)
 		nodeType = strings.TrimSpace(nodeType)
@@ -129,14 +144,7 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 			return
 		}
 		endpointSeen[k] = struct{}{}
-		if _, ok := typeSeen[nodeType]; !ok {
-			typeSeen[nodeType] = struct{}{}
-			nodeTypes = append(nodeTypes, nodeType)
-		}
-		if _, ok := idSeen[nodeID]; !ok {
-			idSeen[nodeID] = struct{}{}
-			nodeIDs = append(nodeIDs, nodeID)
-		}
+		pairs = append(pairs, k)
 	}
 	for _, row := range rows {
 		add(row.sourceType, row.sourceID)
@@ -145,13 +153,32 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	if len(endpointSeen) == 0 {
 		return map[membershipKey]membershipEntry{}, nil
 	}
-	sort.Strings(nodeTypes)
-	sort.Strings(nodeIDs)
+	// Sorted for determinism only (the WHERE clause is an unordered set
+	// membership test) -- matches this package's existing convention of
+	// sorting every IN-list bind value before sending it.
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].nodeType != pairs[j].nodeType {
+			return pairs[i].nodeType < pairs[j].nodeType
+		}
+		return pairs[i].nodeID < pairs[j].nodeID
+	})
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
-		{Name: "node_types", Value: nodeTypes},
-		{Name: "node_ids", Value: nodeIDs},
+		// dev-health-go@v0.6.1's clickhouse.Binding wire format has no
+		// tuple-array encoding (clickhouse/bindings.go's clickHouseParameter
+		// handles only string/[]string/time.Time/ints -- scope.go's
+		// themeFilter doc comment already notes this for a different call
+		// site). node_pairs is therefore PRE-RENDERED as a ClickHouse
+		// Array(Tuple(String, String)) literal (membershipPairsLiteral,
+		// below) and bound as an ordinary string value: the driver's
+		// query-parameter protocol parses that text as the type the query
+		// declares for {node_pairs:...}, the same mechanism
+		// clickHouseStringArray already relies on for Array(String) params
+		// -- proven against local ClickHouse 26.7.5.10 (matches prod's 26.7
+		// line): a tupled IN correctly excludes a constructed cross-product
+		// row that an independent-IN pair of predicates would have matched.
+		{Name: "node_pairs", Value: membershipPairsLiteral(pairs)},
 	}
 	bindings = addMembershipScopeBindings(bindings, scope)
 
@@ -177,8 +204,7 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
             INNER JOIN (%s) AS latest_run ON 1 = 1
             %s
             WHERE m.org_id = {org_id:String}
-              AND m.node_type IN {node_types:Array(String)}
-              AND m.node_id IN {node_ids:Array(String)}
+              AND (m.node_type, m.node_id) IN {node_pairs:Array(Tuple(String, String))}
               AND m.is_dominant = 1
               AND latest_run.latest_run_id != ''
               AND (%s)
@@ -194,7 +220,9 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	defer rowsResult.Close()
 
 	result := map[membershipKey]membershipEntry{}
+	rowsScanned := 0
 	for rowsResult.Next() {
+		rowsScanned++
 		var nodeType, nodeID, kind, category string
 		if scanErr := rowsResult.Scan(&nodeType, &nodeID, &kind, &category); scanErr != nil {
 			return nil, fmt.Errorf("workgraph: batch resolve membership scan: %w", scanErr)
@@ -215,7 +243,37 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 	if err := rowsResult.Err(); err != nil {
 		return nil, fmt.Errorf("workgraph: batch resolve membership rows: %w", err)
 	}
+	// CHAOS-4655 telemetry: rows returned per requested endpoint. Bounded
+	// (<=2, category_kind's fixed {theme,subcategory} cardinality -- see
+	// membership_test.go's TestCategoryKindCardinalityHasNoNewValue) now
+	// that the WHERE clause is a tupled match; this is what makes that
+	// bound an observed property of production traffic, not just an
+	// assertion in this PR's tests.
+	recordMembershipRowsPerEndpoint(ctx, rowsScanned, len(pairs))
 	return result, nil
+}
+
+// membershipPairsLiteral renders pairs as a ClickHouse Array(Tuple(String,
+// String)) parameter literal, e.g. "[('issue','a'),('pr','b')]". See
+// batchResolveMembership's node_pairs binding comment for why this is
+// pre-rendered text rather than a typed clickhouse.Binding value.
+func membershipPairsLiteral(pairs []membershipKey) string {
+	encoded := make([]string, len(pairs))
+	for i, pair := range pairs {
+		encoded[i] = "(" + chStringLiteral(pair.nodeType) + "," + chStringLiteral(pair.nodeID) + ")"
+	}
+	return "[" + strings.Join(encoded, ",") + "]"
+}
+
+// chStringLiteral quotes value as a single ClickHouse String literal, using
+// the SAME escaping dev-health-go@v0.6.1's clickhouse/bindings.go
+// clickHouseStringArray applies to its own Array(String) parameter values
+// (backslash, then single quote) -- this must match it exactly, since both
+// literals are parsed by the identical ClickHouse query-parameter parser.
+var chStringLiteralReplacer = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
+
+func chStringLiteral(value string) string {
+	return "'" + chStringLiteralReplacer.Replace(value) + "'"
 }
 
 // nodeTypeRank mirrors work_graph.py:446's _type_rank -- issue before pr

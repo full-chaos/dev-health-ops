@@ -1,13 +1,104 @@
 package workgraph
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
+
+// --- CHAOS-4655: tupled (node_type, node_id) match --------------------
+
+// TestMembershipPairsLiteral_RendersATupleArrayAndEscapesQuotes locks the
+// exact ClickHouse Array(Tuple(String, String)) parameter text
+// batchResolveMembership's node_pairs binding sends -- a plain string
+// binding whose VALUE is this literal (see that function's doc comment for
+// why: dev-health-go@v0.6.1's clickhouse.Binding has no native tuple-array
+// encoding). A node_type/node_id containing a single quote is a real input
+// shape (arbitrary provider-sourced ids), not a hypothetical -- escaping it
+// wrong would either corrupt the query or, worse, let one endpoint's id
+// break out of its own tuple.
+func TestMembershipPairsLiteral_RendersATupleArrayAndEscapesQuotes(t *testing.T) {
+	pairs := []membershipKey{
+		{nodeType: "issue", nodeID: "a"},
+		{nodeType: "pr", nodeID: `o'brien`},
+	}
+	got := membershipPairsLiteral(pairs)
+	want := `[('issue','a'),('pr','o\'brien')]`
+	if got != want {
+		t.Fatalf("membershipPairsLiteral() = %q, want %q", got, want)
+	}
+}
+
+func TestMembershipPairsLiteral_Empty(t *testing.T) {
+	if got := membershipPairsLiteral(nil); got != "[]" {
+		t.Fatalf("membershipPairsLiteral(nil) = %q, want %q", got, "[]")
+	}
+}
+
+// TestBatchResolveMembership_QueriesATupledMatch is CHAOS-4655's structural
+// regression guard: it locks the WHERE clause shape (a tupled match, not
+// two independent Array(String) IN predicates) and the binding set, so a
+// future edit cannot silently reintroduce the cross-product shape while
+// every other test (which only exercises small fixtures where the two
+// shapes agree) stays green. The seeded-data red/green proof against a
+// REAL ClickHouse engine -- where the two shapes actually DISAGREE on rows
+// returned -- lives in the `integration`-tagged test in this package,
+// which this fake-client test cannot substitute for (a fake only proves
+// SQL TEXT changed, never that it executes correctly against the engine).
+func TestBatchResolveMembership_QueriesATupledMatch(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
+		{"issue", "ep-1", "theme", "reliability"},
+	}}}}
+
+	var recorded []struct{ rows, endpoints int }
+	previous := recordMembershipRowsPerEndpoint
+	recordMembershipRowsPerEndpoint = func(_ context.Context, rowsReturned, endpointsRequested int) {
+		recorded = append(recorded, struct{ rows, endpoints int }{rowsReturned, endpointsRequested})
+	}
+	t.Cleanup(func() { recordMembershipRowsPerEndpoint = previous })
+
+	rows := []edgeEndpoint{{sourceType: "issue", sourceID: "ep-1", targetType: "pr", targetID: "ep-2"}}
+	result, err := batchResolveMembership(context.Background(), client, "org1", rows, newFilterScope(nil, nil))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(client.statements) != 1 {
+		t.Fatalf("got %d Query calls, want 1", len(client.statements))
+	}
+	stmt := client.statements[0]
+	if !strings.Contains(stmt, "(m.node_type, m.node_id) IN {node_pairs:Array(Tuple(String, String))}") {
+		t.Fatalf("query is not a tupled match: %s", stmt)
+	}
+	if strings.Contains(stmt, "node_types") || strings.Contains(stmt, "node_ids") {
+		t.Fatalf("query still references the independent-IN binding names: %s", stmt)
+	}
+
+	pairsVal, ok := bindingValue(client.bindings[0], "node_pairs")
+	if !ok {
+		t.Fatalf("no node_pairs binding")
+	}
+	if want := "[('issue','ep-1'),('pr','ep-2')]"; pairsVal != want {
+		t.Fatalf("node_pairs binding = %v, want %q", pairsVal, want)
+	}
+	if _, ok := bindingValue(client.bindings[0], "node_types"); ok {
+		t.Fatalf("unexpected node_types binding still present")
+	}
+	if _, ok := bindingValue(client.bindings[0], "node_ids"); ok {
+		t.Fatalf("unexpected node_ids binding still present")
+	}
+
+	if len(result) != 1 || result[membershipKey{nodeType: "issue", nodeID: "ep-1"}].dominantTheme != "reliability" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(recorded) != 1 || recorded[0].rows != 1 || recorded[0].endpoints != 2 {
+		t.Fatalf("telemetry not recorded correctly: %+v", recorded)
+	}
+}
 
 // TestCategoryKindCardinalityHasNoNewValue is CHAOS-4647's trip-wire
 // (codex review round 2, adopted into the final ruling as the structural

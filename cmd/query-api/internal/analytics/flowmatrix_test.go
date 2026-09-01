@@ -517,13 +517,17 @@ func TestExecuteFlowMatrix_Success(t *testing.T) {
 		t.Fatalf("got %d nodes, want 2", len(nodes))
 	}
 	// f"{dim}:{node_id}" shape, analytics.py:297.
-	if nodes[0].ID != "TEAM:team-a" || nodes[0].Label != "team-a" || nodes[0].Dimension != "TEAM" || nodes[0].Value != 7 {
+	// CHAOS-4701: SankeyNode.Value/SankeyEdge.Value are *float64, not
+	// float64 -- dereference for the populated-value comparison (same
+	// discipline as resolve_test.go's TestResolve_Investment_ResolvesEndToEnd,
+	// CHAOS-4657).
+	if nodes[0].ID != "TEAM:team-a" || nodes[0].Label != "team-a" || nodes[0].Dimension != "TEAM" || nodes[0].Value == nil || *nodes[0].Value != 7 {
 		t.Fatalf("unexpected node[0]: %+v", nodes[0])
 	}
 	if len(edges) != 1 {
 		t.Fatalf("got %d edges, want 1", len(edges))
 	}
-	if edges[0].Source != "TEAM:team-a" || edges[0].Target != "TEAM:team-b" || edges[0].Value != 2 {
+	if edges[0].Source != "TEAM:team-a" || edges[0].Target != "TEAM:team-b" || edges[0].Value == nil || *edges[0].Value != 2 {
 		t.Fatalf("unexpected edge[0]: %+v", edges[0])
 	}
 }
@@ -654,5 +658,84 @@ func TestQueryEdges_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	}
 	if edges != nil {
 		t.Fatalf("expected nil edges on mid-stream failure, got %d partial rows: %+v", len(edges), edges)
+	}
+}
+
+// TestQueryNodes_AllNullValueYieldsNilValue_NotZero is the CHAOS-4701
+// regression guard for queryNodes' nullable scan -- same shape and same
+// both-directions requirement as CHAOS-4650's breakdown sibling
+// (breakdown_test.go's TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero)
+// and CHAOS-4657's timeseries sibling
+// (timeseries_test.go's TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero).
+// Proven in BOTH directions in the SAME result set: a null-only
+// assertion cannot catch a change that nils out EVERY value, which is
+// the WORSE bug (a populated node/edge silently losing its real value).
+// One row (team-null) whose measure column is SQL NULL must come back
+// as model.SankeyNode.Value/SankeyEdge.Value == nil (JSON null on the
+// wire, not the literal 0); another row (team-real) in the SAME result
+// set must still carry its real float64.
+//
+// RED-on-baseline (executed against origin/main's parent commit,
+// e237f87bc403, in a detached worktree, BEFORE this fix): queryNodes'
+// pre-fix `var value float64` (bare, non-pointer) destination does not
+// compile against this test at all -- the fake's **float64 case is a
+// NEW addition needed by the fix, so the parent commit's queryNodes
+// passes a bare *float64 to Scan, which the fakeRowScanner's existing
+// *float64 case accepts, silently reading the NULL fixture cell as the
+// zero-initialised 0.0 (same mechanism nullable.go's real driver
+// documents -- see fakeRowScanner's *float64 case comment above). The
+// pre-fix code makes team-null's Value compare equal to 0 (the zero
+// value), not nil -- indistinguishable from a genuinely measured zero,
+// which is exactly the silent collapse this ticket exists to remove.
+func TestQueryNodes_AllNullValueYieldsNilValue_NotZero(t *testing.T) {
+	client := &fakeClient{
+		nodesResponse: &fakeRowScanner{rows: [][]any{
+			{"TEAM", "team-null", nil},          // SQL NULL -- the all-NULL-group shape
+			{"TEAM", "team-real", float64(9.5)}, // populated -- the other direction
+		}},
+	}
+	q := compiledQuery{sql: flowMatrixTeamNodesTemplate}
+	nodes, err := queryNodes(context.Background(), client, q)
+	if err != nil {
+		t.Fatalf("queryNodes error = %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2", len(nodes))
+	}
+	nullNode := nodes[0]
+	realNode := nodes[1]
+	if nullNode.ID != "TEAM:team-null" || nullNode.Value != nil {
+		t.Fatalf("expected team-null's Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", nullNode)
+	}
+	if realNode.ID != "TEAM:team-real" || realNode.Value == nil || *realNode.Value != 9.5 {
+		t.Fatalf("expected team-real's Value to be the real populated 9.5 -- a fix that nils out EVERY value would also pass a null-only test, got %+v", realNode)
+	}
+}
+
+// TestQueryEdges_AllNullValueYieldsNilValue_NotZero is queryEdges' half
+// of TestQueryNodes_AllNullValueYieldsNilValue_NotZero -- same shape,
+// same both-directions discipline, applied to the edges scan.
+func TestQueryEdges_AllNullValueYieldsNilValue_NotZero(t *testing.T) {
+	client := &fakeClient{
+		edgesResponse: &fakeRowScanner{rows: [][]any{
+			{"TEAM", "TEAM", "team-a", "team-null", nil},           // SQL NULL
+			{"TEAM", "TEAM", "team-a", "team-real", float64(4.25)}, // populated
+		}},
+	}
+	q := compiledQuery{sql: flowMatrixTeamEdgesTemplate}
+	edges, err := queryEdges(context.Background(), client, q)
+	if err != nil {
+		t.Fatalf("queryEdges error = %v", err)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("got %d edges, want 2", len(edges))
+	}
+	nullEdge := edges[0]
+	realEdge := edges[1]
+	if nullEdge.Target != "TEAM:team-null" || nullEdge.Value != nil {
+		t.Fatalf("expected the team-null edge's Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", nullEdge)
+	}
+	if realEdge.Target != "TEAM:team-real" || realEdge.Value == nil || *realEdge.Value != 4.25 {
+		t.Fatalf("expected the team-real edge's Value to be the real populated 4.25 -- a fix that nils out EVERY value would also pass a null-only test, got %+v", realEdge)
 	}
 }

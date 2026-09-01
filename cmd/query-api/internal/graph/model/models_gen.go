@@ -1601,17 +1601,30 @@ type SankeyCoverage struct {
 	RepoCoverage float64 `json:"repoCoverage"`
 }
 
+// SankeyEdge.Value is *float64, not float64 -- CHAOS-4701, same shape as
+// CHAOS-4650's BreakdownItem.Value / CHAOS-4657's TimeseriesBucket.Value
+// (chris via team-lead, 2026-08-31, "Extend to class" ruling). Hand-edited
+// to match contracts/graphql/v1/schema.graphql's `value: Float` (widened
+// in the same commit, atomically with Python's Strawberry export --
+// unlike CHAOS-4657's TimeseriesBucket, this field's SDL IS widened here,
+// not deferred).
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+// overwritten wholesale by the next `gqlgen generate` -- the durable copy
+// of why lives in flowmatrix.go's queryNodes doc comment. Read that, not
+// this.
 type SankeyEdge struct {
-	Source string  `json:"source"`
-	Target string  `json:"target"`
-	Value  float64 `json:"value"`
+	Source string   `json:"source"`
+	Target string   `json:"target"`
+	Value  *float64 `json:"value"`
 }
 
+// SankeyNode.Value is *float64, not float64 -- see SankeyEdge's doc
+// comment immediately above (CHAOS-4701, same ruling, same commit).
 type SankeyNode struct {
-	ID        string  `json:"id"`
-	Label     string  `json:"label"`
-	Dimension string  `json:"dimension"`
-	Value     float64 `json:"value"`
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	Dimension string   `json:"dimension"`
+	Value     *float64 `json:"value"`
 }
 
 type SankeyRequestInput struct {
@@ -1847,9 +1860,21 @@ type ThroughputStaleWip struct {
 	P90AgeHours *float64 `json:"p90AgeHours,omitempty"`
 }
 
+// TimeseriesBucket.Value is *float64, not float64 -- CHAOS-4657, same
+// shape as CHAOS-4650's BreakdownItem.Value (chris 2026-08-31 04:18,
+// Option B). Hand-edited, NOT regenerated from
+// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
+// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+// overwritten wholesale by the next `gqlgen generate` -- the durable
+// copy of why this diverges from the schema, the reachability
+// mechanism, and the CHAOS-4658 hazard this creates lives in
+// timeseries.go's ExecuteTimeseries doc comment (and, for the sibling
+// field, breakdown.go's breakdownRow.Value doc comment). Read those,
+// not this.
 type TimeseriesBucket struct {
 	Date  graphqldate.Date `json:"date"`
-	Value float64          `json:"value"`
+	Value *float64         `json:"value"`
 }
 
 type TimeseriesRequestInput struct {

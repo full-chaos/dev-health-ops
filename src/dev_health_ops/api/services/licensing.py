@@ -12,9 +12,15 @@ from typing import TYPE_CHECKING, Any
 
 import jwt
 from jwt.exceptions import InvalidTokenError
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.licensing.feature_decisions import evaluate_org_feature_sync
+from dev_health_ops.licensing.feature_decisions import (
+    evaluate_org_feature_sync,
+    evaluate_org_features_async,
+)
+from dev_health_ops.licensing.feature_policy import FeatureDecisionReason
 from dev_health_ops.licensing.types import TIER_ORDER, LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
@@ -25,6 +31,11 @@ from dev_health_ops.models.licensing import (
     TierLimit,
 )
 from dev_health_ops.models.users import Organization
+from dev_health_ops.telemetry_metrics import (
+    build_counter,
+    load_otel_meter,
+    load_prometheus,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -33,6 +44,35 @@ logger = logging.getLogger(__name__)
 
 LICENSE_JWT_ALGORITHM = "RS256"
 LICENSE_JWT_ALGORITHM_SYMMETRIC = "HS256"
+
+_prometheus: Any = load_prometheus()
+_meter: Any = load_otel_meter(__name__)
+
+#: Async tier resolution at the GraphQL edge seam (CHAOS-4697 prerequisite,
+#: this module's ``resolve_org_tier_async``). Labeled by the resolved tier so
+#: a silent "always community" regression (the failure mode the precedence
+#: tests below guard against) is visible in metrics, not just in tests.
+_TIER_RESOLVED_ASYNC_TOTAL = build_counter(
+    "devhealth_org_tier_resolved_async_total",
+    "Async tier resolutions at the GraphQL edge seam, by resolved tier",
+    ["tier"],
+    meter=_meter,
+    prometheus=_prometheus,
+)
+
+#: `licensed_features` producer outcomes (CHAOS-4697 prerequisite, this
+#: module's ``resolve_licensed_features_async``). "ok" covers BOTH an org
+#: with features and an org with none -- that distinction lives in the
+#: envelope's own claim list length, not in this label. "storage_error"
+#: outcomes always pair with a raised ``LicensedFeaturesLookupError``, never
+#: a silently-empty return -- see that function's docstring.
+_LICENSED_FEATURES_TOTAL = build_counter(
+    "devhealth_licensed_features_resolved_total",
+    "licensed_features lookups at the GraphQL edge seam, by outcome",
+    ["outcome"],
+    meter=_meter,
+    prometheus=_prometheus,
+)
 
 
 def _coerce_limit_map(value: object) -> dict[str, int | float | None]:
@@ -81,6 +121,122 @@ def resolve_org_tier(
                 org_id,
             )
     return LicenseTier.COMMUNITY
+
+
+async def resolve_org_tier_async(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> LicenseTier:
+    """Async-usable tier resolution for seams that only hold an ``AsyncSession``
+    (CHAOS-4697 prerequisite -- ``graphql/app.py``'s ``get_context`` is async,
+    on ``get_postgres_session``'s async engine, but ``resolve_org_tier`` is
+    sync and expects a pre-fetched ``OrgLicense``).
+
+    Does **not** reimplement ``resolve_org_tier``'s precedence
+    (``OrgLicense.tier`` wins, else ``Organization.tier``, else COMMUNITY).
+    It fetches the ``OrgLicense`` row through the async session, then hands
+    the actual decision to ``resolve_org_tier`` via ``AsyncSession.run_sync``
+    -- the exact bridge pattern already proven in this codebase at
+    ``api/admin/llm_settings.py::require_byo_llm_access`` (``_resolve``
+    passed to ``session.run_sync``). Two implementations of one precedence
+    rule is the failure mode this repo has already been bitten by --
+    ``licensing/feature_decisions.py``'s ``_resolved_org_tier`` and
+    ``licensing/gating.py``'s inline copy inside
+    ``get_org_entitlements_from_db`` are two pre-existing instances of
+    exactly that (not introduced by this change, and not something this
+    function adds a third to -- see this lane's final report).
+    """
+    org_license = await session.scalar(
+        select(OrgLicense).where(OrgLicense.org_id == org_id)
+    )
+
+    def _resolve(sync_session: Session) -> LicenseTier:
+        return resolve_org_tier(sync_session, org_id, org_license)
+
+    tier = await session.run_sync(_resolve)
+    _TIER_RESOLVED_ASYNC_TOTAL.labels(tier=tier.value).inc()
+    return tier
+
+
+class LicensedFeaturesLookupError(RuntimeError):
+    """Raised when a ``licensed_features`` storage lookup itself fails.
+
+    Keeps "the org has no licensed features" (a valid, expected empty list)
+    distinguishable from "the lookup could not be completed" (a storage
+    failure). A caller must never see the two collapse into the same empty
+    list -- see ``resolve_licensed_features_async``'s docstring.
+    """
+
+
+async def resolve_licensed_features_async(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> list[str]:
+    """The feature keys ``org_id`` currently has access to, resolved live.
+
+    "Feature keys the org currently has access to" is the envelope contract
+    (``docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md``'s
+    v1 claim table; ``principal_envelope.EffectivePrincipalEnvelopeClaims
+    .licensed_features``). This had **no production producer anywhere** in
+    the repo before this change (CHAOS-4697 prerequisite).
+
+    Enumerates every feature key currently registered in the live
+    ``feature_flags`` table -- not the static ``STANDARD_FEATURES`` registry,
+    which can drift ahead of what a given deployment has actually migrated
+    and seeded -- and evaluates each through
+    ``licensing.feature_decisions.evaluate_org_features_async``: the same
+    tier/org-override/license-override decision logic every other feature
+    gate in this codebase uses (``FeatureService``, ``feature_flag_state``),
+    not reimplemented here.
+
+    Authorization is re-checked live every call (North Star check 18): no
+    caching across requests, no memoized result.
+
+    An empty list means the org genuinely has no licensed features, OR no
+    features are registered at all yet -- a pre-migration / minimal DB. That
+    second case mirrors ``feature_flag_state``'s existing "unregistered"
+    treatment: not an error, a legitimate state. A genuine STORAGE failure
+    during evaluation is never folded into that same empty list -- it raises
+    ``LicensedFeaturesLookupError`` instead, so a caller (and the signed
+    envelope this feeds) cannot mistake "the lookup failed" for "the org has
+    no features". This is the one branch this function refuses to fail open
+    on: an empty ``licensed_features`` claim is a security-relevant
+    assertion, and a caller building a trust boundary on it must be able to
+    tell "verified empty" from "unknown".
+    """
+
+    def _has_feature_flags_table(sync_session: Session) -> bool:
+        import sqlalchemy as sa
+
+        return sa.inspect(sync_session.get_bind()).has_table("feature_flags")
+
+    has_table = await session.run_sync(_has_feature_flags_table)
+    if not has_table:
+        _LICENSED_FEATURES_TOTAL.labels(outcome="unregistered_table").inc()
+        return []
+
+    keys = tuple(sorted((await session.scalars(select(FeatureFlag.key))).all()))
+    if not keys:
+        _LICENSED_FEATURES_TOTAL.labels(outcome="no_features_registered").inc()
+        return []
+
+    decisions = await evaluate_org_features_async(session, org_id, keys)
+
+    failed_keys = sorted(
+        key
+        for key, decision in decisions.items()
+        if decision.reason is FeatureDecisionReason.STORAGE_ERROR
+    )
+    if failed_keys:
+        _LICENSED_FEATURES_TOTAL.labels(outcome="storage_error").inc()
+        raise LicensedFeaturesLookupError(
+            f"licensed_features lookup failed for org_id={org_id}: "
+            f"storage error resolving {failed_keys}"
+        )
+
+    allowed = sorted(key for key, decision in decisions.items() if decision.allowed)
+    _LICENSED_FEATURES_TOTAL.labels(outcome="ok").inc()
+    return allowed
 
 
 def _get_license_public_key() -> str | None:

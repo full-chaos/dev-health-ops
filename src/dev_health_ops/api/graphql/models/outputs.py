@@ -34,10 +34,25 @@ class BreakdownItem:
     server-resolved human-readable name (Framework A7); it falls back to a
     controlled non-UUID token when the entity cannot be resolved (A8) so the
     client never renders a raw id as the primary label.
+
+    ``value`` is ``float | None``, not ``float`` -- CHAOS-4658 (chris
+    2026-08-31 17:52 PT, "Yes, exempt" ruling): the published SDL contract
+    is widened to match the Go plane's `*float64` (CHAOS-4650), which
+    preserves an all-NULL aggregate group as SQL NULL / JSON null instead
+    of collapsing it to 0.0. This is a TYPE-CONTRACT change only, not a
+    behavior change on this (Python) side: `_build_breakdown_item`'s
+    caller (resolvers/analytics.py) still passes `float(row.get("value")
+    or 0)` unchanged -- Python continues to collapse the all-NULL case to
+    0.0, its own deliberate divergence from the Go plane (see
+    breakdown.go's breakdownRow.Value doc comment on the Go side). A
+    nullable GraphQL field is free to never actually emit null; only the
+    CONTRACT (what a client is allowed to assume) changes here, so the Go
+    plane's genuine nulls stop violating a schema promise it never agreed
+    to keep.
     """
 
     key: str
-    value: float
+    value: float | None
     label: str | None = None
 
 
@@ -52,21 +67,43 @@ class BreakdownResult:
 
 @strawberry.type
 class SankeyNode:
-    """A node in a Sankey diagram."""
+    """A node in a Sankey diagram.
+
+    ``value`` is ``float | None``, not ``float`` -- CHAOS-4701 (chris via
+    team-lead, 2026-08-31, "Extend to class" ruling extending CHAOS-4658's
+    exemption to the whole nullable-value `Float!` -> `Float` fix class):
+    the published SDL contract is widened to match the Go plane's
+    `*float64` (queryNodes/queryEdges in flowmatrix.go, shared by
+    sankey.go's investment-path measures), which preserves an all-NULL
+    aggregate group as SQL NULL / JSON null instead of collapsing it to
+    0.0. This is a TYPE-CONTRACT change only, not a behavior change on
+    this (Python) side: the sankey/flow-matrix builders in
+    resolvers/analytics.py are unchanged -- Python continues to collapse
+    the all-NULL case to 0.0, its own deliberate divergence from the Go
+    plane (see flowmatrix.go's queryNodes doc comment on the Go side). A
+    nullable GraphQL field is free to never actually emit null; only the
+    CONTRACT (what a client is allowed to assume) changes here, so the Go
+    plane's genuine nulls stop violating a schema promise it never agreed
+    to keep.
+    """
 
     id: str
     label: str
     dimension: str
-    value: float
+    value: float | None
 
 
 @strawberry.type
 class SankeyEdge:
-    """An edge in a Sankey diagram."""
+    """An edge in a Sankey diagram.
+
+    ``value`` is ``float | None`` -- see ``SankeyNode.value``'s doc
+    comment immediately above (CHAOS-4701, same ruling, same commit).
+    """
 
     source: str
     target: str
-    value: float
+    value: float | None
 
 
 @strawberry.type

@@ -158,10 +158,11 @@ SETTINGS max_execution_time = {timeout:UInt64}
 // BreakdownItem.Value on the non-investment breakdown path and no
 // other query. Do not resolve it by reverting Go to Python's 0.0
 // collapse, and do not read it as covering any other measure/field
-// pair sharing the AVG(Nullable(Float64)) shape (timeseries.go's
-// executeTimeseriesRaw scans the same category-2 measures into a bare
-// float64 at timeseries.go:287-288 and has the SAME latent defect --
-// tracked separately, out of this ticket's scope, not yet fixed here).
+// pair sharing the AVG(Nullable(Float64)) shape. timeseries.go's
+// ExecuteTimeseries scanned the same category-2 measures into a bare
+// float64 at the same shape's defect -- CHAOS-4657 fixed that path with
+// the identical *float64 scan and the same product ruling; see
+// timeseries.go's ExecuteTimeseries doc comment.
 //
 // REACHABILITY, checked by mechanism not by ticket state (CHAOS-4538
 // itself merged 08-30/31, bba15566d -- citing it as a blocker is

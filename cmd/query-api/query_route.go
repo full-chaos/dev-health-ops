@@ -696,11 +696,18 @@ func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
 // config: the shared dev-health-go ClickHouse client, a real Postgres
 // pool, and the effective-principal verifier, then hands them to
 // newQueryHandler. The returned cleanup func closes the Postgres pool;
-// call it on shutdown.
-func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
+// call it on shutdown. The returned ready func is CHAOS-4512's fix: a
+// live liveness check of the SAME two dependencies /query actually reads
+// (ClickHouse via chClient.Ping, the registry Postgres pool via
+// pgPool.Ping), for main.go's readyzHandler to call on every /readyz
+// request -- co-located here, not in main.go, because these are the only
+// two places this route's live dependency handles exist. See
+// readyzHandler's doc comment in main.go for the full contract this
+// closes over.
+func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Context) error, func(), error) {
 	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Eager readiness check, matching cmd/dev-health-worker's own
 	// documented contract for this exact env var (deploy/go-workers/
@@ -719,23 +726,53 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(), error) {
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := chClient.Ping(pingCtx); err != nil {
-		return nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
+		return nil, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
 	}
 
 	pgPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {
 		pgPool.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	handler := newQueryHandler(chClient, pgPool, verifier, cfg.SchemaDigest)
 	cleanup := func() { pgPool.Close() }
-	return handler, cleanup, nil
+	ready := readinessCheck(chClient, pgPool)
+	return handler, ready, cleanup, nil
+}
+
+// readinessCheck returns a func that pings BOTH of /query's live
+// dependencies -- ClickHouse and the registry Postgres pool -- and
+// returns the first error either reports. This is CHAOS-4512's actual
+// fix: buildQueryRoute above already pings ClickHouse ONCE, eagerly, at
+// startup (so a ClickHouse that is down at boot refuses to start the
+// process at all -- "measurement that did not happen must FAIL, loudly").
+// That one-shot check says nothing about a ClickHouse that goes
+// unreachable LATER, and says nothing about Postgres at all:
+// pgxpool.New above is lazy by design (pgx does not dial until a query
+// or Ping is issued), so an unreachable or misconfigured
+// GO_API_REGISTRY_POSTGRES_URI has never failed startup -- the process
+// comes up, the OLD readyzHandler answered 200 unconditionally, and every
+// real request then failed against a pool that has never once connected.
+// Calling this on every /readyz request (with a bounded timeout applied
+// by the caller) is what closes that gap: readiness now reflects the
+// CURRENT reachability of both dependencies, not their state at process
+// start.
+func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := chClient.Ping(ctx); err != nil {
+			return fmt.Errorf("clickhouse: %w", err)
+		}
+		if err := pgPool.Ping(ctx); err != nil {
+			return fmt.Errorf("registry postgres: %w", err)
+		}
+		return nil
+	}
 }
 
 // newQueryHandler wires the routeswitch.Mux + registry-backed

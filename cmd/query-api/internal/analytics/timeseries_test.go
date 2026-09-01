@@ -265,6 +265,53 @@ func TestExecuteTimeseries_GroupsByDimensionValue(t *testing.T) {
 	}
 }
 
+// TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero is the
+// CHAOS-4657 regression guard for ExecuteTimeseries's nullable scan --
+// same shape and same both-directions requirement as CHAOS-4650's
+// breakdown sibling (breakdown_test.go's
+// TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero). Proven in
+// BOTH directions: a null-only assertion cannot catch a change that
+// nils out EVERY value, which is the WORSE bug (a populated bucket
+// silently losing its real value). One dimension_value (repo-null)
+// whose measure column is SQL NULL for its one bucket must come back as
+// model.TimeseriesBucket.Value == nil (JSON null on the wire, not the
+// literal 0); another dimension_value (repo-real) in the SAME result
+// set must still carry its real float64.
+//
+// RED-on-baseline: against ExecuteTimeseries's pre-fix `var value
+// float64` (bare, non-pointer) destination, the fake's *float64 case
+// mirrors the real clickhouse-go v2 driver's documented behaviour for a
+// NULL Nullable(Float64) row (nullable.go's ScanRow: no case matches a
+// bare *float64, so it returns nil WITHOUT writing to the destination)
+// -- the zero-initialised 0.0 survives untouched, and this test's
+// repo-null assertion (Value == nil) fails because the raw scanned
+// value is 0.0, indistinguishable from a genuinely measured zero. This
+// is the exact silent collapse CHAOS-4657 exists to remove.
+func TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero(t *testing.T) {
+	client := &fakeSingleClient{
+		response: &fakeRowScanner{rows: [][]any{
+			{mustTime("2026-01-01"), "repo-null", nil},  // SQL NULL -- the all-NULL-bucket shape
+			{mustTime("2026-01-01"), "repo-real", 42.5}, // populated -- the other direction
+		}},
+	}
+	q := compiledQuery{sql: "SELECT ..."}
+	results, err := ExecuteTimeseries(context.Background(), client, q, "REPO", "COVERAGE_LINE_PCT")
+	if err != nil {
+		t.Fatalf("ExecuteTimeseries error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2 (one per dimension_value)", len(results))
+	}
+	nullResult := results[0]
+	realResult := results[1]
+	if nullResult.DimensionValue != "repo-null" || len(nullResult.Buckets) != 1 || nullResult.Buckets[0].Value != nil {
+		t.Fatalf("expected repo-null's bucket Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", nullResult)
+	}
+	if realResult.DimensionValue != "repo-real" || len(realResult.Buckets) != 1 || realResult.Buckets[0].Value == nil || *realResult.Buckets[0].Value != 42.5 {
+		t.Fatalf("expected repo-real's bucket Value to be the real populated 42.5 -- a fix that nils out EVERY value would also pass a null-only test, got %+v", realResult)
+	}
+}
+
 // TestExecuteTimeseries_MidStreamFailureDiscardsPartialRows is the
 // PARTIAL-ROW CLASS regression guard (BRIEF.md; found live in Lane B's
 // fetchPeriodRows -- a scanner that Scan()s some rows successfully and

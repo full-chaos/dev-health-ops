@@ -14,6 +14,13 @@
 // routeswitch.Mux, keyed by the operation registry
 // (src/dev_health_ops/models/go_api_registry.py's ROUTING_STATE table, once
 // a Go reader exists -- CHAOS-4377/dev-health-go).
+//
+// CHAOS-4512: /readyz now reflects /query's actual live dependencies
+// (ClickHouse, registry Postgres) once that route is mounted -- see
+// readyzHandler's doc comment below for the full contract. It is no
+// longer true, as an earlier version of this comment claimed, that
+// readiness has nothing to check: that was Wave 0's shape, before /query
+// existed.
 package main
 
 import (
@@ -58,15 +65,64 @@ func healthzHandler() http.HandlerFunc {
 	}
 }
 
-// readyzHandler reports readiness. Wave 0 has no store dependency to check
-// yet (no resolver reads anything), so readiness is process-liveness only
-// -- deliberately NOT claiming more than is true. A later wave adds a real
-// dependency check (ClickHouse/registry reachability) here, matching this
-// codebase's "a measurement that did not happen must FAIL, loudly"
-// discipline: this handler must not start asserting DB health before it
-// actually checks it.
-func readyzHandler() http.HandlerFunc {
+// readyzTimeout bounds every dependency check readyzHandler runs. An
+// unbounded readiness probe hangs whatever polls it (an orchestrator, a
+// rollout gate, a load balancer health check) for as long as the
+// dependency itself is wedged, which is strictly worse than a fast,
+// definite "not ready" -- see readyzHandler's doc comment.
+const readyzTimeout = 3 * time.Second
+
+// readyzHandler reports whether THIS instance is fit to receive traffic
+// -- distinct from healthzHandler's pure process-liveness (CHAOS-4512:
+// the two must never collapse into one signal; a process that is alive
+// but whose query dependencies are down is live, not ready).
+//
+// ready is nil when /query is not configured/mounted in this deployment
+// (loadQueryRouteConfig's ok=false, main()'s Wave-0 "nothing mounted"
+// shape -- see that call site's comment for what configures it out of
+// this mode). That is a DELIBERATE, documented operating mode elsewhere
+// in this codebase (this file's and query_route.go's own comments both
+// treat an unconfigured environment as intentional, not a failure --
+// "an operator who has not yet configured this service's dependencies
+// must not be forced to also configure ClickHouse/Postgres/JWKS just to
+// build or run the binary"), so this handler does not fail it: there is
+// no /query dependency to check, so there is nothing to report as
+// unreachable. It still answers distinctly (body text + the
+// "not_configured" telemetry outcome below) rather than reading
+// identically to a verified-healthy 200, per CHAOS-4512's explicit
+// instruction not to let "no dependencies configured" silently read as
+// "ready to serve" -- an operator or dashboard can tell the two apart
+// even though both return 200.
+//
+// When ready is non-nil (/query IS mounted), this handler calls it with
+// a bounded timeout on every request -- a LIVE check of ClickHouse and
+// registry-Postgres reachability, not a cached result from process
+// start. That is the actual CHAOS-4512 defect: buildQueryRoute's own
+// eager ClickHouse ping only ever ran once, at startup, and
+// pgxpool.New never pinged Postgres at all, so a dependency that failed
+// or went unreachable after boot was invisible to this endpoint before
+// this fix -- the process stayed up, /readyz kept answering 200
+// unconditionally, and every real /query request then failed or 404'd
+// against a rollout gate that believed the instance was healthy.
+func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if ready == nil {
+			recordReadyzOutcome("not_configured")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ready: /query not configured"))
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), readyzTimeout)
+		defer cancel()
+		if err := ready(ctx); err != nil {
+			log.Printf("query-api: /readyz dependency check failed: %v", err)
+			recordReadyzOutcome("unhealthy")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("not ready: " + err.Error()))
+			return
+		}
+		recordReadyzOutcome("healthy")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready"))
 	}
@@ -80,7 +136,6 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler())
-	mux.HandleFunc("/readyz", readyzHandler())
 
 	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
 	// real featureFlags, reviewEdges, and cognitiveLoad routes when their
@@ -88,17 +143,24 @@ func main() {
 	// comments for what "configured" means and why an unconfigured
 	// environment falls back to Wave 0's "nothing mounted" behavior
 	// instead of failing to start.
+	//
+	// ready is CHAOS-4512's fix: nil until (and unless) /query mounts
+	// successfully, matching readyzHandler's documented "nothing
+	// configured, nothing to check" contract for that state.
+	var ready func(context.Context) error
 	if routeCfg, ok := loadQueryRouteConfig(); ok {
-		queryHandler, cleanup, buildErr := buildQueryRoute(routeCfg)
+		queryHandler, readyFn, cleanup, buildErr := buildQueryRoute(routeCfg)
 		if buildErr != nil {
 			log.Fatalf("query-api: build /query route: %v", buildErr)
 		}
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
+		ready = readyFn
 		log.Print("query-api: /query route mounted (featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, hotspots, operatingReview)")
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
 	}
+	mux.HandleFunc("/readyz", readyzHandler(ready))
 
 	server := &http.Server{
 		Addr:              addr(),

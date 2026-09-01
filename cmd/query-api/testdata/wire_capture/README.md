@@ -38,11 +38,21 @@ to refresh this fixture (e.g. after an intentional query text change).
 | `FEATURE_FLAG_REGISTRY_QUERY` (web source text, unprinted) | `555bc9f82339b8321f309a26d310c4a7e41e79b9b155da41f62d8e97b50da8b7` |
 | this captured fixture (real wire bytes) | `06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208` |
 
-These two digests are DIFFERENT (the source text has a 122-character
-single-line `featureFlags(...)` field argument list; urql's real
-`print()` reflows it past 80 characters) -- this is exactly CHAOS-4696's
-defect. `cmd/query-api/query_route.go`'s `registeredFeatureFlagsDocument`
-const must digest to `06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208`, not `555bc9f82339b8321f309a26d310c4a7e41e79b9b155da41f62d8e97b50da8b7`, for
+These two digests are DIFFERENT for TWO reasons, not one:
+1. `cacheExchange` maps every query through `formatDocument`, injecting
+   a `__typename` selection into every non-root selection set --
+   unconditional for any client (like this repo's) that runs
+   `cacheExchange` before `fetchExchange`.
+2. The source text has a 122-character single-line `featureFlags(...)`
+   field argument list; urql's real `print()` (`fetchExchange`'s
+   `stringifyDocument`) reflows it past 80 characters.
+
+Both are part of CHAOS-4696's defect -- a fix that only reflowed the
+argument list (skipping `__typename`) would still digest-miss a real
+request; see `scripts/graphql-wire-parity.ts` in the web repo. `cmd/query-api/query_route.go`'s
+`registeredFeatureFlagsDocument` const must digest to
+`06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208`, not
+`555bc9f82339b8321f309a26d310c4a7e41e79b9b155da41f62d8e97b50da8b7`, for
 query-api to accept a real client's request.
 
 Captured: 2026-09-01T01:40:06.129Z, ops tip at capture time: see the

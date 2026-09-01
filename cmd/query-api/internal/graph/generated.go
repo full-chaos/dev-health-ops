@@ -10822,7 +10822,7 @@ type AnalyticsResult {
 
 type BreakdownItem {
   key: String!
-  value: Float!
+  value: Float
   label: String
 }
 
@@ -77237,10 +77237,19 @@ func (ec *executionContext) _BreakdownItem(ctx context.Context, sel ast.Selectio
 				out.Invalids++
 			}
 		case "value":
+			// CHAOS-4658 (chris 2026-08-31 17:52 PT, "Yes, exempt" ruling):
+			// hand-edited to drop the Invalids++ this case carried when
+			// BreakdownItem.value was Float! (non-null). model.BreakdownItem.Value
+			// is *float64 (CHAOS-4650) and the SDL now says `value: Float`
+			// (nullable, this commit) -- a nil value is a VALID response, not an
+			// error, so it must NOT collapse the whole BreakdownItem to
+			// graphql.Null the way a genuinely-invalid non-null field would.
+			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+			// on the next `gqlgen generate`; the durable copy of why lives in
+			// breakdown.go's breakdownRow.Value doc comment. Read that, not this.
+			// Matches the "label" case immediately below, which has never
+			// incremented Invalids because String (no !) was always nullable.
 			out.Values[i] = ec._BreakdownItem_value(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "label":
 			out.Values[i] = ec._BreakdownItem_label(ctx, field, obj)
 		default:

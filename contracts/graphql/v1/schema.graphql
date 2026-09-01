@@ -383,7 +383,7 @@ type AnalyticsResult {
 
 type BreakdownItem {
   key: String!
-  value: Float!
+  value: Float
   label: String
 }
 

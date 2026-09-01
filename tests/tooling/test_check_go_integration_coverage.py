@@ -61,9 +61,22 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-4684 added cmd/query-api/internal/hotspots (33 -> 34 discovered,
     # 32 -> 33 will run): the argMax(<col>, (day, computed_at)) tie-break
     # regression guard runs against a real ClickHouse container.
-    assert "34 package(s) discovered, 1 denylisted, 33 will run" in result.stdout
-    # Name the denylisted package explicitly (SET DIFFERENCE), not just the
-    # count -- a bare count is exactly what let CHAOS-4643's own literal drift
+    # CHAOS-4730 un-denylisted cmd/query-api/internal/analytics (34
+    # discovered unchanged, 33 -> 34 will run, 1 -> 0 denylisted): the
+    # CHAOS-4643 premise (this package's ONLY integration file could never
+    # run in CI) no longer holds -- the SETTINGS max_execution_time =
+    # {timeout:UInt64} bound-parameter defect was fixed package-wide, and
+    # the package now has two REAL Testcontainers-backed regression tests
+    # (breakdown_seeded_integration_test.go,
+    # investmentquality_seeded_integration_test.go). nan_class_live_test.go
+    # and investmentquality_live_test.go stay deliberately opt-in-live,
+    # each skipping with a message naming the env var it needs -- that
+    # pattern is not what CHAOS-4643 objected to; its complaint was a
+    # package whose ENTIRE integration coverage was a permanent, silent
+    # skip.
+    assert "34 package(s) discovered, 0 denylisted, 34 will run" in result.stdout
+    # Name the package explicitly (SET MEMBERSHIP), not just the count --
+    # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
-    assert "  SKIP cmd/query-api/internal/analytics: " in result.stdout
-    assert "  RUN  cmd/query-api/internal/analytics" not in result.stdout
+    assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
+    assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

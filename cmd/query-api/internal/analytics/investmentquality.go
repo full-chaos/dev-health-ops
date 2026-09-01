@@ -256,14 +256,13 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
   AND work_unit_investments.to_ts >= {start_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
-SETTINGS max_execution_time = {timeout:UInt64}
-`, latestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter)
+%s
+`, latestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(startDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(endDate.Time())},
-		{Name: "timeout", Value: queryTimeoutSecs},
 	}
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, teamBindings...)

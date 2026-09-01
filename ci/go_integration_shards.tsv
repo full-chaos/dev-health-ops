@@ -16,11 +16,18 @@
 # assertions in them. Re-time it if that file grows. Longest-processing-time-first assignment keeps the two
 # non-dominant shards balanced while isolating that indivisible dominant
 # package under the unchanged 25-minute job budget.
+# cmd/query-api/internal/analytics (CHAOS-4730): un-denylisted (CHAOS-4643's
+# reason no longer held once the package got real Testcontainers coverage,
+# see ci/check_go.sh's INTEGRATION_DENYLIST comment). Weight 22s, ceil() of a
+# local run of both its Testcontainers-backed tests together (21.575s,
+# breakdown_seeded_integration_test.go + investmentquality_seeded_integration_test.go,
+# each starting its own container).
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
 cmd/query-api	15
+cmd/query-api/internal/analytics	22
 cmd/query-api/internal/hotspots	26
 cmd/query-api/internal/routeswitch	5
 internal/cacheinvalidation	2

@@ -355,10 +355,16 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 "go_api_dispatch.digest_computation_failed",
                 extra={"query_length": len(query_text)},
             )
-            GO_API_DISPATCH_FALLBACK_TOTAL.labels(
-                operation="unknown", reason="digest_computation_error"
-            ).inc()
-            return None
+            # CHAOS-4710 codex round 1 (P2, EXECUTED): this branch used to
+            # increment the fallback counter directly, bypassing
+            # _fallback()'s new consistent INFO line -- the one fallback
+            # reason that could occur BEFORE an operation/digest is known
+            # was exactly the one left out of the "no branch stays
+            # half-instrumented" fix. Route through _fallback() like every
+            # other fallback reason, even though "unknown" is a placeholder
+            # operation name here (no catalog match was attempted -- the
+            # digest itself could not be computed).
+            return self._fallback("unknown", "digest_computation_error")
 
         selected_operation = operation_for_digest(doc_digest)
         if selected_operation is None:

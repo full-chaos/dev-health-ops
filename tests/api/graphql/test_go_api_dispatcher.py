@@ -291,6 +291,36 @@ async def test_query_text_with_unpaired_surrogate_falls_back_instead_of_raising(
     assert result is None
 
 
+async def test_digest_computation_failure_logs_consistent_fallback_line(
+    router: GoApiDispatchRouter,
+    caplog: pytest.LogCaptureFixture,
+):
+    """CHAOS-4710 codex round 1 (P2, EXECUTED): this branch used to
+    increment GO_API_DISPATCH_FALLBACK_TOTAL directly and return, bypassing
+    _fallback()'s new consistent plane-decision INFO line -- the one
+    fallback reason reachable BEFORE an operation/digest is known was
+    exactly the one left half-instrumented by the original fix. Must now
+    log go_api_dispatch.fallback (operation=unknown, plane=python,
+    reason=digest_computation_error) same as every other fallback reason."""
+    body = json.dumps({"query": "\ud800"}).encode("utf-8")
+    request = _make_request("POST", body=body)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(request, context)
+
+    assert result is None
+    fallback = [
+        r.getMessage()
+        for r in caplog.records
+        if "go_api_dispatch.fallback" in r.getMessage()
+    ]
+    assert len(fallback) == 1, f"want exactly one fallback log line, got {fallback}"
+    assert "operation=unknown" in fallback[0]
+    assert "plane=python" in fallback[0]
+    assert "reason=digest_computation_error" in fallback[0]
+
+
 async def test_registry_lookup_raises_falls_back_to_python(
     router: GoApiDispatchRouter, monkeypatch: pytest.MonkeyPatch
 ):

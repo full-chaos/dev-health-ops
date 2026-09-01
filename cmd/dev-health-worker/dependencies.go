@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -552,6 +553,14 @@ func configureWorkerDependenciesWithSources(
 	// (reading zero on groups that never touch it) instead of only existing
 	// on scrapes lucky enough to hit a go-worker-heavy replica.
 	if err := registry.RegisterMetrics("repo_user_commit_writer", repouser.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4292: same process-wide-singleton-needs-registration shape as
+	// repo_user_commit_writer above -- cicd's native writer increments it on
+	// every WriteResult call regardless of which worker group runs the
+	// metricsQueue.
+	if err := registry.RegisterMetrics("cicd_writer", cicd.RowsWrittenMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

@@ -1,0 +1,26 @@
+{
+  "records": [
+    {
+      "avg_duration_minutes": 15.0,
+      "avg_queue_minutes": 6.666666666666667,
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "p90_duration_minutes": 26.0,
+      "pipelines_count": 4,
+      "repo_id": "00000000-0000-4000-8000-00000000000a",
+      "success_rate": 0.75
+    },
+    {
+      "avg_duration_minutes": null,
+      "avg_queue_minutes": null,
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "p90_duration_minutes": null,
+      "pipelines_count": 1,
+      "repo_id": "00000000-0000-4000-8000-00000000000b",
+      "success_rate": 0.0
+    }
+  ]
+}

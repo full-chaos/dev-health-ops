@@ -265,6 +265,17 @@ func buildDailyWorker(
 						"error", deployErr,
 					)
 				}
+				if cicdExecutor, cicdErr := daily.NewCICDExecutor(clickhouseConnection); cicdErr == nil {
+					nativeFamilies["cicd"] = cicdExecutor
+				} else {
+					logger.Error(
+						"cicd native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", cicdErr,
+					)
+				}
 				// CHAOS-4277: file_hotspots and file_risk_hotspots are
 				// the third pair of families to leave the Python
 				// compatibility bridge -- registered as TWO independent

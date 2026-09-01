@@ -1132,9 +1132,11 @@ async def run_daily_metrics_job(
     this job must neither recompute nor rewrite them. ``None`` or an empty
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
-    check this set (``team_wellbeing``, ``repo_user_commit``, ``incident``,
-    ``deploy``, ``work_item_state``, ``file_hotspots``,
-    ``file_risk_hotspots``); naming any other family here has no effect.
+    check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
+    CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
+    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
+    ``file_risk_hotspots`` CHAOS-4277); naming any other family here has no
+    effect.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -1609,8 +1611,20 @@ async def run_daily_metrics_job(
             pull_request_review_rows=review_rows,
             computed_at=computed_at,
         )
-        cicd_metrics = compute_cicd_metrics_daily(
-            day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
+        # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
+        # Go dispatcher reports it already computed and wrote this scope,
+        # skip compute here -- unlike repo_user_commit, cicd_metrics has no
+        # downstream in-process consumer in this function (nothing else
+        # reads it before the write block), so skipping compute entirely
+        # (mirroring team_wellbeing, not repo_user_commit's write-only skip)
+        # is safe.
+        skip_cicd = "cicd" in skip_families
+        cicd_metrics = (
+            []
+            if skip_cicd
+            else compute_cicd_metrics_daily(
+                day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
+            )
         )
         testops_pipeline_metrics = compute_pipeline_metrics_daily(
             day=d,
@@ -1925,19 +1939,15 @@ async def run_daily_metrics_job(
         # CHAOS-4246: cicd/deploy/incident are written unconditionally above
         # (write_*_metrics no-ops on an empty list) -- note it here so a run
         # of zero rows is visible instead of indistinguishable from success.
-        # incident's note is skipped when "incident" in skip_families
-        # (CHAOS-4269/CHAOS-4295): in that case incident_metrics is
-        # unconditionally [] because Go already computed and wrote this
-        # family, not because of a genuinely quiet day -- an unconditional
-        # note here would log a spurious "zero rows" warning on every such
-        # partition. When the native executor is unavailable and Python is
-        # still the live compute path for this family (skip_families empty),
-        # the note stays exactly as before -- team_wellbeing/repo_user_commit
-        # went further and dropped their note unconditionally because
-        # nothing else in this function reads their skip_families=false
-        # case's zero-row signal the way CHAOS-4263's stale-family RCA
-        # already covers cicd/deploy/incident/testops_risk specifically.
-        _note_family_zero_rows("cicd", cicd_metrics, day=d)
+        # CHAOS-4292: when cicd was skipped (native Go already computed and
+        # wrote it), cicd_metrics is always [] here regardless of how many
+        # rows the Go side actually wrote -- noting it would be a FALSE zero-
+        # rows-computed signal, so skip the note entirely for this partition;
+        # the native executor's own anomaly detection is
+        # ClickHouseSourceDataChecker (Go), not this Python-side note. Same
+        # shape as incident's own gate just below (CHAOS-4269/CHAOS-4295).
+        if not skip_cicd:
+            _note_family_zero_rows("cicd", cicd_metrics, day=d)
         _note_family_zero_rows("deploy", deploy_metrics, day=d)
         if "incident" not in skip_families:
             _note_family_zero_rows("incident", incident_metrics, day=d)

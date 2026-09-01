@@ -36,6 +36,15 @@ generation. `test_deploy_in_skip_families_writes_nothing_but_still_computes`
 is the red-on-baseline proof: it fails against the tree before this guard
 existed (write_deploy_metrics fires unconditionally) and passes after.
 
+CHAOS-4292 (cicd) added a gate shaped like team_wellbeing's (compute is
+skipped entirely -- cicd_metrics has no downstream in-process consumer in
+this function). It also has its OWN failure mode neither prior gate has:
+cicd_metrics feeds `_note_family_zero_rows("cicd", cicd_metrics, day=d)`
+(CHAOS-4246), which records a "zero rows computed" DEGRADE signal. Skipping
+compute alone would leave cicd_metrics=[] and fire a FALSE zero-rows note
+even when the native Go executor wrote real rows for this partition -- so
+the note itself must also be skipped. The tests below pin both halves.
+
 CHAOS-4277 (file_hotspots + file_risk_hotspots) added the SAME write-only
 gate shape as repo_user_commit: `compute_file_hotspots`/
 `compute_file_risk_hotspots` are still called (neither `all_file_metrics`
@@ -120,7 +129,19 @@ class _FakeLoader:
         return [commit_row], [], []
 
     async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
+        # One in-window pipeline run for REPO_ID -- enough for
+        # compute_cicd_metrics_daily to produce exactly one row when NOT
+        # skipped, so the skip tests below can tell "computed nothing"
+        # apart from "computed something and just didn't write it".
+        pipeline_row = {
+            "repo_id": REPO_ID,
+            "run_id": "run-1",
+            "status": "success",
+            "queued_at": None,
+            "started_at": datetime(2025, 12, 18, 9, 0, tzinfo=timezone.utc),
+            "finished_at": datetime(2025, 12, 18, 9, 10, tzinfo=timezone.utc),
+        }
+        return [pipeline_row], []
 
     async def load_testops_pipeline_data(self, *a: Any, **k: Any) -> tuple[list, list]:
         return [], []
@@ -278,8 +299,8 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
     monkeypatch: Any,
 ) -> None:
     """A family with no native executor is unaffected by being named in
-    skip_families -- only team_wellbeing and repo_user_commit check this set
-    today."""
+    skip_families -- only team_wellbeing, repo_user_commit, incident, deploy,
+    and cicd check this set today. "file_hotspots" has no Go executor yet."""
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
@@ -290,11 +311,12 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         provider="auto",
         org_id=ORG_ID,
         skip_finalize=True,
-        skip_families={"cicd"},
+        skip_families={"file_hotspots"},
     )
 
     assert "team_metrics" in sink.write_calls
     assert "repo_metrics" in sink.write_calls
+    assert "write_cicd_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -435,6 +457,109 @@ async def test_deploy_not_skipped_writes_unconditionally(monkeypatch: Any) -> No
     )
 
     assert "write_deploy_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_cicd_not_skipped_computes_and_writes_real_rows(
+    monkeypatch: Any,
+) -> None:
+    """Baseline (skip_families empty): compute_cicd_metrics_daily runs and
+    produces the one row _FakeLoader.load_cicd_data's fixture pipeline run
+    implies, and no false zero-rows note fires for it."""
+    zero_rows_calls: list[tuple[str, str]] = []
+    original_record = job_daily.record_metrics_family_zero_rows
+
+    def _spy_record(*, family: str, cause: str) -> None:
+        zero_rows_calls.append((family, cause))
+        original_record(family=family, cause=cause)
+
+    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert "write_cicd_metrics" in sink.write_calls
+    assert len(sink.cicd_metrics_writes) == 1
+    assert len(sink.cicd_metrics_writes[0]) == 1
+    cicd_row = sink.cicd_metrics_writes[0][0]
+    assert cicd_row.repo_id == REPO_ID
+    assert cicd_row.pipelines_count == 1
+    assert not any(family == "cicd" for family, _cause in zero_rows_calls)
+
+
+@pytest.mark.asyncio
+async def test_cicd_in_skip_families_computes_nothing_and_notes_no_false_zero_rows(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4292: when the Go dispatcher reports cicd already computed and
+    wrote this scope, this job must (1) never call
+    compute_cicd_metrics_daily and (2) never fire the "cicd" zero-rows-
+    computed DEGRADE note -- an earlier revision of this gate skipped only
+    (1), which left cicd_metrics=[] and made _note_family_zero_rows fire a
+    FALSE "no_rows_computed" signal on every native-executor partition
+    regardless of how many rows Go actually wrote."""
+    compute_calls: list[Any] = []
+    original_compute = job_daily.compute_cicd_metrics_daily
+
+    def _spy_compute(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original_compute(*args, **kwargs)
+
+    monkeypatch.setattr(job_daily, "compute_cicd_metrics_daily", _spy_compute)
+
+    zero_rows_calls: list[tuple[str, str]] = []
+
+    def _spy_record(*, family: str, cause: str) -> None:
+        zero_rows_calls.append((family, cause))
+
+    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"cicd"},
+    )
+
+    assert compute_calls == []
+    assert not any(family == "cicd" for family, _cause in zero_rows_calls)
+
+
+@pytest.mark.asyncio
+async def test_cicd_skip_does_not_affect_other_families(monkeypatch: Any) -> None:
+    """Naming cicd in skip_families must not perturb team_metrics/repo_metrics
+    or any other family's compute or write path."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"cicd"},
+    )
+
+    assert "team_metrics" in sink.write_calls
+    assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

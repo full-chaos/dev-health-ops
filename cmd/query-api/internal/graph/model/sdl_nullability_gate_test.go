@@ -318,11 +318,7 @@ func compareNullability(
 			}
 
 			fieldType := field.Type
-			if fieldType.NamedType == "" {
-				// List-typed field (outer type has no NamedType, only Elem).
-				stats.ListExcluded++
-				continue
-			}
+			isListField := fieldType.NamedType == "" // outer type has no NamedType, only Elem.
 
 			goField, ok := goFields[field.Name]
 			if !ok {
@@ -331,15 +327,36 @@ func compareNullability(
 						"models_gen.go", typeName, field.Name))
 				continue
 			}
-			if goField.IsList {
-				// Should not happen if the SDL side agreed it's not a list, but
-				// don't silently trust that agreement -- surface disagreement
-				// as a structural error instead of comparing pointer-ness of
-				// two differently-shaped things.
+
+			// Shape agreement MUST be checked in BOTH directions before either
+			// side trusts the other -- codex review round 1 (2026-08-31) found
+			// that checking this lookup only after excluding SDL-list fields
+			// meant a field that turned into a list in the SDL while the Go
+			// model stayed a bare scalar (e.g. `*float64`) would silently be
+			// counted as ListExcluded and never compared or flagged, the
+			// mirror image of the check that already existed for "SDL says
+			// not-a-list but Go is a slice".
+			if isListField != goField.IsList {
+				var got string
+				if goField.IsList {
+					got = fmt.Sprintf("Go field IS a slice/array (%s)", goField.GoType)
+				} else {
+					got = fmt.Sprintf("Go field is NOT a slice/array (%s)", goField.GoType)
+				}
+				var want string
+				if isListField {
+					want = fmt.Sprintf("SDL says it IS a list type (%s)", fieldType.String())
+				} else {
+					want = fmt.Sprintf("SDL says it is NOT a list type (%s)", fieldType.String())
+				}
 				structuralErrors = append(structuralErrors, fmt.Sprintf(
-					"SDL field %s.%s is NOT a list type (%s) but its Go field IS a slice/array (%s) -- "+
-						"shape mismatch this gate cannot safely compare", typeName, field.Name,
-					fieldType.String(), goField.GoType))
+					"SDL field %s.%s: %s but its %s -- shape mismatch this gate cannot safely compare "+
+						"pointer-ness for", typeName, field.Name, want, got))
+				continue
+			}
+
+			if isListField {
+				stats.ListExcluded++
 				continue
 			}
 
@@ -776,6 +793,63 @@ func TestCompareNullabilityExcludesObjectAndListAndJSONIdiomsEvenWhenMutated(t *
 	if stats.ObjectIdiomExcluded == 0 || stats.JSONScalarExcluded == 0 {
 		t.Fatalf("mutated fields did not even reach the exclusion counters: stats=%+v", stats)
 	}
+}
+
+// TestCompareNullabilityCatchesListShapeMismatch: codex review round 1
+// (chaos-4702-20260831T211310.md, P2) found that the list exclusion was
+// checked BEFORE the Go field was even looked up, so a field that is a list
+// in the SDL but NOT a slice on the Go side (a codegen break more severe
+// than a nullability divergence -- an outright shape mismatch) would be
+// silently counted as ListExcluded and never flagged. Fixed by moving the
+// Go-field lookup and a two-way shape-agreement check ahead of the list
+// exclusion. This test mutates the one genuinely list-typed field the
+// earlier fixture never touched (`tags`, per that same review's second
+// finding that the "list mutation" claim wasn't backed by an actual test),
+// in both directions.
+func TestCompareNullabilityCatchesListShapeMismatch(t *testing.T) {
+	t.Run("SDL list, Go not a list", func(t *testing.T) {
+		schema := mustLoadSyntheticSchema(t, syntheticGoodSchema)
+		goStructs := syntheticGoodGoStructs()
+
+		tags := goStructs["Widget"]["tags"]
+		tags.IsList = false // `tags: [String!]!` in the SDL; Go regressed to a bare scalar.
+		tags.GoType = "string"
+		goStructs["Widget"]["tags"] = tags
+
+		violations, stats, structuralErrors := compareNullability(schema, goStructs)
+		if len(violations) != 0 {
+			t.Fatalf("a shape mismatch must never be reported as a nullability Divergence: %v", violations)
+		}
+		if len(structuralErrors) != 1 {
+			t.Fatalf("expected exactly 1 structural error for the list/non-list shape mismatch, got %d: %v",
+				len(structuralErrors), structuralErrors)
+		}
+		if !strings.Contains(structuralErrors[0], "Widget.tags") {
+			t.Fatalf("structural error does not name the mutated field: %s", structuralErrors[0])
+		}
+		if stats.ListExcluded != 0 {
+			t.Fatalf("a shape-mismatched field must NOT be silently counted as a clean list exclusion, "+
+				"got ListExcluded=%d", stats.ListExcluded)
+		}
+	})
+
+	t.Run("SDL not a list, Go is a list", func(t *testing.T) {
+		schema := mustLoadSyntheticSchema(t, syntheticGoodSchema)
+		goStructs := syntheticGoodGoStructs()
+
+		price := goStructs["Widget"]["price"]
+		price.IsList = true // `price: Float!` in the SDL; Go somehow became a slice.
+		price.GoType = "[]float64"
+		goStructs["Widget"]["price"] = price
+
+		violations, _, structuralErrors := compareNullability(schema, goStructs)
+		if len(violations) != 0 {
+			t.Fatalf("a shape mismatch must never be reported as a nullability Divergence: %v", violations)
+		}
+		if len(structuralErrors) != 1 || !strings.Contains(structuralErrors[0], "Widget.price") {
+			t.Fatalf("expected exactly 1 structural error naming Widget.price, got: %v", structuralErrors)
+		}
+	})
 }
 
 // TestExclusionIntegrityFailures unit-tests the CheckExclusionIntegrity-style

@@ -19,6 +19,8 @@ Usage:
         GITHUB_RATE_LIMIT_REMAINING,
         record_github_api_request,
         record_github_rate_limit,
+        INGEST_LEGACY_AUTH_REJECTED_TOTAL,
+        record_ingest_legacy_auth_rejected,
     )
 """
 
@@ -801,6 +803,25 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0),
     )
 
+    # ---------------------------------------------------------------------------
+    # Legacy /api/v1/ingest/* auth fail-closed guardrail (CHAOS-4720, G-47)
+    # ---------------------------------------------------------------------------
+    INGEST_LEGACY_AUTH_REJECTED_TOTAL = _prometheus_client_module.Counter(
+        "devhealth_ingest_legacy_auth_rejected_total",
+        "validate_ingest_auth rejections for the legacy /api/v1/ingest/* "
+        "routes, by reason. reason=no_credential_configured is the "
+        "CHAOS-4720 fail-closed branch: the request was rejected because "
+        "NEITHER INGEST_API_KEYS NOR INGEST_SIGNING_SECRET was set outside "
+        "a development environment, where the pre-fix code returned a "
+        "permissive success context instead (either one alone configured "
+        "is unaffected and keeps working as before). "
+        "reason=invalid_api_key/invalid_signature are ordinary rejections "
+        "of a presented-but-wrong credential and existed before this fix. "
+        "A nonzero rate of no_credential_configured in production means "
+        "both secrets are missing there right now.",
+        ["reason"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -852,6 +873,7 @@ else:
     DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _noop_counter()
     SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _noop_histogram()
+    INGEST_LEGACY_AUTH_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
     DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
@@ -1116,6 +1138,18 @@ def record_metrics_family_zero_rows(*, family: str, cause: str) -> None:
         family=family,
         cause=cause,
     ).inc()
+
+
+def record_ingest_legacy_auth_rejected(*, reason: str) -> None:
+    """Record a legacy /api/v1/ingest/* auth rejection (CHAOS-4720, G-47).
+
+    Called from ``api.ingest.auth.validate_ingest_auth`` for every 401 it
+    raises. ``reason`` is drawn from a fixed vocabulary (never request
+    contents): "api_keys_not_configured" / "signing_secret_not_configured"
+    for the fail-closed branch, "invalid_api_key" / "invalid_signature" for
+    an ordinary wrong-credential rejection.
+    """
+    INGEST_LEGACY_AUTH_REJECTED_TOTAL.labels(reason=reason).inc()
 
 
 @contextmanager

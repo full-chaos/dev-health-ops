@@ -2,10 +2,17 @@
 
 Authentication layers:
 - API Key: X-API-Key header validated against INGEST_API_KEYS env var
-- HMAC Signature: Optional X-Signature-256 header (sha256=<hex>) using INGEST_SIGNING_SECRET
+- HMAC Signature: X-Signature-256 header (sha256=<hex>) using INGEST_SIGNING_SECRET
 - Idempotency: Optional X-Idempotency-Key header with Redis-backed deduplication
 
-All layers degrade gracefully when not configured (permissive mode for development).
+CHAOS-4720 (guardrail G-47): missing ``INGEST_API_KEYS`` / ``INGEST_SIGNING_SECRET``
+FAILS CLOSED (401) in any environment except an explicit development opt-in
+(``is_development_environment()`` -- ENVIRONMENT/APP_ENV/ENV in
+{development, dev, local}). The default when none of those are set is
+"production", so leaving the environment unconfigured can never fall into the
+permissive branch by accident -- only a deliberate development label does.
+Idempotency is unrelated to authentication and keeps its own graceful
+degradation (Redis unavailable is not a trust decision).
 """
 
 from __future__ import annotations
@@ -18,13 +25,16 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 
+from dev_health_ops.api.graphql.security import is_development_environment
+from dev_health_ops.metrics.prometheus import record_ingest_legacy_auth_rejected
+
 logger = logging.getLogger(__name__)
 
 
 def _get_api_keys() -> list[str]:
     """Get valid API keys from environment.
 
-    Returns empty list if INGEST_API_KEYS is not set (auth disabled).
+    Returns empty list if INGEST_API_KEYS is not set.
     """
     raw = os.getenv("INGEST_API_KEYS", "")
     if not raw.strip():
@@ -85,24 +95,46 @@ async def validate_ingest_auth(
 ) -> dict:
     """FastAPI dependency to validate ingest API authentication.
 
-    Validates API key and optional HMAC signature. Both layers degrade
-    gracefully when their respective env vars are not configured.
+    Validates the API key and/or the HMAC signature -- either configured
+    credential is sufficient on its own (unchanged from before CHAOS-4720:
+    an operator running API-key-only, or HMAC-only, auth keeps working
+    exactly as configured). What FAILS CLOSED (401) now is the case that was
+    actually exploitable in prod: NEITHER ``INGEST_API_KEYS`` nor
+    ``INGEST_SIGNING_SECRET`` configured, i.e. no credential requirement
+    exists at all. That "auth disabled" state is a development/test-only
+    opt-in now (``is_development_environment()``, guardrail G-47), never a
+    silent default -- environment_name() defaults to "production" when
+    unset, so leaving both unconfigured can never fall into the permissive
+    branch by accident.
 
     Returns:
         Auth context dict with validation metadata.
 
     Raises:
-        HTTPException: 401 if authentication fails.
+        HTTPException: 401 if authentication fails, or if neither credential
+            is configured outside an explicit development environment.
     """
     valid_keys = _get_api_keys()
+    signing_secret = _get_signing_secret()
+
+    if not valid_keys and not signing_secret and not is_development_environment():
+        logger.warning(
+            "Neither INGEST_API_KEYS nor INGEST_SIGNING_SECRET is configured "
+            "outside a development environment - rejecting ingest request "
+            "(CHAOS-4720)"
+        )
+        record_ingest_legacy_auth_rejected(reason="no_credential_configured")
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     if valid_keys:
         if not x_api_key or x_api_key not in valid_keys:
+            record_ingest_legacy_auth_rejected(reason="invalid_api_key")
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-    signing_secret = _get_signing_secret()
     if signing_secret:
         body = await _get_raw_body(request)
         if not _verify_signature(body, x_signature_256, signing_secret):
+            record_ingest_legacy_auth_rejected(reason="invalid_signature")
             raise HTTPException(status_code=401, detail="Invalid signature")
 
     return {

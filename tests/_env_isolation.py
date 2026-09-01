@@ -264,6 +264,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "GO_API_ENVELOPE_ISSUER",
         "GO_API_ENVELOPE_KEY_ID",
         "GO_API_ENVELOPE_PRIVATE_KEY",
+        "GO_API_PLANE_HEADER_ENABLED",
         "GO_API_QUERY_API_URL",
         "GO_API_SCHEMA_DIGEST",
         "GRAPHQL_AUTH_REQUIRED",

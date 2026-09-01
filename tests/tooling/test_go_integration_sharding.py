@@ -30,6 +30,7 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
     "cmd/query-api",
+    "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/hotspots",
     "cmd/query-api/internal/routeswitch",
     "internal/cacheinvalidation",
@@ -248,8 +249,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # guard for a NULL-blame_concentration mixed-day row, each starting
     # its own container); LPT re-balanced shards 2/3 to 364s/363s (still
     # within 1s).
-    assert "34 package(s) discovered, 1 denylisted, 33 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 33 package(s)" in result.stdout
+    #
+    # CHAOS-4730 un-denylisted cmd/query-api/internal/analytics (34
+    # discovered unchanged, 33 -> 34 will run, 1 -> 0 denylisted): the
+    # CHAOS-4643 premise (the package's ONLY integration file could never
+    # run in CI) no longer holds -- the SETTINGS max_execution_time =
+    # {timeout:UInt64} native-parameter defect (parses fine on 26.7/prod,
+    # fails to PARSE with Code: 62 on the pinned 26.6.1.1193 Testcontainers
+    # image and on CI's 24.8) was fixed package-wide via one shared
+    # literal-rendering helper, and the package now has two REAL
+    # Testcontainers-backed regression tests
+    # (breakdown_seeded_integration_test.go,
+    # investmentquality_seeded_integration_test.go) that execute for real
+    # in CI. nan_class_live_test.go and investmentquality_live_test.go stay
+    # deliberately opt-in-live, each skipping with a message naming the env
+    # var it needs -- that pattern (opt-in-live-with-a-named-skip inside an
+    # otherwise real, executing package) is what CHAOS-4643 was never
+    # objecting to; its complaint was a package whose ENTIRE integration
+    # coverage was a permanent, silent skip. Weight 22s, ceil() of a local
+    # run of both new tests together (21.575s, each starting its own
+    # container); LPT re-balanced shards 2/3 to 374s/375s (still within
+    # 1s).
+    assert "34 package(s) discovered, 0 denylisted, 34 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 34 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -275,7 +297,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 33
+    assert len(flattened) == len(set(flattened)) == 34
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1490,7 +1512,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
             if line.startswith("  SHARD-RUN ")
         )
 
-    assert len(selected_packages) == len(set(selected_packages)) == 32
+    # CHAOS-4730: 33, not 32 -- cmd/query-api/internal/analytics
+    # un-denylisted (34 discovered - 1 for the providersync shard-1
+    # package = 33 across shards 2/3).
+    assert len(selected_packages) == len(set(selected_packages)) == 33
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

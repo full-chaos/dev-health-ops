@@ -113,15 +113,14 @@ WHERE %s
 GROUP BY dimension_value
 ORDER BY value DESC, dimension_value ASC
 LIMIT {top_n:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
-`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
+%s
+`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "top_n", Value: req.TopN},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 	bindings = append(bindings, fc.bindings...)
 

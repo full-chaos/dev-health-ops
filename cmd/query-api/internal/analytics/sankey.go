@@ -157,13 +157,12 @@ ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
 `, strings.ToUpper(string(dim)), dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql))
 	}
-	nodesSQL := fmt.Sprintf("\n%s\nSETTINGS max_execution_time = {timeout:UInt64}\n", strings.Join(unionParts, " UNION ALL "))
+	nodesSQL := fmt.Sprintf("\n%s\n%s\n", strings.Join(unionParts, " UNION ALL "), settingsMaxExecutionTime(timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "limit_per_dim", Value: limitPerDim},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
 	nodes = compiledQuery{sql: nodesSQL, bindings: nodesBindings}
@@ -199,15 +198,14 @@ WHERE %s
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
-`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol)
+%s
+`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, settingsMaxExecutionTime(timeoutSeconds))
 
 		edgeBindings := []clickhouse.Binding{
 			{Name: "org_id", Value: orgID},
 			{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 			{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 			{Name: "max_edges", Value: maxEdgesPerPair},
-			{Name: "timeout", Value: timeoutSeconds},
 		}
 		edgeBindings = append(edgeBindings, fc.bindings...)
 		edges = append(edges, compiledQuery{sql: edgeSQL, bindings: edgeBindings})

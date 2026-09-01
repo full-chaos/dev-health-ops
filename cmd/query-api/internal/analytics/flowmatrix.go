@@ -194,35 +194,34 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 
 	switch req.Dimension {
 	case DimensionTeam:
 		nodes = compiledQuery{
-			sql:      flowMatrixTeamNodesTemplate,
+			sql:      fmt.Sprintf(flowMatrixTeamNodesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "limit_per_dim", Value: req.MaxNodes}),
 		}
 		edges = compiledQuery{
-			sql:      flowMatrixTeamEdgesTemplate,
+			sql:      fmt.Sprintf(flowMatrixTeamEdgesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "max_edges", Value: req.MaxEdges}),
 		}
 	case DimensionRepo:
 		nodes = compiledQuery{
-			sql:      flowMatrixRepoNodesTemplate,
+			sql:      fmt.Sprintf(flowMatrixRepoNodesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "limit_per_dim", Value: req.MaxNodes}),
 		}
 		edges = compiledQuery{
-			sql:      flowMatrixRepoEdgesTemplate,
+			sql:      fmt.Sprintf(flowMatrixRepoEdgesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "max_edges", Value: req.MaxEdges}),
 		}
 	case DimensionWorkType:
 		nodes = compiledQuery{
-			sql:      flowMatrixWorkTypeNodesTemplate,
+			sql:      fmt.Sprintf(flowMatrixWorkTypeNodesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "limit_per_dim", Value: req.MaxNodes}),
 		}
 		edges = compiledQuery{
-			sql:      flowMatrixWorkTypeEdgesTemplate,
+			sql:      fmt.Sprintf(flowMatrixWorkTypeEdgesTemplate, settingsMaxExecutionTime(timeoutSeconds)),
 			bindings: append(append([]clickhouse.Binding{}, common...), clickhouse.Binding{Name: "max_edges", Value: req.MaxEdges}),
 		}
 	}
@@ -296,14 +295,13 @@ WHERE %s
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
-`, dimUpper, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql)
+%s
+`, dimUpper, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "limit_per_dim", Value: req.MaxNodes},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
 
@@ -326,14 +324,13 @@ WHERE %s
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
-`, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol)
+%s
+`, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol, settingsMaxExecutionTime(timeoutSeconds))
 	edgesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 		{Name: "max_edges", Value: req.MaxEdges},
-		{Name: "timeout", Value: timeoutSeconds},
 	}
 	edgesBindings = append(edgesBindings, fc.bindings...)
 
@@ -386,7 +383,7 @@ FROM (` + flowMatrixTeamActivitySelect + `) AS team_activity
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // flowMatrixTeamEdgesTemplate ports flow_matrix_team_edges_template
@@ -407,7 +404,7 @@ WHERE a.team_id != b.team_id
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // flowMatrixRepoEnrichedSelect ports _FLOW_MATRIX_REPO_ENRICHED_CTE
@@ -530,7 +527,7 @@ WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // flowMatrixRepoEdgesTemplate ports flow_matrix_repo_edges_template
@@ -557,7 +554,7 @@ WHERE a.team_id IS NOT NULL AND a.team_id != ''
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // flowMatrixWorkTypeNodesTemplate ports flow_matrix_work_type_nodes_template
@@ -579,7 +576,7 @@ WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // flowMatrixWorkTypeEdgesTemplate ports flow_matrix_work_type_edges_template
@@ -609,7 +606,7 @@ WHERE a.repo_id IS NOT NULL
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
-SETTINGS max_execution_time = {timeout:UInt64}
+%s
 `
 
 // QueryClient is the read-only ClickHouse query boundary this package

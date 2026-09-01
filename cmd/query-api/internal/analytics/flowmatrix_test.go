@@ -323,14 +323,26 @@ func TestCompileFlowMatrix_TeamRepoWorkType_BindingsAndTemplate(t *testing.T) {
 		MaxEdges:  200,
 	}
 
+	// CHAOS-4730: the flowMatrix*Template consts now carry a trailing %s
+	// verb for the SETTINGS clause instead of the literal placeholder
+	// text, filled at compile time via settingsMaxExecutionTime -- so the
+	// expected SQL here must go through the same fmt.Sprintf, matching
+	// CompileFlowMatrix's own 30-second timeoutSeconds argument below.
+	const wantTimeout = 30
 	cases := []struct {
 		dim          Dimension
 		wantNodesSQL string
 		wantEdgesSQL string
 	}{
-		{DimensionTeam, flowMatrixTeamNodesTemplate, flowMatrixTeamEdgesTemplate},
-		{DimensionRepo, flowMatrixRepoNodesTemplate, flowMatrixRepoEdgesTemplate},
-		{DimensionWorkType, flowMatrixWorkTypeNodesTemplate, flowMatrixWorkTypeEdgesTemplate},
+		{DimensionTeam,
+			fmt.Sprintf(flowMatrixTeamNodesTemplate, settingsMaxExecutionTime(wantTimeout)),
+			fmt.Sprintf(flowMatrixTeamEdgesTemplate, settingsMaxExecutionTime(wantTimeout))},
+		{DimensionRepo,
+			fmt.Sprintf(flowMatrixRepoNodesTemplate, settingsMaxExecutionTime(wantTimeout)),
+			fmt.Sprintf(flowMatrixRepoEdgesTemplate, settingsMaxExecutionTime(wantTimeout))},
+		{DimensionWorkType,
+			fmt.Sprintf(flowMatrixWorkTypeNodesTemplate, settingsMaxExecutionTime(wantTimeout)),
+			fmt.Sprintf(flowMatrixWorkTypeEdgesTemplate, settingsMaxExecutionTime(wantTimeout))},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.dim), func(t *testing.T) {

@@ -636,9 +636,26 @@ check_contract() {
 # or "it currently fails" are NOT valid reasons; a failing package belongs in
 # the run set, failing loudly, not hidden here. Legitimate reasons look like
 # "needs a live vendor credential CI does not provision."
-declare -A INTEGRATION_DENYLIST=(
-  ["cmd/query-api/internal/analytics"]="nan_class_live_test.go needs a live vendor credential CI does not provision: it dials CLICKHOUSE_URI directly (mirroring the Python dual-run slot harness), and .github/workflows/go.yml's integration-shard job never sets that var -- every other integration-tagged package instead gets its own ClickHouse via testcontainers (StartClickHouse), which this file deliberately does not use. Enrolling it in the deterministic shard let it skip silently on every CI run while reading as coverage (CHAOS-4643). It is a discretionary, slot-only proof per orchestrator ruling 2026-08-29 (see the file's own STATUS header); run it explicitly with CLICKHOUSE_URI + DEV_HEALTH_REQUIRE_LIVE=1 set, not via this gate."
-)
+#
+# CHAOS-4730: cmd/query-api/internal/analytics was the one entry here
+# (CHAOS-4643), because its ONLY integration-tagged file at the time,
+# nan_class_live_test.go, could never run in CI (it dials CLICKHOUSE_URI
+# directly, which .github/workflows/go.yml's integration-shard job never
+# sets) -- enrolling the package let that file skip silently on every CI
+# run while reading as coverage. That premise no longer holds: the package
+# now has two REAL Testcontainers-backed regression tests
+# (breakdown_seeded_integration_test.go, investmentquality_seeded_integration_test.go)
+# that execute for real in CI, same as every other entry in this file's
+# EXPECTED_PACKAGES set. nan_class_live_test.go and
+# investmentquality_live_test.go remain deliberately opt-in-live (each
+# skips with a message naming the env var it needs, per the file's own
+# STATUS header) -- opt-in-live-with-a-named-skip inside an otherwise real,
+# executing package is the accepted pattern this repo uses elsewhere
+# (mirrors internal/providersync's own live-oracle tests), not the CHAOS-4643
+# defect (a package whose ENTIRE integration coverage was a permanent,
+# silent skip). Removed the entry rather than leaving a stale, misleading
+# denylist comment.
+declare -A INTEGRATION_DENYLIST=()
 declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
 declare -a INTEGRATION_SHARD_TOTALS=()

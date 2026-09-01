@@ -1,5 +1,6 @@
 """Tests for work graph builder."""
 
+import contextlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -1718,3 +1719,183 @@ class TestDependencyConfidenceBackfill:
         record.assert_called_once_with(
             rows_by_edge_type={"relates": 3}, outcome="applied"
         )
+
+
+# Every step `build()` runs, with a return shape the real method would produce.
+# Patching them lets a test exercise `build()`'s own control flow -- which is
+# where the confidence convergence is wired -- without a live ClickHouse.
+_BUILD_STEP_RETURNS: dict[str, object] = {
+    "_delete_stale_pr_dependency_issue_edges": None,
+    "_build_issue_issue_edges": 0,
+    "_derive_issue_pr_links_from_dependencies": 0,
+    "_build_issue_pr_edges_from_fast_path": (set(), 0),
+    "_build_issue_pr_edges": (set(), 0),
+    "_build_issue_commit_edges_from_text_parsing": 0,
+    "_build_heuristic_issue_pr_edges": 0,
+    "_derive_pr_commit_links": 0,
+    "_build_pr_commit_edges_from_fast_path": 0,
+    "_count_commit_file_edges": 0,
+    "_build_flag_guards_edges": 0,
+    "_build_operational_incident_edges": 0,
+}
+
+
+@contextlib.contextmanager
+def _stubbed_build_steps():
+    with contextlib.ExitStack() as stack:
+        for name, value in _BUILD_STEP_RETURNS.items():
+            stack.enter_context(
+                patch.object(WorkGraphBuilder, name, return_value=value)
+            )
+        yield
+
+
+class TestDependencyConfidenceConvergenceIsCallerAgnostic:
+    """CHAOS-4752 — the ordering invariant, enforced where no caller can miss it.
+
+    Round 1 of the adversarial review found this exactly: wiring the backfill
+    into `work_graph/runner.py` covered the CLI and left the Celery/River task
+    in `workers/work_graph_tasks.py` -- the entrypoint post-sync ACTUALLY
+    dispatches for `workgraph.build` -- running `builder.build()` and returning
+    with the stored rows still at 1.0. Own executed repro on the parent commit:
+
+        CLI  path  work_graph/runner.py     : ['build', 'backfill', 'close']
+        PROD path  workers/work_graph_tasks : ['build', 'close']
+
+    The fix is not "wire the second call site" -- it is to wire the single point
+    both must pass through, so a third entrypoint cannot reintroduce the class.
+    """
+
+    @staticmethod
+    def _fake_sink():
+        sink = MagicMock()
+        sink.backend_type = "clickhouse"
+        client = MagicMock()
+        client.query.return_value.result_rows = [[1]]
+        sink.client = client
+        return sink
+
+    def test_build_itself_converges_stored_confidences(self):
+        sink = self._fake_sink()
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+        with (
+            _stubbed_build_steps(),
+            patch.object(
+                WorkGraphBuilder,
+                "backfill_dependency_edge_confidence",
+                return_value={"outcome": "applied", "rows": 7},
+            ) as backfill,
+        ):
+            stats = builder.build()
+
+        backfill.assert_called_once_with()
+        assert stats["dependency_confidence_rows_lowered"] == 7
+
+    def test_unscoped_build_does_not_mutate_any_tenant(self):
+        sink = self._fake_sink()
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+        with (
+            _stubbed_build_steps(),
+            patch.object(
+                WorkGraphBuilder, "backfill_dependency_edge_confidence"
+            ) as backfill,
+        ):
+            stats = builder.build()
+
+        backfill.assert_not_called()
+        assert stats["dependency_confidence_rows_lowered"] == 0
+
+    def test_convergence_failure_is_advisory_counted_and_logged(self, caplog):
+        sink = self._fake_sink()
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+        with (
+            _stubbed_build_steps(),
+            patch.object(
+                WorkGraphBuilder,
+                "backfill_dependency_edge_confidence",
+                side_effect=RuntimeError("mutation refused"),
+            ),
+        ):
+            with caplog.at_level("WARNING"):
+                stats = builder.build()
+
+        # The build's own edges already carry the new tier, and a failure leaves
+        # stored rows exactly as they were before this change -- not a
+        # regression, so it must not fail the build. It must still be loud.
+        assert stats["dependency_confidence_rows_lowered"] == 0
+        assert "Dependency-confidence backfill did not run" in caplog.text
+
+    def test_a_failed_mutation_is_counted_as_its_own_outcome(self):
+        """Fail-open, but never fail-silent.
+
+        Without an ``error`` outcome, "the backfill blew up" is indistinguishable
+        in metrics from "the backfill was never invoked" -- and the caller
+        deliberately swallows the exception.
+        """
+        sink = MagicMock()
+        sink.backend_type = "clickhouse"
+        sink.query_dicts.return_value = [{"edge_type": "relates", "rows": 5}]
+        sink.client.command.side_effect = RuntimeError("mutation refused")
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+
+        with patch(
+            "dev_health_ops.work_graph.builder."
+            "record_work_graph_dependency_confidence_backfill"
+        ) as record:
+            with pytest.raises(RuntimeError, match="mutation refused"):
+                builder.backfill_dependency_edge_confidence()
+
+        record.assert_called_once_with(
+            rows_by_edge_type={"relates": 5}, outcome="error"
+        )
+
+    def test_a_sink_without_command_support_is_also_counted(self):
+        sink = MagicMock()
+        sink.backend_type = "clickhouse"
+        sink.query_dicts.return_value = [{"edge_type": "relates", "rows": 5}]
+        sink.client = object()  # no .command
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+
+        with patch(
+            "dev_health_ops.work_graph.builder."
+            "record_work_graph_dependency_confidence_backfill"
+        ) as record:
+            with pytest.raises(RuntimeError, match="unavailable for this sink"):
+                builder.backfill_dependency_edge_confidence()
+
+        record.assert_called_once_with(
+            rows_by_edge_type={"relates": 5}, outcome="error"
+        )
+
+    def test_post_mutation_recount_surfaces_a_racing_writer(self, caplog):
+        sink = MagicMock()
+        sink.backend_type = "clickhouse"
+        # Pre-count sees 5; after the mutation a concurrent writer has inserted 2
+        # fresh above-target rows. mutations_sync=2 means the mutation itself is
+        # done, so a non-zero recount can only be a race -- say so, do not
+        # silently report a converged number.
+        sink.query_dicts.side_effect = [
+            [{"edge_type": "relates", "rows": 5}],
+            [{"edge_type": "relates", "rows": 2}],
+        ]
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=sink):
+            builder = WorkGraphBuilder(config)
+
+        with caplog.at_level("WARNING"):
+            stats = builder.backfill_dependency_edge_confidence()
+
+        assert stats["outcome"] == "applied"
+        assert stats["rows"] == 5
+        assert stats["rows_remaining"] == 2
+        assert "still above the associative tier" in caplog.text

@@ -564,12 +564,61 @@ class WorkGraphBuilder:
 
         stats["operational_incident_edges"] = self._build_operational_incident_edges()
 
+        # CHAOS-4752/CHAOS-4758 — ORDERING IS LOAD-BEARING, enforced HERE rather
+        # than at a call site. The build has just rewritten every dependency edge
+        # that still has a live ``work_item_dependencies`` row at the new
+        # confidence tier; this converges the rest (rows written before the
+        # policy landed, and rows whose dependency has since been deleted, which
+        # no build ever rewrites). It must happen BEFORE any work-unit recompute:
+        # post-sync fans out ``workgraph.build`` and only then
+        # ``investment.materialize``, so a recompute that ran against
+        # un-converged rows would reproduce exactly the truncated components this
+        # change exists to prevent.
+        #
+        # It lives inside ``build()`` because there is MORE THAN ONE production
+        # entrypoint -- the CLI (``work_graph/runner.py``) and the Celery/River
+        # task (``workers/work_graph_tasks.py``, River target ``workgraph.build``,
+        # which is the one post-sync actually dispatches). Wiring it at one call
+        # site left the other silently un-converged, so it is wired at the single
+        # point every caller must pass through instead.
+        stats["dependency_confidence_rows_lowered"] = (
+            self._converge_dependency_edge_confidence()
+        )
+
         logger.info(
             "Work graph build complete: %s",
             ", ".join(f"{k}={v}" for k, v in stats.items()),
         )
 
         return stats
+
+    def _converge_dependency_edge_confidence(self) -> int:
+        """Run the confidence backfill as part of a build; never fail the build.
+
+        Advisory by design. The build's own writes already carry the new tier and
+        a failure here leaves the stored rows exactly as they were BEFORE this
+        change -- it is not a regression, and failing the whole work-graph build
+        over it would turn a partial improvement into an outage. The failure is
+        counted (``outcome="error"`` on the runs counter) and logged at WARNING,
+        so it is fail-open WITH telemetry, never silent.
+
+        Skipped for an unscoped rebuild: the mutation refuses to run without an
+        org, and there is no tenant to converge safely.
+        """
+        if not self.config.org_id:
+            return 0
+        try:
+            stats = self.backfill_dependency_edge_confidence()
+        except Exception as exc:
+            logger.warning(
+                "Dependency-confidence backfill did not run after the build "
+                "(org_id=%s): %s",
+                self.config.org_id,
+                exc,
+            )
+            return 0
+        rows = stats.get("rows")
+        return rows if isinstance(rows, int) else 0
 
     def _build_operational_incident_edges(self) -> int:
         if not self.config.org_id:
@@ -903,7 +952,17 @@ class WorkGraphBuilder:
 
         Idempotent and monotone: the predicate is ``confidence >
         ASSOCIATIVE_DEPENDENCY_CONFIDENCE``, so a second run matches zero rows
-        and the value is only ever LOWERED, never raised. Org-scoped: refuses to
+        and the value is only ever LOWERED, never raised. (Proven on the engine
+        rather than assumed: ``SELECT toFloat32(0.9) > 0.9`` is 0, so the
+        Float32 image of the target no longer satisfies the predicate.)
+
+        The returned ``rows``/``rows_by_edge_type`` are a snapshot of the MATCHED
+        set taken just before the mutation, not a count of rows the mutation
+        rewrote -- ClickHouse's ``ALTER ... UPDATE`` reports no row count. A
+        concurrent writer can therefore add an above-target row between the two
+        statements; ``rows_remaining`` re-counts afterwards so that race is
+        observable and the operator knows to re-run rather than being told a
+        number that quietly drifted. Org-scoped: refuses to
         run without ``BuildConfig.org_id`` rather than mutating every tenant.
         Restricted to ``provenance='native'`` issue<->issue rows -- exactly the
         set ``_build_issue_issue_edges`` writes; ``explicit_text`` and
@@ -930,15 +989,17 @@ class WorkGraphBuilder:
             "AND confidence > {target:Float32}"
         )
 
-        rows = self.sink.query_dicts(
-            "SELECT edge_type, count() AS rows FROM work_graph_edges "
-            f"WHERE {predicate} GROUP BY edge_type ORDER BY edge_type",
-            parameters,
-        )
-        rows_by_edge_type = {
-            str(row["edge_type"]): int(row["rows"] or 0) for row in rows
-        }
+        def _count_matching() -> dict[str, int]:
+            counted = self.sink.query_dicts(
+                "SELECT edge_type, count() AS rows FROM work_graph_edges "
+                f"WHERE {predicate} GROUP BY edge_type ORDER BY edge_type",
+                parameters,
+            )
+            return {str(row["edge_type"]): int(row["rows"] or 0) for row in counted}
+
+        rows_by_edge_type = _count_matching()
         candidates = sum(rows_by_edge_type.values())
+        remaining: int | None = None
 
         if dry_run:
             outcome = "dry_run"
@@ -947,17 +1008,45 @@ class WorkGraphBuilder:
         else:
             command = getattr(getattr(self.sink, "client", None), "command", None)
             if not callable(command):
+                record_work_graph_dependency_confidence_backfill(
+                    rows_by_edge_type=rows_by_edge_type, outcome="error"
+                )
                 raise RuntimeError(
                     "dependency-confidence backfill is unavailable for this sink"
                 )
-            command(
-                "ALTER TABLE work_graph_edges "
-                "UPDATE confidence = {target:Float32} "
-                f"WHERE {predicate} "
-                "SETTINGS mutations_sync=2",
-                parameters=parameters,
-            )
+            try:
+                command(
+                    "ALTER TABLE work_graph_edges "
+                    "UPDATE confidence = {target:Float32} "
+                    f"WHERE {predicate} "
+                    "SETTINGS mutations_sync=2",
+                    parameters=parameters,
+                )
+            except Exception:
+                # A failed mutation must be visible as a distinct outcome:
+                # without this, "the backfill errored" is indistinguishable in
+                # metrics from "the backfill was never invoked", and the caller
+                # in runner.py deliberately treats the failure as advisory.
+                record_work_graph_dependency_confidence_backfill(
+                    rows_by_edge_type=rows_by_edge_type, outcome="error"
+                )
+                raise
             outcome = "applied"
+            # ``mutations_sync=2`` returns only once the mutation is applied, so
+            # this must be 0 unless a concurrent writer inserted fresh
+            # above-target rows between the count and the mutation. The counts
+            # above are therefore a snapshot of the MATCHED set at count time,
+            # not a guaranteed count of rows the mutation itself rewrote; this
+            # check makes any divergence observable instead of silent.
+            remaining = sum(_count_matching().values())
+            if remaining:
+                logger.warning(
+                    "Dependency-confidence backfill: %d row(s) still above the "
+                    "associative tier for org %s after the mutation - a "
+                    "concurrent writer raced the count. Re-run to converge.",
+                    remaining,
+                    self.config.org_id,
+                )
 
         record_work_graph_dependency_confidence_backfill(
             rows_by_edge_type=rows_by_edge_type, outcome=outcome
@@ -966,6 +1055,7 @@ class WorkGraphBuilder:
             "outcome": outcome,
             "rows": candidates,
             "rows_by_edge_type": rows_by_edge_type,
+            "rows_remaining": remaining,
             "target_confidence": ASSOCIATIVE_DEPENDENCY_CONFIDENCE,
             "org_id": self.config.org_id,
         }

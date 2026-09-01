@@ -322,7 +322,7 @@ if _PROMETHEUS_AVAILABLE:
         _prometheus_client_module.Counter(
             "devhealth_work_graph_dependency_confidence_backfill_runs_total",
             "Runs of the associative-dependency confidence backfill (CHAOS-4752), "
-            "by outcome: applied | noop | dry_run",
+            "by outcome: applied | noop | dry_run | error",
             ["outcome"],
         )
     )
@@ -1145,9 +1145,12 @@ def record_work_graph_dependency_confidence_backfill(
     """Observe one associative-dependency confidence backfill (CHAOS-4752).
 
     ``outcome`` is ``applied`` (mutation executed), ``noop`` (nothing left to
-    lower -- the steady state once the backfill has run) or ``dry_run``. A
-    ``noop`` run still increments the runs counter so the backfill's absence is
-    distinguishable from its having nothing to do.
+    lower -- the steady state once the backfill has run), ``dry_run``, or
+    ``error`` (the mutation was attempted and failed). A ``noop`` run still
+    increments the runs counter, so all four of "never invoked", "nothing to
+    do", "rehearsed" and "failed" are distinguishable in metrics -- which
+    matters because the caller in ``work_graph/runner.py`` deliberately treats
+    a backfill failure as advisory and lets the build succeed.
     """
     WORK_GRAPH_DEPENDENCY_CONFIDENCE_BACKFILL_RUNS_TOTAL.labels(outcome=outcome).inc()
     for edge_type, rows in rows_by_edge_type.items():

@@ -157,28 +157,10 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
     try:
         result = builder.build()
 
-        # CHAOS-4752/CHAOS-4758 — ORDERING IS LOAD-BEARING, so it is structural
-        # here rather than a runbook note. The build has just rewritten every
-        # edge that still has a live ``work_item_dependencies`` row at the new
-        # confidence tier; this converges the rest (rows whose dependency has
-        # since been deleted, and everything written before this policy landed).
-        # It must happen BEFORE any work-unit recompute -- post-sync fans out
-        # ``workgraph.build`` and only then ``investment.materialize``, so
-        # running it here puts it on the right side of that edge. Idempotent:
-        # once converged this is a single count() that reports ``noop``. Skipped
-        # for an unscoped rebuild, which has no tenant to mutate safely.
-        if org_id:
-            try:
-                builder.backfill_dependency_edge_confidence()
-            except Exception as exc:
-                # Advisory, not fatal: the build itself succeeded and its edges
-                # already carry the new tier. Loud, never silent.
-                logging.warning(
-                    "Dependency-confidence backfill did not run after the build "
-                    "(org_id=%s): %s",
-                    org_id,
-                    exc,
-                )
+        # The CHAOS-4752 confidence convergence is NOT wired here: it lives
+        # inside ``WorkGraphBuilder.build()`` so that the Celery/River task
+        # (``workers/work_graph_tasks.py``), which is the entrypoint post-sync
+        # actually dispatches, gets it too. See the comment at its call site.
 
         total_edges = sum(result.values())
         logging.info("Work graph build complete. Total edges: %d", total_edges)

@@ -446,53 +446,73 @@ def test_cli_materialize_failure_skips_projection():
     backfill_mock.assert_not_called()
 
 
-class TestDependencyConfidenceBackfillWiring:
-    """CHAOS-4752 — the ordering invariant, made structural.
+class TestEveryWorkGraphEntrypointConverges:
+    """CHAOS-4752 — the ordering invariant must hold for EVERY entrypoint.
 
-    Post-sync fans out ``workgraph.build`` and only then
-    ``investment.materialize``. Running the backfill at the end of the build
-    puts it on the correct side of that edge, so a recompute can never see the
-    pre-policy 1.0 wall it was supposed to be fixed for.
+    Round 1 of the adversarial review found that wiring the confidence backfill
+    into this module covered the CLI only. `workers/work_graph_tasks.py`
+    (River target `workgraph.build`) is the entrypoint post-sync actually
+    dispatches, and it ran `builder.build()` and returned. Own executed repro on
+    the parent commit:
+
+        CLI  path  work_graph/runner.py     : ['build', 'backfill', 'close']
+        PROD path  workers/work_graph_tasks : ['build', 'close']
+
+    The convergence now lives inside `WorkGraphBuilder.build()`. This test walks
+    both entrypoints with a REAL builder and asserts each converges, so a third
+    entrypoint that forgets the call cannot reintroduce the class.
     """
 
-    def test_build_converges_stored_confidences_when_org_scoped(self):
-        fake_builder = _patched_builder()
-        with patch(
-            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
-            return_value=fake_builder,
+    @staticmethod
+    def _sink():
+        sink = MagicMock()
+        sink.backend_type = "clickhouse"
+        client = MagicMock()
+        client.query.return_value.result_rows = [[1]]
+        sink.client = client
+        return sink
+
+    def _run_entrypoint(self, which: str) -> list[str]:
+        from dev_health_ops.work_graph.builder import WorkGraphBuilder
+        from tests.work_graph.test_builder import _stubbed_build_steps
+
+        calls: list[str] = []
+
+        def _record(self_builder):
+            calls.append("converge")
+            return {"outcome": "noop", "rows": 0}
+
+        with (
+            _stubbed_build_steps(),
+            patch(
+                "dev_health_ops.work_graph.builder.create_sink",
+                return_value=self._sink(),
+            ),
+            patch.object(
+                WorkGraphBuilder,
+                "backfill_dependency_edge_confidence",
+                autospec=True,
+                side_effect=_record,
+            ),
         ):
-            rc = run_work_graph_build(_ns(org="org-abc"))
+            if which == "cli":
+                assert run_work_graph_build(_ns(org="org-abc")) == 0
+            else:
+                import dev_health_ops.connectors  # noqa: F401
+                from dev_health_ops.workers import work_graph_tasks
 
-        assert rc == 0
-        fake_builder.backfill_dependency_edge_confidence.assert_called_once_with()
+                work_graph_tasks.run_work_graph_build.run(
+                    db_url="clickhouse://localhost:9000/default", org_id="org-abc"
+                )
+        return calls
 
-    def test_unscoped_rebuild_does_not_mutate_any_tenant(self):
-        fake_builder = _patched_builder()
-        with patch(
-            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
-            return_value=fake_builder,
-        ):
-            rc = run_work_graph_build(_ns(org=None))
+    def test_cli_entrypoint_converges(self):
+        assert self._run_entrypoint("cli") == ["converge"]
 
-        assert rc == 0
-        fake_builder.backfill_dependency_edge_confidence.assert_not_called()
-
-    def test_backfill_failure_is_advisory_and_logged(self, caplog):
-        fake_builder = _patched_builder()
-        fake_builder.backfill_dependency_edge_confidence.side_effect = RuntimeError(
-            "mutation refused"
-        )
-        with patch(
-            "dev_health_ops.work_graph.runner.WorkGraphBuilder",
-            return_value=fake_builder,
-        ):
-            with caplog.at_level("WARNING"):
-                rc = run_work_graph_build(_ns(org="org-abc"))
-
-        # The build itself succeeded and its own edges already carry the new
-        # tier, so this must not fail the build -- but it must be loud.
-        assert rc == 0
-        assert "Dependency-confidence backfill did not run" in caplog.text
+    def test_post_sync_task_entrypoint_converges(self):
+        # This is the one that was silently missing. `workgraph.build` is its
+        # River contract target (work_graph_tasks.RIVER_CONTRACT_TARGETS).
+        assert self._run_entrypoint("task") == ["converge"]
 
 
 class TestDependencyConfidenceBackfillCommand:

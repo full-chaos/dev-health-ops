@@ -390,3 +390,58 @@ jobs:
           path: ${{ runner.temp }}/river-compatibility.json
           if-no-files-found: ignore
           retention-days: 14
+
+  graphql-wire-parity:
+    # CHAOS-4696: query-api's registered-document consts must digest-match
+    # what a real client actually sends. The wire form can ONLY be
+    # computed correctly by the web repo's own pinned @urql/core/graphql
+    # (see cmd/query-api/query_route.go's registeredFeatureFlagsDocument
+    # doc comment for why a Go-side reimplementation of urql's printer is
+    # the exact class of bug this ticket is about) -- so this job checks
+    # out dev-health-web's LIVE main (not a pin: a version bump to
+    # @urql/core/graphql that changes wire output must go red here
+    # immediately, not go stale behind a re-pin) and runs its
+    # graphql-wire-parity check against THIS repo's own HEAD.
+    #
+    # This is the mirror image of dev-health-web's `quality` job, which
+    # checks out ops main and runs the SAME script against web's own HEAD
+    # (scripts/graphql-wire-parity.ts, web repo). Together the two jobs
+    # guarantee neither repo can independently drift out of parity without
+    # its OWN CI catching it -- an ops-only PR that breaks parity fails
+    # here without needing a web PR to exist, and vice versa.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout dev-health-web main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: full-chaos/dev-health-web
+          ref: main
+          path: dev-health-web-main
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          package_json_file: dev-health-web-main/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dev-health-web-main/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        working-directory: dev-health-web-main
+        run: pnpm install --frozen-lockfile
+
+      - name: Run graphql-wire-parity check against this repo's HEAD
+        working-directory: dev-health-web-main
+        run: pnpm graphql:wire-parity:check --ops-root "${{ github.workspace }}"

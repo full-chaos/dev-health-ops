@@ -14,8 +14,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +32,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -77,8 +76,58 @@ import (
 // used the wrong name on both sides) stayed green. Copied verbatim from
 // the real client source so the digest this route checks is the digest a
 // real request actually produces.
+//
+// CHAOS-4696 correction, 2026-08-31: "copied verbatim from the real
+// client source" above was correct but insufficient -- urql never sends
+// the web SOURCE text over the wire, and the gap is BIGGER than a
+// reflowed argument list. `client.query(...)` (web's graphqlFetch,
+// server.ts) hands urql a string; the real exchange chain
+// (`[timingExchange, errorExchange, cacheExchange, fetchExchange]`,
+// server.ts:61) then does TWO transformations before anything reaches
+// the network, not one:
+//  1. `cacheExchange` maps every query through `formatDocument`
+//     (@urql/core's own `mapTypeNames`), which injects a `__typename`
+//     selection into every non-root selection set -- this is NOT
+//     optional or cache-implementation-specific, it runs for any client
+//     that includes `cacheExchange` before `fetchExchange`, which this
+//     repo's server client does.
+//  2. `fetchExchange` then calls `stringifyDocument`, which is
+//     graphql-js-family `print()` output (@0no-co/graphql.web) and
+//     reflows an argument list once it exceeds 80 characters -- this
+//     operation's field line is 122 characters in the web source's
+//     single-line form.
+//
+// A digest computed from print() output alone (skipping step 1) still
+// disagrees with a real request: verified by capturing an actual request
+// off this repo's own unmodified graphqlFetch and finding its digest did
+// NOT match a print()-only recomputation, only a
+// print(formatDocument(...)) one. Every real featureFlags request 404'd
+// and silently fell back to Python, invisibly, because plan §5 defines
+// "digest miss" as "stay on Python". The text below is now the WIRE form
+// (the web repo's `scripts/graphql-wire-parity.ts` calls @urql/core's
+// real `createRequest` + `formatDocument` + `stringifyDocument`, in that
+// order -- not a hand-reflowed guess and not a partial reproduction), and
+// CI's graphql-wire-parity gate (web repo's `.github/workflows/tests.yml`
+// `graphql-wire-parity` job, ops repo's `go.yml` `graphql-wire-parity`
+// job) keeps it that way: it fails the moment this text and the web
+// repo's pinned urql wire form disagree, for this or any of the other 11
+// registered documents. See
+// cmd/query-api/testdata/wire_capture/featureflags_captured.graphql and
+// its README for a byte-for-byte fixture captured off a real HTTP
+// request produced by this repo's actual graphqlFetch code path against
+// a real local HTTP listener -- not reconstructed from source and not
+// produced by invoking urql's printer alone -- and
+// query_route_wire_capture_test.go, which asserts this const's digest
+// against that captured fixture's digest independently of this file's
+// own doc comment claims.
 const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String!, $provider: String, $project: String, $includeArchived: Boolean, $limit: Int!) {
-  featureFlags(orgId: $orgId, provider: $provider, project: $project, includeArchived: $includeArchived, limit: $limit) {
+  featureFlags(
+    orgId: $orgId
+    provider: $provider
+    project: $project
+    includeArchived: $includeArchived
+    limit: $limit
+  ) {
     flags {
       flagId
       flagKey
@@ -87,9 +136,11 @@ const registeredFeatureFlagsDocument = `query FeatureFlagRegistry($orgId: String
       flagType
       createdAt
       archivedAt
+      __typename
     }
     totalCount
     degradedReason
+    __typename
   }
 }`
 
@@ -113,8 +164,10 @@ const registeredReviewEdgesDocument = `query ReviewEdges($input: ReviewEdgesInpu
       reviewsCount
       day
       repoId
+      __typename
     }
     totalCount
+    __typename
   }
 }`
 
@@ -138,7 +191,9 @@ const registeredCognitiveLoadDocument = `query CognitiveLoad($input: CognitiveLo
       reviewRequestLoad
       afterHoursCommitRatio
       weekendCommitRatio
+      __typename
     }
+    __typename
   }
 }`
 
@@ -161,8 +216,10 @@ const registeredComplexityTimeseriesDocument = `query ComplexityTimeseries($inpu
       cyclomaticAvg
       highComplexityFunctions
       veryHighComplexityFunctions
+      __typename
     }
     totalScope
+    __typename
   }
 }`
 
@@ -186,7 +243,9 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
       blameConcentration
       riskScore
       evidenceUrl
+      __typename
     }
+    __typename
   }
 }`
 
@@ -225,11 +284,15 @@ const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!
           absolute
           percent
           status
+          __typename
         }
+        __typename
       }
+      __typename
     }
     recommendations
     recommendationsEmptyState
+    __typename
   }
 }`
 
@@ -261,6 +324,7 @@ const registeredWorkGraphEdgesDocument = `query WorkGraphEdges($orgId: String!, 
       provider
       theme
       subcategory
+      __typename
     }
     totalCount
     pageInfo {
@@ -268,8 +332,10 @@ const registeredWorkGraphEdgesDocument = `query WorkGraphEdges($orgId: String!, 
       hasPreviousPage
       startCursor
       endCursor
+      __typename
     }
     degradedReason
+    __typename
   }
 }`
 
@@ -283,8 +349,10 @@ const registeredWorkGraphFlowDocument = `query WorkGraphFlow($orgId: String!, $f
       nodeType
       inflow
       outflow
+      __typename
     }
     degradedReason
+    __typename
   }
 }`
 
@@ -300,8 +368,10 @@ const registeredWorkGraphArtifactsDocument = `query WorkGraphArtifacts($orgId: S
       displayName
       degree
       evidence
+      __typename
     }
     degradedReason
+    __typename
   }
 }`
 
@@ -340,13 +410,17 @@ const registeredFlowMatrixDocument = `query FlowMatrix($orgId: String!, $batch: 
         label
         dimension
         value
+        __typename
       }
       edges {
         source
         target
         value
+        __typename
       }
+      __typename
     }
+    __typename
   }
 }`
 
@@ -382,7 +456,9 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
       items {
         key
         value
+        __typename
       }
+      __typename
     }
     evidenceQualityDistribution
     evidenceQualityStats {
@@ -390,7 +466,9 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
       stddev
       total
       bandCounts
+      __typename
     }
+    __typename
   }
 }`
 
@@ -419,7 +497,9 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
       items {
         key
         value
+        __typename
       }
+      __typename
     }
     sankey {
       nodes {
@@ -427,31 +507,38 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
         label
         dimension
         value
+        __typename
       }
       edges {
         source
         target
         value
+        __typename
       }
       coverage {
         teamCoverage
         repoCoverage
+        __typename
       }
       unit
+      __typename
     }
+    __typename
   }
 }`
 
-// digestHex is this wave's own document/schema digest convention: no
-// canonical algorithm has landed in this repo yet (go_api_registry.py's
-// schema_digest/document_digest are opaque caller-supplied strings; no
-// compute_document_digest exists to match against). sha256 hex of the
-// trimmed document text is documented here so a later wave that DOES
-// land a canonical algorithm can see exactly what this wave used and
-// migrate deliberately, rather than silently drifting.
+// digestHex is a thin wrapper over the ONE canonical document-digest
+// algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
+// now shared code in cmd/query-api/internal/digest so
+// cmd/query-api/tools/registrydump computes the EXACT SAME digest this
+// running process does -- not a second hand-typed copy of a two-line
+// function that could silently drift from this one. (The schema-digest
+// half of what this comment used to call "no canonical algorithm has
+// landed" is a separate follow-up PR's concern -- see this file's
+// GO_API_SCHEMA_DIGEST verification for that half; this function is
+// document digest only.)
 func digestHex(document string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(document)))
-	return hex.EncodeToString(sum[:])
+	return digest.Document(document)
 }
 
 // queryRouteConfig is env-sourced configuration for the live /query
@@ -855,6 +942,22 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			// documents ... stay on Python") applied at this router --
 			// indistinguishable from an unknown route, exactly like an
 			// operation with no Mux registration at all.
+			//
+			// CHAOS-4696 telemetry: this branch was previously SILENT --
+			// exactly the failure mode that hid featureFlags's digest-miss
+			// from every real request for as long as this route existed.
+			// A digest miss is either a real, un-registered document (the
+			// intended safe default) or a registered document whose const
+			// has drifted from what a real client sends (the CHAOS-4696
+			// defect class); an operator cannot tell those apart without a
+			// log line naming the digest that missed. Bounded the same way
+			// the CHAOS-4647 unwrap-chain log line is (maxUnwrapChainLogBytes
+			// above): the query text is caller-supplied, so truncate before
+			// logging it rather than trusting its length.
+			log.Printf(
+				"query-api: unregistered document digest-miss: digest=%s query=%s",
+				digestHex(parsed.Query), truncateForLog(parsed.Query, maxUnwrapChainLogBytes),
+			)
 			http.NotFound(w, r)
 			return
 		}

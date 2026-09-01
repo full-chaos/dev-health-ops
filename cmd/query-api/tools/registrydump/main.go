@@ -41,16 +41,30 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 )
 
 // registeredDocument is one row of the enumeration this tool emits: the
 // operation name a real request resolves to (digestByOperation's key)
 // paired with the exact registered document text (the const that
-// operation's digestHex(...) call names).
+// operation's digestHex(...) call names) and that text's digest.
+//
+// Digest is computed by calling internal/digest.Document -- the SAME
+// function query_route.go's digestHex wraps -- rather than a second,
+// hand-typed sha256(TrimSpace(...)) here. CHAOS-4696's whole point is
+// that a comparison is only proof when both sides are independently
+// sourced; reimplementing the digest algorithm a second time in this
+// tool would reintroduce exactly the kind of two-copies drift risk this
+// refactor closes for the OTHER half (document text vs const identity).
+// The digest algorithm itself is trivial and shared by import, not by
+// convention -- only the wire-form comparison in
+// scripts/graphql-wire-parity.ts is the genuinely independent side.
 type registeredDocument struct {
 	Operation string `json:"operation"`
 	Document  string `json:"document"`
 	ConstName string `json:"const_name"`
+	Digest    string `json:"digest"`
 }
 
 var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
@@ -271,7 +285,7 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		if !ok {
 			return nil, fmt.Errorf("digestByOperation[%q] names const %s, which was not found among registered*Document consts", operation, constName)
 		}
-		docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName})
+		docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName, Digest: digest.Document(text)})
 		delete(documentByConstName, constName)
 	}
 	if len(documentByConstName) != 0 {

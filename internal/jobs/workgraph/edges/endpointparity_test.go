@@ -40,7 +40,7 @@ func TestEndpointFieldParity(t *testing.T) {
 				RelationshipType: "blocks",
 				RelationshipRaw:  "blocks",
 				SemanticsVersion: blockerProjectionRuleVersion,
-				LastSynced:       "2026-09-01T00:00:00+00:00",
+				LastSynced:       time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
 			}
 			result, err := DeriveIssueIssueEdges([]DependencyRow{row}, buildClock)
 			if err != nil {

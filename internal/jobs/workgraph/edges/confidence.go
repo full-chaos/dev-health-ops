@@ -117,8 +117,27 @@ var AssociativeConfidenceExceptions = func() []GoldenException {
 // This is not hypothetical: the same quantisation changed the measured component
 // count from 1,833 to 1,832 and produced a DIFFERENT component set on the proof
 // org. A port that reproduces 1,833 has skipped this.
-func Quantize(confidence float64) float32 {
-	return float32(confidence)
+// It returns an error rather than a bare float32 because NARROWING CAN MAKE AN
+// INVALID VALUE LOOK VALID. `Quantize(1.00000001)` is exactly 1 in Float32, and
+// `-1e-50` becomes `-0`; both then pass every downstream check while Python's
+// `WorkGraphEdge.__post_init__` raises on the originals (executed, both).
+//
+// So the check has to happen on the float64, BEFORE the narrowing, and the only
+// way to guarantee that is to make it impossible to narrow without checking.
+// A doc comment saying "validate first" would be the same class of defect this
+// port has already been bitten by three times: prose asserting a property that
+// nothing enforces.
+func Quantize(confidence float64) (float32, error) {
+	// Python's predicate verbatim (models.py): `if not 0.0 <= confidence <= 1.0`.
+	// Written as the negation of the range test rather than as separate NaN and
+	// Inf checks, because that is how the reference excludes them -- every
+	// comparison with NaN is false, so NaN fails the range test without being
+	// named. Reproducing the SHAPE keeps the two in step if the bound moves.
+	if !(0.0 <= confidence && confidence <= 1.0) {
+		return 0, fmt.Errorf(
+			"confidence must be between 0 and 1, got %v: %w", confidence, ErrUngroupableConfidence)
+	}
+	return float32(confidence), nil
 }
 
 // ValidateConfidence rejects a confidence that cannot be grouped.

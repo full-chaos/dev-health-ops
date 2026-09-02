@@ -1,9 +1,7 @@
 package edges
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -52,16 +50,16 @@ type DeriveResult struct {
 	// comparison possible.
 	Outcomes []Outcome
 	Counts   map[Outcome]int
-	// TimestampFallbacks counts rows whose last_synced could not be parsed and
-	// whose event_ts therefore became the BUILD clock instead.
+	// MissingTimestamps counts rows that had NO last_synced, and whose event_ts
+	// is therefore the build clock rather than the row's own time.
 	//
-	// Python has the same fallback (`except ValueError: self._now`), but its
-	// parser accepts far more than this one, so a fallback here can mean "the
-	// value was junk" OR "the value was fine and this port could not read it".
-	// Both silently produce a plausible row with a wrong event_ts, on the field
-	// that is already the most delicate in this build (CHAOS-4788). Counting
-	// them is what makes the second case discoverable at all.
-	TimestampFallbacks int
+	// This replaces a fallback counter that existed because the port could fail
+	// to PARSE a timestamp Python read fine. That failure mode is gone -- the
+	// value is an instant now, not text -- so the only remaining case is a row
+	// that genuinely has no timestamp. It is still counted, because event_ts is
+	// decided by merge state (CHAOS-4788) and a build-clock stamp on a row that
+	// should have had its own time is worth seeing.
+	MissingTimestamps int
 }
 
 // DeriveIssueIssueEdges is the pure core of `_build_issue_issue_edges`
@@ -129,12 +127,9 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 			continue
 		}
 
-		eventTs, err := eventTimestamp(row.LastSynced, buildClock)
-		switch {
-		case errors.Is(err, errFellBackToBuildClock):
-			result.TimestampFallbacks++
-		case err != nil:
-			return DeriveResult{}, fmt.Errorf("row %d: %w", index, err)
+		eventTs, present := eventTimestamp(row.LastSynced, buildClock)
+		if !present {
+			result.MissingTimestamps++
 		}
 
 		edge := Row{
@@ -185,150 +180,18 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 	return result, nil
 }
 
-// eventTimestamp is Python's per-row event_ts handling (builder.py:886-895).
+// eventTimestamp is Python's per-row event_ts handling (builder.py:886-895),
+// reduced to what actually remains once the value is an instant rather than a
+// string.
 //
-// A string is parsed with `Z` normalised to `+00:00`; a parse failure falls back
-// to the build clock rather than raising (Python swallows the ValueError, so a
-// bad timestamp is indistinguishable from a missing one). A naive value is
-// coerced to UTC.
-func eventTimestamp(lastSynced string, buildClock time.Time) (time.Time, error) {
-	if lastSynced == "" {
-		// Python does not special-case this: `fromisoformat("")` raises, so an
-		// empty value takes the SAME fallback arm as junk. Returning it without
-		// the signal would produce the right instant and an undercount, which
-		// is the more dangerous half — the whole point of the counter is to
-		// reveal event_ts values that are not the row's real time.
-		return buildClock, errFellBackToBuildClock
+// Python's string arm (`fromisoformat`, and `except ValueError: self._now`)
+// only runs when its driver hands back text. Its `if not event_ts` arm is dead
+// for a different reason: `datetime` has no `__bool__`, so it fires only on a
+// true None (audit gate 19). What is left on both planes is: use the row's
+// instant; if there isn't one, use the build clock.
+func eventTimestamp(lastSynced time.Time, buildClock time.Time) (time.Time, bool) {
+	if lastSynced.IsZero() {
+		return buildClock, false
 	}
-	parsed, err := parseGoldenInstant(lastSynced)
-	if err != nil {
-		// Python's `except ValueError: event_ts = self._now`.
-		return buildClock, errFellBackToBuildClock
-	}
-	return parsed, nil
-}
-
-// errFellBackToBuildClock is a signal, not a failure: the row is still emitted,
-// exactly as Python emits it. It exists so the substitution can be counted
-// rather than inferred from a timestamp that looks ordinary.
-var errFellBackToBuildClock = errors.New("last_synced unparseable; event_ts fell back to the build clock")
-
-// parseGoldenInstant models `datetime.fromisoformat(value.replace("Z","+00:00"))`
-// (builder.py:886-893), coercing a naive value to UTC.
-//
-// # WHAT IS MODELLED, AND WHAT IS NOT
-//
-// `fromisoformat` accepts far more than RFC3339. Measured against the deployed
-// interpreter (3.14), it takes basic format `20260901T123456+0000`, a lowercase
-// `t`, ANY single character as the date/time separator, an offset without its
-// colon, date-only and hour-only values, ISO week dates like `2026-W36-2`, and
-// `24:00:00` rolling into the next day.
-//
-// This models the first five, by NORMALISING the input into layouts Go already
-// parses rather than by hand-rolling an ISO parser -- a wrong parser would be
-// worse than a narrow one. ISO week dates and the 24:00 rollover are
-// deliberately NOT modelled; they are recorded in the timestamp corpus as known
-// divergences (CHAOS-4819) rather than left to be rediscovered.
-//
-// The narrowness is safe for a reason that is worth stating rather than
-// assuming: on the production path this value is not user data. ReadDependencies
-// scans a time.Time from ClickHouse and formats it with RFC3339Nano itself, so
-// the only strings that reach here are the ones this package produced. The wide
-// accept set matters for frozen goldens and directly-constructed rows.
-//
-// Python truncates to MICROSECONDS; Go's RFC3339Nano keeps nanoseconds. That is
-// a real value difference, so the result is truncated to match.
-func parseGoldenInstant(value string) (time.Time, error) {
-	// Python replaces EVERY "Z", not just a trailing one (builder.py:888).
-	normalised := strings.ReplaceAll(value, "Z", "+00:00")
-	for _, candidate := range isoFormatCandidates(normalised) {
-		for _, layout := range isoLayouts {
-			if parsed, err := time.Parse(layout, candidate); err == nil {
-				// Naive -> UTC, as Python does at :892-893, then truncated to
-				// Python's microsecond resolution.
-				return parsed.UTC().Truncate(time.Microsecond), nil
-			}
-		}
-	}
-	return time.Time{}, fmt.Errorf("unparseable instant %q", value)
-}
-
-var isoLayouts = []string{
-	time.RFC3339Nano,
-	"2006-01-02T15:04:05.999999999",
-	"2006-01-02T15:04",
-	"2006-01-02T15",
-	"2006-01-02",
-}
-
-// isoFormatCandidates rewrites the shapes `fromisoformat` accepts into ones the
-// layouts above cover. Normalising the INPUT keeps the parsing itself in the
-// standard library, where it is already correct.
-func isoFormatCandidates(value string) []string {
-	candidates := []string{value}
-	// Basic format: 20260901T123456 -> 2026-09-01T12:34:56. Only the date half
-	// is unambiguous by length, so expand both halves together.
-	if expanded, ok := expandBasicISO(value); ok {
-		candidates = append(candidates, expanded)
-	}
-	expanded := make([]string, 0, len(candidates)*2)
-	for _, candidate := range candidates {
-		expanded = append(expanded, candidate)
-		// Any single character may separate date and time; Go's layouts want T.
-		if len(candidate) > 10 && candidate[10] != 'T' {
-			expanded = append(expanded, candidate[:10]+"T"+candidate[11:])
-		}
-	}
-	final := make([]string, 0, len(expanded)*2)
-	for _, candidate := range expanded {
-		final = append(final, candidate)
-		// Offset without a colon: +0000 -> +00:00.
-		if colonised, ok := colonizeOffset(candidate); ok {
-			final = append(final, colonised)
-		}
-	}
-	return final
-}
-
-func expandBasicISO(value string) (string, bool) {
-	if len(value) < 8 {
-		return "", false
-	}
-	for index := 0; index < 8; index++ {
-		if value[index] < '0' || value[index] > '9' {
-			return "", false
-		}
-	}
-	date := value[:4] + "-" + value[4:6] + "-" + value[6:8]
-	rest := value[8:]
-	if rest == "" {
-		return date, true
-	}
-	// 20260901T123456[offset]
-	if len(rest) >= 7 && (rest[0] == 'T' || rest[0] == 't') {
-		clock, tail := rest[1:], ""
-		if len(clock) > 6 {
-			clock, tail = rest[1:7], rest[7:]
-		}
-		if len(clock) == 6 {
-			return date + "T" + clock[:2] + ":" + clock[2:4] + ":" + clock[4:6] + tail, true
-		}
-	}
-	return date, true
-}
-
-func colonizeOffset(value string) (string, bool) {
-	if len(value) < 5 {
-		return "", false
-	}
-	tail := value[len(value)-5:]
-	if tail[0] != '+' && tail[0] != '-' {
-		return "", false
-	}
-	for _, index := range []int{1, 2, 3, 4} {
-		if tail[index] < '0' || tail[index] > '9' {
-			return "", false
-		}
-	}
-	return value[:len(value)-5] + tail[:3] + ":" + tail[3:], true
+	return lastSynced.UTC(), true
 }

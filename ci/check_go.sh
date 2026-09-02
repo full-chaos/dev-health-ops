@@ -628,7 +628,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython)$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -668,6 +668,17 @@ check_live_python_oracles() {
   # before Python 3.11. A deployment that raised or lowered it would leave this
   # port disagreeing about which PR ids are convertible, in the direction that
   # mislabels a build-aborting row as an ordinary PR.
+  # Its own marker: this is the guard that stops Go's unicode package being the
+  # oracle for a Python-facing predicate. It derives Python's DECIMAL set (the
+  # direction the digit-table guard above does not cover) and compares the two
+  # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
+  # Python does not recognise.
+  proof_file="${proof_dir}/workgraph-python-decimal-blocks"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
   proof_file="${proof_dir}/workgraph-int-max-str-digits"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2

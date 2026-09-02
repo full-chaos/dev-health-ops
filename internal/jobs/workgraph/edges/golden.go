@@ -158,8 +158,10 @@ func (document *GoldenDocument) EdgeRow(edge GoldenEdge) (Row, error) {
 		}
 		*field.into = value
 	}
-	row.Confidence = Quantize(edge.Confidence)
 	var err error
+	if row.Confidence, err = Quantize(edge.Confidence); err != nil {
+		return Row{}, fmt.Errorf("edge %s: %w", row.EdgeID, err)
+	}
 	if row.DiscoveredAt, err = document.Instant(edge.DiscoveredAt); err != nil {
 		return Row{}, err
 	}

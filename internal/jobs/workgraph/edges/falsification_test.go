@@ -114,7 +114,11 @@ func TestRotGuardComparisonCatchesPlantedDrift(t *testing.T) {
 // or storing confidence as float64. Either would reproduce 1,833 components
 // where production has 1,832, with a different component set.
 func TestQuantizeIsNotAnIdentityOnFloat64(t *testing.T) {
-	if float64(Quantize(0.9)) == 0.9 {
+	quantized, err := Quantize(0.9)
+	if err != nil {
+		t.Fatalf("0.9 is a valid confidence: %v", err)
+	}
+	if float64(quantized) == 0.9 {
 		t.Fatal(
 			"Quantize(0.9) round-trips to the float64 literal, so the Float32 narrowing " +
 				"this package depends on is not happening",
@@ -122,8 +126,12 @@ func TestQuantizeIsNotAnIdentityOnFloat64(t *testing.T) {
 	}
 	// It must, however, be idempotent: narrowing an already-narrow value is a
 	// no-op, which is what makes a re-read equal to a write.
-	once := Quantize(0.9)
-	if twice := Quantize(float64(once)); twice != once {
+	once := quantized
+	twice, err := Quantize(float64(once))
+	if err != nil {
+		t.Fatalf("re-quantizing a narrowed value must stay valid: %v", err)
+	}
+	if twice != once {
 		t.Fatalf("Quantize is not idempotent: %v then %v", once, twice)
 	}
 }
@@ -389,6 +397,31 @@ func TestConfidenceAcceptSetIsPythonsNotOurs(t *testing.T) {
 	for name, value := range map[string]float32{"exactly 0": 0, "exactly 1": 1} {
 		if err := ValidateConfidence(value); err != nil {
 			t.Errorf("%s must be accepted — Python's bounds are inclusive: %v", name, err)
+		}
+	}
+}
+
+// TestNarrowingCannotLaunderAnInvalidConfidence pins codex round 3's P3.
+//
+// Float32 narrowing is lossy in the direction that HIDES a violation:
+// 1.00000001 becomes exactly 1, and -1e-50 becomes -0. Both then satisfy every
+// downstream range check, while Python's `WorkGraphEdge.__post_init__` raises on
+// the originals. Validating after narrowing therefore accepts values the
+// reference refuses — so the check has to be on the float64, and Quantize is the
+// only way to narrow.
+func TestNarrowingCannotLaunderAnInvalidConfidence(t *testing.T) {
+	for _, value := range []float64{1.00000001, -1e-50, 1.5, -0.5, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		narrowed, err := Quantize(value)
+		if err == nil {
+			t.Errorf("Quantize(%v) returned %v with no error; Python raises ValueError on this "+
+				"value, and after narrowing nothing downstream can tell", value, narrowed)
+		}
+	}
+	// The boundary values Python accepts must still pass, including negative
+	// zero, which `0.0 <= -0.0` admits.
+	for _, value := range []float64{0, 1, 0.9, math.Copysign(0, -1)} {
+		if _, err := Quantize(value); err != nil {
+			t.Errorf("Quantize(%v) was refused, but Python accepts it: %v", value, err)
 		}
 	}
 }

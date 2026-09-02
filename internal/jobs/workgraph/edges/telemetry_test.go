@@ -35,10 +35,7 @@ func TestEveryOutcomeHasAMetricLabel(t *testing.T) {
 // asserts the deriver's accounting and the metric's contract at once.
 func TestTheGoldenTallyIsPublishable(t *testing.T) {
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	result, err := DeriveIssueIssueEdges(goldenDependencyRows(t, document), buildClock)
 	if err != nil {
 		t.Fatalf("derive: %v", err)
@@ -94,10 +91,7 @@ func TestANilObserverIsRefused(t *testing.T) {
 // defect, so they must not look alike to a reader or a dashboard.
 func TestTheTallyNamesEveryOutcomeEvenAtZero(t *testing.T) {
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	result, err := DeriveIssueIssueEdges(goldenDependencyRows(t, document), buildClock)
 	if err != nil {
 		t.Fatalf("derive: %v", err)

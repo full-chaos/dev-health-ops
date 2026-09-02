@@ -98,7 +98,7 @@ func ReadDependencies(
 			// normalising to UTC here is the same coercion Python applies at
 			// builder.py:892-893, and skipping it would shift every event_ts by
 			// the driver's local offset.
-			LastSynced: lastSynced.UTC().Format(time.RFC3339Nano),
+			LastSynced: lastSynced.UTC(),
 		})
 	}
 	if err := rows.Err(); err != nil {

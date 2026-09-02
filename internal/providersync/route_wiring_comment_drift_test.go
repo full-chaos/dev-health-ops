@@ -22,8 +22,15 @@ import (
 //
 // WHAT THIS KEYS ON, and the bound on what it can ever prove. Discovery is
 // symbol NAMES referenced through the `providersync` package selector in the
-// wiring file, plus the TRANSITIVE closure of struct fields of those types,
-// over both type and function doc comments.
+// wiring file, plus the TRANSITIVE closure of struct fields of those types.
+// Doc comments are read on TYPE, FUNC (including METHODS, attributed to the
+// receiver type), VAR and CONST declarations -- the closed set of Go decl
+// kinds, so this is a bounded decision rather than another reachability hop.
+//
+// MEASURED, not assumed: an earlier version of this sentence claimed "type and
+// function doc comments" while discovery filtered `Recv == nil`, so methods
+// were silently unread. A guard whose own doc overstates its coverage is the
+// exact defect this guard exists to catch, committed by the guard.
 //
 // Detection, however, is a fixed list of literal phrasings, and that list is
 // NOT and CANNOT BE complete: deciding whether arbitrary English asserts
@@ -36,8 +43,12 @@ import (
 // comment misstates wiring. An honest gap beats a coverage claim that cannot
 // be defended -- a reader who believes this guard is complete stops checking.
 //
-// Still outside it: symbols reached only through a helper in another package,
-// through an interface, or named only in a string; and any paraphrase.
+// Still outside it, each verified by probe rather than assumed: DETACHED
+// comments (a comment separated from its declaration by a blank line is not
+// attached as Doc by go/ast, so it is unreadable here by construction);
+// symbols reached only through a helper in another package, through an
+// interface, or named only in a string; function RETURN types (an explicit
+// ruling, not an oversight); and any paraphrase of a stale claim.
 
 // staleRegistrationClaims are the phrases that assert a symbol is not wired.
 // Keep them literal: a regex broad enough to catch paraphrases also catches
@@ -168,6 +179,70 @@ func symbolsConstructedByTheWorker(t *testing.T) map[string]bool {
 // can reach. Embedded fields are an *ast.Ident like any other, so they are
 // covered; map keys and values are both followed because either can name a
 // package type.
+// declsFromFile is the single decl-reading rule, shared by the package walk and
+// by the synthetic fixture, so the fixture exercises the REAL logic rather than
+// a lookalike that could drift away from it.
+func declsFromFile(fset *token.FileSet, entry string, decl ast.Decl) []packageTypeDecl {
+	var out []packageTypeDecl
+	if funcDecl, ok := decl.(*ast.FuncDecl); ok {
+		if funcDecl.Doc == nil {
+			return nil
+		}
+		name := funcDecl.Name.Name
+		if funcDecl.Recv != nil {
+			if recv := receiverTypeName(funcDecl.Recv); recv != "" {
+				name = recv
+			}
+		}
+		return []packageTypeDecl{{name: name, doc: funcDecl.Doc.Text(), file: entry,
+			line: fset.Position(funcDecl.Pos()).Line}}
+	}
+	genDecl, ok := decl.(*ast.GenDecl)
+	if !ok {
+		return nil
+	}
+	switch genDecl.Tok {
+	case token.TYPE:
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			doc := genDecl.Doc
+			if typeSpec.Doc != nil {
+				doc = typeSpec.Doc
+			}
+			out = append(out, packageTypeDecl{name: typeSpec.Name.Name, spec: typeSpec,
+				doc: doc.Text(), file: entry, line: fset.Position(typeSpec.Pos()).Line})
+		}
+	case token.VAR, token.CONST:
+		if genDecl.Doc == nil {
+			return nil
+		}
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok || len(valueSpec.Names) == 0 {
+				continue
+			}
+			out = append(out, packageTypeDecl{name: valueSpec.Names[0].Name,
+				doc: genDecl.Doc.Text(), file: entry, line: fset.Position(valueSpec.Pos()).Line})
+		}
+	}
+	return out
+}
+
+// receiverTypeName unwraps `(m T)` / `(m *T)` to T.
+func receiverTypeName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 {
+		return ""
+	}
+	idents := fieldTypeIdents(recv.List[0].Type)
+	if len(idents) == 0 {
+		return ""
+	}
+	return idents[0]
+}
+
 func fieldTypeIdents(expr ast.Expr) []string {
 	switch typed := expr.(type) {
 	case *ast.Ident:
@@ -213,42 +288,10 @@ func packageTypeDecls(t *testing.T) []packageTypeDecl {
 			t.Fatalf("parse %s: %v", entry, err)
 		}
 		for _, decl := range file.Decls {
-			// Constructor docs count: codex round 2 planted
-			// "This constructor is intentionally unregistered." on
-			// NewGitLabWorkItemDeriver -- a func the worker calls directly --
-			// and the type-only walk accepted it.
-			if funcDecl, ok := decl.(*ast.FuncDecl); ok {
-				if funcDecl.Doc != nil && funcDecl.Recv == nil {
-					decls = append(decls, packageTypeDecl{
-						name: funcDecl.Name.Name,
-						doc:  funcDecl.Doc.Text(),
-						file: entry,
-						line: fset.Position(funcDecl.Pos()).Line,
-					})
-				}
-				continue
-			}
-			genDecl, ok := decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range genDecl.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				doc := genDecl.Doc
-				if typeSpec.Doc != nil {
-					doc = typeSpec.Doc
-				}
-				decls = append(decls, packageTypeDecl{
-					name: typeSpec.Name.Name,
-					spec: typeSpec,
-					doc:  doc.Text(),
-					file: entry,
-					line: fset.Position(typeSpec.Pos()).Line,
-				})
-			}
+			// ONE decl-reading rule, shared with the synthetic fixture, so the
+			// fixture exercises this exact code rather than a lookalike that
+			// could drift away from it.
+			decls = append(decls, declsFromFile(fset, entry, decl)...)
 		}
 	}
 	if len(decls) == 0 {
@@ -380,6 +423,61 @@ func TestDriftGuardCatchesAPlantedStaleClaim(t *testing.T) {
 			t.Fatalf("a legitimate tagged citation was rejected because of a version period: %v", claims)
 		}
 	})
+}
+
+// TestDriftGuardReadsEveryDeclKindItClaims drives the REAL decl walk over a
+// synthetic package and asserts each newly covered kind is actually read. Each
+// case is red on the previous implementation, which filtered `Recv == nil` and
+// accepted only `token.TYPE`: methods, vars and consts were silently unread,
+// so a stale claim on any of them sailed through. Detached comments are
+// asserted UNREADABLE on purpose -- that is a documented bound, and pinning it
+// stops a later reader mistaking the gap for an oversight.
+func TestDriftGuardReadsEveryDeclKindItClaims(t *testing.T) {
+	src := `package p
+
+// WiredThing is fine.
+type WiredThing struct{}
+
+// Fetch is intentionally unregistered by the worker.
+func (w WiredThing) Fetch() int { return 0 }
+
+// PlainFunc is intentionally unregistered.
+func PlainFunc() {}
+
+// SomeVar is intentionally unregistered.
+var SomeVar = 1
+
+// SomeConst is intentionally unregistered.
+const SomeConst = 2
+
+// Detached is intentionally unregistered.
+
+type Detached struct{}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "synthetic.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse synthetic package: %v", err)
+	}
+	found := map[string][]string{}
+	for _, decl := range file.Decls {
+		for _, entry := range declsFromFile(fset, "synthetic.go", decl) {
+			if claims := assertedStaleClaims(entry.doc); len(claims) > 0 {
+				found[entry.name] = claims
+			}
+		}
+	}
+
+	// A method must be attributed to its RECEIVER: that is the symbol the
+	// wiring file names, so that is the name the guard must match against.
+	for _, want := range []string{"WiredThing", "PlainFunc", "SomeVar", "SomeConst"} {
+		if len(found[want]) == 0 {
+			t.Errorf("decl kind for %s is NOT read -- a stale claim there would never be checked", want)
+		}
+	}
+	if len(found["Detached"]) != 0 {
+		t.Errorf("Detached became readable; the documented bound is now wrong and the doc must change")
+	}
 }
 
 // TestDriftGuardCoversConstructorDocsAndDeepFields pins the two discovery holes

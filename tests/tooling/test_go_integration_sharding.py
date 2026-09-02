@@ -1540,7 +1540,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # to fixpoint, pinned by +1 ordinary test (1316 -> 1317):
     # TestDriftGuardCoversConstructorDocsAndDeepFields. Parses source only, so
     # the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1317
+    # codex round 3 (NOT CLEAN, 2xP2+P3) then killed the prose-marker heuristic
+    # outright in favour of a lexical SUPERSEDED: tag, and a reach probe found
+    # discovery filtered `Recv == nil` and accepted only token.TYPE -- so method,
+    # var and const docs were silently unread. Discovery now reads the closed set
+    # of Go decl kinds. +1 ordinary test (1317 -> 1318):
+    # TestDriftGuardReadsEveryDeclKindItClaims, red on the old filter (verified by
+    # mutation: WiredThing/SomeVar/SomeConst all report "is NOT read"). Parses
+    # source only, so the integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1318
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1557,7 +1565,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1317
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1318
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1624,7 +1632,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1317
+    assert len(selected_tests) == len(set(selected_tests)) == 1318
     assert set(selected_tests) == expected_tests
 
 

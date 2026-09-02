@@ -51,6 +51,7 @@ EXPECTED_PACKAGES = {
     "internal/jobs/system",
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
+    "internal/jobs/workgraph/issueprlinks",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -326,8 +327,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 37 package(s)" in result.stdout
+    # CHAOS-4769 added internal/jobs/workgraph/issueprlinks (37 -> 38
+    # discovered, 37 -> 38 will run): the provenance-collision migration
+    # acceptance test is container-backed, so the package gained its first
+    # -tags integration file. The previous literal was 37 because
+    # internal/jobs/workgraph/edges (CHAOS-4766, #2121) had already landed
+    # on main; this branch adds the next one on top of it.
+    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 38 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -357,7 +364,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
     # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
-    assert len(flattened) == len(set(flattened)) == 37
+    # CHAOS-4769: 38, not 37 -- issueprlinks added. FLATTENED includes the
+    # providersync shard-1 package.
+    assert len(flattened) == len(set(flattened)) == 38
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1657,7 +1666,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
     # (37 discovered - 1 for the providersync shard-1 package = 36 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 36
+    # CHAOS-4769: 37, not 36 -- issueprlinks added
+    # (38 discovered - 1 for the providersync shard-1 package = 37).
+    assert len(selected_packages) == len(set(selected_packages)) == 37
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

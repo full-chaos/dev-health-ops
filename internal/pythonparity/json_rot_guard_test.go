@@ -38,8 +38,8 @@ func TestPythonJSONGoldenMatchesLivePython(t *testing.T) {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 
-	repoRoot := pythonJSONRepositoryRoot(t)
-	python := pythonJSONLivePython(t, repoRoot)
+	repoRoot := parityRepositoryRoot(t)
+	python := parityLivePython(t, repoRoot)
 	generator := filepath.Join(
 		repoRoot, "tests", "fixtures", "generate_python_json_golden.py",
 	)
@@ -88,8 +88,9 @@ func TestPythonJSONGoldenMatchesLivePython(t *testing.T) {
 	)
 }
 
-// pythonJSONRepositoryRoot walks up to the module root.
-func pythonJSONRepositoryRoot(t *testing.T) string {
+// parityRepositoryRoot walks up to the module root. Shared by every rot
+// guard in this package.
+func parityRepositoryRoot(t *testing.T) string {
 	t.Helper()
 	working, err := os.Getwd()
 	if err != nil {
@@ -107,12 +108,13 @@ func pythonJSONRepositoryRoot(t *testing.T) string {
 	}
 }
 
-// pythonJSONLivePython mirrors the workgraph-components guard's helper: PYTHON
-// wins, else python3 on PATH, and either way the resolved interpreter must
-// resolve dev_health_ops to a module INSIDE this checkout -- otherwise the
-// guard would silently compare another worktree's producer against this
-// worktree's frozen golden, which is a green that means nothing.
-func pythonJSONLivePython(t *testing.T, repoRoot string) string {
+// parityLivePython mirrors the workgraph-components guard's helper and is
+// shared by every rot guard in this package: PYTHON wins, else python3 on PATH,
+// and either way the resolved interpreter must resolve dev_health_ops to a
+// module INSIDE this checkout -- otherwise the guard would silently compare
+// another worktree's producer against this worktree's frozen golden, which is a
+// green that means nothing.
+func parityLivePython(t *testing.T, repoRoot string) string {
 	t.Helper()
 	resolved := os.Getenv("PYTHON")
 	if resolved == "" {

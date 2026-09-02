@@ -719,7 +719,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestPythonJSONGoldenMatchesLivePython$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -735,6 +735,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-json-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, and this one guards a producer that lives OUTSIDE
+  # this repository: CPython's str.isspace(), i.e. the interpreter's Unicode
+  # tables. A Python upgrade can move it with no diff in src/ for a reviewer to
+  # notice, and pythonparity.IsSpace hard-codes the current 0x1c-0x1f delta.
+  proof_file="${proof_dir}/python-whitespace-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python whitespace predicate did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

@@ -626,3 +626,136 @@ func TestGoldenFreezesItsFullProducerInput(t *testing.T) {
 		t.Errorf("counts[queries] = %d, payload has %d", document.Counts["queries"], want)
 	}
 }
+
+// TestProvenanceAndEvidenceAreDerivedFromTheFrozenInputs gives the two
+// verbatim-serialised fields an oracle of their own, recomputed from the frozen
+// dependency rows.
+//
+// Adversarial review round 4 found the gap: the generator serialises
+// `provenance` and `evidence` exactly as the producer emitted them, and the rot
+// guard only compares a regenerated golden against replay through that SAME
+// current Python. So a Python change that corrupted either field, followed by a
+// regeneration, went green — and taught the later Go port the corrupted output.
+// Every assertion in this file was on some other column, so nothing caught it.
+//
+// Both fields are derivable, so the fix is an independent oracle rather than a
+// narrower promise:
+//
+//   - provenance is unconditional: _build_issue_issue_edges writes
+//     Provenance.NATIVE for every dependency-derived edge.
+//   - evidence is `relationship_type_raw or relationship_type or "dependency"`
+//     — Python truthiness, so an EMPTY raw falls through to the type.
+//
+// This is the same shape as the cleanup-set recomputation: derive the expected
+// value from the inputs, never from the golden's own copy of the answer.
+//
+// The general class is CHAOS-4803 — nine generators in this repo serialise fields
+// verbatim with no independent oracle, and this pattern is the remedy.
+func TestProvenanceAndEvidenceAreDerivedFromTheFrozenInputs(t *testing.T) {
+	document := loadGolden(t)
+
+	type binding struct {
+		low, high string
+		edgeType  string
+	}
+	key := func(a, b, edgeType string) binding {
+		if a > b {
+			a, b = b, a
+		}
+		return binding{a, b, edgeType}
+	}
+	// Same mapping as the event_ts binding; only the TYPE is needed, not the
+	// direction, so _canonical_dependency's endpoint swap cannot affect the key.
+	edgeTypeFor := func(relationship string) string {
+		switch strings.ToLower(relationship) {
+		case "blocks", "blocked_by", "is_blocked_by":
+			return EdgeTypeBlocks
+		case "is_related_to":
+			return EdgeTypeIsRelatedTo
+		case "duplicates":
+			return EdgeTypeDuplicates
+		case "is_duplicate_of":
+			return EdgeTypeIsDuplicateOf
+		case "parent", "is_parent_of":
+			return EdgeTypeParentOf
+		case "child", "is_child_of":
+			return EdgeTypeChildOf
+		default:
+			return EdgeTypeRelates
+		}
+	}
+
+	expectedEvidence := map[binding]map[string]struct{}{}
+	for index, dependency := range document.Dependencies {
+		source, err := document.String(dependency[0])
+		if err != nil {
+			t.Fatalf("dependency %d source: %v", index, err)
+		}
+		target, err := document.String(dependency[1])
+		if err != nil {
+			t.Fatalf("dependency %d target: %v", index, err)
+		}
+		relationship, err := document.String(dependency[2])
+		if err != nil {
+			t.Fatalf("dependency %d relationship_type: %v", index, err)
+		}
+		raw, err := document.String(dependency[3])
+		if err != nil {
+			t.Fatalf("dependency %d relationship_type_raw: %v", index, err)
+		}
+		// Python truthiness: `raw or relationship or "dependency"`.
+		evidence := raw
+		if evidence == "" {
+			evidence = relationship
+		}
+		if evidence == "" {
+			evidence = "dependency"
+		}
+		bindingKey := key(source, target, edgeTypeFor(relationship))
+		if expectedEvidence[bindingKey] == nil {
+			expectedEvidence[bindingKey] = map[string]struct{}{}
+		}
+		expectedEvidence[bindingKey][evidence] = struct{}{}
+	}
+
+	pinned := 0
+	for index, edge := range document.Edges {
+		row, err := document.EdgeRow(edge)
+		if err != nil {
+			t.Fatalf("edge %d: %v", index, err)
+		}
+		if row.Provenance != ProvenanceNative {
+			t.Fatalf(
+				"edge %d carries provenance %q; this producer writes %q unconditionally, so "+
+					"anything else means the producer changed and the golden froze the change",
+				index, row.Provenance, ProvenanceNative,
+			)
+		}
+		allowed, known := expectedEvidence[key(row.SourceID, row.TargetID, row.EdgeType)]
+		if !known {
+			t.Fatalf(
+				"edge %d (%s <-%s-> %s) has no dependency row with those endpoints and that kind",
+				index, row.SourceID, row.EdgeType, row.TargetID,
+			)
+		}
+		if _, ok := allowed[row.Evidence]; !ok {
+			t.Fatalf(
+				"edge %d (%s <-%s-> %s) carries evidence %q, which is not "+
+					"`relationship_type_raw or relationship_type or \"dependency\"` for any "+
+					"dependency row with those endpoints and that kind",
+				index, row.SourceID, row.EdgeType, row.TargetID, row.Evidence,
+			)
+		}
+		if len(allowed) == 1 {
+			pinned++
+		}
+	}
+	if pinned*4 < len(document.Edges)*3 {
+		t.Fatalf(
+			"only %d of %d evidence values are pinned to a single derived string; the oracle "+
+				"is too loose to detect a corrupted evidence field",
+			pinned, len(document.Edges),
+		)
+	}
+	t.Logf("provenance/evidence: %d of %d pinned to exactly one derived value", pinned, len(document.Edges))
+}

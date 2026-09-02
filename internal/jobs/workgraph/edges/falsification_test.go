@@ -3,6 +3,7 @@ package edges
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -241,4 +242,120 @@ func TestEventTimeBindingRejectsARotatedGolden(t *testing.T) {
 		)
 	}
 	t.Logf("rotation attack: %d of %d moved timestamps rejected by the per-edge binding", rejected, rotated)
+}
+
+// TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration is the falsifying
+// half of round 4's finding: it plants the exact regression that used to
+// regenerate green and requires the derived oracle to reject it.
+//
+// The scenario the finding described: someone changes the producer so `evidence`
+// carries the wrong string (or `provenance` stops being native), regenerates the
+// golden, and every test passes because the golden now agrees with the changed
+// Python and nothing derives either field independently.
+func TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration(t *testing.T) {
+	document := loadGolden(t)
+
+	type binding struct{ low, high, edgeType string }
+	key := func(a, b, edgeType string) binding {
+		if a > b {
+			a, b = b, a
+		}
+		return binding{a, b, edgeType}
+	}
+	edgeTypeFor := func(relationship string) string {
+		switch strings.ToLower(relationship) {
+		case "blocks", "blocked_by", "is_blocked_by":
+			return EdgeTypeBlocks
+		case "duplicates":
+			return EdgeTypeDuplicates
+		default:
+			return EdgeTypeRelates
+		}
+	}
+	derived := map[binding]map[string]struct{}{}
+	for index, dependency := range document.Dependencies {
+		source, err := document.String(dependency[0])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		target, err := document.String(dependency[1])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		relationship, err := document.String(dependency[2])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		raw, err := document.String(dependency[3])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		evidence := raw
+		if evidence == "" {
+			evidence = relationship
+		}
+		if evidence == "" {
+			evidence = "dependency"
+		}
+		bindingKey := key(source, target, edgeTypeFor(relationship))
+		if derived[bindingKey] == nil {
+			derived[bindingKey] = map[string]struct{}{}
+		}
+		derived[bindingKey][evidence] = struct{}{}
+	}
+
+	// Plant three regressions a regeneration would otherwise freeze.
+	corruptions := map[string]func(Row) Row{
+		"evidence replaced with a constant": func(row Row) Row {
+			row.Evidence = "dependency"
+			return row
+		},
+		"evidence taken from another kind": func(row Row) Row {
+			row.Evidence = "linear_relation:related"
+			return row
+		},
+		"evidence truncated": func(row Row) Row {
+			if len(row.Evidence) > 3 {
+				row.Evidence = row.Evidence[:3]
+			}
+			return row
+		},
+	}
+	for name, corrupt := range corruptions {
+		moved, rejected := 0, 0
+		for index, edge := range document.Edges {
+			row, err := document.EdgeRow(edge)
+			if err != nil {
+				t.Fatalf("edge %d: %v", index, err)
+			}
+			bad := corrupt(row)
+			if bad.Evidence == row.Evidence {
+				continue
+			}
+			moved++
+			if _, ok := derived[key(bad.SourceID, bad.TargetID, bad.EdgeType)][bad.Evidence]; !ok {
+				rejected++
+			}
+		}
+		if moved == 0 {
+			t.Fatalf("%s: the corruption changed nothing, so it cannot test the oracle", name)
+		}
+		// "evidence taken from another kind" legitimately matches for the edges
+		// that ALREADY carry that value, so require the overwhelming majority
+		// rather than all.
+		if rejected*20 < moved*19 {
+			t.Errorf(
+				"%s: the derived oracle rejected only %d of %d corrupted values; a "+
+					"regeneration carrying this regression would still go green",
+				name, rejected, moved,
+			)
+			continue
+		}
+		t.Logf("%s: %d of %d corrupted values rejected", name, rejected, moved)
+	}
+
+	// And provenance, which is unconditional.
+	if ProvenanceNative == ProvenanceHeuristic || ProvenanceNative == ProvenanceExplicitText {
+		t.Fatal("the provenance constants collapsed; the assertion cannot distinguish them")
+	}
 }

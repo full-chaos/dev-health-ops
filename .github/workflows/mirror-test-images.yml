@@ -93,6 +93,12 @@ jobs:
           #      edoburu/pgbouncer, which lives in no Go file and was missed on
           #      the first pass precisely because it was restated nowhere.
           bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' | cut -f2 > images.raw
+          # Images CI needs that live in no repo file. The service containers in
+          # test.yml / live-e2e.yml pin ClickHouse by TAG, and 26.7 is the minor
+          # the local stack and prod run; mirroring it here means CI owns that tag
+          # instead of depending on someone having pushed it by hand -- which is
+          # precisely how the mirror ended up with packages CI could not read.
+          printf '%s\n' 'clickhouse/clickhouse-server:26.7' >> images.raw
           for compose in tests/compatibility/river/compose.compatibility.yml; do
             test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
             # The compose file parameterises its refs as ${TEST_IMAGE_PREFIX:-}<ref>

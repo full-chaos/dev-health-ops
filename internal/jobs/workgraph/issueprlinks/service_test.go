@@ -392,3 +392,66 @@ func TestWindowBoundsAreTruncatedToWholeSeconds(t *testing.T) {
 		t.Errorf("to_ts = %s, want %s (Python truncates to whole seconds)", got.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
 	}
 }
+
+// TestNonUTCWindowBoundIsRefused is codex round-3 F4.
+//
+// Python's strftime renders the bound's wall-clock fields and DISCARDS the
+// offset, so `2026-01-01T00:00:00.750+05:00` becomes the literal
+// `2026-01-01 00:00:00` (read as UTC). Converting to UTC first gives
+// `2025-12-31T19:00:00Z`. Those are different queries — a PR created at
+// `2025-12-31T20:00Z` falls on opposite sides — and no oracle covers the
+// difference, because the golden freezes no window at all.
+//
+// The live Python path cannot produce such a bound (runner.py:61-69 tags every
+// branch UTC), so rather than pick a semantic for an unexercised path, the
+// loader refuses it.
+func TestNonUTCWindowBoundIsRefused(t *testing.T) {
+	offset := time.FixedZone("UTC+5", 5*60*60)
+	shifted := time.Date(2026, 1, 1, 0, 0, 0, 750_000_000, offset)
+
+	for _, testCase := range []struct {
+		name   string
+		window Window
+	}{
+		{"from", Window{From: &shifted}},
+		{"to", Window{To: &shifted}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			conn := &stubConn{responses: stubResponsesForOneLink()}
+			service, _ := newTestService(t, conn)
+			_, err := service.Produce(context.Background(), testOrg, testCase.window)
+			if !errors.Is(err, ErrNonUTCWindowBound) {
+				t.Fatalf("Produce error = %v, want ErrNonUTCWindowBound", err)
+			}
+			if len(conn.inserted) != 0 {
+				t.Fatalf("wrote %d rows despite refusing the window", len(conn.inserted))
+			}
+		})
+	}
+}
+
+// TestZeroOffsetWindowBoundIsAccepted keeps the refusal from being overbroad: a
+// fixed +00:00 zone denotes the same wall clock as time.UTC, and a caller that
+// parsed "…+00:00" gets a Location that is not time.UTC.
+func TestZeroOffsetWindowBoundIsAccepted(t *testing.T) {
+	fixedUTC := time.FixedZone("+00:00", 0)
+	bound := time.Date(2026, 9, 1, 0, 0, 0, 750_000_000, fixedUTC)
+
+	conn := &stubConn{responses: stubResponsesForOneLink()}
+	service, _ := newTestService(t, conn)
+	if _, err := service.Produce(context.Background(), testOrg, Window{To: &bound}); err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	for _, arg := range conn.queryArgs[2] {
+		named, ok := arg.(driver.NamedValue)
+		if !ok || named.Name != "to_ts" {
+			continue
+		}
+		want := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+		if got := named.Value.(time.Time); !got.Equal(want) {
+			t.Fatalf("to_ts = %s, want %s", got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+		}
+		return
+	}
+	t.Fatal("to_ts bound not found")
+}

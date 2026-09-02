@@ -36,6 +36,9 @@ type Window struct {
 	RepoID *uuid.UUID
 }
 
+// ErrNonUTCWindowBound reports a window bound carrying a non-UTC offset.
+var ErrNonUTCWindowBound = errors.New("issueprlinks: window bounds must be UTC")
+
 // truncateBoundToSecond drops sub-second precision from a window bound, because
 // Python does and this is a parity port.
 //
@@ -51,14 +54,35 @@ type Window struct {
 // by up to a second in BOTH directions: with `to = 00:00:00.750Z`, a PR created
 // at `00:00:00.500Z` is outside Python's window (`<= '...00:00:00'`) and inside
 // an untruncated Go one, so Go would write a native mapping row Python does not;
-// at the `from` bound the asymmetry drops rows instead.
+// at the `from` bound the asymmetry drops rows instead (codex round 1, F1).
 //
-// Truncate() floors toward the zero time, which for a UTC instant is the same
-// operation strftime performs. The frozen golden cannot catch this class at all
-// -- its generator constructs `BuildConfig` with only a DSN and an org, so no
-// window is ever exercised (codex round 1, F1).
-func truncateBoundToSecond(bound time.Time) time.Time {
-	return bound.UTC().Truncate(time.Second)
+// # Why a non-UTC bound is REFUSED rather than converted
+//
+// strftime renders the bound's WALL-CLOCK FIELDS and discards the offset
+// entirely, so Python turns `2026-01-01T00:00:00.750+05:00` into the literal
+// `2026-01-01 00:00:00`, which ClickHouse reads as UTC -- a five-hour shift
+// from the instant the caller named. Converting to UTC first (the
+// instant-preserving reading) gives `2025-12-31T19:00:00Z`. Both are
+// defensible; they are not the same query, and a PR created at
+// `2025-12-31T20:00Z` falls on opposite sides of them (codex round 3).
+//
+// Neither semantic is chosen here. Python's is arguably a latent bug -- it
+// reinterprets an offset-bearing instant as UTC -- and copying it would carry
+// that bug into the plane meant to outlive Python, while silently diverging
+// from it would be a parity hole no oracle covers (the golden freezes no window
+// at all). The live Python path cannot produce a non-UTC bound in the first
+// place: `run_work_graph_build` tags every branch with `timezone.utc`
+// (runner.py:61-69). So this refuses the input instead, loudly, rather than
+// guessing on a path no caller exercises -- a measurement that cannot honour
+// its contract must not report.
+//
+// A zero UTC offset is accepted whatever the Location is named, since a fixed
+// +00:00 zone and time.UTC denote the same wall clock.
+func truncateBoundToSecond(bound time.Time) (time.Time, error) {
+	if _, offset := bound.Zone(); offset != 0 {
+		return time.Time{}, fmt.Errorf("%w: got %s", ErrNonUTCWindowBound, bound.Format(time.RFC3339))
+	}
+	return bound.UTC().Truncate(time.Second), nil
 }
 
 // Loader reads the four inputs Derive needs, scoped to one org.
@@ -189,12 +213,20 @@ FROM git_pull_requests FINAL
 WHERE org_id = {org_id:String}`
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if window.From != nil {
+		bound, err := truncateBoundToSecond(*window.From)
+		if err != nil {
+			return nil, fmt.Errorf("window from: %w", err)
+		}
 		query += ` AND created_at >= {from_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("from_ts", truncateBoundToSecond(*window.From)))
+		args = append(args, clickhouse.Named("from_ts", bound))
 	}
 	if window.To != nil {
+		bound, err := truncateBoundToSecond(*window.To)
+		if err != nil {
+			return nil, fmt.Errorf("window to: %w", err)
+		}
 		query += ` AND created_at <= {to_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("to_ts", truncateBoundToSecond(*window.To)))
+		args = append(args, clickhouse.Named("to_ts", bound))
 	}
 	if window.RepoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`

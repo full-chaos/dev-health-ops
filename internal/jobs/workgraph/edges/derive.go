@@ -228,7 +228,7 @@ var errFellBackToBuildClock = errors.New("last_synced unparseable; event_ts fell
 // parses rather than by hand-rolling an ISO parser -- a wrong parser would be
 // worse than a narrow one. ISO week dates and the 24:00 rollover are
 // deliberately NOT modelled; they are recorded in the timestamp corpus as known
-// divergences (CHAOS-4818) rather than left to be rediscovered.
+// divergences (CHAOS-4819) rather than left to be rediscovered.
 //
 // The narrowness is safe for a reason that is worth stating rather than
 // assuming: on the production path this value is not user data. ReadDependencies

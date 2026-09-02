@@ -16,7 +16,7 @@ import (
 // parser would be worse than a narrow one with a counted fallback. Neither can
 // arrive on the production path: ReadDependencies formats the value with
 // RFC3339Nano itself, so the only strings reaching the parser are this
-// package's own. Tracked as CHAOS-4818.
+// package's own. Tracked as CHAOS-4819.
 var knownTimestampDivergences = map[string]string{
 	"2026-W36-2":          "ISO week date; needs week-date arithmetic Go's time package does not parse",
 	"2026-09-01T24:00:00": "hour 24 rolls into the next day in Python; Go rejects the hour outright",

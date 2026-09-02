@@ -1,8 +1,5 @@
 """CHAOS-4769: make provenance decide which issue<->PR link survives a merge.
 
-DRAFT -- see "UNVERIFIED" below. Two items are lane-4752-go's [SLOT] work and
-this file is not final until they land.
-
 # The defect, measured rather than argued
 
 ``work_graph_issue_pr`` is ``ReplacingMergeTree(last_synced)`` keyed on
@@ -84,9 +81,23 @@ a single ``INSERT ... SELECT`` is one block, and ReplacingMergeTree collapses
 same-key rows AT PART CREATION under the new ranking -- 2 rows in, 1 out. The
 shadow therefore lands already-correct instead of depending on a later merge.
 
-An EXPLICIT column list is used rather than ``SELECT *``, so the copy is immune
-to whether ``version_rank`` ends up MATERIALIZED (excluded from ``SELECT *``)
-or a plain/DEFAULT column (included), and to any later column drift.
+An EXPLICIT column list is used rather than ``SELECT *``. The reason is the
+MATERIALIZED-vs-``SELECT *`` ambiguity: a MATERIALIZED column is excluded from
+``SELECT *`` while a DEFAULT one is included, so ``SELECT *`` would couple the
+copy's correctness to which form the version column takes.
+
+It is NOT drift immunity, and an earlier version of this docstring claimed it
+was -- backwards. The explicit list is VULNERABLE to column drift where
+``SELECT *`` is the mirror image: a column added to ``work_graph_issue_pr``
+after this file is written would be present in the shadow (which is built from
+``SHOW CREATE TABLE``) but unnamed by the copy, left at its DEFAULT, swapped in
+by ``EXCHANGE``, and the old table dropped -- silent, total loss of that column
+with no error at any step. The window is wide by design, because the prod apply
+is a separate per-op GO deferred in time.
+
+That is why ``_assert_carried_columns_match`` runs BEFORE the copy and fails
+closed: the migration refuses to run rather than quietly truncating. Found on
+review by lane-4752-go.
 
 # WHAT THIS DOES NOT FIX
 
@@ -95,16 +106,25 @@ migration can resurrect a row the engine has deleted; those keys are repaired
 by the next build that rewrites them, not by this change. The mechanism is
 forward-only in effect as well as in migration.
 
-# UNVERIFIED -- lane-4752-go [SLOT], this file is a DRAFT until they land
+# The version column's FORM, verified on containers rather than assumed
 
-  1. Whether ClickHouse 26.7 accepts a MATERIALIZED column as the
-     ReplacingMergeTree version parameter. Fallback order under test:
-     MATERIALIZED -> DEFAULT -> plain UInt64 populated by the copy. The plain
-     column certainly works but reintroduces a writer obligation for future
-     inserts, which violates the no-Python-writer constraint and changes the
-     answer -- so this is not a detail.
-  2. Whether a version column may be added to an existing table at all, or only
-     at CREATE. The shadow-table rebuild below sidesteps it either way.
+Measured by lane-4752-go on ClickHouse 26.6.1.1193 (2026-09-02), and this
+file's acceptance test passes on 26.6.1.1193 and 26.7.6.57 (2026-09-02):
+
+    MATERIALIZED column              ACCEPTED   <- what this migration uses
+    DEFAULT column                   ACCEPTED
+    ALIAS column                     REFUSED  Code 16 NO_SUCH_COLUMN_IN_TABLE
+                                              "Version column version_rank does
+                                               not exist in table declaration."
+    expression as engine argument    REFUSED  Code 36 "Cannot evaluate engine
+                                              argument 0: Unknown expression or
+                                              function identifier `provenance`"
+    EXCHANGE TABLES                  ACCEPTED
+
+The two refusals are kept because they are WHY there is no fallback ladder:
+MATERIALIZED works, so no writer obligation is reintroduced and constraint (1)
+holds. An ALIAS column would have been the tidier expression of "derived, never
+stored" and the engine rejects it outright.
 
 # Rebuild shape
 
@@ -255,6 +275,55 @@ def _replace_table_name(ddl: str, old: str, new: str) -> str:
     return result
 
 
+def _column_shape(client, table: str) -> list[tuple[str, str, str]]:
+    """(name, type, default_kind) for a table, in position order."""
+    res = client.query(
+        "SELECT name, type, default_kind FROM system.columns "
+        "WHERE database = currentDatabase() AND table = {name:String} "
+        "ORDER BY position",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return [(str(r[0]), str(r[1]), str(r[2] or "")) for r in rows]
+
+
+def _assert_carried_columns_match(client, table: str) -> None:
+    """Refuse to run if the live table is not exactly what the copy names.
+
+    `_copy` names a hardcoded column list. If a column is added to
+    `work_graph_issue_pr` after this file is written, the shadow gets it (it is
+    built from SHOW CREATE TABLE) but the copy does not name it, so EXCHANGE
+    swaps in a table where that column is empty for every row and the original
+    is dropped. Silent, total loss, no error at any step.
+
+    The window is wide by design: prod apply is a separate per-op GO, deferred.
+    So this fails CLOSED on any difference rather than trusting the constant.
+    """
+    live = [
+        name for name, _, kind in _column_shape(client, table) if kind != "MATERIALIZED"
+    ]
+    if tuple(live) != tuple(CARRIED_COLUMNS):
+        raise RuntimeError(
+            f"{table} has stored columns {live!r} but this migration copies "
+            f"{list(CARRIED_COLUMNS)!r}. A column was added or removed since this "
+            "migration was written; copying anyway would silently drop it during "
+            "EXCHANGE. Update CARRIED_COLUMNS and re-verify the acceptance test."
+        )
+
+
+def _assert_shadow_matches(client, table: str, shadow: str) -> None:
+    """The shadow must be the source plus exactly the version column."""
+    expected = _column_shape(client, table) + [
+        (VERSION_COLUMN, "UInt64", "MATERIALIZED")
+    ]
+    actual = _column_shape(client, shadow)
+    if actual != expected:
+        raise RuntimeError(
+            f"{shadow} column shape {actual!r} is not {table}'s {expected!r}; "
+            "the DDL rewrite changed something it should not have"
+        )
+
+
 def _copy(client, source: str, target: str) -> None:
     """Copy every version across, WITHOUT FINAL. See HAZARD 3.
 
@@ -299,6 +368,9 @@ def _rebuild(client) -> None:
         log.warning(f"  {SHADOW}: dropping a leftover pre-EXCHANGE shadow")
         client.command(f"DROP TABLE `{SHADOW}`")
 
+    # Fail closed BEFORE building anything if the table is not what we copy.
+    _assert_carried_columns_match(client, TABLE)
+
     original_key = _sorting_key(client, TABLE)
     key_columns = [c.strip() for c in original_key.strip("() ").split(",") if c.strip()]
 
@@ -324,6 +396,8 @@ def _rebuild(client) -> None:
             f"{SHADOW}: engine {_engine_full(client, SHADOW)!r} is not versioned on "
             f"{VERSION_COLUMN}; aborting without swapping"
         )
+
+    _assert_shadow_matches(client, TABLE, SHADOW)
 
     before = _distinct_key_count(client, TABLE, key_columns)
     _copy(client, TABLE, SHADOW)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -187,6 +188,17 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	assertOnlyProvenance(ctx, t, conn, keyB, "explicit_text")
 	assertRowCount(ctx, t, conn, keyC, 1)
 	assertOnlyProvenance(ctx, t, conn, keyC, "native")
+	// EVERY carried column must round-trip, not just provenance.
+	//
+	// The migration copies a hardcoded column list. If that list ever stops
+	// matching the table, the shadow still HAS the missing column (it is built
+	// from SHOW CREATE TABLE) but the copy leaves it at its DEFAULT, EXCHANGE
+	// swaps it in and the original is dropped -- silent, total loss with no
+	// error. A test that reads back only `provenance` is green through exactly
+	// that. Found on review by lane-4752-go; the migration also fails closed on
+	// it, so the two defences are independent.
+	assertSurvivingRowIntact(ctx, t, conn, keyA, org, repo, prA,
+		1.00, "native", "seed-native", "2026-01-01 00:00:00.000")
 
 	// STEP 5. Regime (b): an EXACT version tie, resolved by part recency.
 	// A fresh table per trial -- not merely a fresh key -- because an earlier
@@ -282,8 +294,8 @@ func seed(ctx context.Context, t *testing.T, conn driver.Conn,
 	exec(ctx, t, conn, fmt.Sprintf(
 		`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence,
 		 provenance, evidence, last_synced, org_id)
-		 VALUES ('%s','%s',%d,%f,'%s','seed','%s','%s')`,
-		repo, workItem, pr, confidence, provenance, lastSynced, org))
+		 VALUES ('%s','%s',%d,%f,'%s','%s','%s','%s')`,
+		repo, workItem, pr, confidence, provenance, "seed-"+provenance, lastSynced, org))
 }
 
 type link struct {
@@ -376,5 +388,47 @@ func writeProof(t *testing.T, marker string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, marker), []byte("executed"), 0o644); err != nil {
 		t.Fatalf("write proof marker: %v", err)
+	}
+}
+
+// assertSurvivingRowIntact reads back every carried column for a key.
+func assertSurvivingRowIntact(
+	ctx context.Context, t *testing.T, conn driver.Conn,
+	workItem, org, repo string, pr int,
+	confidence float64, provenance, evidence, lastSynced string,
+) {
+	t.Helper()
+	var (
+		gotRepo, gotItem, gotProv, gotEvidence, gotOrg, gotSynced string
+		gotPR                                                     uint32
+		gotConfidence                                             float32
+	)
+	if err := conn.QueryRow(ctx, `
+		SELECT toString(repo_id), work_item_id, pr_number, confidence, provenance,
+		       evidence, toString(last_synced), toString(org_id)
+		FROM work_graph_issue_pr WHERE work_item_id = ? LIMIT 1`, workItem,
+	).Scan(&gotRepo, &gotItem, &gotPR, &gotConfidence, &gotProv,
+		&gotEvidence, &gotSynced, &gotOrg); err != nil {
+		t.Fatalf("read back the surviving row for %s: %v", workItem, err)
+	}
+	for _, c := range []struct{ field, got, want string }{
+		{"repo_id", gotRepo, repo},
+		{"work_item_id", gotItem, workItem},
+		{"provenance", gotProv, provenance},
+		{"evidence", gotEvidence, evidence},
+		{"org_id", gotOrg, org},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: %s = %q, want %q", workItem, c.field, c.got, c.want)
+		}
+	}
+	if gotPR != uint32(pr) {
+		t.Errorf("%s: pr_number = %d, want %d", workItem, gotPR, pr)
+	}
+	if float64(gotConfidence) != confidence {
+		t.Errorf("%s: confidence = %v, want %v", workItem, gotConfidence, confidence)
+	}
+	if !strings.HasPrefix(gotSynced, lastSynced[:19]) {
+		t.Errorf("%s: last_synced = %q, want prefix %q", workItem, gotSynced, lastSynced[:19])
 	}
 }

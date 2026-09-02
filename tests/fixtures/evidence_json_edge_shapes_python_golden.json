@@ -197,6 +197,10 @@
       "why": "two astral code points back to back: four \\u escapes, no literal bytes"
     }
   ],
+  "environment": {
+    "float_repr_style": "short",
+    "python_version": "3.14.7"
+  },
   "provenance": "shapes identified by lane-3092 while peer-reviewing #2140; its 302-shape real-row comparison carried zero -Infinity and no non-ASCII, so these were added synthetically to cover the gap",
   "purpose": "edge-shape evidence_json cases the real rule corpus cannot reach: -Infinity, non-ASCII/CJK/astral text, short escapes, C0 controls, signed zero and the empty list"
 }

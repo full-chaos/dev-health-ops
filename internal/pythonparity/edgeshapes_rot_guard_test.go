@@ -63,7 +63,11 @@ func TestEdgeShapesGoldenMatchesLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if string(frozen) == string(rendered) {
+	// Compare the PAYLOAD, not the whole document: provenance fields such as
+	// `environment` record an interpreter that drifts without anyone deciding
+	// anything, and freezing that inside the comparison already produced one
+	// false "has ROTTED" pointing at loader.py. See comparePayload.
+	if err := comparePayload(frozen, rendered, "cases"); err == nil {
 		if writeErr := os.WriteFile(
 			filepath.Join(proofDirectory, "evidence-json-edge-shapes-golden"),
 			[]byte("executed"), 0o644,

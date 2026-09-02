@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import platform
 import random
 import struct
 import sys
@@ -116,29 +117,28 @@ def main() -> int:
     cases = [evidence_bytes(v, d) for v in values for d in (4, 2)]
     document = {
         "purpose": "dense 1e8..7e15 repr-band coverage for MarshalPythonJSONInsertionOrder (#2140)",
-        # NO interpreter metadata is frozen here, deliberately.
+        # Interpreter provenance. RECORDED, NEVER COMPARED.
         #
-        # The rot guard compares the WHOLE FILE byte for byte, so anything
-        # recorded in this document becomes part of the comparison. An
-        # interpreter field therefore turns every interpreter difference into a
-        # reported "ROT" -- pointing at loader.py, when nothing rotted.
+        # The rot guard compares the PAYLOAD (the `cases` array, and
+        # `distinct_input_values` where present) rather than the whole document,
+        # so this block is documentation that a byte-comparison cannot reach.
         #
-        # That already fired once: `sys.version` embeds the build string, so a
-        # macOS-generated fixture could never match a Linux runner. Replacing it
-        # with the bare version narrowed the window but did not close it -- the
-        # live interpreter is UNPINNED (parityLivePython takes $PYTHON, else
-        # whatever `python3` resolves to), so CPython 3.14.8 reproduces the same
-        # incident on CPython's release schedule.
+        # It has to be that way round. Freezing it inside the comparison already
+        # fired once: `sys.version` embeds the build string, so a macOS-generated
+        # fixture could never match a Linux runner. Recording the bare version
+        # narrowed the window without closing it -- the live interpreter is
+        # UNPINNED (parityLivePython takes $PYTHON, else whatever `python3`
+        # resolves to), so CPython 3.14.8 would reproduce the same incident on
+        # CPython's release schedule.
         #
-        # The three pre-existing goldens in this package -- json, sum,
-        # whitespace -- record no interpreter metadata for this reason. This
-        # follows them. The interpreter is still printed to stdout when the
-        # generator is run by hand, where it is useful and harmless.
-        "note": (
-            "evidence_json is the output of the LIVE recommendation_to_record -> "
-            "json.dumps path. Key order, the ', '/': ' separators and the float "
-            "notation are all as the reference writes them."
-        ),
+        # The distinction worth keeping, from lane-ci-flakes: a frozen
+        # environment value is a DEFECT when the environment can drift without a
+        # decision, and a FEATURE when it cannot. This one drifts without a
+        # decision, so it is recorded outside the comparison rather than deleted.
+        "environment": {
+            "python_version": platform.python_version(),
+            "float_repr_style": sys.float_repr_style,
+        },
         "distinct_input_values": len(values),
         "cases": cases,
     }

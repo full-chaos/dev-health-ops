@@ -144,7 +144,6 @@ func TestBuildWindowRejectsMalformedScopeValues(t *testing.T) {
 	for _, scope := range []string{
 		`{"repo_id":"not-a-uuid"}`,
 		`{"to_date":"15/08/2026"}`,
-		`{"from_date":""}`,
 		`not json`,
 	} {
 		if _, err := step.windowFor([]byte(scope)); err == nil {
@@ -168,5 +167,117 @@ func TestPreStepNameIsStable(t *testing.T) {
 	// The name is a ledger evidence key; changing it orphans historical rows.
 	if got := (&issuePRLinksPreStep{}).Name(); got != "issue_pr_links" {
 		t.Fatalf("Name() = %q", got)
+	}
+}
+
+// TestBuildPreStepOrderIsPinned makes appending a pre-step a DECISION.
+//
+// Order is load-bearing (see the ordering invariant on workgraph.NativePreStep):
+// Python's build() runs the edge builder, then the mapping, then the fast-path
+// edge builder that READS the mapping. A step registered on the wrong side of
+// the mapping does not fail — it reads the previous run's rows and produces a
+// plausible, stale result. Nothing else in the process would notice.
+//
+// So this test exists to FAIL when the list changes. That is the point: whoever
+// appends has to come here, read the invariant, and state where their step
+// belongs relative to "issue_pr_links". lane-4752-go's edge producer straddles
+// it and therefore needs at least two entries, one on each side.
+func TestBuildPreStepOrderIsPinned(t *testing.T) {
+	want := []string{"issue_pr_links"}
+	got := buildPreStepOrder()
+
+	if len(got) != len(want) {
+		t.Fatalf(
+			"build pre-step order is %v, want %v.\n"+
+				"If you are ADDING a step, read the ordering invariant on workgraph.NativePreStep "+
+				"first, then place it by this rule: a step that READS a table an earlier step WRITES "+
+				"goes after it.\n"+
+				"KNOWN PENDING (CHAOS-4766, lane-4766-go): `issue_issue_edges` registers BEFORE "+
+				"`issue_pr_links` — it does not read the mapping — giving "+
+				"[issue_issue_edges issue_pr_links]. A later PR of that lane ports "+
+				"`_build_issue_pr_edges_from_fast_path`, which DOES read work_graph_issue_pr and "+
+				"therefore registers AFTER `issue_pr_links`.",
+			got, want,
+		)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("build pre-step order is %v, want %v", got, want)
+		}
+	}
+}
+
+// TestBuildPreStepOrderNamesAreUnique guards the evidence merge: fragments are
+// keyed by step name, so two steps sharing one would silently drop a fragment.
+func TestBuildPreStepOrderNamesAreUnique(t *testing.T) {
+	seen := map[string]struct{}{}
+	for _, name := range buildPreStepOrder() {
+		if name == "" {
+			t.Fatal("a pre-step has an empty name; it is a ledger evidence key")
+		}
+		if _, duplicate := seen[name]; duplicate {
+			t.Fatalf("pre-step name %q appears twice; evidence fragments are keyed by name", name)
+		}
+		seen[name] = struct{}{}
+	}
+}
+
+// TestBuildWindowTreatsAnEmptyScopeValueAsAbsent is codex round-1 F2 (EXECUTED).
+//
+// Python gates on TRUTHINESS -- `if to_date:` (work_graph_tasks.py:124,129) --
+// so an empty string is "absent" and the default window applies. Go saw a
+// non-nil pointer to "" and failed the whole build. An empty string is a
+// perfectly ordinary serialisation of "no value", so this turned a normal
+// Python default into a Go build failure.
+//
+// Worse than the divergence: the previous version of
+// TestBuildWindowRejectsMalformedScopeValues asserted that rejection as
+// DESIRABLE. A test can pin a bug as a requirement, which is why "the tests
+// pass" is not the same claim as "the behaviour matches the reference".
+func TestBuildWindowTreatsAnEmptyScopeValueAsAbsent(t *testing.T) {
+	step := frozenPreStep()
+	wantTo := time.Date(2026, 9, 1, 12, 30, 45, 500_000_000, time.UTC)
+
+	for _, scope := range []string{
+		`{"from_date":""}`,
+		`{"to_date":""}`,
+		`{"from_date":"   ","to_date":"\t"}`,
+		`{"repo_id":""}`,
+	} {
+		window, err := step.windowFor([]byte(scope))
+		if err != nil {
+			t.Fatalf("windowFor(%s) failed; Python treats an empty value as absent: %v", scope, err)
+		}
+		if !window.To.Equal(wantTo) {
+			t.Errorf("windowFor(%s) to = %s, want the default now (%s)", scope, window.To, wantTo)
+		}
+		if want := wantTo.AddDate(0, 0, -30); !window.From.Equal(want) {
+			t.Errorf("windowFor(%s) from = %s, want the default to-30d (%s)", scope, window.From, want)
+		}
+		if window.RepoID != nil {
+			t.Errorf("windowFor(%s) repo_id = %v, want unset", scope, window.RepoID)
+		}
+	}
+}
+
+// TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts covers the rest of F2:
+// `datetime.fromisoformat` (3.11+) accepts basic dates and minute precision,
+// verified against the deployed interpreter.
+func TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts(t *testing.T) {
+	step := frozenPreStep()
+	for _, testCase := range []struct {
+		scope string
+		want  time.Time
+	}{
+		{`{"to_date":"20260815"}`, time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)},
+		{`{"to_date":"2026-08-15T06:07"}`, time.Date(2026, 8, 15, 6, 7, 0, 0, time.UTC)},
+	} {
+		window, err := step.windowFor([]byte(testCase.scope))
+		if err != nil {
+			t.Fatalf("windowFor(%s): %v", testCase.scope, err)
+		}
+		if !window.To.Equal(testCase.want) {
+			t.Errorf("windowFor(%s) to = %s, want %s", testCase.scope, window.To, testCase.want)
+		}
 	}
 }

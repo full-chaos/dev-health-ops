@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -210,4 +211,37 @@ func TestMergePreStepEvidence(t *testing.T) {
 			t.Fatalf("merged = %s", merged)
 		}
 	})
+}
+
+// TestMergePreStepEvidencePreservesLargeIntegers is codex round-1 F3.
+//
+// Decoding the executor's payload into map[string]any turns every JSON number
+// into a float64, which cannot represent integers above 2^53 exactly. Re-encoding
+// then writes the ROUNDED value, and the result is still valid jsonb — so the
+// ledger row silently stops matching what Python sent.
+//
+// `spend_limit_microunits` is a bigint the schema allows
+// (0060_add_workgraph_investment_execution_state.py), and this repository
+// already documents the same float64 hazard at publisher.go:137. Attaching a
+// telemetry fragment must not corrupt the authoritative payload it is attached
+// to.
+func TestMergePreStepEvidencePreservesLargeIntegers(t *testing.T) {
+	// 2^53 + 1: the smallest integer a float64 cannot represent.
+	const exact = "9007199254740993"
+	payload := []byte(`{"spend_limit_microunits":` + exact + `}`)
+
+	merged := mergePreStepEvidence(payload, map[string]map[string]any{
+		"issue_pr_links": {"rows_written": 2493},
+	})
+
+	if !strings.Contains(string(merged), exact) {
+		t.Fatalf("merged evidence lost the exact integer %s: %s", exact, merged)
+	}
+	// And the fragment still arrived.
+	if !strings.Contains(string(merged), "issue_pr_links") {
+		t.Fatalf("merged evidence dropped the fragment: %s", merged)
+	}
+	if !json.Valid(merged) {
+		t.Fatalf("merged evidence is not valid json: %s", merged)
+	}
 }

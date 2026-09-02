@@ -39,8 +39,35 @@ import (
 // AMBIGUOUS rather than failed, because a step that writes in batches may have
 // written some rows before the error.
 //
-// Steps run in registration order, before the bridge, inside the same lease
+// Steps run in REGISTRATION ORDER, before the bridge, inside the same lease
 // renewal. A step must be idempotent: the request it serves can be retried.
+//
+// # Ordering invariant (binding on every future step)
+//
+// Order is load-bearing, because the Python build these steps run ahead of is
+// itself ordered and its stages feed each other (`work_graph/builder.py`
+// `build()`):
+//
+//	:464  _build_issue_issue_edges                  edges from work_item_dependencies
+//	:466  _derive_issue_pr_links_from_dependencies  the MAPPING (ported: issueprlinks)
+//	:470  _build_issue_pr_edges_from_fast_path      READS work_graph_issue_pr
+//
+// Note that the edge work STRADDLES the mapping: part of it precedes the
+// mapping and part of it consumes the mapping. A single pre-step covering both
+// halves cannot satisfy that, so a port of the edge producer has to register at
+// least two steps, one on each side.
+//
+// The invariant, stated so it survives the specific ports:
+//
+//	ANY step that READS a table an earlier step WRITES must be registered
+//	after it.
+//
+// Concretely today: anything reading `work_graph_issue_pr` registers after the
+// mapping step. Getting this wrong does not fail — a fast-path edge builder
+// running before the mapping simply reads the PREVIOUS run's rows and produces
+// a plausible, stale edge set. `buildPreStepOrder` in the composition root
+// pins the current order so that appending a step has to be a decision rather
+// than an accident of registration.
 type NativePreStep interface {
 	// Name identifies the step in the ledger evidence and in errors. It must be
 	// a stable, unique JSON object key.
@@ -58,14 +85,25 @@ type NativePreStep interface {
 // ledger row is durable execution evidence, and corrupting it to attach a
 // telemetry nicety would be a bad trade -- the same counts are already on the
 // step's own structured log line and its observer.
+//
+// It decodes through decodeJSONPreservingNumbers rather than a plain
+// json.Unmarshal into `any`, for the reason already documented above that
+// helper: the default decoder turns every JSON number into a float64, which
+// silently rounds integers above 2^53. Python's evidence carries
+// `spend_limit_microunits`, a bigint the schema allows, so a plain decode would
+// re-encode 9007199254740993 as 9007199254740992 -- still valid jsonb, and no
+// longer what Python sent (codex round 1, F3).
 func mergePreStepEvidence(evidence []byte, fragments map[string]map[string]any) []byte {
 	if len(fragments) == 0 || len(evidence) == 0 {
 		return evidence
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(evidence, &payload); err != nil || payload == nil {
-		// Not a JSON object (or not decodable): leave it exactly as Python
-		// produced it.
+	decoded, err := decodeJSONPreservingNumbers(evidence)
+	if err != nil {
+		return evidence
+	}
+	payload, isObject := decoded.(map[string]any)
+	if !isObject || payload == nil {
+		// Not a JSON object: leave it exactly as Python produced it.
 		return evidence
 	}
 	for name, fragment := range fragments {
@@ -78,8 +116,8 @@ func mergePreStepEvidence(evidence []byte, fragments map[string]map[string]any) 
 		}
 		payload[name] = fragment
 	}
-	merged, err := json.Marshal(payload)
-	if err != nil {
+	merged, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
 		return evidence
 	}
 	return merged

@@ -81,6 +81,30 @@ func (step *issuePRLinksPreStep) Run(ctx context.Context, claim workgraph.Claim)
 // The 30-day default is load-bearing and easy to miss: Python's build window is
 // NEVER unbounded. A pre-step that read with no window would consider pull
 // requests the Python producer never looks at, and write mapping rows for them.
+//
+// # The two-`now` boundary, analysed and accepted (codex round 1, F1)
+//
+// On a default scope (the fixed producer persists `{}`) this step takes `now`
+// when it runs and Python takes its own `now` moments later, so Python's `to`
+// bound is strictly LATER. A pull request created in that sliver is inside
+// Python's window and outside this one. It cannot be removed: both planes
+// derive `now` independently and nothing is shared to anchor them, so the only
+// "fix" would be changing the reference producer.
+//
+// It is accepted rather than merely noted, because the consequence is bounded
+// at both ends of this stack's life:
+//
+//   - WHILE the Python producer is still live (PR 2), its window is the wider
+//     one at the `to` end, so it writes the row this step skipped. The mapping
+//     TABLE is unaffected; only this step's ledger fragment counts differ.
+//   - AFTER the Python producer is retired (PR 3), this window is the only one,
+//     and "the window ends when the step runs" is the correct semantics for a
+//     producer with a `now` bound -- not a missing link.
+//
+// What would be a real defect is the reverse ordering (this step's `to` being
+// LATER than Python's), because then this step would write links Python never
+// derives. It cannot happen: the step runs strictly before the bridge dispatch
+// that leads to Python's own derivation.
 func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window, error) {
 	scope := buildScope{}
 	if len(rawScope) > 0 {
@@ -89,8 +113,13 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 		}
 	}
 
+	// Python gates these on TRUTHINESS (`if to_date:`, work_graph_tasks.py:124
+	// and :129), so an empty or whitespace-only value means ABSENT and the
+	// default applies. Testing the pointer for nil instead would turn an
+	// ordinary "no value" serialisation into a build failure (codex round 1,
+	// F2 -- and the first version of this adapter did exactly that).
 	to := step.now().UTC()
-	if scope.ToDate != nil {
+	if present(scope.ToDate) {
 		parsed, err := parseScopeInstant(*scope.ToDate)
 		if err != nil {
 			return issueprlinks.Window{}, fmt.Errorf("build scope to_date: %w", err)
@@ -98,7 +127,7 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 		to = parsed
 	}
 	from := to.AddDate(0, 0, -30)
-	if scope.FromDate != nil {
+	if present(scope.FromDate) {
 		parsed, err := parseScopeInstant(*scope.FromDate)
 		if err != nil {
 			return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
@@ -107,7 +136,7 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	}
 
 	window := issueprlinks.Window{From: &from, To: &to}
-	if scope.RepoID != nil && strings.TrimSpace(*scope.RepoID) != "" {
+	if present(scope.RepoID) {
 		repoID, err := uuid.Parse(strings.TrimSpace(*scope.RepoID))
 		if err != nil {
 			return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
@@ -134,12 +163,31 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 // instant-preserving reading. Those are different queries, nothing produces
 // such a scope today, and guessing between them is exactly what a measurement
 // that cannot honour its contract must not do.
+// present reports whether a scope string carries a value, matching Python's
+// truthiness gate. A nil pointer, an empty string and a whitespace-only string
+// are all "absent".
+func present(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != ""
+}
+
 func parseScopeInstant(value string) (time.Time, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return time.Time{}, fmt.Errorf("empty value")
 	}
-	for _, layout := range []string{"2006-01-02", "2006-01-02T15:04:05", "2006-01-02 15:04:05"} {
+	// The layouts `datetime.fromisoformat` accepts that a caller could plausibly
+	// send, verified against the deployed interpreter: extended and BASIC dates,
+	// and date-times at minute or second precision. ISO week dates
+	// ("2026-W33-6") and ordinal dates are accepted by Python and refused here;
+	// nothing in the tree writes a build scope with dates at all (the fixed
+	// producer persists `{}`), so those forms are unreachable, and a LOUD
+	// refusal is the right failure for an unreachable input -- far better than
+	// silently computing a different window than the reference would.
+	for _, layout := range []string{
+		"2006-01-02", "20060102",
+		"2006-01-02T15:04:05", "2006-01-02 15:04:05",
+		"2006-01-02T15:04", "2006-01-02 15:04",
+	} {
 		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
 			return parsed, nil
 		}

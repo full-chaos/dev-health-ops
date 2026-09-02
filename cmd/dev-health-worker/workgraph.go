@@ -113,6 +113,7 @@ func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client
 func workgraphBuildPreSteps(
 	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
 ) ([]workgraph.NativePreStep, error) {
+	declared := buildPreStepOrder()
 	buildSelected := false
 	for _, spec := range specs {
 		if spec.Kind == jobcontract.KindWorkGraphBuild {
@@ -149,7 +150,36 @@ func workgraphBuildPreSteps(
 	if stepErr != nil {
 		return nil, errWorkerDependencyUnavailable
 	}
-	return []workgraph.NativePreStep{step}, nil
+	steps := []workgraph.NativePreStep{step}
+
+	// The constructed steps must match the DECLARED order exactly. Without
+	// this, the declaration would be a comment: a step could be added to the
+	// construction, run in whatever position it happened to be appended, and
+	// the ordering invariant in NativePreStep would be violated silently.
+	if len(steps) != len(declared) {
+		return nil, errWorkerDependencyUnavailable
+	}
+	for index, name := range declared {
+		if steps[index].Name() != name {
+			return nil, errWorkerDependencyUnavailable
+		}
+	}
+	return steps, nil
+}
+
+// buildPreStepOrder is the DECLARED order of the native pre-steps that run
+// inside a work-graph build, and the single place that order is decided.
+//
+// It is a pure function so a test can assert the order without a ClickHouse
+// connection -- the same "declared source of truth, asserted separately from
+// the actual dispatch" split daily_native_family_registration_test.go uses.
+//
+// Appending here is a real decision, not a formality: see the ordering
+// invariant on workgraph.NativePreStep. lane-4752-go's edge producer straddles
+// this step in Python's build() and therefore needs at least two entries, one
+// before and one after "issue_pr_links".
+func buildPreStepOrder() []string {
+	return []string{"issue_pr_links"}
 }
 
 func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep) error {

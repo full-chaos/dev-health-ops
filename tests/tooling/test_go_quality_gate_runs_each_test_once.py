@@ -1,4 +1,4 @@
-"""The Go quality gate must not run the same test twice.
+"""The live-Python oracle section must not run the same test twice.
 
 WHY THIS EXISTS
 ---------------
@@ -8,160 +8,225 @@ Each solo block re-ran the same test against the same fixture and re-checked the
 same `python-sum-golden` marker, so the second and third runs could not fail
 unless the first already had.
 
-That is not merely wasted CI time, though it was that too. A duplicated block is
-a maintenance hazard with a specific failure mode: the next person to change
-one of them changes only one, and the gate then contains two versions of the
-same check disagreeing about what it checks. Nothing reports the disagreement,
-because both blocks pass.
+That is not merely wasted CI time. A duplicated block is a maintenance hazard
+with a specific failure mode: the next person to change one of them changes only
+one, and the gate then contains two versions of the same check disagreeing about
+what it checks. Nothing reports the disagreement, because both blocks pass.
 
-The duplicate survived because nothing looked. Deleting it fixes the instance;
-this fixes the class.
+WHY THE FIRST VERSION OF THIS FILE WAS UNSOUND
+----------------------------------------------
+It extracted literal `Test[A-Za-z0-9_]+` tokens from `-run` patterns and counted
+them. A codex round broke it twice, by construction, and both breaks were the
+same mistake: **it asked what an invocation NAMED, not what it RUNS.**
 
-WHAT IS ASSERTED, AND WHY IT IS A PROPERTY RATHER THAN A LIST
-------------------------------------------------------------
-Every Go test named in a `-run` pattern must appear in exactly ONE such pattern.
-There is no allow-list: at the time of writing all 42 distinct test names are
-unique, so the property holds with zero exceptions, and an exception added later
-has to argue for itself rather than being inherited.
+  1. A wildcard selector names nothing. `-run '^Test.*GoldenMatchesLivePython$'`
+     runs the sum oracle again and yields zero literal tokens, so the counter,
+     the floors and the package check all passed with the duplicate present.
 
-A test that genuinely needs two invocations -- different environment, different
-build tags -- is a real possibility, and the right response then is to say so in
-this file with a reason, not to weaken the check into a count.
+  2. The unfiltered-package inventory was a HARD-CODED list of four packages,
+     and the comment above it claimed it was "re-derived by the test below"
+     when the test simply iterated the constant. Adding an unfiltered
+     `go test ./internal/pythonparity` re-ran the sum oracle, and that package
+     was not on the list, so nothing saw it.
+
+The second one is the sharper lesson: I replaced an enumeration with another
+enumeration, in a file whose entire argument is that enumerations do not work,
+and wrote a comment asserting the opposite of what the code did.
+
+WHAT IT DOES NOW
+----------------
+It DERIVES, for each `go test` invocation in the script, the set of tests that
+invocation actually executes:
+
+  * every invocation is parsed out of the script, with its package paths and its
+    `-run` selector if it has one -- single OR double quoted;
+  * the real test inventory comes from scanning `func Test...` declarations in
+    the packages named;
+  * a selector is applied as Go applies it, and an invocation with NO selector
+    runs everything in its package.
+
+Then it asserts no test is in two invocations' sets. Wildcards, unfiltered
+packages, and packages nobody listed are all handled by the same mechanism,
+because none of them is a special case of "what does this name".
+
+GO'S `-run` IS UNANCHORED, WHICH MATTERS HERE
+---------------------------------------------
+`go test -run TestFoo` also runs `TestFooBar`: the pattern is matched with
+`regexp.MatchString` semantics against each slash-separated part of the name,
+not compared for equality. The simulation below uses `re.search` for that
+reason. Treating it as an equality test would under-count what a loose selector
+executes, which is the same error in a new place.
 """
 
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = REPO_ROOT / "ci/check_go.sh"
 
-# `-run` patterns are multi-line in this script (a long alternation split across
-# continuation lines), so the DOTALL flag is load-bearing rather than defensive.
-RUN_PATTERN = re.compile(r"-run\s+'([^']*)'", re.S)
-TEST_NAME = re.compile(r"Test[A-Za-z0-9_]+")
+GO_TEST = re.compile(r"\bgo test\b")
+# `-run` may be single- or double-quoted. The first version handled only single,
+# so a double-quoted duplicate was invisible.
+SELECTOR = re.compile(r"-run\s+(?:'([^']*)'|\"([^\"]*)\")")
+PACKAGE = re.compile(r"(\./[A-Za-z0-9_./-]+)")
+DECLARED_TEST = re.compile(r"^func (Test[A-Za-z0-9_]+)", re.M)
+
+ORACLE_ENV = "DEV_HEALTH_LIVE_PYTHON_ORACLES=1"
 
 
-def _test_names_per_run_pattern() -> list[set[str]]:
-    source = CHECK_GO.read_text(encoding="utf-8")
-    return [set(TEST_NAME.findall(pattern)) for pattern in RUN_PATTERN.findall(source)]
+def _invocations() -> list[tuple[str | None, list[str]]]:
+    """Every LIVE-ORACLE `go test` command as (selector or None, packages).
+
+    # PARSED BY WALKING THE CONTINUATION CHAIN, NOT BY ONE REGEX
+    #
+    # A shell command here spans many lines: the environment prefix sits ABOVE
+    # `go test` and the package argument BELOW it, all joined by trailing
+    # backslashes. A single regex anchored on `go test` found 13 of them and
+    # silently dropped the rest, which would have made this check under-count
+    # exactly the way its predecessor did. Walking backward and forward from the
+    # `go test` line over the backslash chain finds 28, of which 21 are oracle
+    # runs -- and the count is asserted below rather than trusted.
+    #
+    # WHY SCOPED TO THE LIVE-ORACLE RUNS
+    #
+    # Unscoped, this fires 8-9 times per test, and correctly: the gate really
+    # does run `go test ./...` for the unit pass, again under -race, and again
+    # elsewhere. Those are different MODES over the same code, not duplicates.
+    # A live-Python oracle test SKIPS unless DEV_HEALTH_LIVE_PYTHON_ORACLES=1 is
+    # set, so a sweep without it does not execute the oracle at all. The
+    # duplicate this file exists to prevent lived entirely in the oracle
+    # section, where the variable IS set and the test really ran three times.
+    """
+    lines = CHECK_GO.read_text(encoding="utf-8").splitlines()
+    found: list[tuple[str | None, list[str]]] = []
+    for index, line in enumerate(lines):
+        if not GO_TEST.search(line):
+            continue
+        # Prose mentioning `go test` is not an invocation.
+        if line.lstrip().startswith("#") or "printf" in line:
+            continue
+        start = index
+        while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\") and end + 1 < len(lines):
+            end += 1
+        block = "\n".join(lines[start : end + 1])
+        packages = PACKAGE.findall(block)
+        if not packages or ORACLE_ENV not in block:
+            continue
+        match = SELECTOR.search(block)
+        found.append(((match.group(1) or match.group(2)) if match else None, packages))
+    return found
 
 
-def test_no_go_test_is_invoked_by_two_run_patterns() -> None:
-    """A test named in two `-run` patterns is executed twice by one gate run."""
-    counts: Counter[str] = Counter()
-    for names in _test_names_per_run_pattern():
-        counts.update(names)
+def _tests_declared_in(package_argument: str) -> set[str]:
+    """Test functions declared under a `./path` or `./path/...` argument."""
+    relative = package_argument.lstrip("./").removesuffix("/...")
+    directory = REPO_ROOT / relative
+    if not directory.is_dir():
+        return set()
+    names: set[str] = set()
+    for source in directory.rglob("*_test.go"):
+        names.update(
+            DECLARED_TEST.findall(source.read_text(encoding="utf-8", errors="ignore"))
+        )
+    return names
 
-    duplicated = {name: count for name, count in counts.items() if count > 1}
+
+def _tests_executed_by(selector: str | None, packages: list[str]) -> set[str]:
+    """What this invocation actually runs.
+
+    No selector means EVERY test in the package -- the case the previous version
+    could not see at all, because it had no name to extract.
+    """
+    available: set[str] = set()
+    for package in packages:
+        available |= _tests_declared_in(package)
+    if selector is None:
+        return available
+    try:
+        pattern = re.compile(selector)
+    except re.error:
+        # An unparseable selector must not be silently treated as matching
+        # nothing; that would hide every test it runs.
+        raise AssertionError(
+            f"`-run {selector!r}` in ci/check_go.sh is not a valid regex, so this "
+            "check cannot determine what it executes and must not guess"
+        ) from None
+    # Go matches unanchored, per slash-separated part; re.search mirrors that.
+    return {name for name in available if pattern.search(name)}
+
+
+def test_no_go_test_is_executed_by_two_invocations() -> None:
+    """A test reachable from two invocations is run twice by one gate pass."""
+    by_test: dict[str, int] = defaultdict(int)
+    for selector, packages in _invocations():
+        for name in _tests_executed_by(selector, packages):
+            by_test[name] += 1
+
+    duplicated = {name: count for name, count in by_test.items() if count > 1}
 
     assert not duplicated, (
-        "these Go tests are invoked by more than one `-run` pattern in "
-        "ci/check_go.sh, so the gate runs them repeatedly:\n  "
+        "these Go tests are executed by more than one `go test` invocation in "
+        "ci/check_go.sh:\n  "
         + "\n  ".join(f"{count}x  {name}" for name, count in sorted(duplicated.items()))
-        + "\n\nThe repeat runs cannot fail unless the first already did, and the "
-        "real cost is that the next person to edit one block edits only one -- "
-        "leaving two versions of the same check that disagree, with nothing to "
-        "report the disagreement because both pass.\n"
+        + "\n\nThis is computed from what each invocation RUNS -- resolving "
+        "wildcard selectors against the real test inventory, and treating an "
+        "invocation with no `-run` as running its whole package -- not from the "
+        "names a selector happens to spell out.\n"
         "If a test genuinely needs two invocations (different environment or "
         "build tags), say so with a reason in this file rather than deleting "
         "this assertion."
     )
 
 
-def test_the_gate_still_names_a_plausible_number_of_tests() -> None:
-    """Vacuity guard: an emptied or unparsed script must fail, not pass.
+def test_the_parser_finds_a_plausible_number_of_invocations() -> None:
+    """Vacuity guard: an unparsed script must fail, not pass silently.
 
-    Without this, a rename of the `-run` flag, a quoting change, or a truncated
-    file would yield zero patterns, zero names, zero duplicates -- and the check
-    above would go green while asserting nothing at all. That is the exact shape
-    of failure this repository has hit repeatedly: a guard that passes by
-    failing to look.
-
-    The floor sits well below the current count so that ADDING gate coverage
-    never fails the build, while losing it does.
+    A renamed flag, a quoting change or a truncated file would otherwise yield
+    zero invocations, zero executed tests, zero duplicates -- and the check
+    above would go green while looking at nothing.
     """
-    patterns = _test_names_per_run_pattern()
-    distinct = {name for names in patterns for name in names}
+    invocations = _invocations()
+    executed = set()
+    for selector, packages in invocations:
+        executed |= _tests_executed_by(selector, packages)
 
-    assert len(patterns) >= 15, (
-        f"only {len(patterns)} `-run` pattern(s) found in ci/check_go.sh; the "
-        "gate invokes far more than that, so the parse has probably broken "
-        "rather than the script having shrunk"
+    assert len(invocations) >= 15, (
+        f"only {len(invocations)} `go test` invocation(s) parsed from "
+        "ci/check_go.sh; the gate runs far more, so the parse has broken rather "
+        "than the script having shrunk"
     )
-    assert len(distinct) >= 30, (
-        f"only {len(distinct)} distinct Go test name(s) found across those "
-        "patterns; the uniqueness check above would pass vacuously on a set "
-        "this small"
+    assert len(executed) >= 30, (
+        f"only {len(executed)} test(s) resolved across those invocations; the "
+        "duplicate check above would pass vacuously on a set this small"
     )
 
 
-# Live-oracle invocations that carry NO `-run`, so they execute EVERY test in
-# their package. Derived by reading ci/check_go.sh, and re-derived by the test
-# below rather than trusted from this list.
-_UNFILTERED_ORACLE_PACKAGES = (
-    "internal/providersync",
-    "internal/scheduler/sync",
-    "internal/synccoverage",
-    "internal/syncdispatchruntime",
-)
+def test_the_parser_reads_the_whole_continuation_chain() -> None:
+    """Pin the parser property that a single regex got wrong.
 
-
-def test_no_named_test_also_runs_inside_an_unfiltered_package() -> None:
-    """Close the blind spot rather than only documenting it.
-
-    The check above reads `-run` patterns, so it can only see tests invoked BY
-    NAME. Four live-oracle blocks carry no `-run` at all and execute every test
-    in their package:
-
-        go test -mod=readonly -count=1 ./internal/providersync/...
-
-    A test living in one of those packages AND named in some other `-run`
-    pattern would therefore run twice, and the name-based check could not see
-    it -- the exact failure shape this file exists to prevent, one level down.
-
-    Today the overlap is empty: 1319 + 211 + 23 + 255 tests across those four
-    packages, none of them among the 42 named in a `-run`. That makes the
-    property assertable now, which is the moment to assert it -- a limitation
-    documented in prose is one nobody re-checks.
+    The environment prefix is ABOVE `go test` and the package argument BELOW it.
+    A parser that reads only the `go test` line, or only forward from it, finds
+    neither -- and an invocation it cannot see is an invocation it cannot report
+    as a duplicate. That is how the previous version failed, so the replacement
+    asserts its own reach rather than describing it.
     """
-    named: set[str] = set()
-    for names in _test_names_per_run_pattern():
-        named |= names
+    invocations = _invocations()
+    assert invocations, "no live-oracle invocations parsed at all"
 
-    declared = re.compile(r"^func (Test[A-Za-z0-9_]+)", re.M)
-    overlaps: dict[str, list[str]] = {}
-    for package in _UNFILTERED_ORACLE_PACKAGES:
-        directory = REPO_ROOT / package
-        if not directory.is_dir():
-            continue
-        in_package: set[str] = set()
-        for source in directory.rglob("*_test.go"):
-            in_package.update(
-                declared.findall(source.read_text(encoding="utf-8", errors="ignore"))
-            )
-        # A package with no tests found means the scan broke, not that the
-        # package is empty -- these are large packages and a silent zero here
-        # would make the assertion below vacuous.
-        assert in_package, (
-            f"found no Test functions in {package}; the scan has broken rather "
-            "than the package having emptied, and a zero here would make this "
-            "check pass without looking"
-        )
-        shared = sorted(named & in_package)
-        if shared:
-            overlaps[package] = shared
+    with_selector = [selector for selector, _ in invocations if selector is not None]
+    without_selector = [selector for selector, _ in invocations if selector is None]
 
-    assert not overlaps, (
-        "these tests are named in a `-run` pattern AND live in a package the "
-        "gate runs unfiltered, so each executes twice:\n  "
-        + "\n  ".join(
-            f"{package}: {', '.join(tests)}"
-            for package, tests in sorted(overlaps.items())
-        )
-        + "\n\nThe name-based check in this file cannot see this, because one of "
-        "the two invocations names no tests at all. Either drop the `-run` entry "
-        "or scope the unfiltered run."
+    assert with_selector, (
+        "no invocation with a `-run` selector was found; the selector sits on a "
+        "continuation line, so this means the parser is not reading forward"
+    )
+    assert without_selector, (
+        "no unfiltered invocation was found; the gate has several, and missing "
+        "them is the blind spot that let a duplicate through before"
     )

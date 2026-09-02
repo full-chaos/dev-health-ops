@@ -378,6 +378,26 @@ UUID_VALUES: list[Any] = [
     "X" + _UUID + "X",
     "[" + _UUID + "]",
     "!" + _UUID + "?",
+    # NON-ASCII, which is where the two fields of one scope document part
+    # company. `repo_id` reaches `uuid.UUID`, whose last step is `int(hex, 16)`
+    # and which FOLDS Unicode decimal digits to ASCII -- so "１"*32 is a valid
+    # UUID there. `to_date` reaches `datetime.fromisoformat`, which is
+    # ASCII-ONLY and rejects the same characters outright. Both measured.
+    #
+    # Two CPython parsers with opposite Unicode policies, in the same document,
+    # and until now the corpus put non-ASCII values only under the date fields.
+    # A Go port that reached for one policy and applied it to both would be
+    # wrong on one of them, in a direction no other row can see.
+    "１" * 32,
+    "１" * 16 + "1" * 16,
+    "٠" * 32,
+    "0x" + "1" * 30,
+    " " + "1" * 30 + " ",
+    "1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_11",
+    "+" + "1" * 31,
+    # Nd in Unicode 17.0.0 (Go) and absent from 16.0.0 (this interpreter): the
+    # ten codepoints where Go's unicode package is WIDER than CPython's table.
+    "\U00011de0" * 32,
 ]
 
 # The FIELD axis. Every scope field the bridge admits, crossed with every value

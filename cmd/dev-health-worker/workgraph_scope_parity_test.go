@@ -125,7 +125,7 @@ var divergenceClasses = []divergenceClass{
 			"only \"T\" and a space. Unreachable -- nothing writes a build scope with dates -- and " +
 			"a loud refusal beats accepting a separator no producer would emit.",
 		matches: func(value string) bool {
-			return separatorRun.MatchString(value)
+			return looksLikeADate(value) && separatorRun.MatchString(value)
 		},
 	},
 	{
@@ -136,7 +136,7 @@ var divergenceClasses = []divergenceClass{
 			"but note the reference's behaviour is a SILENT DAY SHIFT rather than an error, so " +
 			"matching it would mean reproducing a rollover no producer intends.",
 		matches: func(value string) bool {
-			return hour24.MatchString(value)
+			return looksLikeADate(value) && hour24.MatchString(value)
 		},
 	},
 	{
@@ -157,12 +157,30 @@ var (
 	trailingOffset = regexp.MustCompile(`(Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?)$`)
 	separatorRun   = regexp.MustCompile(`\d[t_]\d`)
 	bareDate       = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}$`)
+	datePrefix     = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}`)
 	// Hour 24 only: "T24:00" and "T24:00:00", not an offset of +24:00 (which is
 	// a different class, already covered by non-zero offset) and not hour 4 of
 	// some longer number.
 	hour24       = regexp.MustCompile(`[Tt _]24:?[0-5]\d(:?[0-5]\d)?(\.\d+)?$`)
 	dateTimeBody = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}[Tt _]\d{2}:?\d{2}(:?\d{2}(\.\d+)?)?$`)
 )
+
+// looksLikeADate gates the DATE-family classes so they cannot claim a value
+// from another field.
+//
+// The divergence table is keyed by VALUE and applied regardless of which field
+// carried it -- deliberately, because a value's form is a property of the value.
+// But the CLASSES are field-specific in meaning, and nothing enforced that: the
+// separator pattern matched "1_1" inside the underscored UUID
+// "1_1_1_..._11", so a repo_id was classified under a date/time separator rule.
+//
+// It surfaced as a STALE entry only because Go happens to agree with the
+// reference on that value. Had it disagreed, the class would have silenced a
+// real repo_id divergence behind a reason about date separators -- the precise
+// hazard a class carries that a per-value entry does not.
+func looksLikeADate(value string) bool {
+	return datePrefix.MatchString(value)
+}
 
 // trailingOffsetText returns the offset spelling at the end of a value, or "".
 //

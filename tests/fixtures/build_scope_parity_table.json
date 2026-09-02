@@ -9581,6 +9581,99 @@
    "verdict": "RAISES"
   },
   {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "11111111-1111-1111-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff111111111111111111"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "11111111-1111-1111-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660\u0660"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "00000000-0000-0000-0000-000000000000",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "0x111111111111111111111111111111"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "00111111-1111-1111-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": " 111111111111111111111111111111 "
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "00111111-1111-1111-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_11"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "00000000-0000-0001-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "scope": {
+    "repo_id": "+1111111111111111111111111111111"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": "01111111-1111-1111-1111-111111111111",
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
    "case": "field:heuristic_window",
    "scope": {
     "heuristic_window": null

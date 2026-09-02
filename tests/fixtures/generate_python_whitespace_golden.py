@@ -79,6 +79,23 @@ GO_UNICODE_ISSPACE = {
 }
 
 
+def _float_pads_without_changing_value(char: str) -> bool:
+    """True when `char` may surround a numeral without altering float()'s result.
+
+    float() is a SECOND numeric parser with its own space rule, and
+    confidenceFromString mirrors it with strings.TrimSpace on the same reasoning
+    as parsePythonInt. That reasoning was asserted and not measured, exactly as
+    int()'s was, so it is derived here too.
+
+    The exclusion list is wider than int()'s because float() accepts '.', 'e'
+    and 'E' inside a numeral; including them would derive them as "padding".
+    """
+    try:
+        return float(char + "5" + char) == 5.0
+    except ValueError:
+        return False
+
+
 def _int_pads_without_changing_value(char: str) -> bool:
     """True when `char` may surround a numeral without altering int()'s result."""
     try:
@@ -176,6 +193,13 @@ def main() -> None:
         and chr(cp) not in "+-"
         and _int_pads_without_changing_value(chr(cp))
     ]
+    float_space = [
+        cp
+        for cp in range(0x110000)
+        if not chr(cp).isdecimal()
+        and chr(cp) not in "+-.eE"
+        and _float_pads_without_changing_value(chr(cp))
+    ]
 
     # Bound as locals before going into the payload dict: indexing a
     # dict[str, object] hands mypy an `object`, which cannot be passed to hex().
@@ -206,6 +230,8 @@ def main() -> None:
         "int_space_code_points": int_space,
         "isspace_only_vs_int_space": sorted(set(isspace) - set(int_space)),
         "int_space_only_vs_isspace": sorted(set(int_space) - set(isspace)),
+        "float_space_code_points": float_space,
+        "float_space_differs_from_int_space": sorted(set(float_space) ^ set(int_space)),
     }
 
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -221,6 +247,11 @@ def main() -> None:
     print(f"  split/isspace disagreements: {split_disagrees or 'none'}")
     print(f"  splitlines boundaries:      {len(splitlines_boundaries)}")
     print(f"  int() space set:            {len(int_space)}")
+    print(f"  float() space set:          {len(float_space)}")
+    print(
+        "  int()/float() space delta:  "
+        f"{sorted(set(float_space) ^ set(int_space)) or 'none — identical'}"
+    )
     print(
         "  whitespace to str.strip() but NOT to int(): "
         f"{[hex(c) for c in sorted(set(isspace) - set(int_space))]}"

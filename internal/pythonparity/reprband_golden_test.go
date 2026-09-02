@@ -90,7 +90,7 @@ func bandEvidenceRow(value float64) []OrderedObject {
 func TestReprBandMatchesLiveProducerBytes(t *testing.T) {
 	golden := loadReprBandGolden(t)
 
-	var checked, exponential int
+	var checked, exponential, mismatches int
 	for _, testCase := range golden.Cases {
 		value := floatFromBits(t, testCase.RoundedBits)
 		encoded, err := MarshalPythonJSONInsertionOrder(bandEvidenceRow(value))
@@ -107,10 +107,18 @@ func TestReprBandMatchesLiveProducerBytes(t *testing.T) {
 				"  python:     %s\n  go:         %s",
 				testCase.InputRepr, testCase.RoundDigits, testCase.RoundedRepr,
 				testCase.EvidenceJSON, got)
-			if t.Failed() && checked > 20 {
-				t.Fatal("stopping after the first cluster of band mismatches; " +
-					"a repr-window bug produces thousands of these and the rest " +
-					"add no information")
+			// Count MISMATCHES, not cases examined. Using `checked` here meant
+			// that past index 20 the bail fired on the very first divergence,
+			// so a repr-window bug -- which hits a contiguous HIGH region, and
+			// therefore starts late -- reported exactly one case. One case
+			// cannot distinguish a window bug from a one-off; the PATTERN is
+			// the diagnosis, and the pattern needs several.
+			mismatches++
+			if mismatches >= 20 {
+				t.Fatal("stopping after 20 band mismatches; a repr-window bug " +
+					"produces thousands and the rest add no information. The " +
+					"20 above are enough to show whether the failures are " +
+					"contiguous above a threshold (a window bug) or scattered")
 			}
 		}
 	}

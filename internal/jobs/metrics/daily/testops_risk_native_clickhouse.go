@@ -455,6 +455,29 @@ func factorsJSON(fields []factorsJSONField) string {
 // (strconv.FormatFloat(value, 'e', -1, 64)) rather than trying to coax the
 // 'g'/'f' verbs into matching a different threshold.
 func pythonFloatJSON(value float64) string {
+	// codex round 3 (P2, ARGUED, confirmed by source read): strconv.FormatFloat
+	// with 'e' never contains the byte 'e' for NaN/+-Inf ("NaN", "+Inf",
+	// "-Inf"), so the un-guarded IndexByte(...'e') lookup below returned -1
+	// and `scientific[:eIndex]` PANICKED (slice bounds out of range [:-1]) --
+	// a full process crash, not a returned error, bypassing the native
+	// family's fail-open/refused-telemetry path entirely (daily.go's
+	// computeNativeFamilies only degrades gracefully on a returned error).
+	// coverage_snapshots.line_coverage_pct is an unconstrained
+	// Nullable(Float64) with no finite-value guard on the Python writer
+	// side, so a NaN (e.g. a 0/0 division upstream) is real, representable
+	// input, not a hypothetical one. Python's own json.dumps (default
+	// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity"
+	// for these -- not valid JSON per the spec, but exactly what the Python
+	// authority this port must match byte-for-byte actually writes.
+	if math.IsNaN(value) {
+		return "NaN"
+	}
+	if math.IsInf(value, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(value, -1) {
+		return "-Infinity"
+	}
 	if value == 0 {
 		if math.Signbit(value) {
 			return "-0.0"

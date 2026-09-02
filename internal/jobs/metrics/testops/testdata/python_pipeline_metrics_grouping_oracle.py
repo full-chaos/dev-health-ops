@@ -17,6 +17,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.compute_testops import compute_pipeline_metrics_daily
+from dev_health_ops.metrics.testops_schemas import PipelineRunExtendedRow
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 
 ORG_ID = "00000000-0000-4000-8000-000000000009"
@@ -30,10 +31,11 @@ def dt(hour: int) -> datetime:
     return datetime(2026, 8, 15, hour, 0, 0, tzinfo=timezone.utc)
 
 
-PIPELINE_RUNS = [
+PIPELINE_RUNS: list[PipelineRunExtendedRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-null-service",
+        "provider": "github_actions",
         "status": "success",
         "queued_at": None,
         "started_at": dt(9),
@@ -48,6 +50,7 @@ PIPELINE_RUNS = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-empty-service",
+        "provider": "github_actions",
         "status": "failure",
         "queued_at": None,
         "started_at": dt(10),

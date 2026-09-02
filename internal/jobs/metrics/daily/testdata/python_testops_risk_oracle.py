@@ -26,6 +26,12 @@ from dev_health_ops.metrics.compute_testops_risk import (
     compute_quality_drag,
     compute_release_confidence,
 )
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageSnapshotRow,
+    PipelineRunExtendedRow,
+    TestCaseResultRow,
+    TestSuiteResultRow,
+)
 
 ORG_ID = "00000000-0000-4000-8000-000000000009"
 REPO_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
@@ -43,10 +49,11 @@ def dt(hour: int, minute: int = 0, second: int = 0) -> datetime:
 # grouping, which (unlike those two) keeps BOTH groups as separate
 # "days_data" entries for the SAME calendar day (compute_testops_risk.py:191-193
 # groups purely by repo_id, never by team/service).
-PIPELINE_RUNS = [
+PIPELINE_RUNS: list[PipelineRunExtendedRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-1",
+        "provider": "github_actions",
         "status": "success",
         "queued_at": dt(9, 0),
         "started_at": dt(9, 1),
@@ -61,6 +68,7 @@ PIPELINE_RUNS = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-2",
+        "provider": "github_actions",
         "status": "failed",
         "queued_at": dt(10, 0),
         "started_at": dt(10, 2),
@@ -75,6 +83,7 @@ PIPELINE_RUNS = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-3",
+        "provider": "github_actions",
         "status": "success",
         "queued_at": dt(11, 0),
         "started_at": dt(11, 3),
@@ -88,7 +97,7 @@ PIPELINE_RUNS = [
     },
 ]
 
-SUITE_ROWS = [
+SUITE_ROWS: list[TestSuiteResultRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-1",
@@ -129,7 +138,7 @@ SUITE_ROWS = [
     },
 ]
 
-CASE_ROWS = [
+CASE_ROWS: list[TestCaseResultRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-1",
@@ -182,7 +191,7 @@ CASE_ROWS = [
 # something a pure-function oracle can exercise without a live database.
 HISTORICAL_FAILED_NAMES_BY_REPO = {REPO_ID: {"test_recurrent_failure"}}
 
-COVERAGE_SNAPSHOTS = [
+COVERAGE_SNAPSHOTS: list[CoverageSnapshotRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-1",
@@ -196,7 +205,7 @@ COVERAGE_SNAPSHOTS = [
         "org_id": ORG_ID,
     },
 ]
-PRIOR_COVERAGE_SNAPSHOTS = [
+PRIOR_COVERAGE_SNAPSHOTS: list[CoverageSnapshotRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "run-0",

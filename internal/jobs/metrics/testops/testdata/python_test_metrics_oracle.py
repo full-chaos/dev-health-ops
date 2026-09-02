@@ -14,13 +14,14 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.compute_testops import compute_test_metrics_daily
+from dev_health_ops.metrics.testops_schemas import TestCaseResultRow, TestSuiteResultRow
 
 ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
 REPO_ID = uuid.UUID("920f9442-07df-4217-4dc4-c5833c0b8268")
 DAY = date(2026, 8, 23)
 COMPUTED_AT = datetime(2026, 8, 23, 23, 0, 0, tzinfo=timezone.utc)
 
-SUITE_ROWS = [
+SUITE_ROWS: list[TestSuiteResultRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "32662748666",
@@ -59,7 +60,7 @@ SUITE_ROWS = [
     },
 ]
 
-CASE_ROWS = [
+CASE_ROWS: list[TestCaseResultRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "32662748666",
@@ -67,6 +68,7 @@ CASE_ROWS = [
         "case_id": "c1",
         "case_name": "test_list_authenticated_user_repos_includes_private",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -77,6 +79,7 @@ CASE_ROWS = [
         "case_id": "c2",
         "case_name": "test_list_public_repos_from_github_org",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -87,6 +90,7 @@ CASE_ROWS = [
         "case_id": "c3",
         "case_name": "test_search_public_repos",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -97,6 +101,7 @@ CASE_ROWS = [
         "case_id": "c4",
         "case_name": "test_list_public_repos_from_user",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -107,6 +112,7 @@ CASE_ROWS = [
         "case_id": "c5",
         "case_name": "test_github_invalid_token",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -117,6 +123,7 @@ CASE_ROWS = [
         "case_id": "c6",
         "case_name": "test_access_private_repo_without_token",
         "status": "skipped",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -127,6 +134,7 @@ CASE_ROWS = [
         "case_id": "c7",
         "case_name": "test_access_private_repo_with_valid_token",
         "status": "skipped",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },
@@ -137,6 +145,7 @@ CASE_ROWS = [
         "case_id": "c8",
         "case_name": "test_search_public_repos",
         "status": "passed",
+        "duration_seconds": None,
         "retry_attempt": 0,
         "org_id": ORG_ID,
     },

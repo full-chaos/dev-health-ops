@@ -55,3 +55,32 @@ func TestPythonFloatJSONNegativeZero(t *testing.T) {
 		t.Errorf("pythonFloatJSON(-0.0) = %q, want \"-0.0\"", got)
 	}
 }
+
+// TestPythonFloatJSONNonFiniteValuesDoNotPanic is the red-on-baseline proof
+// for codex round 3 (P2, ARGUED then confirmed by source read): before this
+// guard existed, strconv.FormatFloat(value, 'e', -1, 64) on NaN/+-Inf
+// returns "NaN"/"+Inf"/"-Inf" -- none contain the byte 'e' -- so
+// strings.IndexByte(scientific, 'e') returned -1 and `scientific[:eIndex]`
+// PANICKED (slice bounds out of range [:-1]). This is a real input, not a
+// hypothetical one: coverage_snapshots.line_coverage_pct is an
+// unconstrained Nullable(Float64) with no finite-value guard on the Python
+// writer side. Pinned against real `python3 -c "import json;
+// json.dumps(float('nan'))"` output -- Python's json module (default
+// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity",
+// not valid JSON per spec but exactly what the Python authority writes.
+func TestPythonFloatJSONNonFiniteValuesDoNotPanic(t *testing.T) {
+	cases := []struct {
+		value float64
+		want  string
+	}{
+		{math.NaN(), "NaN"},
+		{math.Inf(1), "Infinity"},
+		{math.Inf(-1), "-Infinity"},
+	}
+	for _, tc := range cases {
+		got := pythonFloatJSON(tc.value) // must not panic
+		if got != tc.want {
+			t.Errorf("pythonFloatJSON(%v) = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+}

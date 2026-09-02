@@ -17,16 +17,22 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.compute_testops import compute_pipeline_metrics_daily
+from dev_health_ops.metrics.testops_schemas import PipelineRunExtendedRow
 
 ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
 REPO_ID = uuid.UUID("d4f322ad-2102-1fbf-8425-7400573194f7")
 DAY = date(2026, 8, 27)
 COMPUTED_AT = datetime(2026, 8, 27, 20, 0, 0, tzinfo=timezone.utc)
 
-PIPELINE_RUNS = [
+PIPELINE_RUNS: list[PipelineRunExtendedRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "33109458314",
+        # provider is required by PipelineRunExtendedRow's type but not read
+        # by compute_pipeline_metrics_daily (compute_testops.py never
+        # touches it) -- not part of this ClickHouse row pull, a plausible
+        # value satisfies the type without affecting the oracle's output.
+        "provider": "github_actions",
         "status": "success",
         "queued_at": datetime(2026, 8, 27, 19, 39, 4, tzinfo=timezone.utc),
         "started_at": datetime(2026, 8, 27, 19, 39, 4, tzinfo=timezone.utc),

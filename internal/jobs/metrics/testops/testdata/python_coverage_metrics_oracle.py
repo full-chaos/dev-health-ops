@@ -15,13 +15,14 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.compute_testops import compute_coverage_metrics_daily
+from dev_health_ops.metrics.testops_schemas import CoverageSnapshotRow
 
 ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
 REPO_ID = uuid.UUID("d29d160a-95fe-5b45-d4c1-fd1f5427b772")
 DAY = date(2026, 8, 25)
 COMPUTED_AT = datetime(2026, 8, 25, 12, 0, 0, tzinfo=timezone.utc)
 
-CURRENT_SNAPSHOTS = [
+CURRENT_SNAPSHOTS: list[CoverageSnapshotRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "32793481613",
@@ -35,7 +36,7 @@ CURRENT_SNAPSHOTS = [
         "org_id": ORG_ID,
     },
 ]
-PRIOR_SNAPSHOTS = [
+PRIOR_SNAPSHOTS: list[CoverageSnapshotRow] = [
     {
         "repo_id": REPO_ID,
         "run_id": "32768344924",

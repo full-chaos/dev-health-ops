@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,134 +64,19 @@ type divergence struct {
 // the reference refuses — that direction would let this step write mapping rows
 // for a request the build is about to reject, which is the defect class that
 // produced the second failure of this gate.
+//
+// Most of what used to live here is now covered by divergenceClasses below. A
+// per-value entry is for a shape whose REASON is its own.
 var enumeratedDivergences = map[string]divergence{
-	`"2026-08-15T06:07:08+05:00"`: {
-		want: "RAISES",
-		reason: "non-zero UTC offset: the reference's strftime keeps the wall-clock fields and " +
-			"DISCARDS the offset, so rendering it would silently pick one of two possible instants. " +
-			"Refused rather than guessed; nothing produces such a scope today.",
-	},
-	`"2026-08-15T06:07:08-08:00"`: {
-		want:   "RAISES",
-		reason: "same as the +05:00 case.",
-	},
 	`"2026-W33-6"`: {
 		want: "RAISES",
 		reason: "ISO week date. Accepted by fromisoformat, refused here: nothing in the tree writes " +
 			"a build scope with dates at all (the fixed producer persists `{}`), so it is unreachable, " +
 			"and a loud refusal beats silently computing a different window.",
 	},
-	`"2026-08-15t06:07:08"`: {
+	`"2026-243"`: {
 		want:   "RAISES",
-		reason: "lowercase separator; same unreachability reasoning as the ISO week date.",
-	},
-	`"2026-08-15_06:07:08"`: {
-		want:   "RAISES",
-		reason: "arbitrary single-character separator; same reasoning.",
-	},
-
-	// BASIC DATE crossed with an OFFSET. The value axis carried basic dates and
-	// it carried offsets, but never the two together -- and the Go layout table
-	// pairs offsets only with EXTENDED dates, so the crossing is exactly where a
-	// divergence could hide. It did. Eight values, sixteen failing rows (each
-	// value under both to_date and from_date), every one of them fail-closed.
-	//
-	// Enumerated rather than fixed, deliberately, and this is a CHOICE rather
-	// than an oversight: adding the eight layouts would be a behaviour change to
-	// the parser, and nothing in the tree writes a build scope with dates at all
-	// (the fixed producer persists `{}`), so the forms are unreachable. A loud
-	// refusal is the right failure for an unreachable input. If a producer ever
-	// starts emitting basic-format dates, these entries turn into the work item.
-	`"20260815T060708Z"`: {
-		want: "RAISES",
-		reason: "basic date with a zero offset: the reference accepts it and Go's offset layouts " +
-			"are all extended-date. Fail-closed and unreachable; see the block comment above.",
-	},
-	`"20260815T060708+00:00"`: {
-		want:   "RAISES",
-		reason: "basic date with a zero offset; same as the Z form.",
-	},
-	`"20260815T060708+0000"`: {
-		want:   "RAISES",
-		reason: "basic date, colon-less zero offset; same reasoning.",
-	},
-	`"20260815T060708+00"`: {
-		want:   "RAISES",
-		reason: "basic date, hour-only zero offset; same reasoning.",
-	},
-	`"20260815T0607+00:00"`: {
-		want:   "RAISES",
-		reason: "basic date at minute precision with a zero offset; same reasoning.",
-	},
-	`"20260815T060708+05:00"`: {
-		want: "RAISES",
-		reason: "basic date with a NON-ZERO offset. Refused for two independent reasons: the " +
-			"basic-date layout gap above, and the same non-zero-offset hazard already enumerated " +
-			"for the extended form -- strftime keeps the wall clock and discards the offset.",
-	},
-	`"20260815T060708-08:00"`: {
-		want:   "RAISES",
-		reason: "same as the +05:00 basic-date case.",
-	},
-	// This one is not a layout gap. It is the reference doing something a reader
-	// would never predict, and it is the strongest argument in this table for
-	// refusing rather than matching.
-	//
-	// `fromisoformat` accepts ANY single character as the date/time separator,
-	// so in "20260815+05:00" the `+` is read as the SEPARATOR and "05:00" as a
-	// wall-clock TIME -- not as an offset at all:
-	//
-	//	fromisoformat("20260815+05:00")  -> 2026-08-15T05:00:00   tzinfo=None
-	//	fromisoformat("20260815+00:00")  -> 2026-08-15T00:00:00   tzinfo=None
-	//	fromisoformat("20260815Z")       -> raises
-	//
-	// So a value that every reader parses as "midnight at UTC+5" becomes "05:00,
-	// timezone unknown", silently, and the window moves five hours. Matching the
-	// reference here would mean reproducing that reinterpretation on purpose.
-	// Refusing is fail-closed AND correct-by-intent, which is a rarer alignment
-	// than it sounds -- the other entries trade one for the other.
-	// The OTHER half of the same cross-product, named by the same review: an
-	// EXTENDED date at MINUTE precision, or with a space separator, crossed with
-	// an offset. Go's offset layouts carry minute precision only in the
-	// colon-less ("+0000") and hour-only ("+00") spellings, and carry no
-	// space-separated form with an offset at all.
-	//
-	// Recorded together with the basic-date entries above so that neither half
-	// can be closed while the other stands -- fixing only the half that was
-	// easiest to see is how this gap survived to a seventh round.
-	//
-	// "2026-08-15T06:07+0000" is deliberately ABSENT: Go already accepts it via
-	// the colon-less layout, so an entry for it would be stale on arrival.
-	`"2026-08-15T06:07+00:00"`: {
-		want: "RAISES",
-		reason: "extended date, minute precision, colon-form zero offset. Go has the colon-less " +
-			"and hour-only spellings at this precision but not this one. Fail-closed; unreachable " +
-			"for the same reason as the basic-date block above.",
-	},
-	`"2026-08-15T06:07Z"`: {
-		want:   "RAISES",
-		reason: "minute precision with Z; same layout gap.",
-	},
-	`"2026-08-15T06:07+05:00"`: {
-		want: "RAISES",
-		reason: "minute precision with a NON-ZERO offset: refused both by the layout gap and by " +
-			"the non-zero-offset rule already enumerated for the second-precision form.",
-	},
-	`"2026-08-15 06:07:08+00:00"`: {
-		want: "RAISES",
-		reason: "space separator with a zero offset. Go accepts the space separator WITHOUT an " +
-			"offset and every offset layout uses \"T\", so the combination has no layout.",
-	},
-	`"2026-08-15 06:07:08Z"`: {
-		want:   "RAISES",
-		reason: "space separator with Z; same gap.",
-	},
-
-	`"20260815+00:00"`: {
-		want: "RAISES",
-		reason: "the reference reads `+` as the date/time separator and \"00:00\" as a wall-clock " +
-			"time, yielding a NAIVE 2026-08-15T00:00:00 rather than an offset. Refused rather " +
-			"than reproduced; see the comment above.",
+		reason: "ordinal date; same unreachability reasoning as the ISO week date.",
 	},
 	// NOTE: "2026-08-15T06:07:08.123" was listed here on the assumption that Go
 	// would refuse a fractional second its layout does not name. It does not —
@@ -200,6 +87,102 @@ var enumeratedDivergences = map[string]divergence{
 	// Recorded because it is the third time this gate was got wrong by
 	// reasoning, and the first time the mechanism caught it instead of a
 	// reviewer.
+}
+
+// divergenceClass enumerates a WHOLE FAMILY of shapes under one reason.
+//
+// The corpus is a cross-product (date form x separator x precision x offset),
+// so a family has dozens of members that differ only in spelling. Listing them
+// individually produced 166 near-identical rows, which destroys what this table
+// is for: every entry exists to state a REASON, and a table people skim is how
+// a stale entry hides a real one.
+//
+// A class must still earn its place. TestEveryEnumeratedDivergenceIsInTheTable
+// fails a class that matches nothing, exactly as it fails a value entry that
+// has stopped diverging.
+type divergenceClass struct {
+	name    string
+	reason  string
+	matches func(value string) bool
+}
+
+var divergenceClasses = []divergenceClass{
+	{
+		name: "non-zero UTC offset",
+		reason: "the reference's strftime keeps the wall-clock fields and DISCARDS the offset, so " +
+			"rendering a shifted bound would silently pick one of two possible instants. Refused " +
+			"rather than guessed; see issueprlinks.ErrNonUTCWindowBound, which refuses the same " +
+			"shape one layer down.",
+		matches: func(value string) bool {
+			offset := trailingOffsetText(value)
+			return offset != "" && offset != "Z" && strings.Trim(offset[1:], "0:") != ""
+		},
+	},
+	{
+		name: "arbitrary single-character date/time separator",
+		reason: "`fromisoformat` accepts ANY single character between the date and the time, so " +
+			"\"2026-08-15t06:07:08\" and \"2026-08-15_06:07:08\" both parse there. Go accepts " +
+			"only \"T\" and a space. Unreachable -- nothing writes a build scope with dates -- and " +
+			"a loud refusal beats accepting a separator no producer would emit.",
+		matches: func(value string) bool {
+			return separatorRun.MatchString(value)
+		},
+	},
+	{
+		name: "bare date carrying an offset",
+		reason: "the reference does NOT read this as a date with an offset. It reads the sign as " +
+			"the date/time separator and the rest as a WALL-CLOCK TIME: " +
+			"fromisoformat(\"20260815+05:00\") is 2026-08-15T05:00:00 with tzinfo=None. A value " +
+			"every reader parses as \"midnight at UTC+5\" becomes \"05:00, timezone unknown\", and " +
+			"the window moves five hours. Refused rather than reproduced.",
+		matches: func(value string) bool {
+			offset := trailingOffsetText(value)
+			return offset != "" && bareDate.MatchString(strings.TrimSuffix(value, offset))
+		},
+	},
+}
+
+var (
+	trailingOffset = regexp.MustCompile(`(Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?)$`)
+	separatorRun   = regexp.MustCompile(`\d[t_]\d`)
+	bareDate       = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}$`)
+	dateTimeBody   = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}[Tt _]\d{2}:?\d{2}(:?\d{2}(\.\d+)?)?$`)
+)
+
+// trailingOffsetText returns the offset spelling at the end of a value, or "".
+//
+// A trailing "-15" is a well-formed ±HH offset, so "2026-08-15" matches the
+// pattern and is NOT an offset. The remainder is therefore required to be a
+// date or a date-time in its own right: for a bare date the remainder would be
+// "2026-08", which is neither.
+//
+// This mirrors the same precaution in parseScopeInstant, and it was NOT written
+// defensively -- the staleness check reported "2026-08-15" as a stale entry in
+// the non-zero-offset class the first time this ran.
+func trailingOffsetText(value string) string {
+	offset := trailingOffset.FindString(value)
+	if offset == "" {
+		return ""
+	}
+	body := strings.TrimSuffix(value, offset)
+	if !bareDate.MatchString(body) && !dateTimeBody.MatchString(body) {
+		return ""
+	}
+	return offset
+}
+
+// classifyDivergence reports the class covering a value, if any.
+func classifyDivergence(quotedValue string) (divergenceClass, bool) {
+	var value string
+	if err := json.Unmarshal([]byte(quotedValue), &value); err != nil {
+		return divergenceClass{}, false
+	}
+	for _, class := range divergenceClasses {
+		if class.matches(value) {
+			return class, true
+		}
+	}
+	return divergenceClass{}, false
 }
 
 // canonicalScope compacts a scope document so the divergence list can be keyed
@@ -305,6 +288,12 @@ func TestBuildScopeMatchesTheBridgeAdmission(t *testing.T) {
 			enumerated := false
 			if key, parsed := scopeValueKey(t, testCase.Scope); parsed {
 				diverge, enumerated = enumeratedDivergences[key]
+				if !enumerated {
+					if class, matched := classifyDivergence(key); matched {
+						diverge = divergence{want: "RAISES", reason: class.name + ": " + class.reason}
+						enumerated = true
+					}
+				}
 			}
 
 			if testCase.Verdict == "RAISES" {
@@ -389,6 +378,31 @@ func TestEveryEnumeratedDivergenceIsInTheTable(t *testing.T) {
 				"enumeratedDivergences lists %s (%s) but the measured table does not contain it; "+
 					"add it to the generator's CASES or drop the entry",
 				raw, diverge.reason,
+			)
+		}
+	}
+
+	// A CLASS must earn its place too. One that matches nothing is the same
+	// hazard as a stale value entry -- it reads as a documented, live decision
+	// while covering no case at all, so the next reader trusts it and does not
+	// look. Asserted here rather than claimed in a comment: the claim was in the
+	// comment first, and it was not true until this loop existed.
+	for _, class := range divergenceClasses {
+		matched := 0
+		for raw := range measured {
+			var value string
+			if err := json.Unmarshal([]byte(raw), &value); err != nil {
+				continue
+			}
+			if class.matches(value) {
+				matched++
+			}
+		}
+		if matched == 0 {
+			t.Errorf(
+				"divergence class %q matches no value in the measured table; "+
+					"the corpus no longer reaches it, so drop the class or extend the generator",
+				class.name,
 			)
 		}
 	}

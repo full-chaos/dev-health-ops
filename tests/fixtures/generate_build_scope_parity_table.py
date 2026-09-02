@@ -125,6 +125,48 @@ VALUES: list[Any] = [
     "2026-08-15 06:07:08+00:00",
     "2026-08-15 06:07:08Z",
 ]
+
+# THE FULL DATE-TIME GRID.
+#
+# The hand-written values above grew one cell at a time, each added because a
+# review round found the cell. That is how a layout gap survived to a seventh
+# round: the corpus had basic dates and it had offsets, and nobody had crossed
+# them; then it had the basic-date crossing and still not the minute-precision
+# one. Closing cells does not close the class.
+#
+# So the datetime family is now a CROSS-PRODUCT rather than a list. Every
+# combination is measured against the reference, and whichever ones Go refuses
+# are enumerated as fail-closed divergences. A future layout change cannot open
+# a hole here without the differential reporting a STALE entry.
+_DATE_FORMS = [("2026-08-15", "extended"), ("20260815", "basic")]
+_SEPARATORS = ["T", " ", "t", "_"]
+_TIME_FORMS = {
+    "extended": ["", "06:07", "06:07:08", "06:07:08.123"],
+    "basic": ["", "0607", "060708", "060708.123"],
+}
+_OFFSETS = ["", "Z", "+00:00", "+0000", "+00", "+00:00:00", "+05:00", "-08:00"]
+
+
+def _datetime_grid() -> list[str]:
+    """Every date x separator x time x offset combination, deduplicated."""
+    grid: list[str] = []
+    for date_text, kind in _DATE_FORMS:
+        for time_text in _TIME_FORMS[kind]:
+            for separator in _SEPARATORS:
+                for offset in _OFFSETS:
+                    if not time_text:
+                        # No time means no separator; a bare date with an offset
+                        # is still worth measuring (the reference reads the sign
+                        # as a separator), so emit it once rather than per
+                        # separator.
+                        if separator != "T":
+                            continue
+                        grid.append(date_text + offset)
+                        continue
+                    grid.append(date_text + separator + time_text + offset)
+    return list(dict.fromkeys(grid))
+
+
 # The tail of the hand-written list: separators and malformed values that are
 # not part of the datetime grid's axes.
 VALUES += [
@@ -135,12 +177,10 @@ VALUES += [
     "2026-13-45",
 ]
 
-# NOTE: a full date x separator x time x offset CROSS-PRODUCT was built here and
-# measured (see the lane handoff). It reports 166 fail-closed divergences and
-# ZERO in the dangerous direction -- 99 of them the already-deliberate non-zero
-# offset refusal, 67 a layout gap. Enumerating 166 near-identical entries would
-# be a ledger nobody reads, and widening the parser is a behaviour change, so
-# the disposition is a ruling rather than a lane decision. Held out pending it.
+# Appended LAST so its de-duplication sees every hand-written value: the grid
+# re-derives several of them (the "t" and "_" separators among them), and a
+# duplicate row would make the corpus look broader than it is.
+VALUES += [value for value in _datetime_grid() if value not in VALUES]
 
 
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:

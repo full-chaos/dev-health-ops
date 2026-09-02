@@ -246,6 +246,34 @@ func scopeString(raw json.RawMessage) (string, bool, error) {
 	return text, true, nil
 }
 
+// noOffsetLayouts are the date and date-time forms accepted WITHOUT an offset.
+// The offset, when present, is split off and parsed separately -- see
+// splitTrailingOffset -- so this list stays one-dimensional instead of being
+// multiplied by every offset spelling.
+//
+// Fractional seconds need no layout of their own: time.Parse accepts a
+// fractional second immediately after seconds even when the layout omits it.
+var noOffsetLayouts = append([]string{
+	// Date-only forms. These are listed FIRST and are deliberately absent from
+	// dateTimeLayouts below: a bare date cannot carry an offset.
+	"2006-01-02", "20060102",
+}, dateTimeLayouts...)
+
+// dateTimeLayouts are the forms that may be followed by an offset.
+//
+// A DATE alone may not: `fromisoformat("2026-08-15Z")` raises, and so does the
+// basic spelling. Splitting the offset off and parsing the remainder against
+// the full layout list accepted both -- four rows in the dangerous direction,
+// caught by the grid the moment it was widened. An offset is only meaningful
+// once there is a time for it to offset.
+var dateTimeLayouts = []string{
+	"2006-01-02T15:04:05", "2006-01-02 15:04:05",
+	"2006-01-02T15:04", "2006-01-02 15:04",
+	// Basic (hyphen-less) date-times, which fromisoformat also accepts.
+	"20060102T150405", "20060102T1504",
+	"20060102 150405", "20060102 1504",
+}
+
 func parseScopeInstant(value string) (time.Time, error) {
 	// NOT trimmed: the caller has already applied Python's truthiness, and a
 	// whitespace-only value must reach the parser and be REJECTED here, exactly
@@ -262,43 +290,111 @@ func parseScopeInstant(value string) (time.Time, error) {
 	// producer persists `{}`), so those forms are unreachable, and a LOUD
 	// refusal is the right failure for an unreachable input -- far better than
 	// silently computing a different window than the reference would.
-	for _, layout := range []string{
-		"2006-01-02", "20060102",
-		"2006-01-02T15:04:05", "2006-01-02 15:04:05",
-		"2006-01-02T15:04", "2006-01-02 15:04",
-		// Basic (hyphen-less) date-times, which fromisoformat also accepts.
-		"20060102T150405", "20060102T1504",
-	} {
+	for _, layout := range noOffsetLayouts {
 		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
 			return parsed, nil
 		}
 	}
-	// Zero-offset forms, including the colon-less "+0000" that RFC3339 rejects
-	// but fromisoformat accepts.
-	for _, layout := range []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05-0700", "2006-01-02T15:04-0700",
-		// fromisoformat also accepts hour-only and second-precision offsets.
-		"2006-01-02T15:04:05-07", "2006-01-02T15:04-07",
-		"2006-01-02T15:04:05-07:00:00",
-	} {
-		parsed, err := time.Parse(layout, trimmed)
-		if err != nil {
-			continue
-		}
-		// A ZERO offset ("Z" or "+00:00") is unambiguous: Python's
-		// fromisoformat yields an aware UTC datetime and strftime renders the
-		// same wall clock either reading would give. Accepting it here matches
-		// issueprlinks.truncateBoundToSecond, which also accepts a zero-offset
-		// bound and refuses only a shifted one. Refusing "Z" would have been
-		// over-strict AND inconsistent between the two layers.
-		if _, offset := parsed.Zone(); offset == 0 {
-			return parsed.UTC(), nil
-		}
+	// OFFSETS ARE SPLIT OFF, not enumerated as layouts.
+	//
+	// Pairing every offset spelling with every date form, separator and time
+	// precision is a combinatorial layout table, and building it by hand is what
+	// produced the gap a review round found: the offset layouts were all
+	// extended-date and second-precision, so basic dates and minute precision
+	// silently had no offset support. Seven rounds and two partial fixes later,
+	// the grid was measured instead -- 1,189 cases -- and the answer is that the
+	// offset is INDEPENDENT of everything before it. So it is parsed
+	// independently.
+	//
+	// Order matters: the no-offset layouts are tried FIRST, above, because a
+	// plain "2026-08-15" ends in "-15", which is a well-formed ±HH offset. Only
+	// a string no layout accepts is re-examined for a trailing offset.
+	body, offsetSeconds, hasOffset := splitTrailingOffset(trimmed)
+	if !hasOffset {
+		return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
+	}
+	if offsetSeconds != 0 {
+		// The one real divergence in this family, and it is deliberate. Python's
+		// strftime keeps the wall-clock fields and DISCARDS the offset, so a
+		// shifted bound would silently mean a different instant than the
+		// reference computes. Refused rather than guessed.
 		return time.Time{}, fmt.Errorf(
 			"%q carries a non-zero UTC offset; Python's strftime would discard it and mean a "+
 				"different instant (see issueprlinks.ErrNonUTCWindowBound)", trimmed,
 		)
 	}
+	// A ZERO offset ("Z", "+00:00", "+0000", "+00", "+00:00:00") is unambiguous:
+	// every spelling names the same instant the naive reading would give.
+	//
+	// dateTimeLayouts, NOT noOffsetLayouts: a bare date with an offset is not a
+	// thing the reference accepts.
+	for _, layout := range dateTimeLayouts {
+		if parsed, err := time.ParseInLocation(layout, body, time.UTC); err == nil {
+			return parsed, nil
+		}
+	}
 	return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
+}
+
+// splitTrailingOffset separates an ISO 8601 UTC offset from the end of a value.
+//
+// It reports the body, the offset in seconds, and whether one was found. The
+// spellings are the ones `datetime.fromisoformat` accepts: "Z", and a signed
+// hour with optional minutes and seconds, with or without colons.
+//
+// It does NOT validate the body; the caller parses that. It is only ever
+// reached for strings the no-offset layouts already rejected.
+func splitTrailingOffset(value string) (body string, offsetSeconds int, ok bool) {
+	if strings.HasSuffix(value, "Z") {
+		return strings.TrimSuffix(value, "Z"), 0, true
+	}
+	// Scan back over the offset's digits and colons to find the sign.
+	for index := len(value) - 1; index >= 0 && len(value)-index <= 10; index-- {
+		switch character := value[index]; {
+		case character >= '0' && character <= '9', character == ':':
+			continue
+		case character == '+' || character == '-':
+			seconds, valid := parseOffsetSeconds(value[index:])
+			if !valid {
+				return value, 0, false
+			}
+			return value[:index], seconds, true
+		default:
+			return value, 0, false
+		}
+	}
+	return value, 0, false
+}
+
+// parseOffsetSeconds reads a signed offset in any spelling fromisoformat
+// accepts: ±HH, ±HHMM, ±HH:MM, ±HHMMSS, ±HH:MM:SS.
+func parseOffsetSeconds(text string) (int, bool) {
+	if len(text) < 3 {
+		return 0, false
+	}
+	sign := 1
+	if text[0] == '-' {
+		sign = -1
+	}
+	digits := strings.ReplaceAll(text[1:], ":", "")
+	if len(digits) != 2 && len(digits) != 4 && len(digits) != 6 {
+		return 0, false
+	}
+	total := 0
+	for offset := 0; offset < len(digits); offset += 2 {
+		part, err := strconv.Atoi(digits[offset : offset+2])
+		if err != nil {
+			return 0, false
+		}
+		// hours, then minutes, then seconds
+		switch offset {
+		case 0:
+			total += part * 3600
+		case 2:
+			total += part * 60
+		default:
+			total += part
+		}
+	}
+	return sign * total, true
 }

@@ -79,14 +79,40 @@ func testRoot(t *testing.T) string {
 	return root
 }
 
+// principalFixtureDir and principalFixtureManifest are written as WHOLE
+// repo-relative paths, not as a basename joined at runtime.
+//
+// tests/tooling/test_go_workflow_path_filters.py resolves the file literals in
+// Go test sources to prove every input a Go test reads is covered by go.yml's
+// path filters -- otherwise a PR touching only that input is classified
+// non-Go, the workflow never runs, and go-quality passes vacuously. A bare
+// basename is unresolvable to that oracle: it matches several files in the
+// tree and the oracle refuses to guess between them (guessing is how a
+// coverage oracle starts asserting coverage it does not have). Spelling the
+// path in full makes the reference unambiguous and the coverage real rather
+// than assumed. Do not collapse these back to a basename.
+//
+// The prose here deliberately avoids naming a file inside double quotes: that
+// oracle scans the raw source with a string-literal regex, so it sees a quoted
+// filename in a COMMENT exactly as it sees one in code. An explanatory comment
+// about the rule was itself enough to trip the rule.
+// manifestBasename is derived from the full path above rather than written
+// again, so the two cannot drift apart.
+var manifestBasename = filepath.Base(principalFixtureManifest)
+
+const (
+	principalFixtureDir      = "contracts/auth/v1/examples/principal"
+	principalFixtureManifest = "contracts/auth/v1/examples/principal/manifest.json"
+)
+
 func fixtureDir(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(ContractsDir(testRoot(t)), "examples", "principal")
+	return filepath.Join(testRoot(t), principalFixtureDir)
 }
 
 func loadManifest(t *testing.T) fixtureManifest {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(fixtureDir(t), "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), principalFixtureManifest))
 	if err != nil {
 		t.Fatalf("reading fixture manifest: %v", err)
 	}
@@ -128,7 +154,7 @@ func TestEveryFixtureFileOnDiskIsClaimedByTheManifest(t *testing.T) {
 	}
 	onDisk := map[string]bool{}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "manifest.json" || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() || entry.Name() == manifestBasename || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		onDisk[entry.Name()] = true

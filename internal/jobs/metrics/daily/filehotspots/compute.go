@@ -58,6 +58,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // aggregateStatsMarker mirrors dev_health_ops.utils.AGGREGATE_STATS_MARKER.
@@ -320,17 +321,18 @@ func sampleZScores(values []float64) []float64 {
 	if n < 2 {
 		return zeros
 	}
-	var sum float64
-	for _, v := range values {
-		sum += v
-	}
-	mean := sum / float64(n)
-	var sumSquares float64
-	for _, v := range values {
+	// CHAOS-4824: both reductions mirror a Python `sum()` over floats, which
+	// is Neumaier-compensated since CPython 3.12 -- a naive Go `+=` loop is
+	// not equivalent (16% disagreement on random 2-8 element inputs, per
+	// pythonparity.Sum's doc comment). mean = sum(values) / n.
+	mean := pythonparity.Sum(values) / float64(n)
+	squaredDiffs := make([]float64, n)
+	for i, v := range values {
 		diff := v - mean
-		sumSquares += diff * diff
+		squaredDiffs[i] = diff * diff
 	}
-	variance := sumSquares / float64(n-1)
+	// variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+	variance := pythonparity.Sum(squaredDiffs) / float64(n-1)
 	stdev := math.Sqrt(variance)
 	if stdev == 0 {
 		return zeros

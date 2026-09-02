@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // -----------------------------------------------------------------------
@@ -815,53 +816,24 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	if n == 0 {
 		return nil
 	}
-	weights := make([]float64, n)
-	totalWeight := 0.0
-	for i := range dayEntries {
-		// float64(...) is load-bearing (CHAOS-4818): Go may otherwise fuse
-		// this into one FMA on arm64, rounding once where CPython's
-		// `weights = [1.0 + i * 0.5 for i in range(n)]` rounds the multiply
-		// and the add separately.
-		weights[i] = 1.0 + float64(float64(i)*0.5)
-		totalWeight += weights[i]
-	}
-	successRate7d := 0.0
+	// CHAOS-4824: pythonparity.Sum replaces every naive `+=` accumulation
+	// below -- CPython's builtin sum() has been Neumaier-compensated since
+	// 3.12, and a naive Go loop disagrees ~16-26% of the time on small
+	// fractional inputs (see pythonparity.Sum's own doc comment). Every
+	// term is collected into a slice first so pythonparity.Sum can
+	// reproduce CPython's algorithm exactly, rather than accumulating in
+	// the loop -- see weightedSuccessRate7d/successRateTrendFromRates
+	// (which also carry the CHAOS-4818 FMA guards this same code needed
+	// before extraction).
+	successRates := make([]float64, n)
 	for i, m := range dayEntries {
-		// float64(...) is load-bearing (CHAOS-4818, codex round 3 on
-		// PR #2106): compound assignment desugars to
-		// `successRate7d = successRate7d + m.SuccessRate*weights[i]`, and Go
-		// may fuse the product into that addition on arm64 -- a DIFFERENT
-		// defect from the CHAOS-4824 compensated-sum() issue on this same
-		// accumulator (tracked separately, PR #2107): this is a per-step FMA
-		// fusion present regardless of whether the accumulation strategy is
-		// naive or compensated. Measured: `go tool objdump` showed FMADDD at
-		// this line before the wrap.
-		successRate7d += float64(m.SuccessRate * weights[i])
+		successRates[i] = m.SuccessRate
 	}
-	successRate7d /= totalWeight
+	successRate7d := weightedSuccessRate7d(successRates)
 
 	successRateTrend := 0.0
 	if n >= 2 {
-		xMean := float64(n-1) / 2.0
-		ySum := 0.0
-		for _, m := range dayEntries {
-			ySum += m.SuccessRate
-		}
-		yMean := ySum / float64(n)
-		num := 0.0
-		den := 0.0
-		for i, m := range dayEntries {
-			// float64(...) is load-bearing (CHAOS-4818, codex round 3 on
-			// PR #2106): found by disassembly while verifying the :830 fix
-			// -- these two compound assignments have the SAME live FMADDD/
-			// FMSUBD exposure as successRate7d above, for the same reason
-			// (compound assignment desugars to a fusable add/subtract).
-			num += float64((float64(i) - xMean) * (m.SuccessRate - yMean))
-			den += float64((float64(i) - xMean) * (float64(i) - xMean))
-		}
-		if den > 0 {
-			successRateTrend = num / den
-		}
+		successRateTrend = successRateTrendFromRates(successRates)
 	}
 
 	consecutiveFailures := 0
@@ -918,6 +890,86 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 		row.MedianRecoveryTimeSeconds = &v
 	}
 	return row
+}
+
+// weightedSuccessRate7d ports the UNROUNDED weighted-average half of
+// compute_pipeline_stability (compute_testops_risk.py:200-204):
+//
+//	weights = [1.0 + i * 0.5 for i in range(n)]
+//	total_weight = sum(weights)
+//	success_rate_7d = sum(m.success_rate * w for m, w in zip(days_data, weights)) / total_weight
+//
+// Extracted from computePipelineStability into its own testable function
+// (CHAOS-4824) so a live-Python golden can assert the exact bit pattern of
+// the value BEFORE computePipelineStability rounds it to 4 decimals for
+// storage -- the rounded, stored value only rarely differs between naive
+// and compensated summation (measured: 0 divergences in 200,000 random
+// 3-8 element fractional trials, since 4-decimal rounding is far coarser
+// than the few-ULP difference the two algorithms produce), so a golden
+// against the STORED value would almost never go red on the naive
+// baseline. The unrounded value is where the defect is actually visible,
+// matching every other CHAOS-4818/4824 bit-pattern golden in this repo.
+//
+// CHAOS-4824: every reduction below mirrors a Python `sum()` over floats,
+// which is Neumaier-compensated since CPython 3.12 -- NOT the naive
+// left-to-right `total += x` a Go loop would otherwise do (16% disagreement
+// on random 2-8 element inputs, per pythonparity.Sum's own doc comment).
+// Every term is collected into a slice first so pythonparity.Sum can
+// reproduce CPython's algorithm exactly, rather than accumulating in the
+// loop.
+func weightedSuccessRate7d(successRates []float64) float64 {
+	n := len(successRates)
+	weights := make([]float64, n)
+	for i := range successRates {
+		// float64(...) is load-bearing (CHAOS-4818, site 9 on PR #2106,
+		// carried forward here since this branch's extraction predates that
+		// fix landing on main): Go may otherwise fuse this into one FMA on
+		// arm64, rounding once where CPython's
+		// `weights = [1.0 + i * 0.5 for i in range(n)]` rounds the multiply
+		// and the add separately.
+		weights[i] = 1.0 + float64(float64(i)*0.5)
+	}
+	totalWeight := pythonparity.Sum(weights) // sum(weights)
+
+	weightedRates := make([]float64, n)
+	for i, rate := range successRates {
+		weightedRates[i] = rate * weights[i]
+	}
+	// sum(m.success_rate * w for m, w in zip(days_data, weights)) / total_weight
+	return pythonparity.Sum(weightedRates) / totalWeight
+}
+
+// successRateTrendFromRates ports the UNROUNDED linear-regression-slope
+// half of compute_pipeline_stability (compute_testops_risk.py:206-215),
+// for n >= 2 (the caller's guard):
+//
+//	x_mean = (n - 1) / 2.0
+//	y_mean = sum(m.success_rate for m in days_data) / n
+//	num = sum((i - x_mean) * (m.success_rate - y_mean) for i, m in enumerate(days_data))
+//	den = sum((i - x_mean) ** 2 for i in range(n))
+//	success_rate_trend = num / den if den > 0 else 0.0
+//
+// See weightedSuccessRate7d's doc comment for why this returns the
+// UNROUNDED value and why every sum below uses pythonparity.Sum.
+func successRateTrendFromRates(successRates []float64) float64 {
+	n := len(successRates)
+	xMean := float64(n-1) / 2.0
+	// sum(m.success_rate for m in days_data) / n
+	yMean := pythonparity.Sum(successRates) / float64(n)
+	numTerms := make([]float64, n)
+	denTerms := make([]float64, n)
+	for i, rate := range successRates {
+		numTerms[i] = (float64(i) - xMean) * (rate - yMean)
+		denTerms[i] = (float64(i) - xMean) * (float64(i) - xMean)
+	}
+	// sum((i - x_mean) * (m.success_rate - y_mean) for i, m in enumerate(days_data))
+	num := pythonparity.Sum(numTerms)
+	// sum((i - x_mean) ** 2 for i in range(n))
+	den := pythonparity.Sum(denTerms)
+	if den > 0 {
+		return num / den
+	}
+	return 0.0
 }
 
 // -----------------------------------------------------------------------

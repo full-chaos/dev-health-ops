@@ -330,6 +330,120 @@ def _bundle_cases() -> list[dict[str, Any]]:
                 "work_unit_id": "4" * 64,
             },
         ),
+        # --- truncation boundary, the axis the ASCII case above cannot reach ---
+        # _truncate_text slices with `compact[:limit]`, which counts CODE
+        # POINTS. A Go port using byte slicing keeps 280 BYTES: 93 CJK chars
+        # instead of 280, or 70 emoji instead of 280 -- and can cut a rune in
+        # half, producing invalid UTF-8 that then encodes as U+FFFD. Every one
+        # of those changes input_hash. Pure-ASCII fixtures cannot see any of
+        # it, because there one char is one byte.
+        (
+            "truncation_boundary_cjk",
+            {
+                "issue_ids": ["linear:CJK"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:CJK": {
+                        "title": "修" * 400,
+                        "description": "復" * 400,
+                    }
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "6" * 64,
+            },
+        ),
+        (
+            "truncation_boundary_astral",
+            {
+                # 4 bytes per code point: the worst char-to-byte ratio, and the
+                # case most likely to be cut mid-rune by a byte-slicing port.
+                "issue_ids": ["linear:EMOJI"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:EMOJI": {"title": "\U0001f600" * 400, "description": ""}
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "7" * 64,
+            },
+        ),
+        (
+            "truncation_exactly_on_the_limit",
+            {
+                # 279 / 280 / 281 characters: off-by-one in either direction
+                # changes whether the ellipsis is appended at all.
+                "issue_ids": ["linear:E279", "linear:E280", "linear:E281"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:E279": {"title": "a" * 279, "description": ""},
+                    "linear:E280": {"title": "a" * 280, "description": ""},
+                    "linear:E281": {"title": "a" * 281, "description": ""},
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "8" * 64,
+            },
+        ),
+        (
+            "python_only_whitespace_in_split",
+            {
+                # `" ".join(value.split())` splits on PYTHON whitespace, which
+                # includes 0x1c-0x1f. Go's strings.Fields uses unicode.IsSpace,
+                # a strict subset that does NOT, so a Go port built on Fields
+                # leaves these bytes embedded and diverges. Same delta already
+                # documented for str.strip() in investment/scope.go.
+                "issue_ids": ["linear:WS"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:WS": {
+                        "title": "alpha\x1cbeta\x1fgamma\x1ddelta\x1eepsilon",
+                        "description": "  collapse\t\tthese   spaces\n\nplease  ",
+                    }
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "9" * 64,
+            },
+        ),
+        (
+            "nested_truncation_non_ascii",
+            {
+                # MAX_FIELD_CHARS applies per field, then MAX_SOURCE_CHARS
+                # applies to the joined result -- two truncations in sequence,
+                # both code-point counted, with a "\n" join between them.
+                "issue_ids": ["linear:NEST"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:NEST": {
+                        "title": "修" * 300,
+                        "description": "復" * 300,
+                        "type": "バグ" * 50,
+                        "labels": ["ラベル" * 20, "another" * 30],
+                        "parent_id": "P1",
+                        "epic_id": "E1",
+                    }
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {"P1": "親" * 200},
+                "epic_titles": {"E1": "叙事詩" * 100},
+                "work_unit_id": "a" * 64,
+            },
+        ),
         (
             "ids_present_but_absent_from_maps",
             {

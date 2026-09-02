@@ -276,17 +276,29 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenRenewalKeepsFailing(t *testi
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler context was not canceled after the lease was lost")
 	}
-	if got := retirements.reason(); got != IdempotencyRenewalTransientExhausted {
-		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalTransientExhausted)
+	// The renewal goroutine really is gone, not merely quiet -- and this wait
+	// is also what makes the retirement assertion below deterministic. markLost
+	// closes the lost channel BEFORE it reports the retirement, deliberately:
+	// the loss signal is what stops a handler running on a lease it no longer
+	// holds, and a caller-supplied observer must never be able to delay that.
+	// Observing Lost() therefore establishes nothing about the observer having
+	// run yet. renew's deferred close of renewalDone does: it can only happen
+	// after markLost has returned, so it is a real happens-before edge for the
+	// recorder read. Asserting the reason before this wait raced the renewal
+	// goroutine and failed on loaded CI runners with the sentinel
+	// `retirement reason = "0 retirements"`.
+	internal, ok := claim.(*postgresClaim)
+	if !ok {
+		t.Fatalf("claim is %T, not *postgresClaim: renewal retirement is unobservable", claim)
+	}
+	select {
+	case <-internal.renewalDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("renewal goroutine still running after signaling loss")
 	}
 
-	// The renewal goroutine really is gone, not merely quiet.
-	if internal, ok := claim.(*postgresClaim); ok {
-		select {
-		case <-internal.renewalDone:
-		case <-time.After(10 * time.Second):
-			t.Fatal("renewal goroutine still running after signaling loss")
-		}
+	if got := retirements.reason(); got != IdempotencyRenewalTransientExhausted {
+		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalTransientExhausted)
 	}
 
 	// Durable truth agrees the lease lapsed. This is the honest outcome, not a
@@ -413,6 +425,19 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenFencedOut(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler context was not canceled after the claim was fenced out")
 	}
+	// Same happens-before edge the transient-exhaustion test relies on: the
+	// retirement is reported after the lost channel closes, so only the
+	// renewal goroutine's exit proves the observer has been called.
+	internal, ok := claim.(*postgresClaim)
+	if !ok {
+		t.Fatalf("claim is %T, not *postgresClaim: renewal retirement is unobservable", claim)
+	}
+	select {
+	case <-internal.renewalDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("renewal goroutine still running after the claim was fenced out")
+	}
+
 	if got := retirements.reason(); got != IdempotencyRenewalFenced {
 		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalFenced)
 	}

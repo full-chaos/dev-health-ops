@@ -768,7 +768,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -807,6 +807,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/clickhouse-string-decode-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: clickhouse String decode policy did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
+  # used Neumaier compensated summation for floats since 3.12 and was a naive
+  # accumulation before. The fixture therefore depends on the interpreter
+  # version with no diff in this repository, in BOTH directions -- a downgrade
+  # below 3.12 would make pythonparity.Sum's compensation wrong, not merely
+  # unnecessary.
+  proof_file="${proof_dir}/python-sum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

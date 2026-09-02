@@ -1470,7 +1470,44 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubWorkItemPRSocialFetcherClosingReferenceCompletePageIsNotTruncated
     # (github_work_items_social_fetch_test.go). Not integration-tagged.
     # 1298 -> 1300 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1300
+    # CHAOS-4757 (Jira dev-status slice): 7 new ordinary top-level tests --
+    # TestJiraDevStatusPullRequestSourceIDParsesTrustedGitHubURLOnly,
+    # TestExtractJiraDevStatusDependenciesEmitsDedupedPrimaryEdges,
+    # TestFetchJiraDevStatusPullRequestsParsesOKResponse,
+    # TestFetchJiraDevStatusPullRequestsTreats400And404AsCleanNoOp,
+    # TestFetchJiraDevStatusPullRequestsFailsOnUnexpectedStatus
+    # (jira_dev_status_test.go); TestJiraWorkItemsRouteDevStatusSyncsPrimaryDependencyRow,
+    # TestJiraWorkItemsRouteDevStatusUnavailableIsCleanNoOp (jira_work_items_route_test.go).
+    # Not integration-tagged. 1300 -> 1307 top-level; 152 -> 152 integration-tagged (unchanged).
+    # codex round 1 (P1) moved the dev-status wiring from JiraWorkItemsRouteHandler
+    # (never constructed by the worker) to JiraAtlassianRouteHandler (the real
+    # route): -2 (jira_work_items_route_test.go) +3
+    # (TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow,
+    # TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp,
+    # TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts). codex round 1 (P2)
+    # added a real-wire-attempt counting fix: +2
+    # (TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries,
+    # TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess,
+    # jira_dev_status_test.go). Net +3. 1307 -> 1310 top-level; 152 -> 152
+    # integration-tagged (unchanged).
+    # codex round 2 (P2): the cap must limit the retry policy itself, not just
+    # count after the fact -- TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts
+    # renamed to TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts (net 0) plus
+    # 1 new test, TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget
+    # (jira_dev_status_test.go). Net +1. 1310 -> 1311 top-level; 152 -> 152
+    # integration-tagged (unchanged).
+    # codex round 3 (CLEAN, coverage note): added
+    # TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues, EXECUTED
+    # multi-issue coverage for the cross-issue budget invariant round 3 verified
+    # only statically. 1311 -> 1312 top-level; 152 -> 152 integration-tagged
+    # (unchanged).
+    # codex round 4 (scoped, P3): the multi-issue test above covered only
+    # all-503 exhaustion, not proving a clean 400/404 no-op also debits the
+    # shared budget. Added TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget
+    # (production confirmed correct by codex's own mutation probes; this closes
+    # the missing regression oracle). 1312 -> 1313 top-level; 152 -> 152
+    # integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1313
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1487,7 +1524,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1300
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1313
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1551,7 +1588,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1300
+    assert len(selected_tests) == len(set(selected_tests)) == 1313
     assert set(selected_tests) == expected_tests
 
 

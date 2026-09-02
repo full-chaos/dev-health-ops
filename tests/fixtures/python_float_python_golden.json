@@ -840,6 +840,116 @@
     {
       "float_raises_value_error": true,
       "input_codepoints": [
+        304,
+        78,
+        70
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        304,
+        110,
+        102
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        105,
+        78,
+        70,
+        304,
+        78,
+        304,
+        84,
+        89
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        304,
+        78,
+        70,
+        73,
+        78,
+        73,
+        84,
+        89
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        110,
+        304,
+        110
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        78,
+        65,
+        304
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        65321,
+        65326,
+        65318
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        65326,
+        65313,
+        65326
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
+        8490,
+        105,
+        110
+      ],
+      "result_bits": "0000000000000000",
+      "result_repr": "0.0"
+    },
+    {
+      "float_raises_value_error": false,
+      "input_codepoints": [
+        105,
+        110,
+        102
+      ],
+      "result_bits": "7ff0000000000000",
+      "result_repr": "inf"
+    },
+    {
+      "float_raises_value_error": true,
+      "input_codepoints": [
         48,
         120,
         49,

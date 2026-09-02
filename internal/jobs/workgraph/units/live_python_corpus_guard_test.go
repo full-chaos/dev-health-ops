@@ -45,15 +45,73 @@ import (
 // this lane owns. A generator that does neither is REPORTED rather than failed:
 // most belong to other lanes, and failing their build to enforce a convention
 // they never agreed to would be the wrong way to ask.
-var outputPathPattern = regexp.MustCompile(
-	`OUTPUT_PATH\s*=\s*Path\(__file__\)\.parent\s*/\s*"([^"]+)"`,
-)
+// TWO conventions exist in tests/fixtures/, and the first version of this file
+// recognised only one -- the one I happen to write:
+//
+//	OUTPUT_PATH = Path(__file__).parent / "name.json"     10 generators
+//	OUTPUT      = Path(__file__).with_name("name.json")    6 generators
+//
+// So "discovery" silently skipped six conforming generators, including
+// generate_file_hotspots_python_golden.py, whose live comparison passes fine.
+// That is the enumeration failure one level up: I replaced a hand-written list
+// with a pattern, and then wrote a pattern matching my own house style. Found by
+// a codex round, which ran the skipped ones directly and showed they work.
+//
+// Both forms are matched now. A third form should be ADDED here rather than the
+// generator being rewritten to suit the matcher.
+var outputPathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`OUTPUT_PATH\s*=\s*Path\(__file__\)\.parent\s*/\s*"([^"]+)"`),
+	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*"([^"]+)"\s*\)`),
+}
 
-// nonHermeticGenerators names generators that CANNOT run in this guard, with the
-// reason. Empty today, and kept so a future non-hermetic generator has a home
-// that forces its author to state why rather than silently dropping out of
-// coverage.
-var nonHermeticGenerators = map[string]string{}
+func declaredOutputPath(source []byte) (string, bool) {
+	for _, pattern := range outputPathPatterns {
+		if match := pattern.FindSubmatch(source); match != nil {
+			return string(match[1]), true
+		}
+	}
+	return "", false
+}
+
+// maxUnguardableGenerators is a RATCHET, not a target.
+//
+// Generators that declare no recognised output path or accept no --stdout cannot
+// be discovered. Most belong to other lanes, so failing their build to enforce a
+// convention they never agreed to is the wrong way to ask -- but letting the
+// number grow silently is how the rot surface got to 22 in the first place.
+//
+// So the count may only go DOWN. Lower this when a generator is brought into the
+// convention; if it rises, someone has added an undiscoverable corpus and this
+// test says so. Tracked as CHAOS-4849.
+const maxUnguardableGenerators = 9
+
+// excludedGenerators names generators that are discoverable but CANNOT run in
+// CI, with the reason and the condition that would remove the exclusion.
+//
+// This map had its first entry added by a codex round, and the finding is the
+// counter-argument to this whole file: the hand-written enumeration I replaced
+// was LOAD-BEARING in exactly one case. It had accidentally excluded
+// generate_effort_golden.py, for a reason nobody had written down, and
+// discovery restored it and would have broken go-quality.
+//
+// So discovery is not strictly better than enumeration. It converts a silent gap
+// into a loud failure, which is an improvement only if the genuine exclusions
+// are recorded -- and an exclusion that outlives its reason is the same rot as a
+// stale divergence entry. Hence TestExcludedGeneratorsAreStillUnrunnable below,
+// which fails when an exclusion becomes unnecessary.
+var excludedGenerators = map[string]struct {
+	reason        string
+	missingModule string
+	removeWhen    string
+}{
+	"generate_effort_golden.py": {
+		reason: "imports work_graph.investment.materialize, which transitively " +
+			"imports httpx2; the CI oracle closure is installed --no-deps and " +
+			"pins httpx==0.28.1 but not httpx2, so this raises ModuleNotFoundError",
+		missingModule: "httpx2",
+		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
+	},
+}
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
@@ -86,8 +144,8 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 	for _, generator := range generators {
 		name := filepath.Base(generator)
 
-		if reason, skip := nonHermeticGenerators[name]; skip {
-			t.Logf("skipping %s: %s", name, reason)
+		if excluded, skip := excludedGenerators[name]; skip {
+			t.Logf("excluded %s: %s (remove when: %s)", name, excluded.reason, excluded.removeWhen)
 			continue
 		}
 
@@ -96,12 +154,11 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 			t.Errorf("read %s: %v", name, err)
 			continue
 		}
-		match := outputPathPattern.FindSubmatch(source)
-		if match == nil || !strings.Contains(string(source), "--stdout") {
+		fixtureName, declared := declaredOutputPath(source)
+		if !declared || !strings.Contains(string(source), "--stdout") {
 			unguardable = append(unguardable, name)
 			continue
 		}
-		fixtureName := string(match[1])
 
 		t.Run(name, func(t *testing.T) {
 			command := exec.Command(python, generator, "--stdout")
@@ -147,15 +204,23 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 
 	t.Logf("guarded %d corpora by discovery", len(guarded))
 	if len(unguardable) > 0 {
-		// Reported, not failed. These are mostly other lanes' generators, and
-		// failing their build to enforce a convention they never agreed to
-		// would be the wrong way to ask. The number is the point: it is the
-		// size of the remaining rot surface.
 		t.Logf(
-			"%d generator(s) cannot be guarded because they declare no "+
-				"OUTPUT_PATH = Path(__file__).parent / \"...\" or accept no "+
-				"--stdout; their corpora can rot undetected:\n  %s",
+			"%d generator(s) are undiscoverable (no recognised output-path "+
+				"declaration, or no --stdout); their corpora can rot undetected:\n  %s",
 			len(unguardable), strings.Join(unguardable, "\n  "),
+		)
+	}
+	// The RATCHET. t.Logf is invisible in non-verbose CI, so the list above
+	// informs a human reading the log and nothing else -- which is how the rot
+	// surface reached 22 unnoticed. This assertion is the part that acts.
+	if len(unguardable) > maxUnguardableGenerators {
+		t.Errorf(
+			"%d undiscoverable generators, but the ratchet allows at most %d. A "+
+				"new corpus has been added that this guard cannot check. Either "+
+				"give it a recognised output-path declaration and --stdout, or "+
+				"add it to excludedGenerators with a reason. Do NOT raise the "+
+				"ratchet: it exists to make the rot surface monotonically shrink.",
+			len(unguardable), maxUnguardableGenerators,
 		)
 	}
 }
@@ -196,4 +261,71 @@ func itoa(value int) string {
 		value /= 10
 	}
 	return string(digits)
+}
+
+// TestExcludedGeneratorsAreStillUnrunnable fails when an exclusion stops being
+// necessary.
+//
+// An exclusion is a claim about the environment, and claims about the
+// environment go stale silently. The entry for generate_effort_golden.py exists
+// because the CI oracle closure lacks httpx2; the day someone adds it, that
+// corpus becomes guardable and the exclusion becomes a hole nobody is watching.
+//
+// # WHY THIS READS THE REQUIREMENTS FILE AND NOT THE INTERPRETER
+//
+// The first version of this test imported the module and failed if the import
+// succeeded. That has INVERTED polarity: httpx2 is present in a developer's
+// local venv, so the test would have been red on every machine and green in the
+// only environment the exclusion is about. A check whose result depends on where
+// it runs, in the opposite direction to the thing it guards, is worse than no
+// check.
+//
+// The exclusion is a statement about ci/requirements-live-python-oracles.txt, so
+// that file is what gets read. Environment-independent, and it tests the exact
+// condition recorded in removeWhen.
+func TestExcludedGeneratorsAreStillUnrunnable(t *testing.T) {
+	if len(excludedGenerators) == 0 {
+		t.Skip("no exclusions to verify")
+	}
+
+	repoRoot := repositoryRootPath(t)
+	closurePath := filepath.Join(repoRoot, "ci", "requirements-live-python-oracles.txt")
+	closure, err := os.ReadFile(closurePath)
+	if err != nil {
+		t.Fatalf("read the live-oracle closure: %v", err)
+	}
+
+	for name, excluded := range excludedGenerators {
+		if excluded.missingModule == "" {
+			t.Errorf(
+				"%s is excluded with no missingModule, so the exclusion cannot be "+
+					"checked and will outlive its reason silently", name,
+			)
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, line := range strings.Split(string(closure), "\n") {
+				requirement := strings.TrimSpace(line)
+				if requirement == "" || strings.HasPrefix(requirement, "#") {
+					continue
+				}
+				// Match the distribution name only: "httpx2==1.0" must match
+				// while "httpx==0.28.1" must not, which a substring test gets
+				// wrong in exactly the direction that matters here.
+				distribution := requirement
+				if index := strings.IndexAny(distribution, "=<>!~[; "); index >= 0 {
+					distribution = distribution[:index]
+				}
+				if strings.EqualFold(strings.TrimSpace(distribution), excluded.missingModule) {
+					t.Errorf(
+						"%s is excluded because %q, but %q is NOW in %s. The "+
+							"exclusion is stale: remove the entry and let discovery "+
+							"guard this corpus. (Recorded removal condition: %s)",
+						name, excluded.reason, excluded.missingModule,
+						"ci/requirements-live-python-oracles.txt", excluded.removeWhen,
+					)
+				}
+			}
+		})
+	}
 }

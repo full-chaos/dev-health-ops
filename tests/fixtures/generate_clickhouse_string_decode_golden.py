@@ -65,6 +65,59 @@ from typing import Any
 OUTPUT_PATH = Path(__file__).parent / "clickhouse_string_decode_python_golden.json"
 
 
+def _assert_driver_still_hexes_on_decode_failure() -> str:
+    """Fail if clickhouse-connect no longer decodes the way this corpus assumes.
+
+    The decode is an inline try/except inside a read loop, not a callable, so it
+    cannot be imported and driven directly -- the expression in _driver_decode is
+    therefore a COPY, and a copy of third-party behaviour is a claim that goes
+    stale in silence. A codex round made exactly this point: a clickhouse-connect
+    upgrade could leave this corpus's "live" guard green while the driver did
+    something else entirely.
+
+    So the assumption is asserted rather than described. This reads the installed
+    driver's source and fails if the decode/hex fallback is gone, turning a
+    dependency upgrade into a red test instead of a silent divergence.
+
+    Returns the installed version, so the payload records what was MEASURED. The
+    previous revision hard-coded "0.15.1" -- a fact about the environment frozen
+    into a file, which is the same rot in miniature.
+    """
+    import inspect
+
+    from clickhouse_connect.driver import buffer
+
+    source_path = Path(inspect.getfile(buffer))
+    normalised = " ".join(source_path.read_text().split())
+    for fragment in (
+        "app(x.decode(encoding))",
+        "except UnicodeDecodeError",
+        "app(x.hex())",
+    ):
+        if fragment not in normalised:
+            raise SystemExit(
+                "clickhouse_connect's String decode no longer matches what this "
+                f"corpus assumes: {fragment!r} is absent from {source_path}.\n"
+                "The whole-value hex substitution on UnicodeDecodeError is the "
+                "behaviour pythonparity.DecodeClickHouseString reproduces. "
+                "Re-derive it from the new source before regenerating -- do NOT "
+                "just delete this check."
+            )
+
+    from clickhouse_connect import driver as _driver
+
+    return str(getattr(_driver, "__version__", "") or _installed_driver_version())
+
+
+def _installed_driver_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("clickhouse-connect")
+    except PackageNotFoundError:  # pragma: no cover - the import above would fail first
+        return "unknown"
+
+
 def _driver_decode(raw: bytes) -> str:
     """The EXACT expression clickhouse_connect/driver/buffer.py:135-138 uses.
 
@@ -169,7 +222,7 @@ def main() -> None:
             "returns the raw bytes instead, so chquery must apply the same "
             "substitution at scan time."
         ),
-        "clickhouse_connect_version_measured": "0.15.1",
+        "clickhouse_connect_version_measured": _assert_driver_still_hexes_on_decode_failure(),
         "cases": cases,
     }
 

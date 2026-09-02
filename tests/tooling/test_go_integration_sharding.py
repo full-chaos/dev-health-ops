@@ -100,9 +100,36 @@ def _pinned_clickhouse_image() -> str:
         r'(?m)^\s*ClickHouseImage\s*=\s*"(?P<image>[^"]+)"',
         CONTAINER_HARNESS.read_text(encoding="utf-8"),
     )
-    assert match is not None
+    assert match is not None, (
+        "no ClickHouseImage declaration found in the container harness -- if it "
+        "was renamed this helper is silently dead, so fix the pattern rather "
+        "than the assertion"
+    )
     image = match.group("image")
-    assert re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image)
+    # A TAG, not a digest. ClickHouse tracks the 26 MAJOR so minor and patch
+    # upgrades apply -- ruled by chris (CHAOS-4854), the same policy CHAOS-4851
+    # used for the CI service containers.
+    #
+    # The REPOSITORY is fixed even so. An earlier revision asserted only
+    # `[^@\s]+:[^@\s]+|...`, i.e. "a reference of some kind", which blessed
+    # `:latest`, `clickhouse/other-image:26.7` and
+    # `quay.io/other/clickhouse-server:latest`. This helper feeds the pre-pull
+    # expectations below, so whatever it accepts is what the mirror assertions
+    # are then derived FROM -- a foreign registry accepted here would be
+    # asserted as correct rather than caught.
+    # `[0-9]`, never `\d`. This same pattern is written in three dialects --
+    # bash ERE in ci/check_go.sh, Go RE2 in harness_test.go, and Python here --
+    # and they must accept the same set. Python's `\d` is UNICODE-aware, so it
+    # matches Arabic-Indic and other non-ASCII digits; bash `[0-9]` and Go RE2
+    # (whose Perl classes are ASCII-only) both reject them. Measured: the tag
+    # `26.\u0667` was ACCEPTED by Python's `\d` and rejected by the other two.
+    # `[0-9]` is the one spelling that means the same thing in all three.
+    assert re.fullmatch(
+        r"clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})", image
+    ), (
+        "ClickHouseImage must be clickhouse/clickhouse-server pinned to a 26.x "
+        f"tag or a sha256 digest, got {image!r}"
+    )
     return image
 
 

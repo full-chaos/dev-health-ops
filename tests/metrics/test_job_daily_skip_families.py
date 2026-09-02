@@ -81,6 +81,7 @@ class _RecordingSink:
     def __init__(self, db_url: str) -> None:
         self.write_calls: list[str] = []
         self.team_metrics_writes: list[Any] = []
+        self.cicd_metrics_writes: list[Any] = []
 
     def ensure_tables(self) -> None:
         return None
@@ -100,6 +101,21 @@ class _RecordingSink:
 
     def write_repo_metrics(self, rows: Any) -> None:
         self.write_calls.append("repo_metrics")
+
+    def write_cicd_metrics(self, rows: Any) -> None:
+        # Mirrors write_cicd_metrics's own production no-op-on-empty
+        # semantics (sinks/clickhouse/ci.py) -- same discipline as
+        # write_team_metrics above. Codex round-4 finding: the generic
+        # __getattr__ fallback below records a "write_cicd_metrics" call
+        # regardless of row count, so a regression that silently emptied
+        # cicd_metrics (e.g. mis-wiring the unrelated-family skip to also
+        # catch "cicd") would still show the call as present. Only
+        # recording on a non-empty list, and capturing the rows, lets tests
+        # assert on ACTUAL row content, not just call presence.
+        if not rows:
+            return
+        self.write_calls.append("write_cicd_metrics")
+        self.cicd_metrics_writes.append(list(rows))
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("write_"):
@@ -316,7 +332,19 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
 
     assert "team_metrics" in sink.write_calls
     assert "repo_metrics" in sink.write_calls
+    # Codex round-4 (CHAOS-4292) finding: "write_cicd_metrics" in write_calls
+    # alone proves only that the METHOD was called, not that it carried real
+    # rows -- a regression that mistakenly wired "file_hotspots" to also
+    # suppress cicd (e.g. an "|| family == other_skipped_thing" typo) could
+    # leave cicd_metrics=[] and still pass that weaker assertion, since
+    # write_cicd_metrics fires unconditionally in production and the assert
+    # never inspected content. Assert the actual row, not just the call.
     assert "write_cicd_metrics" in sink.write_calls
+    assert len(sink.cicd_metrics_writes) == 1
+    assert len(sink.cicd_metrics_writes[0]) == 1
+    cicd_row = sink.cicd_metrics_writes[0][0]
+    assert cicd_row.repo_id == REPO_ID
+    assert cicd_row.pipelines_count == 1
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,7 @@ package pythonparity
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -59,16 +60,36 @@ import (
 //
 //   - `replace` removes EVERY occurrence anywhere in the string, not a prefix.
 //     So `urn:`, `uuid:`, `urn:urn:uuid:` and `urn:uuid:urn:uuid:` all parse.
+//
 //   - `strip('{}')` removes ANY NUMBER of leading and trailing braces, and does
 //     not require them to balance. So `{{X}}`, `{X` and `X}` all parse.
+//
 //   - Both are CASE-SENSITIVE, which is the divergence that matters:
 //     `urn:uuid:X` parses and `URN:UUID:X` raises, because the uppercase prefix
 //     is never removed and the leftover colons fail the length check.
-//   - There is NO whitespace stripping. A padded value raises.
+//
+//   - `len()` counts CHARACTERS, not bytes, so the gate is 32 codepoints and a
+//     multi-byte value can pass it.
+//
+//   - The final step is `int(hex, 16)`, NOT a hex decode. Its grammar is much
+//     wider than "32 hex digits": it folds Unicode decimal digits to ASCII,
+//     accepts surrounding whitespace, a leading `+`, an `0x` prefix and
+//     underscores between digits. All of those fit in 32 characters, so all of
+//     them are reachable here:
+//
+//     uuid.UUID("１" * 32)                        # fullwidth digits: accepted
+//     uuid.UUID(" " + "1" * 30 + " ")             # padded: accepted
+//     uuid.UUID("0x" + "1" * 30)                  # prefixed: accepted
+//     uuid.UUID("1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_11")  # underscored: accepted
+//
+//     Describing this step as a hex decode was the defect a review round found:
+//     it refused all four, which for the CLASSIFIER caller below silently moves
+//     work into the unattributed bucket with every total still balancing.
 //
 // # Why not github.com/google/uuid.Parse
 //
-// It dispatches on LENGTH: at 38 characters it assumes the braced form and
+// Beyond being a hex decode rather than `int()`, it dispatches on LENGTH: at 38
+// characters it assumes the braced form and
 // strips the first and last character WITHOUT checking they are braces, so
 // `X<uuid>X`, `[<uuid>]`, `!<uuid>?` and a space-padded value all parse there
 // and all raise in CPython. It is also case-insensitive about the URN prefix,
@@ -87,14 +108,40 @@ func ParseUUID(value string) (uuid.UUID, error) {
 	hex = strings.ReplaceAll(hex, "uuid:", "")
 	hex = strings.Trim(hex, "{}")
 	hex = strings.ReplaceAll(hex, "-", "")
-	if len(hex) != 32 {
-		return uuid.Nil, fmt.Errorf("uuid %q: python normalisation yields %d hex digits, want 32", value, len(hex))
+	// `len()` on a Python str counts CHARACTERS. Counting bytes here refuses
+	// every non-ASCII value that reaches this point, including ones the
+	// reference accepts.
+	if length := utf8.RuneCountInString(hex); length != 32 {
+		return uuid.Nil, fmt.Errorf("uuid %q: python normalisation yields %d characters, want 32", value, length)
 	}
-	// The remaining 32 characters must be hex. uuid.Parse's 32-character branch
-	// is an exact-length hex decode with no stripping, so it is safe here.
-	parsed, err := uuid.Parse(hex)
+
+	parsed, err := parsePythonIntBase16(hex)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("uuid %q: %w", value, err)
 	}
-	return parsed, nil
+	// CPython's own range check, verbatim: `if not 0 <= int < 1<<128`.
+	//
+	// UNREACHABLE BY CONSTRUCTION, and kept anyway. Both halves are dead given
+	// the steps above, for reasons that belong to those steps rather than to
+	// this one:
+	//
+	//   - Negative: `int()` never sees a sign, because `replace('-', '')` above
+	//     removes every hyphen BEFORE the length gate. "-" + 31 digits is
+	//     rejected as 31 characters, not as a negative.
+	//   - Overflow: 32 characters cannot encode more than 128 bits, and a sign,
+	//     an "0x" prefix, whitespace or an underscore all consume characters
+	//     that would otherwise be digits, so they only ever shrink the value.
+	//
+	// It stays because it is a line of the reference, and because the first
+	// reason is a property of a DIFFERENT step: anything that later relaxes the
+	// hyphen removal or the gate makes it live again. A planted-defect round
+	// confirmed no input reaches it — treat that as the measured reason it is
+	// untested, not as a gap in the corpus.
+	if parsed.Sign() < 0 || parsed.BitLen() > 128 {
+		return uuid.Nil, fmt.Errorf("uuid %q: int is out of range (need a 128-bit value)", value)
+	}
+
+	var out uuid.UUID
+	parsed.FillBytes(out[:])
+	return out, nil
 }

@@ -112,12 +112,35 @@ VALUES: list[Any] = [
     # A basic DATE with an offset and no time at all. Recorded because the
     # reference's handling of it is not what a reader would guess.
     "20260815+00:00",
+    # EXTENDED date at MINUTE precision crossed with an offset -- the other half
+    # of the same cross-product. The Go offset layouts carry minute precision
+    # only in the colon-less and hour-only offset spellings, so the colon form
+    # is missing. Named by the same review that named the basic-date gap; both
+    # halves are recorded here so neither can be closed while the other stands.
+    "2026-08-15T06:07+00:00",
+    "2026-08-15T06:07Z",
+    "2026-08-15T06:07+0000",
+    "2026-08-15T06:07+05:00",
+    # Space separator crossed with an offset, for the same reason.
+    "2026-08-15 06:07:08+00:00",
+    "2026-08-15 06:07:08Z",
+]
+# The tail of the hand-written list: separators and malformed values that are
+# not part of the datetime grid's axes.
+VALUES += [
     "2026-08-15t06:07:08",
     "2026-08-15_06:07:08",
     "15/08/2026",
     "not-a-date",
     "2026-13-45",
 ]
+
+# NOTE: a full date x separator x time x offset CROSS-PRODUCT was built here and
+# measured (see the lane handoff). It reports 166 fail-closed divergences and
+# ZERO in the dangerous direction -- 99 of them the already-deliberate non-zero
+# offset refusal, 67 a layout gap. Enumerating 166 near-identical entries would
+# be a ledger nobody reads, and widening the parser is a behaviour change, so
+# the disposition is a ruling rather than a lane decision. Held out pending it.
 
 
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:

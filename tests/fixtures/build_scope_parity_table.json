@@ -567,6 +567,78 @@
   {
    "case": "field:to_date",
    "scope": {
+    "to_date": "2026-08-15T06:07+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:00+00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T06:07Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:00+00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T06:07+0000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:00+00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T06:07+05:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:00+05:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:00+05:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15 06:07:08+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+00:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15 06:07:08Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+00:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
     "to_date": "2026-08-15t06:07:08"
    },
    "verdict": "RUNS",
@@ -1109,6 +1181,78 @@
   {
    "case": "field:from_date",
    "scope": {
+    "from_date": "2026-08-15T06:07+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T06:07Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T06:07+0000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:00+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T06:07+05:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:00+05:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15 06:07:08+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15 06:07:08Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
     "from_date": "2026-08-15t06:07:08"
    },
    "verdict": "RUNS",
@@ -1572,6 +1716,60 @@
    "error": "ValueError",
    "scope": {
     "repo_id": "20260815+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07Z"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07+0000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07+05:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15 06:07:08+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15 06:07:08Z"
    },
    "stage": "window",
    "verdict": "RAISES"
@@ -2415,6 +2613,78 @@
   {
    "case": "field:heuristic_window",
    "scope": {
+    "heuristic_window": "2026-08-15T06:07+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07+0000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07+05:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15 06:07:08+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15 06:07:08Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
     "heuristic_window": "2026-08-15t06:07:08"
    },
    "verdict": "RUNS",
@@ -2982,6 +3252,78 @@
    "case": "field:heuristic_confidence",
    "scope": {
     "heuristic_confidence": "20260815+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07+0000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07+05:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15 06:07:08+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15 06:07:08Z"
    },
    "verdict": "RUNS",
    "window": {

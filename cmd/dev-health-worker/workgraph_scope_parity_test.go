@@ -148,6 +148,43 @@ var enumeratedDivergences = map[string]divergence{
 	// reference here would mean reproducing that reinterpretation on purpose.
 	// Refusing is fail-closed AND correct-by-intent, which is a rarer alignment
 	// than it sounds -- the other entries trade one for the other.
+	// The OTHER half of the same cross-product, named by the same review: an
+	// EXTENDED date at MINUTE precision, or with a space separator, crossed with
+	// an offset. Go's offset layouts carry minute precision only in the
+	// colon-less ("+0000") and hour-only ("+00") spellings, and carry no
+	// space-separated form with an offset at all.
+	//
+	// Recorded together with the basic-date entries above so that neither half
+	// can be closed while the other stands -- fixing only the half that was
+	// easiest to see is how this gap survived to a seventh round.
+	//
+	// "2026-08-15T06:07+0000" is deliberately ABSENT: Go already accepts it via
+	// the colon-less layout, so an entry for it would be stale on arrival.
+	`"2026-08-15T06:07+00:00"`: {
+		want: "RAISES",
+		reason: "extended date, minute precision, colon-form zero offset. Go has the colon-less " +
+			"and hour-only spellings at this precision but not this one. Fail-closed; unreachable " +
+			"for the same reason as the basic-date block above.",
+	},
+	`"2026-08-15T06:07Z"`: {
+		want:   "RAISES",
+		reason: "minute precision with Z; same layout gap.",
+	},
+	`"2026-08-15T06:07+05:00"`: {
+		want: "RAISES",
+		reason: "minute precision with a NON-ZERO offset: refused both by the layout gap and by " +
+			"the non-zero-offset rule already enumerated for the second-precision form.",
+	},
+	`"2026-08-15 06:07:08+00:00"`: {
+		want: "RAISES",
+		reason: "space separator with a zero offset. Go accepts the space separator WITHOUT an " +
+			"offset and every offset layout uses \"T\", so the combination has no layout.",
+	},
+	`"2026-08-15 06:07:08Z"`: {
+		want:   "RAISES",
+		reason: "space separator with Z; same gap.",
+	},
+
 	`"20260815+00:00"`: {
 		want: "RAISES",
 		reason: "the reference reads `+` as the date/time separator and \"00:00\" as a wall-clock " +

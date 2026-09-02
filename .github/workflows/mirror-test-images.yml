@@ -192,14 +192,27 @@ jobs:
           HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
-          token=$(curl -fsSL -u "${HUB_USER}:${HUB_TOKEN}" \
-            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" \
-            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          # NO `-f` on either call, deliberately. `curl -f` turns a 429 into exit
+          # 22 with no body and no headers -- so the diagnostic died exactly in
+          # the situation it exists to diagnose (observed 2026-09-02 14:17: the
+          # probe failed with `curl: (22) ... error: 429` and reported nothing).
+          # A probe that only works when nothing is wrong is not a probe.
+          token_body=$(curl -sSL -w '\n%{http_code}' -u "${HUB_USER}:${HUB_TOKEN}" \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull")
+          token_status="${token_body##*$'\n'}"
+          token=$(printf '%s' "${token_body}" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          if [ "${token_status}" = "429" ]; then
+            echo "--- Docker Hub rate limit ---"
+            echo "429 from the TOKEN endpoint: the account is fully rate limited."
+            echo "=> quota exhausted. Wait for the window to roll over, or raise the plan."
+            echo "   Do not retry in a loop; each attempt extends the exhaustion."
+            exit 0
+          fi
           if [ -z "${token}" ]; then
-            echo "::error::could not obtain a Docker Hub token with the configured credentials"
+            echo "::error::no token returned (HTTP ${token_status}) for the configured credentials"
             exit 1
           fi
-          headers=$(curl -fsSI -H "Authorization: Bearer ${token}" \
+          headers=$(curl -sSI -H "Authorization: Bearer ${token}" \
             https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest)
           limit=$(printf '%s\n' "${headers}" | grep -i '^ratelimit-limit:' || true)
           remaining=$(printf '%s\n' "${headers}" | grep -i '^ratelimit-remaining:' || true)

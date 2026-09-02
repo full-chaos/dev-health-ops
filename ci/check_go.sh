@@ -628,7 +628,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython)$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -651,6 +651,14 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-numeric-digit-table"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: a different Unicode property from the digit table above, and
+  # the one that decides which BRANCH of the canonicalisation a row takes.
+  proof_file="${proof_dir}/workgraph-python-lower"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

@@ -1,6 +1,8 @@
 package units
 
 import (
+	"errors"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -137,6 +139,42 @@ func parsePythonInt(raw string) (int, bool) {
 
 	parsed, err := strconv.Atoi(sign + builder.String())
 	if err != nil {
+		// A RANGE error is NOT the same as a malformed value, and collapsing
+		// the two is a real divergence (found by applying lane-4752-go's
+		// magnitude axis).
+		//
+		// Python's int() is unbounded, so INVESTMENT_MAX_COMPONENT_NODES set to
+		// forty 1s parses to 10^40 -- a cap so large that NO component is ever
+		// split. Go's Atoi returns ErrRange, and treating that as "malformed"
+		// falls back to the default of 150, which splits aggressively. The two
+		// planes then mint completely different work_unit_ids for any org with
+		// a component above 150 nodes, which is the CHAOS-2775 split this port
+		// exists to reproduce.
+		//
+		// Saturating is EXACT here, not an approximation: a cap of 10^40 and a
+		// cap of MaxInt produce identical splitting decisions, because no
+		// component can contain more than MaxInt nodes. The unrepresentable
+		// value and the saturated one are indistinguishable for every reachable
+		// input.
+		//
+		// Sign is preserved so the caller's `< 1` check still rejects a huge
+		// NEGATIVE cap, exactly as Python's does.
+		//
+		// The ErrRange test is currently unreachable-as-FALSE, and saying so is
+		// more useful than implying the test covers it: the loop above has
+		// already rejected every non-digit, so the string handed to Atoi is
+		// sign-plus-digits and can only fail with ErrRange, never ErrSyntax.
+		// Replacing this condition with a bare `err != nil` passes the whole
+		// suite (verified by mutation). It is kept explicit anyway, because it
+		// states the intent and because it stops being equivalent the moment
+		// the digit filter above is loosened -- at which point saturating a
+		// malformed value would be a silent, and much worse, defect.
+		if errors.Is(err, strconv.ErrRange) {
+			if sign == "-" {
+				return math.MinInt, true
+			}
+			return math.MaxInt, true
+		}
 		return 0, false
 	}
 	return parsed, true

@@ -35,6 +35,17 @@ two runs across a time gap, and these tables move continuously (RMT inserts,
 syncs), so it would fail on data drift while saying nothing about Python drift.
 ``--stdout`` re-queries and is for REGENERATING the file, not for guarding it.
 
+REGENERATION IS NOT BYTE-STABLE, AND THAT IS NOT DRIFT (CHAOS-4788). The producer
+reads ``work_item_dependencies`` with no ``FINAL``, no ``argMax`` and no ``ORDER
+BY``, while the table is a ReplacingMergeTree carrying unmerged duplicate
+versions (6,531 raw rows for 6,365 distinct keys today). Its dict dedup is
+last-write-wins, so which version's ``last_synced`` becomes an edge's
+``event_ts`` is decided by ClickHouse merge state. Two captures 40 minutes apart
+produced an IDENTICAL edge_id set but differed in ``event_ts`` on 155 edges and
+``day`` on 27. The structure is stable; the timestamps are not. This is why the
+rot guard REPLAYS frozen rows instead of regenerating -- and why a regeneration
+that differs only in ``event_ts``/``day``/``input_watermark`` is expected.
+
 READ-ONLY. The builder is constructed WITHOUT running ``__init__`` so that
 ``sink.ensure_schema()`` -- the one write-capable call on the path -- never fires;
 the recording sink refuses every method except the reads and writes it captures;
@@ -58,6 +69,7 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink  # noq
 from dev_health_ops.work_graph.builder import (  # noqa: E402
     BuildConfig,
     WorkGraphBuilder,
+    _format_datetime_for_clickhouse,
 )
 
 ORG_ID = "70d529e0-3c06-4597-8480-794fd02328b6"
@@ -98,12 +110,24 @@ class RecordingSink:
         self._inner = inner
         self.client = RecordingClient()
         self.reads: list[list[dict[str, Any]]] = []
+        # The QUERY TEXT is recorded, not just the rows. Rows alone cannot show
+        # which input dimensions a producer actually consults, and a dimension
+        # nobody froze is a dimension the oracle silently ignores -- exactly the
+        # blind spot lane-pathb-go's review found (its generator passed only DSN
+        # and org, so the build WINDOW sat outside an oracle that looked
+        # exhaustive). Freezing the text makes the absence of a date bound an
+        # asserted structural fact rather than a reading of the source, and a
+        # future Python change that adds one turns the rot guard red.
+        self.queries: list[dict[str, Any]] = []
         self.edges: list[Any] = []
         self.projection_runs: list[Any] = []
 
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         rows = self._inner.query_dicts(query, params)
         self.reads.append(rows)
+        self.queries.append(
+            {"statement": " ".join(query.split()), "parameters": params or {}}
+        )
         return rows
 
     def write_work_graph_edges(self, records: Any) -> None:
@@ -172,8 +196,25 @@ def _finite(value: Any) -> float:
     return number
 
 
+# A window with SUB-SECOND components, deliberately.
+#
+# `_format_datetime_for_clickhouse` (builder.py:57-60) renders bounds with
+# strftime("%Y-%m-%d %H:%M:%S"), so milliseconds are DROPPED while the columns
+# they are compared against are DateTime64(3). A Go writer that bound the raw
+# instant would move every window boundary by up to a second in both directions.
+# Freezing a window whose sub-second part is non-zero makes that truncation
+# visible in the fixture instead of invisible.
+FROM_TS = datetime(2026, 8, 18, 12, 34, 56, 789000, tzinfo=timezone.utc)
+TO_TS = datetime(2026, 9, 1, 1, 2, 3, 456000, tzinfo=timezone.utc)
+
+
 def build_golden() -> dict[str, Any]:
-    config = BuildConfig(dsn=os.environ["CLICKHOUSE_URI"], org_id=ORG_ID)
+    config = BuildConfig(
+        dsn=os.environ["CLICKHOUSE_URI"],
+        org_id=ORG_ID,
+        from_date=FROM_TS,
+        to_date=TO_TS,
+    )
     inner = ClickHouseMetricsSink(config.dsn)
     sink = RecordingSink(inner)
 
@@ -258,6 +299,23 @@ def build_golden() -> dict[str, Any]:
         "generated_by": "tests/fixtures/generate_workgraph_issue_edges_python_golden.py",
         "producer": "work_graph/builder.py::_build_issue_issue_edges",
         "frozen_now": _iso(FROZEN_NOW),
+        # The full producer input, not just the rows. `clickhouse_bounds` is what
+        # _format_datetime_for_clickhouse renders from from_ts/to_ts -- both are
+        # frozen so the second-truncation contract is testable directly from the
+        # fixture rather than restated in a Go constant.
+        "config": {
+            "org_id": ORG_ID,
+            "from_ts": _iso(FROM_TS),
+            "to_ts": _iso(TO_TS),
+            "repo_id": None,
+            "heuristic_days_window": config.heuristic_days_window,
+            "heuristic_confidence": config.heuristic_confidence,
+            "clickhouse_bounds": {
+                "from": _format_datetime_for_clickhouse(FROM_TS),
+                "to": _format_datetime_for_clickhouse(TO_TS),
+            },
+        },
+        "queries": sink.queries,
         "row_schemas": {
             "strings": "shared intern table; every int field below indexes it",
             "dependencies": (
@@ -275,6 +333,8 @@ def build_golden() -> dict[str, Any]:
                 "input_watermark*, row_count, completed_at*]"
             ),
             "mutations": "recorded, never executed; {statement, parameters} in issue order",
+            "queries": "every read the producer issued, {statement, parameters}, in issue order",
+            "config": "the FULL producer input; clickhouse_bounds is the second-truncated rendering",
             "note": "* = index into strings",
         },
         "counts": {
@@ -284,6 +344,7 @@ def build_golden() -> dict[str, Any]:
             "edges": len(edges),
             "projection_runs": len(projection_runs),
             "mutations": len(sink.client.commands),
+            "queries": len(sink.queries),
         },
         "strings": table.values(),
         "dependencies": dependencies,
@@ -359,7 +420,13 @@ def replay_golden(path: str) -> dict[str, Any]:
         for page in golden["existing_edge_ids"]
     ]
 
-    config = BuildConfig(dsn="clickhouse://replay/none", org_id=golden["org_id"])
+    frozen_config = golden["config"]
+    config = BuildConfig(
+        dsn="clickhouse://replay/none",
+        org_id=golden["org_id"],
+        from_date=_parse_iso(frozen_config["from_ts"]),
+        to_date=_parse_iso(frozen_config["to_ts"]),
+    )
     sink = ReplaySink([dependency_rows, *existing_pages])
     builder = object.__new__(WorkGraphBuilder)
     builder.config = config

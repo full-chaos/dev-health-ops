@@ -315,3 +315,113 @@ func formatCounts(counts map[string]int) string {
 	}
 	return rendered
 }
+
+// TestWindowBoundsAreTruncatedToTheSecondExactlyAsPythonRendersThem pins the
+// bound-formatting contract against Python's OWN rendering, frozen in the
+// fixture, rather than against a Go constant restating it.
+//
+// Python renders bounds with strftime("%Y-%m-%d %H:%M:%S") while the columns are
+// DateTime64(3), so the sub-second component is dropped. A Go writer binding the
+// raw instant would move every window boundary by up to a second in both
+// directions. The frozen window carries non-zero milliseconds precisely so this
+// test can fail.
+func TestWindowBoundsAreTruncatedToTheSecondExactlyAsPythonRendersThem(t *testing.T) {
+	document := loadGolden(t)
+
+	from, err := time.Parse(time.RFC3339Nano, document.Config.FromTs)
+	if err != nil {
+		t.Fatalf("parse config.from_ts: %v", err)
+	}
+	to, err := time.Parse(time.RFC3339Nano, document.Config.ToTs)
+	if err != nil {
+		t.Fatalf("parse config.to_ts: %v", err)
+	}
+
+	// The fixture must actually exercise the truncation, or this test is theatre.
+	if from.Nanosecond() == 0 && to.Nanosecond() == 0 {
+		t.Fatal(
+			"the frozen window has no sub-second component, so it cannot detect a Go writer " +
+				"that binds the raw instant — regenerate with a window whose milliseconds are non-zero",
+		)
+	}
+	for name, pair := range map[string]struct {
+		instant  time.Time
+		rendered string
+	}{
+		"from": {from, document.Config.ClickHouseBounds.From},
+		"to":   {to, document.Config.ClickHouseBounds.To},
+	} {
+		if got := FormatDateTimeForClickHouse(pair.instant); got != pair.rendered {
+			t.Errorf("%s bound: Go renders %q, Python froze %q", name, got, pair.rendered)
+		}
+		if pair.rendered == pair.instant.UTC().Format(time.RFC3339Nano) {
+			t.Errorf("%s bound: the frozen rendering still carries sub-second precision", name)
+		}
+	}
+}
+
+// TestDependencyReadIsWindowIndependent asserts, from the frozen QUERY TEXT
+// rather than from reading builder.py, that this sub-builder consults no time
+// bound — so the window is not a hidden input to the edges the golden freezes.
+//
+// This is the structural half of the answer. The empirical half: two captures of
+// the deployed producer, one with no window and one with the 14-day window frozen
+// here, produced an IDENTICAL edge_id set (0 ids on either side only). What did
+// differ between those runs was event_ts on 155 edges — not a window effect but
+// CHAOS-4788 (the dependency read skips FINAL/argMax on a ReplacingMergeTree, so
+// which unmerged version wins is decided by merge state).
+func TestDependencyReadIsWindowIndependent(t *testing.T) {
+	document := loadGolden(t)
+	if len(document.Queries) == 0 {
+		t.Fatal("the golden froze no query text, so window-independence cannot be asserted")
+	}
+	dependencyRead := document.Queries[0]
+	if !contains(dependencyRead.Statement, "FROM work_item_dependencies") {
+		t.Fatalf("first frozen query is not the dependency read: %q", dependencyRead.Statement)
+	}
+	for _, bound := range []string{
+		"event_ts", "created_at", "author_when", "last_synced >", "last_synced <",
+		"from_date", "to_date", "%(start", "%(end",
+	} {
+		if contains(dependencyRead.Statement, bound) {
+			t.Errorf(
+				"the dependency read now references %q — this sub-builder has gained a time bound, "+
+					"so the window IS an input and the golden must freeze its effect: %q",
+				bound, dependencyRead.Statement,
+			)
+		}
+	}
+	// It must still be org-scoped: the one input dimension it does consult.
+	if !contains(dependencyRead.Statement, "org_id = '"+document.Config.OrgID+"'") {
+		t.Errorf("the dependency read is not scoped to the golden's org: %q", dependencyRead.Statement)
+	}
+}
+
+// TestGoldenFreezesItsFullProducerInput is the guard against the blind spot
+// itself: every dimension of BuildConfig the producer could consult is present in
+// the fixture, so a future sub-builder cannot quietly depend on one that was
+// never captured.
+func TestGoldenFreezesItsFullProducerInput(t *testing.T) {
+	document := loadGolden(t)
+	if document.Config.OrgID == "" {
+		t.Error("config.org_id is not frozen")
+	}
+	if document.Config.OrgID != document.OrgID {
+		t.Errorf("config.org_id %q disagrees with the document org %q", document.Config.OrgID, document.OrgID)
+	}
+	if document.Config.FromTs == "" || document.Config.ToTs == "" {
+		t.Error("the build window is not frozen; an entire input dimension is outside the oracle")
+	}
+	if document.Config.ClickHouseBounds.From == "" || document.Config.ClickHouseBounds.To == "" {
+		t.Error("the rendered ClickHouse bounds are not frozen")
+	}
+	if document.Config.HeuristicDaysWindow == 0 {
+		t.Error("heuristic_days_window is not frozen (0 disables the heuristic builder entirely)")
+	}
+	if document.Config.HeuristicConfidence == 0 {
+		t.Error("heuristic_confidence is not frozen")
+	}
+	if want := len(document.Queries); want != document.Counts["queries"] {
+		t.Errorf("counts[queries] = %d, payload has %d", document.Counts["queries"], want)
+	}
+}

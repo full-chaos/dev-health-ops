@@ -26,8 +26,10 @@ type GoldenDocument struct {
 	ExistingEdgeIDs [][]int      `json:"existing_edge_ids"`
 	Edges           []GoldenEdge `json:"edges"`
 	// [org_id*, projection_name*, scope_repo_id*, rule_version*, watermark*, row_count, completed_at*]
-	ProjectionRuns [][7]int   `json:"projection_runs"`
-	Mutations      []Mutation `json:"mutations"`
+	ProjectionRuns [][7]int     `json:"projection_runs"`
+	Mutations      []Mutation   `json:"mutations"`
+	Config         GoldenConfig `json:"config"`
+	Queries        []Query      `json:"queries"`
 
 	Counts map[string]int `json:"counts"`
 }
@@ -177,4 +179,37 @@ func (document *GoldenDocument) EdgeRow(edge GoldenEdge) (Row, error) {
 	}
 	row.Day = parsedDay.UTC()
 	return row, nil
+}
+
+// GoldenConfig is the FULL producer input, not just its rows.
+//
+// Freezing only the rows leaves every other input dimension outside the oracle
+// while it still looks exhaustive — the blind spot lane-pathb-go's review found,
+// where a generator passed only DSN and org and the build WINDOW was never
+// captured at all.
+type GoldenConfig struct {
+	OrgID               string  `json:"org_id"`
+	FromTs              string  `json:"from_ts"`
+	ToTs                string  `json:"to_ts"`
+	RepoID              *string `json:"repo_id"`
+	HeuristicDaysWindow int     `json:"heuristic_days_window"`
+	HeuristicConfidence float64 `json:"heuristic_confidence"`
+	// ClickHouseBounds is what _format_datetime_for_clickhouse rendered from the
+	// two instants above, frozen alongside them so the second-truncation contract
+	// is testable against Python's own output rather than a Go constant.
+	ClickHouseBounds struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"clickhouse_bounds"`
+}
+
+// Query is one read the producer issued, statement and parameters.
+//
+// The TEXT is frozen, not just the rows it returned, because rows alone cannot
+// show which input dimensions a producer consults. It is what makes "this
+// sub-builder does not filter by window" an asserted structural fact instead of
+// a reading of the source that decays the moment Python changes.
+type Query struct {
+	Statement  string         `json:"statement"`
+	Parameters map[string]any `json:"parameters"`
 }

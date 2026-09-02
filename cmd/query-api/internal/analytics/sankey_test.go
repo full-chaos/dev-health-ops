@@ -82,8 +82,8 @@ func TestCompileSankey_Investment_CompilesInlinedSource(t *testing.T) {
 		if !strings.Contains(q.sql, "(argMax(tuple(repo_id), computed_at)).1") {
 			t.Errorf("%s: expected CHAOS-4547 tuple-wrap fix for repo_id, got: %s", name, q.sql)
 		}
-		if !strings.Contains(q.sql, "LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)") {
-			t.Errorf("%s: expected the REPO-dimension repo join, got: %s", name, q.sql)
+		if !strings.Contains(q.sql, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}") {
+			t.Errorf("%s: expected the REPO-dimension repo join, deduped with FINAL (CHAOS-4773), got: %s", name, q.sql)
 		}
 		if !strings.Contains(q.sql, "(argMax(tuple(resolved_team), (cnt, resolved_team_id))).1 AS team_label") {
 			t.Errorf("%s: expected CHAOS-4547 site-3 tuple-wrap fix on the team vote, got: %s", name, q.sql)

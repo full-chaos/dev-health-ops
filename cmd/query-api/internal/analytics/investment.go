@@ -516,9 +516,39 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 		joins = append(joins, fmt.Sprintf("LEFT JOIN (%s) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id", unitTeamSQL))
 	}
 
-	// Repo join: compiler.py:209-210.
+	// Repo join: compiler.py:209-210, GO-ONLY DIVERGENCE (CHAOS-4773).
+	//
+	// Python's `LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)`
+	// reads the raw `repos` table -- ReplacingMergeTree(org_id, id) -- with
+	// no FINAL and no dedup. Confirmed live (system.part_log on org
+	// 70d529e0): `repos` churns continuously, NewPart landing every sync
+	// cycle with MergeParts collapsing roughly every 10-40 minutes. Any
+	// repo rewritten since the last merge has 2+ live physical parts for
+	// the same (org_id, id) sort key, and this join has nothing to collapse
+	// them before the aggregate -- so it silently fans out EVERY investment
+	// aggregate (TEAM/THEME/REPO alike, whichever dimension is grouped)
+	// for every work unit referencing that repo, by exactly the number of
+	// unmerged versions, for the window between the write and the next
+	// merge. Deterministic repro (throwaway scratch db, CHAOS-4773 comment
+	// cd7799c5): 2 unmerged versions of one repos row + a unit with
+	// allocation_weight=2.5357 read 5.0714 through this join unfixed and
+	// 2.5357 with `FINAL` added -- matching the ticket's worked example
+	// (unit d86aca6013467340..., reported 5.0713) almost exactly.
+	//
+	// `FINAL` forces the merge-on-read this join was missing, matching the
+	// convention already used elsewhere in this package for the same table
+	// (team_repo_ownership_derivation_clickhouse.go's `FROM repos FINAL`).
+	// Also adds the org_id predicate this join never carried (harmless
+	// today only because repo UUIDs do not collide across orgs in
+	// practice; free to add since {org_id:String} is already bound by
+	// every caller of this function).
+	//
+	// This is a Go-only fix (CHAOS-4547-class divergence, same routing as
+	// buildUnitTeamSubquery's argMax(tuple()).1 fix above): Python keeps
+	// the defect until CHAOS-2600 retires that read path -- see the parity
+	// note on CHAOS-4773.
 	if dimensionListHas(dimensions, DimensionRepo) {
-		joins = append(joins, "LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
+		joins = append(joins, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}")
 	}
 
 	// Author join: compiler.py:212-223 (CHAOS-2492).

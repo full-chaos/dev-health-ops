@@ -112,8 +112,8 @@ func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 	if !strings.Contains(q.sql, "if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id") {
 		t.Errorf("expected compiler.py's repo-allocation source for a REPO-dimensioned investment query, got: %s", q.sql)
 	}
-	if !strings.Contains(q.sql, "LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)") {
-		t.Errorf("expected the REPO-dimension repo join, got: %s", q.sql)
+	if !strings.Contains(q.sql, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}") {
+		t.Errorf("expected the REPO-dimension repo join, deduped with FINAL (CHAOS-4773), got: %s", q.sql)
 	}
 	bindings := bindingMap(q.bindings)
 	if bindings["org_id"] != "org-1" {

@@ -150,7 +150,15 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		joins = append(joins,
 			fmt.Sprintf("LEFT JOIN (%s) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id", unitTeamSQL),
 			fmt.Sprintf("LEFT JOIN %s AS wure ON wure.org_id = work_unit_investments.org_id AND wure.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
-			"LEFT JOIN repos AS r ON toString(r.id) = toString(wure.repo_id)",
+			// GO-ONLY DIVERGENCE (CHAOS-4773): same unguarded-join defect
+			// class as investmentContextFor's repo join (investment.go) --
+			// `repos` is ReplacingMergeTree(org_id, id) and this read had no
+			// FINAL/dedup, so it silently fanned out (and inflated
+			// count()/countIf() coverage denominators) whenever a repo had
+			// an unmerged physical version. See investment.go's doc comment
+			// on this same fix for the executed repro. Python keeps the
+			// defect until CHAOS-2600 retires this read path.
+			"LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(wure.repo_id) AND r.org_id = {org_id:String}",
 			fmt.Sprintf("LEFT JOIN (SELECT org_id, work_unit_id, count() AS repo_row_count FROM %s GROUP BY org_id, work_unit_id) AS wure_counts ON wure_counts.org_id = work_unit_investments.org_id AND wure_counts.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
 		)
 
@@ -278,6 +286,11 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// CHAOS-4759 transition guard: bounded-cooldown check, see
 		// RecordArgMaxNullTransitionGuard's doc comment.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, timeoutSeconds)
+		// CHAOS-4773 telemetry: compileSankeyCoverage's investment branch
+		// always compiles the same class of repos join investment.go's
+		// investmentContextFor does (now FINAL-deduped) -- see
+		// investmentrepojointelemetry.go.
+		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 	}
 
 	rows, err := client.Query(ctx, query.sql, query.bindings)

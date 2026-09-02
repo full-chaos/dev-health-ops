@@ -3,6 +3,7 @@ package pythonparity
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 )
 
@@ -103,10 +104,54 @@ type OrderedObject []Member
 // safety, but because their conversion to a Python number is ambiguous and a
 // guess would be silent.
 func MarshalPythonJSONInsertionOrder(value any) ([]byte, error) {
-	return appendOrderedValue(make([]byte, 0, 256), value)
+	return appendOrderedValue(make([]byte, 0, 256), value, map[containerKey]bool{})
 }
 
-func appendOrderedValue(dst []byte, value any) ([]byte, error) {
+// containerKey identifies one container instance for cycle detection.
+//
+// Length is part of the key because two slices can share a backing pointer when
+// one is a prefix re-slice of the other; without it, `v[:1]` nested inside `v`
+// would be reported as a cycle when it is merely a re-slice.
+type containerKey struct {
+	pointer uintptr
+	length  int
+}
+
+func keyFor(value any) (containerKey, bool) {
+	reflected := reflect.ValueOf(value)
+	if reflected.Kind() != reflect.Slice {
+		return containerKey{}, false
+	}
+	return containerKey{pointer: reflected.Pointer(), length: reflected.Len()}, true
+}
+
+// enterContainer implements CPython's `markers` discipline exactly: a container
+// is added on ENTRY and removed on EXIT, so it detects a container nested
+// inside ITSELF while still allowing the same container to appear twice as
+// siblings. A visited-set that never removed entries would reject
+// `[]any{x, x}`, which json.dumps encodes happily.
+func enterContainer(seen map[containerKey]bool, value any) (containerKey, bool, error) {
+	key, ok := keyFor(value)
+	if !ok {
+		return containerKey{}, false, nil
+	}
+	if seen[key] {
+		// CPython: ValueError("Circular reference detected"), because
+		// json.dumps defaults to check_circular=True.
+		//
+		// Without this, Go recurses until `fatal error: stack overflow` --
+		// which is NOT a panic and CANNOT be recovered, so it takes the whole
+		// process down. A Python ValueError became a process kill.
+		return containerKey{}, false, fmt.Errorf(
+			"pythonparity: circular reference detected -- json.dumps defaults to " +
+				"check_circular=True and raises ValueError here; without this " +
+				"check Go recurses to an unrecoverable stack overflow")
+	}
+	seen[key] = true
+	return key, true, nil
+}
+
+func appendOrderedValue(dst []byte, value any, seen map[containerKey]bool) ([]byte, error) {
 	switch typed := value.(type) {
 	case nil:
 		return append(dst, "null"...), nil
@@ -129,6 +174,38 @@ func appendOrderedValue(dst []byte, value any) ([]byte, error) {
 		return appendPythonJSONFloat(dst, typed), nil
 
 	case OrderedObject:
+		key, tracked, err := enterContainer(seen, typed)
+		if err != nil {
+			return nil, err
+		}
+		if tracked {
+			defer delete(seen, key)
+		}
+		// A Python dict CANNOT hold duplicate keys, so an OrderedObject that
+		// does is not a dict and there is NO json.dumps call this could equal.
+		// Emitting it produced `{"a": 1, "a": 2}` -- bytes CPython cannot write.
+		//
+		// Refused rather than collapsed. Collapsing would mean emulating dict
+		// CONSTRUCTION, which happens before json.dumps and is outside what this
+		// function reproduces; and silently dropping a caller's value is the
+		// kind of plausible-looking output this package exists to prevent. For
+		// the record, a dict keeps the FIRST position and the LAST value:
+		// {}; d["a"]=1; d["b"]=2; d["a"]=3  ->  {"a": 3, "b": 2}
+		if len(typed) > 1 {
+			keys := make(map[string]int, len(typed))
+			for index, member := range typed {
+				if first, duplicated := keys[member.Key]; duplicated {
+					return nil, fmt.Errorf(
+						"pythonparity: duplicate key %q at positions %d and %d -- "+
+							"a Python dict cannot hold both, so no json.dumps call "+
+							"produces these bytes. A dict would keep the FIRST "+
+							"position with the LAST value; collapse at the call "+
+							"site if that is what you mean",
+						member.Key, first, index)
+				}
+				keys[member.Key] = index
+			}
+		}
 		dst = append(dst, '{')
 		for index, member := range typed {
 			if index > 0 {
@@ -136,34 +213,45 @@ func appendOrderedValue(dst []byte, value any) ([]byte, error) {
 			}
 			dst = AppendPythonJSONString(dst, member.Key)
 			dst = append(dst, ": "...)
-			var err error
-			if dst, err = appendOrderedValue(dst, member.Value); err != nil {
+			if dst, err = appendOrderedValue(dst, member.Value, seen); err != nil {
 				return nil, err
 			}
 		}
 		return append(dst, '}'), nil
 
 	case []any:
+		key, tracked, err := enterContainer(seen, typed)
+		if err != nil {
+			return nil, err
+		}
+		if tracked {
+			defer delete(seen, key)
+		}
 		dst = append(dst, '[')
 		for index, element := range typed {
 			if index > 0 {
 				dst = append(dst, ", "...)
 			}
-			var err error
-			if dst, err = appendOrderedValue(dst, element); err != nil {
+			if dst, err = appendOrderedValue(dst, element, seen); err != nil {
 				return nil, err
 			}
 		}
 		return append(dst, ']'), nil
 
 	case []OrderedObject:
+		key, tracked, err := enterContainer(seen, typed)
+		if err != nil {
+			return nil, err
+		}
+		if tracked {
+			defer delete(seen, key)
+		}
 		dst = append(dst, '[')
 		for index, element := range typed {
 			if index > 0 {
 				dst = append(dst, ", "...)
 			}
-			var err error
-			if dst, err = appendOrderedValue(dst, element); err != nil {
+			if dst, err = appendOrderedValue(dst, element, seen); err != nil {
 				return nil, err
 			}
 		}

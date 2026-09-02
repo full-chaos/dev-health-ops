@@ -83,10 +83,23 @@ jobs:
           bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' | cut -f2 > images.raw
           for compose in tests/compatibility/river/compose.compatibility.yml; do
             test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
-            sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${compose}" >> images.raw
+            # The compose file parameterises its refs as ${TEST_IMAGE_PREFIX:-}<ref>
+            # so CI can redirect them at this mirror. Strip that expansion to get
+            # back to the UPSTREAM ref, which is what must be mirrored FROM.
+            sed -nE 's/^[[:space:]]*image:[[:space:]]*(\$\{[^}]*\})?([^[:space:]#]+).*$/\2/p' \
+              "${compose}" >> images.raw
           done
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
+          # Refuse to mirror anything still carrying an unexpanded shell variable
+          # rather than pushing a garbage ref. This fired for real: parameterising
+          # the compose file broke this parser, and without the guard the failure
+          # surfaced as an opaque "invalid reference format" from buildx.
+          if grep -q '[$]' images.txt; then
+            echo "::error::unresolved variable in an image ref:"
+            grep '[$]' images.txt
+            exit 1
+          fi
           echo "--- images to mirror ---"
           cat images.txt
 

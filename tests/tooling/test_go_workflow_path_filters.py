@@ -118,6 +118,14 @@ def _github_glob_to_regex(pattern: str) -> re.Pattern[str]:
 
     out: list[str] = []
     index = 0
+    # A LEADING `**/` means ZERO or more directories, so `**/testdata/**` matches
+    # a top-level `testdata/x.json` as well as a nested one. Translating it as
+    # `.*/` requires at least one directory and reports a covered file as
+    # UNCOVERED -- wrong in the direction that manufactures work, and latent only
+    # because no top-level testdata/ exists today.
+    if pattern.startswith("**/"):
+        out.append("(?:.*/)?")
+        index = 3
     while index < len(pattern):
         if pattern.startswith("**", index):
             out.append(".*")
@@ -176,6 +184,13 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
 }
 
 
+# Directories no walk in this file descends: VCS internals, virtualenvs, caches.
+# Shared so the two oracles below cannot drift apart on what they skip.
+_SKIP_DIRECTORIES = frozenset(
+    {".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
+)
+
+
 def _fixture_like_files_on_disk() -> set[str]:
     """Every non-`.go` file under any `testdata/` or `fixtures/` directory.
 
@@ -193,26 +208,85 @@ def _fixture_like_files_on_disk() -> set[str]:
     matches.
     """
     root = REPO_ROOT
-    skip = {
-        ".git",
-        ".venv",
-        "node_modules",
-        "__pycache__",
-        ".mypy_cache",
-        ".ruff_cache",
-    }
     found: set[str] = set()
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         parts = path.relative_to(root).parts
-        if skip.intersection(parts):
+        if _SKIP_DIRECTORIES.intersection(parts):
             continue
         if path.suffix == ".go":
             continue
         if not any(segment in ("testdata", "fixtures") for segment in parts):
             continue
         found.add(path.relative_to(root).as_posix())
+    return found
+
+
+_GO_DATA_SUFFIXES = (
+    ".json",
+    ".sql",
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".golden",
+)
+
+
+def _files_named_by_go_tests() -> set[str]:
+    """Every repo file a Go test NAMES, resolved from that test's own directory.
+
+    THIS is the coverage oracle for Go test inputs, and it is keyed on the
+    property that actually matters: a file is a Go test's input because a Go test
+    READS it, not because of what its parent directory is called.
+
+    The previous version walked for a `testdata/` or `fixtures/` path segment.
+    That was the third instance of one error in this file. It began as a regex
+    over one directory; then a walk of `tests/fixtures/`; then a walk keyed on
+    two directory NAMES -- each fix replacing an enumeration with a slightly
+    larger enumeration and calling it complete. Four contract files read by Go
+    tests were invisible to all three, because none of them lives under either
+    name:
+
+        contracts/metrics/v1/remaining-scopes.json          scopes_test.go:56
+        contracts/cache-invalidation/v1/org_cache_epoch_key.json
+        contracts/provider-matrix/v1/matrix.json            capability_matrix_test.go
+        internal/jobs/metrics/daily/families.json           families_test.go:11
+
+    A PR changing only one of those ran the no-op `go-quality` while this guard
+    reported no uncovered fixture.
+
+    Reference forms all reduce to the same rule -- resolve the literal against
+    the test file's directory:
+
+        os.ReadFile("../../../../contracts/metrics/v1/remaining-scopes.json")
+        const p = "../../contracts/..."; os.ReadFile(filepath.Clean(p))
+        os.ReadFile(filepath.Join("families.json"))
+
+    Only literals ending in a data suffix are considered; `.go` needs no cover
+    because `**/*.go` already matches it.
+    """
+    found: set[str] = set()
+    for test in REPO_ROOT.rglob("*_test.go"):
+        parts = test.relative_to(REPO_ROOT).parts
+        if _SKIP_DIRECTORIES.intersection(parts):
+            continue
+        try:
+            source = test.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for literal in re.findall(r'"([^"\n]+)"', source):
+            if not literal.endswith(_GO_DATA_SUFFIXES):
+                continue
+            candidate = (test.parent / literal).resolve()
+            try:
+                relative = candidate.relative_to(REPO_ROOT)
+            except ValueError:
+                continue  # escapes the repo; not ours to cover
+            if candidate.is_file():
+                found.add(relative.as_posix())
     return found
 
 
@@ -292,7 +366,7 @@ def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
     UNCOVERED_FIXTURE_DIRECTORIES with a reason.
     """
     go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
-    fixtures = _fixture_like_files_on_disk()
+    fixtures = _fixture_like_files_on_disk() | _files_named_by_go_tests()
 
     assert fixtures, (
         "no fixture-like files found anywhere in the tree -- the walk has broken, "

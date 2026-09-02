@@ -32,6 +32,11 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - '**/testdata/**'
+      # Go tests read these directly (contracts/*.json via os.ReadFile,
+      # internal/**/families.json via filepath.Join). Not under testdata/
+      # or fixtures/, so the shared glob above does not reach them.
+      - 'contracts/**'
+      - 'internal/**/*.json'
       - 'tests/workers/job_contracts/**'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -69,6 +74,11 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - '**/testdata/**'
+      # Go tests read these directly (contracts/*.json via os.ReadFile,
+      # internal/**/families.json via filepath.Join). Not under testdata/
+      # or fixtures/, so the shared glob above does not reach them.
+      - 'contracts/**'
+      - 'internal/**/*.json'
       - 'tests/workers/job_contracts/**'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'

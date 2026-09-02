@@ -86,3 +86,61 @@ func TestCodeOwnershipGiniMatchesLivePythonBitExact(t *testing.T) {
 		t.Errorf("... and %d more mismatches (total %d of %d cases)", mismatches-10, mismatches, len(fixture.Gini))
 	}
 }
+
+// TestCodeOwnershipGiniMultiRowMatchesLivePythonBitExact is the CHAOS-4824
+// regression test for codex round 4's finding (P2, EXECUTED): the ACCUMULATOR
+// itself, not just the aggregated value, needs to be unbounded. The main
+// gini corpus (TestCodeOwnershipGiniMatchesLivePythonBitExact) uses one row
+// per author, so it can only ever exercise the value AFTER aggregation --
+// codex constructed 2.1 BILLION int32-max rows for one author, overflowing a
+// native int64 ACCUMULATOR mid-sum (wrapping negative, silently dropping the
+// author at the `> 0` filter) even though every individual row and the true
+// total are each representable. This test builds MULTIPLE rows per author
+// (tests/fixtures/generate_pysum_golden.py's `gini_multi_row` family, same
+// live-Python generation discipline as every other golden here) so the
+// accumulation step itself is exercised, not just its result.
+func TestCodeOwnershipGiniMultiRowMatchesLivePythonBitExact(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "pysum_golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		GiniMultiRow []struct {
+			AuthorRows   [][]int64 `json:"author_rows"`
+			ExpectedBits string    `json:"expected_bits"`
+		} `json:"gini_multi_row"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.GiniMultiRow) == 0 {
+		t.Fatal("fixture has no gini_multi_row cases")
+	}
+
+	repoID := uuid.MustParse("00000000-0000-4000-8000-00000000000a")
+
+	for caseIndex, testCase := range fixture.GiniMultiRow {
+		var windowStats []CommitStatRow
+		for authorIndex, rowValues := range testCase.AuthorRows {
+			for rowIndex, value := range rowValues {
+				windowStats = append(windowStats, CommitStatRow{
+					RepoID:      repoID,
+					CommitHash:  "a" + strconv.Itoa(authorIndex) + "c" + strconv.Itoa(rowIndex),
+					AuthorEmail: "a" + strconv.Itoa(authorIndex) + "@example.com",
+					FilePath:    "src/f.py",
+					Additions:   int(value),
+				})
+			}
+		}
+		got := CodeOwnershipGini(repoID, windowStats)
+		wantBits, err := strconv.ParseUint(strings.TrimPrefix(testCase.ExpectedBits, "0x"), 16, 64)
+		if err != nil {
+			t.Fatalf("case %d: parse expected_bits %q: %v", caseIndex, testCase.ExpectedBits, err)
+		}
+		gotBits := math.Float64bits(got)
+		if gotBits != wantBits {
+			t.Errorf("case %d CodeOwnershipGini(author_rows=%v) = %v (bits %#x), want bits %#x (%v)",
+				caseIndex, testCase.AuthorRows, got, gotBits, wantBits, math.Float64frombits(wantBits))
+		}
+	}
+}

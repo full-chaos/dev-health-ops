@@ -72,6 +72,68 @@ def _window_stats(churns: list[float]) -> list[CommitStatRow]:
     return rows
 
 
+def _gini_multi_row_window_stats(author_rows: list[list[int]]) -> list[CommitStatRow]:
+    """Like _window_stats, but each author can contribute MULTIPLE rows whose
+    additions SUM to that author's total churn -- needed to reproduce codex
+    round 4's construction (2.1 BILLION int32-max rows overflow a native
+    int64 ACCUMULATOR even though each individual row and the final total
+    are each representable; _window_stats's one-row-per-author shape cannot
+    exercise the accumulation step at all, only the post-aggregation value)."""
+    rows: list[CommitStatRow] = []
+    for author_index, row_values in enumerate(author_rows):
+        for row_index, value in enumerate(row_values):
+            rows.append(
+                {
+                    "repo_id": REPO_UUID,
+                    "commit_hash": f"a{author_index}c{row_index}",
+                    "author_email": f"a{author_index}@example.com",
+                    "author_name": None,
+                    "committer_when": datetime(2026, 9, 1, tzinfo=timezone.utc),
+                    "file_path": "src/f.py",
+                    "additions": value,
+                    "deletions": 0,
+                }
+            )
+    return rows
+
+
+def _gini_multi_row_cases() -> list[dict[str, Any]]:
+    """codex round 4 (P2, EXECUTED): a per-author accumulator that is a
+    native int64 overflows given enough int32-max rows for one author (the
+    30-day loader has no row cap) -- a DIFFERENT mechanism from rounds 1-2
+    (which were about the value AFTER aggregation exceeding a float64's
+    exact-integer range, not the accumulation itself overflowing a
+    fixed-width integer type). Codex's own construction needed 2.1 billion
+    rows to overflow int64 through int32-max values; reproduced here with 3
+    rows of a much larger per-row value (still representable in a single Go
+    int, i.e. < int64 max) so the corpus stays fast -- what matters is that
+    SOME combination of rows sums past int64 max during accumulation, not
+    that the specific row count/magnitude split matches production exactly.
+    """
+    int64_max = 2**63 - 1
+    cases: list[dict[str, Any]] = [
+        {
+            # 3 rows of 4e18 each = 1.2e19, well past int64_max (~9.223e18).
+            "author_rows": [[4_000_000_000_000_000_000] * 3, [1]],
+        },
+        {
+            # Exactly astride the int64 boundary: 2 rows summing to
+            # int64_max + 1 for one author.
+            "author_rows": [
+                [(int64_max + 1) // 2, (int64_max + 1) - (int64_max + 1) // 2],
+                [7],
+            ],
+        },
+    ]
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        author_rows = case["author_rows"]
+        stats = _gini_multi_row_window_stats(author_rows)
+        expected = compute_code_ownership_gini(REPO_ID, stats)
+        rows.append({"author_rows": author_rows, "expected_bits": bits_hex(expected)})
+    return rows
+
+
 def _gini_corpus() -> list[list[float]]:
     corpus: list[list[float]] = [
         [1, 5, 20],  # 3 authors: the minimum where compensation is nonzero
@@ -204,6 +266,7 @@ def render() -> str:
     value = {
         "schema_version": 1,
         "gini": _gini_cases(),
+        "gini_multi_row": _gini_multi_row_cases(),
         "pipeline_stability": _pipeline_stability_cases(),
     }
     return (

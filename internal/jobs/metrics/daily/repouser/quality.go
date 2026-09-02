@@ -142,52 +142,57 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 	if len(windowStats) == 0 {
 		return 0.0
 	}
-	authorChurn := map[string]int64{}
+	// CHAOS-4824 (rounds 1-4, codex): Python's Gini formula is EXACT integer
+	// arithmetic -- `churns` holds arbitrary-precision Python ints -- until
+	// ONE true division at the very end, `2*numerator/denominator`, which
+	// CPython computes as the correctly-rounded float64 nearest the exact
+	// rational. Converting churn totals to float64 (or even to a FIXED-WIDTH
+	// int64) at any EARLIER point loses precision or silently wraps in a way
+	// Python never does, and each earlier attempt here closed one
+	// construction while leaving a strictly more extreme one reachable:
+	// float64 terms (round 1: accumulated numerator crossing 2**53 across
+	// many representable per-author totals; round 2: a SINGLE author's own
+	// total exceeding 2**53 before summation began); then int64 accumulation
+	// of that same per-author total (round 4: 2.1 BILLION int32-max rows for
+	// one author overflows int64 and silently wraps negative, discarding the
+	// author entirely at the `> 0` filter below). Mirroring Python's
+	// conversion POINT instead of patching each construction: EVERY
+	// arithmetic step from the first row read to the final division is
+	// math/big.Int (or the one big.Rat-mediated division CPython's own
+	// int/int does), so there is no fixed-width integer or float anywhere
+	// upstream of it for a large construction to overflow or round.
+	authorChurn := map[string]*big.Int{}
 	for _, row := range windowStats {
 		if row.RepoID != repoID {
 			continue
 		}
 		identity := rawIdentity(row.AuthorEmail, row.AuthorName)
-		authorChurn[identity] += int64(row.Additions) + int64(row.Deletions)
+		rowChurn := new(big.Int).Add(big.NewInt(int64(row.Additions)), big.NewInt(int64(row.Deletions)))
+		if total, ok := authorChurn[identity]; ok {
+			total.Add(total, rowChurn)
+		} else {
+			authorChurn[identity] = rowChurn
+		}
 	}
-	churns := make([]int64, 0, len(authorChurn))
+	churns := make([]*big.Int, 0, len(authorChurn))
 	for _, churn := range authorChurn {
-		if churn > 0 {
+		if churn.Sign() > 0 {
 			churns = append(churns, churn)
 		}
 	}
 	if len(churns) == 0 {
 		return 0.0
 	}
-	sort.Slice(churns, func(i, j int) bool { return churns[i] < churns[j] })
+	sort.Slice(churns, func(i, j int) bool { return churns[i].Cmp(churns[j]) < 0 })
 	n := len(churns)
 
-	// CHAOS-4824 (round 3, codex): Python's Gini formula is EXACT integer
-	// arithmetic -- `churns` holds arbitrary-precision Python ints -- until
-	// ONE true division at the very end, `2*numerator/denominator`, which
-	// CPython computes as the correctly-rounded float64 nearest the exact
-	// rational. Converting churn totals to float64 at any EARLIER point
-	// loses precision Python never loses, and each earlier attempt here
-	// (pythonparity.Sum over float64 terms) closed one construction while
-	// leaving a strictly more extreme one reachable: an accumulated
-	// numerator crossing 2**53 across many representable per-author totals,
-	// then a SINGLE author's own total exceeding 2**53 before summation
-	// even began. Mirroring Python's conversion POINT instead of patching
-	// each construction: accumulate numerator/denominator as math/big.Int
-	// (churn totals are integers; (index+1)*churn can exceed int64 for
-	// large n or large churn), then do the ONE division with
-	// big.Rat.Float64(), documented to return the nearest float64 to the
-	// exact rational -- the same guarantee CPython's int/int division
-	// makes. No float appears before that single step, so both prior
-	// constructions and any further "more extreme" one collapse to this
-	// one mechanism.
 	numerator := new(big.Int)
 	denominatorSum := new(big.Int)
 	term := new(big.Int)
 	for index, churn := range churns {
-		term.Mul(big.NewInt(int64(index+1)), big.NewInt(churn))
+		term.Mul(big.NewInt(int64(index+1)), churn)
 		numerator.Add(numerator, term)
-		denominatorSum.Add(denominatorSum, big.NewInt(churn))
+		denominatorSum.Add(denominatorSum, churn)
 	}
 	denominator := new(big.Int).Mul(big.NewInt(int64(n)), denominatorSum)
 	if denominator.Sign() == 0 {

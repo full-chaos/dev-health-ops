@@ -48,12 +48,12 @@ func insertionOrderInputs() map[string]any {
 	return map[string]any{
 		// The shape this encoder exists for, including the non-finite values
 		// that are LIVE on the evidence path.
-		"evidence: ordinary float":                                   evidenceRow(1.5),
-		"evidence: integral float keeps .0":                          evidenceRow(24.0),
-		"evidence: +Infinity (reachable: _safe_float passes it)":     evidenceRow(math.Inf(1)),
-		"evidence: -Infinity (reachable)":                            evidenceRow(math.Inf(-1)),
-		"evidence: NaN (unreachable via _safe_float; pinned anyway)": evidenceRow(math.NaN()),
-		"evidence: null value":                                       evidenceRow(nil),
+		"evidence: ordinary float":                                              evidenceRow(1.5),
+		"evidence: integral float keeps .0":                                     evidenceRow(24.0),
+		"evidence: +Infinity (reachable: _safe_float passes it)":                evidenceRow(math.Inf(1)),
+		"evidence: -Infinity (reachable)":                                       evidenceRow(math.Inf(-1)),
+		"evidence: NaN (live: _safe_float guards scalars, not the list fields)": evidenceRow(math.NaN()),
+		"evidence: null value":                                                  evidenceRow(nil),
 
 		"key order is insertion, not sorted": OrderedObject{
 			{Key: "zebra", Value: 1}, {Key: "alpha", Value: 2}, {Key: "mango", Value: 3},

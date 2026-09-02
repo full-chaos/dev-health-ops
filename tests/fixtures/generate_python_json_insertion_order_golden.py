@@ -22,10 +22,21 @@ THE allow_nan EDGE, WHICH IS WHY THE NON-FINITE CASES ARE HERE
 because the Go side must emit them too -- it reproduces the call, not an
 improvement on it.
 
-On the evidence path the reachability is asymmetric: `_safe_float` returns None
-for NaN but passes +/-Inf through, so the infinities are LIVE and NaN is not.
-NaN is pinned anyway; the encoder equals the Python call rather than the caller
-that feeds it today.
+All three tokens are LIVE on the evidence path. An earlier version of this
+docstring said NaN was unreachable because `_safe_float` returns None for it.
+That was inference, not measurement: `_safe_float` is applied to the SIX SCALAR
+fields only (loader.py:171,202,255,299,300,358). The list fields are built raw --
+
+    wip = [float(r.get("wip_total") or 0.0) for r in rows]   # loader.py:150
+
+-- and NaN survives that idiom, because NaN is truthy, so `or 0.0` replaces only
+falsy values. NaN also arises internally: LinearSlope computes `inf - inf` on an
+Inf element. So NaN reaches the list-derived evidence fields directly.
+
+The encoder would pin the token regardless -- it equals the Python call, not the
+caller -- but the reachability claim is load-bearing for how a reviewer weighs
+these cases, so it is stated correctly. Credit to lane-3092, whose corpus
+carries 62 NaN evidence values arriving by exactly these routes.
 
 FLOAT RENDERING is `float.__repr__`, not `str(float)` and not `%g`: `24.0` stays
 `24.0`, and `1e10` is `10000000000.0` rather than `1e+10`. That is the same rule
@@ -76,7 +87,7 @@ def cases() -> list[dict[str, Any]]:
         },
         {"name": "evidence: -Infinity (reachable)", "value": _evidence(float("-inf"))},
         {
-            "name": "evidence: NaN (unreachable via _safe_float; pinned anyway)",
+            "name": "evidence: NaN (live: _safe_float guards scalars, not the list fields)",
             "value": _evidence(float("nan")),
         },
         {"name": "evidence: null value", "value": _evidence(None)},

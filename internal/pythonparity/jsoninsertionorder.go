@@ -64,11 +64,17 @@ type OrderedObject []Member
 // and the decoder half is stated here because a note only at the encoder leaves
 // the next person to discover it by hitting the parse error.
 //
-// Reachability on the evidence path is asymmetric and worth knowing:
-// `_safe_float` (recommendations/loader.py) returns None for NaN but passes
-// ±Inf through, so +Inf and -Inf are LIVE there and NaN is not. NaN is pinned
-// regardless: this function equals the Python call, not the caller that happens
-// to feed it today.
+// All three tokens are LIVE on the evidence path. `_safe_float` guards the six
+// SCALAR fields only; the list fields are built with a bare `float(...)`, and
+// NaN survives the `or 0.0` idiom there because NaN is truthy. LinearSlope also
+// mints NaN internally from `inf - inf`.
+//
+// One thing this does NOT mean: the stored data is not broken. CPython's
+// json.loads ACCEPTS all three bare tokens, so the Python-writes/Python-reads
+// round trip in production is clean. The divergence appears only at a Go
+// boundary, in both directions -- encoding/json refuses to emit these tokens
+// and refuses to decode them. That is an argument for this encoder, not a
+// report of a live defect.
 //
 // Floats otherwise render through Repr, because json.dumps uses float.__repr__
 // for them -- which is why `24.0` is `24.0` and not `24`, and why `1e10` is

@@ -25,7 +25,7 @@
     {
       "expected": "[{\"team_id\": \"70d529e0-3c06-4597-8480-794fd02328b6\", \"metric_table\": \"dora_deployments\", \"window_start\": \"2026-08-01T00:00:00+00:00\", \"window_end\": \"2026-08-31T00:00:00+00:00\", \"field\": \"deployment_frequency\", \"value\": NaN}]",
       "input_repr": "[{'team_id': '70d529e0-3c06-4597-8480-794fd02328b6', 'metric_table': 'dora_deployments', 'window_start': '2026-08-01T00:00:00+00:00', 'window_end': '2026-08-31T00:00:00+00:00', 'field': 'deployment_frequency', 'value': nan}]",
-      "name": "evidence: NaN (unreachable via _safe_float; pinned anyway)"
+      "name": "evidence: NaN (live: _safe_float guards scalars, not the list fields)"
     },
     {
       "expected": "[{\"team_id\": \"70d529e0-3c06-4597-8480-794fd02328b6\", \"metric_table\": \"dora_deployments\", \"window_start\": \"2026-08-01T00:00:00+00:00\", \"window_end\": \"2026-08-31T00:00:00+00:00\", \"field\": \"deployment_frequency\", \"value\": null}]",

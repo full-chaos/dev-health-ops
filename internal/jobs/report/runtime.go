@@ -101,7 +101,10 @@ func NewRuntimeAdapters(
 }
 
 // Register adds both independently-routed report kinds to a River worker set.
-// Production does not call this while their checked-in routes remain Celery.
+//
+// CHAOS-4440: this comment previously said production does not call it while
+// the routes remain Celery — backwards. `cmd/dev-health-worker/reports.go:17-96`
+// (CUT-03) calls Register in production; both report kinds are Go-native.
 func (adapters *RuntimeAdapters) Register(workers *river.Workers) error {
 	if adapters == nil || adapters.OnDemand == nil || adapters.Scheduled == nil || workers == nil {
 		return ErrDependencyUnavailable

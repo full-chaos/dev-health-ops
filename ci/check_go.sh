@@ -1416,11 +1416,36 @@ discover_test_dependency_image() {
   printf '%s\n' "${image}"
 }
 
+# mirrored_image applies TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX exactly as
+# testcontainers-go does, so the pre-pull warms the SAME ref the tests will later
+# ask for. Reusing the library's own variable rather than inventing a second one
+# is deliberate: one setting redirects both, and they cannot disagree about where
+# an image lives.
+#
+# The rule matches prependHubRegistry: an image that already names a registry is
+# left alone, where "names a registry" means its first path component contains a
+# dot or a colon (docker.io/x, localhost:5000/x). `postgres:18-alpine` does not
+# qualify -- the colon there is a tag -- which is exactly why the check looks at
+# the first component only.
+mirrored_image() {
+  local image="$1" prefix="${TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:-}" first
+  if [ -z "${prefix}" ]; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  first="${image%%/*}"
+  if [ "${first}" != "${image}" ] && case "${first}" in *.*|*:*) true ;; *) false ;; esac; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  printf '%s/%s\n' "${prefix%/}" "${image}"
+}
+
 prepull_one_image() {
   local key="$1" image attempt delay
   local max_attempts=3
 
-  image="$(discover_test_dependency_image "${key}")"
+  image="$(mirrored_image "$(discover_test_dependency_image "${key}")")"
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     printf 'pre-pull %s test dependency image %s (attempt %d/%d)\n' \
       "${key}" "${image}" "${attempt}" "${max_attempts}"

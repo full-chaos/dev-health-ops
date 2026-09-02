@@ -2085,10 +2085,18 @@ def test_docker_hub_login_is_skipped_on_forks() -> None:
 
     Without the condition the login step fails there and takes the whole job with
     it; with it, forks fall back to anonymous pulls plus the bounded retry.
+
+    Scoped to **docker.io** logins deliberately. The ghcr.io logins authenticate
+    with `GITHUB_TOKEN`, which -- unlike a stored secret -- is present on fork
+    pull requests, so guarding them would skip a login that would have worked and
+    is required whenever the mirrored packages are private. The distinction is
+    the credential's source, not the action.
     """
     for job_name, job in _workflow()["jobs"].items():
         for step in job.get("steps", []):
             if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+                continue
+            if str((step.get("with") or {}).get("registry", "")) != "docker.io":
                 continue
             condition = str(step.get("if", ""))
             assert "head.repo.full_name == github.repository" in condition, (
@@ -2187,3 +2195,44 @@ def test_pulling_and_harness_obligations_are_distinguished() -> None:
     )
     assert _step_kind({"run": "docker run --rm postgres:18-alpine"}) == "pulls"
     assert _step_kind({"run": "bash ci/check_go_containers.sh smoke"}) == "pulls"
+
+
+def test_ghcr_login_is_present_and_not_fork_guarded() -> None:
+    """The mirror is only usable if every job that pulls it can authenticate.
+
+    `GITHUB_TOKEN` works on fork pull requests where stored secrets do not, so
+    these logins must NOT carry the Docker Hub fork guard -- and every job that
+    pre-pulls or runs the river compose must have one, or a private package
+    fails at pull time.
+    """
+    workflow = _workflow()
+    guarded: list[str] = []
+    for job_name, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            uses = str(step.get("uses", ""))
+            if not uses.startswith(_DOCKER_LOGIN_ACTION):
+                continue
+            if str((step.get("with") or {}).get("registry", "")) != "ghcr.io":
+                continue
+            if "head.repo.full_name" in str(step.get("if", "")):
+                guarded.append(f"{job_name}: ghcr login is fork-guarded")
+    assert not guarded, "\n".join(guarded)
+
+    for job_name, job in workflow["jobs"].items():
+        commands = [str(step.get("run", "")) for step in job.get("steps", [])]
+        needs_mirror = any(
+            _PREPULL_COMMAND in c
+            or "compose.compatibility.yml" in c
+            or "river" in c.lower()
+            for c in commands
+        )
+        if not needs_mirror:
+            continue
+        registries = [
+            str((step.get("with") or {}).get("registry", ""))
+            for step in job.get("steps", [])
+            if str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION)
+        ]
+        assert "ghcr.io" in registries, (
+            f"{job_name}: pulls the mirror with no ghcr.io login"
+        )

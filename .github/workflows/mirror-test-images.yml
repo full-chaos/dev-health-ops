@@ -71,32 +71,51 @@ jobs:
 
       # Read the set from ci/check_go.sh rather than restating it here: one
       # parser, so the mirror and the pre-pull cannot drift apart.
-      - name: Resolve the declared dependency images
+      - name: Resolve every image CI pulls from Docker Hub
         id: images
         run: |
           set -euo pipefail
-          bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' > images.tsv
-          test -s images.tsv || { echo "::error::no images resolved"; exit 1; }
+          # Two sources, both DERIVED so neither can drift from what CI runs:
+          #   1. the Go test harness, via check_go.sh's own parser
+          #   2. compose files used by CI jobs -- river-compatibility pulls
+          #      edoburu/pgbouncer, which lives in no Go file and was missed on
+          #      the first pass precisely because it was restated nowhere.
+          bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' | cut -f2 > images.raw
+          for compose in tests/compatibility/river/compose.compatibility.yml; do
+            test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
+            sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' "${compose}" >> images.raw
+          done
+          sort -u images.raw > images.txt
+          test -s images.txt || { echo "::error::no images resolved"; exit 1; }
           echo "--- images to mirror ---"
-          cat images.tsv
+          cat images.txt
 
+      # Destinations PRESERVE the upstream path under the mirror:
+      #   postgres:18-alpine@sha256:X      -> ghcr.io/<owner>/postgres:18-alpine
+      #   clickhouse/clickhouse-server@X   -> ghcr.io/<owner>/clickhouse/clickhouse-server:mirrored
+      #   testcontainers/ryuk:0.14.0       -> ghcr.io/<owner>/testcontainers/ryuk:0.14.0
+      # That is not cosmetic. TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX works by
+      # PREPENDING itself to the image name, so a path-preserving mirror lets one
+      # env var redirect every Docker Hub pull -- including the reaper, whose name
+      # testcontainers-go hardcodes and offers no other way to override. A flat
+      # rename would be unreachable by that mechanism.
       - name: Mirror each image to ghcr.io, preserving its digest
         env:
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          while IFS=$'\t' read -r key image; do
-            case "${key}" in
-              # The reaper keeps its upstream PATH under the mirror, because
-              # testcontainers-go reaches it only via
-              # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX, which PREPENDS the prefix
-              # to the library's own hardcoded name.
-              reaper) dest="ghcr.io/${OWNER}/${image}" ;;
-              *)      dest="ghcr.io/${OWNER}/dev-health-test-${key}:mirrored" ;;
+          while read -r image; do
+            [ -n "${image}" ] || continue
+            ref="${image}"
+            case "${ref}" in *@sha256:*) ref="${ref%@*}" ;; esac
+            case "${ref}" in
+              *:*) repo="${ref%:*}"; tag="${ref##*:}" ;;
+              *)   repo="${ref}";    tag="mirrored"   ;;
             esac
-            printf '\n=== %s\n    from %s\n    to   %s\n' "${key}" "${image}" "${dest}"
+            dest="ghcr.io/${OWNER}/${repo}:${tag}"
+            printf '\n=== from %s\n    to   %s\n' "${image}" "${dest}"
             docker buildx imagetools create --tag "${dest}" "${image}"
-          done < images.tsv
+          done < images.txt
 
       - name: Verify every mirrored digest matches upstream
         env:
@@ -104,44 +123,51 @@ jobs:
         run: |
           set -euo pipefail
           failed=0
-          while IFS=$'\t' read -r key image; do
-            case "${key}" in
-              reaper) dest="ghcr.io/${OWNER}/${image}" ;;
-              *)      dest="ghcr.io/${OWNER}/dev-health-test-${key}:mirrored" ;;
+          while read -r image; do
+            [ -n "${image}" ] || continue
+            ref="${image}"
+            case "${ref}" in *@sha256:*) ref="${ref%@*}" ;; esac
+            case "${ref}" in
+              *:*) repo="${ref%:*}"; tag="${ref##*:}" ;;
+              *)   repo="${ref}";    tag="mirrored"   ;;
             esac
+            dest="ghcr.io/${OWNER}/${repo}:${tag}"
             mirrored=$(docker buildx imagetools inspect --format '{{ .Manifest.Digest }}' "${dest}")
             case "${image}" in
-              # Digest-pinned upstream: the mirrored manifest MUST carry the
-              # same sha256, which is what lets every pin in the repo stay a
-              # literal after the switch to ghcr refs.
+              # Digest-pinned upstream: the mirrored manifest MUST carry the same
+              # sha256. That equality is what lets every pin in the repository
+              # stay a literal while the pull is redirected to the mirror.
               *@sha256:*)
                 want="${image##*@}"
                 if [ "${mirrored}" = "${want}" ]; then
-                  printf 'OK   %-11s %s\n' "${key}" "${mirrored}"
+                  printf 'OK   %-34s %s\n' "${repo}" "${mirrored}"
                 else
-                  printf 'FAIL %-11s mirrored=%s want=%s\n' "${key}" "${mirrored}" "${want}" >&2
+                  printf 'FAIL %-34s mirrored=%s want=%s\n' "${repo}" "${mirrored}" "${want}" >&2
                   failed=1
                 fi
                 ;;
               # Tag-pinned upstream (the reaper: testcontainers-go hardcodes the
-              # tag and offers no override). Nothing to compare against, so
-              # record the digest the mirror now serves.
+              # tag and offers no override). Nothing to assert against, so record
+              # what the mirror now serves.
               *)
-                printf 'NOTE %-11s tag-pinned upstream, mirrored digest %s\n' "${key}" "${mirrored}"
+                printf 'NOTE %-34s tag-pinned upstream, mirrored digest %s\n' "${repo}" "${mirrored}"
                 ;;
             esac
-          done < images.tsv
+          done < images.txt
           exit "${failed}"
 
   # Measures the account's Docker Hub tier and remaining quota instead of asking
-  # for it. Docker Hub returns `ratelimit-limit`/`ratelimit-remaining` on
-  # metered plans and OMITS them entirely on unmetered ones, so the absence of
-  # the headers is itself the answer. Kept as a permanent diagnostic: the next
-  # time CI dies on `toomanyrequests`, this is one dispatch rather than an
-  # investigation.
+  # for it. Hub returns `ratelimit-limit`/`ratelimit-remaining` on metered plans
+  # and OMITS them on unmetered ones, so their absence is itself the answer.
+  # Measured 2026-09-02: `200;w=3600` with 65 remaining -- a metered account at
+  # 200 pulls per HOUR, shared fleet-wide. One Go run is ~8 container jobs x 4
+  # images, so a few concurrent lanes exhaust it inside the window; that is the
+  # outage this workflow exists to end.
   #
-  # Only the two header values are printed. The credentials are passed to curl
-  # through the environment and never echoed; `set -x` is deliberately not used.
+  # Kept as a permanent diagnostic: the next `toomanyrequests` is one dispatch
+  # rather than an investigation. Only the two header values are printed --
+  # credentials reach curl through the environment, are never echoed, and `set -x`
+  # is deliberately not used.
   ratelimit-probe:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -170,5 +196,6 @@ jobs:
             echo "=> unmetered plan (Pro/Team/Business): pull limits are not the cause"
           else
             printf '%s\n%s\n' "${limit}" "${remaining}"
-            echo "=> metered plan. 'w=21600' is the 6-hour window; remaining=0 means exhausted."
+            echo "=> metered plan. The 'w=' value is the window IN SECONDS"
+            echo "   (w=3600 is hourly, w=21600 six-hourly); remaining=0 means exhausted."
           fi

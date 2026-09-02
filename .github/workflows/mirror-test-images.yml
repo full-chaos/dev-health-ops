@@ -14,6 +14,22 @@
 # multi-arch image it extracts one platform and republishes a different
 # manifest, silently changing the digest. The verify step below fails the run if
 # the digests ever diverge, so this cannot rot quietly.
+# ORDERING, AND ITS LIMIT. This workflow triggers on changes to test.yml and
+# live-e2e.yml, but Actions gives no cross-workflow dependency: `Tests` starts
+# on the same PR update this mirror does. That only bites when a change
+# introduces a service ref the mirror has NEVER published -- an existing ref is
+# already there and pulls immediately. So:
+#
+#   Introducing a NEW service image? Dispatch this workflow on the branch and
+#   let it finish BEFORE the PR's Tests run, or expect one failed pull.
+#
+# Fork PRs cannot publish at all: GITHUB_TOKEN is read-only on a fork, so the
+# mirror job is skipped. They CAN pull every image already mirrored, because
+# these packages are public -- verified: an anonymous ghcr token returns 200 for
+# `full-chaos/valkey/valkey:8-alpine`. A fork PR that introduces a brand-new
+# service image therefore needs a maintainer to mirror it first, which is the
+# correct outcome rather than a gap: a fork must not be able to publish into
+# this registry.
 name: Mirror test images
 
 on:
@@ -111,21 +127,55 @@ jobs:
           # Those files name the MIRRORED ref, so the prefix is stripped to
           # recover the upstream ref to mirror FROM -- the inverse of what the
           # river compose needs, and for the same reason.
-          for wf in .github/workflows/test.yml .github/workflows/live-e2e.yml; do
-            test -f "${wf}" || { echo "::error::workflow missing: ${wf}"; exit 1; }
-            # Fail closed: a service image NOT under the mirror is a Docker Hub
-            # pull on a required check, and it must not pass silently just
-            # because this parser did not recognise it.
-            if grep -nE '^[[:space:]]*image:[[:space:]]*' "${wf}" \
-                 | grep -vE '^[0-9]+:[[:space:]]*image:[[:space:]]*ghcr\.io/' >/dev/null; then
-              echo "::error::${wf} declares a service image outside the mirror:"
-              grep -nE '^[[:space:]]*image:[[:space:]]*' "${wf}" \
-                | grep -vE '^[0-9]+:[[:space:]]*image:[[:space:]]*ghcr\.io/'
-              exit 1
-            fi
-            sed -nE 's|^[[:space:]]*image:[[:space:]]*ghcr\.io/[^/]+/([^[:space:]#]+).*$|\1|p' \
-              "${wf}" >> images.raw
-          done
+          # Parsed as YAML, NOT matched as lines. A line-based scan recognised
+          # only `image:` at the start of a line, so these all bypassed it while
+          # remaining valid Actions syntax:
+          #   redis: { image: ghcr.io/... }     flow mapping, one line
+          #   <<: *service_anchor                YAML alias
+          #   any non-standard indentation
+          # A guard that cannot see a declaration cannot refuse it, and this
+          # file's whole job is to see every image CI pulls.
+          #
+          # These files name the MIRRORED ref, so the owner-qualified prefix is
+          # stripped to recover the upstream ref to mirror FROM -- the inverse of
+          # what the river compose needs, and for the same reason.
+          OWNER="${{ github.repository_owner }}" python3 - \
+              .github/workflows/test.yml .github/workflows/live-e2e.yml >> images.raw <<'PY'
+          import os, sys, yaml
+
+          prefix = f"ghcr.io/{os.environ['OWNER']}/"
+          bad, out = [], []
+          for path in sys.argv[1:]:
+              document = yaml.safe_load(open(path, encoding="utf-8")) or {}
+              for job_name, job in (document.get("jobs") or {}).items():
+                  if not isinstance(job, dict):
+                      continue
+                  declarations = []
+                  container = job.get("container")
+                  if container is not None:
+                      declarations.append(("container", container))
+                  for service_name, service in (job.get("services") or {}).items():
+                      declarations.append((f"services.{service_name}", service))
+                  for where, declaration in declarations:
+                      # A bare string IS valid: `redis: redis:7-alpine`.
+                      image = declaration if isinstance(declaration, str) else (
+                          declaration.get("image") if isinstance(declaration, dict) else None)
+                      if not image:
+                          bad.append(f"{path}: {job_name}.{where} has no resolvable image")
+                          continue
+                      # Owner-qualified, not merely `ghcr.io/`. Another owner's
+                      # namespace is somebody else's registry: the runner would
+                      # pull THEIRS while this workflow publishes OURS.
+                      if not str(image).startswith(prefix):
+                          bad.append(f"{path}: {job_name}.{where} pulls {image!r}, not under {prefix}")
+                          continue
+                      out.append(str(image)[len(prefix):])
+          if bad:
+              for line in bad:
+                  print(f"::error::{line}", file=sys.stderr)
+              sys.exit(1)
+          print("\n".join(out))
+          PY
           for compose in tests/compatibility/river/compose.compatibility.yml; do
             test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
             # The compose file parameterises its refs as ${TEST_IMAGE_PREFIX:-}<ref>

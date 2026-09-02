@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import platform
 import random
 import struct
 import sys
@@ -117,7 +118,18 @@ def main() -> int:
     document = {
         "purpose": "dense 1e8..7e15 repr-band coverage for MarshalPythonJSONInsertionOrder (#2140)",
         "environment": {
-            "python_version": sys.version,
+            # platform.python_version(), NOT sys.version.
+            #
+            # sys.version embeds the BUILD STRING -- "[Clang 21.0.0 ...]" on a
+            # developer Mac, "[GCC 13.3.0]" on the CI runner -- for the same
+            # 3.14.7 interpreter. Freezing it makes the fixture environment-
+            # specific, so the rot guard compares a macOS build against a Linux
+            # one and reports drift that is not drift. It did exactly that.
+            #
+            # The version is what matters here: float repr and json.dumps
+            # behaviour are properties of the interpreter version, not of the
+            # compiler that built it.
+            "python_version": platform.python_version(),
             "float_repr_style": sys.float_repr_style,
         },
         "note": (

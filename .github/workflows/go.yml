@@ -152,11 +152,21 @@ concurrency:
 
 permissions:
   contents: read
+  # Pull the mirrored test-dependency images from ghcr.io. Works whether the
+  # packages are private or public, so CI does not depend on their visibility.
+  packages: read
 
 jobs:
   go-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Redirect every registry-less Docker Hub pull -- the harness images AND
+      # testcontainers-go's own hardcoded reaper -- at the ghcr mirror. Job-level
+      # on purpose: the pre-pull warms the ref, and testcontainers resolves it
+      # again when a test starts a container, so both need the same value.
+      # The pins stay literal; the mirrored digests are identical to upstream.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -205,14 +215,6 @@ jobs:
       # Skipped on fork pull requests, where `secrets.*` are empty by design:
       # those runs fall back to anonymous pulls plus the bounded retry rather
       # than failing at login.
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       # `ci` ends in check_multi_replica_workers, which starts a Testcontainers
       # PostgreSQL -- and testcontainers-go starts its own reaper first. Both
       # were pulled cold and anonymously from Docker Hub until CHAOS-4778: run
@@ -220,6 +222,13 @@ jobs:
       # response from daemon: unauthorized: authentication required`, before the
       # test executed a line of its own logic. ClickHouse is deliberately not in
       # this subset; no test in this job starts one.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Pre-pull pinned test dependency images with bounded retry
         run: bash ci/check_go.sh integration-prepull
 
@@ -331,6 +340,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
+    env:
+      # Redirect every registry-less Docker Hub pull -- the harness images AND
+      # testcontainers-go's own hardcoded reaper -- at the ghcr mirror. Job-level
+      # on purpose: the pre-pull warms the ref, and testcontainers resolves it
+      # again when a test starts a container, so both need the same value.
+      # The pins stay literal; the mirrored digests are identical to upstream.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -365,13 +381,12 @@ jobs:
       # Skipped on fork pull requests, where `secrets.*` are empty by design:
       # those runs fall back to anonymous pulls plus the bounded retry rather
       # than failing at login.
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pre-pull pinned test dependency images with bounded retry
         run: bash ci/check_go.sh integration-prepull
@@ -410,14 +425,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Build and smoke Go images
         run: bash ci/check_go_containers.sh smoke
 
@@ -430,14 +437,6 @@ jobs:
         target: [worker, scheduler, reconciler, stream-runner, operator, contractcheck, migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build ${{ matrix.target }} security image
         env:
@@ -483,22 +482,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Verify reproducible Go images
         run: bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Compose cannot read TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX, so the
+      # compose file takes its own variable with the same meaning. The trailing
+      # slash is part of the VALUE, and the file defaults it to empty, so a local
+      # `docker compose up` is unchanged and still pulls upstream.
+      TEST_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -516,14 +520,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13.14'
-
-      - name: Log in to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Install pinned Python compatibility dependencies
         run: >-

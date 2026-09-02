@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    image: ${TEST_IMAGE_PREFIX:-}postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     environment:
       POSTGRES_DB: river_compat
       POSTGRES_PASSWORD: river_compat
@@ -20,7 +20,7 @@ services:
       - /var/lib/postgresql
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+    image: ${TEST_IMAGE_PREFIX:-}edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,7 +53,7 @@ services:
       - "127.0.0.1::6432"
 
   pgbouncer-session:
-    image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+    image: ${TEST_IMAGE_PREFIX:-}edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,7 +95,7 @@ services:
   # writable and ephemeral. The harness waits for this service to become
   # healthy, so it is a startup proof rather than a render-only assertion.
   pgbouncer-session-helm-smoke:
-    image: edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
+    image: ${TEST_IMAGE_PREFIX:-}edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
     user: "70:70"
     read_only: true
     cap_drop: [ALL]

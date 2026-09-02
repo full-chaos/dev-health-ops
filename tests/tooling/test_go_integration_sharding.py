@@ -2021,12 +2021,52 @@ def _run_uses_go_test_harness(command: str) -> bool:
     return False
 
 
+# Host match anchored at a boundary, NOT a substring. `"ghcr.io/" in text` is
+# satisfied by `evil-ghcr.io/` and `ghcr.io.attacker.net/`, so a hostile or
+# merely mistaken ref would be read as OUR mirror; CodeQL raised this as
+# incomplete URL substring sanitization and was right. The lookbehind also
+# excludes `/` so a PATH segment (`https://registry.example/ghcr.io/x`) does not
+# match, which is why scheme separators are normalised first -- otherwise
+# `docker://ghcr.io/x` and the path case are indistinguishable. An optional port
+# keeps the valid `ghcr.io:443/...` form matching.
+# IGNORECASE because registry HOSTS are case-insensitive: `GHCR.IO/full-chaos/x`
+# is the same registry and was classified as not-the-mirror, so a job spelling
+# it that way escaped the login requirement. The lookbehind uses `\w` (unicode)
+# rather than an ASCII class so `éghcr.io/x` -- a different host entirely -- is
+# not read as ours.
+_MIRROR_HOST = re.compile(r"(?<![\w.:/-])ghcr\.io(?::\d+)?/", re.IGNORECASE)
+
+
+def _workflow_files() -> list[Path]:
+    """Every workflow file. GitHub honours BOTH extensions.
+
+    Scanning only `*.yml` left `escape.yaml` invisible to the guards below.
+    """
+    directory = ROOT / ".github" / "workflows"
+    return sorted(list(directory.glob("*.yml")) + list(directory.glob("*.yaml")))
+
+
+def _normalise_scheme(text: str) -> str:
+    """`scheme://host` -> `scheme host`, so a host and a path segment differ."""
+    return text.replace("://", " ")
+
+
+def _is_docker_login_action(step: dict[str, Any]) -> bool:
+    """Case-insensitive, because GitHub resolves action refs case-insensitively.
+
+    `uses: Docker/Login-Action@v4` is the SAME action as `docker/login-action@v4`
+    (verified: `gh api repos/Docker/Login-Action` returns `docker/login-action`),
+    so a case-sensitive compare let a login with no `registry` -- i.e. defaulting
+    to Docker Hub -- pass the guard that exists to forbid exactly that.
+    """
+    return str(step.get("uses", "")).casefold().startswith(_DOCKER_LOGIN_ACTION)
+
+
 def _step_kind(step: dict[str, Any]) -> str | None:
     """Classify a workflow step as login / prepull / container-running."""
-    uses = str(step.get("uses", ""))
-    if uses.startswith(_DOCKER_LOGIN_ACTION):
+    if _is_docker_login_action(step):
         registry = str((step.get("with") or {}).get("registry", ""))
-        return "login" if registry == "docker.io" else None
+        return "login" if registry == "ghcr.io" else None
     command = str(step.get("run", ""))
     if not command:
         return None
@@ -2039,8 +2079,17 @@ def _step_kind(step: dict[str, Any]) -> str | None:
         return "prepull"
     if _run_uses_go_test_harness(command):
         return "harness"
-    if _run_starts_containers(command):
-        return "pulls"
+    # The river compose pulls its images through the same mirror, so it needs the
+    # ghcr login -- but it does NOT need `integration-prepull`, which only warms
+    # the Go harness images.
+    if "compose.compatibility.yml" in command or "tests/compatibility/river" in command:
+        return "mirror"
+    # Any direct reference to the mirror registry counts too. Recognising only the
+    # two shapes that exist today was fail-open: a future job running
+    # `docker pull ghcr.io/<owner>/...` with no login classified as None and was
+    # skipped by BOTH assertions, leaving the suite green while the job failed.
+    if _MIRROR_HOST.search(_normalise_scheme(command)):
+        return "mirror"
     return None
 
 
@@ -2050,17 +2099,20 @@ def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() ->
 
     for job_name, job in _workflow()["jobs"].items():
         kinds = [_step_kind(step) for step in job.get("steps", [])]
-        pulling = [i for i, k in enumerate(kinds) if k in {"harness", "pulls"}]
-        if not pulling:
+        mirror_users = [i for i, k in enumerate(kinds) if k in {"harness", "mirror"}]
+        if not mirror_users:
             continue
-        first_pull = pulling[0]
+        first_pull = mirror_users[0]
         harness = next((i for i, k in enumerate(kinds) if k == "harness"), None)
         login = next((i for i, k in enumerate(kinds) if k == "login"), None)
         prepull = next((i for i, k in enumerate(kinds) if k == "prepull"), None)
 
-        # Every job that pulls an image at all needs the authenticated pull.
+        # Every job that pulls an image needs the ghcr login: all test dependency
+        # images come from the mirror now, and CI holds NO Docker Hub credentials
+        # (chris, 2026-09-02) after a personal account's 200/hour quota took the
+        # whole fleet down. A private package would fail at pull time without it.
         if login is None:
-            offenders.append(f"{job_name}: pulls images with no docker.io login step")
+            offenders.append(f"{job_name}: pulls images with no ghcr.io login step")
         elif login > first_pull:
             offenders.append(f"{job_name}: logs in AFTER pulling images")
 
@@ -2080,110 +2132,146 @@ def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() ->
     assert not offenders, "\n".join(offenders)
 
 
-def test_docker_hub_login_is_skipped_on_forks() -> None:
-    """`secrets.*` are empty on fork pull requests.
+def test_ci_holds_no_docker_hub_credentials() -> None:
+    """CI must not authenticate to Docker Hub at all.
 
-    Without the condition the login step fails there and takes the whole job with
-    it; with it, forks fall back to anonymous pulls plus the bounded retry.
+    A personal Docker Hub account metered at 200 pulls/hour, shared across every
+    lane, hit zero on 2026-09-02 and took every Testcontainers job down on every
+    branch. The fix was not a bigger quota: it was to stop depending on that
+    registry from CI. Every test dependency now comes from the ghcr mirror, which
+    GITHUB_TOKEN already authenticates.
+
+    This asserts the absence, because a single reintroduced login would quietly
+    put the fleet back on a shared personal quota.
     """
-    for job_name, job in _workflow()["jobs"].items():
-        for step in job.get("steps", []):
-            if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+    offenders: list[str] = []
+    # EVERY workflow, both extensions. A login reintroduced in test.yml or in a
+    # new `escape.yaml` drains the same shared quota and takes the same fleet
+    # down; scanning two named files was the same enumerate-the-known-cases
+    # mistake the guards kept making.
+    for path in _workflow_files():
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "DOCKERHUB_" in text:
+            offenders.append(f"{path.name}: references a DOCKERHUB_* secret")
+        # Structural, not textual: `registry: docker.io` was the only spelling
+        # checked, so a login-action with renamed secrets and the registry key
+        # OMITTED passed -- and an omitted registry IS the Docker Hub default.
+        document = yaml.safe_load(text) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
                 continue
-            condition = str(step.get("if", ""))
-            assert "head.repo.full_name == github.repository" in condition, (
-                f"{job_name}: Docker Hub login has no fork guard"
-            )
-            assert "github.event_name != 'pull_request'" in condition, (
-                f"{job_name}: Docker Hub login would be skipped on push/merge_group"
-            )
+            for step in job.get("steps") or []:
+                if not _is_docker_login_action(step):
+                    continue
+                registry = str((step.get("with") or {}).get("registry", "")).strip()
+                if registry != "ghcr.io":
+                    offenders.append(
+                        f"{path.name}: job {job_name!r} runs docker/login-action "
+                        f"with registry={registry or '<unset>'}; an unset registry "
+                        "DEFAULTS to Docker Hub, which CI must never authenticate to"
+                    )
+    assert not offenders, "\n".join(offenders)
 
 
-def test_step_classifier_fails_closed_on_known_evasions() -> None:
-    """Every shape a review round has used to slip past this guard.
+def test_ghcr_login_is_present_and_not_fork_guarded() -> None:
+    """The mirror is only usable if every job that pulls it can authenticate.
 
-    These are not hypotheticals: each was constructed against an earlier revision
-    of the guard and ACCEPTED by it. They are pinned here because the guard is
-    static analysis of shell, where the failure mode is always "a spelling nobody
-    thought of reads as safe" — so the classifier must be shown to reject the
-    spellings we have actually been caught by.
+    `GITHUB_TOKEN` works on fork pull requests where stored secrets do not, so
+    these logins must NOT carry the Docker Hub fork guard -- and every job that
+    pre-pulls or runs the river compose must have one, or a private package
+    fails at pull time.
     """
-    must_be_container = [
-        # A container-starting verb reached through a shell variable.
-        'requested=ci\nbash ci/check_go.sh "${requested}"',
-        # The Testcontainers test invoked directly, bypassing check_go.sh.
-        "go test -tags=integration -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' ./cmd/dev-health-worker",
-        # A build tag supplied indirectly, invisible to any literal scan.
-        "tag=integration\ngo test -mod=readonly -tags=${tag} -count=1 ./cmd/dev-health-worker",
-        # A verb that exists but nobody classified.
-        "bash ci/check_go.sh some-new-verb",
-        # Known container verbs, spelled plainly.
-        "bash ci/check_go.sh ci",
-        "bash ci/check_go.sh fast",
-        'bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"',
-        # The command PATH assembled from fragments, so no literal script name
-        # appears at the call site.
-        'script=ci/check_go; ext=.sh; verb=ci; "$script$ext" "$verb"',
-        # A container started with no Go involvement at all.
-        "docker run --rm postgres:18-alpine",
-        "docker compose -f compose.yml up -d postgres",
-        # A build tag arriving through the environment rather than the command
-        # line, turning a verb declared safe into an integration run. check_go.sh
-        # scrubs GOFLAGS now, so this is belt and braces.
-        "GOFLAGS=-tags=integration bash ci/check_go.sh test",
-        # Any other script: not analysable from here, so not assumed safe.
-        "bash ci/check_go_containers.sh smoke",
-        "tests/compatibility/river/run.sh",
-    ]
-    for command in must_be_container:
-        assert _run_starts_containers(command), f"classified as safe: {command!r}"
+    workflow = _workflow()
+    guarded: list[str] = []
+    for job_name, job in workflow["jobs"].items():
+        for step in job.get("steps", []):
+            if not _is_docker_login_action(step):
+                continue
+            if str((step.get("with") or {}).get("registry", "")) != "ghcr.io":
+                continue
+            if "head.repo.full_name" in str(step.get("if", "")):
+                guarded.append(f"{job_name}: ghcr login is fork-guarded")
+    assert not guarded, "\n".join(guarded)
 
-    must_be_safe = [
-        "bash ci/check_go.sh fmt",
-        "bash ci/check_go.sh integration-vet",
-        "bash ci/check_go.sh integration-prepull",
-        "go test ./...",  # no -tags: cannot compile an integration-tagged caller
-        "bash ci/check_river_compat_static.sh",
-        "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt",
-    ]
-    for command in must_be_safe:
-        assert not _run_starts_containers(command), (
-            f"classified as container: {command!r}"
+    for job_name, job in workflow["jobs"].items():
+        commands = [str(step.get("run", "")) for step in job.get("steps", [])]
+        needs_mirror = any(
+            _PREPULL_COMMAND in c
+            or "compose.compatibility.yml" in c
+            or "river" in c.lower()
+            for c in commands
+        )
+        if not needs_mirror:
+            continue
+        registries = [
+            str((step.get("with") or {}).get("registry", ""))
+            for step in job.get("steps", [])
+            if _is_docker_login_action(step)
+        ]
+        assert any(registry == "ghcr.io" for registry in registries), (
+            f"{job_name}: pulls the mirror with no ghcr.io login"
         )
 
 
-def test_prepull_subset_does_not_read_as_a_valid_pre_pull() -> None:
-    """A leftover subset must fail review, not fail late in CI.
+def test_mirrored_image_matches_testcontainers_prefix_semantics() -> None:
+    """`check_go.sh` must redirect exactly as testcontainers-go does.
 
-    `integration-prepull clickhouse` is refused at runtime now, but if the guard
-    still accepted it as a pre-pull step the job would reach CI before saying so.
+    The pre-pull warms a ref and testcontainers resolves the image again when a
+    test starts a container. If the two disagree by even one rule, CI warms one
+    image and pulls another -- strictly worse than not mirroring, because it adds
+    a pull instead of removing one.
+
+    The explicit `docker.io/...` form is REFUSED rather than matched:
+    testcontainers-go cannot handle it coherently (`ExtractRegistry` normalises
+    "docker.io" to its empty fallback, so its own docker.io exclusion never
+    fires and it would build `<prefix>/docker.io/<image>`). Refusing is the only
+    option that neither pre-warms a nonsense ref nor diverges silently.
     """
-    assert _step_kind({"run": "bash ci/check_go.sh integration-prepull"}) == "prepull"
-    assert _step_kind({"run": "ci/check_go.sh integration-prepull"}) == "prepull"
+    script = ROOT / "ci" / "check_go.sh"
+    source = script.read_text(encoding="utf-8")
+    body = re.search(r"^mirrored_image\(\) \{.*?^\}", source, re.S | re.M)
+    assert body, "mirrored_image not found in check_go.sh"
 
-    not_a_prepull = [
-        # A leftover subset argument: refused at runtime, and must fail review too.
-        "bash ci/check_go.sh integration-prepull clickhouse",
-        # `:` is a successful shell no-op. The text is present, nothing is warmed,
-        # and the next step pulls cold -- which a substring match accepted.
-        ": bash ci/check_go.sh integration-prepull",
-        "echo bash ci/check_go.sh integration-prepull",
-    ]
-    for command in not_a_prepull:
-        assert _step_kind({"run": command}) != "prepull", f"accepted: {command!r}"
+    def run(image: str, prefix: str) -> subprocess.CompletedProcess:
+        program = (
+            'die() { printf "ERROR: %s\\n" "$*" >&2; exit 2; }\n'
+            + body.group(0)
+            + f'\nmirrored_image "{image}"\n'
+        )
+        return subprocess.run(
+            ["bash", "-c", program],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX": prefix},
+        )
 
+    prefix = "ghcr.io/full-chaos"
+    redirected = {
+        "postgres:18-alpine@sha256:abc": f"{prefix}/postgres:18-alpine@sha256:abc",
+        "clickhouse/clickhouse-server@sha256:d": f"{prefix}/clickhouse/clickhouse-server@sha256:d",
+        "testcontainers/ryuk:0.14.0": f"{prefix}/testcontainers/ryuk:0.14.0",
+    }
+    for image, want in redirected.items():
+        got = run(image, prefix)
+        assert got.returncode == 0, got.stderr
+        assert got.stdout.strip() == want, (image, got.stdout)
 
-def test_pulling_and_harness_obligations_are_distinguished() -> None:
-    """A job that pulls needs the login; only harness jobs need the pre-pull.
+    # An image naming a real registry is left alone, exactly as prependHubRegistry
+    # excludes it.
+    for image in ("ghcr.io/x/y:1", "registry.hub.docker.com/library/postgres:1"):
+        got = run(image, prefix)
+        assert got.returncode == 0, got.stderr
+        assert got.stdout.strip() == image, (image, got.stdout)
 
-    Demanding `integration-prepull` from a job that builds off a Python base image
-    would be a guard asking for something that cannot help, which is how guards
-    get worked around rather than satisfied.
-    """
-    assert _step_kind({"run": "bash ci/check_go.sh ci"}) == "harness"
-    assert (
-        _step_kind({"run": "go test -tags=integration ./cmd/dev-health-worker"})
-        == "harness"
-    )
-    assert _step_kind({"run": "docker run --rm postgres:18-alpine"}) == "pulls"
-    assert _step_kind({"run": "bash ci/check_go_containers.sh smoke"}) == "pulls"
+    # With no prefix configured, nothing is redirected -- local runs are unchanged.
+    for image in redirected:
+        got = run(image, "")
+        assert got.returncode == 0, got.stderr
+        assert got.stdout.strip() == image, (image, got.stdout)
+
+    # The incoherent form is refused, loudly.
+    refused = run("docker.io/postgres:1", prefix)
+    assert refused.returncode != 0, refused.stdout
+    assert "names docker.io explicitly" in refused.stderr, refused.stderr

@@ -96,6 +96,11 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  integration-images
+         Print "<key>\t<image>" for every image declared by the Go test
+         container harness. The single source of truth for the dependency set:
+         the pre-pull and the ghcr.io mirror workflow both read it, so neither
+         re-parses harness.go on its own. No Docker required.
   integration-prepull
          Pre-pull every image declared by the Go test container harness --
          postgres, clickhouse, valkey, and the testcontainers-go reaper,
@@ -1460,11 +1465,47 @@ discover_test_dependency_image() {
   printf '%s\n' "${image}"
 }
 
+# mirrored_image applies TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX exactly as
+# testcontainers-go does, so the pre-pull warms the SAME ref the tests will later
+# ask for. Reusing the library's own variable rather than inventing a second one
+# is deliberate: one setting redirects both, and they cannot disagree about where
+# an image lives.
+#
+# The rule matches prependHubRegistry: an image that already names a registry is
+# left alone, where "names a registry" means its first path component contains a
+# dot or a colon (docker.io/x, localhost:5000/x). `postgres:18-alpine` does not
+# qualify -- the colon there is a tag -- which is exactly why the check looks at
+# the first component only.
+mirrored_image() {
+  local image="$1" prefix="${TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:-}" first
+  if [ -z "${prefix}" ]; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  first="${image%%/*}"
+  # An explicitly written `docker.io/...` ref is REFUSED rather than guessed at.
+  # testcontainers-go cannot handle it coherently: ExtractRegistry normalises
+  # "docker.io" to the empty fallback, so its own `registry == "docker.io"`
+  # exclusion can never fire, and prependHubRegistry then builds
+  # `<prefix>/docker.io/<image>` -- a ref that does not resolve. Matching that
+  # would mean pre-warming a nonsense ref; diverging from it would mean this
+  # script warms one image while the test pulls another. Both are worse than
+  # refusing, and no pin here needs the prefix form.
+  if [ "${first}" != "${image}" ] && [ "$(printf '%s' "${first}" | tr '[:upper:]' '[:lower:]')" = "docker.io" ]; then
+    die "test dependency image '${image}' names docker.io explicitly. Write it without the registry (e.g. 'postgres:18-alpine@sha256:...') so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX can redirect it; testcontainers-go mishandles the explicit form."
+  fi
+  if [ "${first}" != "${image}" ] && case "${first}" in *.*|*:*) true ;; *) false ;; esac; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  printf '%s/%s\n' "${prefix%/}" "${image}"
+}
+
 prepull_one_image() {
   local key="$1" image attempt delay
   local max_attempts=3
 
-  image="$(discover_test_dependency_image "${key}")"
+  image="$(mirrored_image "$(discover_test_dependency_image "${key}")")"
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     printf 'pre-pull %s test dependency image %s (attempt %d/%d)\n' \
       "${key}" "${image}" "${attempt}" "${max_attempts}"
@@ -1482,6 +1523,17 @@ prepull_one_image() {
     printf 'WARN: %s image pull attempt %d/%d failed; retrying in %ds\n' \
       "${key}" "${attempt}" "${max_attempts}" "${delay}" >&2
     sleep "${delay}"
+  done
+}
+
+# print_test_dependency_images emits "<key><TAB><image>" for every declared
+# dependency, so anything that needs the set -- the pre-pull below, and the
+# mirror workflow that copies them to ghcr.io -- reads it from ONE parser
+# instead of each re-deriving it from harness.go and drifting.
+print_test_dependency_images() {
+  local key
+  for key in "${INTEGRATION_IMAGE_KEYS[@]}"; do
+    printf '%s\t%s\n' "${key}" "$(discover_test_dependency_image "${key}")"
   done
 }
 
@@ -1734,6 +1786,10 @@ case "${1:-all}" in
   integration-shard-plan)
     [ "$#" -eq 1 ] || die "integration-shard-plan accepts no arguments"
     check_integration_shard_plan
+    ;;
+  integration-images)
+    [ "$#" -eq 1 ] || die "integration-images accepts no arguments"
+    print_test_dependency_images
     ;;
   integration-prepull)
     [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"

@@ -64,11 +64,43 @@ var outputPathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*"([^"]+)"\s*\)`),
 }
 
+// explicitCorpusPaths names generators whose corpus path cannot be INFERRED
+// from their source, but which are still fully checkable: they accept --stdout
+// and their committed corpus is in the tree, so the guard can compare them once
+// it is told where to look.
+//
+// This is deliberately NOT excludedGenerators. That map is for generators that
+// cannot RUN (a missing module), and its self-check demands a missingModule.
+// An undiscoverable-but-runnable generator has a different problem and needs the
+// opposite treatment: naming the path here makes it GUARDED, which shrinks the
+// rot surface the ratchet measures, where an exclusion would merely excuse it.
+//
+// An entry earns its place only while the path is genuinely uninferable --
+// TestExplicitCorpusPathsAreStillNeeded below deletes the excuse when the
+// generator starts declaring its own path.
+var explicitCorpusPaths = map[string]string{
+	// Declares its output as an argparse `--out` default of
+	// /tmp/build_scope_parity_table.json, so no repo-relative constant exists to
+	// match -- but it takes --stdout and its corpus is committed beside it.
+	"generate_build_scope_parity_table.py": "build_scope_parity_table.json",
+}
+
 func declaredOutputPath(source []byte) (string, bool) {
 	for _, pattern := range outputPathPatterns {
 		if match := pattern.FindSubmatch(source); match != nil {
 			return string(match[1]), true
 		}
+	}
+	return "", false
+}
+
+// corpusPathFor resolves a generator's corpus, by declaration or by explicit map.
+func corpusPathFor(name string, source []byte) (string, bool) {
+	if path, ok := declaredOutputPath(source); ok {
+		return path, true
+	}
+	if path, ok := explicitCorpusPaths[name]; ok {
+		return path, true
 	}
 	return "", false
 }
@@ -154,7 +186,7 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 			t.Errorf("read %s: %v", name, err)
 			continue
 		}
-		fixtureName, declared := declaredOutputPath(source)
+		fixtureName, declared := corpusPathFor(name, source)
 		if !declared || !strings.Contains(string(source), "--stdout") {
 			unguardable = append(unguardable, name)
 			continue
@@ -217,9 +249,12 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 		t.Errorf(
 			"%d undiscoverable generators, but the ratchet allows at most %d. A "+
 				"new corpus has been added that this guard cannot check. Either "+
-				"give it a recognised output-path declaration and --stdout, or "+
-				"add it to excludedGenerators with a reason. Do NOT raise the "+
-				"ratchet: it exists to make the rot surface monotonically shrink.",
+				"give it a recognised output-path declaration and --stdout, or, "+
+				"if it runs but declares no repo-relative path, name its corpus "+
+				"in explicitCorpusPaths. Do NOT use excludedGenerators: that map "+
+				"is for generators that cannot RUN and its self-check demands a "+
+				"missingModule. Do NOT raise the ratchet: it exists to make the "+
+				"rot surface monotonically shrink.",
 			len(unguardable), maxUnguardableGenerators,
 		)
 	}
@@ -325,6 +360,42 @@ func TestExcludedGeneratorsAreStillUnrunnable(t *testing.T) {
 						"ci/requirements-live-python-oracles.txt", excluded.removeWhen,
 					)
 				}
+			}
+		})
+	}
+}
+
+// TestExplicitCorpusPathsAreStillNeeded deletes an excuse the moment it stops
+// being one.
+//
+// An explicit entry exists only because the generator declares no inferable
+// output path. If it starts declaring one, the entry is now a second source of
+// truth that can disagree with the source -- the same rot as a stale exclusion.
+func TestExplicitCorpusPathsAreStillNeeded(t *testing.T) {
+	if len(explicitCorpusPaths) == 0 {
+		t.Skip("no explicit corpus paths to verify")
+	}
+	fixturesDir := filepath.Join(repositoryRootPath(t), "tests", "fixtures")
+	for name, corpus := range explicitCorpusPaths {
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(fixturesDir, name))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			if declared, ok := declaredOutputPath(source); ok {
+				t.Errorf(
+					"%s now declares its own output path (%q), so its "+
+						"explicitCorpusPaths entry is stale and must be deleted "+
+						"rather than left to disagree with the source",
+					name, declared,
+				)
+			}
+			if !strings.Contains(string(source), "--stdout") {
+				t.Errorf("%s no longer accepts --stdout, so naming its corpus "+
+					"cannot make it checkable; move it to the ratchet instead", name)
+			}
+			if _, err := os.Stat(filepath.Join(fixturesDir, corpus)); err != nil {
+				t.Errorf("%s names corpus %q which is not present: %v", name, corpus, err)
 			}
 		})
 	}

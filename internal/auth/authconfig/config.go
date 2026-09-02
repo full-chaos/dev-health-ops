@@ -334,10 +334,20 @@ func validateKeyID(keyID string) error {
 	return nil
 }
 
-// validateIdentifier bounds a value that will be interpolated into SQL as a
-// schema name. The auth schema is an operator setting, and pgx has no
-// placeholder for an identifier, so the only safe posture is a closed
-// character set validated once, here, at load time.
+// validateIdentifier restricts a schema name to [a-z][a-z0-9_]*.
+//
+// What this enforces: the string's SHAPE. It rejects whitespace, quotes,
+// semicolons, mixed case and anything else outside that set, once, at load
+// time, so a malformed value fails startup rather than surfacing later.
+//
+// What it does NOT enforce, stated because an earlier version of this comment
+// implied otherwise: safety as a bare SQL identifier. Reserved keywords pass
+// it -- `select`, `from`, `user`, `table` are all accepted. Today that costs
+// nothing, because the only consumer (authstore.Postgres.Probe) binds the
+// schema as a query PARAMETER and never emits it as an identifier. A future
+// call site that needs an identifier must quote it via
+// pgx.Identifier{...}.Sanitize() rather than treating this function as
+// having already made it safe.
 func validateIdentifier(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s must not be empty", name)

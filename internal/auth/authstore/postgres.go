@@ -158,9 +158,19 @@ func (p *Postgres) Shutdown(context.Context) error {
 //
 // The schema name is bound as a QUERY PARAMETER, not interpolated: this
 // compares against pg_namespace.nspname rather than naming an identifier, so
-// no operator-supplied value ever reaches the SQL text. authconfig
-// additionally bounds the value to an unquoted-identifier character set, which
-// is belt-and-braces for the day a call site does need it as an identifier.
+// no operator-supplied value ever reaches the SQL text. That parameter binding
+// is the ONLY thing making this safe, and it is enforced by pgx, here.
+//
+// authconfig additionally restricts the value to [a-z][a-z0-9_]*. That is
+// defence in depth against the SHAPE of the string, and nothing more: it does
+// NOT make the value safe to emit as a bare identifier, because it accepts
+// PostgreSQL reserved keywords -- `select`, `from`, `user` and `table` all pass
+// it (codex round 3; verified by executing Load against each). An earlier
+// version of this comment called that charset "belt-and-braces for the day a
+// call site does need it as an identifier", which claimed a guarantee the
+// check does not provide. A future call site that genuinely needs an
+// identifier must quote it -- pgx.Identifier{schema}.Sanitize() -- and must not
+// rely on this validator having made it safe.
 func (p *Postgres) Probe(ctx context.Context) error {
 	if p == nil || p.pool == nil {
 		return failure(ReasonInvalidConfig, errors.New("pool is not constructed"))

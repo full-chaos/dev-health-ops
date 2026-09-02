@@ -134,26 +134,35 @@ func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handle
 // protect is still unwritten.
 //
 // The cost is explicit: an undeclared-length request is buffered in memory up
-// to the limit. PER REQUEST that is a hard bound. IN AGGREGATE IT IS NOT
-// BOUNDED BY ANYTHING IN THIS PACKAGE, and an earlier version of this comment
-// claimed otherwise -- it said the total was held down by "the route's rate
-// limiter and the server's connection limits", and neither of those is such a
-// control. RateLimit runs BEFORE this middleware and is a token bucket: it
-// bounds the RATE of admission, not how many admitted requests sit here at
-// once. Server.Start uses a plain net.Listen with no netutil.LimitListener and
-// no ConnState accounting, so there is no connection cap either. Measured, not
-// argued: lane-auth-cp drove 64 concurrent requests through the real
-// RateLimit+MaxBody chain and confirmed all 64 sat inside the body-read step
-// simultaneously, each free to buffer up to the limit.
+// to the limit. PER REQUEST that is a hard bound, enforced by the
+// io.LimitReader above.
 //
-// Nothing is exposed today -- the service is dormant and no route is mounted,
-// so the only caller of this path is the test suite. BEFORE THE FIRST REAL
-// ROUTE GOES LIVE this needs an actual concurrency bound (a LimitListener, a
-// semaphore around the buffering step, or a per-connection accounting) rather
-// than a sentence asserting one exists. Recorded here rather than quietly
-// fixed, because inventing a limiter for a service nothing calls would be
-// unreviewed machinery, and because a comment that describes an imaginary
-// control is worse than one that names a real gap.
+// IN AGGREGATE the ceiling is a COMPOSITION of two enforcers, and naming them
+// took this comment three tries, so they are named precisely here. RateLimit
+// (which runs before this middleware) admits at most `burst` immediately plus
+// `rate` per second. http.Server.ReadTimeout, set in NewServer, bounds how
+// long any single request can spend being read, body included. Occupancy of
+// this buffering step is therefore at most
+//
+//	burst + rate x ReadTimeout
+//
+// concurrent requests, each holding at most `limit` bytes: at the defaults
+// (burst 40, rate 20/s, ReadTimeout 15s, limit 1 MiB) that is ~340 requests
+// and ~340 MiB. Finite, and far too large to be an acceptable capacity
+// control -- but finite, which two earlier versions of this comment got wrong
+// in opposite directions. The first claimed the rate limiter and "the server's
+// connection limits" bounded the total, naming a connection cap that does not
+// exist (Server.Start uses a plain net.Listen, no netutil.LimitListener, no
+// ConnState accounting). The second over-corrected to "bounded by nothing in
+// this package", which ignored that a rate bound composed with a residency
+// bound IS an occupancy bound (codex round 3).
+//
+// A REAL capacity control -- a LimitListener, or a semaphore around this
+// buffering step -- is tracked as CHAOS-4893 and must land before the first
+// route mounts. Nothing is exposed today: the service is dormant, no route is
+// mounted, and the only caller of this path is the test suite. It is not built
+// here because inventing a limiter for a service nothing calls would be
+// unreviewed machinery.
 //
 // A future route needing true streaming ingest wants its own middleware, not a
 // weakening of this one.

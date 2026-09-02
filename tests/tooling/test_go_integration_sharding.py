@@ -2595,29 +2595,40 @@ _DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
         "export",
     }
 )
-# Management NOUNS, not verbs. `docker image pull` is the modern spelling of
-# `docker pull`, so exempting the noun exempted every verb beneath it --
-# including the pulling ones. The verb is the token after the noun.
-_DOCKER_MANAGEMENT_NOUNS = frozenset(
+# Which verb pulls an image depends on the NOUN it sits under. `create` pulls
+# under `container` and bare (`docker create <image>`), but `docker volume
+# create myvol` creates a named volume from no image at all -- and the flat verb
+# set read `myvol` as an image, then reported it as unresolvable. Fail-closed,
+# so nothing bad was ever admitted, but it would fail a legitimate workflow on a
+# required check with a message naming the wrong cause.
+#
+# `run` has the same shape and is safe today only by accident: it exists solely
+# under `container`. Encoding the dependence makes that deliberate.
+_NOUN_PULLING_VERBS: dict[str, frozenset[str]] = {
+    "": frozenset({"pull", "run", "create"}),  # bare `docker <verb>`
+    "image": frozenset({"pull"}),
+    "container": frozenset({"run", "create"}),
+    "service": frozenset({"create"}),  # `docker service create <image>`
+    "plugin": frozenset({"install"}),
+}
+# Nouns under which NO verb takes an image: they name a resource instead.
+_NON_PULLING_NOUNS = frozenset(
     {
-        "image",
-        "container",
         "volume",
         "network",
-        "system",
-        "builder",
-        "context",
-        "manifest",
-        "trust",
-        "plugin",
-        "secret",
         "config",
+        "secret",
         "node",
-        "service",
-        "stack",
+        "context",
+        "builder",
+        "trust",
+        "system",
+        "manifest",
         "swarm",
+        "stack",
     }
 )
+_DOCKER_MANAGEMENT_NOUNS = frozenset(_NOUN_PULLING_VERBS) - {""} | _NON_PULLING_NOUNS
 # Compose is refused rather than scanned; the legacy hyphenated binary is the
 # same thing under another name and must not slip past that refusal.
 _COMPOSE_BINARIES = frozenset({"docker-compose", "podman-compose", "nerdctl-compose"})
@@ -2660,13 +2671,18 @@ def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
             if sub is None:
                 unknown.append(f"container tool with no subcommand: {line[:60]}")
                 continue
+            noun = ""
             if sub in _DOCKER_MANAGEMENT_NOUNS:
-                # `docker image pull x` -> the verb is `pull`. A noun with no
-                # verb after it is unknown, not harmless.
+                # `docker image pull x` -> noun `image`, verb `pull`. A noun with
+                # no verb after it is unknown, not harmless.
                 if len(words) < 2:
                     unknown.append(f"`docker {sub}` with no verb: {line[:60]}")
                     continue
-                sub = words[1]
+                noun, sub = sub, words[1]
+                if noun in _NON_PULLING_NOUNS:
+                    # Nothing under this noun takes an image; the next token is a
+                    # resource name, not a ref.
+                    continue
             if sub == "compose":
                 # Images live in the compose file, not here. Refused rather than
                 # scanned: no workflow runs compose today, so a scanner would be
@@ -2675,8 +2691,9 @@ def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
                 continue
             if sub in _DOCKER_NON_PULLING_SUBCOMMANDS:
                 continue
-            if sub not in _DOCKER_PULLING_SUBCOMMANDS:
-                unknown.append(f"unrecognised docker subcommand {sub!r}: {line[:60]}")
+            if sub not in _NOUN_PULLING_VERBS.get(noun, frozenset()):
+                where = f"`docker {noun} {sub}`" if noun else f"`docker {sub}`"
+                unknown.append(f"unrecognised subcommand {where}: {line[:60]}")
                 continue
             after = rest[rest.index(sub) + 1 :]
             image = None
@@ -2850,4 +2867,43 @@ def test_no_orphaned_module_level_helpers() -> None:
         f"helper(s) defined and never called: {orphans}. Wire them in or delete "
         "them -- an uncalled guard helper reads as protection while providing "
         "none."
+    )
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # A resource name is not an image. `create` pulls under `container` and
+        # bare, but `docker volume create myvol` names a volume -- the flat verb
+        # set read `myvol` as an image and reported it unresolvable, failing a
+        # legitimate workflow with a message naming the wrong cause.
+        ("docker volume create myvol", False),
+        ("docker network create ci-net", False),
+        ("docker volume create --label keep=1 myvol", False),
+        ("docker secret create tls ./cert.pem", False),
+        ("docker config create app ./app.conf", False),
+        # ...while `create` under container and bare STILL pulls.
+        ("docker create postgres:16", True),
+        ("docker container create postgres:16", True),
+        ("docker create ghcr.io/full-chaos/postgres:18-alpine", False),
+        ("docker container create ghcr.io/full-chaos/postgres:18-alpine", False),
+        # An unrecognised verb under a known noun stays fail-closed.
+        ("docker container frobnicate x", True),
+    ],
+)
+def test_pulling_verbs_are_resolved_per_noun(
+    command: str, expected_refused: bool
+) -> None:
+    """Which verb pulls depends on the noun above it.
+
+    `run` exists only under `container`, so the flat set was safe for it by
+    accident rather than by design; encoding the dependence makes that
+    deliberate and fixes `create`, which genuinely differs by noun.
+    """
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused} "
+        f"(images={images}, unknown={unknown}). A resource name must not be "
+        "read as an image, and a real image must still be checked."
     )

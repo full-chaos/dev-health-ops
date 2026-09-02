@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 // dependencyEdgeType is the ONE mapping from a dependency row's relationship_type
@@ -30,8 +31,28 @@ import (
 // does. Only the TYPE is derived here, never the direction, so the endpoint swap
 // _canonical_dependency performs for blocker rows cannot affect a caller keying
 // on an unordered pair.
+//
+// # WHY THIS MATCHES EXACTLY INSTEAD OF CASE-FOLDING
+//
+// The producer lowercases (`relationship_type.lower()`, builder.py:97) but Go and
+// Python do not agree on what lowercasing means. Executed both ways on the
+// Turkish dotted capital İ:
+//
+//	go     strings.ToLower("İS_BLOCKED_BY") = "is_blocked_by"   -> BLOCKS
+//	python "İS_BLOCKED_BY".lower()          = "i̇s_blocked_by"   -> RELATES (falls through)
+//
+// Go drops the combining dot; Python keeps it. Folding here would therefore
+// disagree with the producer on such a row. Folding with ASCII-only rules would
+// disagree on a different one (U+212A KELVIN SIGN lowercases to "k" in Python).
+// There is no folding that is right in general.
+//
+// Matching exactly is right whenever the stored values are already the plain
+// lowercase tokens the producer's map is keyed on — and that is not assumed, it
+// is asserted: TestFrozenRelationshipValuesNeedNoCaseFolding fails if the fixture
+// ever carries a value for which folding would not be a no-op, so a regeneration
+// that introduced one could not slip past.
 func dependencyEdgeType(relationship string) string {
-	switch strings.ToLower(relationship) {
+	switch relationship {
 	case "blocks", "blocked_by", "is_blocked_by":
 		return EdgeTypeBlocks
 	case "relates", "relates_to":
@@ -756,4 +777,50 @@ func TestProvenanceAndEvidenceAreDerivedFromTheFrozenInputs(t *testing.T) {
 		)
 	}
 	t.Logf("provenance/evidence: %d of %d pinned to exactly one derived value", pinned, len(document.Edges))
+}
+
+// TestFrozenRelationshipValuesNeedNoCaseFolding is the precondition that makes
+// dependencyEdgeType's exact matching provably equivalent to the producer's
+// `.lower()` for this fixture.
+//
+// The producer folds; this helper does not, because no folding agrees with
+// Python in general (see dependencyEdgeType's note). Exact matching is faithful
+// precisely when folding would have been a no-op — so that is asserted rather
+// than assumed. A regeneration that brought in "BLOCKS", or any value whose
+// lowercase form differs from itself, fails here and tells whoever regenerated
+// it to look, instead of silently diverging in whichever direction the folding
+// rules happen to differ.
+func TestFrozenRelationshipValuesNeedNoCaseFolding(t *testing.T) {
+	document := loadGolden(t)
+	seen := map[string]struct{}{}
+	for index, dependency := range document.Dependencies {
+		relationship, err := document.String(dependency[2])
+		if err != nil {
+			t.Fatalf("dependency %d relationship_type: %v", index, err)
+		}
+		seen[relationship] = struct{}{}
+		for _, r := range relationship {
+			if r > unicode.MaxASCII {
+				t.Fatalf(
+					"dependency %d relationship_type %q contains a non-ASCII rune; Go and "+
+						"Python do not agree on how to lowercase it, so the exact-match mapper "+
+						"cannot be shown equivalent to the producer",
+					index, relationship,
+				)
+			}
+		}
+		if lowered := strings.ToLower(relationship); lowered != relationship {
+			t.Fatalf(
+				"dependency %d relationship_type %q is not already lowercase (folds to %q); "+
+					"the producer folds and this helper does not, so they would disagree",
+				index, relationship, lowered,
+			)
+		}
+	}
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	t.Logf("relationship_type values, all ASCII-lowercase: %v", values)
 }

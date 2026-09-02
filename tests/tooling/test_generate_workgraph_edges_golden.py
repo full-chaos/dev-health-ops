@@ -141,7 +141,7 @@ class TestReplayQueryContract:
 
     def test_replay_refuses_every_other_sink_method(self, generator):
         sink = generator.ReplaySink([], [])
-        with pytest.raises(AssertionError, match="replay refuses sink."):
+        with pytest.raises(AttributeError, match="replay refuses sink."):
             sink.ensure_schema()
 
 
@@ -234,7 +234,7 @@ class TestTheReadBarrierIsServerSide:
 
     def test_an_undefined_attribute_is_still_refused(self, generator):
         sink = generator.RecordingSink(lambda statement, params: [])
-        with pytest.raises(AssertionError, match="generator refuses sink."):
+        with pytest.raises(AttributeError, match="generator refuses sink."):
             sink.ensure_schema()
 
 

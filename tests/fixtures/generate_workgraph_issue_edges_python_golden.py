@@ -176,9 +176,17 @@ class RecordingSink:
         self.projection_runs.extend(records)
 
     def __getattr__(self, name: str) -> Any:
-        # Anything the producer might reach that is NOT one of the methods above
-        # is a path this generator must never trigger.
-        raise AssertionError(
+        # AttributeError, not AssertionError: `__getattr__` is part of the
+        # attribute protocol, and raising anything else breaks `hasattr` and
+        # `getattr(x, y, default)` for every caller.
+        #
+        # The loudness that motivated AssertionError is supplied by the producer,
+        # not by this exception type: every probe it makes is already guarded by
+        # an explicit callable check that raises RuntimeError on a miss
+        # (builder.py:805, :933, :1011). And since the real barrier moved to a
+        # server-enforced readonly=1 connection, this refusal is defence in depth
+        # rather than the control.
+        raise AttributeError(
             f"generator refuses sink.{name}: the golden run must stay read-only"
         )
 
@@ -499,7 +507,8 @@ class ReplaySink:
             )
 
     def __getattr__(self, name: str) -> Any:
-        raise AssertionError(
+        # AttributeError for the same reason as RecordingSink above.
+        raise AttributeError(
             f"replay refuses sink.{name}: the guard must stay read-only"
         )
 

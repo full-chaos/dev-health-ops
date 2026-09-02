@@ -119,6 +119,11 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 			t.Fatalf("family %q declares phase=%q -- only work_item_state is expected to be non-default today; update this test if that changes deliberately", name, phase)
 		}
 	}
+	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/
+	// team_wellbeing's exact registration pattern (CICDExecutor).
+	if got := byName["cicd"]; got != "go" {
+		t.Fatalf("cicd must be port=go, got %q", got)
+	}
 	// file_hotspots and file_risk_hotspots are CHAOS-4277's cutover: both
 	// must be "go", registering FileHotspotsExecutor/FileRiskHotspotsExecutor
 	// exactly as the two reference implementations above did.

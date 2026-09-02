@@ -473,6 +473,31 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/daily/cicd (frozen cicd golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestCICDGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/cicd
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY from repo-user-commit-golden above -- see that block's
+  # comment on capacity-forecast-golden for why two goldens need two markers.
+  proof_file="${proof_dir}/cicd-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: cicd golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/remaining (DORA incident projection vs the live Python builder)\n'
   if ! (
     cd "${ROOT}"

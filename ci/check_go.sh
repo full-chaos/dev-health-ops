@@ -1793,12 +1793,55 @@ integration_image_declaration() {
   esac
 }
 
+# integration_image_reference_pattern echoes the ERE that a NOT-digest-pinned
+# image must match. It is per-key on purpose. The previous generic
+# `^[^[:space:]]+:[^[:space:]]+$` asserted only "something, a colon, something",
+# which accepted `clickhouse/clickhouse-server:latest`,
+# `quay.io/other/clickhouse-server:latest` and `clickhouse/other-image:26.7`
+# alike -- a foreign registry so accepted then bypasses the ghcr mirror
+# downstream. Relaxing ClickHouse from a digest to a tag (CHAOS-4854) was a
+# change to the VERSION predicate; it should never have relaxed the IMAGE
+# domain along with it.
+integration_image_reference_pattern() {
+  case "$1" in
+    # chris's CHAOS-4854 ruling: "26.7 will pull all tags, 'matching' != matching
+    # exact. It's major version MATCHING." So the repository is fixed and only
+    # the 26.x version floats -- 26.7 and any patch inside it apply
+    # automatically, while `latest` and a different image do not. A digest stays
+    # legal so a future re-pin needs no change here.
+    clickhouse)
+      printf '%s\n' '^clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})$'
+      ;;
+    # The reaper's identity is pinned by TestReaperImageMatchesTestcontainers
+    # against testcontainers-go's own exported constant, which is a stronger
+    # control than a pattern here could be. This only rejects a bare repository.
+    #
+    # Deliberately UNCHANGED from the pattern this function replaced, including
+    # its acceptance of a digest form. Waiving the digest REQUIREMENT for a key
+    # should not also forbid a digest -- a digest is strictly more pinned than a
+    # tag, so refusing one here would reject an improvement. Narrowing this is
+    # out of scope for CHAOS-4854, which is about ClickHouse.
+    *)
+      printf '%s\n' '^[^[:space:]]+:[^[:space:]]+$'
+      ;;
+  esac
+}
+
 integration_image_requires_digest() {
-  [ "$1" != "reaper" ]
+  # reaper: testcontainers-go picks its own tag, so we match the library.
+  # clickhouse: tracks the 26 MAJOR by tag so minor and patch upgrades apply --
+  # ruled by chris (CHAOS-4854), same policy CHAOS-4851 used for the CI service
+  # containers. Returning 1 here waives only the DIGEST requirement; each key
+  # still has to satisfy integration_image_reference_pattern above, which keeps
+  # the repository fixed.
+  case "$1" in
+    reaper | clickhouse) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 discover_test_dependency_image() {
-  local key="$1" declaration image
+  local key="$1" declaration image reference_pattern
   local -a images=()
 
   declaration="$(integration_image_declaration "${key}")"
@@ -1820,8 +1863,11 @@ discover_test_dependency_image() {
     if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
       die "${declaration} must be pinned by a full sha256 digest, got '${image}'"
     fi
-  elif [[ ! "${image}" =~ ^[^[:space:]]+:[^[:space:]]+$ ]]; then
-    die "${declaration} must name an image and tag, got '${image}'"
+  else
+    reference_pattern="$(integration_image_reference_pattern "${key}")"
+    if [[ ! "${image}" =~ ${reference_pattern} ]]; then
+      die "${declaration} must match ${reference_pattern}, got '${image}'"
+    fi
   fi
   printf '%s\n' "${image}"
 }

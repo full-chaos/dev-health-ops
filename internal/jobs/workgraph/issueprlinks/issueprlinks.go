@@ -407,8 +407,8 @@ func Derive(inputs Inputs) Result {
 	for _, dependency := range inputs.Dependencies {
 		admission, admissible := admit(admissions, dependency)
 		if !admissible {
-			if reserved, ok := admit(ReservedAdmissions, dependency); ok {
-				result.ReservedSeenByRawKind[reserved.RelationshipTypeRaw]++
+			if kind, ok := reservedRawKind(dependency.RelationshipTypeRaw); ok {
+				result.ReservedSeenByRawKind[kind]++
 			}
 			result.Rejected[ReasonNotAdmissible]++
 			continue
@@ -487,6 +487,31 @@ func admit(admissions []Admission, dependency DependencyRow) (Admission, bool) {
 		}
 	}
 	return Admission{}, false
+}
+
+// reservedRawKind matches on the RAW KIND ALONE, deliberately -- unlike admit,
+// which additionally requires the target prefix.
+//
+// The two are asking different questions. Admission asks "may this row become a
+// mapping row", and a raw kind pointing into the wrong id space must fail that.
+// ReservedSeenByRawKind asks "has this provider started writing these rows at
+// all", and the answer to that must not depend on the rows being well-formed:
+// a provider emitting only malformed targets would otherwise report zero, which
+// is indistinguishable from a provider that has not shipped yet.
+//
+// That is the same defect class as codex round-1 F2 (AdmittedByRawKind counted
+// after parsing rather than after admission), applied to the counter added in
+// response to it. Round 2 labelled the prefix requirement here "expected, not a
+// finding"; recording the disagreement rather than deferring, because the
+// counter exists precisely to make the activation decision evidence-based and a
+// silent zero is the one answer it must never give wrongly.
+func reservedRawKind(relationshipTypeRaw string) (string, bool) {
+	for _, reserved := range ReservedAdmissions {
+		if relationshipTypeRaw == reserved.RelationshipTypeRaw {
+			return reserved.RelationshipTypeRaw, true
+		}
+	}
+	return "", false
 }
 
 func evidenceFor(relationshipTypeRaw, provider string) string {

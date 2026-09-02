@@ -376,3 +376,32 @@ func repositoryRootPath(t *testing.T) string {
 		directory = parent
 	}
 }
+
+// TestReservedKindIsSeenEvenWhenMalformed is the round-2 disagreement, pinned.
+//
+// A reserved row whose target points at the wrong id space is still evidence
+// that the provider has started writing that raw kind. Counting it only when
+// well-formed would report zero for a provider shipping broken rows — the same
+// "nothing arrived" / "arrived malformed" conflation as round-1 F2.
+func TestReservedKindIsSeenEvenWhenMalformed(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].TargetWorkItemID = testLinear // wrong id space for this kind
+
+	result := Derive(inputs)
+	if result.Written() != 0 {
+		t.Fatalf("wrote %d links for a malformed reserved row", result.Written())
+	}
+	if got := result.ReservedSeenByRawKind["github_closing_reference"]; got != 1 {
+		t.Errorf(
+			"reserved_seen[github_closing_reference] = %d, want 1: a malformed row is still "+
+				"evidence the provider has started writing this kind", got,
+		)
+	}
+	if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
+		t.Errorf("rejected[not_admissible] = %d, want 1", got)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}

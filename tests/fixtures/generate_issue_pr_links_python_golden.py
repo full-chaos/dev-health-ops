@@ -41,7 +41,6 @@ from typing import Any, cast
 
 sys.path.insert(0, "/app/src")
 
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink  # noqa: E402
 from dev_health_ops.work_graph.builder import (  # noqa: E402
     BuildConfig,
     WorkGraphBuilder,
@@ -119,6 +118,14 @@ def _iso(value: Any) -> str:
 
 
 def build_golden() -> dict[str, Any]:
+    # Imported HERE, not at module scope: --replay must run with nothing but the
+    # builder importable. It is the mode the CI rot guard uses, and requiring a
+    # ClickHouse client for a run that never opens a connection would make the
+    # guard fail for a reason unrelated to what it measures.
+    from dev_health_ops.metrics.sinks.clickhouse import (  # noqa: PLC0415
+        ClickHouseMetricsSink,
+    )
+
     config = BuildConfig(dsn=os.environ["CLICKHOUSE_URI"], org_id=ORG_ID)
     inner = ClickHouseMetricsSink(config.dsn)
     sink = RecordingSink(inner)

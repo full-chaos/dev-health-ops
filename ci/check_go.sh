@@ -420,6 +420,36 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/workgraph/issueprlinks (frozen issue-PR mapping golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestIssuePRLinksGoldenMatchesLivePython$' \
+        ./internal/jobs/workgraph/issueprlinks
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4757. Its own marker, for the reason spelled out above the
+  # capacity-forecast check: a shared marker is satisfied by whichever guard
+  # happened to run. Unlike the other entries here this guard needs no
+  # ClickHouse -- the generator's --replay mode feeds the golden's own frozen
+  # reads back through the deployed producer, because the tables it would
+  # otherwise query move continuously and a re-query guard would fail on data
+  # drift while saying nothing about Python drift.
+  proof_file="${proof_dir}/issue-pr-links-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: issue-PR mapping golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/daily/repouser (frozen repo_user_commit golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

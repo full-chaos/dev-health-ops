@@ -132,7 +132,7 @@ def main() -> None:
     # Emit the Go table too. Production code cannot read a test fixture, and
     # Go's own unicode tables are NOT usable as the source: they are versioned
     # independently (Go 1.27 ships Unicode 17 against this interpreter's 16, and
-    # they already disagree on U+11DA0-U+11DA9). Deriving the ranges here is the
+    # they already disagree on U+11DE0-U+11DE9). Deriving the ranges here is the
     # only way the Go side can hold the same set the reference does.
     #
     # Ranges rather than 760 individual entries, because Nd is laid out in

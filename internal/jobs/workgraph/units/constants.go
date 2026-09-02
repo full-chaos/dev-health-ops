@@ -141,7 +141,7 @@ func ResolveMaxComponentNodes(explicit *int) int {
 //
 //  1. VERSION SKEW. Go's unicode tables and CPython's are versioned separately.
 //     Go 1.27 ships Unicode 17 and the reference interpreter reports 16, and
-//     they already DISAGREE: U+11DA0-U+11DA9 are Nd to Go and unassigned to
+//     they already DISAGREE: U+11DE0-U+11DE9 are Nd to Go and unassigned to
 //     Python. Using unicode.IsDigit would accept ten code points Python
 //     refuses, today, on this toolchain.
 //

@@ -15,42 +15,50 @@ import (
 // that asymmetry is Python's and is preserved deliberately.
 const workItemsDeduped = "work_items FINAL"
 
-// normalizeTimestamp ports utils/evidence.py:27-38 _ensure_utc for the values
-// this package returns.
+// normalizeTimestamp puts a scanned timestamp on UTC, matching what
+// evidence._ensure_utc produces for the same row.
 //
-// This is NOT decoration. The columns are inconsistent about timezones, and the
-// inconsistency is invisible until it moves a work unit's time bounds across a
-// window edge:
+// # THIS CONVERTS. IT USED TO REINTERPRET, AND THAT WAS WRONG.
 //
-//	work_items.created_at / updated_at        DateTime64(3)          -- NO timezone
-//	work_items.closed_at / completed_at       Nullable(DateTime64(3)) -- NO timezone
-//	git_commits.author_when / committer_when  DateTime64(3, 'UTC')
-//	git_pull_requests.created_at              DateTime64(3, 'UTC')
-//	git_pull_requests.merged_at / closed_at   Nullable(DateTime64(3, 'UTC'))
-//	work_item_cycle_times.computed_at         DateTime('UTC')
+// PR2 shipped this as a wall-clock REBUILD -- time.Date(y, m, d, h, ...,
+// time.UTC) -- deliberately modelling Python's `.replace(tzinfo=utc)`. That
+// choice was made by reading _ensure_utc's naive branch and assuming the driver
+// returned naive values. Measured against a real container with a non-UTC
+// server timezone (Asia/Kolkata, +05:30), the assumption was backwards:
 //
-// (Read from system.columns on the live stack, 2026-09-02 — not from migrations.)
+//	column                    python driver returns    _ensure_utc does
+//	DateTime64(3)   (no tz)   AWARE, in the SERVER tz  .astimezone() CONVERTS
+//	DateTime64(3,'UTC')       NAIVE                    .replace()    REINTERPRETS
 //
-// Python receives the tz-naive ones as naive datetimes and _ensure_utc stamps
-// them `.replace(tzinfo=timezone.utc)` — it REINTERPRETS the wall clock as UTC
-// rather than converting it. Go's driver always attaches a Location, so the
-// equivalent is to rebuild the same wall clock in UTC, not to call .UTC(),
-// which would convert and shift the instant if the driver attached anything
-// other than UTC.
+// The column WITHOUT a declared timezone comes back timezone-AWARE, and the one
+// WITH 'UTC' comes back naive. So the reinterpreting version was wrong for
+// exactly the columns it looked right for:
 //
-// For the columns that DO declare 'UTC' the two are identical, so applying this
-// uniformly is safe and removes a per-column decision that a future fetcher
-// would have to get right again.
+//	work_items.created_at   DateTime64(3)        reinterpret -> off by 5h30m
+//	git_commits.author_when DateTime64(3,'UTC')  reinterpret -> correct
 //
-// VERIFICATION OWED: the integration test asserts these values against the same
-// rows fetched through Python, so the claim is measured rather than argued. Do
-// not treat this comment as the proof.
+// work_items is the naive-declared table, so PR2's version silently shifted
+// every work-item timestamp by the ClickHouse server's UTC offset. Measured
+// epochs for one row seeded at '2026-09-02 10:30:00' in both columns:
+//
+//	                        python _ensure_utc   reinterpret      .UTC()
+//	DateTime64(3)           1788325200000        1788345000000    1788325200000
+//	DateTime64(3,'UTC')     1788345000000        1788345000000    1788345000000
+//
+// .UTC() agrees with Python on BOTH, because the two drivers return the same
+// INSTANT and differ only in the location attached to it. Converting preserves
+// the instant; rebuilding the wall clock changes it whenever that location is
+// not already UTC.
+//
+// This also removes a dependency on the deployment: with
+// apply_server_timezone=False the Python driver attaches the CLIENT's local
+// zone instead of the server's, so a reinterpreting port would have been wrong
+// by a per-machine offset. Converting is correct under every setting because it
+// never reads the wall clock at all.
+//
+// CHAOS-4441 plan section 5f. The defect was carried by PR2; the fix rides PR3.
 func normalizeTimestamp(value time.Time) time.Time {
-	return time.Date(
-		value.Year(), value.Month(), value.Day(),
-		value.Hour(), value.Minute(), value.Second(), value.Nanosecond(),
-		time.UTC,
-	)
+	return value.UTC()
 }
 
 func normalizeOptionalTimestamp(value *time.Time) *time.Time {

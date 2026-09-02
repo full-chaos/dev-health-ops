@@ -235,6 +235,7 @@ def main() -> None:
         9007199254740992.0,
         123456789.123456789,
     ]
+
     # The tail_values list is a CLAIM about coverage, and until this assertion
     # existed it was not an effective one. Membership here does not create a
     # corpus entry -- the loop below only ADDS tail precisions to values that

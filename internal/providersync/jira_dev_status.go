@@ -155,3 +155,38 @@ func extractJiraDevStatusDependencies(
 	}
 	return rows
 }
+
+// jiraDevStatusCountingDoer counts actual outbound HTTP attempts, including
+// every internal retry providerfoundation.HTTPClient.Do makes for one logical
+// call (codex round 1, P2: HTTPClient.Do retries transient failures up to
+// its RetryPolicy.MaxAttempts internally, invisible to the caller -- a naive
+// "increment once per logical fetch" cap on dev_status_max_requests permits
+// up to MaxAttempts times as many real wire requests during an outage, with
+// no signal). Mirrors gitHubWorkItemPRSocialCountingDoer's shape
+// (github_work_items_social_fetch.go), the existing precedent for this exact
+// problem in this codebase.
+type jiraDevStatusCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer jiraDevStatusCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
+// fetchJiraDevStatusPullRequestsCountingAttempts wraps
+// fetchJiraDevStatusPullRequests with a counting Doer so the caller's
+// dev_status_max_requests cap reflects real wire cost (including retries),
+// not just logical calls. Returns the attempt count alongside the normal
+// result so the caller can advance its running total by the true amount.
+func fetchJiraDevStatusPullRequestsCountingAttempts(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+) (payload jiraDevStatusPayload, available bool, attempts int, err error) {
+	counted := *client
+	counted.Doer = jiraDevStatusCountingDoer{delegate: client.Doer, attempts: &attempts}
+	payload, available, err = fetchJiraDevStatusPullRequests(ctx, &counted, issueID)
+	return payload, available, attempts, err
+}

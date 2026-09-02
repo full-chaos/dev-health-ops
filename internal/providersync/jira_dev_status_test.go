@@ -80,10 +80,15 @@ type jiraDevStatusDoer struct {
 	status   int
 	body     string
 	requests int
+	// statuses, when non-empty, overrides status with a per-call sequence
+	// (the last entry repeats past its length) -- used to simulate
+	// HTTPClient.Do's internal retries against a transient status.
+	statuses []int
 }
 
 func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
+	index := doer.requests
 	doer.requests++
 	if request.URL.Path != "/rest/dev-status/1.0/issue/detail" {
 		doer.t.Fatalf("unexpected path %s", request.URL.Path)
@@ -94,8 +99,16 @@ func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error)
 	if got := request.URL.Query().Get("dataType"); got != "pullrequest" {
 		doer.t.Fatalf("dataType=%q", got)
 	}
+	status := doer.status
+	if len(doer.statuses) > 0 {
+		if index < len(doer.statuses) {
+			status = doer.statuses[index]
+		} else {
+			status = doer.statuses[len(doer.statuses)-1]
+		}
+	}
 	return &http.Response{
-		StatusCode: doer.status,
+		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(doer.body)),
 		Request:    request,
@@ -104,16 +117,72 @@ func (doer *jiraDevStatusDoer) Do(request *http.Request) (*http.Response, error)
 
 func jiraDevStatusTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *providerfoundation.HTTPClient {
 	t.Helper()
+	return jiraDevStatusTestClientWithRetries(t, doer, 1)
+}
+
+func jiraDevStatusTestClientWithRetries(t *testing.T, doer providerfoundation.HTTPDoer, maxAttempts int) *providerfoundation.HTTPClient {
+	t.Helper()
 	client, err := providerfoundation.NewHTTPClient(
 		"jira", "https://acme.atlassian.net", doer,
 		func(request *http.Request) error { return nil },
-		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.RetryPolicy{MaxAttempts: maxAttempts, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client
+}
+
+// TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries is the
+// red-first test for codex round 1's P2 finding: HTTPClient.Do retries a
+// transient (5xx) failure internally, invisible to a caller that only
+// increments its budget cap once per logical call -- the counting Doer must
+// observe every actual wire attempt, not just one per fetchJiraDevStatusPullRequests
+// call.
+func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.T) {
+	t.Parallel()
+	doer := &jiraDevStatusDoer{
+		t: t, statuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+		body: `{"errorMessages":["temporarily unavailable"]}`,
+	}
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+		context.Background(), client, "10050",
+	)
+	if err == nil || available {
+		t.Fatalf("expected a genuine error after exhausting retries, available=%v err=%v", available, err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d want=3 (RetryPolicy.MaxAttempts, all consumed by transient 503s)", attempts)
+	}
+	if doer.requests != 3 {
+		t.Fatalf("doer observed %d real wire requests, want=3", doer.requests)
+	}
+}
+
+// TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess
+// is the companion positive case: no retries needed, attempts must be 1, not
+// over- or under-counted.
+func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess(t *testing.T) {
+	t.Parallel()
+	doer := &jiraDevStatusDoer{
+		t: t, status: http.StatusOK,
+		body: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
+	}
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+		context.Background(), client, "10050",
+	)
+	if err != nil || !available {
+		t.Fatalf("available=%v err=%v", available, err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want=1", attempts)
+	}
+	if len(payload.Detail) != 1 {
+		t.Fatalf("payload=%+v", payload)
+	}
 }
 
 func TestFetchJiraDevStatusPullRequestsParsesOKResponse(t *testing.T) {

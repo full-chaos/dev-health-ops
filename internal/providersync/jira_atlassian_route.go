@@ -172,6 +172,24 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
+	// CHAOS-4757: dev-status (GitHub-for-Jira panel) is the PRIMARY
+	// provider-attached PR<->issue mapping for Jira -- default false since it
+	// is an extra REST call per issue (N+1) that most orgs without the app
+	// configured would pay for nothing. codex round 1 (P1) found this wired
+	// only into JiraWorkItemsRouteHandler, which the worker never constructs
+	// (provider_sync.go builds JiraAtlassianRouteHandler for Jira work-items)
+	// -- moved here, the actually-active route.
+	fetchDevStatus := jiraOptionBool(claim, "fetch_dev_status", false)
+	devStatusMaxRequests := jiraOptionInt(claim, "dev_status_max_requests", jiraDevStatusMaxRequestsPerRun)
+	// devStatusRequestsIssued counts REAL wire attempts (via
+	// fetchJiraDevStatusPullRequestsCountingAttempts), including internal
+	// HTTPClient.Do retries -- codex round 1 (P2) found a first version that
+	// counted one logical fetch per issue permitted up to RetryPolicy.MaxAttempts
+	// times as many actual requests during an outage, unobserved.
+	devStatusRequestsIssued := 0
+	devStatusCapSkipped := 0
+	devStatusUnavailableCount := 0
+	devStatusPullRequestsSynced := 0
 	// CHAOS-4193: same project-membership resolution cache/counter as
 	// jira_work_items_route.go's Collect -- see resolveJiraProjectCatalog's
 	// own doc comment.
@@ -203,6 +221,37 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...)
 		rows.ReopenEvents = append(rows.ReopenEvents,
 			jiraReopenEvents(claim, transitions, normalizedAt)...)
+
+		if fetchDevStatus {
+			issueID := strings.TrimSpace(stringFrom(issue["id"]))
+			if issueID == "" {
+				optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
+			} else if devStatusRequestsIssued >= devStatusMaxRequests {
+				devStatusCapSkipped++
+				client.Metrics.RecordJiraDevStatus("cap_skipped")
+			} else {
+				devStatusPayload, devStatusAvailable, devStatusAttempts, devStatusErr := fetchJiraDevStatusPullRequestsCountingAttempts(
+					ctx, client, issueID,
+				)
+				devStatusRequestsIssued += devStatusAttempts
+				requests += devStatusAttempts
+				switch {
+				case devStatusErr != nil:
+					optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
+					client.Metrics.RecordJiraDevStatus("failed")
+				case !devStatusAvailable:
+					devStatusUnavailableCount++
+					client.Metrics.RecordJiraDevStatus(jiraDevStatusUnavailableCause)
+				default:
+					devStatusDependencies := extractJiraDevStatusDependencies(
+						claim, item.WorkItemID, devStatusPayload, normalizedAt,
+					)
+					rows.Dependencies = append(rows.Dependencies, devStatusDependencies...)
+					devStatusPullRequestsSynced += len(devStatusDependencies)
+					client.Metrics.RecordJiraDevStatus("synced")
+				}
+			}
+		}
 
 		for _, move := range jiraIssueProjectMoves(jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true}, handler.Identity) {
 			if move.OccurredAt.IsZero() {
@@ -411,6 +460,12 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		"derived_destinations_unimplemented": append([]string(nil), derivedUnimplemented...),
 		"watermark_held_for_incomplete":      summary.WatermarkHeldForIncomplete,
 		"jira_work_items":                    summary,
+		// CHAOS-4757 telemetry: PRIMARY dev-status rows synced, orgs with no
+		// GitHub-for-Jira app configured (clean no-op, not an error), and any
+		// issue skipped because dev_status_max_requests was reached this run.
+		"dev_status_pull_requests_synced": devStatusPullRequestsSynced,
+		"dev_status_unavailable_count":    devStatusUnavailableCount,
+		"dev_status_cap_skipped":          devStatusCapSkipped,
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete

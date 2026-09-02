@@ -1479,7 +1479,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (jira_dev_status_test.go); TestJiraWorkItemsRouteDevStatusSyncsPrimaryDependencyRow,
     # TestJiraWorkItemsRouteDevStatusUnavailableIsCleanNoOp (jira_work_items_route_test.go).
     # Not integration-tagged. 1300 -> 1307 top-level; 152 -> 152 integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1307
+    # codex round 1 (P1) moved the dev-status wiring from JiraWorkItemsRouteHandler
+    # (never constructed by the worker) to JiraAtlassianRouteHandler (the real
+    # route): -2 (jira_work_items_route_test.go) +3
+    # (TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow,
+    # TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp,
+    # TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts). codex round 1 (P2)
+    # added a real-wire-attempt counting fix: +2
+    # (TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries,
+    # TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess,
+    # jira_dev_status_test.go). Net +3. 1307 -> 1310 top-level; 152 -> 152
+    # integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1310
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1496,7 +1507,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1307
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1310
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1560,7 +1571,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1307
+    assert len(selected_tests) == len(set(selected_tests)) == 1310
     assert set(selected_tests) == expected_tests
 
 

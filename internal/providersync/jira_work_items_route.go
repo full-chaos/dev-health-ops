@@ -101,16 +101,6 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	requests := searchPages
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
-	// CHAOS-4757: dev-status (GitHub-for-Jira panel) is the PRIMARY
-	// provider-attached PR<->issue mapping for Jira -- default false since it
-	// is an extra REST call per issue (N+1) that most orgs without the app
-	// configured would pay for nothing.
-	fetchDevStatus := jiraOptionBool(claim, "fetch_dev_status", false)
-	devStatusMaxRequests := jiraOptionInt(claim, "dev_status_max_requests", jiraDevStatusMaxRequestsPerRun)
-	devStatusRequestsIssued := 0
-	devStatusCapSkipped := 0
-	devStatusUnavailableCount := 0
-	devStatusPullRequestsSynced := 0
 	sprintIDs := make(map[string]struct{})
 	// jiraProjectCache resolves a project id to (key, name) at most once per
 	// Collect call, mirroring sprintCache's own per-run cache below.
@@ -206,36 +196,6 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 				)
 			}
 		}
-		if fetchDevStatus {
-			issueID := strings.TrimSpace(stringFrom(issue["id"]))
-			if issueID == "" {
-				optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
-			} else if devStatusRequestsIssued >= devStatusMaxRequests {
-				devStatusCapSkipped++
-				client.Metrics.RecordJiraDevStatus("cap_skipped")
-			} else {
-				devStatusRequestsIssued++
-				devStatusPayload, devStatusAvailable, devStatusErr := fetchJiraDevStatusPullRequests(
-					ctx, client, issueID,
-				)
-				requests++
-				switch {
-				case devStatusErr != nil:
-					optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
-					client.Metrics.RecordJiraDevStatus("failed")
-				case !devStatusAvailable:
-					devStatusUnavailableCount++
-					client.Metrics.RecordJiraDevStatus(jiraDevStatusUnavailableCause)
-				default:
-					devStatusDependencies := extractJiraDevStatusDependencies(
-						claim, item.WorkItemID, devStatusPayload, normalizedAt,
-					)
-					rows.Dependencies = append(rows.Dependencies, devStatusDependencies...)
-					devStatusPullRequestsSynced += len(devStatusDependencies)
-					client.Metrics.RecordJiraDevStatus("synced")
-				}
-			}
-		}
 		if item.SprintID != nil && *item.SprintID != "" {
 			sprintIDs[*item.SprintID] = struct{}{}
 		}
@@ -301,12 +261,6 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		"project_memberships_synced":     len(rows.ProjectMemberships),
 		"unresolved_project_memberships": unresolvedProjectMemberships,
 		"project_key":                    projectKey,
-		// CHAOS-4757 telemetry: PRIMARY dev-status rows synced, orgs with no
-		// GitHub-for-Jira app configured (clean no-op, not an error), and any
-		// issue skipped because dev_status_max_requests was reached this run.
-		"dev_status_pull_requests_synced": devStatusPullRequestsSynced,
-		"dev_status_unavailable_count":    devStatusUnavailableCount,
-		"dev_status_cap_skipped":          devStatusCapSkipped,
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete

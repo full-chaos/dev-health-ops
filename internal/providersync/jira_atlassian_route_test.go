@@ -20,6 +20,14 @@ type jiraAtlassianDoer struct {
 	mu     sync.Mutex
 	paths  []string
 	boards int
+	// devStatus/devStatusStatuses/devStatusBodies let a test control the
+	// dev-status response, including a sequence of statuses (for retry
+	// tests) -- zero-value (unset) means "this test does not expect a
+	// dev-status call": the default handler below fails loudly if hit
+	// unexpectedly.
+	devStatus         int
+	devStatusStatuses []int
+	devStatusBody     string
 }
 
 func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error) {
@@ -29,9 +37,10 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	doer.mu.Unlock()
 
 	var body string
+	status := http.StatusOK
 	switch {
 	case request.URL.Path == "/rest/api/3/search/jql":
-		body = `{"issues":[{"key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
+		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
 		body = `{"values":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}],"total":1,"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
@@ -43,10 +52,22 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 		body = `{"values":[{"id":77,"name":"Operations"}],"isLast":true}`
 	case request.URL.Path == "/rest/agile/1.0/board/77/sprint":
 		body = `{"values":[{"id":9001,"name":"August","state":"active","startDate":"2026-08-01T00:00:00Z","endDate":"2026-08-31T00:00:00Z"}],"isLast":true}`
+	case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
+		index := doer.devStatus
+		doer.devStatus++
+		if len(doer.devStatusStatuses) == 0 {
+			doer.t.Fatalf("unexpected dev-status request %s (test did not configure devStatusStatuses)", request.URL.String())
+		}
+		if index < len(doer.devStatusStatuses) {
+			status = doer.devStatusStatuses[index]
+		} else {
+			status = doer.devStatusStatuses[len(doer.devStatusStatuses)-1]
+		}
+		body = doer.devStatusBody
 	default:
 		doer.t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 	}
-	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
 func jiraAtlassianClaim() Claim {
@@ -138,6 +159,141 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 		if parsed.Path == "/rest/api/3/search/jql" && parsed.Query().Get("startAt") != "0" {
 			t.Fatalf("search pagination=%s", raw)
 		}
+	}
+}
+
+// TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow is red on
+// origin/main -- the fetch_dev_status option does not exist on
+// JiraAtlassianRouteHandler there. codex round 1 (P1) found the first
+// implementation wired this into JiraWorkItemsRouteHandler instead, which
+// the worker (cmd/dev-health-worker/provider_sync.go) never constructs for
+// Jira work-items -- JiraAtlassianRouteHandler is the actually-active route.
+func TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["fetch_dev_status"] = true
+	doer := &jiraAtlassianDoer{
+		t: t, devStatusStatuses: []int{http.StatusOK},
+		devStatusBody: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
+	}
+	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil {
+		t.Fatalf("expected the watermark to advance (dev-status success is not incompleteness): batch=%+v", batch)
+	}
+	if doer.devStatus != 1 {
+		t.Fatalf("dev-status requests=%d want=1", doer.devStatus)
+	}
+	if got := batch.Result["dev_status_pull_requests_synced"]; got != 1 {
+		t.Fatalf("result=%v", batch.Result)
+	}
+	if got := batch.Result["dev_status_unavailable_count"]; got != 0 {
+		t.Fatalf("result=%v", batch.Result)
+	}
+	var devStatusDependency jiraWorkItemDependencyRow
+	found := false
+	for _, effect := range batch.Effects {
+		if effect.Destination != "work_item_dependencies" {
+			continue
+		}
+		for _, raw := range effect.Rows {
+			var row jiraWorkItemDependencyRow
+			if err := json.Unmarshal(raw, &row); err != nil {
+				t.Fatal(err)
+			}
+			if row.RelationshipTypeRaw == "jira_dev_status" {
+				devStatusDependency, found = row, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no jira_dev_status dependency row in effects")
+	}
+	if devStatusDependency.SourceWorkItemID != "ghpr:acme/api#968" ||
+		devStatusDependency.TargetWorkItemID != "jira:OPS-201" ||
+		devStatusDependency.RelationshipType != "relates_to" {
+		t.Fatalf("dev-status dependency=%+v", devStatusDependency)
+	}
+}
+
+// TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp is the red-first test
+// for the ruling (chris via team-lead, 2026-09-01): an org with no
+// GitHub-for-Jira app configured (400/404) must never fail the sync or
+// suppress the watermark -- a typed, counted no-op only.
+func TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			claim := jiraAtlassianClaim()
+			claim.DatasetOptions["fetch_dev_status"] = true
+			doer := &jiraAtlassianDoer{
+				t: t, devStatusStatuses: []int{status}, devStatusBody: `{"errorMessages":["no dev-status data"]}`,
+			}
+			client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			batch, err := jiraAtlassianCompleteHandler(t).Collect(
+				context.Background(), claim, providerfoundation.Credential{}, client,
+				time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.Watermark == nil {
+				t.Fatalf("a clean no-op must not suppress the watermark: batch=%+v", batch)
+			}
+			if incomplete, ok := batch.Result["incomplete"]; ok {
+				t.Fatalf("a clean no-op must not be recorded as incompleteness: incomplete=%v", incomplete)
+			}
+			if got := batch.Result["dev_status_unavailable_count"]; got != 1 {
+				t.Fatalf("result=%v", batch.Result)
+			}
+			if got := batch.Result["dev_status_pull_requests_synced"]; got != 0 {
+				t.Fatalf("result=%v", batch.Result)
+			}
+		})
+	}
+}
+
+// TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts is the red-first
+// test for codex round 1's P2 finding: dev_status_max_requests must bound
+// actual wire requests (including HTTPClient.Do's internal retries), not
+// just logical fetch calls, or a transient outage can cost up to
+// RetryPolicy.MaxAttempts times the configured budget with no signal.
+func TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["fetch_dev_status"] = true
+	claim.DatasetOptions["dev_status_max_requests"] = 1
+	doer := &jiraAtlassianDoer{
+		t: t,
+		// Three transient failures: with a retrying client this single
+		// issue's dev-status fetch alone consumes 3 real wire requests,
+		// already exceeding the cap of 1 -- prove the route observes that
+		// (dev_status_cap_skipped stays 0 here since there is only one
+		// issue in this fixture; the assertion is on the wire-request count
+		// the counting Doer reports via Evidence.Requests, not on a second
+		// issue being skipped).
+		devStatusStatuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+		devStatusBody:     `{"errorMessages":["temporarily unavailable"]}`,
+	}
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.devStatus != 3 {
+		t.Fatalf("dev-status wire requests=%d want=3 (the retrying client's real attempt count)", doer.devStatus)
+	}
+	// The failed fetch is recorded as optional incompleteness (a genuine
+	// error, not the clean no-op), so the watermark is withheld.
+	if batch.Watermark != nil {
+		t.Fatalf("a genuine dev-status fetch failure must withhold the watermark: batch=%+v", batch)
 	}
 }
 

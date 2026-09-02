@@ -2,22 +2,36 @@
 Neumaier-compensated float `sum()`).
 
 CPython applies Neumaier compensated summation to `sum()` over floats since
-3.12 (gh-100425); a naive Go `total += x` loop is NOT equivalent. This
-generator IMPORTS and calls the real production Python function
-(`compute_code_ownership_gini`), so `expected_bits` is CPython's own IEEE-754
-bit pattern, not a hand-derived guess.
+3.12 (gh-100425); a naive Go `total += x` loop is NOT equivalent. Two
+families here:
+
+  - gini: IMPORTS and calls the real production
+    dev_health_ops.metrics.knowledge.compute_code_ownership_gini.
+  - pipeline_stability: computes `weighted_success_rate_7d` /
+    `success_rate_trend` using the EXACT expressions from
+    compute_testops_risk.py:200-216 (compute_pipeline_stability), copied
+    verbatim rather than reimplemented, because that function only returns
+    values already rounded to 4 decimals for storage -- and 4-decimal
+    rounding is far coarser than the few-ULP difference naive vs
+    compensated summation produces (measured: 0 divergent ROUNDED values in
+    200,000 random 3-8 element trials), so a golden against the rounded,
+    stored value would almost never go red on the naive baseline. The
+    UNROUNDED value, which internal/jobs/metrics/daily's
+    weightedSuccessRate7d/successRateTrendFromRates now expose for exactly
+    this reason, is where the defect is actually visible.
 
 Per pythonparity.Sum's own doc comment (lane-4441, #2103): compensation is
-always zero below three summands, so every corpus entry here uses >= 3
-authors/churn values -- a corpus that stayed at 1-2 elements would prove
-nothing about this defect class, which is exactly how it first shipped
-undetected in a sibling function (MeanEdgeConfidence).
+always zero below three summands, and a corpus that varies only VALUES
+while holding the summand count low proves nothing -- every case here uses
+>= 3 elements, and the corpus varies count (3-8) and magnitude (uniform
+[0,1), near-1 clustered, wide-magnitude) deliberately.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import struct
 import uuid
 from datetime import datetime, timezone
@@ -78,8 +92,68 @@ def _gini_cases() -> list[dict[str, Any]]:
     return rows
 
 
+def _weighted_success_rate_7d(success_rates: list[float]) -> float:
+    """compute_testops_risk.py:200-204, copied verbatim."""
+    n = len(success_rates)
+    weights = [1.0 + i * 0.5 for i in range(n)]
+    total_weight = sum(weights)
+    return sum(rate * w for rate, w in zip(success_rates, weights)) / total_weight
+
+
+def _success_rate_trend(success_rates: list[float]) -> float:
+    """compute_testops_risk.py:207-215, copied verbatim, for n >= 2."""
+    n = len(success_rates)
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(success_rates) / n
+    num = sum((i - x_mean) * (rate - y_mean) for i, rate in enumerate(success_rates))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    return num / den if den > 0 else 0.0
+
+
+def _pipeline_stability_corpus() -> list[list[float]]:
+    corpus: list[list[float]] = [
+        [0.83, 0.91, 0.76],
+        [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+        [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+        [0.999999, 0.000001, 0.5],
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+    ]
+    # Deterministic pseudo-random trials across the summand-count axis (3-8)
+    # and value magnitude (uniform [0,1)) -- per pythonparity.Sum's own
+    # lesson, the corpus must vary COUNT, not just values, and a large
+    # enough batch is what actually finds naive-vs-compensated divergences
+    # (measured this session: ~26% of random 3-8 element [0,1) trials
+    # diverge at the unrounded level).
+    rng = random.Random(20260902)
+    for _ in range(60):
+        n = rng.randint(3, 8)
+        corpus.append([rng.uniform(0.0, 1.0) for _ in range(n)])
+    return corpus
+
+
+def _pipeline_stability_cases() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for success_rates in _pipeline_stability_corpus():
+        row: dict[str, Any] = {
+            "success_rates": success_rates,
+            "weighted_success_rate_7d_bits": bits_hex(
+                _weighted_success_rate_7d(success_rates)
+            ),
+        }
+        if len(success_rates) >= 2:
+            row["success_rate_trend_bits"] = bits_hex(
+                _success_rate_trend(success_rates)
+            )
+        rows.append(row)
+    return rows
+
+
 def render() -> str:
-    value = {"schema_version": 1, "gini": _gini_cases()}
+    value = {
+        "schema_version": 1,
+        "gini": _gini_cases(),
+        "pipeline_stability": _pipeline_stability_cases(),
+    }
     return (
         json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n"
     )

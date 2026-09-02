@@ -912,6 +912,18 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
 
+### `metrics.daily_partition`'s native-family dispatch: pre_bridge vs post_bridge phases (CHAOS-4276, CHAOS-4278)
+
+`metrics.daily_partition` (`internal/jobs/metrics/daily/daily.go` `PartitionHandler.Work`) fans out ~24 per-repo/day metric families, cutting them over from the Python compatibility bridge one at a time (`families.json`'s `"port": "go"`). Since CHAOS-4276 (`team_wellbeing`, `repo_user_commit`) the dispatch order per partition was: run every registered native Go family (`SetNativeFamilies`, `PartitionHandler.computeNativeFamilies`) → call the Python compatibility bridge with a skip-list naming whichever natives just succeeded.
+
+CHAOS-4278 (`work_item_state`) added a SECOND phase, because it broke that assumption: its native executor reads `work_item_team_attributions`, a table the STILL-PYTHON `work_item_attribution` family writes fresh inside the SAME partition's bridge call. Running `work_item_state` in the original (now `pre_bridge`) phase meant its Go read happened BEFORE that write -- a codex review round caught this as a same-partition staleness bug, not merely the already-disclosed "coverage caveat" of the read-not-recompute design (see the [Python↔Go live-path ledger](../../reference/runtime/python-go-live-path-ledger.md)'s Metrics family section).
+
+The fix is additive, not a rewrite of the existing dispatch: `families.json` gained an optional `"phase"` field (`"pre_bridge"`, the default when omitted -- every existing family needs no edit; `"post_bridge"` -- new). `PartitionHandler` gained `SetPostBridgeNativeFamilies` (`cmd/dev-health-worker/daily.go` registers `work_item_state` there, not in the `SetNativeFamilies` map) and `computePostBridgeNativeFamilies`. `Work`'s dispatch is now: pre_bridge natives run → their names, PLUS every registered post_bridge family name UNCONDITIONALLY, are excluded from the bridge call (`skipFamiliesForBridge`) → the bridge runs (computing `work_item_attribution` among whatever else was not skipped) → post_bridge natives run, now against fresh data.
+
+**Fail-open asymmetry, by design:** a `pre_bridge` family's runtime failure still has the bridge as a fallback (it was never told to skip that family). A `post_bridge` family's runtime failure does NOT -- the bridge was already told to skip it (skipFamiliesForBridge cannot know in advance that the later post_bridge run will fail), so a `post_bridge` failure means zero rows for that family this partition, surfaced only via the same `DailyMetricsNativeFamilyOutcomeRefused` telemetry every native-family refusal already uses.
+
+**This phase is temporary per family it's declared for**, not a permanent second tier: `families.json`'s `"phase_note"` on `work_item_state` says so explicitly -- once CHAOS-4283 ports `work_item_attribution` to a native Go executor, that executor can simply run BEFORE `work_item_state` within the ordinary `pre_bridge` phase (in-process sequencing, no cross-phase call needed), and `work_item_state` moves back to `pre_bridge` (or drops the field).
+
 ### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: retired, not fixed (CHAOS-4243)
 
 Both kinds were registered handlers (`cmd/dev-health-worker/daily.go`) with

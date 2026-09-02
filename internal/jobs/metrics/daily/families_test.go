@@ -15,11 +15,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	var registry struct {
 		SchemaVersion int `json:"schema_version"`
 		Families      []struct {
-			Name   string   `json:"name"`
-			Python string   `json:"python"`
-			Writes []string `json:"writes"`
-			Port   string   `json:"port"`
-			Golden string   `json:"golden"`
+			Name      string   `json:"name"`
+			Python    string   `json:"python"`
+			Writes    []string `json:"writes"`
+			Port      string   `json:"port"`
+			Golden    string   `json:"golden"`
+			Phase     string   `json:"phase"`
+			PhaseNote string   `json:"phase_note"`
 		} `json:"families"`
 	}
 	if err := json.Unmarshal(data, &registry); err != nil {
@@ -36,10 +38,27 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// leaves a family stuck, so it is validated here rather than only at
 	// the Go-executor construction site.
 	validPorts := map[string]bool{"pending": true, "next_core": true, "go": true}
+	// phase (CHAOS-4278) is additive: "" (omitted) and "pre_bridge" are the
+	// SAME thing (today's dispatch order, cmd/dev-health-worker/daily.go
+	// SetNativeFamilies), so every existing family needs no edit.
+	// "post_bridge" (PartitionHandler.SetPostBridgeNativeFamilies) means the
+	// family's native executor depends on data the SAME partition's
+	// compatibility-bridge call writes, and must therefore run after it --
+	// see work_item_state's phase_note for the concrete case. A
+	// "post_bridge" family MUST carry a phase_note explaining the
+	// cross-family dependency (this field earns its cost by being read
+	// during triage, so an empty one defeats the point).
+	validPhases := map[string]bool{"": true, "pre_bridge": true, "post_bridge": true}
 	seen := map[string]bool{}
 	for _, family := range registry.Families {
-		if family.Name == "" || family.Python == "" || len(family.Writes) == 0 || family.Golden != "required" || seen[family.Name] || !validPorts[family.Port] {
+		if family.Name == "" || family.Python == "" || len(family.Writes) == 0 || family.Golden != "required" || seen[family.Name] || !validPorts[family.Port] || !validPhases[family.Phase] {
 			t.Fatalf("invalid family entry: %#v", family)
+		}
+		if family.Phase == "post_bridge" && family.PhaseNote == "" {
+			t.Fatalf("family %q declares phase=post_bridge with no phase_note explaining why", family.Name)
+		}
+		if family.Phase != "post_bridge" && family.PhaseNote != "" {
+			t.Fatalf("family %q has a phase_note but is not phase=post_bridge -- stale note or missing phase?", family.Name)
 		}
 		seen[family.Name] = true
 	}
@@ -74,5 +93,30 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// family, not just a working-but-slower one.
 	if got := byName["incident"]; got != "go" {
 		t.Fatalf("incident must be port=go, got %q", got)
+	}
+	// work_item_state is CHAOS-4278's cutover: it must be "go", registering
+	// WorkItemStateExecutor exactly as team_wellbeing/repo_user_commit did.
+	if got := byName["work_item_state"]; got != "go" {
+		t.Fatalf("work_item_state must be port=go, got %q", got)
+	}
+	byPhase := make(map[string]string, len(registry.Families))
+	for _, family := range registry.Families {
+		byPhase[family.Name] = family.Phase
+	}
+	// work_item_state must stay phase=post_bridge until CHAOS-4283 ports
+	// work_item_attribution to Go (see families.json's phase_note) -- a
+	// families.json edit that silently drops this back to pre_bridge (empty)
+	// while cmd/dev-health-worker/daily.go still registers it via
+	// SetPostBridgeNativeFamilies would just be dead JSON, not a real
+	// regression by itself, but the two must be caught drifting apart
+	// together at the registration site instead (see cmd/dev-health-worker's
+	// own comment) -- this assertion is the families.json half of that pair.
+	if got := byPhase["work_item_state"]; got != "post_bridge" {
+		t.Fatalf("work_item_state must be phase=post_bridge (CHAOS-4278, pending CHAOS-4283), got %q", got)
+	}
+	for name, phase := range byPhase {
+		if phase != "" && name != "work_item_state" {
+			t.Fatalf("family %q declares phase=%q -- only work_item_state is expected to be non-default today; update this test if that changes deliberately", name, phase)
+		}
 	}
 }

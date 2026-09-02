@@ -841,7 +841,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -857,6 +857,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-json-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again. It shares the band golden's producer but guards a
+  # DIFFERENT axis: string and token spellings rather than float rendering.
+  # Someone "fixing" the column with ensure_ascii=False or allow_nan=False would
+  # leave the band golden green, so a shared marker would let that through.
+  proof_file="${proof_dir}/evidence-json-edge-shapes-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json edge-shapes golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

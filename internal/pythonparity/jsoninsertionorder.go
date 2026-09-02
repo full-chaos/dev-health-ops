@@ -79,6 +79,29 @@ type OrderedObject []Member
 // Floats otherwise render through Repr, because json.dumps uses float.__repr__
 // for them -- which is why `24.0` is `24.0` and not `24`, and why `1e10` is
 // `10000000000.0` and not `1e+10`.
+//
+// # INTS ARE ENCODED, NOT REFUSED, AND THAT IS A SHARP EDGE TOO
+//
+// `int` and `int64` encode as Python ints: `100`, not `100.0`. That is
+// faithful -- `json.dumps(100)` is `100` -- and it is deliberate.
+//
+// It is worth stating explicitly because it is easy to assume the opposite and
+// then rely on the assumption. On the evidence path every `value=` site passes
+// an explicit ndigits to `round`, and `round(float, ndigits)` returns a float,
+// so the column holds `100.0`. But `round(x)` WITHOUT ndigits returns an int.
+// If a site ever loses its second argument, Python yields an int, this encoder
+// faithfully writes `100` where `100.0` stood, and the column changes with no
+// error anywhere on either side.
+//
+// This encoder cannot catch that, and must not: refusing ints would make it
+// disagree with json.dumps. The invariant belongs to the Python caller, and
+// lane-3092 owns a float-type assertion in the loader port for exactly this.
+// Recorded here so the next reader does not inherit the belief that the
+// boundary is guarded.
+//
+// float32, int32, uint and the other numeric types ARE refused -- not for
+// safety, but because their conversion to a Python number is ambiguous and a
+// guess would be silent.
 func MarshalPythonJSONInsertionOrder(value any) ([]byte, error) {
 	return appendOrderedValue(make([]byte, 0, 256), value)
 }
@@ -152,11 +175,25 @@ func appendOrderedValue(dst []byte, value any) ([]byte, error) {
 		// -- a different answer on every run, none of them the reference's.
 		// That is the one input most likely to be passed by mistake, so the
 		// message names it.
+		// The message is type-shaped: a map and a float32 arrive here for
+		// entirely different reasons, and one generic sentence about key order
+		// misdirects whoever passed the float32.
+		switch value.(type) {
+		case map[string]any, map[string]string, map[string]map[string]string:
+			return nil, fmt.Errorf(
+				"pythonparity: refusing to encode %T -- use OrderedObject for objects "+
+					"so the key order is the caller's rather than Go's randomized map "+
+					"iteration; this encoder reproduces json.dumps(value) with no "+
+					"sort_keys, so order is part of the output",
+				value,
+			)
+		}
 		return nil, fmt.Errorf(
-			"pythonparity: refusing to encode %T -- use OrderedObject for objects "+
-				"so the key order is the caller's rather than Go's randomized map "+
-				"iteration; this encoder reproduces json.dumps(value) with no "+
-				"sort_keys, so order is part of the output",
+			"pythonparity: refusing to encode %T -- this encoder accepts string, "+
+				"bool, nil, int, int64, float64, OrderedObject and slices of those. "+
+				"Other numeric types are refused because their conversion to a "+
+				"Python number is ambiguous; convert explicitly at the call site so "+
+				"the choice is visible rather than guessed here",
 			value,
 		)
 	}

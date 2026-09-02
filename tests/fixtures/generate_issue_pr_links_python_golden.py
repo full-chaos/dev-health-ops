@@ -74,7 +74,17 @@ class RecordingSink:
     def __getattr__(self, name: str) -> Any:
         # Anything the derivation might reach that is NOT one of the two methods
         # above is a write path this generator must never trigger.
-        raise AssertionError(
+        #
+        # AttributeError, not AssertionError: __getattr__ is part of Python's
+        # attribute protocol, and `getattr(obj, name, default)` only falls back
+        # to its default when AttributeError is raised. The deployed builder
+        # relies on exactly that -- `getattr(getattr(self.sink, "client", None),
+        # "command", None)` at builder.py:805 and :933 -- so a non-standard
+        # exception here would propagate out of a probe written to tolerate a
+        # missing attribute, and crash the generator with a misleading message
+        # instead of returning None. Direct access (`sink.write_edges(...)`)
+        # still fails loudly, which is what this guard is for.
+        raise AttributeError(
             f"generator refuses sink.{name}: the golden run must stay read-only"
         )
 
@@ -297,7 +307,8 @@ class ReplaySink:
         self.written.extend(records)
 
     def __getattr__(self, name: str) -> Any:
-        raise AssertionError(
+        # AttributeError for the same protocol reason as RecordingSink above.
+        raise AttributeError(
             f"replay refuses sink.{name}: the guard must stay read-only"
         )
 

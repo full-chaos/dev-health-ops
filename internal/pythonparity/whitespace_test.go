@@ -25,6 +25,8 @@ type whitespaceGolden struct {
 	IntSpaceCodePoints        []int            `json:"int_space_code_points"`
 	IsSpaceOnlyVsIntSpace     []int            `json:"isspace_only_vs_int_space"`
 	IntSpaceOnlyVsIsSpace     []int            `json:"int_space_only_vs_isspace"`
+	FloatSpaceCodePoints      []int            `json:"float_space_code_points"`
+	FloatSpaceDiffersFromInt  []int            `json:"float_space_differs_from_int_space"`
 	PythonOnlyCodePoints      []int            `json:"python_only_code_points"`
 	GoOnlyCodePoints          []int            `json:"go_only_code_points"`
 	SplitDisagreesWithIsSpace []int            `json:"split_disagrees_with_isspace"`
@@ -395,6 +397,33 @@ func TestIntSpaceSetIsGoUnicodeIsSpaceExactly(t *testing.T) {
 	for _, separator := range []string{"\x1c", "\x1d", "\x1e", "\x1f"} {
 		if Strip(separator+"200"+separator) != "200" {
 			t.Errorf("Strip must remove %q", separator)
+		}
+	}
+
+	// float() is a SECOND numeric parser with its own rule, mirrored by
+	// confidenceFromString with the same strings.TrimSpace on the same
+	// reasoning. That reasoning was asserted and not measured either. It is
+	// identical to int()'s today -- but "identical today" is a measurement, and
+	// the two are separate functions in CPython that could diverge.
+	if len(golden.FloatSpaceCodePoints) == 0 {
+		t.Fatal("golden records no float() space set; confidenceFromString's " +
+			"TrimSpace is unpinned")
+	}
+	if n := len(golden.FloatSpaceDiffersFromInt); n != 0 {
+		t.Errorf("float() and int() space sets have diverged on %d code points: %v\n"+
+			"parsePythonInt and confidenceFromString both use strings.TrimSpace on "+
+			"the assumption they agree; one of them now needs its own predicate",
+			n, golden.FloatSpaceDiffersFromInt)
+	}
+	floatSpace := make(map[rune]bool, len(golden.FloatSpaceCodePoints))
+	for _, codePoint := range golden.FloatSpaceCodePoints {
+		floatSpace[rune(codePoint)] = true
+	}
+	for codePoint := rune(0); codePoint <= 0x10FFFF; codePoint++ {
+		if unicode.IsSpace(codePoint) != floatSpace[codePoint] {
+			t.Errorf("unicode.IsSpace and float()'s space set disagree on U+%04X",
+				codePoint)
+			break
 		}
 	}
 }

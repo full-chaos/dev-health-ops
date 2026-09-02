@@ -265,11 +265,53 @@ func buildDailyWorker(
 						"error", deployErr,
 					)
 				}
-				if len(nativeFamilies) > 0 {
-					handler.SetNativeFamilies(nativeFamilies)
+				// CHAOS-4278: work_item_state reads its team attribution
+				// from work_item_team_attributions.is_primary=1 rather than
+				// recomputing the 9-source cascade -- see
+				// WorkItemStateExecutor's and
+				// LoadWorkItemPrimaryTeamAttributions's doc comments. It is
+				// registered POST-BRIDGE, not in the nativeFamilies map
+				// above (SetPostBridgeNativeFamilies, not SetNativeFamilies)
+				// -- families.json declares "phase":"post_bridge" for the
+				// SAME reason: work_item_team_attributions is written by
+				// work_item_attribution, still Python-bridged (CHAOS-4283),
+				// in the SAME partition's compatibility call, so this
+				// executor must run AFTER that call returns, not before
+				// (codex round-1 P1 on this PR caught the pre_bridge
+				// placement reading stale data -- see
+				// computePostBridgeNativeFamilies's doc comment). TEMPORARY:
+				// move back into nativeFamilies above once CHAOS-4283 ports
+				// work_item_attribution to Go and families.json's phase_note
+				// says work_item_state can return to pre_bridge.
+				postBridgeFamilies := map[string]daily.NativeFamilyExecutor{}
+				if workItemStateExecutor, workItemStateErr := daily.NewWorkItemStateExecutor(clickhouseConnection); workItemStateErr == nil {
+					postBridgeFamilies["work_item_state"] = workItemStateExecutor
+					// CHAOS-4278: the team-attribution-READ guard counter --
+					// see WorkItemStateMissingAttributionObserver's doc
+					// comment. Same optional-observer discipline as
+					// team_wellbeing's repoCountObserver above.
+					if missingAttributionObserver, ok := observer.(jobruntime.WorkItemStateMissingAttributionObserver); ok {
+						workItemStateExecutor.SetMissingAttributionObserver(missingAttributionObserver)
+					}
+				} else {
+					logger.Error(
+						"work_item_state native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", workItemStateErr,
+					)
+				}
+				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
 					}
+				}
+				if len(nativeFamilies) > 0 {
+					handler.SetNativeFamilies(nativeFamilies)
+				}
+				if len(postBridgeFamilies) > 0 {
+					handler.SetPostBridgeNativeFamilies(postBridgeFamilies)
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,

@@ -361,6 +361,14 @@ type PartitionHandler struct {
 	nativeFamiliesNow   func() time.Time
 	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
 
+	// postBridgeFamilies/postBridgeFamilyNames (CHAOS-4278) are native
+	// families that must run AFTER the compatibility bridge call for the
+	// SAME partition, not before -- see computePostBridgeNativeFamilies's
+	// doc comment for why families.json's "pre_bridge" (default) vs
+	// "post_bridge" phase exists at all.
+	postBridgeFamilies    map[string]NativeFamilyExecutor
+	postBridgeFamilyNames []string
+
 	// livenessCeilingBase/PerRepo (CHAOS-4316) bound the compatibility
 	// bridge call from the Go side, as a backstop behind the bridge's own
 	// progress-based watchdog (worker_metrics.py _watch_progress_stall).
@@ -495,8 +503,32 @@ func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFam
 	handler.nativeFamilyNames = names
 }
 
+// SetPostBridgeNativeFamilies registers the families.json families that
+// declare `"phase":"post_bridge"` (CHAOS-4278) -- native families that must
+// run AFTER the compatibility bridge call for the SAME partition, because
+// their compute depends on a table the bridge itself writes this partition
+// (see computePostBridgeNativeFamilies's doc comment). Mirrors
+// SetNativeFamilies exactly (REPLACES its map on every call, sorts names for
+// deterministic iteration) -- the only difference is WHEN the dispatcher
+// runs these executors, in Work.
+func (handler *PartitionHandler) SetPostBridgeNativeFamilies(families map[string]NativeFamilyExecutor) {
+	if handler == nil {
+		return
+	}
+	handler.postBridgeFamilies = families
+	names := make([]string, 0, len(families))
+	for name := range families {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	handler.postBridgeFamilyNames = names
+}
+
 // SetNativeFamilyObserver wires the optional telemetry observer for native
-// family computation. Never gates behavior on its own.
+// family computation. Never gates behavior on its own. Shared by both
+// pre_bridge (computeNativeFamilies) and post_bridge
+// (computePostBridgeNativeFamilies) families -- the observer interface
+// carries a family name, not a phase, so one wiring covers both.
 func (handler *PartitionHandler) SetNativeFamilyObserver(observer jobruntime.DailyMetricsNativeFamilyObserver) {
 	if handler == nil {
 		return
@@ -572,6 +604,93 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 	return skipFamilies
 }
 
+// skipFamiliesForBridge is what the compatibility bridge call is told NOT to
+// compute for this partition: every pre_bridge family that just succeeded
+// (computeNativeFamilies' own return value), PLUS every registered
+// post_bridge family NAME unconditionally (CHAOS-4278) -- a post_bridge
+// family has not run YET at this point (it runs after the bridge call
+// returns, see computePostBridgeNativeFamilies), so there is no success/
+// failure outcome to key the skip decision on. It must still be excluded
+// from the bridge's own compute: the bridge is Python's LAST family compute
+// this partition, if a post_bridge family were left unskipped Python would
+// ALSO write it, duplicating every row the post_bridge executor writes a
+// moment later. This is the one place a post_bridge family's inclusion is
+// NOT fail-open the way pre_bridge families are: if the post_bridge run
+// then fails, nothing computes that family for this partition (Python was
+// already told to skip it) -- see computePostBridgeNativeFamilies's doc
+// comment for why that tradeoff is inherent to the phase itself, not an
+// oversight.
+func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) []string {
+	skipFamilies := handler.computeNativeFamilies(ctx, run, partition)
+	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
+		return skipFamilies
+	}
+	return append(skipFamilies, handler.postBridgeFamilyNames...)
+}
+
+// computePostBridgeNativeFamilies runs every registered POST_BRIDGE native
+// family executor for one partition, AFTER the compatibility bridge call has
+// already returned successfully for that same partition (see Work).
+//
+// # Why a post_bridge phase exists at all (CHAOS-4278)
+//
+// families.json's `"phase"` field is additive and defaults to `pre_bridge`
+// (today's behavior, computeNativeFamilies above) for every family that does
+// not declare it -- this phase exists for the narrow case of a native family
+// whose OWN correctness depends on data a DIFFERENT, still-Python-bridged
+// family writes during the SAME partition run. `work_item_state`
+// (WorkItemStateExecutor) is the first: it reads `work_item_team_
+// attributions`, which `work_item_attribution` (still Python-bridged,
+// CHAOS-4283) writes fresh every partition. Running work_item_state
+// pre_bridge (as it originally shipped) meant the Go read happened BEFORE
+// that write -- codex round 1 (2026-09-01) caught this as a P1: a new or
+// re-attributed item's freshest attribution was systematically invisible to
+// the same-partition read. post_bridge fixes the ordering: pre_bridge
+// natives run, then the bridge runs (computing `work_item_attribution`
+// among whatever else was not skipped), THEN this method runs
+// work_item_state against the now-fresh table.
+//
+// TEMPORARY, per family (team-lead ruling 2026-09-01): when CHAOS-4283 ports
+// `work_item_attribution` to a native Go executor, that executor should run
+// BEFORE `work_item_state` within the SAME (pre_bridge) native phase --
+// ordinary in-process sequencing, no cross-phase call needed -- and
+// `work_item_state` should move back to `pre_bridge` in families.json.
+// post_bridge is a bridge (pun intended) for as long as the dependency
+// crosses the Python/Go boundary, not a permanent architectural feature.
+//
+// Fail-open, like computeNativeFamilies, for the SAME reason (a transient
+// ClickHouse hiccup must never fail the partition) -- but with a narrower
+// safety net: Python was already told (via skipFamiliesForBridge) not to
+// compute this family, so a post_bridge failure here means NO writer
+// produces this family's rows for this partition, unlike a pre_bridge
+// failure (which still has the bridge as a fallback). This method therefore
+// never returns an error to Work; a failure is logged via the SAME
+// DailyMetricsNativeFamilyOutcomeRefused telemetry pre_bridge failures use,
+// which is the operator-visible signal for "this partition produced zero
+// rows for this family, check why."
+func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Context, run Run, partition Partition) {
+	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
+		return
+	}
+	for _, name := range handler.postBridgeFamilyNames {
+		executor := handler.postBridgeFamilies[name]
+		if executor == nil {
+			continue
+		}
+		started := handler.nativeFamiliesNow()
+		rows, err := executor.ComputeFamily(ctx, run, partition)
+		duration := handler.nativeFamiliesNow().Sub(started)
+		outcome := jobruntime.DailyMetricsNativeFamilyOutcomeComputed
+		if err != nil {
+			rows = 0
+			outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+		}
+		if handler.nativeObserver != nil {
+			_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(name, outcome, rows, duration)
+		}
+	}
+}
+
 func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) error {
 	if handler == nil || handler.store == nil || handler.publisher == nil || handler.compatibility == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
@@ -606,16 +725,29 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			skipFamilies := handler.computeNativeFamilies(workCtx, run, claim.Partition)
+			skipFamilies := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
 			// CHAOS-4316: bound only the compatibility bridge call, not the
-			// native-family compute above -- that is a separate, fast,
-			// ClickHouse-only path with none of the bridge's liveness gap.
+			// native-family compute above (or the post_bridge native
+			// compute below, CHAOS-4278, for the SAME reason -- a separate,
+			// fast, ClickHouse-only path with none of the bridge's
+			// liveness gap) -- bridgeCtx is scoped to this one call only,
+			// workCtx stays unbounded for computePostBridgeNativeFamilies.
+			bridgeCtx := workCtx
 			if ceiling := handler.livenessCeiling(len(claim.Partition.RepoIDs)); ceiling > 0 {
 				var cancel context.CancelFunc
-				workCtx, cancel = context.WithTimeout(workCtx, ceiling)
+				bridgeCtx, cancel = context.WithTimeout(bridgeCtx, ceiling)
 				defer cancel()
 			}
-			return handler.compatibility.ComputePartition(workCtx, run, claim.Partition, skipFamilies)
+			if err := handler.compatibility.ComputePartition(bridgeCtx, run, claim.Partition, skipFamilies); err != nil {
+				return err
+			}
+			// CHAOS-4278: only after the bridge call has durably succeeded
+			// for this partition -- see computePostBridgeNativeFamilies's
+			// doc comment for why this ordering is the whole point of the
+			// phase, and why it never returns an error here (fail-open,
+			// narrower safety net than pre_bridge).
+			handler.computePostBridgeNativeFamilies(workCtx, run, claim.Partition)
+			return nil
 		},
 	); err != nil {
 		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {

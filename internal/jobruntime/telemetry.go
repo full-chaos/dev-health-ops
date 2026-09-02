@@ -526,7 +526,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // process start, exactly like the zero-rows-with-source series, so a
 // construction refusal is visible on the SAME counter a healthy deploy
 // would move, not absent from it.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "deploy"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "deploy", "work_item_state"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -896,7 +896,15 @@ type MetricsCollector struct {
 	// deliberately no team_id label, same cardinality discipline as every
 	// other per-tenant-identity signal in this file.
 	teamMetricsDailyRepoCount *histogram
-	postSyncFanout            map[PostSyncFanoutOutcome]uint64
+	// workItemStateMissingAttribution (CHAOS-4278): count of work items this
+	// family processed (they have status transitions) with NO primary row in
+	// work_item_team_attributions -- see
+	// WorkItemStateMissingAttributionObserver's doc comment. A plain scalar
+	// counter, not a histogram: this is a defect-visibility guard on the
+	// team-attribution READ contract, not a distribution anyone needs
+	// percentiles of.
+	workItemStateMissingAttribution uint64
+	postSyncFanout                  map[PostSyncFanoutOutcome]uint64
 	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
 	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
 	// is the paired rows-written histogram, observed only on the
@@ -1038,6 +1046,7 @@ var _ RemainingMetricsManualBackfillObserver = (*MetricsCollector)(nil)
 var _ ZeroUnitFinalizationObserver = (*MetricsCollector)(nil)
 var _ CoverageCacheInvalidationObserver = (*MetricsCollector)(nil)
 var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
+var _ WorkItemStateMissingAttributionObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
@@ -1689,6 +1698,22 @@ func (collector *MetricsCollector) ObserveTeamMetricsDailyRepoCount(repoCount in
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.teamMetricsDailyRepoCount.observe(float64(repoCount))
+	return nil
+}
+
+// ObserveWorkItemStateMissingAttribution records how many work items ONE
+// work_item_state ComputeFamily call processed (they had status transitions)
+// with no primary row in work_item_team_attributions (CHAOS-4278). count=0
+// is a valid, expected observation -- it is the healthy steady state this
+// counter exists to keep visible, not skipped as a no-op the way a
+// zero-repo-count call would be for ObserveTeamMetricsDailyRepoCount above.
+func (collector *MetricsCollector) ObserveWorkItemStateMissingAttribution(count int) error {
+	if count < 0 {
+		return errors.New("work item state missing attribution count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.workItemStateMissingAttribution += uint64(count)
 	return nil
 }
 
@@ -2459,6 +2484,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsNativeFamily(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
+	collector.writeWorkItemStateMissingAttribution(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeIncidentValidFromGuard(&output)
@@ -2915,6 +2941,16 @@ func (collector *MetricsCollector) writeDailyMetricsCompatRetry(output *strings.
 func (collector *MetricsCollector) writeTeamMetricsDailyRepoCount(output *strings.Builder) {
 	writeMetadata(output, "dev_health_team_metrics_daily_repo_count", "Distinct repo_id rows written to team_metrics_daily per (team_id, day) in one write. A value of 1 is an ordinary single-repo team, not a defect (CHAOS-4329).", "histogram")
 	writeHistogram(output, "dev_health_team_metrics_daily_repo_count", nil, collector.teamMetricsDailyRepoCount)
+}
+
+// writeWorkItemStateMissingAttribution exposes the CHAOS-4278
+// team-attribution-READ guard: work items work_item_state processed with no
+// primary row in work_item_team_attributions. Should read 0 -- see
+// WorkItemStateMissingAttributionObserver's doc comment for why this counter
+// exists even though it is expected to never move.
+func (collector *MetricsCollector) writeWorkItemStateMissingAttribution(output *strings.Builder) {
+	writeMetadata(output, "worker_daily_metrics_work_item_state_missing_attribution_total", "Work items the work_item_state native family processed (they had status transitions) with no primary row in work_item_team_attributions, defaulting to \"unassigned\" (CHAOS-4278). Expected to stay 0.", "counter")
+	writeUintSample(output, "worker_daily_metrics_work_item_state_missing_attribution_total", nil, collector.workItemStateMissingAttribution)
 }
 func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) {
 	writeMetadata(output, "dev_health_post_sync_fanout_total", "Post-sync fanout outcomes: whether a completed sync's post_sync job published a daily-metrics re-drive (CHAOS-4263).", "counter")

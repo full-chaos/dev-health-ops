@@ -78,6 +78,16 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
     # is no synthetic "unassigned" bucket here: an org with zero owned repos
     # for any team on a given day legitimately writes zero rows for it.
     "team_cognitive_load": "team_cognitive_load_daily",
+    # CHAOS-4278: work_item_state_durations_daily has no repo_id column at
+    # all (day, provider, work_scope_id, team_id, status) -- it is neither
+    # REPO_DAY_FAMILIES- nor a repo-scoped TEAM_DAY_FAMILIES-shaped table,
+    # but it IS (org_id, team_id, computed_at)-shaped, which is all
+    # team_readback actually requires. "unassigned" is a legitimate team_id
+    # here too (an item whose primary attribution row is missing or has a
+    # NULL team_id normalizes to "unassigned" -- see
+    # WorkItemStateExecutor/resolveWorkItemPrimaryTeam), so this reuses
+    # team_readback rather than inventing a fourth shape.
+    "work_item_state": "work_item_state_durations_daily",
 }
 
 

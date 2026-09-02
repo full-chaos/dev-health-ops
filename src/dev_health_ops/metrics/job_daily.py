@@ -1579,15 +1579,27 @@ async def run_daily_metrics_job(
             # but was never invoked in the live scheduled daily job, so the table
             # stayed empty for real orgs. Reuse the work_items / transitions
             # already loaded for this day.
-            wi_state_durations = compute_work_item_state_durations_daily(
-                day=d,
-                work_items=work_items,
-                transitions=work_item_transitions,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
+            #
+            # CHAOS-4278: work_item_state has a native Go executor
+            # (WorkItemStateExecutor). When the Go dispatcher reports it
+            # already computed and wrote this scope, skip compute here too --
+            # unlike repo_user_commit, nothing downstream of
+            # wi_state_durations in this function reads it (its only other
+            # use is the write below), so there is no shared-input reason to
+            # keep computing it, matching team_wellbeing's skip shape.
+            wi_state_durations = (
+                []
+                if "work_item_state" in skip_families
+                else compute_work_item_state_durations_daily(
+                    day=d,
+                    work_items=work_items,
+                    transitions=work_item_transitions,
+                    computed_at=computed_at,
+                    team_resolver=team_resolver,
+                    project_key_resolver=project_key_resolver,
+                    linked_issue_resolver=linked_issue_resolver,
+                    attribution_context=team_attribution_context,
+                )
             )
 
         review_edges = compute_review_edges_daily(

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -140,6 +141,185 @@ func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
 		t.Fatalf("partition completions=%d, want 1 (fail-open must still complete the partition)", store.partitionCompletions)
 	}
 	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+		t.Fatalf("observations=%#v", observer.calls)
+	}
+}
+
+// sharedOrderingState lets a test observe whether a family's ComputeFamily
+// call sees data the compatibility bridge writes DURING the same partition
+// -- CHAOS-4278's whole reason for the post_bridge phase existing. Mirrors,
+// at test-double granularity, work_item_state reading work_item_team_
+// attributions after work_item_attribution (Python-bridged) writes it.
+type sharedOrderingState struct {
+	mu    sync.Mutex
+	value string
+}
+
+// bridgeWritingCompatibility is a CompatibilityExecutor stub that writes a
+// value to shared state on ComputePartition, simulating the bridge's
+// work_item_attribution family writing a fresh work_item_team_attributions
+// row for this partition.
+type bridgeWritingCompatibility struct {
+	state *sharedOrderingState
+}
+
+func (compatibility *bridgeWritingCompatibility) ComputePartition(_ context.Context, _ Run, _ Partition, _ []string) error {
+	compatibility.state.mu.Lock()
+	compatibility.state.value = "written-by-bridge"
+	compatibility.state.mu.Unlock()
+	return nil
+}
+func (*bridgeWritingCompatibility) Finalize(context.Context, Run) error { return nil }
+
+// stateReadingExecutor is a NativeFamilyExecutor stub that records whatever
+// sharedOrderingState held AT THE MOMENT ComputeFamily ran, so a test can
+// distinguish "ran before the bridge wrote" from "ran after."
+type stateReadingExecutor struct {
+	state    *sharedOrderingState
+	observed string
+	calls    int
+}
+
+func (executor *stateReadingExecutor) ComputeFamily(context.Context, Run, Partition) (int, error) {
+	executor.calls++
+	executor.state.mu.Lock()
+	executor.observed = executor.state.value
+	executor.state.mu.Unlock()
+	return 1, nil
+}
+
+// TestPreBridgeNativeFamilyReadsStaleDataBeforeCompatibilityWrites is
+// CHAOS-4278's RED-ON-BASELINE proof: a family registered pre_bridge (via
+// SetNativeFamilies, the mistake work_item_state originally shipped with,
+// caught by codex round 1 2026-09-01) runs its ComputeFamily call BEFORE the
+// compatibility bridge writes this partition's fresh data -- so it observes
+// the state BEFORE the bridge's write, not after. This is exactly codex's
+// P1: "Go reads attribution before Python writes this partition's snapshot."
+func TestPreBridgeNativeFamilyReadsStaleDataBeforeCompatibilityWrites(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	state := &sharedOrderingState{}
+	compatibility := &bridgeWritingCompatibility{state: state}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &stateReadingExecutor{state: state}
+	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": executor}) // WRONG phase -- demonstrates the bug
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor calls=%d, want 1", executor.calls)
+	}
+	if executor.observed != "" {
+		t.Fatalf("pre_bridge executor observed %q, want \"\" (empty/stale) -- it must have run BEFORE the bridge's write for this baseline to demonstrate the bug", executor.observed)
+	}
+}
+
+// TestPostBridgeNativeFamilyReadsDataWrittenByCompatibility is the GREEN
+// counterpart: the SAME family, registered post_bridge (SetPostBridge
+// NativeFamilies), observes the bridge's write -- proving
+// computePostBridgeNativeFamilies actually runs after
+// compatibility.ComputePartition returns, not before or concurrently.
+func TestPostBridgeNativeFamilyReadsDataWrittenByCompatibility(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	state := &sharedOrderingState{}
+	compatibility := &bridgeWritingCompatibility{state: state}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &stateReadingExecutor{state: state}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": executor})
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("executor calls=%d, want 1", executor.calls)
+	}
+	if executor.observed != "written-by-bridge" {
+		t.Fatalf("post_bridge executor observed %q, want %q", executor.observed, "written-by-bridge")
+	}
+}
+
+// TestSkipFamiliesForBridgeIncludesPostBridgeNamesUnconditionally proves
+// skipFamiliesForBridge tells the compatibility bridge to skip a
+// post_bridge family EVEN THOUGH it has not run yet (it cannot have -- it
+// runs after the bridge call this skip list is FOR), alongside a pre_bridge
+// family that skips only because it already succeeded.
+func TestSkipFamiliesForBridgeIncludesPostBridgeNamesUnconditionally(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preExecutor := &fakeNativeFamilyExecutor{rowsWritten: 3}
+	postExecutor := &fakeNativeFamilyExecutor{rowsWritten: 5}
+	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": preExecutor})
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": postExecutor})
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+	got := compatibility.lastSkipFamilies()
+	sort.Strings(got)
+	want := []string{"team_wellbeing", "work_item_state"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("skipFamilies=%v, want %v", got, want)
+	}
+	if preExecutor.calls != 1 {
+		t.Fatalf("pre_bridge executor calls=%d, want 1", preExecutor.calls)
+	}
+	if postExecutor.calls != 1 {
+		t.Fatalf("post_bridge executor calls=%d, want 1", postExecutor.calls)
+	}
+}
+
+// TestPostBridgeNativeFamilyFailureIsFailOpenWithNarrowerSafetyNet proves
+// the documented tradeoff: a post_bridge family's runtime failure is
+// fail-open (the partition still completes, the refusal is observed), but
+// UNLIKE a pre_bridge failure, the family was already excluded from the
+// bridge's own compute (skipFamiliesForBridge cannot know in advance that
+// the post_bridge run will fail) -- so this partition produces ZERO rows
+// for this family, not a Python fallback.
+func TestPostBridgeNativeFamilyFailureIsFailOpenWithNarrowerSafetyNet(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postExecutor := &fakeNativeFamilyExecutor{err: errors.New("transient clickhouse failure")}
+	observer := &recordingNativeFamilyObserver{}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": postExecutor})
+	handler.SetNativeFamilyObserver(observer)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a post_bridge family failure must not fail the partition: %v", err)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "work_item_state" {
+		t.Fatalf("skipFamilies=%v, want [work_item_state] -- it must be excluded from the bridge even though its post_bridge run later failed", got)
+	}
+	if store.partitionCompletions != 1 {
+		t.Fatalf("partition completions=%d, want 1 (fail-open must still complete the partition)", store.partitionCompletions)
+	}
+	if len(observer.calls) != 1 || observer.calls[0].family != "work_item_state" ||
 		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
 		t.Fatalf("observations=%#v", observer.calls)
 	}

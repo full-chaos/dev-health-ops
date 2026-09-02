@@ -360,6 +360,26 @@ type TeamMetricsDailyRepoCountObserver interface {
 	ObserveTeamMetricsDailyRepoCount(repoCount int) error
 }
 
+// WorkItemStateMissingAttributionObserver is the narrow capability
+// WorkItemStateExecutor depends on after loading primary team attributions
+// for a repo (CHAOS-4278). This family reads its team attribution from
+// `work_item_team_attributions.is_primary=1` instead of recomputing the
+// 9-source resolve_team_attribution cascade in Go (team-lead ruling,
+// 2026-09-01) -- a work item this family processes (it has status
+// transitions) with NO primary attribution row silently defaults to
+// "unassigned" rather than failing the partition, which is the right
+// behavior but must not be invisible: it is indistinguishable, from the
+// written row alone, from an item the cascade itself would have resolved to
+// "unassigned". Measured 0 occurrences over 1903 completed work items on
+// org 70d529e0 (2026-09-01, see CHAOS-4278's Linear comment) before this
+// executor shipped; this counter is the guard that makes the day that stops
+// being true (a cascade source starts winning that `work_item_attribution`'s
+// write doesn't cover, or its write falls behind this family's read)
+// observable instead of a silent attribution regression.
+type WorkItemStateMissingAttributionObserver interface {
+	ObserveWorkItemStateMissingAttribution(count int) error
+}
+
 // ZeroUnitFinalizationObserver is the narrow capability the native
 // finalize_sync_run port depends on (CHAOS-4175) after classifying a
 // zero-unit sync run's cause. Generic runtime middleware cannot infer this:

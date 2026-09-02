@@ -329,7 +329,7 @@ classes — and explicitly excludes tenant-authored policy code from the first
 engine.
 
 The Wave 0 inventory found that per-route action, resource, and entitlement were
-**not derivable** for all 58 GraphQL resolvers (context-level auth is anchored;
+**not derivable** for all 59 GraphQL resolvers (context-level auth is anchored;
 per-field scoping was not re-derived) and that roughly 17 of billing's ~20
 routes were classified by family pattern with a gaps note. So the action
 vocabulary cannot be generated from the inventory alone.

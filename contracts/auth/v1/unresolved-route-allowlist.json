@@ -1,5 +1,0 @@
-{
-  "$comment": "CHAOS-3273 L10 guardrail 11 (UNVERIFIED ROUTE, see ci/check_endpoint_profiles.py module docstring). Excuses exactly one row id per entry -- never a pattern, never a whole file -- when discovery cannot resolve a REST row's route to a deployed app (a dotted or otherwise dynamic include_router). Every entry MUST carry a non-empty 'reason' recorded by the human who reviewed it; an entry with no reason does not excuse its row and is itself reported as an error. Empty on purpose: the real 361-row inventory resolves cleanly today (303/303 REST routes resolution == OK) -- add an entry here only after a genuine, reviewed case appears.",
-  "entries": [],
-  "schema_version": "unresolved-route-allowlist.v1"
-}

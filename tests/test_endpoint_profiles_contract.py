@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,47 +62,218 @@ def test_real_tree_passes_the_gate():
     assert errors == [], "\n".join(errors)
 
 
-def test_inventory_row_count_matches_the_wave0_baseline():
-    """361 rows = 303 REST + 58 GraphQL (audited baseline, see lane brief
-    section 6 -- a different number here is a finding to reconcile, not an
-    adjustment to make quietly)."""
+_GRAPHQL_KINDS = ("graphql_field", "graphql_mutation", "graphql_subscription")
+
+
+def test_inventory_row_count_matches_the_baseline():
+    """370 rows = 311 REST + 59 GraphQL. A different number here is a finding
+    to reconcile, not an adjustment to make quietly.
+
+    Was 361 (303 + 58) under source-text discovery. The move to enumerating
+    the served objects (CHAOS-4761) changed it by nine, and every one of the
+    nine is a defect the old count concealed:
+      +8 REST -- four fastapi doc routes, /metrics, and GET/POST/WEBSOCKET
+         /graphql. All served by the main app, none written in ops source, so
+         no source-text pattern could ever have matched them.
+      +3 GraphQL -- the three @strawberry.subscription resolvers the old
+         decorator list did not include.
+      -2 GraphQL -- `metrics` and `update_setting`, which are
+         `@strawberry.field` examples inside a DOCSTRING and are not fields
+         on the served schema at all.
+    """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
-    graphql = [
-        r for r in rows if r["surface_kind"] in ("graphql_field", "graphql_mutation")
-    ]
-    assert len(rest) == 303, len(rest)
-    assert len(graphql) == 58, len(graphql)
-    assert len(rows) == 361, len(rows)
+    graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
+    assert len(rest) == 311, len(rest)
+    assert len(graphql) == 59, len(graphql)
+    assert len(rows) == 370, len(rows)
 
 
-def test_classification_summary_matches_the_wave0_baseline():
+def test_the_three_subscriptions_are_profiled():
+    """They were invisible to the old discoverer and excluded from the count
+    it produced (CHAOS-4761)."""
+    inventory = checker.load_json(_INVENTORY_PATH)
+    subs = {
+        r["graphql_field_name"]
+        for r in inventory["rows"]
+        if r["surface_kind"] == "graphql_subscription"
+    }
+    assert subs == {"metrics_updated", "task_status", "sync_progress"}, subs
+
+
+def test_classification_summary_matches_the_baseline():
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     protected = [r for r in rows if r["classification"] == "protected"]
     public = [r for r in rows if r["classification"] == "public"]
-    assert len(protected) == 339, len(protected)
-    assert len(public) == 22, len(public)
+    # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms.
+    assert len(protected) == 343, len(protected)
+    # 22 + the four fastapi doc routes + /metrics.
+    assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)
 
 
-def test_discovered_keys_and_row_keys_are_identical_sets():
-    """Not just totals -- the actual (file, line) key SETS in both
-    directions, so a missed surface can't net against an unrelated phantom
-    row and silently pass."""
+def test_served_surface_set_and_row_set_are_identical_in_both_directions():
+    """The structural test, and the reason this gate is worth anything.
+
+    Not totals -- the actual SETS, keyed on the deployed identity discovery
+    produces from the served app/schema objects, so a missed surface cannot
+    net against an unrelated phantom row and pass. Both directions are
+    asserted separately: a surface with no row, and a row naming no surface.
+    """
     inventory = checker.load_json(_INVENTORY_PATH)
     discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_direct")
     discovered = discoverer.discover(_REPO_ROOT)
 
-    discovered_keys = {(r["file"], r["line"]) for r in discovered["routes"]}
-    discovered_keys |= {(r["file"], r["line"]) for r in discovered["graphql"]}
-    row_keys = {(r["source"]["file"], r["source"]["line"]) for r in inventory["rows"]}
+    served, map_errors = checker._live_surface_map(discovered)
+    assert map_errors == [], map_errors
+    row_keys = {
+        key
+        for key in (checker._row_surface_key(r) for r in inventory["rows"])
+        if key is not None
+    }
 
-    missed = discovered_keys - row_keys
-    phantom = row_keys - discovered_keys
-    assert missed == set(), f"discovered but not inventoried: {missed}"
-    assert phantom == set(), f"inventoried but not (re)discovered: {phantom}"
+    missed = served.keys() - row_keys
+    phantom = row_keys - served.keys()
+    assert missed == set(), f"served but not inventoried: {sorted(missed)}"
+    assert phantom == set(), f"inventoried but not served: {sorted(phantom)}"
+
+
+def test_every_row_key_is_well_formed():
+    """_row_surface_key returning None means the row could not name a surface
+    at all; such a row is skipped by the parity check above, so a tree full of
+    them would pass it vacuously."""
+    inventory = checker.load_json(_INVENTORY_PATH)
+    unkeyed = [
+        r["id"] for r in inventory["rows"] if checker._row_surface_key(r) is None
+    ]
+    assert unkeyed == [], unkeyed
+
+
+def test_discovery_defaults_are_the_real_deployed_objects():
+    """`discover()` takes the app/schema table as parameters so the fixture
+    tests can point it at a purpose-built package. This pins the DEFAULTS, so
+    that flexibility can never quietly become a narrower production config."""
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_defaults")
+    assert discoverer.DEPLOYED_APPS == (
+        ("dev_health_ops.api.main", "app"),
+        ("dev_health_ops.api.billing_edge", "app"),
+    )
+    assert discoverer.GRAPHQL_SCHEMA == (
+        "dev_health_ops.api.graphql.schema",
+        "schema",
+    )
+    # Every app the discoverer walks must be attributable to a service, or
+    # rows for it cannot be checked at all.
+    for module, attr in discoverer.DEPLOYED_APPS:
+        assert f"{module}::{attr}" in checker._APP_ROOT_SERVICE
+
+
+def test_multi_mount_yields_one_surface_per_mount(tmp_path):
+    """CHAOS-4760, closed by construction.
+
+    One router included at two prefixes is two served surfaces. Under the old
+    mount arithmetic it collapsed to `prefixes[0]`, which produced BOTH a
+    false negative (a profile covering one mount passed) and a false positive
+    (two correct profiles tripped duplicate-surface, because identity was the
+    shared file:line). Enumerating app.routes gives two route objects with two
+    paths, and identity is (service, method, path), so both halves go away.
+    """
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / _MAIN_FILE,
+        "from fastapi import FastAPI\n"
+        "\n"
+        "from .routers.example import router as example_router\n"
+        "\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
+        "app.include_router(example_router)\n"
+        'app.include_router(example_router, prefix="/v2")\n',
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+
+    # 1. both mounts are discovered
+    discoverer = checker._load_module(
+        _DISCOVERER_PATH, "discover_ops_routes_multimount"
+    )
+    paths = {r["path"] for r in discoverer.discover(root)["routes"]}
+    assert paths == {"/example", "/v2/example"}, paths
+
+    # 2. covering only one of them FAILS, naming the missing mount
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("UNOWNED SURFACE" in e and "/v2/example" in e for e in errors), errors
+
+    # 3. two correct rows for the two mounts BOTH pass -- no duplicate-surface
+    #    error, even though they share one file:line anchor.
+    second = _minimal_valid_row(
+        id="GET /v2/example [dev-health-ops-api]", route="/v2/example"
+    )
+    _write_inventory(root, [_minimal_valid_row(), second])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert errors == [], errors
+
+
+def test_a_dynamically_included_router_is_discovered(tmp_path):
+    """The case the retired static walk had to fail closed on (UNVERIFIED
+    ROUTE + its reviewed allowlist). A router reached through a computed
+    import is in app.routes like any other, so there is nothing to vouch for.
+    """
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / _MAIN_FILE,
+        "import importlib\n"
+        "\n"
+        "from fastapi import FastAPI\n"
+        "\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
+        "_name = '.'.join(['dev_health_ops', 'api', 'routers', 'example'])\n"
+        "app.include_router(getattr(importlib.import_module(_name), 'router'))\n",
+    )
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_dynamic")
+    paths = {r["path"] for r in discoverer.discover(root)["routes"]}
+    assert paths == {"/example"}, paths
+    inventory_path, schema_path, cc_path = _paths(root)
+    assert checker.check(root, inventory_path, schema_path, cc_path) == []
+
+
+def test_gate_fails_loudly_when_the_app_cannot_be_imported(tmp_path):
+    """An unimportable app must raise, never yield an empty surface set --
+    an empty set makes every cross-check pass while checking nothing."""
+    root = _minimal_valid_root(tmp_path)
+    _write(root / _MAIN_FILE, "raise RuntimeError('boom')\n")
+    inventory_path, schema_path, cc_path = _paths(root)
+    with pytest.raises(RuntimeError) as exc:
+        checker.check(root, inventory_path, schema_path, cc_path)
+    assert "dev_health_ops.api.main" in str(exc.value)
+
+
+def test_gate_refuses_to_run_without_a_date_time_format_checker(tmp_path, monkeypatch):
+    """`format_checker=` alone is inert: jsonschema only checks "date-time"
+    when a backing implementation (rfc3339-validator) is importable, so
+    `generated_at: "not-a-date"` would validate cleanly and the fix would look
+    applied while changing nothing (CHAOS-4761)."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    checkers = dict(checker.jsonschema.Draft202012Validator.FORMAT_CHECKER.checkers)
+    checkers.pop("date-time", None)
+    monkeypatch.setattr(
+        checker.jsonschema.Draft202012Validator.FORMAT_CHECKER, "checkers", checkers
+    )
+    with pytest.raises(RuntimeError, match="date-time"):
+        checker.check(root, inventory_path, schema_path, cc_path)
+
+
+def test_gate_rejects_a_malformed_generated_at(tmp_path):
+    """The format check is real, not declared: red before the
+    rfc3339-validator dependency was added, green after."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    inventory = json.loads(inventory_path.read_text())
+    inventory["generated_at"] = "not-a-date"
+    _write(inventory_path, json.dumps(inventory, indent=2))
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("generated_at" in e and "date-time" in e for e in errors), errors
 
 
 def test_every_accepted_credential_class_is_real():
@@ -122,7 +294,13 @@ def test_schema_accepts_server_action_surface_kind_dynamically():
     reading it back, not by asserting on checker source."""
     schema = checker.load_json(_SCHEMA_PATH)
     vocab = checker._schema_enum(schema, "surface_kind")
-    assert vocab == {"rest", "graphql_field", "graphql_mutation", "server_action"}
+    assert vocab == {
+        "rest",
+        "graphql_field",
+        "graphql_mutation",
+        "graphql_subscription",
+        "server_action",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -151,42 +329,117 @@ def _seed_shared_fixtures(root: Path) -> None:
         root / "contracts" / "auth" / "v1" / "credential-classes.schema.json",
         _CREDENTIAL_CLASSES_SCHEMA_PATH.read_text(),
     )
-    # Empty on purpose, matching the real committed allowlist -- every
-    # fixture route below resolves cleanly (resolution == "OK"), so this is
-    # never actually consulted by those tests; it exists purely so check()
-    # (which always loads it) has a valid, empty file to find at its
-    # default sibling path rather than reporting ALLOWLIST MALFORMED/
-    # UNREADABLE against every other test in this file.
-    _write(
-        root / "contracts" / "auth" / "v1" / "unresolved-route-allowlist.json",
-        json.dumps({"schema_version": "unresolved-route-allowlist.v1", "entries": []}),
-    )
 
 
 _ROUTER_FILE = "src/dev_health_ops/api/routers/example.py"
 _MAIN_FILE = "src/dev_health_ops/api/main.py"
+_SCHEMA_FILE = "src/dev_health_ops/api/graphql/schema.py"
+_BILLING_EDGE_FILE = "src/dev_health_ops/api/billing_edge.py"
+
+# CHAOS-4761: discovery IMPORTS the app and the schema, so a fixture tree is
+# no longer a few files that happen to contain the right decorators -- it is a
+# real, importable package that really serves what it claims. That is the
+# point: a fixture the discoverer only PARSES can drift from a fixture the
+# framework would actually dispatch, and a gate proven against the first says
+# nothing about the second. `ci/discover_ops_routes.py` swaps
+# `dev_health_ops` in `sys.modules` for the root under test and restores the
+# real one afterwards, so these fixtures and `test_real_tree_passes_the_gate`
+# coexist in one pytest process.
+#
+# Note the app is built with docs_url/redoc_url/openapi_url=None. A default
+# FastAPI() also serves /docs, /docs/oauth2-redirect, /redoc and
+# /openapi.json, and under this gate those are four real surfaces that would
+# need four real rows -- which is exactly how the four of them were found
+# missing from the committed inventory in the first place.
+_DEFAULT_ROUTER_BODY = (
+    "from fastapi import APIRouter\n"
+    "\n"
+    "router = APIRouter()\n"
+    "\n"
+    "\n"
+    '@router.get("/example")\n'
+    "async def get_example():\n"
+    "    return {}\n"
+)
+
+# `example` is a plain attribute, not a resolver, so the minimal tree has
+# ZERO GraphQL surfaces -- a field with no resolver runs none of our code and
+# is read off an already-resolved parent. Tests that need a GraphQL surface
+# opt in with _schema_with_resolver() below.
+_DEFAULT_SCHEMA_BODY = (
+    "import strawberry\n"
+    "\n"
+    "\n"
+    "@strawberry.type\n"
+    "class Query:\n"
+    "    example: str\n"
+    "\n"
+    "\n"
+    "schema = strawberry.Schema(query=Query)\n"
+)
 
 
-def _seed_source_tree(root: Path) -> None:
+def _schema_with_resolver(python_name: str) -> str:
+    """A served schema with exactly one resolver-bearing root field.
+
+    The resolver's `@strawberry.field` decorator lands on line 6, which is
+    what `inspect.getsourcelines` reports and therefore what a row must
+    anchor to.
+    """
+    return (
+        "import strawberry\n"
+        "\n"
+        "\n"
+        "@strawberry.type\n"
+        "class Query:\n"
+        "    @strawberry.field\n"
+        f"    async def {python_name}(self) -> str:\n"
+        '        return ""\n'
+        "\n"
+        "\n"
+        "schema = strawberry.Schema(query=Query)\n"
+    )
+
+
+_RESOLVER_ANCHOR_LINE = 6
+
+
+def _write_package_init(root: Path, *dotted_dirs: str) -> None:
+    for rel in dotted_dirs:
+        _write(root / rel / "__init__.py", "")
+
+
+def _seed_source_tree(
+    root: Path,
+    router_body: str = _DEFAULT_ROUTER_BODY,
+    schema_body: str = _DEFAULT_SCHEMA_BODY,
+) -> None:
+    _write_package_init(
+        root,
+        "src/dev_health_ops",
+        "src/dev_health_ops/api",
+        "src/dev_health_ops/api/routers",
+        "src/dev_health_ops/api/graphql",
+    )
     _write(
         root / _MAIN_FILE,
         "from fastapi import FastAPI\n"
         "\n"
         "from .routers.example import router as example_router\n"
         "\n"
-        "app = FastAPI()\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
         "app.include_router(example_router)\n",
     )
+    _write(root / _ROUTER_FILE, router_body)
+    _write(root / _SCHEMA_FILE, schema_body)
+    # billing_edge is in DEPLOYED_APPS, so every fixture tree needs one or
+    # discovery cannot import it. Empty by default; the billing-edge tests
+    # below overwrite it with a real second app.
     _write(
-        root / _ROUTER_FILE,
-        "from fastapi import APIRouter\n"
+        root / _BILLING_EDGE_FILE,
+        "from fastapi import FastAPI\n"
         "\n"
-        "router = APIRouter()\n"
-        "\n"
-        "\n"
-        '@router.get("/example")\n'
-        "async def get_example():\n"
-        "    return {}\n",
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n",
     )
 
 
@@ -212,7 +465,11 @@ def _write_inventory(root: Path, rows: list[dict]) -> Path:
     inventory = {
         "schema_version": "endpoint-profile.v1",
         "generated_at": "2026-09-01T00:00:00Z",
-        "source_commit": "0000000000000000000000000000000000000",
+        # 40 hex chars: check_source_commit rejects anything shorter as a
+        # placeholder. tmp_path is not a git repository, so ancestry is
+        # reported as unverifiable rather than checked -- which is the point
+        # of the note being a separate return value.
+        "source_commit": "0" * 40,
         "credential_class_source": "contracts/auth/v1/credential-classes.json",
         "rows": rows,
     }
@@ -272,36 +529,86 @@ def test_gate_catches_a_synthetic_unowned_rest_route(tmp_path):
 
 def test_gate_catches_a_synthetic_unowned_graphql_resolver(tmp_path):
     root = _minimal_valid_root(tmp_path)
-    resolver_file = "src/dev_health_ops/api/graphql/resolvers/example.py"
-    _write(
-        root / resolver_file,
-        "import strawberry\n"
-        "\n"
-        "\n"
-        "@strawberry.field\n"
-        "async def resolve_rogue() -> str:\n"
-        '    return ""\n',
-    )
+    _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_rogue"))
     inventory_path, schema_path, cc_path = _paths(root)
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("UNOWNED SURFACE" in e and f"{resolver_file}:4" in e for e in errors), (
-        errors
+    assert any("UNOWNED SURFACE" in e and "resolve_rogue" in e for e in errors), errors
+
+
+def test_gate_catches_a_resolver_that_exists_only_in_a_docstring(tmp_path):
+    """The defect that put two rows in the committed inventory for surfaces
+    that never existed (CHAOS-4761).
+
+    `api/graphql/authz.py:25` and `:30` are `@strawberry.field` EXAMPLES inside
+    `require_permission`'s docstring. Source-text discovery matched them, so
+    the inventory gained rows for `metrics` and `update_setting` -- two
+    profiles of documentation. Enumerating the served schema cannot reproduce
+    that: a docstring defines no field. Red-on-baseline for this is the
+    committed inventory itself at the parent commit, which contained both rows
+    and passed.
+    """
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / "src/dev_health_ops/api/graphql/authz.py",
+        "def require_permission(*permissions):\n"
+        '    """Decorator to require permissions for GraphQL resolvers.\n'
+        "\n"
+        "    Usage:\n"
+        "        @strawberry.field\n"
+        "        async def metrics(self, info) -> list[str]:\n"
+        "            ...\n"
+        '    """\n'
+        "    return lambda f: f\n",
     )
+    inventory_path, schema_path, cc_path = _paths(root)
+    # The tree is otherwise fully owned, so a docstring-derived surface would
+    # show up as the ONLY new error.
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert errors == [], errors
+    # And a row claiming that docstring "surface" is rejected as a phantom.
+    row = _minimal_valid_row(
+        id="graphql:field:metrics",
+        surface_kind="graphql_field",
+        method=None,
+        route=None,
+        graphql_field_name="metrics",
+        source={"file": "src/dev_health_ops/api/graphql/authz.py", "line": 5},
+    )
+    _write_inventory(root, [_minimal_valid_row(), row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("PHANTOM ROW" in e and "metrics" in e for e in errors), errors
 
 
-def test_gate_catches_a_phantom_stale_row(tmp_path):
-    """A row whose anchor no longer names a real discovered surface must
-    fail -- the surface was removed/renamed but the row was not."""
+def test_gate_catches_a_row_anchored_away_from_its_endpoint(tmp_path):
+    """The row names a surface the app really serves, but anchors it at a
+    line the endpoint is not defined on.
+
+    Identity and anchor are separate concerns since CHAOS-4761: this row
+    matches a served surface (so it is not a phantom) and is caught on the
+    anchor alone, checked against where the served callable actually is."""
     root = _minimal_valid_root(tmp_path)
     inventory_path, schema_path, cc_path = _paths(root)
     row = _minimal_valid_row(
         source={"file": _ROUTER_FILE, "line": 3}
-    )  # not a decorator line
+    )  # not the decorator line
     _write_inventory(root, [row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("PHANTOM ROW" in e for e in errors), errors
-    # And the real route is now unowned too (bidirectional parity).
-    assert any("UNOWNED SURFACE" in e for e in errors), errors
+    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+
+
+def test_gate_catches_a_row_naming_a_route_the_app_does_not_serve(tmp_path):
+    """Bidirectional parity: the fabricated row is a phantom AND the real
+    route it displaced is unowned. Both are asserted, because a check that
+    only counted would let the two net out."""
+    root = _minimal_valid_root(tmp_path)
+    inventory_path, schema_path, cc_path = _paths(root)
+    row = _minimal_valid_row(
+        id="GET /not-served [dev-health-ops-api]", route="/not-served"
+    )
+    _write_inventory(root, [row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("PHANTOM ROW" in e and "/not-served" in e for e in errors), errors
+    assert any("UNOWNED SURFACE" in e and "/example" in e for e in errors), errors
 
 
 def test_gate_catches_a_duplicate_id(tmp_path):
@@ -365,48 +672,68 @@ def test_gate_catches_a_public_row_with_no_rationale(tmp_path):
     assert any("MISSING public_rationale" in e for e in errors), errors
 
 
-def test_gate_catches_content_drift_when_the_method_is_swapped(tmp_path):
-    """The anchored line still being a route decorator isn't enough -- the
-    SAME method must still be there (Codex-precedent-class check)."""
+def test_gate_catches_a_row_claiming_a_method_the_app_does_not_serve(tmp_path):
+    """The app serves GET /example, not POST. Under identity-by-(service,
+    method, path) that is a row naming nothing plus a real route left
+    unowned -- both reported."""
     root = _minimal_valid_root(tmp_path)
     inventory_path, schema_path, cc_path = _paths(root)
     row = _minimal_valid_row(method="POST", id="POST /example [dev-health-ops-api]")
     _write_inventory(root, [row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+    assert any("PHANTOM ROW" in e and "POST" in e for e in errors), errors
+    assert any("UNOWNED SURFACE" in e and "GET /example" in e for e in errors), errors
 
 
-def test_gate_catches_content_drift_when_the_route_path_is_swapped(tmp_path):
+def test_gate_catches_a_row_claiming_a_path_the_app_does_not_serve(tmp_path):
     root = _minimal_valid_root(tmp_path)
     inventory_path, schema_path, cc_path = _paths(root)
     row = _minimal_valid_row(route="/a-completely-different-path")
     _write_inventory(root, [row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+    assert any(
+        "PHANTOM ROW" in e and "/a-completely-different-path" in e for e in errors
+    ), errors
+    assert any("UNOWNED SURFACE" in e and "/example" in e for e in errors), errors
 
 
-def test_gate_catches_content_drift_when_a_graphql_field_name_is_swapped(tmp_path):
+def test_gate_catches_a_graphql_row_naming_a_field_the_schema_does_not_serve(
+    tmp_path,
+):
     root = _minimal_valid_root(tmp_path)
-    resolver_file = "src/dev_health_ops/api/graphql/resolvers/example.py"
-    _write(
-        root / resolver_file,
-        "import strawberry\n"
-        "\n"
-        "\n"
-        "@strawberry.field\n"
-        "async def resolve_real_name() -> str:\n"
-        '    return ""\n',
-    )
+    _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_real_name"))
     row = _minimal_valid_row(
         id="graphql:field:a_different_name",
         surface_kind="graphql_field",
         method=None,
         route=None,
         graphql_field_name="a_different_name",
-        source={"file": resolver_file, "line": 4},
+        source={"file": _SCHEMA_FILE, "line": _RESOLVER_ANCHOR_LINE},
     )
     inventory_path, schema_path, cc_path = _paths(root)
-    _write_inventory(root, [row])
+    _write_inventory(root, [_minimal_valid_row(), row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("PHANTOM ROW" in e and "a_different_name" in e for e in errors), errors
+    assert any("UNOWNED SURFACE" in e and "resolve_real_name" in e for e in errors), (
+        errors
+    )
+
+
+def test_gate_catches_a_graphql_row_anchored_at_the_wrong_line(tmp_path):
+    """The row names a field the schema really serves, but anchors it
+    somewhere the resolver is not defined."""
+    root = _minimal_valid_root(tmp_path)
+    _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_real_name"))
+    row = _minimal_valid_row(
+        id="graphql:field:resolve_real_name",
+        surface_kind="graphql_field",
+        method=None,
+        route=None,
+        graphql_field_name="resolve_real_name",
+        source={"file": _SCHEMA_FILE, "line": 1},
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
     assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
 
@@ -744,7 +1071,7 @@ def test_gate_catches_duplicate_surface_ownership(tmp_path):
     _write_inventory(root, [row_a, row_b])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
     assert any(
-        "DUPLICATE SURFACE OWNERSHIP" in e and _ROUTER_FILE in e for e in errors
+        "DUPLICATE SURFACE OWNERSHIP" in e and "GET /example" in e for e in errors
     ), errors
 
 
@@ -784,20 +1111,22 @@ def test_gate_catches_the_real_committed_off_by_one_anchor_bug(tmp_path):
     data; this is the regression guard against the same bug SHAPE, using a
     synthetic fixture (ops has no such bug -- this proves the mechanism)."""
     root = tmp_path / "repo"
-    _write(
-        root / _ROUTER_FILE,
-        "from fastapi import APIRouter\n"
-        "\n"
-        "router = APIRouter()\n"
-        "\n"
-        "\n"
-        "def build_handler():\n"
-        "    inner = (\n"
-        "        lambda: {}\n"
-        "    )\n"
-        "    return protected(inner)\n",
-    )
     _seed_shared_fixtures(root)
+    _seed_source_tree(
+        root,
+        router_body=(
+            "from fastapi import APIRouter\n"
+            "\n"
+            "router = APIRouter()\n"
+            "\n"
+            "\n"
+            "def build_handler():\n"
+            "    inner = (\n"
+            "        lambda: {}\n"
+            "    )\n"
+            "    return protected(inner)\n"
+        ),
+    )
     row = _minimal_valid_row(
         primary_validator={
             "description": "wraps itself in protected()",
@@ -824,10 +1153,11 @@ def test_gate_catches_an_issued_credential_anchor_with_no_extractable_function_n
     must be reported, not silently accepted just because the file exists
     and the line is in bounds."""
     root = tmp_path / "repo"
-    _write(
-        root / _ROUTER_FILE, "from fastapi import APIRouter\n\nrouter = APIRouter()\n"
-    )
     _seed_shared_fixtures(root)
+    _seed_source_tree(
+        root,
+        router_body="from fastapi import APIRouter\n\nrouter = APIRouter()\n",
+    )
     row = _minimal_valid_row(
         classification="protected",
         public_rationale=None,
@@ -959,7 +1289,7 @@ def _seed_billing_edge_app(root: Path) -> None:
         root / _BILLING_EDGE_FILE,
         "from fastapi import FastAPI\n"
         "\n"
-        "app = FastAPI()\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
         "\n"
         "\n"
         '@app.post("/shared")\n'
@@ -1033,7 +1363,7 @@ def test_gate_catches_a_billing_edge_row_mislabelled_as_the_main_app(tmp_path):
     assert any(
         "SERVICE MISMATCH" in e
         and "dev-health-ops-billing-edge" in e
-        and _BILLING_EDGE_FILE in e
+        and "/shared" in e
         for e in errors
     ), errors
 
@@ -1090,10 +1420,10 @@ def test_gate_accepts_server_action_surface_kind_through_check_end_to_end(tmp_pa
     ops's own discover_ops_routes.py has no server_action discovery at all
     (ops is a Python FastAPI backend, not Next.js -- server_action is in
     the shared schema for the WEB lane's checker) -- so this row can only
-    ever fail here as a PHANTOM ROW (no discovered counterpart), the
-    correct, discovery-based reason, and that must be the ONLY complaint:
-    never one naming surface_kind/enum/vocabulary, which is what a
-    reintroduced hardcoded allowlist would add."""
+    ever fail here as an UNCHECKABLE ROW -- ops serves no Server Actions, so
+    this gate cannot attribute the row to anything -- and that must be the
+    ONLY complaint: never one naming surface_kind/enum/vocabulary, which is
+    what a reintroduced hardcoded allowlist would add."""
     root = _minimal_valid_root(tmp_path)
     inventory_path, schema_path, cc_path = _paths(root)
     row = _minimal_valid_row(
@@ -1105,16 +1435,10 @@ def test_gate_accepts_server_action_surface_kind_through_check_end_to_end(tmp_pa
     )
     _write_inventory(root, [_minimal_valid_row(), row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("PHANTOM ROW" in e and "src/app/actions.ts:3" in e for e in errors), (
-        errors
-    )
+    assert any("UNCHECKABLE ROW" in e for e in errors), errors
     assert not any(
-        (
-            "surface_kind" in e.lower()
-            or "enum" in e.lower()
-            or "vocabulary" in e.lower()
-        )
-        and "PHANTOM ROW" not in e
+        ("enum" in e.lower() or "vocabulary" in e.lower())
+        and "UNCHECKABLE ROW" not in e
         for e in errors
     ), errors
 
@@ -1276,12 +1600,8 @@ def test_cli_does_not_crash_on_a_malformed_row_inside_the_list(tmp_path, capsys)
 # 2. Two crash-before-report cases: a scalar/list top-level inventory
 #    document, and a malformed top-level credential-classes document, each
 #    raised before the computed schema violation ever printed.
-# 3. UNVERIFIED ROUTE (the important one): a row anchored to a route
-#    discovery could not resolve (UNRESOLVED_ROUTER/UNMOUNTED_ROUTER)
-#    previously skipped its route/service comparison entirely -- a false
-#    route + a wrong-but-valid service passed unchecked. Now fails closed
-#    unless the row id has a reasoned entry in the narrow
-#    unresolved-route-allowlist.json.
+# 3. UNVERIFIED ROUTE -- retired by CHAOS-4761 along with its allowlist;
+#    see the note at the end of this file.
 # ---------------------------------------------------------------------------
 
 
@@ -1351,130 +1671,262 @@ def test_check_does_not_crash_on_a_malformed_top_level_credential_classes(tmp_pa
     assert any("CREDENTIAL CLASS SCHEMA VIOLATION" in e for e in errors), errors
 
 
-_UNMOUNTED_ROUTER_FILE = "src/dev_health_ops/api/routers/unmounted.py"
+# ---------------------------------------------------------------------------
+# The UNVERIFIED ROUTE tests and their unresolved-route-allowlist fixtures
+# were REMOVED with CHAOS-4761, not weakened. They proved a fail-closed
+# escape hatch for routes a static source walk could not resolve to a mount
+# path. Enumerating app.routes has nothing to resolve -- a route the app
+# serves is in that list however it was included -- so the failure mode and
+# the allowlist that excused it no longer exist. The replacement coverage is
+# test_a_dynamically_included_router_is_discovered (the case the allowlist
+# existed for, now simply discovered) and
+# test_gate_fails_loudly_when_the_app_cannot_be_imported (the failure that
+# replaced it).
+# ---------------------------------------------------------------------------
 
 
-def _seed_unmounted_router(root: Path) -> None:
-    """A router with a real decorated route that is never
-    ``include_router``'d anywhere reachable from a FastAPI() root --
-    discovery still finds the route (routes are collected independently of
-    mount status) but reports it with resolution == UNMOUNTED_ROUTER,
-    full_path=None, no app_root. Stands in for the dotted/dynamic
-    `include_router` case this fix targets -- same "discovery cannot
-    resolve this to a deployed app" shape, easier to construct in a
-    fixture than a genuinely dynamic include expression."""
-    _write(
-        root / _UNMOUNTED_ROUTER_FILE,
-        "from fastapi import APIRouter\n"
-        "\n"
-        "router = APIRouter()\n"
-        "\n"
-        "\n"
-        '@router.get("/dynamic")\n'
-        "async def get_dynamic():\n"
-        "    return {}\n",
+# ---------------------------------------------------------------------------
+# Provenance: `source_commit` must name a commit this HEAD descends from
+# (team-lead, 2026-09-01 -- acr's ci/ops-contract.pin held a commit that was
+# never going to land on origin/main and nothing said so; the same class
+# exists for the ops inventory's own source_commit).
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _tiny_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f").write_text("a\n")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "a")
+    return repo
+
+
+def test_source_commit_must_be_a_full_sha(tmp_path):
+    """acr's pin was the literal PLACEHOLDER-PENDING-OPS-MERGE-... string."""
+    repo = _tiny_repo(tmp_path)
+    errors, note = checker.check_source_commit(
+        repo, {"source_commit": "PLACEHOLDER-PENDING-OPS-MERGE"}
     )
+    assert any("STALE SOURCE COMMIT" in e for e in errors), errors
+    assert note is None
 
 
-_UNVERIFIABLE_ROW_ID = "GET /dynamic [dev-health-ops-api]"
-
-
-def _unverifiable_row(**overrides) -> dict:
-    row = _minimal_valid_row(
-        id=_UNVERIFIABLE_ROW_ID,
-        # Both of these are false/wrong-but-schema-valid -- the whole
-        # point is that discovery cannot resolve this route, so neither
-        # can be checked against anything real unless this fails closed.
-        route="/totally-fabricated-path",
-        service="dev-health-ops-billing-edge",
-        source={"file": _UNMOUNTED_ROUTER_FILE, "line": 6},
+def test_source_commit_absent_from_the_repository_fails(tmp_path):
+    """The acr shape exactly: a well-formed sha for a commit that does not
+    exist in this history."""
+    repo = _tiny_repo(tmp_path)
+    errors, note = checker.check_source_commit(
+        repo, {"source_commit": "e57ca829f0ec" + "0" * 28}
     )
-    row.update(overrides)
-    return row
-
-
-def _write_allowlist(root: Path, entries: list[dict]) -> None:
-    _write(
-        root / "contracts" / "auth" / "v1" / "unresolved-route-allowlist.json",
-        json.dumps(
-            {"schema_version": "unresolved-route-allowlist.v1", "entries": entries}
-        ),
-    )
-
-
-def test_gate_catches_an_unresolved_route_as_unverified(tmp_path):
-    """Merge-gate P1, the important one, EXECUTED repro: a row anchored to
-    a route discovery cannot resolve to a deployed app previously skipped
-    its route/service comparison entirely -- a false `route` and a
-    wrong-but-schema-valid `service` (both set in _unverifiable_row above)
-    passed with zero errors. This is the fail-closed fix."""
-    root = _minimal_valid_root(tmp_path)
-    _seed_unmounted_router(root)
-    inventory_path, schema_path, cc_path = _paths(root)
-    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
-    errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
+    assert any("STALE SOURCE COMMIT" in e and "not a commit" in e for e in errors), (
         errors
     )
-    # And neither the false route nor the wrong service is what's reported
-    # -- this is "cannot verify", not a (misleading) STALE ANCHOR/SERVICE
-    # MISMATCH claim about a route discovery never actually resolved.
-    assert not any("STALE ANCHOR" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
-        errors
-    )
-    assert not any(
-        "SERVICE MISMATCH" in e and _UNVERIFIABLE_ROW_ID in e for e in errors
-    ), errors
+    assert note is None
 
 
-def test_gate_accepts_an_unresolved_route_once_allowlisted_with_a_reason(tmp_path):
-    """The escape hatch: a human-reviewed, reasoned allowlist entry for
-    this EXACT row id makes the same fixture pass cleanly."""
-    root = _minimal_valid_root(tmp_path)
-    _seed_unmounted_router(root)
-    inventory_path, schema_path, cc_path = _paths(root)
-    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
-    _write_allowlist(
-        root,
-        [
-            {
-                "id": _UNVERIFIABLE_ROW_ID,
-                "reason": "reviewed manually 2026-09-01 -- dynamic include verified safe",
-            }
-        ],
+def test_source_commit_off_this_history_fails(tmp_path):
+    """A REAL commit that HEAD does not descend from -- an abandoned or
+    rebased branch. Distinct from the absent case: the object resolves, so
+    only an ancestry test catches it."""
+    repo = _tiny_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "f").write_text("side\n")
+    _git(repo, "commit", "-qam", "side")
+    abandoned = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "f").write_text("main2\n")
+    _git(repo, "commit", "-qam", "main2")
+
+    errors, note = checker.check_source_commit(repo, {"source_commit": abandoned})
+    assert any("does not descend" in e for e in errors), errors
+    assert note is None
+
+    # ...and the ancestor case passes, so this is not just "everything fails".
+    first = _git(repo, "rev-list", "--max-parents=0", "HEAD")
+    assert checker.check_source_commit(repo, {"source_commit": first}) == ([], None)
+
+
+def test_source_commit_unverifiable_is_reported_not_passed_silently(tmp_path):
+    """A shallow clone (GitHub's default checkout depth) cannot tell the stale
+    case from the truncated one. That must SAY so rather than read as a
+    verified pass -- the note is a separate return value precisely so a caller
+    counting errors cannot mistake one for the other."""
+    origin = _tiny_repo(tmp_path)
+    (origin / "f").write_text("b\n")
+    _git(origin, "commit", "-qam", "b")
+    deep = _git(origin, "rev-list", "--max-parents=0", "HEAD")
+
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{origin}", str(shallow)],
+        check=True,
+        capture_output=True,
     )
-    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
+
+    errors, note = checker.check_source_commit(shallow, {"source_commit": deep})
+    assert errors == [], errors
+    assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
+
+
+def test_the_committed_inventory_source_commit_is_an_ancestor_of_head():
+    inventory = checker.load_json(_INVENTORY_PATH)
+    errors, _note = checker.check_source_commit(_REPO_ROOT, inventory)
     assert errors == [], errors
 
 
-def test_gate_catches_an_allowlist_entry_with_no_reason(tmp_path):
-    """An allowlist entry with an empty reason does not excuse its row
-    (fails closed) AND is itself reported -- the file can never be turned
-    into a blanket suppression by leaving `reason` off."""
-    root = _minimal_valid_root(tmp_path)
-    _seed_unmounted_router(root)
-    inventory_path, schema_path, cc_path = _paths(root)
-    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
-    _write_allowlist(root, [{"id": _UNVERIFIABLE_ROW_ID, "reason": ""}])
-    errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("ALLOWLIST ENTRY MISSING REASON" in e for e in errors), errors
-    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
-        errors
-    )
+# ---------------------------------------------------------------------------
+# Discovery must not leave a partially-imported package behind (codex round 1,
+# P2). Found by adversarial review, then reproduced.
+# ---------------------------------------------------------------------------
 
 
-def test_gate_allowlist_entry_is_narrow_to_one_row_id(tmp_path):
-    """An allowlist entry excuses exactly the row id it names -- never a
-    pattern, never the whole file. A reasoned entry for a DIFFERENT id
-    must not excuse this row."""
+def test_a_failed_import_leaves_no_partial_package_resident(tmp_path):
+    """EXECUTED repro of the defect, then the guard.
+
+    `_import_context` used to purge on exit only when it had purged something
+    on entry. With nothing cached, a root whose `api/main.py` imports a helper
+    and THEN raises left `dev_health_ops`, `dev_health_ops.api` and
+    `dev_health_ops.api.helper` resident after `discover()` had already raised
+    -- a half-loaded tree a later import could reuse.
+    """
+    root = tmp_path / "repo"
+    api = root / "src" / "dev_health_ops" / "api"
+    api.mkdir(parents=True)
+    (root / "src" / "dev_health_ops" / "__init__.py").write_text("")
+    (api / "__init__.py").write_text("")
+    (api / "helper.py").write_text("MARKER = 'stale'\n")
+    (api / "main.py").write_text("from . import helper\n\nraise RuntimeError('boom')\n")
+
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_leak")
+    before = {
+        n
+        for n in sys.modules
+        if n == "dev_health_ops" or n.startswith("dev_health_ops.")
+    }
+    with pytest.raises(RuntimeError):
+        discoverer.discover(root)
+    after = {
+        n
+        for n in sys.modules
+        if n == "dev_health_ops" or n.startswith("dev_health_ops.")
+    }
+    assert after == before, sorted(after - before)
+    assert str((root / "src").resolve()) not in sys.path
+
+
+# ---------------------------------------------------------------------------
+# Codex round 2. Both findings reproduced against the real pinned frameworks
+# before either was fixed.
+# ---------------------------------------------------------------------------
+
+
+def test_an_opaque_asgi_mount_is_discovered(tmp_path):
+    """R2-1, EXECUTED repro then guard.
+
+    `Mount.routes` is `getattr(self.app, "routes", [])`, so a mount wrapping an
+    OPAQUE ASGI app -- StaticFiles, a WSGI adapter, a bare ASGI callable -- has
+    no child routes while still serving every request under its prefix.
+    Recursing into it and emitting nothing made such a mount invisible to a
+    gate whose whole claim is that a surface cannot be added in a way that
+    escapes it.
+
+    Repro before the fix, with the real pinned fastapi/starlette:
+    `app.mount("/assets", StaticFiles(directory=...))` served
+    `GET /assets/x.txt -> 200` while the walk returned only `/example`.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.staticfiles import StaticFiles
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "x.txt").write_text("hi\n")
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/example")
+    async def example():  # pragma: no cover -- never called, only registered
+        return {}
+
+    app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    # The mount really serves -- proven, not argued.
+    with TestClient(app) as client:
+        assert client.get("/assets/x.txt").status_code == 200
+
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_mount")
+    walked = discoverer._walk_routes(app.routes)
+    paths = {path for path, _ in walked}
+    assert "/assets" in paths, sorted(paths)
+    assert "/example" in paths, sorted(paths)
+
+
+def test_an_opaque_mount_becomes_a_surface_the_gate_demands_a_row_for(tmp_path):
+    """The walk finding it is only half: it has to reach the parity check as a
+    surface, with a verb that does not pretend to know what the mount serves."""
     root = _minimal_valid_root(tmp_path)
-    _seed_unmounted_router(root)
+    _write(
+        root / _MAIN_FILE,
+        "from fastapi import FastAPI\n"
+        "from starlette.staticfiles import StaticFiles\n"
+        "\n"
+        "from .routers.example import router as example_router\n"
+        "\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
+        "app.include_router(example_router)\n"
+        'app.mount("/assets", StaticFiles(directory="."), name="assets")\n',
+    )
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_mount2")
+    records = discoverer.discover(root)["routes"]
+    mount = [r for r in records if r["path"] == "/assets"]
+    assert len(mount) == 1, records
+    assert mount[0]["method"] == "MOUNT", mount[0]
+    # Anchored at the mounted app's class, which is third-party -- so the row
+    # will also have to carry provenance.
+    assert mount[0]["endpoint_in_ops_source"] is False, mount[0]
+    assert mount[0]["endpoint_name"] == "StaticFiles", mount[0]
+
     inventory_path, schema_path, cc_path = _paths(root)
-    _write_inventory(root, [_minimal_valid_row(), _unverifiable_row()])
-    _write_allowlist(
-        root, [{"id": "GET /some-other-route [dev-health-ops-api]", "reason": "n/a"}]
-    )
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("UNVERIFIED ROUTE" in e and _UNVERIFIABLE_ROW_ID in e for e in errors), (
-        errors
-    )
+    assert any("UNOWNED SURFACE" in e and "/assets" in e for e in errors), errors
+
+
+def test_discovery_restores_otel_enabled_when_it_set_it(tmp_path, monkeypatch):
+    """R2-2, EXECUTED. `setdefault` left OTEL_ENABLED=false behind on a process
+    that never had it, so everything the caller did afterwards ran under a
+    setting this module chose for its own import."""
+    monkeypatch.delenv("OTEL_ENABLED", raising=False)
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_otel")
+
+    with discoverer._import_context(root):
+        assert os.environ["OTEL_ENABLED"] == "false"
+    assert "OTEL_ENABLED" not in os.environ
+
+
+def test_discovery_does_not_override_a_caller_set_otel_enabled(tmp_path, monkeypatch):
+    """The other half: an environment that deliberately chose a value keeps it,
+    both during and after."""
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_otel2")
+
+    with discoverer._import_context(root):
+        assert os.environ["OTEL_ENABLED"] == "true"
+    assert os.environ["OTEL_ENABLED"] == "true"

@@ -875,6 +875,69 @@
       ]
     },
     {
+      "bucket": "mock",
+      "input_codepoints": [
+        109,
+        111,
+        99,
+        8490
+      ]
+    },
+    {
+      "bucket": "mock",
+      "input_codepoints": [
+        77,
+        79,
+        67,
+        8490
+      ]
+    },
+    {
+      "bucket": "unknown",
+      "input_codepoints": [
+        117,
+        110,
+        8490,
+        110,
+        111,
+        119,
+        110
+      ]
+    },
+    {
+      "bucket": "unknown",
+      "input_codepoints": [
+        85,
+        78,
+        8490,
+        78,
+        79,
+        87,
+        78
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        102,
+        97,
+        108,
+        383,
+        101
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        383,
+        116,
+        97,
+        116,
+        117,
+        115
+      ]
+    },
+    {
       "bucket": "other",
       "input_codepoints": [
         927,

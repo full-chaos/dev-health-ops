@@ -28,9 +28,17 @@ import (
 //	"İ".lower()    -> "i" + U+0307, TWO code points
 //	                  unicode.ToLower gives one, dropping the combining dot
 //
-// x/text's cases.Lower with the undetermined language applies the default
-// Unicode rules, which is what CPython does -- CPython does not apply the
-// locale-specific Lithuanian or Turkish tailorings, and neither does Und.
+// cases.Lower(language.Und) is correct BY DESIGN, not by observed agreement, and
+// the distinction matters because the second kind evaporates on a dependency
+// bump. CPython's str.lower() is locale-INDEPENDENT by definition: it applies
+// the default Unicode mapping and never the Turkish (dotless i) or Lithuanian
+// tailorings, whatever the process locale. Und is the caser with no tailoring,
+// so it is the only correct choice here -- not merely the one that currently
+// agrees. A future x/text release changing a DEFAULT would be a bug in x/text;
+// one changing a tailoring cannot reach us.
+//
+// (Raised by lane-pathb-go: my first wording stated the agreement without the
+// reason, which reads as a coincidence a reader has no way to re-derive.)
 //
 // # A MEASURED, BOUNDED DIVERGENCE THAT IS CONTAINED RATHER THAN IGNORED
 //

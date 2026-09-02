@@ -181,9 +181,29 @@ func ParsePythonFloat(s string) (float64, bool) {
 // not cosmetic: +Inf instead of 0.0 clears the 0.2 membership threshold AND
 // sorts first in the argmax, so it also takes is_dominant.
 //
-// strings.EqualFold is not the fix either -- it applies Unicode simple folding,
-// which is a different relation again. Explicit ASCII folding is the only one
-// that matches a byte-wise tolower.
+// strings.EqualFold is a THIRD relation -- Unicode simple folding -- and is not
+// a substitute for ASCII folding in general. It accepts "fal\u017fe" as "false".
+//
+// For THIS keyword set, though, the two are provably equivalent, and the claim
+// is measured rather than asserted. Substituting every code point at every
+// position of inf/infinity/nan produced 0 disagreements between EqualFold and
+// asciiLower, and the structural reason is that exactly two ASCII letters are
+// reachable by a non-ASCII simple fold:
+//
+//	"k" <- U+212A  KELVIN SIGN
+//	"s" <- U+017F  LATIN SMALL LETTER LONG S
+//
+// Neither appears in inf, infinity or nan, so no input can distinguish them
+// here. An earlier version of this comment claimed an EqualFold divergence at
+// this call site; lane-pathb-go could not reproduce it, and they were right --
+// a comment asserting a defect that no input exhibits reads as measured and
+// stops the next reader looking.
+//
+// asciiLower is still what is used, because it is the honest port of a byte-wise
+// tolower and stays correct if the keyword set ever grows an "s" or a "k". Note
+// the two Go primitives are wrong in DISJOINT directions -- EqualFold
+// over-accepts on s/k keywords, strings.ToLower over-accepts on U+0130 -- and
+// only ASCII folding is right in both.
 func asciiLower(value string) string {
 	var builder strings.Builder
 	builder.Grow(len(value))

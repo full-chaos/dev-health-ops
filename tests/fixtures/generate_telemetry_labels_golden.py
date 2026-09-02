@@ -109,6 +109,25 @@ def _provider_cases() -> list[str]:
         "azure",
         "bedrock",
         "unknown-provider",
+        # U+212A KELVIN SIGN is the ONLY non-ASCII letter that str.lower()
+        # maps INTO an ASCII letter this allow-list uses -- it lowercases to
+        # "k", and both "mock" and "unknown" contain one. So these reach a
+        # REAL bucket rather than "other", in both planes.
+        #
+        # Pinned because the corpus held this axis constant, and because the
+        # axis is asymmetric in a way that is easy to get backwards: U+017F
+        # (LONG S) does NOT reach "s" under lower() -- it is already
+        # lowercase, so "fal\u017fe".lower() is unchanged and Python rejects
+        # it. It DOES reach "s" under Unicode simple folding, which is why
+        # strings.EqualFold is unsafe for s/k keywords while lower() is unsafe
+        # only for k. Raised by lane-pathb-go; verified against the
+        # interpreter.
+        "moc\u212a",
+        "MOC\u212a",
+        "un\u212anown",
+        "UN\u212aNOWN",
+        "fal\u017fe",
+        "\u017ftatus",
         # The lower() divergences, as provider strings.
         "ΟΔΟΣ",
         "İ",

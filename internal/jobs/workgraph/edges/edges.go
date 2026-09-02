@@ -10,7 +10,7 @@
 // column is the reason this package exists at all -- see the confidence
 // contract in confidence.go.
 //
-// # FIDELITY CONTRACT: THREE ENUMERATED DIVERGENCES
+// # FIDELITY CONTRACT: FOUR ENUMERATED DIVERGENCES
 //
 // This is a bit-exact port of the current Python behaviour except where the
 // Divergences list below says otherwise. That list is the single place they are
@@ -159,7 +159,15 @@ var Divergences = []Divergence{
 		Name:         "variant-C confidence: the associative family ranks strictly below delivery",
 		Authority:    "CHAOS-4752 / CHAOS-4758",
 		GoldenCanSee: true,
-		implemented:  func() bool { return len(AssociativeConfidenceExceptions) > 0 },
+		// Probes the BEHAVIOUR, not the exception list. `len(list) > 0` was the
+		// first version and it proves nothing: neutering DependencyConfidence to
+		// return DeliveryConfidence always, while leaving the list populated,
+		// left this probe passing. A probe that a removed divergence survives is
+		// not a probe.
+		implemented: func() bool {
+			return DependencyConfidence("relates") != DeliveryConfidence &&
+				DependencyConfidence("relates") == AssociativeConfidence
+		},
 	},
 	{
 		Name:         "malformed_pr_id where Python raises an uncaught ValueError and aborts the org's build",
@@ -175,5 +183,26 @@ var Divergences = []Divergence{
 		Authority:    "CHAOS-4441 RequireOrganizationScope",
 		GoldenCanSee: false,
 		implemented:  func() bool { return requireEdgeScope("") != nil },
+	},
+	{
+		// The honest one: this divergence was INTRODUCED by the fix for a
+		// previous divergence. Replacing `strings.ToLower` with
+		// `cases.Lower(language.Und)` corrected context-sensitive final sigma
+		// and moved the oracle from Go's stdlib Unicode table to x/text's --
+		// which is Unicode 17 where the deployed interpreter is UCD 16.
+		//
+		// 28 code points differ, all Unicode 17 additions CPython treats as
+		// unassigned and therefore leaves alone. Absent in practice:
+		// relationship types are ASCII by provider spec and all 11 values in
+		// the frozen corpus are ASCII, so no input reaching this port can
+		// contain one. Pinned exactly by TestEveryRuneLowercasesLikeLivePython,
+		// which compares EVERY code point rather than a derived subset.
+		Name:         "case-folding 28 Unicode 17 code points the deployed CPython leaves unchanged",
+		Authority:    "CHAOS-4766 re-cert P3a, team-lead ruling; full derivation tracked as CHAOS-4869",
+		GoldenCanSee: false,
+		implemented: func() bool {
+			// U+A7CE is one of the 28: x/text lowers it, CPython 16 does not.
+			return pythonLower("\uA7CE") != "\uA7CE"
+		},
 	},
 }

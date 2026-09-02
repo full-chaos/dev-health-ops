@@ -682,7 +682,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython)$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -727,6 +727,16 @@ check_live_python_oracles() {
   # direction the digit-table guard above does not cover) and compares the two
   # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
   # Python does not recognise.
+  # Its own marker: this one enumerates EVERY code point rather than a derived
+  # subset, because the two previous case guards were each blind to a one-rune
+  # property they did not think to vary -- context-sensitive final sigma, then
+  # Unicode version skew between x/text and the interpreter.
+  proof_file="${proof_dir}/workgraph-python-lower-allrunes"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
   proof_file="${proof_dir}/workgraph-python-decimal-blocks"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2

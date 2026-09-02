@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -185,4 +186,132 @@ func TestPythonLowerHandlesContextSensitiveFinalSigma(t *testing.T) {
 func TestTheReadPathCarriesAnInstantNotAString(t *testing.T) {
 	var row DependencyRow
 	var _ time.Time = row.LastSynced // a string here stops the build
+}
+
+// unicodeVersionSkewRunes is the EXACT set of code points where
+// `cases.Lower(language.Und)` disagrees with the deployed CPython's
+// `str.lower()`, derived by comparing both planes over all 0x110000.
+//
+// They are Unicode 17 additions that x/text lowercases and CPython's UCD 16
+// treats as unassigned and therefore leaves alone: three Latin Extended-D
+// letters and the twenty-five Old Uyghur letters.
+//
+// This is divergence #4 in Divergences (edges.go). It exists because the fix
+// for the previous Unicode defect swapped one oracle for another: replacing
+// `strings.ToLower` with `cases.Lower` moved authority from Go's stdlib table
+// to x/text's, and x/text is a different Unicode version from the interpreter
+// this port must match.
+var unicodeVersionSkewRunes = []rune{
+	0xA7CE, 0xA7D2, 0xA7D4,
+	0x16EA0, 0x16EA1, 0x16EA2, 0x16EA3, 0x16EA4, 0x16EA5, 0x16EA6, 0x16EA7,
+	0x16EA8, 0x16EA9, 0x16EAA, 0x16EAB, 0x16EAC, 0x16EAD, 0x16EAE, 0x16EAF,
+	0x16EB0, 0x16EB1, 0x16EB2, 0x16EB3, 0x16EB4, 0x16EB5, 0x16EB6, 0x16EB7,
+	0x16EB8,
+}
+
+// TestEveryRuneLowercasesLikeLivePython compares BOTH planes over EVERY code
+// point and pins the disagreement set exactly.
+//
+// # Why this replaces a multi-rune-only guard
+//
+// The previous guard enumerated only multi-rune lowercase mappings. That is a
+// real property derived from the interpreter, and it was still blind twice: to
+// context-sensitive final sigma (a one-rune mapping that depends on position),
+// and to Unicode VERSION SKEW (a one-rune mapping that exists in one plane and
+// not the other). Both slipped through because the guard varied the thing it
+// knew to vary.
+//
+// Enumerating every code point removes the axis question entirely: there is no
+// sampling decision left to get wrong.
+//
+// A change in EITHER direction fails. More disagreements means the port drifted
+// or x/text moved; fewer means CPython caught up, and then divergence #4 should
+// be deleted rather than quietly shrinking.
+//
+// Proof marker: workgraph-python-lower-allrunes
+func TestEveryRuneLowercasesLikeLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	python := os.Getenv("PYTHON")
+	if python == "" {
+		resolved, err := exec.LookPath("python3")
+		if err != nil {
+			t.Fatalf("python3 is required: %v", err)
+		}
+		python = resolved
+	}
+
+	const derive = `
+import json, sys, unicodedata
+mapping = {}
+for cp in range(0x110000):
+    c = chr(cp)
+    low = c.lower()
+    if low != c:
+        mapping[cp] = [ord(x) for x in low]
+print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
+`
+	output, err := exec.Command(python, "-c", derive).Output()
+	if err != nil {
+		t.Fatalf("derive full lower mapping from live python: %v", err)
+	}
+	var live struct {
+		Mapping map[string][]int `json:"mapping"`
+		Unicode string           `json:"unicode"`
+	}
+	if err := json.Unmarshal(output, &live); err != nil {
+		t.Fatalf("decode derivation: %v", err)
+	}
+	if len(live.Mapping) == 0 {
+		t.Fatal("derivation produced no mappings; a silently empty result would make this vacuous")
+	}
+	t.Logf("python unicode %s: %d runes have a non-identity lower()", live.Unicode, len(live.Mapping))
+
+	expected := make(map[rune]struct{}, len(unicodeVersionSkewRunes))
+	for _, r := range unicodeVersionSkewRunes {
+		expected[r] = struct{}{}
+	}
+
+	var unexpected, missing []rune
+	for codePoint := rune(0); codePoint <= 0x10FFFF; codePoint++ {
+		want := string(codePoint)
+		if mapped, present := live.Mapping[strconv.Itoa(int(codePoint))]; present {
+			runes := make([]rune, 0, len(mapped))
+			for _, value := range mapped {
+				runes = append(runes, rune(value))
+			}
+			want = string(runes)
+		}
+		_, isKnown := expected[codePoint]
+		if pythonLower(string(codePoint)) != want {
+			if !isKnown {
+				unexpected = append(unexpected, codePoint)
+			}
+		} else if isKnown {
+			missing = append(missing, codePoint)
+		}
+	}
+
+	for _, codePoint := range unexpected {
+		t.Errorf("U+%04X: pythonLower gives %q, live python maps it to %v — a NEW disagreement, so "+
+			"either this port drifted or x/text's Unicode table moved. It is not in the pinned "+
+			"skew set and must not be added without measuring why",
+			codePoint, pythonLower(string(codePoint)), live.Mapping[strconv.Itoa(int(codePoint))])
+	}
+	for _, codePoint := range missing {
+		t.Errorf("U+%04X is pinned as a version-skew divergence but the two planes now AGREE — "+
+			"CPython has caught up, so divergence #4 should shrink or be deleted rather than "+
+			"silently carrying a stale entry", codePoint)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(proofDirectory, "workgraph-python-lower-allrunes"), []byte("executed"), 0o644,
+	); err != nil {
+		t.Fatalf("write proof marker: %v", err)
+	}
 }

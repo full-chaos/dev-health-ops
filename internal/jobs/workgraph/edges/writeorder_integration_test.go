@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -43,26 +44,19 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Production DDL, transcribed rather than paraphrased so the ORDER BY under
-	// test is the real one: 014_work_graph.sql:6-22, then the two ALTERs that
-	// followed it -- 016_work_graph_event_ts.sql:2-3 (event_ts, day) and
-	// 024_add_org_id.sql:58 (org_id).
+	// The REAL migration chain, not a transcription. `chschema.Apply` shells out
+	// to the repo's Python and runs `migrations/clickhouse/` in order, so the
+	// table under test is the production table -- including every ALTER that
+	// followed 014_work_graph.sql.
 	//
-	// The first draft of this test transcribed only 014 and the write failed
-	// with "No such column event_ts". That is the schema drift this lane's
-	// standing note warns about, caught here by the engine rather than by
-	// reading: a hand-copied DDL is a second source of truth and goes stale.
-	if err := conn.Exec(ctx, `CREATE TABLE work_graph_edges (
-    edge_id String, source_type String, source_id String, target_type String, target_id String,
-    edge_type String, repo_id Nullable(UUID), provider Nullable(String), provenance String,
-    confidence Float32, evidence String,
-    discovered_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'),
-    event_ts DateTime64(3, 'UTC') DEFAULT now(), day Date DEFAULT toDate(event_ts),
-    org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (source_type, source_id, edge_type, target_type, target_id)`); err != nil {
-		t.Fatal(err)
-	}
+	// The first version of this test hand-copied the DDL from 014 alone and
+	// failed on "No such column event_ts", which 016 adds. That was the visible
+	// half of the problem. The invisible half is what this replaces: a copied
+	// schema is a SECOND SOURCE OF TRUTH, so a production change to the engine's
+	// version column or sorting key would leave this test green while the real
+	// table no longer collapses Python's 1.0 and this port's 0.9 at all -- and
+	// the collapse is the entire thing being proven.
+	chschema.Apply(ctx, t, instance)
 
 	const org = "70d529e0-3c06-4597-8480-794fd02328b6"
 	// A `relates` row: the associative family, which is where variant-C differs.

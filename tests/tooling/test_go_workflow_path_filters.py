@@ -331,7 +331,34 @@ def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> s
         # (2) //go:embed — space-separated patterns, globs allowed.
     for directive in re.findall(r"//go:embed\s+(.+)", source):
         for pattern in directive.split():
+            # Go's `all:` prefix changes DIRECTORY WALKING to include names
+            # starting with `.` or `_` (go doc embed). It is not part of the
+            # path, so it must be stripped before globbing -- otherwise the glob
+            # looks for a directory literally named `all:uncovered` and silently
+            # finds nothing. A file reachable only through an `all:` embed was
+            # invisible to this oracle and to the workflow filters.
+            include_dot_prefixed = pattern.startswith("all:")
+            if include_dot_prefixed:
+                pattern = pattern[len("all:") :]
             for match in base.glob(pattern):
+                # A directory pattern embeds the whole TREE beneath it. `add`
+                # requires a file, so globbing a directory added nothing at all
+                # -- `//go:embed uncovered` covered none of its contents.
+                if match.is_dir():
+                    for entry in match.rglob("*"):
+                        if not entry.is_file():
+                            continue
+                        # Without `all:`, Go excludes any path element starting
+                        # with `.` or `_`, so this oracle must exclude them too:
+                        # claiming coverage Go does not give is the same defect
+                        # as missing coverage it does.
+                        parts = entry.relative_to(match).parts
+                        if not include_dot_prefixed and any(
+                            part.startswith((".", "_")) for part in parts
+                        ):
+                            continue
+                        add(entry)
+                    continue
                 add(match)
 
     # (4) os.ReadDir on a literal directory: its own non-.go files.
@@ -611,6 +638,50 @@ def test_a_variable_rooted_filepath_join_is_found(tmp_path: Path) -> None:
     assert "one.json" in single, (
         "a variable-rooted SINGLE-segment filepath.Join was not resolved; the "
         f"old len(segments) > 1 guard skipped exactly this shape. found={sorted(single)}"
+    )
+
+
+def test_go_embed_prefix_and_directory_forms_are_found(tmp_path: Path) -> None:
+    """`all:` is a walking MODE, not part of the path, and a directory embeds a tree.
+
+    Two ways this silently found nothing. `//go:embed all:dir/x.json` was passed
+    to `Path.glob` verbatim, so it looked for a directory literally named
+    `all:dir` -- no match, no error. And a bare directory pattern globbed to the
+    directory itself, which `add` rejects because it is not a file, so
+    `//go:embed dir` covered none of its contents.
+
+    The exclusion rule is asserted too, not just the inclusion. Without `all:`,
+    Go skips any path element starting with `.` or `_` (go doc embed). An oracle
+    that claimed those files were covered would be overstating coverage, which
+    is the same defect as missing it -- it just fails in the other direction.
+    """
+    package = tmp_path / "cmd" / "pkg"
+    (package / "data" / "sub").mkdir(parents=True)
+    for name in (
+        "data/.hidden.json",
+        "data/_under.json",
+        "data/plain.json",
+        "data/sub/deep.json",
+    ):
+        (package / name).write_text("{}", encoding="utf-8")
+
+    def resolve(pattern: str) -> set[str]:
+        found = _resolve_named_files(f"//go:embed {pattern}", package, tmp_path)
+        return {path.split("pkg/", 1)[1] for path in found}
+
+    assert resolve("all:data/.hidden.json") == {"data/.hidden.json"}, (
+        "an `all:`-prefixed file pattern found nothing; the prefix is a walking "
+        "mode and must be stripped before globbing"
+    )
+    assert resolve("all:data") == {
+        "data/.hidden.json",
+        "data/_under.json",
+        "data/plain.json",
+        "data/sub/deep.json",
+    }, "`all:` on a directory must embed the whole tree INCLUDING dot/underscore names"
+    assert resolve("data") == {"data/plain.json", "data/sub/deep.json"}, (
+        "a bare directory embeds its tree but EXCLUDES dot/underscore names; "
+        "including them would claim coverage Go does not actually give"
     )
 
 

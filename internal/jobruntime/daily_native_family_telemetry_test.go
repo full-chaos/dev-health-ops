@@ -40,6 +40,34 @@ func TestDailyMetricsNativeFamilyCountersReachTheExposition(t *testing.T) {
 	}
 }
 
+// TestDailyMetricsNativeFamilyIncludesFileHotspotsFamilies is CHAOS-4277's
+// telemetry registration proof (codex round 1 finding #2): dailyMetrics
+// NativeFamilies is a CLOSED allow-list, and computeNativeFamilies
+// (internal/jobs/metrics/daily/daily.go) discards ObserveDailyMetricsNative
+// Family's error (`_ = handler.nativeObserver.Observe...`), so a family
+// absent from this list silently loses ALL its telemetry -- both the
+// "computed" and "refused" outcomes, forever, with no visible symptom short
+// of reading this source file. Before this ticket's fix, "file_hotspots"
+// and "file_risk_hotspots" were both absent.
+func TestDailyMetricsNativeFamilyIncludesFileHotspotsFamilies(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	for _, family := range []string{"file_hotspots", "file_risk_hotspots"} {
+		if err := collector.ObserveDailyMetricsNativeFamily(
+			family, DailyMetricsNativeFamilyOutcomeComputed, 7, 5*time.Millisecond,
+		); err != nil {
+			t.Fatalf("%s must be a registered native family, got: %v", family, err)
+		}
+		exposition := collector.PrometheusText()
+		want := `worker_daily_metrics_native_family_rows_written_total{family="` + family + `"} 7`
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q\nfull exposition:\n%s", want, exposition)
+		}
+	}
+}
+
 func TestDailyMetricsNativeFamilyRejectsUnregisteredFamily(t *testing.T) {
 	collector, err := NewMetricsCollector(MetricDimensions{})
 	if err != nil {

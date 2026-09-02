@@ -1,0 +1,120 @@
+{
+  "file_metrics_repo_a": [
+    {
+      "churn": 60,
+      "commits_count": 2,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "contributors": 2,
+      "day": "2026-07-20",
+      "hotspot_score": 2.8443495456693246,
+      "org_id": "",
+      "path": "shared.py",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa"
+    },
+    {
+      "churn": 10,
+      "commits_count": 2,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "contributors": 2,
+      "day": "2026-07-20",
+      "hotspot_score": 2.1591581091193484,
+      "org_id": "",
+      "path": "ws_email.py",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa"
+    },
+    {
+      "churn": 4,
+      "commits_count": 1,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "contributors": 1,
+      "day": "2026-07-20",
+      "hotspot_score": 1.2437751649736402,
+      "org_id": "",
+      "path": "solo.py",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa"
+    }
+  ],
+  "file_metrics_repo_b": [
+    {
+      "churn": 1000,
+      "commits_count": 1,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "contributors": 1,
+      "day": "2026-07-20",
+      "hotspot_score": 3.363501911726088,
+      "org_id": "",
+      "path": "other_repo.py",
+      "repo_id": "00000000-0000-4000-8000-0000000000fb"
+    }
+  ],
+  "risk_hotspots_repo_a": [
+    {
+      "blame_concentration": 0.75,
+      "churn_commits_30d": 2,
+      "churn_loc_30d": 60,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 24,
+      "day": "2026-07-20",
+      "file_path": "shared.py",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa",
+      "risk_score": 1.4307208863586498
+    },
+    {
+      "blame_concentration": null,
+      "churn_commits_30d": 0,
+      "churn_loc_30d": 0,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "cyclomatic_avg": 4.0,
+      "cyclomatic_total": 80,
+      "day": "2026-07-20",
+      "file_path": "idle_complex.py",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa",
+      "risk_score": 0.7695794407401305
+    },
+    {
+      "blame_concentration": null,
+      "churn_commits_30d": 2,
+      "churn_loc_30d": 10,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "day": "2026-07-20",
+      "file_path": "ws_email.py",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa",
+      "risk_score": -0.992893239668019
+    },
+    {
+      "blame_concentration": null,
+      "churn_commits_30d": 1,
+      "churn_loc_30d": 4,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "day": "2026-07-20",
+      "file_path": "solo.py",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-0000000000fa",
+      "risk_score": -1.2074070874307614
+    }
+  ],
+  "risk_hotspots_repo_b": [
+    {
+      "blame_concentration": null,
+      "churn_commits_30d": 1,
+      "churn_loc_30d": 1000,
+      "computed_at": "2026-07-21T00:00:00+00:00",
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "day": "2026-07-20",
+      "file_path": "other_repo.py",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-0000000000fb",
+      "risk_score": 0.0
+    }
+  ],
+  "schema_version": 1
+}

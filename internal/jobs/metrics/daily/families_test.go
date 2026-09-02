@@ -119,4 +119,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 			t.Fatalf("family %q declares phase=%q -- only work_item_state is expected to be non-default today; update this test if that changes deliberately", name, phase)
 		}
 	}
+	// file_hotspots and file_risk_hotspots are CHAOS-4277's cutover: both
+	// must be "go", registering FileHotspotsExecutor/FileRiskHotspotsExecutor
+	// exactly as the two reference implementations above did.
+	if got := byName["file_hotspots"]; got != "go" {
+		t.Fatalf("file_hotspots must be port=go, got %q", got)
+	}
+	if got := byName["file_risk_hotspots"]; got != "go" {
+		t.Fatalf("file_risk_hotspots must be port=go, got %q", got)
+	}
 }

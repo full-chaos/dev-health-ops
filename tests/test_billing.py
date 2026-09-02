@@ -2126,6 +2126,78 @@ class TestBillingNotificationCompletionFence:
         assert row["claimed_at"] is not None
         assert row["completed_at"] is None
 
+    def test_malformed_durable_attributes_release_claim_and_drop_permanently(self):
+        """Codex round 3, P1 (executed): a claim taken BEFORE the durable
+        row's attributes are coerced left every un-guarded coercion/
+        validation call site able to leave a held claim with no release.
+        A malformed stored value (retrying never fixes stored data) must
+        release the claim and drop -- not raise/retry, and not silently
+        leave the claim held for a later attempt to misreport as sent."""
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        notification_id = str(uuid.uuid4())
+        key = "billing:malformed-attrs-key"
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        row = self._row(key)
+        row["attributes"] = {"amount_cents": "not-an-integer"}
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                side_effect=self._fake_load(row),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                side_effect=self._fake_claim(row),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._release_billing_notification_completion_claim",
+                side_effect=lambda _id: row.__setitem__("claimed_at", None),
+            ) as release_claim,
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-malformed-attrs", retries=0)
+            try:
+                result = task(
+                    durable_notification_id=notification_id, idempotency_key=key
+                )
+            finally:
+                task.pop_request()
+
+        assert result == {
+            "status": "dropped",
+            "reason": "malformed_notification_attributes",
+        }
+        send_invoice_receipt.assert_not_called()
+        release_claim.assert_called_once_with(notification_id)
+        assert row["claimed_at"] is None, (
+            "a permanent drop must release the claim -- otherwise a later "
+            "attempt misreports this never-sent email as already_sent"
+        )
+
+    def test_claim_release_write_failure_is_swallowed_not_raised(self):
+        """Codex round 3, P1 (executed): the release call sits inside an
+        already-caught exception's handler. If a DB failure writing
+        claimed_at=NULL were allowed to propagate, it would REPLACE the
+        original exception -- skipping self.retry() entirely and leaving
+        the caller with no idea cleanup failed. The function must swallow
+        its own failure (logged) so the caller's error handling always
+        completes."""
+        from dev_health_ops.workers.system_ops import (
+            _release_billing_notification_completion_claim,
+        )
+
+        with patch(
+            "dev_health_ops.db.get_postgres_session_sync",
+            side_effect=RuntimeError("db unavailable"),
+        ):
+            # Must not raise.
+            _release_billing_notification_completion_claim(str(uuid.uuid4()))
+
     def test_send_failure_releases_the_claim_so_a_retry_can_still_send(self):
         """Codex round 1, P1 (executed): claim-then-send means an ordinary
         transient send failure must release the claim, or the email is

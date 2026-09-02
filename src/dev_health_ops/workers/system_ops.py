@@ -15,6 +15,28 @@ from dev_health_ops.workers.system_ops_metrics import (
 
 logger = logging.getLogger(__name__)
 
+
+class _PermanentBillingDrop(Exception):
+    """Signals a permanently-invalid billing notification, post-claim.
+
+    Codex round 3 (P1 x2, both EXECUTED) found that everything between a
+    successful claim and the guarded send call — attribute coercion,
+    identity checks, email-type lookup, org_id parsing — was UNGUARDED: an
+    exception or an early ``return`` there left the claim held with no
+    release, and a Go retry hitting that still-fresh, unresolved claim
+    reported `already_sent: true` for an email that was never attempted.
+    Every one of those conditions is data-permanent (retrying does not
+    change a malformed stored value), so they all funnel through this one
+    exception, caught once, released once, reported once — not repeated
+    per call site the way the un-guarded returns were.
+    """
+
+    def __init__(self, reason: str, **extra: object) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.extra = extra
+
+
 # CHAOS-3952: a claim older than this with no completion is reported as
 # stale rather than silently treated as an ordinary in-flight duplicate.
 # River's own backoff for this task tops out well under this window (three
@@ -172,61 +194,105 @@ def send_billing_notification(
                 "already_sent": True,
             }
         claimed_durable_notification_id = durable_notification_id
-        amount_cents = int(cast(Any, attributes.get("amount_cents", 0)))
-        currency = str(attributes.get("currency", "usd"))
-        invoice_url = str(attributes.get("invoice_url", ""))
-        attempt_count = int(cast(Any, attributes.get("attempt_count", 1)))
-        old_tier = str(attributes.get("old_tier", ""))
-        new_tier = str(attributes.get("new_tier", ""))
-        tier = str(attributes.get("tier", ""))
-        days_remaining = int(cast(Any, attributes.get("days_remaining", 0)))
-        trial_end_date = str(attributes.get("trial_end_date", ""))
 
-    if not email_type or not org_id:
-        return {"status": "dropped", "reason": "missing_notification_identity"}
-
-    dispatch = {
-        "invoice_receipt": lambda oid: billing_emails.send_invoice_receipt(
-            oid, amount_cents, currency, invoice_url
-        ),
-        "payment_failed": lambda oid: billing_emails.send_payment_failed(
-            oid, amount_cents, currency, attempt_count
-        ),
-        "subscription_changed": lambda oid: billing_emails.send_subscription_changed(
-            oid, old_tier, new_tier
-        ),
-        "subscription_cancelled": lambda oid: (
-            billing_emails.send_subscription_cancelled(oid, tier)
-        ),
-        "trial_started": lambda oid: getattr(billing_emails, "send_trial_started")(
-            oid, tier, trial_end_date
-        ),
-        "trial_expiring": lambda oid: getattr(billing_emails, "send_trial_expiring")(
-            oid, tier, days_remaining, trial_end_date
-        ),
-        "trial_expired": lambda oid: getattr(billing_emails, "send_trial_expired")(
-            oid, tier
-        ),
-    }
-
-    fn = dispatch.get(email_type)
-    if not fn:
-        # email_type comes from the task payload and may contain customer-supplied
-        # data. Keep the operational signal without sending it to application logs.
-        logger.error("Billing notification dropped: unsupported email type")
-        return {"status": "error", "reason": f"unknown_email_type: {email_type}"}
-
+    # CHAOS-3952, codex round 3 (P1 x2, both EXECUTED): everything from here
+    # through the send attempt runs ONLY after a claim may already be held
+    # (`claimed_durable_notification_id` set). Every exit from this block —
+    # exception or deliberate drop — must release that claim before
+    # returning/propagating, or a Go retry hitting the still-fresh,
+    # unresolved claim reports `already_sent: true` for an email that was
+    # never attempted. One try/except covers the whole block instead of
+    # guarding each call site individually, which is exactly what round 3
+    # found un-guarded (attribute coercion, identity checks, email-type
+    # lookup, org_id parsing all returned/raised directly).
     try:
-        org_uuid = uuid.UUID(org_id)
-    except ValueError:
-        # A malformed org_id is permanently bad — retrying can never succeed.
-        # Seen via Stripe TEST webhooks whose metadata carries fixture ids like
-        # "org-abc"; the retry loop just spams the worker.
-        logger.error("Billing notification dropped: invalid organization identifier")
-        return {"status": "dropped", "reason": "invalid_org_id", "org_id": org_id}
+        if durable_notification_id:
+            # A stored value's shape does not change between retries — a
+            # malformed one is a permanent-drop condition (codex round 3,
+            # P1, EXECUTED), same family as an invalid org_id below, not a
+            # transient failure worth self.retry()'s backoff.
+            try:
+                amount_cents = int(cast(Any, attributes.get("amount_cents", 0)))
+                currency = str(attributes.get("currency", "usd"))
+                invoice_url = str(attributes.get("invoice_url", ""))
+                attempt_count = int(cast(Any, attributes.get("attempt_count", 1)))
+                old_tier = str(attributes.get("old_tier", ""))
+                new_tier = str(attributes.get("new_tier", ""))
+                tier = str(attributes.get("tier", ""))
+                days_remaining = int(cast(Any, attributes.get("days_remaining", 0)))
+                trial_end_date = str(attributes.get("trial_end_date", ""))
+            except (TypeError, ValueError) as exc:
+                raise _PermanentBillingDrop(
+                    "malformed_notification_attributes"
+                ) from exc
 
-    try:
+        if not email_type or not org_id:
+            raise _PermanentBillingDrop("missing_notification_identity")
+
+        dispatch = {
+            "invoice_receipt": lambda oid: billing_emails.send_invoice_receipt(
+                oid, amount_cents, currency, invoice_url
+            ),
+            "payment_failed": lambda oid: billing_emails.send_payment_failed(
+                oid, amount_cents, currency, attempt_count
+            ),
+            "subscription_changed": (
+                lambda oid: billing_emails.send_subscription_changed(
+                    oid, old_tier, new_tier
+                )
+            ),
+            "subscription_cancelled": lambda oid: (
+                billing_emails.send_subscription_cancelled(oid, tier)
+            ),
+            "trial_started": lambda oid: getattr(billing_emails, "send_trial_started")(
+                oid, tier, trial_end_date
+            ),
+            "trial_expiring": lambda oid: getattr(
+                billing_emails, "send_trial_expiring"
+            )(oid, tier, days_remaining, trial_end_date),
+            "trial_expired": lambda oid: getattr(billing_emails, "send_trial_expired")(
+                oid, tier
+            ),
+        }
+
+        fn = dispatch.get(email_type)
+        if not fn:
+            # email_type comes from the task payload and may contain
+            # customer-supplied data. Keep the operational signal without
+            # sending it to application logs.
+            raise _PermanentBillingDrop("unknown_email_type") from None
+
+        try:
+            org_uuid = uuid.UUID(org_id)
+        except ValueError:
+            # A malformed org_id is permanently bad — retrying can never
+            # succeed. Seen via Stripe TEST webhooks whose metadata carries
+            # fixture ids like "org-abc"; the retry loop just spams the
+            # worker.
+            raise _PermanentBillingDrop("invalid_org_id", org_id=org_id) from None
+
         run_async(fn(org_uuid))
+    except _PermanentBillingDrop as drop:
+        if claimed_durable_notification_id:
+            _release_billing_notification_completion_claim(
+                claimed_durable_notification_id
+            )
+        if drop.reason == "missing_notification_identity":
+            return {"status": "dropped", "reason": drop.reason}
+        if drop.reason == "unknown_email_type":
+            logger.error("Billing notification dropped: unsupported email type")
+            return {"status": "error", "reason": f"unknown_email_type: {email_type}"}
+        if drop.reason == "invalid_org_id":
+            logger.error(
+                "Billing notification dropped: invalid organization identifier"
+            )
+            return {
+                "status": "dropped",
+                "reason": "invalid_org_id",
+                "org_id": drop.extra.get("org_id"),
+            }
+        logger.error("Billing notification dropped: durable row attributes malformed")
+        return {"status": "dropped", "reason": "malformed_notification_attributes"}
     except Exception as exc:
         if claimed_durable_notification_id:
             # The claim above already reserved this row before the send was
@@ -396,11 +462,22 @@ def _release_billing_notification_completion_claim(
 ) -> None:
     """Undo a claim this attempt made but never delivered on.
 
-    Only called after an exception from the send itself (the ordinary
-    self.retry() path) — never after a successful send. Restoring
-    ``claimed_at`` to NULL lets the next retry claim and actually send;
-    without this, a transient email-provider error would claim the fence
-    once and then silently never send at all.
+    Called from every exception/permanent-drop exit after a claim is held
+    (the ordinary self.retry() path, and the permanent-drop paths added in
+    codex round 3) — never after a successful send. Restoring
+    ``claimed_at`` to NULL lets the next attempt claim and actually send;
+    without this, a failure here would claim the fence once and then
+    silently never send at all.
+
+    NEVER RAISES (codex round 3, P1, EXECUTED): this call sits inside an
+    already-caught exception's handler. If the release write itself failed
+    and were allowed to propagate, it would REPLACE the original exception
+    — silently skipping self.retry() and any drop reporting, and leaving
+    the caller to believe cleanup happened when it did not. A failure here
+    is therefore logged and swallowed; the claim is left held, which the
+    existing stale-claim detection surfaces on a later contending attempt
+    (the same "observable, not silently lost" outcome the claimed_at/
+    completed_at split exists for).
     """
     try:
         notification_uuid = uuid.UUID(durable_notification_id)
@@ -411,11 +488,17 @@ def _release_billing_notification_completion_claim(
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.operational_deliveries import BillingNotification
 
-    with get_postgres_session_sync() as session:
-        session.execute(
-            update(BillingNotification)
-            .where(BillingNotification.id == notification_uuid)
-            .values(claimed_at=None)
+    try:
+        with get_postgres_session_sync() as session:
+            session.execute(
+                update(BillingNotification)
+                .where(BillingNotification.id == notification_uuid)
+                .values(claimed_at=None)
+            )
+    except Exception:
+        logger.error(
+            "Billing notification claim release failed; claim stays held "
+            "(will surface as a stale claim on a later attempt)"
         )
 
 

@@ -151,7 +151,13 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        image: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        # The runner pulls a service image BEFORE the first step, so no
+        # `docker/login-action` step can authenticate it -- GitHub requires
+        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -162,7 +168,13 @@ jobs:
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
       clickhouse:
-        image: clickhouse/clickhouse-server:25.1
+        image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7
+        # The runner pulls a service image BEFORE the first step, so no
+        # `docker/login-action` step can authenticate it -- GitHub requires
+        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           CLICKHOUSE_DB: default
           CLICKHOUSE_USER: ch
@@ -321,7 +333,13 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        image: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        # The runner pulls a service image BEFORE the first step, so no
+        # `docker/login-action` step can authenticate it -- GitHub requires
+        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -332,7 +350,13 @@ jobs:
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
       clickhouse:
-        image: clickhouse/clickhouse-server:25.1
+        image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7
+        # The runner pulls a service image BEFORE the first step, so no
+        # `docker/login-action` step can authenticate it -- GitHub requires
+        # credentials on the declaration itself. GITHUB_TOKEN reads the mirror.
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           CLICKHOUSE_DB: default
           CLICKHOUSE_USER: ch

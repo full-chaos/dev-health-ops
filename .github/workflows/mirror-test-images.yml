@@ -32,6 +32,10 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # A service-image change must re-run the mirror, or the new ref is
+      # declared before it exists and the required check fails at pull time.
+      - .github/workflows/test.yml
+      - .github/workflows/live-e2e.yml
       - .github/workflows/mirror-test-images.yml
   pull_request:
     paths:
@@ -42,6 +46,10 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # A service-image change must re-run the mirror, or the new ref is
+      # declared before it exists and the required check fails at pull time.
+      - .github/workflows/test.yml
+      - .github/workflows/live-e2e.yml
       - .github/workflows/mirror-test-images.yml
 
 permissions:
@@ -93,12 +101,31 @@ jobs:
           #      edoburu/pgbouncer, which lives in no Go file and was missed on
           #      the first pass precisely because it was restated nowhere.
           bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' | cut -f2 > images.raw
-          # Images CI needs that live in no repo file. The service containers in
-          # test.yml / live-e2e.yml pin ClickHouse by TAG, and 26.7 is the minor
-          # the local stack and prod run; mirroring it here means CI owns that tag
-          # instead of depending on someone having pushed it by hand -- which is
-          # precisely how the mirror ended up with packages CI could not read.
-          printf '%s\n' 'clickhouse/clickhouse-server:26.7' >> images.raw
+          #   3. GitHub Actions `services:` containers in test.yml / live-e2e.yml
+          # Source 3 replaces a hardcoded `clickhouse/clickhouse-server:26.7`
+          # line. A hand-maintained entry is exactly the shape that rots: the
+          # workflow declaring the service and the workflow mirroring it drift,
+          # and the failure appears at pull time on a required check. Deriving it
+          # means the declaration IS the source of truth.
+          #
+          # Those files name the MIRRORED ref, so the prefix is stripped to
+          # recover the upstream ref to mirror FROM -- the inverse of what the
+          # river compose needs, and for the same reason.
+          for wf in .github/workflows/test.yml .github/workflows/live-e2e.yml; do
+            test -f "${wf}" || { echo "::error::workflow missing: ${wf}"; exit 1; }
+            # Fail closed: a service image NOT under the mirror is a Docker Hub
+            # pull on a required check, and it must not pass silently just
+            # because this parser did not recognise it.
+            if grep -nE '^[[:space:]]*image:[[:space:]]*' "${wf}" \
+                 | grep -vE '^[0-9]+:[[:space:]]*image:[[:space:]]*ghcr\.io/' >/dev/null; then
+              echo "::error::${wf} declares a service image outside the mirror:"
+              grep -nE '^[[:space:]]*image:[[:space:]]*' "${wf}" \
+                | grep -vE '^[0-9]+:[[:space:]]*image:[[:space:]]*ghcr\.io/'
+              exit 1
+            fi
+            sed -nE 's|^[[:space:]]*image:[[:space:]]*ghcr\.io/[^/]+/([^[:space:]#]+).*$|\1|p' \
+              "${wf}" >> images.raw
+          done
           for compose in tests/compatibility/river/compose.compatibility.yml; do
             test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
             # The compose file parameterises its refs as ${TEST_IMAGE_PREFIX:-}<ref>

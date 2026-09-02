@@ -709,6 +709,36 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestPythonJSONGoldenMatchesLivePython$' \
+        ./internal/pythonparity
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason the two above have theirs: a THIRD
+  # distinct producer -- CPython's json.dumps over evidence.build_text_bundle's
+  # payload -- and the only one whose divergence costs money rather than
+  # correctness. input_hash is categorization_input_hash, the LLM
+  # skip-existing key; a drifted hash matches no stored row and re-categorizes
+  # every work unit on every run, silently. A shared marker could be satisfied
+  # by either guard above while this one was filtered out of -run.
+  proof_file="${proof_dir}/python-json-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

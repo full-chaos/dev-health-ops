@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,9 +18,10 @@ import (
 type goldenEnvironment struct {
 	PythonVersion  string `json:"python_version"`
 	Implementation string `json:"implementation"`
-	Machine        string `json:"machine"`
 	UnicodeVersion string `json:"unicode_version"`
 	FloatReprStyle string `json:"float_repr_style"`
+	// Recorded by the generator as `machine_not_compared` and deliberately
+	// absent from this struct: see TestFrozenEnvironmentIsPortable.
 }
 
 type goldenEvidence struct {
@@ -499,4 +501,94 @@ func TestEveryEvidenceValueIsAPythonFloat(t *testing.T) {
 			document.EvidenceValuesTypeChecked, checked)
 	}
 	t.Logf("evidence values with a recorded Python type of float: %d", checked)
+}
+
+// portableVersion matches a bare interpreter version and nothing else.
+var portableVersion = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// TestFrozenEnvironmentIsPortable stops this corpus from recording an
+// environment that only one machine can ever match.
+//
+// A frozen fixture is eventually compared against a live interpreter somewhere
+// else -- CI, another lane, another OS. So every environment field it records
+// must be identical on any machine running the same interpreter. `sys.version`
+// is not: it carries the build string, and the same interpreter reports
+//
+//	3.14.7 (main, Aug 25 2026, 13:50:14) [Clang 22.1.3 ]   on this Mac
+//	3.14.7 (main, Aug  6 2026, 02:19:46) [GCC 13.3.0]       on the Linux runner
+//
+// A guard comparing that can never pass on a second machine, and it reports
+// "the interpreter moved" when nothing moved -- the right diagnosis from what
+// it can see, and the wrong one about the world.
+//
+// This is not hypothetical and it is not someone else's mistake. Two probes
+// this lane wrote froze `sys.version`; the choice was harmless while they were
+// throwaway artefacts on one machine, and became a guaranteed CI failure the
+// moment lane-4441 promoted them into the shipped corpus (#2140). The defect
+// appeared at promotion, not at authorship, and neither of us saw it by reading
+// -- on a single machine it is invisible by construction.
+//
+// This corpus is already shipped, so it is already promoted; it simply has no
+// consumer for its metadata yet. This test is the consumer, added before a rot
+// guard is built on top of the bad spelling rather than after.
+//
+// `machine` is the other half. It is recorded as `machine_not_compared` and is
+// absent from goldenEnvironment on purpose: arm64 and x86_64 differ
+// legitimately while the behaviour this corpus pins does not, so treating it as
+// identity misattributes a platform difference as corpus rot. This lane made
+// exactly that mistake once already, in the float-text rot guard, and the fix
+// there was to compare data and environment separately.
+func TestFrozenEnvironmentIsPortable(t *testing.T) {
+	document := loadRulesGolden(t)
+	environment := document.Environment
+
+	if !portableVersion.MatchString(environment.PythonVersion) {
+		t.Errorf("frozen python_version is %q, which is not a bare X.Y.Z version -- "+
+			"the generator has probably regressed to sys.version, whose build string "+
+			"differs between the machine that generated the corpus and any machine "+
+			"that checks it; use platform.python_version()",
+			environment.PythonVersion)
+	}
+	if environment.Implementation != "CPython" {
+		t.Errorf("frozen implementation is %q, want \"CPython\"", environment.Implementation)
+	}
+	// float_repr_style decides whether repr uses the shortest-round-trip
+	// algorithm or the platform libc, which changes the rendered rationale
+	// strings. "legacy" would make this corpus describe a different reference.
+	if environment.FloatReprStyle != "short" {
+		t.Errorf("frozen float_repr_style is %q, want \"short\": on a legacy build "+
+			"repr falls back to the platform libc and the rationale strings this "+
+			"corpus pins would not be reproducible",
+			environment.FloatReprStyle)
+	}
+	if environment.UnicodeVersion == "" {
+		t.Error("frozen unicode_version is empty; the corpus no longer records which " +
+			"Unicode tables produced it")
+	}
+
+	// The machine field must NOT be readable through this struct, so a future
+	// guard cannot casually start comparing it. Assert the corpus spells it with
+	// the name that says so.
+	raw, err := os.ReadFile("testdata/recommendations_rules_golden.json")
+	if err != nil {
+		t.Fatalf("read corpus: %v", err)
+	}
+	var probe struct {
+		Environment map[string]any `json:"environment"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		t.Fatalf("decode corpus: %v", err)
+	}
+	if _, plain := probe.Environment["machine"]; plain {
+		t.Error("the corpus records `machine`; rename it `machine_not_compared` so a " +
+			"future guard cannot compare a value that differs legitimately between " +
+			"arm64 and x86_64 while the pinned behaviour does not")
+	}
+	if _, named := probe.Environment["machine_not_compared"]; !named {
+		t.Error("the corpus no longer records the machine at all; keep it as " +
+			"`machine_not_compared` -- it is useful provenance, just not identity")
+	}
+	t.Logf("frozen environment: python %s, %s, Unicode %s, float_repr_style %s",
+		environment.PythonVersion, environment.Implementation,
+		environment.UnicodeVersion, environment.FloatReprStyle)
 }

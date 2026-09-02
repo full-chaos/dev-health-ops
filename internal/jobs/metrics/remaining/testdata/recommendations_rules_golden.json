@@ -1,14 +1,14 @@
 {
   "evidence_values_type_checked": 2407,
   "environment": {
-    "python_version": "3.14.7 (main, Aug 25 2026, 13:50:14) [Clang 22.1.3 ]",
+    "python_version": "3.14.7",
+    "machine_not_compared": "arm64",
     "version_info": [
       3,
       14,
       7
     ],
     "implementation": "CPython",
-    "machine": "arm64",
     "unicode_version": "16.0.0",
     "float_repr_style": "short"
   },

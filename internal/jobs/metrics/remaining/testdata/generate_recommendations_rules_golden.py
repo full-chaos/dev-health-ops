@@ -444,11 +444,31 @@ def build_document() -> dict:
 
     return {
         "evidence_values_type_checked": typed,
+        # PORTABILITY: every field here must be identical on any machine running
+        # the same interpreter, because a frozen fixture is compared against a
+        # live interpreter somewhere else -- CI, another lane, another OS.
+        #
+        # `sys.version` is NOT that. It carries the build string:
+        #
+        #   3.14.7 (main, Aug 25 2026, 13:50:14) [Clang 22.1.3 ]     <- this Mac
+        #   3.14.7 (main, Aug  6 2026, 02:19:46) [GCC 13.3.0]        <- Linux CI
+        #
+        # Same interpreter, different compiler, so a guard comparing it can
+        # never pass on a second machine and reports "the interpreter moved"
+        # when nothing moved. lane-4441 hit exactly this when two of this lane's
+        # probes were promoted into the shipped corpus (#2140).
+        #
+        # `platform.python_version()` is the portable spelling: "3.14.7".
         "environment": {
-            "python_version": sys.version,
+            "python_version": platform.python_version(),
+            # Descriptive only, deliberately NOT compared by any guard. It
+            # differs legitimately between arm64 and x86_64 while the float
+            # behaviour pinned by this corpus does not, and treating it as
+            # identity misattributes a platform difference as corpus rot --
+            # a mistake this lane already made once, in the float-text guard.
+            "machine_not_compared": platform.machine(),
             "version_info": list(sys.version_info[:3]),
             "implementation": platform.python_implementation(),
-            "machine": platform.machine(),
             "unicode_version": unicodedata.unidata_version,
             "float_repr_style": sys.float_repr_style,
         },

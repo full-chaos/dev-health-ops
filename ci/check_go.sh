@@ -682,7 +682,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython)$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -713,6 +713,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-python-lower"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this one reads an interpreter SETTING rather than a Unicode
+  # property, so it rots for a different reason from every guard above --
+  # sys.set_int_max_str_digits() can change it at runtime, and it did not exist
+  # before Python 3.11. A deployment that raised or lowered it would leave this
+  # port disagreeing about which PR ids are convertible, in the direction that
+  # mislabels a build-aborting row as an ordinary PR.
+  proof_file="${proof_dir}/workgraph-int-max-str-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

@@ -119,6 +119,19 @@ func ParsePRDependencySource(value string) (PRReference, error) {
 	}, nil
 }
 
+// pythonIntMaxStrDigits is CPython's `sys.get_int_max_str_digits()` default.
+//
+// Above it, `int(<digit string>)` raises ValueError -- so in builder.py it is
+// another uncaught crash on the same unguarded conversion (CHAOS-4811), and
+// this port must bucket it as `malformed_pr_id` rather than claim the row for
+// the issue<->PR pipeline.
+//
+// It is an interpreter SETTING, not a language constant: `sys.set_int_max_str_digits()`
+// changes it, and it did not exist before 3.11. TestIntMaxStrDigitsMatchesLivePython
+// reads it back from the deployed interpreter so a runtime that raised or lowered
+// it cannot leave this port silently disagreeing.
+const pythonIntMaxStrDigits = 4300
+
 // numericTypeDigitNotDecimal is every rune for which Python's `str.isdigit()` is
 // TRUE but `int()` RAISES — derived by scanning all 0x110000 code points through
 // the live interpreter, not by hand.
@@ -211,6 +224,17 @@ func isPythonDigitString(value string) bool {
 // unavailable, and callers that need it must check this flag rather than read
 // a silently truncated PRNumber.
 func pythonIntFromDigits(value string) (number int, positive bool, exceedsInt64 bool, ok bool) {
+	// CPython refuses str->int conversions above this many digits (PEP " +
+	// 3.11's int_max_str_digits, a DoS guard). Round 1 removed a bound this
+	// port invented; round 2 found that the reference has a bound of its OWN,
+	// and that removing mine had made the port accept 4301 digits where Python
+	// raises. Over-correcting is still diverging.
+	//
+	// The digit count is of the STRING, so leading zeros count: `int("0"*4301)`
+	// raises exactly as `int("9"*4301)` does (measured, both directions).
+	if len(value) > pythonIntMaxStrDigits {
+		return 0, false, false, false
+	}
 	for _, r := range value {
 		digit := decimalValue(r)
 		if digit < 0 {
